@@ -1,6 +1,6 @@
 # Corvid: a local-first .NET agent with a calibrated decision fabric
 
-Version 0.1, 2026-10-16. Status: design proposal, nothing built. "Corvid" is a placeholder name (open decision D-1).
+Version 0.2, 2026-10-16. Status: design proposal, nothing built. "Corvid" is a placeholder name (open decision D-1).
 
 ## 0. Thesis
 
@@ -121,6 +121,10 @@ src/
   Corvid.Gateway             adapter host, delivery ledger, pairing; Corvid.Gateway.<Platform>
   Corvid.Cli                 Spectre.Console scrollback UI, slash commands
   Corvid.Host                generic host, configuration, DI, OpenTelemetry, single-file publish
+  Corvid.Vault.Client        socket client, VaultHandler HttpClient handler, SecretRef type (no secret values ever)
+vault/
+  corvid-vault               SEPARATE executable and service (Native AOT, no models, no Corvid.* dependencies except the wire contract):
+                             encrypted store, egress proxy, ssh-agent, scrub service, policy, audit; see vault.md
 evals/                       golden trajectories, decision sets, replay harness
 ```
 
@@ -431,10 +435,22 @@ Before any request to a slot with privacy class `cloud`:
 - GLiNER2 runs PII labels (person, email, phone, address, account number, credential, plus user-defined labels) over the outgoing projection.
 - The profile's policy decides: send as is, redact to stable placeholders (`<PERSON_1>`), mapped back in the response, or refuse and stay local.
 - Core memory blocks are marked `local-only` by default.
+- Cloud provider API keys never live in Corvid. Model slots authenticate through Vault's egress proxy (§10.5).
 
 Hermes has no equivalent. Hermes even sent web search to a third party without opt-in (#45058).
 
-### 10.5 Supply chain
+### 10.5 Secrets: Corvid Vault
+
+Secrets live in **Corvid Vault** (`corvid-vault`), a separate, model-free process that Corvid cannot read. In the strong tier it runs under a different OS user. The full design is in [`vault.md`](vault.md). In short:
+
+- Corvid and every model see only secret names and per-session placeholders.
+- Vault substitutes real values at the network edge, only for hosts the secret is bound to. It also acts as ssh-agent and gpg-agent, and as a last resort runs a command with the value injected.
+- Vault scrubs every byte it relays. The kernel also passes every tool result through Vault's scrub service before the event log.
+- Each secret has its own policy (hosts, methods, paths, budgets, taint). High-value uses need an out-of-band confirmation that Corvid cannot forge.
+- Credentials pasted into chat are intercepted at ingress and moved into Vault.
+- Corvid never reads secrets from environment variables. When Vault is absent, secret-bearing tools are unavailable.
+
+### 10.6 Supply chain
 
 - **Skills and plugins from hubs.** Scanned like Hermes' scanner, plus `injection` over the SKILL.md body. Scripts in skills always run sandboxed.
 - **Plugins.** .NET assemblies load into a collectible `AssemblyLoadContext` and declare their capabilities in a manifest. A tool from a plugin gets no permissions its manifest did not declare.
@@ -519,6 +535,7 @@ Rows follow the numbering of the Hermes feature report (16 Oct 2026, v0.22.2). P
 | 1.12 | two-layer compression, structured summary, tool-result placeholders, Anthropic caching | summarizer smaller than window drops context; lost goals (#33618); orphaned queue (#99882) | event-log projection; `clear_results`; map-reduce summaries; goals as events; never deletes | Kev, summarizer slot | v1 |
 | 1.13 | shadow-git checkpoints, `/rollback` | — | same, unified with log positions | — | v1 |
 | 1.14 | approval modes, regex dangerous patterns, hardline list, container boundary | bypasses (#84551, #74078); non-shell tools ungated (#35357); config unguarded (#59293); scanner misses (#27284); unrequested third-party egress (#45058) | sandbox policy separate from approval policy; parsed-structure risk; approvals for all side effects; taint tracking; PII egress gate | Kev, GLiNER2 | v1 |
+| 1.14b | credential vault (1Password, Bitwarden, command), env scrubbing for subprocesses, pattern-based output redaction, writes to `~/.ssh` and `.env` blocked | the agent process holds the keys; redaction is by pattern | Corvid Vault: separate model-free process (separate uid in the strong tier); placeholders, edge substitution bound to hosts, ssh-agent, exact-value scrubbing, per-secret access policy, out-of-band confirm, provider keys through Vault | GLiNER2 (paste interception) | v1 |
 | 1.15 | MCP client (stdio, HTTP, OAuth, sampling), ACP | — | MCP C# SDK client and server; sampling not relied on (deprecated in MCP 2026-07-28); tasks extension for long calls; ACP | — | v1 |
 | 1.16 | profiles, SOUL.md, plugins with 27 hooks | — | profiles as directories with their own store; persona block; plugins in collectible load contexts with declared capabilities; hooks as typed events on the log | — | v1 / later |
 | 1.17 | batch runner, trajectory compressor; Atropos removed | — | replay harness, golden sets, ShareGPT export, Kev decision export | — | later |
@@ -534,6 +551,7 @@ Rows follow the numbering of the Hermes feature report (16 Oct 2026, v0.22.2). P
 | **S2** | Does the fabric make Qwen3.5-0.8B a usable tool caller? Build a 200-case golden set of personal-assistant tasks (reminders, notes, files, search, messages) and compare (a) Qwen alone with all tools, (b) the embedding shortlist, (c) the shortlist plus Kev `tool` plus one schema plus repair | (c) beats (a) by ≥ 25 points on tool choice and argument exact match; escalation rate below 30% |
 | **S3** | GLiNER2 on shell-argument targets and PII labels | recall ≥ 0.95 on paths, hosts and PIDs in a 300-command corpus that includes Hermes' published bypasses |
 | **S4** | TurnState design: does Kev's answer quality hold at 600 tokens against the full transcript? | `tool` and `done` accuracy within 3 points |
+| **S6, S7** | Vault: no secret value in any Corvid or sandbox core dump, log, span or cloud request; prompt-injection exfiltration suite (`vault.md` §13) | no match anywhere; every exfiltration attempt refused or scrubbed |
 | **S5** | Starling's Qwen client with an llguidance grammar (prototype on a Starling branch) | 0 invalid tool names, with no added latency over 10% |
 
 ### Phase 1: kernel and local loop (v0.1)
@@ -589,6 +607,7 @@ These belong in Starling's own plan, not here. They are the changes that make Co
 | D-7 | Voice in v1 or later | later |
 | D-8 | Which cloud providers ship in v1 | Anthropic, OpenAI-compatible (covers OpenRouter and local servers), Gemini |
 | D-9 | Hermes compatibility: import `~/.hermes` skills, memories and sessions (Hermes has `hermes claw migrate` for OpenClaw) | import skills and memories in v1; sessions later |
+| D-10 – D-12 | Vault: strong tier required or optional; Windows and macOS isolation; own store or front a password manager | see `vault.md` §14 |
 
 ## 21. Sources
 
@@ -618,6 +637,7 @@ Hermes issue numbers, version facts and the MCP 2026-07-28 details are as report
 | R14 | https://learn.microsoft.com/dotnet/ai/microsoft-extensions-ai | `IChatClient` middleware |
 | R15 | https://opentelemetry.io/docs/specs/semconv/gen-ai/ | tracing conventions |
 | R16 | https://aider.chat/docs/repomap.html | architect/editor split, repo map |
+| V1 | `vault.md` §15 | prior art for credential-injecting proxies (Fly.io Tokenizer, Infisical Agent Vault, varlock, Gondolin, Novita, Cloak) |
 | R17 | https://agentskills.io | skill format |
 
 ## Changelog
@@ -625,3 +645,4 @@ Hermes issue numbers, version facts and the MCP 2026-07-28 details are as report
 | Version | Date | Change |
 | --- | --- | --- |
 | 0.1 | 2026-10-16 | First draft. |
+| 0.2 | 2026-10-16 | Corvid Vault (§10.5, `vault.md`): secrets in a separate model-free process; provider keys through Vault; parity row 1.14b; spikes S6–S7; decisions D-10 to D-12. |
