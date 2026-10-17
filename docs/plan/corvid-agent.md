@@ -96,6 +96,7 @@ Corvid stores every session as an append-only log of typed events, in the style 
   2. fabric
   3. subagents
   4. background consolidation
+- Starling's model calls are synchronous native work (`KevDecisionModel.Decide`, GLiNER2 and embeddings). Adapters run them on the device scheduler's threads, never on the session actor, and return `Task`s.
 - Cancellation is a `CancellationToken` end to end. Starling's clients check it between prefill chunks and decode steps.
 
 These are what Hermes cannot do cheaply. It uses a background thread per API call and a thread pool for tools (#11431), and an eager-import gateway that ran to about 8 GB in an hour (#18438).
@@ -189,24 +190,31 @@ Kev must never see the transcript. The fabric builds a **TurnState**, a small JS
   "recent": ["user asked about dentist reminder (cron job 14)", "assistant listed 3 reminders"],
   "goal": null,
   "entities": {"date": ["tomorrow", "friday"], "person": ["sam"], "task": ["dentist reminder"]},
-  "candidate_tools": ["cronjob.update: change a scheduled job", "send_message: message a contact", "memory.search: look up stored facts"],
-  "candidate_skills": ["reschedule-reminder: move a reminder and notify people"],
   "step": 0,
   "last_tool_result": null,
   "generator": "qwen3.5-0.8b local, 8k"
 }
 ```
 
-Budget: 600 tokens by default, with a hard stop at 1,500. Each field has a token budget and a deterministic truncation rule. `recent` is a list of event one-liners drawn from the log, not message text. `entities` come from GLiNER2. The candidate lists come from embedding retrieval (§5.4). When the turn-state would exceed the hard stop, or Kev refuses it, the checkpoint falls back to the degraded tier (§5.6) and logs the fact.
+Budget: 600 tokens by default, with a hard stop at 1,500. Each field has a token budget and a deterministic truncation rule. `recent` is a list of event one-liners drawn from the log, not message text. `entities` come from GLiNER2.
+
+**State and instructions are separate places.** Kev's contract runs the shared `state` once and then gives each question its own row with its own `instructions` (which also accept `KevContent.Json`). Content that only one question needs goes in that question's instructions or options, not in the state:
+- Candidate tools and skills (from §5.4) are the **options** of `tool` and `skill`, rendered as `name: description`. Kev was trained to read the description at each option's closing token.
+- The old tool results for `clear_results` and the retrieved neighbours for `memory_op` go in those questions' instructions.
+
+Rows in one pass are right-padded to the longest, and each row is bounded by `KevOptions.MaxRowTokens` (8,192). The 0.37 s figure in §2 was measured with rows up to 853 tokens, so the row budget is 1,000 tokens per question.
+
+When the turn-state would exceed the hard stop, or Kev refuses it, the checkpoint falls back to the degraded tier (§5.6) and logs the fact.
 
 ### 5.2 Checkpoints and batching
 
-Each turn has up to three fabric checkpoints. Each one is a **single** `KevRequest` with several questions on one state:
+Each turn has up to four kinds of fabric checkpoint. Each one is a **single** `KevRequest` with several questions on one state:
 
 | Checkpoint | When | Typical questions |
 | --- | --- | --- |
 | `ingress` | user message arrives | intent, tool need, difficulty, memory recall need, clarify need, injection check on attachments |
 | `step` | after each tool result, before the next generator call | done/continue, next tool, stuck, escalate, result-clearing |
+| `pre-execute` | after the generator emits a side-effecting call, before it runs; also before a memory or skill write | `risk` over the parsed action, `memory_op`, `skill_write_safe`. Runs only for tools with side-effect metadata, so read-only calls cost nothing. |
 | `egress` | before the answer is delivered | worth remembering, skill opportunity, follow-up scheduling, delivery channel |
 
 In code this follows the Kev API on the `kev-onnx` branch:
@@ -219,7 +227,10 @@ var questions = new Dictionary<string, KevQuestion>
     ["needs_tools"] = KevQuestion.Noul("Does completing this require running a tool?"),
     ["difficulty"] = KevQuestion.Score("How hard is this for a small local model?",
         "trivial", "easy", "moderate", "hard", "needs a frontier model"),
-    ["tool"] = KevQuestion.Choice("Which tool should run first?", shortlist.Names().Append("none")),
+    // Options carry their descriptions: Kev reads "name: description" at each option's closing token.
+    ["tool"] = KevQuestion.Choice("Which tool should run first?",
+        shortlist.Select(t => KeyValuePair.Create(t.Name, (KevContent?)t.Description))
+                 .Append(KeyValuePair.Create("none", (KevContent?)"no tool is needed"))),
 };
 KevDecision d = kev.Decide(new KevRequest(KevContent.Json(turnState.ToJsonElement()), questions), ct);
 // d["intent"].Choice, d["intent"].Confidence, d["needs_tools"].Yes, d["difficulty"].ExpectedScore, d["tool"].Probabilities
@@ -229,7 +240,7 @@ Every answer is appended as a `Decision` event with these fields: question id, t
 
 ### 5.3 The question catalogue
 
-Every point where Hermes uses the generator, a regex or a flag becomes a typed question. A **floor** is the confidence below which Corvid does not act on the answer. Floors start at the values below and are retuned from the decision log (§5.5). Kev's choice confidence is `(p_max − 1/K)/(1 − 1/K)`. The Hermes column names the weakness each question fixes.
+Every point where Hermes uses the generator, a regex or a flag becomes a typed question. A **floor** is the confidence below which Corvid does not act on the answer. Floors start at the values below and are retuned from the decision log (§5.5). Kev's choice confidence is `(p_max − 1/K)/(1 − 1/K)`. Score levels are indexed from 0, and `ExpectedScore` is `Σ i·pᵢ`, so on a five-level score 3.5 lies between the fourth and fifth levels. The Hermes column names the weakness each question fixes.
 
 | ID | Checkpoint | Type and options | Act when | Below the floor | Hermes weakness fixed |
 | --- | --- | --- | --- | --- | --- |
@@ -281,7 +292,7 @@ Kev is unmerged and Experimental. Corvid must work without it:
 | Question shape | Without Kev |
 | --- | --- |
 | `tool`, `skill`, `deliver` (Choice over named items) | embedding similarity between the turn-state and each option's description; top-1 if the margin is above 0.05, otherwise the whole shortlist goes to the generator |
-| Noul questions | the generator answers "yes" or "no" with logprobs where the slot exposes them. Otherwise the conservative default applies. |
+| Noul questions | the generator answers "yes" or "no". Its logprobs could serve as a confidence if a slot exposed them, but `IChatClient` has no logprobs surface and Starling's client does not expose them today. So the conservative default applies whenever the answer gates anything. |
 | `risk`, `skill_write_safe`, `memory_op` (gates) | **no calibrated confidence, so the gate defaults to asking the user** |
 | `difficulty` | token-length and tool-count heuristics; escalation becomes manual (`/model`) |
 
@@ -519,7 +530,7 @@ Rows follow the numbering of the Hermes feature report (16 Oct 2026, v0.22.2). P
 
 | Spike | Question | Pass condition |
 | --- | --- | --- |
-| **S1** | Kev-0.8B and Kev-4B latency on the 3090 (through `tools/gpu-lease`) and on the workstation CPU, for turn-states of 300, 600 and 1,500 tokens with 4–8 questions | an ingress checkpoint at p50 ≤ 300 ms on GPU with Kev-0.8B. If it only fits on CPU at ≥ 1 s, reduce checkpoints to ingress + egress and drop `step` questions to two. |
+| **S1** | Kev-0.8B and Kev-4B latency on the 3090 (through `tools/gpu-lease`) and on the workstation CPU, for turn-states of 300, 600 and 1,500 tokens with 4–8 questions and rows up to 1,000 tokens; plus the per-call cost of a one-question `pre-execute` checkpoint | an ingress checkpoint at p50 ≤ 300 ms on GPU with Kev-0.8B. If it only fits on CPU at ≥ 1 s, reduce checkpoints to ingress + egress and drop `step` questions to two. |
 | **S2** | Does the fabric make Qwen3.5-0.8B a usable tool caller? Build a 200-case golden set of personal-assistant tasks (reminders, notes, files, search, messages) and compare (a) Qwen alone with all tools, (b) the embedding shortlist, (c) the shortlist plus Kev `tool` plus one schema plus repair | (c) beats (a) by ≥ 25 points on tool choice and argument exact match; escalation rate below 30% |
 | **S3** | GLiNER2 on shell-argument targets and PII labels | recall ≥ 0.95 on paths, hosts and PIDs in a 300-command corpus that includes Hermes' published bypasses |
 | **S4** | TurnState design: does Kev's answer quality hold at 600 tokens against the full transcript? | `tool` and `done` accuracy within 3 points |
@@ -580,6 +591,8 @@ These belong in Starling's own plan, not here. They are the changes that make Co
 | D-9 | Hermes compatibility: import `~/.hermes` skills, memories and sessions (Hermes has `hermes claw migrate` for OpenClaw) | import skills and memories in v1; sessions later |
 
 ## 21. Sources
+
+Hermes issue numbers, version facts and the MCP 2026-07-28 details are as reported by research passes on 2026-10-16 (H1, R12). They were not each verified against the primary page.
 
 | ID | Source | Used for |
 | --- | --- | --- |
