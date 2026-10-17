@@ -260,7 +260,8 @@ public sealed class EndToEndTests : IDisposable
         Assert.Contains("ECHO:Bearer [secret:test.token]", lines);
 
         // Positive control: the scan finds what the child does hold.
-        Assert.Contains("canary-utf16", found);
+        Assert.Contains("canary-utf16", found); // managed strings
+        Assert.Contains("canary-utf8", found);  // raw byte regions (argv), where a UTF-8 body buffer would sit
         Assert.True(scanned > 10_000_000, $"Scanned only {scanned} bytes.");
 
         // The property: no encoding of the value anywhere in the client's memory.

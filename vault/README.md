@@ -4,6 +4,8 @@ Holds the secrets Corvid's tools need, in a separate process that runs no model.
 
 Status: **M1**, Linux only, default tier (same uid, non-dumpable). See "What M1 does not do yet" below.
 
+> **Default-tier limit.** Corvid's process never holds a value (test S6). But anything running as your user can run `systemd-creds --user decrypt` on `master.cred` and read the store. A shell tool driven by a model is safe from this only once Corvid's sandbox denies Vault's directories (C-007), or once Vault runs as its own user (strong tier, V-008).
+
 ## Use
 
 ```sh
@@ -77,11 +79,11 @@ Requests without a placeholder go straight to the inner handler; requests with o
 | Property | Test |
 | --- | --- |
 | The value never enters the client process (S6) | `S6_the_value_never_enters_the_client_process`: a separate process uses the secret; its memory, read through `/proc`, holds the value in none of 8 encodings, while a canary it holds is found |
-| Values go only to bound hosts, over HTTPS | `A_host_the_secret_is_not_bound_to_is_refused_before_anything_is_sent`, `PolicyTests` |
+| Values go only to bound hosts, over HTTPS | Host binding: `A_host_the_secret_is_not_bound_to_is_refused_before_anything_is_sent`. HTTPS-only: evaluator unit test only. The end-to-end tests use plain HTTP to loopback, so TLS on the wire and upstream certificate checks (`SocketsHttpHandler` defaults) are not exercised by the suite. |
 | Headers only, once per request | `Placeholders_in_the_body_or_url_or_repeated_are_refused` |
 | Placeholders are bound to session, uid and lifetime | `A_placeholder_from_another_session_is_refused`, `PlaceholderTests` |
 | Echoes are scrubbed, including compressed and redirected ones | `The_upstream_gets_the_value_and_Corvid_gets_it_scrubbed`, `Compressed_echoes_…`, `Redirects_are_returned_not_followed_…` |
-| Store is encrypted, 0600, and needs the key | `StoreTests` |
+| Store is encrypted, 0600, and needs the key | `StoreTests` (with the test-only `file` key provider). The `systemd` key provider was checked by a manual smoke run on 2026-10-16 (init, set, list, AOT binary), not by the suite. |
 | Other uids are rejected | `Other_uids_are_rejected_and_audited` |
 
 ## What M1 does not do yet

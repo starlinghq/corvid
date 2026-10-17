@@ -578,7 +578,7 @@ Subagents, code mode, media memory, remaining gateway adapters, voice, two-tier 
 | C-004 | `IDecider` with Kev and degraded implementations; TurnState builder with budgets | C-003 |
 | C-005 | Tool source generator and registry | C-001 |
 | C-006 | Slot registry, profiles and switch semantics (§4.2) with tests that switch mid-turn | C-002 |
-| C-007 | Sandbox (bubblewrap, Landlock, seccomp) and the structural approval pipeline | S3 |
+| C-007 | Sandbox (bubblewrap, Landlock, seccomp) and the structural approval pipeline. Must deny every tool access to Vault's data and config directories: until then, a shell tool can decrypt the default-tier store (`vault.md`, Implementation status). | S3 |
 | C-008 | Memory store: FTS5, sqlite-vec, graph tables, write and read paths | C-004 |
 | C-009 | Golden set and replay harness | C-002 |
 

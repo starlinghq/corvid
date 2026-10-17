@@ -274,6 +274,14 @@ These are vendor docs and blog posts found by search on 2026-10-16. Their claims
 
 It has 59 tests. S6 passes: a separate client process's memory (about 119 MB scanned through `/proc`) holds the value in none of 8 encodings, while a canary it holds is found. Native AOT publish is clean (8.6 MB).
 
+**What S6 does and does not prove.** S6 proves the value never enters Corvid's process. It does not prove that something running as the user cannot get the value.
+
+In the default tier, `master.cred` decrypts for anyone running as the user (`systemd-creds --user decrypt`), and `store.bin` sits next to it. So a shell tool the model drives could decrypt the store, until one of these lands:
+- Corvid's sandbox denies `$XDG_DATA_HOME/corvid-vault/` and `$XDG_CONFIG_HOME/corvid-vault/` to every tool (C-007 in `corvid-agent.md`).
+- The strong tier puts Vault under its own uid (V-008).
+
+Until then, M1 protects against accidental exposure through Corvid's own code paths: replies, logs, prompts and HTTP responses. It does not yet protect against a tool deliberately reading Vault's files.
+
 Deviations from the text above:
 
 - **The policy file is `vault.json`, not TOML.** JSON keeps Vault free of dependencies and AOT-safe through source generation. Same keys, in camelCase. §6's `approval = "keeper"` key is not implemented: `confirm` refuses until V-006.
