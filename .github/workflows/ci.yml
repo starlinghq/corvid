@@ -1,0 +1,68 @@
+name: ci
+
+# Build, test and publish checks. No secrets are used or exposed here.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  CI: true
+
+jobs:
+  test:
+    name: Build and test (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          global-json-file: global.json
+
+      # Warnings are errors (Directory.Build.props), including the trim and AOT analyzers.
+      - name: Build
+        run: dotnet build Corvid.slnx -c Release
+
+      - name: Test
+        run: dotnet test --solution Corvid.slnx -c Release --no-build
+        env:
+          TMPDIR: ${{ runner.temp }}
+
+      # S6 (docs/plan/vault.md §13) skips itself where a parent cannot read a child's memory. On CI that would hide
+      # the one test that proves Corvid never holds a secret value, so require that it ran and passed.
+      - name: S6 ran and passed
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          echo "Yama ptrace_scope: $(cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo absent)"
+          tests/Corvid.Vault.Tests/bin/Release/net10.0/Corvid.Vault.Tests -method "*S6*" -noColor | tee s6.log
+          grep -q "Total: 1, Errors: 0, Failed: 0, Skipped: 0" s6.log
+
+  aot:
+    name: Native AOT publish (corvid-vault)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          global-json-file: global.json
+
+      - name: Publish
+        run: dotnet publish vault/Corvid.Vault/Corvid.Vault.csproj -c Release -r linux-x64 -p:PublishAot=true -o out
+
+      - name: Run the native binary
+        run: |
+          ls -l out/corvid-vault
+          out/corvid-vault --help
