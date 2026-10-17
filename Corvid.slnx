@@ -1,5 +1,8 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Corvid.Abstractions/Corvid.Abstractions.csproj" />
+    <Project Path="src/Corvid.Kernel/Corvid.Kernel.csproj" />
+    <Project Path="src/Corvid.Models/Corvid.Models.csproj" />
     <Project Path="src/Corvid.Vault.Contracts/Corvid.Vault.Contracts.csproj" />
     <Project Path="src/Corvid.Vault.Client/Corvid.Vault.Client.csproj" />
   </Folder>
@@ -7,7 +10,11 @@
     <Project Path="vault/Corvid.Vault/Corvid.Vault.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Corvid.Architecture.Tests/Corvid.Architecture.Tests.csproj" />
     <Project Path="tests/Corvid.Vault.Tests/Corvid.Vault.Tests.csproj" />
     <Project Path="tests/Corvid.Vault.TestClient/Corvid.Vault.TestClient.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Corvid.Architecture/Corvid.Architecture.csproj" />
   </Folder>
 </Solution>

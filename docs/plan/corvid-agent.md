@@ -1,6 +1,6 @@
 # Corvid: a local-first .NET agent with a calibrated decision fabric
 
-Version 0.3, 2026-10-16. Status: design proposal. Corvid Vault M1 is built (`vault.md`, Implementation status); the agent itself is not.
+Version 0.3, 2026-10-16. Status: design proposal. Corvid Vault M1 is built (`vault.md`, Implementation status); C-001's initial agent projects and dependency boundary check are built ([architecture](../architecture.md)). The agent loop itself is not.
 
 ## 0. Thesis
 
@@ -572,7 +572,7 @@ Subagents, code mode, media memory, remaining gateway adapters, voice, two-tier 
 
 | ID | Item | Depends on |
 | --- | --- | --- |
-| C-001 | Repository, solution layout, boundary check (no provider SDK outside `Corvid.Models.*`) | — |
+| C-001 | **Built:** repository, initial core solution layout, resolved dependency boundary check (no provider SDK outside `Corvid.Models.*`); see [architecture](../architecture.md) | — |
 | C-002 | Event model and SQLite log with projections | C-001 |
 | C-003 | Spikes S1–S5 and their write-ups | Kev branch, GPU lease |
 | C-004 | `IDecider` with Kev and degraded implementations; TurnState builder with budgets | C-003 |
