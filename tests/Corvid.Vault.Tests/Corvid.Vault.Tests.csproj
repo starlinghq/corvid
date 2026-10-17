@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../vault/Corvid.Vault/Corvid.Vault.csproj" />
+    <ProjectReference Include="../../src/Corvid.Vault.Client/Corvid.Vault.Client.csproj" />
+    <!-- Built first, run as a separate process by the S6 test. -->
+    <ProjectReference Include="../Corvid.Vault.TestClient/Corvid.Vault.TestClient.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Stands in for Corvid in the S6 test: a separate process that uses a secret only through Vault. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Corvid.Vault.Client/Corvid.Vault.Client.csproj" />
+  </ItemGroup>
+
+</Project>

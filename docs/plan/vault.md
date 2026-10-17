@@ -1,6 +1,6 @@
 # Corvid Vault: a secrets broker Corvid cannot read
 
-Version 0.1, 2026-10-16. Companion to [`corvid-agent.md`](corvid-agent.md) (§10.5). Status: design proposal.
+Version 0.2, 2026-10-16. Companion to [`corvid-agent.md`](corvid-agent.md) (§10.5). Status: M1 built (`vault/`, default tier, Linux), S6 passing; see "Implementation status" at the end.
 
 Vault is a separate, model-free process that holds every secret Corvid's tools need. Corvid sees only secret **names** and **placeholders**. Tools and scripts can still use the secrets:
 
@@ -262,3 +262,33 @@ These are vendor docs and blog posts found by search on 2026-10-16. Their claims
 | [Novita sandbox secrets](https://docs.novita.ai/guides/sandbox-secret) | opaque placeholders with host allowlists |
 | [Blaxel, egress proxy for agent sandboxes](https://blaxel.ai/blog/egress-proxy-api-credentials-ai-agent-sandboxes) | why environment variables are the wrong place |
 | [agentpatterns.ai, sandbox credential masking](https://agentpatterns.ai/security/sandbox-credential-masking/) | the pattern in general |
+
+## Implementation status
+
+**M1 (2026-10-16)** lives in `vault/Corvid.Vault` (the `corvid-vault` executable), `src/Corvid.Vault.Contracts` and `src/Corvid.Vault.Client`. It covers:
+
+- V-001: encrypted store, socket with `SO_PEERCRED`, policy, audit, CLI
+- V-002: forward proxy with upstream TLS verification, header substitution and response scrubbing
+- the scrub service and placeholders
+- the default tier's `PR_SET_DUMPABLE=0`
+
+It has 59 tests. S6 passes: a separate client process's memory (about 119 MB scanned through `/proc`) holds the value in none of 8 encodings, while a canary it holds is found. Native AOT publish is clean (8.6 MB).
+
+Deviations from the text above:
+
+- **The policy file is `vault.json`, not TOML.** JSON keeps Vault free of dependencies and AOT-safe through source generation. Same keys, in camelCase. §6's `approval = "keeper"` key is not implemented: `confirm` refuses until V-006.
+- **Response bodies are buffered**, up to `maxResponseBytes` (16 MB by default), so scrubbing sees whole bodies. Streaming comes later.
+- **Redirects are never followed.** The 3xx goes back to Corvid with its `Location` scrubbed, so a substituted header cannot follow a redirect to another host.
+- **Responses are decompressed before scrubbing**, so a gzip-compressed echo of a token cannot slip past.
+- **The scrubber matches the longest pattern first**, using a first-byte index rather than Aho–Corasick. That is enough for tens of secrets.
+- **The scrubber does not see** a value embedded inside a larger encoded blob (for example base64 of `user:token`). The egress path keeps values out of reach in the first place.
+- **Not built yet:** websocket first-frame substitution (§9) and `allowInUrl` beyond plain substitution. `allowInUrl` exists as a policy flag and is tested only through refusal.
+
+Next: M2 = V-003, the sandbox proxy for scripts.
+
+## Changelog
+
+| Version | Date | Change |
+| --- | --- | --- |
+| 0.1 | 2026-10-16 | Design. |
+| 0.2 | 2026-10-16 | M1 built; deviations recorded under "Implementation status". |

@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    corvid-vault: holds secrets for Corvid and uses them on its behalf. Deliberately small: no models, no plugins, no
+    Corvid libraries. The only project reference is the wire contract.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>corvid-vault</AssemblyName>
+    <RootNamespace>Corvid.Vault</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Corvid.Vault.Contracts/Corvid.Vault.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Corvid.Vault.Tests" />
+  </ItemGroup>
+
+</Project>

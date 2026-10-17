@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Corvid's side of Corvid Vault: the socket client and an HttpClient handler that sends placeholder-bearing requests through Vault. Never holds a secret value.</Description>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Corvid.Vault.Contracts/Corvid.Vault.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>
