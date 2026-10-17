@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <Description>Checks restored production dependency graphs against Corvid's architecture boundaries.</Description>
+  </PropertyGroup>
+</Project>

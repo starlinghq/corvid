@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Corvid session actors, event log and projections.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Corvid.Abstractions/Corvid.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

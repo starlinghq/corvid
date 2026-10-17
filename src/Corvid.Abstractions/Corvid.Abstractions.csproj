@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Provider-independent contracts for the Corvid agent. No package or project dependencies.</Description>
+  </PropertyGroup>
+</Project>

@@ -34,6 +34,9 @@ jobs:
       - name: Build
         run: dotnet build Corvid.slnx -c Release
 
+      - name: Production dependency boundaries
+        run: dotnet run --project tools/Corvid.Architecture -c Release --no-build -- .
+
       - name: Test
         run: dotnet test --solution Corvid.slnx -c Release --no-build
         env:
