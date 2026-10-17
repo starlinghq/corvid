@@ -1,6 +1,6 @@
 # Corvid: a local-first .NET agent with a calibrated decision fabric
 
-Version 0.2, 2026-10-16. Status: design proposal, nothing built. "Corvid" is a placeholder name (open decision D-1).
+Version 0.3, 2026-10-16. Status: design proposal. Corvid Vault M1 is built (`vault.md`, Implementation status); the agent itself is not.
 
 ## 0. Thesis
 
@@ -600,7 +600,7 @@ These belong in Starling's own plan, not here. They are the changes that make Co
 
 | ID | Decision | Default proposal |
 | --- | --- | --- |
-| D-1 | Product name and repository home (`starlinghq/corvid`, or personal) | placeholder "Corvid", local repo only |
+| D-1 | Product name and repository home | **Decided by Mark, 2026-10-16:** the name is Corvid; the repo is `starlinghq/corvid`, private. |
 | D-2 | Is Corvid Starling's named .NET consumer for Kev (P-028 in the Starling plan)? | yes. It is the demand evidence Kev's admission lacks. |
 | D-3 | Depend on Starling packages from nuget.org only, or on project references during phase 0 | project references until Kev ships |
 | D-4 | Licence | MIT OR Apache-2.0, like Starling |
@@ -648,3 +648,4 @@ Hermes issue numbers, version facts and the MCP 2026-07-28 details are as report
 | --- | --- | --- |
 | 0.1 | 2026-10-16 | First draft. |
 | 0.2 | 2026-10-16 | Corvid Vault (§10.5, `vault.md`): secrets in a separate model-free process; provider keys through Vault; parity row 1.14b; spikes S6–S7; decisions D-10 to D-12. |
+| 0.3 | 2026-10-16 | D-1 decided (name Corvid, `starlinghq/corvid` private); status line notes Vault M1 is built. |
