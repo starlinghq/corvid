@@ -39,7 +39,7 @@ Vault is its own executable (`corvid-vault`). It is deliberately small and borin
 - no Starling, no models, no plugins, no scripting
 - the fewest dependencies possible
 
-Corvid talks to it over a Unix domain socket and Vault authenticates the caller with `SO_PEERCRED`: uid, pid, and the executable path checked against the installed Corvid binary. On Windows the equivalent is a named pipe with an ACL and client process verification. On macOS it is a launchd service with a Unix socket.
+Corvid talks to it over a Unix domain socket and Vault authenticates the caller with `SO_PEERCRED`. In the strong tier it checks the uid against Corvid's user. A different uid cannot inspect `/proc/<pid>/exe`, so the uid is the identity there. In the default tier it also checks the peer's executable path against the installed Corvid binary. On Windows the equivalent is a named pipe with an ACL and client process verification. On macOS it is a launchd service with a Unix socket.
 
 **Store.** Values are encrypted at rest under an OS facility:
 
@@ -92,12 +92,14 @@ Most secrets are bearer tokens or API keys sent in an HTTP header, so most secre
 Some tools need the raw value: a database CLI with a connection string, a cloud CLI that signs requests (AWS SigV4), a binary that reads a key file. Two options, best first:
 
 - **A signing adapter.** Vault signs on the caller's behalf. Vault's proxy can do SigV4 itself, so `aws` gets placeholder credentials and the proxy re-signs the request. Adapters are added per protocol.
-- **Exec.** Corvid asks Vault to run a command. Vault spawns it as `corvid-exec` inside the same sandbox profile Corvid would use, with the value in env or in a memory-backed file (`memfd`) that is deleted on exit.
+- **Exec.** Corvid asks Vault to run a command. Vault spawns it as `corvid-exec` through `corvid-sandbox`. That is a small launcher executable shared by Corvid and Vault, so the bubblewrap, Landlock and seccomp policy is defined in one place and Vault does not depend on Corvid's libraries. The child gets the value in env or in a memory-backed file (`memfd`) that is deleted on exit.
   - stdout and stderr are relayed back to Corvid **through the scrubber**.
   - The child's network is still limited to the secret's bound hosts.
   - The model writes the command, but Vault decides whether it may run with the secret: policy names the allowed executables and argument patterns per secret, for example `psql` only, against the bound host.
 
 Exec is the weakest path, because the value lives in a process the model's code influences. A script can still write the value somewhere inside its sandbox, or encode it into an allowed request. Exec secrets are therefore tagged in policy, and Kev's `risk` question sees "exec with secret" as a risk factor.
+
+**Out of scope for v1:** scripts that write a secret into a long-lived config file for another program (`~/.netrc`, a kubeconfig, a database client's password file). Exec's `memfd` covers one-shot use. Persistent cases need a protocol adapter (as §3.2 does for SSH) or the user's own setup outside Corvid.
 
 ## 4. Names, placeholders and the catalogue
 
@@ -188,7 +190,12 @@ Cloud model slots (`corvid-agent.md` §4) authenticate through the proxy like an
 - A leaked config file, crash dump or environment dump from Corvid contains nothing.
 - Hermes' credential pools and key rotation become Vault policy (several values per name, round-robin, cool-down on 429) without Corvid knowing.
 
-Gateway bot tokens (Telegram, Discord, Slack) follow the same pattern. Adapters connect through Vault's proxy, or, for long-lived websockets, through a Vault-held connection that relays frames.
+Gateway bot tokens (Telegram, Discord, Slack) also go through the proxy path, never exec, so they work in both tiers:
+- Telegram puts the token in the URL path, so that secret enables path substitution for `api.telegram.org`.
+- Slack's Socket Mode uses the token in a header to open the connection.
+- Discord sends its token inside the first websocket frame (`IDENTIFY`). Vault's proxy handles the websocket upgrade and substitutes only in that first client frame, for secrets marked `ws_first_frame`.
+
+In every case the value stays inside Vault.
 
 ## 10. Audit
 
@@ -204,7 +211,7 @@ Corvid shows Vault events in `/insights` only as counts, through a read-only sum
 
 ## 11. When Vault is absent
 
-Tools with `SecretRef` parameters report unavailable through their `check_fn`, and cloud slots without keys disappear from `/model`. Everything else works. Corvid never falls back to reading environment variables for secrets. That one rule closes the easiest leak.
+Tools with `SecretRef` parameters report unavailable through their `check_fn`, and cloud slots without keys disappear from `/model`. The kernel's scrub step is skipped, because no values exist to find. Everything else works. Corvid never falls back to reading environment variables for secrets. That one rule closes the easiest leak.
 
 ## 12. How this compares
 

@@ -115,7 +115,8 @@ src/
   Corvid.Memory              SQLite store: FTS5, sqlite-vec, temporal graph, core blocks
   Corvid.Skills              agentskills.io loader, selector, learning loop, curator
   Corvid.Tools               built-in tools + Corvid.Tools.Generators (Roslyn source generator)
-  Corvid.Sandbox             Linux: bubblewrap + Landlock + seccomp; container backend; SSH backend
+  Corvid.Sandbox             Linux: bubblewrap + Landlock + seccomp; container backend; SSH backend.
+                             The policy is applied by a small shared launcher, corvid-sandbox, that Corvid Vault also uses
   Corvid.Mcp                 client and server (ModelContextProtocol C# SDK)
   Corvid.Acp                 Agent Client Protocol over stdio
   Corvid.Gateway             adapter host, delivery ledger, pairing; Corvid.Gateway.<Platform>
@@ -330,7 +331,7 @@ Starling already renders the Qwen template and parses tool calls in-process (`Qw
 
 **Constrained decoding (later, upstream U-2).** ONNX Runtime GenAI integrates llguidance. When Starling exposes it, Corvid builds a Lark grammar per turn: either free text, or the union of `{name: const, arguments: schema}` for the offered tools. Invalid names and malformed arguments then become impossible, and step 5 becomes rare.
 
-**Tool registry.** Tools are C# methods with attributes. A Roslyn incremental generator emits the `AIFunction` wrapper, the JSON Schema (`AIJsonUtilities` at compile time), the validator, the risk metadata (`[SideEffect(Filesystem)]`, `[Network]`, `[Destructive]`) and the embedding examples file. That means no reflection and Native AOT compatibility. Toolsets, platform presets and `check_fn` availability work as in Hermes. MCP tools arrive as `McpClientTool`, which is already an `AIFunction`, and get the same treatment: embedded, shortlisted and risk-scored.
+**Tool registry.** Tools are C# methods with attributes. A Roslyn incremental generator emits the `AIFunction` wrapper, the JSON Schema (`AIJsonUtilities` at compile time), the validator, the risk metadata (`[SideEffect(Filesystem)]`, `[Network]`, `[Destructive]`) and the embedding examples file. Parameters of type `SecretRef` are rendered as an enum of Vault catalogue names, so a model can only name a secret, never supply one (§10.5). That means no reflection and Native AOT compatibility. Toolsets, platform presets and `check_fn` availability work as in Hermes. MCP tools arrive as `McpClientTool`, which is already an `AIFunction`, and get the same treatment: embedded, shortlisted and risk-scored.
 
 **Tool search.** When a cloud generator is active and the shortlist is too small, Corvid exposes `tool_search` and `tool_call`, as Hermes and Anthropic do. Local generators never see the search tool, because the fabric does the searching.
 
@@ -449,6 +450,7 @@ Secrets live in **Corvid Vault** (`corvid-vault`), a separate, model-free proces
 - Each secret has its own policy (hosts, methods, paths, budgets, taint). High-value uses need an out-of-band confirmation that Corvid cannot forge.
 - Credentials pasted into chat are intercepted at ingress and moved into Vault.
 - Corvid never reads secrets from environment variables. When Vault is absent, secret-bearing tools are unavailable.
+- The hardline deny list (§10.2) and the sandbox's denial of secret paths stay in place as defence in depth.
 
 ### 10.6 Supply chain
 
