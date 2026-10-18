@@ -37,6 +37,20 @@ jobs:
       - name: Production dependency boundaries
         run: dotnet run --project tools/Corvid.Architecture -c Release --no-build -- .
 
+      # The sandbox tests (C-007a) run real commands under bubblewrap. Ubuntu 23.10 and later let AppArmor restrict
+      # unprivileged user namespaces to programs with a profile that allows them; bubblewrap needs one, and the seccomp
+      # test needs `unshare -U` to work outside the sandbox as its control. Lift the restriction on this throwaway runner.
+      - name: Install bubblewrap and allow unprivileged user namespaces
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap
+          bwrap --version
+          echo "LSMs: $(cat /sys/kernel/security/lsm)"
+          echo "apparmor_restrict_unprivileged_userns: $(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo absent)"
+          if sysctl -n kernel.apparmor_restrict_unprivileged_userns > /dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
       - name: Test
         run: dotnet test --solution Corvid.slnx -c Release --no-build
         env:
@@ -52,8 +66,18 @@ jobs:
           tests/Corvid.Vault.Tests/bin/Release/net10.0/Corvid.Vault.Tests -method "*S6*" -noColor | tee s6.log
           grep -q "Total: 1, Errors: 0, Failed: 0, Skipped: 0" s6.log
 
+      # The confinement tests skip themselves where bubblewrap or Landlock is missing. On CI that would hide the tests
+      # that prove a sandboxed tool cannot read Vault's store, so require that all of them ran and passed. Update the
+      # count when confinement tests are added.
+      - name: Sandbox confinement ran and passed
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          tests/Corvid.Sandbox.Tests/bin/Release/net10.0/Corvid.Sandbox.Tests -trait "Category=Confinement" -noColor | tee sandbox.log
+          grep -q "Total: 26, Errors: 0, Failed: 0, Skipped: 0, Not Run: 0" sandbox.log
+
   aot:
-    name: Native AOT publish (corvid-vault)
+    name: Native AOT publish (corvid-vault, corvid-sandbox)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -69,3 +93,31 @@ jobs:
         run: |
           ls -l out/corvid-vault
           out/corvid-vault --help
+
+      - name: Install bubblewrap and allow unprivileged user namespaces
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap
+          if sysctl -n kernel.apparmor_restrict_unprivileged_userns > /dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      - name: Publish corvid-sandbox
+        run: dotnet publish sandbox/Corvid.Sandbox.Launcher/Corvid.Sandbox.Launcher.csproj -c Release -r linux-x64 -p:PublishAot=true -o out-sandbox
+
+      # A real confined run with the native binary: the workspace is written, a planted ~/.ssh file is not readable,
+      # and the status reports every layer.
+      - name: Run the native corvid-sandbox
+        run: |
+          ls -l out-sandbox/corvid-sandbox
+          out-sandbox/corvid-sandbox --version
+          mkdir -p "$RUNNER_TEMP/ws" "$HOME/.ssh"
+          echo "smoke-secret-$GITHUB_RUN_ID" > "$HOME/.ssh/corvid-smoke"
+          out-sandbox/corvid-sandbox --workspace "$RUNNER_TEMP/ws" --env PATH --status-file "$RUNNER_TEMP/status.json" \
+            -- /bin/sh -c 'echo sandboxed > out.txt; if cat "$0"; then echo LEAKED; fi' "$HOME/.ssh/corvid-smoke" | tee smoke.log
+          cat "$RUNNER_TEMP/status.json"; echo
+          grep -qx sandboxed "$RUNNER_TEMP/ws/out.txt"
+          if grep -q -e LEAKED -e smoke-secret smoke.log; then echo "The sandbox read ~/.ssh"; exit 1; fi
+          grep -q '"started":true' "$RUNNER_TEMP/status.json"
+          grep -q '"landlock-v' "$RUNNER_TEMP/status.json"
+          grep -q '"seccomp"' "$RUNNER_TEMP/status.json"

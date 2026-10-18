@@ -63,6 +63,17 @@ public sealed class BoundaryTests
     [InlineData("Corvid.Fabric", "Starlings.Models.Kev", "package", false)]
     [InlineData("Corvid.Fabric", "Corvid.Models.Starling", "project", false)]
     [InlineData("Corvid.Fabric", "System.Numerics.Tensors", "package", false)]
+    // C-007a: the sandbox launcher has no dependencies and nothing references it.
+    [InlineData("Corvid.Sandbox.Launcher", "Corvid.Abstractions", "project", false)]
+    [InlineData("Corvid.Sandbox.Launcher", "Corvid.Vault.Contracts", "project", false)]
+    [InlineData("Corvid.Sandbox.Launcher", "Microsoft.Extensions.AI.Abstractions", "package", false)]
+    [InlineData("Corvid.Sandbox.Launcher", "Microsoft.NET.ILLink.Tasks", "package", true)]
+    [InlineData("Corvid.Sandbox", "Corvid.Abstractions", "project", true)]
+    [InlineData("Corvid.Sandbox", "Corvid.Sandbox.Launcher", "project", false)]
+    [InlineData("Corvid.Sandbox", "Starlings.Models.Kev", "package", false)]
+    [InlineData("Corvid.Kernel", "Corvid.Sandbox.Launcher", "project", false)]
+    [InlineData("Corvid.Vault", "Corvid.Sandbox.Launcher", "project", false)]
+    [InlineData("Corvid.Models.Starling", "Corvid.Sandbox.Launcher", "project", false)]
     public void EnforcesLayerRules(string project, string dependency, string type, bool allowed)
     {
         using var assets = Assets(("net10.0", dependency, type));

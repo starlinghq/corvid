@@ -5,6 +5,7 @@
     <Project Path="src/Corvid.Kernel/Corvid.Kernel.csproj" />
     <Project Path="src/Corvid.Models/Corvid.Models.csproj" />
     <Project Path="src/Corvid.Models.Starling/Corvid.Models.Starling.csproj" />
+    <Project Path="src/Corvid.Sandbox/Corvid.Sandbox.csproj" />
     <Project Path="src/Corvid.Tools/Corvid.Tools.csproj" />
     <Project Path="src/Corvid.Tools.Generators/Corvid.Tools.Generators.csproj" />
     <Project Path="src/Corvid.Vault.Contracts/Corvid.Vault.Contracts.csproj" />
@@ -12,6 +13,9 @@
   </Folder>
   <Folder Name="/vault/">
     <Project Path="vault/Corvid.Vault/Corvid.Vault.csproj" />
+  </Folder>
+  <Folder Name="/sandbox/">
+    <Project Path="sandbox/Corvid.Sandbox.Launcher/Corvid.Sandbox.Launcher.csproj" />
   </Folder>
   <Folder Name="/evals/">
     <Project Path="evals/Corvid.Evals/Corvid.Evals.csproj" />
@@ -26,6 +30,7 @@
     <Project Path="tests/Corvid.Vault.Tests/Corvid.Vault.Tests.csproj" />
     <Project Path="tests/Corvid.Tools.Fixtures/Corvid.Tools.Fixtures.csproj" />
     <Project Path="tests/Corvid.Tools.Tests/Corvid.Tools.Tests.csproj" />
+    <Project Path="tests/Corvid.Sandbox.Tests/Corvid.Sandbox.Tests.csproj" />
     <Project Path="tests/Corvid.Vault.TestClient/Corvid.Vault.TestClient.csproj" />
   </Folder>
   <Folder Name="/tools/">
