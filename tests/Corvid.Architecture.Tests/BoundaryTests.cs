@@ -58,6 +58,11 @@ public sealed class BoundaryTests
     [InlineData("Corvid.Tools", "Starlings.Acquisition", "package", false)]
     [InlineData("Corvid.Abstractions", "Starlings.Tokenizers", "package", false)]
     [InlineData("Corvid.Kernel", "Corvid.Models.Starling", "project", false)]
+    [InlineData("Corvid.Fabric", "Microsoft.Extensions.AI.Abstractions", "package", true)]
+    [InlineData("Corvid.Fabric", "Corvid.Abstractions", "project", true)]
+    [InlineData("Corvid.Fabric", "Starlings.Models.Kev", "package", false)]
+    [InlineData("Corvid.Fabric", "Corvid.Models.Starling", "project", false)]
+    [InlineData("Corvid.Fabric", "System.Numerics.Tensors", "package", false)]
     public void EnforcesLayerRules(string project, string dependency, string type, bool allowed)
     {
         using var assets = Assets(("net10.0", dependency, type));

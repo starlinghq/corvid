@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Corvid's decision fabric: question catalogue, floors, TurnState, policy and the degraded decider.</Description>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
+    <ProjectReference Include="../Corvid.Abstractions/Corvid.Abstractions.csproj" />
+    <EmbeddedResource Include="floors.json" LogicalName="Corvid.Fabric.floors.json" />
+    <InternalsVisibleTo Include="Corvid.Fabric.Tests" />
+  </ItemGroup>
+</Project>

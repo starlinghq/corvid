@@ -1,4 +1,5 @@
 using Corvid.Abstractions.Extraction;
+using Corvid.Abstractions.Fabric;
 using Microsoft.Extensions.AI;
 
 namespace Corvid.Models;
@@ -18,15 +19,16 @@ public static class ModelSlots
         [Generator, Summarizer, Decider, Extractor, TextEmbedder, MediaEmbedder, Vision];
 
     /// <summary>
-    /// The service a binding must provide, or null where the contract is not defined yet: the decider contract arrives
-    /// with C-004a, and media embeddings use a typed Starling API that core cannot reference.
+    /// The service a binding must provide, or null where the contract is not defined yet: media embeddings use a typed
+    /// Starling API that core cannot reference. IExtractor arrived with C-010 and IDecider with C-004a.
     /// </summary>
     public static Type? ContractOf(string slot) => slot switch
     {
         Generator or Summarizer or Vision => typeof(IChatClient),
         TextEmbedder => typeof(IEmbeddingGenerator<string, Embedding<float>>),
+        Decider => typeof(IDecider),
         Extractor => typeof(IExtractor),
-        Decider or MediaEmbedder => null,
+        MediaEmbedder => null,
         _ => throw new ArgumentException($"Unknown model slot '{slot}'.", nameof(slot)),
     };
 

@@ -1,4 +1,4 @@
-# Agent foundation (C-001, C-002, C-005, C-006, C-009, C-010)
+# Agent foundation (C-001, C-002, C-004a, C-005, C-006, C-009, C-010)
 
 The solution contains `Corvid.Abstractions`, `Corvid.Kernel`, and
 `Corvid.Models`, alongside the working Vault projects. Kernel and Models each
@@ -6,7 +6,9 @@ reference Abstractions; Models also references
 `Microsoft.Extensions.AI.Abstractions`. Models must not reference Kernel: the
 kernel's turn loop will depend on the slots. C-005 added `Corvid.Tools` and its
 build-time generator, `Corvid.Tools.Generators` (see [Tools](#tools-c-005)). C-010 added the first adapter,
-`Corvid.Models.Starling` (see [Starling adapters](#starling-adapters-c-010)). Add
+`Corvid.Models.Starling` (see [Starling adapters](#starling-adapters-c-010)).
+C-004a added `Corvid.Fabric`, which references Abstractions and
+`Microsoft.Extensions.AI.Abstractions` (see [Decision fabric](#decision-fabric-c-004a)). Add
 the other projects from the agent plan as their implementations start, rather
 than creating empty projects for every future surface.
 
@@ -74,8 +76,9 @@ are synchronous; callers that must not block should use a storage worker.
   persisted serializer itself rather than a copy of the format.
 
 Not built yet: decision replay. The plan (§3.2, §16) replays logs against new
-thresholds and new models; that needs `IDecider` and the TurnState builder (C-004),
-then a decision-set format and scoring (tool choice, argument match, escalation
+thresholds and new models. `IDecider`, the TurnState builder and versioned floors
+now exist (C-004a), and every `Decision` event records its floor version and decider;
+replay still needs a decision-set format and scoring (tool choice, argument match, escalation
 rate). Golden sets per generator profile and fabric version, a command-line runner,
 and prompt-rendering checks (C-006) also follow later.
 
@@ -95,10 +98,11 @@ de-escalation rule of §6. It depends only on Abstractions and
 - `ModelSlots` names the seven slots (`generator`, `summarizer`, `decider`,
   `extractor`, `embedder.text`, `embedder.media`, `vision`) and their contracts:
   `IChatClient` for generator, summarizer and vision,
-  `IEmbeddingGenerator<string, Embedding<float>>` for `embedder.text`, and
-  `IExtractor` (Corvid.Abstractions, added by C-010) for `extractor`. The
-  decider and media-embedder contracts are not defined yet (C-004a, and a
-  Starling-typed API core cannot reference), so those slots accept any service.
+  `IEmbeddingGenerator<string, Embedding<float>>` for `embedder.text`,
+  `IExtractor` (`Corvid.Abstractions.Extraction`, added by C-010) for `extractor`, and
+  `IDecider` (`Corvid.Abstractions.Fabric`, added by C-004a) for `decider`. The
+  media-embedder contract is not defined yet (a Starling-typed API core cannot
+  reference), so that slot accepts any service.
 - `ModelSlotRegistry` is the process-wide catalogue: per slot a default binding,
   an escalation ladder and a fallback chain. `SessionModelSlots` holds one
   session's current bindings, captured from the registry at creation, so
@@ -137,7 +141,7 @@ reports the direction), per-request redaction (§10.4), re-rendering the
 projection for the new model's format, re-embedding after an `embedder.text`
 swap (§4.3), restoring current bindings and pins from the log on resume (pins
 are not persisted), recording switch costs for `/insights`, and the
-decider/media contracts.
+media-embedder contract.
 
 ## Starling adapters (C-010)
 
@@ -215,7 +219,7 @@ conversation-level token counting before a call, the `corvid doctor` command its
 - Core libraries may reference other core libraries and explicitly reviewed
   infrastructure packages. They may not reference adapters or provider SDKs,
   even indirectly. The package allowlist contains
-  `Microsoft.Extensions.AI.Abstractions` and, for the event log,
+  `Microsoft.Extensions.AI.Abstractions` (used by Models, Tools and Fabric) and, for the event log,
   `Microsoft.Data.Sqlite` with its resolved dependencies
   (`Microsoft.Data.Sqlite.Core` and the `SQLitePCLRaw.*` e_sqlite3 bundle). Add infrastructure packages and their
   transitive dependencies to `CorePackages` in the checker when needed; never
@@ -289,6 +293,89 @@ and return values (which need a `JsonSerializerContext`), toolsets, platform
 presets and `check_fn` availability, and restricting secrets by the catalogue's
 toolset bindings. Corvid.Tools contains no built-in tools yet.
 
+## Decision fabric (C-004a)
+
+`Corvid.Fabric` (core, `IsAotCompatible`) implements plan §5.1, §5.3, the policy
+side of §5.2 and §5.5, and the degraded tier of §5.6. Kev is not used:
+`Starlings.Models.Kev` is not on nuget.org, so the degraded decider is the only
+`IDecider` implementation, and nothing in Fabric references a Starling or provider
+package. It needs no new infrastructure package, so the checker's allowlist is
+unchanged.
+
+- Contracts (`Corvid.Abstractions/Fabric`): `IDecider` takes a `DecisionRequest`,
+  one shared state (`JsonElement`) plus named `DecisionQuestion`s, each Noul
+  (options `yes`, `no`), Choice (options with optional descriptions, rendered
+  `name: description`) or Score (ordered levels), with per-question instructions
+  as text or JSON (`DecisionContent`, after `KevContent`). It returns
+  `DeciderAnswers` or `DeciderUnavailable` (`StateOverBudget`, `Refused`,
+  `Failed`), which makes the caller fall back. A `DecisionAnswer` holds
+  probabilities in option order, `Confidence` (Kev's `(p_max − 1/K)/(1 − 1/K)`),
+  `ExpectedScore` (Σ i·pᵢ for scores), `Calibrated` and, for embedding answers,
+  the top-1 `Margin`. The contract lives in Abstractions so `Corvid.Models` can
+  type the slot without referencing Fabric. The `extractor` slot's `IExtractor`
+  is C-010's (`Corvid.Abstractions.Extraction`).
+- `QuestionCatalogue.Default` is the §5.3 table as data: id, checkpoints
+  (`ingress`, `step`, `pre_execute`, `egress`, `tick`), kind and fixed options (or
+  caller-supplied for `tool` and `skill`), role (gate or routing), what the floor
+  measures (choice confidence, P(yes), expected score, or the `risk` level rule),
+  the act and below-floor actions, the degraded rule, and named caller conditions
+  (`FabricConditions`, for example `agent_authored` for `skill_write_safe`). Gates
+  are `risk`, `skill_write_safe` and `memory_op`. A request key may carry an
+  instance suffix (`clear_results/call-7`).
+- Floors are versioned configuration: `floors.json`, embedded in the assembly and
+  read through a source-generated context that rejects unknown properties.
+  `FloorConfiguration` holds the version, the degraded choice margin (0.05) and one
+  floor per catalogue question, validated on load. Starting values are the §5.3
+  ones; `risk`, which the table gives no number, starts at confidence 0.9 (the
+  §5.5 gating precision target).
+- `TurnStateBuilder` renders the §5.1 fields in a fixed order with per-field
+  token budgets (total 600, hard stop 1,500). Strings keep their longest prefix
+  that fits, ending in `…`, without splitting surrogate pairs; `recent` keeps the
+  newest items; entities keep ordinal label order. If the state is still over
+  the total, `recent`, `last_tool_result`, `entities`, `goal` and `user_message`
+  are cut further in that order. Fixed fields still over the hard stop set
+  `ExceedsHardStop`. Counting goes through `ITokenCounter`
+  (`Corvid.Abstractions.Tokens`, shared with C-010); the default is characters /
+  4, rounded up. A model's own counter, such as the Qwen generator binding's, can
+  be passed in, but nothing wires one yet.
+- `DegradedDecider` (§5.6): choices by cosine similarity between the rendered state
+  (`key: value` lines, as Kev reads JSON) and each option, in one embedding batch
+  per request; Noul questions by asking the generator for `yes` or `no` (leading
+  word, any case; anything else is no answer); `difficulty` by the user message's
+  token length and the tool steps taken. Gates, `injection` and `clear_results`
+  get no answer, and no model is called for them. Every answer is uncalibrated.
+- `DecisionPolicy` applies floors. An uncalibrated answer never passes a gate. A
+  degraded choice acts only when its margin is above 0.05. A heuristic
+  `difficulty` is logged but never escalates, so escalation is manual (`/model`).
+  A missing or malformed answer, or a missing required condition, takes the
+  below-floor action. For `risk` above its floor, levels 3–4 return `ask`, 0–1
+  return `auto_run` in permissive mode, and other levels return `approval_mode`,
+  left to the approval pipeline (C-007b).
+- `DecisionFabric.DecideAsync` runs one checkpoint. Questions must belong to the
+  catalogue and the checkpoint, have the catalogue's kind and, for rows with fixed
+  options (`risk`, `difficulty`, `memory_op` and others), exactly its options in
+  order, because the policy reads score levels by index. It sends one request to the calibrated decider
+  when one is configured and the state is within the hard stop, and falls back
+  to the degraded tier when there is none, the state is over the hard stop, or
+  the decider declines or throws. It then appends one `Decision` per question in
+  a single batch, retrying at the new head after a concurrent append. Each event
+  holds the probabilities, confidence, the threshold actually compared (floor or
+  margin), the action, `catalogue_version` (the floor version) and `decider`, for
+  example `degraded after kev-0.8b: state_over_budget`. `RecordOutcome` appends
+  `DecisionOutcomeRecorded`.
+- `Decision` gained two optional fields, `catalogue_version` and `decider`. They
+  are omitted when null, so events written before C-004a keep their persisted form
+  and still read.
+
+Not built yet: the Kev adapter and the two-tier escalation to Kev-4B (C-004b, which
+waits for the package); wiring a model's token counter into the builder; GLiNER2 entities and the
+embedding shortlist that feed the state and the `tool` and `skill` options (§5.4,
+C-010, C-011); the `remember` durability score; the `tool` question's
+below-floor variant that escalates on the 0.8B generator (the caller's choice for
+now); generator logprobs as a Noul confidence (`IChatClient` has no logprobs
+surface); per-question row budgets (1,000 tokens), which the Kev adapter enforces
+by declining; decision replay and calibration tooling (C-021).
+
 ## Running the check
 
 ```sh
@@ -311,4 +398,4 @@ architecture regression check for NuGet/project references, not a security
 sandbox or an IL analyzer for manually supplied binaries.
 
 The next milestone that builds on the log is decision replay in the C-009
-harness, after C-004.
+harness, now that C-004a records floor versions on every decision.
