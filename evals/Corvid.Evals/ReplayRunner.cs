@@ -72,7 +72,11 @@ public sealed class ReplaySession : IDisposable
     private static long Append(IEventLog log, string sessionId, GoldenTrajectory trajectory, CancellationToken cancellationToken)
     {
         if (trajectory.Events.IsEmpty)
-            return 0;
+        {
+            // Nothing to append, so no conflict would surface; check emptiness directly.
+            var head = log.GetHead(sessionId, cancellationToken);
+            return head == 0 ? 0 : throw new EventLogConflictException(sessionId, 0, head);
+        }
         // One batch at head zero: a session that already has history fails with a conflict instead of mixing logs.
         var stored = log.Append(sessionId, 0, [.. trajectory.Events.Select(EventData.Create)], cancellationToken);
         return stored[^1].Sequence;
@@ -145,10 +149,19 @@ public static class ReplayRunner
         var checks = ImmutableArray.CreateBuilder<CheckResult>();
         foreach (var check in trajectory.Checks)
         {
-            var actual = SnapshotJson.ToJson(session.Project(check.Through, check.ExpandCompactions, cancellationToken));
-            var differences = check.Expected is { } expected
-                ? JsonDiff.Compare(expected, actual)
-                : ["The expected projection has not been recorded."];
+            IReadOnlyList<string> differences;
+            try
+            {
+                // A trajectory built in code is not range-checked by the parser, so a bad position is a result, not a throw.
+                var actual = SnapshotJson.ToJson(session.Project(check.Through, check.ExpandCompactions, cancellationToken));
+                differences = check.Expected is { } expected
+                    ? JsonDiff.Compare(expected, actual)
+                    : ["The expected projection has not been recorded."];
+            }
+            catch (Exception exception) when (exception is ArgumentException or InvalidDataException)
+            {
+                differences = [$"Position {check.Through} does not project: {exception.Message}"];
+            }
             checks.Add(new(check.Through, check.ExpandCompactions, [.. differences]));
         }
         return new(trajectory.Id, checks.ToImmutable(), failures.ToImmutable());

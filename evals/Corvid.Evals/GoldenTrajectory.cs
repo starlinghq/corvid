@@ -63,7 +63,10 @@ public static class GoldenTrajectoryFile
                 throw new InvalidDataException($"Expected format '{Format}'.");
             if (Integer(root, "format_version") != FormatVersion)
                 throw new InvalidDataException($"Unsupported golden trajectory format version; this harness reads version {FormatVersion}.");
-            var payloadVersion = (int)Integer(root, "payload_version");
+            // Range-check before narrowing so an oversized version cannot wrap round to a supported one.
+            var payloadVersion = Integer(root, "payload_version") is var version and >= 0 and <= int.MaxValue
+                ? (int)version
+                : throw new InvalidDataException("'payload_version' is out of range.");
 
             var events = ImmutableArray.CreateBuilder<SessionEvent>();
             foreach (var item in Array(root, "events"))

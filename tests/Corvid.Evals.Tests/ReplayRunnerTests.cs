@@ -71,6 +71,16 @@ public sealed class ReplayRunnerTests
     }
 
     [Fact]
+    public void A_check_past_the_head_is_reported_not_thrown()
+    {
+        var recorded = Recorded();
+        var report = ReplayRunner.Verify(recorded with { Checks = [.. recorded.Checks, new GoldenCheck(9, false, null)] }, Ct);
+
+        Assert.False(report.Passed);
+        Assert.Contains("does not project", Assert.Single(report.Checks[^1].Differences));
+    }
+
+    [Fact]
     public void Every_position_projects_the_prefix()
     {
         using var session = ReplaySession.Create(Recorded(), Ct);
@@ -109,6 +119,7 @@ public sealed class ReplayRunnerTests
             }
 
             Assert.Throws<EventLogConflictException>(() => ReplaySession.Create(Recorded(), log, "s1", Ct));
+            Assert.Throws<EventLogConflictException>(() => ReplaySession.Create(Recorded() with { Events = [] }, log, "s1", Ct));
             // Disposing a session over a caller's log leaves the log alone.
             Assert.Equal(3, log.GetHead("s1", Ct));
         }
@@ -181,6 +192,7 @@ public sealed class GoldenTrajectoryFileTests
     [InlineData("\"format_version\": 1", "\"format_version\": 2", "format version")]
     [InlineData("\"format\": \"corvid-golden-trajectory\"", "\"format\": \"other\"", "format")]
     [InlineData("\"payload_version\": 1", "\"payload_version\": 2", "payload version 2")]
+    [InlineData("\"payload_version\": 1", "\"payload_version\": 4294967297", "payload_version")]
     [InlineData("\"description\": \"\"", "\"description\": \"\", \"extra\": true", "$.extra")]
     [InlineData("\"through\": 1", "\"through\": 2", "through must be between")]
     [InlineData("\"through\": 1", "\"through\": -1", "through must be between")]
