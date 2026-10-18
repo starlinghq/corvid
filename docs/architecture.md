@@ -1,11 +1,41 @@
-# Agent foundation (C-001)
+# Agent foundation (C-001, C-002)
 
-The initial solution contains `Corvid.Abstractions`, `Corvid.Kernel`, and
+The solution contains `Corvid.Abstractions`, `Corvid.Kernel`, and
 `Corvid.Models`, alongside the working Vault projects. Kernel and Models each
-reference Abstractions. These three agent projects intentionally contain no public
-types yet: the event contracts belong to C-002, and slot contracts to C-006.
-Add the other projects from the agent plan as their implementations start, rather
-than creating empty projects for every future surface.
+reference Abstractions. `Corvid.Models` has no public types yet; slot contracts
+belong to C-006. Add the other projects from the agent plan as their
+implementations start, rather than creating empty projects for every future surface.
+
+## Session event log (C-002)
+
+- `Corvid.Abstractions/Events` holds the event contracts: `SessionEvent` and its
+  types, and `IEventLog`. The JSON discriminators declared on `SessionEvent`
+  (`user_message`, `decision`, `compacted`, ...) are persisted wire names; renaming
+  one requires a payload version bump and a migration.
+- `Corvid.Kernel/Events` holds `SqliteEventLog`, the source-generated JSON
+  context (snake_case, payload version 1) and `SessionProjection`. Abstractions and
+  Kernel set `IsAotCompatible`, so the trim and AOT analyzers run on them.
+- The log is one SQLite file (WAL, `synchronous=FULL`) with one row per event,
+  keyed by session and a one-based sequence. Triggers reject `UPDATE` and `DELETE`.
+  `Append` takes the expected head, writes a whole batch or nothing, and throws
+  `EventLogConflictException` when another writer got there first. A session
+  actor is expected to be the single writer; the check keeps a second writer
+  (for example a recovering process) from silently interleaving.
+- `SessionProjection` replays a complete prefix into a snapshot: transcript, goal,
+  todos, pending approvals, model profiles per slot, decisions with outcomes, and
+  checkpoints. `Compacted` replaces its range in the transcript only; the raw
+  events stay in the log. Goals, todos and approvals are folded from their own
+  events, so compaction cannot remove them. `Load(log, session, throughSequence)`
+  projects any earlier position, the basis for resume, branch and undo.
+- Persisted events the projection cannot apply (a compaction that splits a tool
+  call from its result, an outcome for an unknown decision, duplicate IDs) are
+  reported in `SessionSnapshot.Issues` rather than thrown, because an append-only
+  log cannot repair them and the session must stay readable.
+
+Not built yet: the session actor and its command channel, rendering a projection
+into a model prompt (C-006), full-text search over raw events, branch and fork
+sessions that copy a prefix, and schema migrations beyond version 1. SQLite calls
+are synchronous; callers that must not block should use a storage worker.
 
 ## Dependency rules
 
@@ -16,8 +46,10 @@ than creating empty projects for every future surface.
   `Corvid.Models` project is core, not an adapter.
 - Core libraries may reference other core libraries and explicitly reviewed
   infrastructure packages. They may not reference adapters or provider SDKs,
-  even indirectly. The initial package allowlist contains only
-  `Microsoft.Extensions.AI.Abstractions`. Add infrastructure packages and their
+  even indirectly. The package allowlist contains
+  `Microsoft.Extensions.AI.Abstractions` and, for the event log,
+  `Microsoft.Data.Sqlite` with its resolved dependencies
+  (`Microsoft.Data.Sqlite.Core` and the `SQLitePCLRaw.*` e_sqlite3 bundle). Add infrastructure packages and their
   transitive dependencies to `CorePackages` in the checker when needed; never
   add a provider SDK there.
 - Provider SDKs and Starling model packages belong in `Corvid.Models.*` adapters.
@@ -54,5 +86,5 @@ standard `obj/` path; custom intermediate paths are not supported. This is an
 architecture regression check for NuGet/project references, not a security
 sandbox or an IL analyzer for manually supplied binaries.
 
-The next milestone is C-002: typed events and an append-only SQLite log with
-projections, which will support session resume, compaction and model switching.
+The next milestones that build on the log are C-006 (slot registry, profiles and
+switching) and C-009 (golden set and replay harness).

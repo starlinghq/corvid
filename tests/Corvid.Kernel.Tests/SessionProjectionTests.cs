@@ -1,0 +1,222 @@
+using System.Collections.Immutable;
+using Corvid.Abstractions.Events;
+using Corvid.Kernel.Events;
+
+namespace Corvid.Kernel.Tests;
+
+public sealed class SessionProjectionTests : IDisposable
+{
+    private static readonly CompactionSummary Summary = new("move reminder", ["local only"], [], [], [], "tell sam");
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+    private readonly TempLog _db = new();
+
+    public void Dispose() => _db.Dispose();
+
+    private long Append(params SessionEvent[] events)
+    {
+        var head = _db.Log.GetHead("s", cancellationToken: Ct);
+        return _db.Log.Append("s", head, Samples.Data(events), cancellationToken: Ct)[^1].Sequence;
+    }
+
+    private SessionSnapshot Load(long? through = null, bool expand = false) =>
+        SessionProjection.Load(_db.Log, "s", through, expand, cancellationToken: Ct);
+
+    private static Decision Decide(string id) =>
+        new(id, "intent", ImmutableDictionary<string, double>.Empty.Add("use_tools", 0.9), 0.9, 0.6, "use_tools");
+
+    [Fact]
+    public void Compaction_replaces_a_range_in_the_transcript_only()
+    {
+        Append(
+            new UserMessage("one"),                                         // 1
+            new AssistantMessage("two"),                                    // 2
+            new ToolCallIssued("c1", "read", Samples.Json("{}")),           // 3
+            new ToolResult("c1", Samples.Json("\"text\"")),                 // 4
+            new UserMessage("five"));                                       // 5
+        Append(new Compacted(1, 4, Summary));                               // 6
+
+        var snapshot = Load();
+
+        Assert.Equal(6, snapshot.Head);
+        Assert.Collection(snapshot.Transcript,
+            entry => Assert.Equal((1L, 4L, "tell sam"), (entry.FromSequence, entry.ThroughSequence, ((Compacted)entry.Content).Summary.NextStep)),
+            entry => Assert.Equal("five", Assert.IsType<UserMessage>(entry.Content).Text));
+        Assert.Empty(snapshot.Issues);
+        // The raw range is still in the log, and the expanded view shows it.
+        Assert.Equal(6, _db.Log.Read("s", cancellationToken: Ct).Count);
+        Assert.Equal([1L, 2L, 3L, 4L, 5L], Load(expand: true).Transcript.Select(entry => entry.FromSequence));
+    }
+
+    [Fact]
+    public void Goals_todos_approvals_and_decisions_survive_compaction()
+    {
+        Append(
+            new GoalSet("ship the event log"),                                  // 1
+            new TodosSet([new TodoItem("t1", "tests", Completed: false)]),     // 2
+            new ApprovalRequested("a1", "git push", "publishes the branch"),    // 3
+            new ApprovalRequested("a2", "rm build", "deletes files"),           // 4
+            new ApprovalResolved("a2", Approved: false, "user denied"),         // 5
+            Decide("d1"),                                                       // 6
+            new UserMessage("chatter"),                                         // 7
+            new Compacted(1, 7, Summary));                                      // 8
+
+        var snapshot = Load();
+
+        Assert.Equal("ship the event log", snapshot.Goal);
+        Assert.Equal("tests", Assert.Single(snapshot.Todos).Text);
+        Assert.Equal("a1", Assert.Single(snapshot.PendingApprovals).Key);
+        Assert.Equal("d1", Assert.Single(snapshot.Decisions).Key);
+        Assert.IsType<Compacted>(Assert.Single(snapshot.Transcript).Content);
+    }
+
+    [Fact]
+    public void Later_goal_and_todo_events_replace_earlier_ones()
+    {
+        Append(new GoalSet("first"), new TodosSet([new TodoItem("t1", "a", false)]),
+            new GoalSet(null), new TodosSet([new TodoItem("t1", "a", true), new TodoItem("t2", "b", false)]));
+
+        var snapshot = Load();
+
+        Assert.Null(snapshot.Goal);
+        Assert.Equal([true, false], snapshot.Todos.Select(item => item.Completed));
+        Assert.Equal("first", Load(through: 1).Goal);
+    }
+
+    [Fact]
+    public void Decision_outcomes_are_separate_events_and_the_decision_is_unchanged()
+    {
+        Append(Decide("d1"), Decide("d2"), new DecisionOutcomeRecorded("d1", "user_approved"));
+
+        var snapshot = Load();
+        var raw = _db.Log.Read("s", cancellationToken: Ct);
+
+        Assert.Equal("user_approved", snapshot.Decisions["d1"].Outcome);
+        Assert.Null(snapshot.Decisions["d2"].Outcome);
+        Assert.Equal(0.6, snapshot.Decisions["d1"].Decision.Threshold);
+        Assert.IsType<Decision>(raw[0].Payload);
+        Assert.IsType<DecisionOutcomeRecorded>(raw[2].Payload);
+        Assert.Null(Load(through: 2).Decisions["d1"].Outcome);
+    }
+
+    [Fact]
+    public void A_position_projects_exactly_the_prefix()
+    {
+        Append(new UserMessage("a"), new GoalSet("g1"), new AssistantMessage("b"),
+            new ModelSwitched("generator", Samples.Json("""{"n":"small"}"""), Samples.Json("""{"n":"large"}"""), "escalate"),
+            new GoalSet("g2"), new CheckpointTaken("k1", "rev"), new UserMessage("c"));
+
+        var events = _db.Log.Read("s", cancellationToken: Ct);
+        for (long position = 0; position <= events.Count; position++)
+        {
+            var at = Load(through: position);
+            var replay = SessionProjection.Build("s", events.Take((int)position));
+            Assert.Equal(position, at.Head);
+            Assert.Equal(replay.Goal, at.Goal);
+            Assert.Equal(replay.Transcript.Select(entry => entry.FromSequence), at.Transcript.Select(entry => entry.FromSequence));
+            Assert.Equal(replay.ModelProfiles.Keys, at.ModelProfiles.Keys);
+            Assert.Equal(replay.Checkpoints.Length, at.Checkpoints.Length);
+        }
+        Assert.Equal("g1", Load(through: 4).Goal);
+        Assert.Equal("large", Load(through: 4).ModelProfiles["generator"].GetProperty("n").GetString());
+    }
+
+    [Fact]
+    public void Loading_pages_through_long_sessions()
+    {
+        // More than one page of the log's maximum read size.
+        for (var batch = 0; batch < 5; batch++)
+            Append([.. Enumerable.Range(0, 1000).Select(i => new UserMessage($"{batch}:{i}"))]);
+
+        var snapshot = SessionProjection.Load(_db.Reopen(), "s", cancellationToken: Ct);
+
+        Assert.Equal(5000, snapshot.Head);
+        Assert.Equal(5000, snapshot.Transcript.Length);
+        Assert.Equal("4:999", Assert.IsType<UserMessage>(snapshot.Transcript[^1].Content).Text);
+    }
+
+    [Fact]
+    public void A_wider_compaction_replaces_the_summary_it_contains()
+    {
+        Append(new UserMessage("1"), new UserMessage("2"), new Compacted(1, 2, Summary),   // 1-3
+            new UserMessage("4"), new Compacted(1, 4, Summary with { NextStep = "wider" }), // 4-5
+            new UserMessage("6"));                                                          // 6
+
+        var snapshot = Load();
+
+        Assert.Empty(snapshot.Issues);
+        Assert.Collection(snapshot.Transcript,
+            entry => Assert.Equal("wider", ((Compacted)entry.Content).Summary.NextStep),
+            entry => Assert.Equal(6, entry.FromSequence));
+    }
+
+    public static TheoryData<long, long, string> InvalidCompactions() => new()
+    {
+        { 2, 3, "splits a tool call" },   // the call at 2 without its result at 4
+        { 4, 5, "splits a tool call" },   // the result at 4 without its call at 2
+        { 1, 7, "prior history" },        // includes itself
+        { 2, 2, "splits a tool call" },
+    };
+
+    [Theory]
+    [MemberData(nameof(InvalidCompactions))]
+    public void Invalid_compactions_are_ignored_and_reported(long from, long through, string reason)
+    {
+        Append(new UserMessage("1"), new ToolCallIssued("c1", "read", Samples.Json("{}")), new AssistantMessage("3"),
+            new ToolResult("c1", Samples.Json("{}")), new UserMessage("5"), new UserMessage("6"));
+        // The log only checks that a range is prior history; relationships are the projection's to judge.
+        if (through >= 7)
+        {
+            Assert.Throws<ArgumentException>(() => Append(new Compacted(from, through, Summary)));
+            return;
+        }
+        Append(new Compacted(from, through, Summary));
+
+        var snapshot = Load();
+
+        Assert.Contains(reason, Assert.Single(snapshot.Issues).Reason, StringComparison.Ordinal);
+        Assert.Equal([1L, 2L, 3L, 4L, 5L, 6L], snapshot.Transcript.Select(entry => entry.FromSequence));
+    }
+
+    [Fact]
+    public void A_partial_overlap_with_an_active_summary_is_ignored()
+    {
+        Append(new UserMessage("1"), new UserMessage("2"), new UserMessage("3"),
+            new Compacted(1, 2, Summary), new Compacted(2, 3, Summary));
+
+        var snapshot = Load();
+
+        Assert.Equal(5, Assert.Single(snapshot.Issues).Sequence);
+        Assert.Equal([1L, 3L], snapshot.Transcript.Select(entry => entry.FromSequence));
+    }
+
+    [Fact]
+    public void Inconsistent_persisted_events_are_reported_without_making_the_session_unreadable()
+    {
+        Append(
+            new ToolCallIssued("c1", "read", Samples.Json("{}")),
+            new ToolCallIssued("c1", "read", Samples.Json("{}")),
+            new ToolResult("missing", Samples.Json("{}")),
+            new DecisionOutcomeRecorded("nope", "accepted"),
+            new ApprovalResolved("nope", true, ""),
+            Decide("d1"), Decide("d1"));
+
+        var snapshot = Load();
+
+        Assert.Equal([2L, 3L, 4L, 5L, 7L], snapshot.Issues.Select(issue => issue.Sequence));
+        Assert.Single(snapshot.Decisions);
+        Assert.Equal(3, snapshot.Transcript.Length);
+    }
+
+    [Fact]
+    public void Replay_input_must_be_one_sessions_complete_prefix()
+    {
+        Append(new UserMessage("a"), new UserMessage("b"), new UserMessage("c"));
+        var events = _db.Log.Read("s", cancellationToken: Ct);
+
+        Assert.Throws<ArgumentException>(() => SessionProjection.Build("s", events.Skip(1)));
+        Assert.Throws<ArgumentException>(() => SessionProjection.Build("other", events));
+        Assert.Throws<ArgumentException>(() => SessionProjection.Build("s", events, throughSequence: 4));
+        Assert.Throws<ArgumentException>(() => Load(through: 4));
+        Assert.Equal(0, SessionProjection.Load(_db.Log, "empty", cancellationToken: Ct).Head);
+    }
+}

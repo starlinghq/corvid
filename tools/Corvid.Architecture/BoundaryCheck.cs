@@ -9,7 +9,14 @@ public static class BoundaryCheck
     // Provider SDKs must never be added here; they belong in Corvid.Models.* adapters.
     private static readonly HashSet<string> CorePackages = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Microsoft.Extensions.AI.Abstractions"
+        "Microsoft.Extensions.AI.Abstractions",
+        // The kernel's event log (C-002): Microsoft.Data.Sqlite and the native SQLite bundle it resolves.
+        "Microsoft.Data.Sqlite",
+        "Microsoft.Data.Sqlite.Core",
+        "SQLitePCLRaw.bundle_e_sqlite3",
+        "SQLitePCLRaw.core",
+        "SQLitePCLRaw.lib.e_sqlite3",
+        "SQLitePCLRaw.provider.e_sqlite3"
     };
 
     public static IReadOnlyList<string> CheckRepository(string root)

@@ -1,0 +1,73 @@
+using System.Collections.Immutable;
+using System.Text.Json;
+using Corvid.Abstractions.Events;
+using Corvid.Kernel.Events;
+using Microsoft.Data.Sqlite;
+
+namespace Corvid.Kernel.Tests;
+
+/// <summary>An event database in its own temporary directory, removed with its WAL files on dispose.</summary>
+internal sealed class TempLog : IDisposable
+{
+    public TempLog()
+    {
+        Root = Path.Combine(Path.GetTempPath(), "corvid-events-" + Guid.NewGuid().ToString("N"));
+        FilePath = Path.Combine(Root, "nested", "events.db");
+        Log = new SqliteEventLog(FilePath);
+    }
+
+    public string Root { get; }
+
+    public string FilePath { get; }
+
+    public SqliteEventLog Log { get; }
+
+    public SqliteEventLog Reopen() => new(FilePath);
+
+    public SqliteConnection OpenRaw()
+    {
+        var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = FilePath, Pooling = false }.ToString());
+        connection.Open();
+        return connection;
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(Root))
+            Directory.Delete(Root, recursive: true);
+    }
+}
+
+internal static class Samples
+{
+    public static JsonElement Json(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.Clone();
+    }
+
+    /// <summary>One instance of every event type, with nested values populated.</summary>
+    public static IReadOnlyList<SessionEvent> All() =>
+    [
+        new UserMessage("move the dentist reminder to friday"),
+        new AssistantMessage("Done."),
+        new ToolCallIssued("call-1", "cron.update", Json("""{"id":14,"day":"friday"}""")),
+        new ToolResult("call-1", Json("""{"ok":true}"""), IsError: false),
+        new Decision("d-1", "intent", ImmutableDictionary<string, double>.Empty.Add("use_tools", 0.82).Add("answer_directly", 0.18),
+            0.82, 0.6, "use_tools"),
+        new DecisionOutcomeRecorded("d-1", "tool_succeeded"),
+        new ApprovalRequested("a-1", "rm -rf build", "deletes files"),
+        new ApprovalResolved("a-1", Approved: true, "user approved"),
+        new ModelSwitched("generator", Json("""{"name":"qwen3.5-0.8b"}"""), Json("""{"name":"cloud"}"""), "escalated"),
+        new Compacted(1, 2, new CompactionSummary("move reminder", ["no cloud"], ["use cron.update"], ["notes.md"],
+            ["tell sam?"], "message sam")),
+        new MemoryWritten("m-1", "insert"),
+        new SkillChanged("s-1", "r2", "agent"),
+        new GoalSet("ship C-002"),
+        new GoalSet(null),
+        new TodosSet([new TodoItem("t-1", "write tests", Completed: false), new TodoItem("t-2", "docs", Completed: true)]),
+        new CheckpointTaken("c-1", "abc123"),
+    ];
+
+    public static EventData[] Data(params SessionEvent[] events) => events.Select(EventData.Create).ToArray();
+}
