@@ -1,6 +1,6 @@
 # Corvid Vault: a secrets broker Corvid cannot read
 
-Version 0.2, 2026-10-16. Companion to [`corvid-agent.md`](corvid-agent.md) (§10.5). Status: M1 built (`vault/`, default tier, Linux), S6 passing; see "Implementation status" at the end.
+Version 0.3, 2026-10-18. Companion to [`corvid-agent.md`](corvid-agent.md) (§10.5). Status: M1 built (`vault/`, default tier, Linux), S6 passing, and Corvid's sandbox (C-007a) hides the store from sandboxed commands; see "Implementation status" at the end.
 
 Vault is a separate, model-free process that holds every secret Corvid's tools need. Corvid sees only secret **names** and **placeholders**. Tools and scripts can still use the secrets:
 
@@ -276,11 +276,13 @@ It has 59 tests. S6 passes: a separate client process's memory (about 119 MB sca
 
 **What S6 does and does not prove.** S6 proves the value never enters Corvid's process. It does not prove that something running as the user cannot get the value.
 
-In the default tier, `master.cred` decrypts for anyone running as the user (`systemd-creds --user decrypt`), and `store.bin` sits next to it. So a shell tool the model drives could decrypt the store, until one of these lands:
-- Corvid's sandbox denies `$XDG_DATA_HOME/corvid-vault/` and `$XDG_CONFIG_HOME/corvid-vault/` to every tool (C-007 in `corvid-agent.md`).
-- The strong tier puts Vault under its own uid (V-008).
+In the default tier, `master.cred` decrypts for anyone running as the user (`systemd-creds --user decrypt`), and `store.bin` sits next to it. So a shell tool the model drives could decrypt the store. Two changes close that:
+- **Built (C-007a in `corvid-agent.md`):** Corvid's sandbox. A command run through `corvid-sandbox` cannot read or list `$XDG_DATA_HOME/corvid-vault/` or `$XDG_CONFIG_HOME/corvid-vault/` (nor the `~/.local/share` and `~/.config` defaults), and Vault's socket is out of reach: `$XDG_RUNTIME_DIR` and `/run` are hidden, and the PID namespace hides Vault's `/proc` entries. Confinement tests prove it against a temporary HOME and XDG layout. This covers only commands that go through the sandbox: the built-in shell and code tools that use it arrive with C-012, and a store kept elsewhere (`--data-dir`, `--config`) must be passed to the sandbox as an extra denied path.
+- **Not built:** the strong tier puts Vault under its own uid (V-008). Until then, a same-uid process that is not sandboxed can still decrypt the store, which is the residual default-tier risk.
 
-Until then, M1 protects against accidental exposure through Corvid's own code paths: replies, logs, prompts and HTTP responses. It does not yet protect against a tool deliberately reading Vault's files.
+M1 on its own protects against accidental exposure through Corvid's own code paths: replies, logs, prompts and HTTP responses. With C-007a, sandboxed tools can no longer read Vault's files either.
+
+`corvid-sandbox` is also the launcher §3.3's exec path will use (`sandbox/Corvid.Sandbox.Launcher`; no `Corvid.*` dependencies, started by path). Running it as `corvid-exec` and injecting values is not built.
 
 Deviations from the text above:
 
@@ -300,3 +302,4 @@ Next: M2 = V-003, the sandbox proxy for scripts.
 | --- | --- | --- |
 | 0.1 | 2026-10-16 | Design. |
 | 0.2 | 2026-10-16 | M1 built; deviations recorded under "Implementation status". |
+| 0.3 | 2026-10-18 | Implementation status: Corvid's sandbox (C-007a) hides Vault's directories and socket from sandboxed commands; the strong tier (V-008) remains. |

@@ -1,4 +1,4 @@
-# Agent foundation (C-001, C-002, C-004a, C-005, C-006, C-009, C-010)
+# Agent foundation (C-001, C-002, C-004a, C-005, C-006, C-007a, C-009, C-010)
 
 The solution contains `Corvid.Abstractions`, `Corvid.Kernel`, and
 `Corvid.Models`, alongside the working Vault projects. Kernel and Models each
@@ -8,7 +8,9 @@ kernel's turn loop will depend on the slots. C-005 added `Corvid.Tools` and its
 build-time generator, `Corvid.Tools.Generators` (see [Tools](#tools-c-005)). C-010 added the first adapter,
 `Corvid.Models.Starling` (see [Starling adapters](#starling-adapters-c-010)).
 C-004a added `Corvid.Fabric`, which references Abstractions and
-`Microsoft.Extensions.AI.Abstractions` (see [Decision fabric](#decision-fabric-c-004a)). Add
+`Microsoft.Extensions.AI.Abstractions` (see [Decision fabric](#decision-fabric-c-004a)).
+C-007a added `Corvid.Sandbox` (core, no dependencies) and the `corvid-sandbox` launcher
+executable in `sandbox/Corvid.Sandbox.Launcher` (see [Sandbox](#sandbox-c-007a)). Add
 the other projects from the agent plan as their implementations start, rather
 than creating empty projects for every future surface.
 
@@ -233,6 +235,11 @@ conversation-level token counting before a call, the `corvid doctor` command its
   with GenAI CUDA): both ship the native library under the same file name.
 - The Vault executable may reference only `Corvid.Vault.Contracts`. Agent
   projects, including adapters, may not reference the Vault executable.
+- The sandbox launcher (`sandbox/Corvid.Sandbox.Launcher`, the `corvid-sandbox` executable;
+  `LauncherProjects` in the checker) may have no package or project dependencies at all, so
+  Vault can start it without taking on any of Corvid's code. No project may reference it,
+  including Vault and adapters: Corvid.Sandbox and Vault start it by path. The test project
+  references it (tests are not scanned) to reach its internals and to build it next to the tests.
 - `Microsoft.NET.ILLink.Tasks` is allowed everywhere as SDK trim/AOT build
   tooling, not an application dependency.
 - Build-tool projects run inside the compiler, not in Corvid. The only one is
@@ -376,6 +383,85 @@ now); generator logprobs as a Noul confidence (`IChatClient` has no logprobs
 surface); per-question row budgets (1,000 tokens), which the Kev adapter enforces
 by declining; decision replay and calibration tooling (C-021).
 
+## Sandbox (C-007a)
+
+Plan §10.1 and §3.4, and `vault.md` §3.3 and "Implementation status". Linux only.
+
+- `sandbox/Corvid.Sandbox.Launcher` builds `corvid-sandbox`, a Native AOT executable
+  (`IsAotCompatible`, published and smoke-run in CI's aot job) with no package or project
+  dependencies. Its command line is the contract (`corvid-sandbox --help`): `--workspace`,
+  `--chdir`, `--ro`, `--deny`, `--env NAME`, `--network`, `--best-effort-layers`, `--bwrap`,
+  `--status-file`, then `-- COMMAND`. Exit status is the command's, or 125 when the sandbox
+  was not set up and nothing ran. The status file (JSON: `started`, `exitCode`, `layers`,
+  `error`) tells a refusal from a command that exited 125. It is opened before anything runs,
+  with `O_NOFOLLOW`, and refused if it resolves inside the workspace, because the launcher
+  itself runs unconfined and a command could otherwise redirect that write.
+- Stage 1 (the supervisor) resolves the policy with every path canonical and runs bubblewrap:
+  `--unshare-all --unshare-user --disable-userns` (new user, mount, PID, network, IPC, UTS and,
+  where possible, cgroup namespaces; no nested user namespaces), `--share-net` only with
+  `--network`, `--die-with-parent`, `--new-session`, `--clearenv`. `/` is bound read-only, the
+  workspace read-write, `--ro` paths read-only (parents before children), and `/tmp`, `/run`
+  fresh. Then the masks: directories behind a mode-0000 tmpfs, files behind `/dev/null`.
+  Masked: `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gh` (and `$XDG_CONFIG_HOME/gh`), Vault's
+  data and config directories (`$XDG_DATA_HOME/corvid-vault`, `$XDG_CONFIG_HOME/corvid-vault`
+  and the `~/.local/share`, `~/.config` defaults), `$XDG_RUNTIME_DIR`, `.env` and `.env.*` files
+  at the top of home and anywhere in the workspace, and `--deny` paths. Both `$HOME` and the
+  password-database home are covered. Vault's directories for the current `$HOME` and XDG
+  variables are created (0700) when missing, so a store created while a command runs is still
+  hidden; other denied paths that do not exist are skipped. The supervisor stays the parent, and kills bubblewrap
+  when its own parent exits or on SIGINT, SIGTERM, SIGHUP or SIGQUIT.
+- Stage 2 is the launcher again, run by bubblewrap inside the namespaces. It checks that it is
+  in none of the supervisor's namespaces (which also catches a stand-in for bubblewrap), sets
+  `no_new_privs`, applies Landlock (read and execute anywhere; write only beneath the
+  workspace, the sandbox's `/tmp` and `/dev/shm`, plus existing devices; from ABI 6, abstract
+  Unix socket and signal scoping) and a seccomp deny list (EPERM for mount and namespace calls,
+  `clone` with namespace flags, `ptrace`, `process_vm_*`, `bpf`, `perf_event_open`,
+  `userfaultfd`, `io_uring_*`, `keyctl`, module and kexec loading, `TIOCSTI` and others; ENOSYS
+  for `clone3`; another architecture's calls kill the process; tables for x86_64 and arm64).
+  It reports the layers on a pipe, closes it, and `execve`s the command with exactly the
+  allowlisted environment. Both layers bind the calling thread and survive `execve`, so all
+  of stage 2 runs on the main thread. Without Landlock or a seccomp table it refuses unless
+  `--best-effort-layers` is given; bubblewrap is never optional.
+- Refusals (exit 125, nothing run): bubblewrap missing or failing, a namespace missing, the
+  launcher or bubblewrap inside the workspace (the command could replace it), the workspace or
+  working directory inside a denied path, a secret-like `--env` name (tokens, keys, passwords,
+  agent sockets, cloud and VCS prefixes), a status file inside the workspace or behind a
+  symlink, and a workspace with more than 100,000 entries to scan for `.env` files.
+- `src/Corvid.Sandbox` (core, `IsAotCompatible`, no dependencies): `SandboxPolicy` (workspace,
+  read-only and denied paths, network, environment names; default environment `PATH`, `HOME`,
+  `USER`, `LOGNAME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, `TZ`), `SandboxCommand`,
+  `SandboxResult` (exit code, output, truncation flags, `TimedOut`, layers), `ISandbox` and
+  `BubblewrapSandbox`. It finds the launcher through `SandboxOptions.LauncherPath`,
+  `$CORVID_SANDBOX`, or next to the application, starts it with a cleared environment (the
+  policy's names plus what the launcher needs: `PATH`, `HOME`, the XDG directories,
+  `DOTNET_ROOT`), and enforces a timeout (kills the whole tree), a per-stream output limit
+  (the rest is drained) and cancellation. A refusal throws `SandboxRefusedException`; it never
+  falls back to running unsandboxed. Its secret-name rule repeats the launcher's so a value is
+  refused before it leaves Corvid; a test keeps them in step.
+- Tests: `tests/Corvid.Sandbox.Tests`. The confinement tests (trait `Category=Confinement`)
+  run real commands under bubblewrap against a temporary HOME and XDG layout kept outside
+  `/tmp`, each with a positive control, and prove that a command cannot read or list Vault's
+  directories, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gh` or `.env` files, cannot write
+  outside the workspace, has no network by default, gets only the allowlisted environment,
+  cannot create namespaces, and dies on timeout, cancellation and launcher death; and that
+  the refusals above run nothing. Landlock and seccomp are also tested on their own (stage 2
+  outside bubblewrap), and a small BPF interpreter checks the filter's decisions. CI installs
+  bubblewrap, sets `kernel.apparmor_restrict_unprivileged_userns=0` (Ubuntu 24.04 limits
+  unprivileged user namespaces to AppArmor-profiled programs), and the required step "Sandbox
+  confinement ran and passed" fails unless all of them ran with none skipped.
+
+Limits: masking is by path, so the same files reached another way (a hard link, another
+mount of the same file system, a snapshot directory) stay readable; Landlock grants only and
+cannot hide a path inside a readable tree. The `.env` scan runs before the command, to a depth
+of 12, skipping `.git` and `node_modules`.
+
+Not built yet: `*.pem` masking and `.env` files below the top of home, Landlock deny-read,
+graceful termination (SIGTERM to the launcher ends the sandbox with SIGKILL), extra writable
+paths such as tool caches in home, the HTTPS proxy route for sandboxed scripts (V-003), the
+`corvid-exec` user and value injection for Vault's exec path, container and SSH backends,
+macOS and Windows, the structural approval pipeline (C-007b), and the shell and code tools
+that use the sandbox (C-012).
+
 ## Running the check
 
 ```sh
@@ -384,8 +470,8 @@ dotnet run --project tools/Corvid.Architecture -c Release --no-build -- .
 dotnet test --solution Corvid.slnx -c Release --no-build
 ```
 
-CI runs all three. The checker enumerates every production `.csproj` under `src/`
-and `vault/`, then reads its `obj/project.assets.json`. NuGet's resolved targets
+CI runs all three. The checker enumerates every production `.csproj` under `src/`,
+`vault/` and `sandbox/`, then reads its `obj/project.assets.json`. NuGet's resolved targets
 include transitive packages and projects; all restored frameworks and runtime
 targets are checked. Project identity comes from the referenced `.csproj` path,
 not its configurable assembly name. Unknown packages fail closed in core projects.
