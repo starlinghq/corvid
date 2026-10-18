@@ -11,8 +11,12 @@
   <Folder Name="/vault/">
     <Project Path="vault/Corvid.Vault/Corvid.Vault.csproj" />
   </Folder>
+  <Folder Name="/evals/">
+    <Project Path="evals/Corvid.Evals/Corvid.Evals.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Corvid.Kernel.Tests/Corvid.Kernel.Tests.csproj" />
+    <Project Path="tests/Corvid.Evals.Tests/Corvid.Evals.Tests.csproj" />
     <Project Path="tests/Corvid.Architecture.Tests/Corvid.Architecture.Tests.csproj" />
     <Project Path="tests/Corvid.Vault.Tests/Corvid.Vault.Tests.csproj" />
     <Project Path="tests/Corvid.Tools.Fixtures/Corvid.Tools.Fixtures.csproj" />

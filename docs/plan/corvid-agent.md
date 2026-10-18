@@ -1,6 +1,6 @@
 # Corvid: a local-first .NET agent with a calibrated decision fabric
 
-Version 0.3, 2026-10-16. Status: design proposal. Corvid Vault M1 is built (`vault.md`, Implementation status); C-001's initial agent projects and dependency boundary check, C-002's event log and projections, and C-005's tool generator and registry are built ([architecture](../architecture.md)). The agent loop itself is not.
+Version 0.3, 2026-10-16. Status: design proposal. Corvid Vault M1 is built (`vault.md`, Implementation status); C-001's initial agent projects and dependency boundary check, C-002's event log and projections, C-005's tool generator and registry, and C-009's golden-trajectory replay harness are built ([architecture](../architecture.md)). The agent loop itself is not.
 
 ## 0. Thesis
 
@@ -580,7 +580,7 @@ Subagents, code mode, media memory, remaining gateway adapters, voice, two-tier 
 | C-006 | Slot registry, profiles and switch semantics (§4.2) with tests that switch mid-turn | C-002 |
 | C-007 | Sandbox (bubblewrap, Landlock, seccomp) and the structural approval pipeline. Must deny every tool access to Vault's data and config directories: until then, a shell tool can decrypt the default-tier store (`vault.md`, Implementation status). | S3 |
 | C-008 | Memory store: FTS5, sqlite-vec, graph tables, write and read paths | C-004 |
-| C-009 | Golden set and replay harness | C-002 |
+| C-009 | **Built:** versioned golden-trajectory fixtures under `evals/golden`, a replay harness that loads them into the SQLite log, projects any position and diffs against the recorded projection, and a five-trajectory seed set; decision replay against new thresholds or models waits for `IDecider` (C-004); see [architecture](../architecture.md) | C-002 |
 
 ## 19. Upstream asks for Starling
 

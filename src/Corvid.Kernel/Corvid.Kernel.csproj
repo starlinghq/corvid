@@ -7,5 +7,7 @@
     <PackageReference Include="Microsoft.Data.Sqlite" />
     <ProjectReference Include="../Corvid.Abstractions/Corvid.Abstractions.csproj" />
     <InternalsVisibleTo Include="Corvid.Kernel.Tests" />
+    <!-- The replay harness reads and writes fixtures in the persisted event format, not a copy of it. -->
+    <InternalsVisibleTo Include="Corvid.Evals" />
   </ItemGroup>
 </Project>

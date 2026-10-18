@@ -1,4 +1,4 @@
-# Agent foundation (C-001, C-002, C-005)
+# Agent foundation (C-001, C-002, C-005, C-009)
 
 The solution contains `Corvid.Abstractions`, `Corvid.Kernel`, and
 `Corvid.Models`, alongside the working Vault projects. Kernel and Models each
@@ -38,6 +38,44 @@ into a model prompt (C-006), full-text search over raw events, branch and fork
 sessions that copy a prefix, and schema migrations beyond version 1. SQLite calls
 are synchronous; callers that must not block should use a storage worker.
 
+## Golden trajectories and replay (C-009)
+
+- `evals/golden/*.json` are golden trajectories: format `corvid-golden-trajectory`,
+  `format_version` 1. Each file holds an `id` (the file name), a description, the
+  session's `events` in the event log's persisted form (`payload_version` 1, the same
+  snake_case JSON and discriminators the log stores), and `checks`: a log position
+  (`through`), an optional `expand_compactions`, and the `expected` projection.
+  Unknown fields, versions and event types are rejected rather than ignored.
+- `evals/Corvid.Evals` is the harness. `ReplaySession` appends a trajectory to a fresh
+  `SqliteEventLog` (under the temporary directory, removed on dispose) or to an empty
+  session in a caller's log, and projects any position with `SessionProjection.Load`.
+  `ReplayRunner.Verify` compares each check with `JsonDiff` and reports differences by
+  JSON path. It also projects every position from 0 to the head, compacted and
+  expanded, and requires the log round trip to match `SessionProjection.Build` over
+  the in-memory events.
+- `SnapshotJson` is the comparable form of a snapshot: head, goal, todos, transcript
+  entries with their event, pending approvals, model profiles per slot, decisions with
+  outcomes, checkpoints and issues. Dictionaries are written as arrays sorted by key;
+  the session ID, event IDs and timestamps are left out. Issue reasons are compared,
+  so rewording one means re-recording.
+- `ReplayRunner.Record` fills `expected` from the current projection, for authoring.
+  `CORVID_RECORD_GOLDENS=1` makes the golden-set test rewrite the committed fixtures
+  instead of asserting; review that diff, since recording accepts whatever the
+  projection does today. `tests/Corvid.Evals.Tests` also states the seed set's key
+  behaviours directly, so a recorded regression does not pass silently.
+- The seed set covers a tool call round trip with a decision outcome, nested
+  compaction and its expanded view, goal, todos and an approval across compaction,
+  model switches per slot with a checkpoint, and inconsistent history reported as
+  issues.
+- Corvid.Kernel grants `InternalsVisibleTo` to Corvid.Evals so fixtures use the
+  persisted serializer itself rather than a copy of the format.
+
+Not built yet: decision replay. The plan (§3.2, §16) replays logs against new
+thresholds and new models; that needs `IDecider` and the TurnState builder (C-004),
+then a decision-set format and scoring (tool choice, argument match, escalation
+rate). Golden sets per generator profile and fabric version, a command-line runner,
+and prompt-rendering checks (C-006) also follow later.
+
 ## Dependency rules
 
 - `Corvid.Abstractions` and `Corvid.Vault.Contracts` have no application package or
@@ -68,8 +106,10 @@ are synchronous; callers that must not block should use a storage worker.
   project references from each production `.csproj` and fails any that names a
   project outside `BuildToolProjects`. A build-tool project in another
   project's restored graph (an ordinary reference) fails the check.
-- Test and development tool projects are outside these production rules. They
-  can reference implementations to exercise them, including Vault.
+- Test, eval and development tool projects (`tests/`, `evals/`, `tools/`) are outside
+  these production rules, and the checker does not scan them. They can reference
+  implementations to exercise them, including Vault. Production projects should not
+  reference them; the checker does not yet enforce that.
 
 When the composition root (`Corvid.Host`) is implemented, give it an explicit
 composition rule allowing adapter references. Do not relax the core library rule
@@ -137,4 +177,4 @@ architecture regression check for NuGet/project references, not a security
 sandbox or an IL analyzer for manually supplied binaries.
 
 The next milestones that build on the log are C-006 (slot registry, profiles and
-switching) and C-009 (golden set and replay harness).
+switching) and, after C-004, decision replay in the C-009 harness.

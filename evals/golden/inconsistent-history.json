@@ -1,0 +1,141 @@
+{
+  "format": "corvid-golden-trajectory",
+  "format_version": 1,
+  "payload_version": 1,
+  "id": "inconsistent-history",
+  "description": "Persisted events the projection cannot apply are reported as issues and the session stays readable: a compaction that splits a tool call from its result, an outcome for an unknown decision, an approval resolved twice.",
+  "events": [
+    {
+      "type": "user_message",
+      "text": "list the backups"
+    },
+    {
+      "type": "tool_call_issued",
+      "call_id": "c1",
+      "tool_name": "files.list",
+      "arguments": {
+        "path": "/backups"
+      }
+    },
+    {
+      "type": "tool_result",
+      "call_id": "c1",
+      "result": [
+        "a.tar",
+        "b.tar"
+      ],
+      "is_error": false
+    },
+    {
+      "type": "compacted",
+      "from_sequence": 1,
+      "through_sequence": 2,
+      "summary": {
+        "goal": "list backups",
+        "constraints": [],
+        "decisions": [],
+        "files": [],
+        "open_questions": [],
+        "next_step": null
+      }
+    },
+    {
+      "type": "decision_outcome_recorded",
+      "decision_id": "missing",
+      "outcome": "ignored"
+    },
+    {
+      "type": "approval_requested",
+      "approval_id": "a1",
+      "action": "rm /backups/a.tar",
+      "reason": "deletes a file"
+    },
+    {
+      "type": "approval_resolved",
+      "approval_id": "a1",
+      "approved": true,
+      "reason": "user approved"
+    },
+    {
+      "type": "approval_resolved",
+      "approval_id": "a1",
+      "approved": true,
+      "reason": "duplicate delivery"
+    },
+    {
+      "type": "assistant_message",
+      "text": "Two backups: a.tar and b.tar."
+    }
+  ],
+  "checks": [
+    {
+      "through": 9,
+      "expected": {
+        "head": 9,
+        "goal": null,
+        "todos": [],
+        "transcript": [
+          {
+            "from": 1,
+            "through": 1,
+            "event": {
+              "type": "user_message",
+              "text": "list the backups"
+            }
+          },
+          {
+            "from": 2,
+            "through": 2,
+            "event": {
+              "type": "tool_call_issued",
+              "call_id": "c1",
+              "tool_name": "files.list",
+              "arguments": {
+                "path": "/backups"
+              }
+            }
+          },
+          {
+            "from": 3,
+            "through": 3,
+            "event": {
+              "type": "tool_result",
+              "call_id": "c1",
+              "result": [
+                "a.tar",
+                "b.tar"
+              ],
+              "is_error": false
+            }
+          },
+          {
+            "from": 9,
+            "through": 9,
+            "event": {
+              "type": "assistant_message",
+              "text": "Two backups: a.tar and b.tar."
+            }
+          }
+        ],
+        "pending_approvals": [],
+        "model_profiles": [],
+        "decisions": [],
+        "checkpoints": [],
+        "issues": [
+          {
+            "sequence": 4,
+            "reason": "Range splits a tool call from its result or contains an unfinished call."
+          },
+          {
+            "sequence": 5,
+            "reason": "Outcome for unknown decision 'missing'."
+          },
+          {
+            "sequence": 8,
+            "reason": "Approval 'a1' was resolved but is not pending."
+          }
+        ]
+      }
+    }
+  ]
+}

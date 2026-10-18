@@ -1,0 +1,363 @@
+{
+  "format": "corvid-golden-trajectory",
+  "format_version": 1,
+  "payload_version": 1,
+  "id": "compaction",
+  "description": "A summary replaces events 1-6 in the transcript only. A later, wider compaction replaces the first summary. The expanded view still shows every raw event.",
+  "events": [
+    {
+      "type": "user_message",
+      "text": "find the notes about the boiler"
+    },
+    {
+      "type": "tool_call_issued",
+      "call_id": "c1",
+      "tool_name": "notes.search",
+      "arguments": {
+        "query": "boiler"
+      }
+    },
+    {
+      "type": "tool_result",
+      "call_id": "c1",
+      "result": [
+        "notes/house.md",
+        "notes/2025-winter.md"
+      ],
+      "is_error": false
+    },
+    {
+      "type": "assistant_message",
+      "text": "Two notes mention the boiler."
+    },
+    {
+      "type": "user_message",
+      "text": "read the winter one"
+    },
+    {
+      "type": "assistant_message",
+      "text": "It says the service is due in November."
+    },
+    {
+      "type": "compacted",
+      "from_sequence": 1,
+      "through_sequence": 6,
+      "summary": {
+        "goal": "find boiler service date",
+        "constraints": [],
+        "decisions": [
+          "searched notes"
+        ],
+        "files": [
+          "notes/2025-winter.md"
+        ],
+        "open_questions": [],
+        "next_step": "book the service"
+      }
+    },
+    {
+      "type": "user_message",
+      "text": "book it for the first week"
+    },
+    {
+      "type": "assistant_message",
+      "text": "Which day suits you?"
+    },
+    {
+      "type": "compacted",
+      "from_sequence": 1,
+      "through_sequence": 9,
+      "summary": {
+        "goal": "book boiler service",
+        "constraints": [
+          "first week of November"
+        ],
+        "decisions": [
+          "service due in November"
+        ],
+        "files": [
+          "notes/2025-winter.md"
+        ],
+        "open_questions": [
+          "which day"
+        ],
+        "next_step": "ask for a day"
+      }
+    },
+    {
+      "type": "user_message",
+      "text": "tuesday"
+    }
+  ],
+  "checks": [
+    {
+      "through": 6,
+      "expected": {
+        "head": 6,
+        "goal": null,
+        "todos": [],
+        "transcript": [
+          {
+            "from": 1,
+            "through": 1,
+            "event": {
+              "type": "user_message",
+              "text": "find the notes about the boiler"
+            }
+          },
+          {
+            "from": 2,
+            "through": 2,
+            "event": {
+              "type": "tool_call_issued",
+              "call_id": "c1",
+              "tool_name": "notes.search",
+              "arguments": {
+                "query": "boiler"
+              }
+            }
+          },
+          {
+            "from": 3,
+            "through": 3,
+            "event": {
+              "type": "tool_result",
+              "call_id": "c1",
+              "result": [
+                "notes/house.md",
+                "notes/2025-winter.md"
+              ],
+              "is_error": false
+            }
+          },
+          {
+            "from": 4,
+            "through": 4,
+            "event": {
+              "type": "assistant_message",
+              "text": "Two notes mention the boiler."
+            }
+          },
+          {
+            "from": 5,
+            "through": 5,
+            "event": {
+              "type": "user_message",
+              "text": "read the winter one"
+            }
+          },
+          {
+            "from": 6,
+            "through": 6,
+            "event": {
+              "type": "assistant_message",
+              "text": "It says the service is due in November."
+            }
+          }
+        ],
+        "pending_approvals": [],
+        "model_profiles": [],
+        "decisions": [],
+        "checkpoints": [],
+        "issues": []
+      }
+    },
+    {
+      "through": 9,
+      "expected": {
+        "head": 9,
+        "goal": null,
+        "todos": [],
+        "transcript": [
+          {
+            "from": 1,
+            "through": 6,
+            "event": {
+              "type": "compacted",
+              "from_sequence": 1,
+              "through_sequence": 6,
+              "summary": {
+                "goal": "find boiler service date",
+                "constraints": [],
+                "decisions": [
+                  "searched notes"
+                ],
+                "files": [
+                  "notes/2025-winter.md"
+                ],
+                "open_questions": [],
+                "next_step": "book the service"
+              }
+            }
+          },
+          {
+            "from": 8,
+            "through": 8,
+            "event": {
+              "type": "user_message",
+              "text": "book it for the first week"
+            }
+          },
+          {
+            "from": 9,
+            "through": 9,
+            "event": {
+              "type": "assistant_message",
+              "text": "Which day suits you?"
+            }
+          }
+        ],
+        "pending_approvals": [],
+        "model_profiles": [],
+        "decisions": [],
+        "checkpoints": [],
+        "issues": []
+      }
+    },
+    {
+      "through": 11,
+      "expected": {
+        "head": 11,
+        "goal": null,
+        "todos": [],
+        "transcript": [
+          {
+            "from": 1,
+            "through": 9,
+            "event": {
+              "type": "compacted",
+              "from_sequence": 1,
+              "through_sequence": 9,
+              "summary": {
+                "goal": "book boiler service",
+                "constraints": [
+                  "first week of November"
+                ],
+                "decisions": [
+                  "service due in November"
+                ],
+                "files": [
+                  "notes/2025-winter.md"
+                ],
+                "open_questions": [
+                  "which day"
+                ],
+                "next_step": "ask for a day"
+              }
+            }
+          },
+          {
+            "from": 11,
+            "through": 11,
+            "event": {
+              "type": "user_message",
+              "text": "tuesday"
+            }
+          }
+        ],
+        "pending_approvals": [],
+        "model_profiles": [],
+        "decisions": [],
+        "checkpoints": [],
+        "issues": []
+      }
+    },
+    {
+      "through": 11,
+      "expand_compactions": true,
+      "expected": {
+        "head": 11,
+        "goal": null,
+        "todos": [],
+        "transcript": [
+          {
+            "from": 1,
+            "through": 1,
+            "event": {
+              "type": "user_message",
+              "text": "find the notes about the boiler"
+            }
+          },
+          {
+            "from": 2,
+            "through": 2,
+            "event": {
+              "type": "tool_call_issued",
+              "call_id": "c1",
+              "tool_name": "notes.search",
+              "arguments": {
+                "query": "boiler"
+              }
+            }
+          },
+          {
+            "from": 3,
+            "through": 3,
+            "event": {
+              "type": "tool_result",
+              "call_id": "c1",
+              "result": [
+                "notes/house.md",
+                "notes/2025-winter.md"
+              ],
+              "is_error": false
+            }
+          },
+          {
+            "from": 4,
+            "through": 4,
+            "event": {
+              "type": "assistant_message",
+              "text": "Two notes mention the boiler."
+            }
+          },
+          {
+            "from": 5,
+            "through": 5,
+            "event": {
+              "type": "user_message",
+              "text": "read the winter one"
+            }
+          },
+          {
+            "from": 6,
+            "through": 6,
+            "event": {
+              "type": "assistant_message",
+              "text": "It says the service is due in November."
+            }
+          },
+          {
+            "from": 8,
+            "through": 8,
+            "event": {
+              "type": "user_message",
+              "text": "book it for the first week"
+            }
+          },
+          {
+            "from": 9,
+            "through": 9,
+            "event": {
+              "type": "assistant_message",
+              "text": "Which day suits you?"
+            }
+          },
+          {
+            "from": 11,
+            "through": 11,
+            "event": {
+              "type": "user_message",
+              "text": "tuesday"
+            }
+          }
+        ],
+        "pending_approvals": [],
+        "model_profiles": [],
+        "decisions": [],
+        "checkpoints": [],
+        "issues": []
+      }
+    }
+  ]
+}
