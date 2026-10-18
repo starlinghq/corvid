@@ -110,6 +110,22 @@ public sealed class GeneratorTests
     }
 
     [Fact]
+    public void Enum_members_named_after_keywords_compile()
+    {
+        (Compilation output, ImmutableArray<Diagnostic> diagnostics, _) = Run("""
+            using Corvid.Tools;
+            public enum Choice { @default, @class, Other }
+            public sealed partial class T
+            {
+                [Tool(Description = "d")] public string Pick(Choice choice = Choice.@class) => choice.ToString();
+            }
+            """);
+
+        Assert.Empty(diagnostics);
+        Assert.Empty(output.GetDiagnostics(TestContext.Current.CancellationToken).Where(d => d.Severity >= DiagnosticSeverity.Warning));
+    }
+
+    [Fact]
     public void Default_name_is_snake_case_without_async()
     {
         (_, _, GeneratorDriverRunResult result) = Run("""

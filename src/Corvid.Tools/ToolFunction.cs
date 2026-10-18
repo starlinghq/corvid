@@ -42,7 +42,9 @@ public abstract class ToolFunction : AIFunction
     public override object? GetService(Type serviceType, object? serviceKey = null)
     {
         ArgumentNullException.ThrowIfNull(serviceType);
-        return serviceKey is null && serviceType.IsInstanceOfType(Descriptor) ? Descriptor : base.GetService(serviceType, serviceKey);
+        // The function itself comes first, so GetService(typeof(object)) still returns this function.
+        return base.GetService(serviceType, serviceKey)
+            ?? (serviceKey is null && serviceType.IsInstanceOfType(Descriptor) ? Descriptor : null);
     }
 }
 

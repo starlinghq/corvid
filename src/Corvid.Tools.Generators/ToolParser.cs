@@ -139,6 +139,11 @@ internal static class ToolParser
             {
                 bindings.AppendLine($"{declared} {local} = {shape.Read($"{Args}.Get(arguments, {literal})", literal)};");
             }
+            else if (shape.Nullable)
+            {
+                // The schema admits null, so an explicit null binds null; only an absent argument takes the default.
+                bindings.AppendLine($"{declared} {local} = {Args}.TryGetPresent(arguments, {literal}, out object? {local}Raw) ? ({Args}.IsNull({local}Raw) ? ({declared})null : {shape.Read($"{local}Raw", literal)}) : {DefaultCSharp(parameter, declared)};");
+            }
             else
             {
                 bindings.AppendLine($"{declared} {local} = {Args}.TryGet(arguments, {literal}, out object? {local}Raw) ? {shape.Read($"{local}Raw", literal)} : {DefaultCSharp(parameter, declared)};");
@@ -300,7 +305,9 @@ internal static class ToolParser
             helpers.AppendLine("    {");
             foreach (string member in members)
             {
-                helpers.AppendLine($"        {Literal(member)} => {qualified}.{member},");
+                // A member named after a keyword (declared as @default) needs the escape in generated code.
+                string identifier = SyntaxFacts.GetKeywordKind(member) == SyntaxKind.None ? member : "@" + member;
+                helpers.AppendLine($"        {Literal(member)} => {qualified}.{identifier},");
             }
 
             helpers.AppendLine($"        var other => throw {Args}.NotAllowed(parameter, other, {Literal(string.Join(", ", members))}),");

@@ -44,11 +44,18 @@ public static class ToolArguments
             : throw new ToolArgumentException($"Missing required argument '{parameter}'.", parameter);
     }
 
-    /// <summary>False when the argument is absent or null, so an optional parameter keeps its default.</summary>
+    /// <summary>False when the argument is absent or null, so an optional non-nullable parameter keeps its default.</summary>
     public static bool TryGet(AIFunctionArguments arguments, string parameter, out object? value)
     {
         ArgumentNullException.ThrowIfNull(arguments);
         return arguments.TryGetValue(parameter, out value) && !IsNull(value);
+    }
+
+    /// <summary>True when the argument is present, even as null: a nullable optional parameter binds an explicit null.</summary>
+    public static bool TryGetPresent(AIFunctionArguments arguments, string parameter, out object? value)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        return arguments.TryGetValue(parameter, out value);
     }
 
     public static bool IsNull(object? value) => value is null || value is JsonElement { ValueKind: JsonValueKind.Null or JsonValueKind.Undefined };

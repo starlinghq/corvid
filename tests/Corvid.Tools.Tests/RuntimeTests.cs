@@ -47,6 +47,7 @@ public sealed class RuntimeTests
         Assert.Equal(true, tool.AdditionalProperties[ToolFunction.DestructiveKey]);
         Assert.Equal(false, tool.AdditionalProperties[ToolFunction.NetworkKey]);
         Assert.Equal("clear_notes", tool.GetService<ToolDescriptor>()?.Name);
+        Assert.Same(tool, tool.GetService<object>());
     }
 
     [Fact]
@@ -112,7 +113,23 @@ public sealed class RuntimeTests
             }
             """), TestContext.Current.CancellationToken);
 
-        Assert.Equal($"9007199254740993|0.25|2|True|{id}|1767323045|2026|1,2,3|Low,High|null|hi|1.5|High", result);
+        Assert.Equal($"9007199254740993|0.25|2|True|{id}|1767323045|2026|1,2,3|Low,High|null|hi|1.5|null", result);
+    }
+
+    [Fact]
+    public async Task Nullable_optional_parameter_takes_its_default_only_when_absent()
+    {
+        const string Required = """
+            "big": 1, "ratio": 1, "scale": 1, "flag": false, "id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+            "when": "2026-01-02T03:04:05Z", "day": "2026-05-06", "numbers": [], "priorities": [], "maybe": 1, "note": null
+            """;
+        AIFunction tool = Tool(Registry(), "describe_values");
+
+        object? absent = await tool.InvokeAsync(Json($$"""{ {{Required}} }"""), TestContext.Current.CancellationToken);
+        object? explicitNull = await tool.InvokeAsync(Json($$"""{ {{Required}}, "level": null }"""), TestContext.Current.CancellationToken);
+
+        Assert.EndsWith("|High", (string?)absent, StringComparison.Ordinal);
+        Assert.EndsWith("|null", (string?)explicitNull, StringComparison.Ordinal);
     }
 
     [Fact]

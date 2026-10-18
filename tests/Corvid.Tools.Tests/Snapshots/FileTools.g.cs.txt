@@ -28,7 +28,7 @@ namespace Sample
             {
                 global::Corvid.Vault.Client.SecretRef __arg0 = global::Corvid.Tools.ToolArguments.ReadSecretRef(global::Corvid.Tools.ToolArguments.Get(arguments, "token"), "token");
                 long[] __arg1 = global::Corvid.Tools.ToolArguments.ReadArray<long>(global::Corvid.Tools.ToolArguments.Get(arguments, "ids"), "ids", global::Corvid.Tools.ToolArguments.ReadInt64);
-                double? __arg2 = global::Corvid.Tools.ToolArguments.TryGet(arguments, "ratio", out object? __arg2Raw) ? global::Corvid.Tools.ToolArguments.ReadDouble(__arg2Raw, "ratio") : (double?)(0.5);
+                double? __arg2 = global::Corvid.Tools.ToolArguments.TryGetPresent(arguments, "ratio", out object? __arg2Raw) ? (global::Corvid.Tools.ToolArguments.IsNull(__arg2Raw) ? (double?)null : global::Corvid.Tools.ToolArguments.ReadDouble(__arg2Raw, "ratio")) : (double?)(0.5);
                 await global::Sample.FileTools.UploadAsync(__arg0, __arg1, __arg2).ConfigureAwait(false);
                 return null;
             }

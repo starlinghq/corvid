@@ -48,6 +48,10 @@ public sealed class ToolRegistry
         }
     }
 
+    /// <summary>
+    /// The registered tool, unrestricted. Calls from a model must go through the functions <see cref="GetFunctions"/>
+    /// returned, which refuse secrets outside the catalogue; this one does not.
+    /// </summary>
     public bool TryGet(string name, [NotNullWhen(true)] out ToolFunction? tool)
     {
         lock (_gate)
