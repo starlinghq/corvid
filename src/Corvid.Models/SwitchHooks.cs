@@ -113,6 +113,10 @@ public enum SwitchStatus
 
 /// <param name="Sequence">The <c>ModelSwitched</c> event's position, when one was appended.</param>
 /// <param name="PendingApprovals">Approvals still pending when the switch was recorded; they carry over unchanged.</param>
+/// <param name="UnfinishedToolCalls">
+/// Issued calls with no result when the switch was recorded: calls parked for an approval, or, on a fallback, calls
+/// still running. They carry over unchanged.
+/// </param>
 public sealed record SwitchResult(
     SwitchStatus Status,
     string Slot,
@@ -122,7 +126,10 @@ public sealed record SwitchResult(
     long? Sequence = null,
     BudgetAction Budget = BudgetAction.None,
     ImmutableArray<string> PendingApprovals = default,
-    string? Detail = null)
+    string? Detail = null,
+    ImmutableArray<string> UnfinishedToolCalls = default)
 {
     public ImmutableArray<string> PendingApprovals { get; init; } = PendingApprovals.IsDefault ? [] : PendingApprovals;
+
+    public ImmutableArray<string> UnfinishedToolCalls { get; init; } = UnfinishedToolCalls.IsDefault ? [] : UnfinishedToolCalls;
 }

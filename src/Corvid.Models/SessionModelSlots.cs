@@ -25,6 +25,7 @@ public sealed class SessionModelSlots
     private readonly Dictionary<string, ModelBinding> _current = new(StringComparer.Ordinal);
     private readonly HashSet<string> _pinned = new(StringComparer.Ordinal);
     private readonly Dictionary<string, TaskCompletionSource> _inFlight = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _parked = new(StringComparer.Ordinal);
 
     public SessionModelSlots(ModelSlotRegistry registry, IEventLog log, string sessionId, ModelSwitchOptions? options = null)
     {
@@ -81,44 +82,61 @@ public sealed class SessionModelSlots
         ArgumentException.ThrowIfNullOrWhiteSpace(callId);
         lock (_state)
         {
-            if (!_inFlight.TryAdd(callId, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)))
-                throw new InvalidOperationException($"Tool call '{callId}' is already tracked.");
+            if (_parked.Contains(callId) || !_inFlight.TryAdd(callId, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)))
+                throw new InvalidOperationException($"Tool call '{callId}' is already tracked or parked.");
         }
         return new ToolCallLease(this, callId);
     }
 
+    /// <summary>
+    /// Marks an issued tool call as waiting on an approval. It is not running, so a switch neither waits for it nor
+    /// treats it as orphaned, and the result reports it. Dispose when the approval is resolved, then track the call if it runs.
+    /// </summary>
+    public IDisposable ParkToolCall(string callId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(callId);
+        lock (_state)
+        {
+            if (_inFlight.ContainsKey(callId) || !_parked.Add(callId))
+                throw new InvalidOperationException($"Tool call '{callId}' is already tracked or parked.");
+        }
+        return new ParkedCallLease(this, callId);
+    }
+
     /// <summary>Switches a slot (a <c>/model</c> command, or an explicit escalation). A pinned slot is not de-escalated.</summary>
-    public async Task<SwitchResult> SwitchAsync(string slot, ModelBinding target, SwitchReason reason = SwitchReason.User,
+    public Task<SwitchResult> SwitchAsync(string slot, ModelBinding target, SwitchReason reason = SwitchReason.User,
         bool pin = false, CancellationToken cancellationToken = default)
     {
         ModelSlots.Check(slot, target);
-        await _switching.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            return await SwitchCoreAsync(slot, target, reason, pin, cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            _switching.Release();
-        }
+        return SerializedAsync(waitForTools: reason != SwitchReason.Fallback,
+            () => SwitchCoreAsync(slot, target, reason, pin, cancellationToken), cancellationToken);
     }
 
     /// <summary>Moves to the next escalation target the privacy gate allows.</summary>
     public Task<SwitchResult> EscalateAsync(string slot, CancellationToken cancellationToken = default) =>
-        MoveAlongAsync(slot, Current(slot), configuration => configuration.Escalation, SwitchReason.Escalation, cancellationToken);
+        SerializedAsync(waitForTools: true,
+            () => MoveAlongAsync(slot, Current(slot), configuration => configuration.Escalation, SwitchReason.Escalation, [], cancellationToken),
+            cancellationToken);
 
     /// <summary>
-    /// Moves past <paramref name="failed"/> along the fallback chain. Returns <see cref="SwitchStatus.Unchanged"/> when
-    /// the slot has already moved off the failed binding (a concurrent call fell back first): retry on the current one.
+    /// Moves past <paramref name="failed"/> along the fallback chain, skipping <paramref name="alsoFailed"/> (bindings
+    /// that already failed this request). Returns <see cref="SwitchStatus.Unchanged"/> when the slot has already moved
+    /// off the failed binding (a concurrent call fell back first): retry on the current one.
     /// </summary>
-    public Task<SwitchResult> FallBackAsync(string slot, ModelBinding failed, CancellationToken cancellationToken = default) =>
-        MoveAlongAsync(slot, failed, configuration => configuration.Fallbacks, SwitchReason.Fallback, cancellationToken);
+    /// <remarks>
+    /// A fallback replaces one failed request and touches no issued tool call, so it does not wait for tracked calls:
+    /// a tool whose own model call fails would otherwise wait for itself.
+    /// </remarks>
+    public Task<SwitchResult> FallBackAsync(string slot, ModelBinding failed, IReadOnlyCollection<ModelBinding>? alsoFailed = null,
+        CancellationToken cancellationToken = default) =>
+        SerializedAsync(waitForTools: false,
+            () => MoveAlongAsync(slot, failed, configuration => configuration.Fallbacks, SwitchReason.Fallback, alsoFailed ?? [],
+                cancellationToken),
+            cancellationToken);
 
     /// <summary>After a turn: every unpinned slot that is off its default switches back (plan §6 de-escalation).</summary>
-    public async Task<IReadOnlyList<SwitchResult>> CompleteTurnAsync(CancellationToken cancellationToken = default)
-    {
-        await _switching.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+    public Task<IReadOnlyList<SwitchResult>> CompleteTurnAsync(CancellationToken cancellationToken = default) =>
+        SerializedAsync<IReadOnlyList<SwitchResult>>(waitForTools: true, async () =>
         {
             string[] slots;
             lock (_state)
@@ -131,44 +149,60 @@ public sealed class SessionModelSlots
                     results.Add(await SwitchCoreAsync(slot, target, SwitchReason.DeEscalation, pin: false, cancellationToken).ConfigureAwait(false));
             }
             return results;
-        }
-        finally
+        }, cancellationToken);
+
+    // Runs one switch operation at a time. Tracked tool calls are awaited outside the lock, so a tool that needs the lock
+    // (its own model call falls back) never waits on a switch that is itself waiting for that tool.
+    private async Task<T> SerializedAsync<T>(bool waitForTools, Func<Task<T>> operation, CancellationToken cancellationToken)
+    {
+        while (true)
         {
-            _switching.Release();
+            if (waitForTools)
+                await WaitForTrackedCallsAsync(cancellationToken).ConfigureAwait(false);
+            await _switching.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                if (waitForTools && HasTrackedCalls())
+                    continue;
+                return await operation().ConfigureAwait(false);
+            }
+            catch (ToolsRunningException)
+            {
+                // A call was tracked after the check (seen on a retry after a concurrent append): wait for it and start again.
+            }
+            finally
+            {
+                _switching.Release();
+            }
         }
     }
 
     private async Task<SwitchResult> MoveAlongAsync(string slot, ModelBinding from, Func<SlotConfiguration, ImmutableArray<ModelBinding>> list,
-        SwitchReason reason, CancellationToken cancellationToken)
+        SwitchReason reason, IReadOnlyCollection<ModelBinding> alsoFailed, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(from);
-        await _switching.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            var current = Current(slot);
-            if (!ReferenceEquals(current, from))
-                return new(SwitchStatus.Unchanged, slot, current.Profile, current.Profile, reason, Detail: "the slot already moved");
+        var current = Current(slot);
+        if (!ReferenceEquals(current, from))
+            return new(SwitchStatus.Unchanged, slot, current.Profile, current.Profile, reason, Detail: "the slot already moved");
 
-            var candidates = list(_registry.Get(slot));
-            var index = candidates.IndexOf(from, ReferenceEqualityComparer.Instance);
-            var refusals = new List<string>();
-            // Inside the list, only move forward, so a chain can never cycle back to a binding that failed.
-            foreach (var candidate in index >= 0 ? candidates[(index + 1)..] : candidates)
-            {
-                if (ReferenceEquals(candidate, from))
-                    continue;
-                var result = await SwitchCoreAsync(slot, candidate, reason, pin: false, cancellationToken).ConfigureAwait(false);
-                if (result.Status != SwitchStatus.Refused)
-                    return result;
-                refusals.Add($"{candidate.Profile.Id}: {result.Detail}");
-            }
-            return new(SwitchStatus.NoTarget, slot, from.Profile, null, reason,
-                Detail: refusals.Count == 0 ? $"no {reason.ToWireName()} target after '{from.Profile.Id}'" : string.Join("; ", refusals));
-        }
-        finally
+        var configuration = _registry.Get(slot);
+        var candidates = list(configuration);
+        var index = candidates.IndexOf(from, ReferenceEqualityComparer.Instance);
+        // Past a hop in the list, only move forward, so a chain never cycles back to an earlier hop. The default is the
+        // starting point even when it is also listed (for example as the last resort), so from there start at the top.
+        var start = index >= 0 && !ReferenceEquals(from, configuration.Default) ? index + 1 : 0;
+        var refusals = new List<string>();
+        foreach (var candidate in candidates[start..])
         {
-            _switching.Release();
+            if (ReferenceEquals(candidate, from) || alsoFailed.Contains(candidate, ReferenceEqualityComparer.Instance))
+                continue;
+            var result = await SwitchCoreAsync(slot, candidate, reason, pin: false, cancellationToken).ConfigureAwait(false);
+            if (result.Status != SwitchStatus.Refused)
+                return result;
+            refusals.Add($"{candidate.Profile.Id}: {result.Detail}");
         }
+        return new(SwitchStatus.NoTarget, slot, from.Profile, null, reason,
+            Detail: refusals.Count == 0 ? $"no {reason.ToWireName()} target after '{from.Profile.Id}'" : string.Join("; ", refusals));
     }
 
     private async Task<SwitchResult> SwitchCoreAsync(string slot, ModelBinding target, SwitchReason reason, bool pin,
@@ -186,8 +220,11 @@ public sealed class SessionModelSlots
         LogState state = default;
         for (var attempt = 1; stored is null; attempt++)
         {
-            // Step 1: issued tool calls finish and their results are logged; nothing in flight is cancelled.
-            state = await WaitForIssuedWorkAsync(cancellationToken).ConfigureAwait(false);
+            // Step 1: issued tool calls finish and their results are logged; nothing in flight is cancelled. Tracked calls
+            // were awaited before taking the lock; this checks the log. A fallback skips it (see FallBackAsync).
+            state = ReadState(cancellationToken);
+            if (reason != SwitchReason.Fallback)
+                CheckIssuedWork(state);
 
             // Step 6, checked before the event so a refused move is never recorded as having happened.
             if (target.Profile.Privacy == PrivacyClass.Cloud)
@@ -220,7 +257,8 @@ public sealed class SessionModelSlots
         // through the slot uses the new binding.
         var budget = await _options.Budget.OnProfileChangedAsync(
             new(SessionId, slot, from.Profile, target.Profile, stored.Sequence), cancellationToken).ConfigureAwait(false);
-        return new(SwitchStatus.Switched, slot, from.Profile, target.Profile, reason, stored.Sequence, budget, state.PendingApprovals);
+        return new(SwitchStatus.Switched, slot, from.Profile, target.Profile, reason, stored.Sequence, budget, state.PendingApprovals,
+            UnfinishedToolCalls: state.UnfinishedCalls);
     }
 
     private void SetPinned(string slot, bool pin)
@@ -234,31 +272,39 @@ public sealed class SessionModelSlots
         }
     }
 
-    private async Task<LogState> WaitForIssuedWorkAsync(CancellationToken cancellationToken)
+    private async Task WaitForTrackedCallsAsync(CancellationToken cancellationToken)
     {
         while (true)
         {
             Task[] running;
             lock (_state)
                 running = _inFlight.Values.Select(source => source.Task).ToArray();
-            if (running.Length > 0)
-            {
-                await Task.WhenAll(running).WaitAsync(cancellationToken).ConfigureAwait(false);
-                continue;
-            }
-
-            var state = ReadState(cancellationToken);
-            if (state.UnfinishedCalls.IsEmpty)
-                return state;
-            lock (_state)
-            {
-                if (_inFlight.Count > 0)
-                    continue;
-            }
-            throw new InvalidOperationException(
-                $"Cannot switch session '{SessionId}': tool call(s) {string.Join(", ", state.UnfinishedCalls)} were issued, " +
-                "have no result and are not tracked. Track running calls with TrackToolCall and log their results first.");
+            if (running.Length == 0)
+                return;
+            await Task.WhenAll(running).WaitAsync(cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    private bool HasTrackedCalls()
+    {
+        lock (_state)
+            return _inFlight.Count > 0;
+    }
+
+    private void CheckIssuedWork(LogState state)
+    {
+        string[] orphans;
+        lock (_state)
+        {
+            if (_inFlight.Count > 0)
+                throw new ToolsRunningException();
+            orphans = state.UnfinishedCalls.Where(call => !_parked.Contains(call)).ToArray();
+        }
+        if (orphans.Length > 0)
+            throw new InvalidOperationException(
+                $"Cannot switch session '{SessionId}': tool call(s) {string.Join(", ", orphans)} were issued, have no result " +
+                "and are neither tracked nor parked. Track running calls with TrackToolCall and log their results first; " +
+                "park calls that wait on an approval with ParkToolCall.");
     }
 
     // A small fold over the raw log. Corvid.Models cannot reference the kernel's projection (the kernel depends on Models).
@@ -287,6 +333,12 @@ public sealed class SessionModelSlots
         return new(head, [.. calls], [.. approvals]);
     }
 
+    private void Unpark(string callId)
+    {
+        lock (_state)
+            _parked.Remove(callId);
+    }
+
     private void Complete(string callId)
     {
         TaskCompletionSource? source;
@@ -304,4 +356,12 @@ public sealed class SessionModelSlots
     {
         public void Dispose() => owner.Complete(callId);
     }
+
+    private sealed class ParkedCallLease(SessionModelSlots owner, string callId) : IDisposable
+    {
+        public void Dispose() => owner.Unpark(callId);
+    }
+
+    // Internal control flow only: SerializedAsync catches it, releases the lock and waits.
+    private sealed class ToolsRunningException : Exception;
 }

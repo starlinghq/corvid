@@ -125,6 +125,97 @@ public sealed class SwitchTests : IDisposable
     }
 
     [Fact]
+    public async Task A_call_parked_at_an_approval_prompt_does_not_block_a_switch()
+    {
+        var slots = Slots(new RecordingHooks(allowCloud: true));
+        Append(new ToolCallIssued("c1", "shell", Profiles.Json("""{"command":"rm notes/old.md"}""")),
+            new ApprovalRequested("a1", "rm notes/old.md", "deletes a file"));
+        var parked = slots.ParkToolCall("c1");
+
+        // The user types /model at the approval prompt.
+        var result = await slots.SwitchAsync(Generator, _server, cancellationToken: Ct);
+
+        Assert.Equal(SwitchStatus.Switched, result.Status);
+        Assert.Equal(["a1"], result.PendingApprovals);
+        Assert.Equal(["c1"], result.UnfinishedToolCalls);
+        Assert.IsType<ModelSwitched>(Events()[^1]);
+
+        // Approved: the call runs, so the next switch waits for it again.
+        parked.Dispose();
+        var lease = slots.TrackToolCall("c1");
+        Append(new ApprovalResolved("a1", true, "once"));
+        var back = slots.SwitchAsync(Generator, _local, cancellationToken: Ct);
+        Assert.False(back.IsCompleted);
+        Append(new ToolResult("c1", Profiles.Json("{}")));
+        lease.Dispose();
+        Assert.Equal(SwitchStatus.Switched, (await back).Status);
+        Assert.Empty((await back).UnfinishedToolCalls);
+    }
+
+    [Fact]
+    public async Task A_tool_whose_model_call_fails_falls_back_without_waiting_for_itself()
+    {
+        var slots = Slots(new RecordingHooks(allowCloud: true), fallbacks: [_server]);
+        var client = slots.GetChatClient(Generator);
+        Append(new ToolCallIssued("c1", "summarize_page", Profiles.Json("{}")));
+        using var lease = slots.TrackToolCall("c1");
+        _local.Client().FailWith(Profiles.Status(HttpStatusCode.ServiceUnavailable));
+
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "summarize")], cancellationToken: Ct)
+            .WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+        Assert.Equal("qwen3.5-27b", response.Text);
+        AssertSwitch(Assert.Single(Switches()), _local, _server, "fallback");
+    }
+
+    [Fact]
+    public async Task A_switch_waiting_for_a_tool_does_not_block_that_tools_fallback()
+    {
+        var slots = Slots(new RecordingHooks(allowCloud: true), fallbacks: [_server]);
+        var client = slots.GetChatClient(Generator);
+        Append(new ToolCallIssued("c1", "summarize_page", Profiles.Json("{}")));
+        var lease = slots.TrackToolCall("c1");
+        var switching = slots.SwitchAsync(Generator, _cloudA, cancellationToken: Ct);
+        Assert.False(switching.IsCompleted);
+
+        _local.Client().FailWith(Profiles.Status(HttpStatusCode.TooManyRequests));
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "summarize")], cancellationToken: Ct)
+            .WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        Append(new ToolResult("c1", Profiles.Json("{}")));
+        lease.Dispose();
+        var result = await switching.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+        Assert.Equal("qwen3.5-27b", response.Text);
+        Assert.Equal(SwitchStatus.Switched, result.Status);
+        Assert.Collection(Switches(),
+            change => AssertSwitch(change, _local, _server, "fallback"),
+            change => AssertSwitch(change, _server, _cloudA, "user"));
+    }
+
+    [Fact]
+    public async Task A_failing_default_listed_as_the_last_resort_falls_back_from_the_top_of_the_chain()
+    {
+        // The usual shape: cloud B first, then the local default as the last resort.
+        var slots = Slots(new RecordingHooks(allowCloud: true), fallbacks: [_cloudB, _local]);
+        _local.Client().FailWith(Profiles.Status(HttpStatusCode.ServiceUnavailable), Profiles.Status(HttpStatusCode.ServiceUnavailable));
+
+        var response = await slots.GetChatClient(Generator).GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: Ct);
+        Assert.Equal("cloud-b", response.Text);
+        _cloudB.Client().FailWith(Profiles.Status(HttpStatusCode.BadGateway));
+
+        // Within one request a binding that already failed is not tried again.
+        await slots.SwitchAsync(Generator, _local, cancellationToken: Ct);
+        var error = await Assert.ThrowsAsync<HttpRequestException>(() =>
+            slots.GetChatClient(Generator).GetResponseAsync([new ChatMessage(ChatRole.User, "again")], cancellationToken: Ct));
+        Assert.Equal(HttpStatusCode.BadGateway, error.StatusCode);
+        Assert.Equal(2, _local.Client().Calls.Count);
+        Assert.Collection(Switches(),
+            change => AssertSwitch(change, _local, _cloudB, "fallback"),
+            change => AssertSwitch(change, _cloudB, _local, "user"),
+            change => AssertSwitch(change, _local, _cloudB, "fallback"));
+    }
+
+    [Fact]
     public async Task Moving_to_cloud_passes_the_privacy_gate_and_a_refusal_records_nothing()
     {
         var hooks = new RecordingHooks(allowCloud: false);

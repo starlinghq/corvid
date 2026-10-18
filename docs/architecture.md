@@ -104,8 +104,10 @@ de-escalation rule of §6. It depends only on Abstractions and
   bindings are configuration, not events, so a projection's `ModelProfiles`
   lists only slots that have switched.
 - `SessionModelSlots.SwitchAsync` runs the switch procedure, serialized per
-  session: wait for tracked tool calls (`TrackToolCall`) and verify from the log
-  that every issued call has a result; ask the privacy gate when the target is
+  session: wait for tracked tool calls (`TrackToolCall`), outside the lock, and
+  verify from the log that every issued call has a result or is parked at an
+  approval prompt (`ParkToolCall`; parked calls are reported, not awaited, so
+  `/model` works while an approval is pending); ask the privacy gate when the target is
   `cloud`; append `ModelSwitched` with old and new profile snapshots and the
   reason (`user`, `escalation`, `fallback`, `de_escalation`) at the expected
   head, re-checking on a concurrent append; then swap the binding and run the
@@ -115,8 +117,11 @@ de-escalation rule of §6. It depends only on Abstractions and
 - `GetChatClient(slot)` returns an `IChatClient` that resolves the current
   binding on every call, so a switch takes effect at the next call while calls
   already in flight finish on the old model. A 429, 5xx or transport failure
-  moves along the fallback chain (forward only, skipping targets the privacy gate
-  refuses), one `fallback` switch event per hop; streaming falls back only
+  moves along the fallback chain (forward only from a listed hop, from the top
+  when the default fails, skipping targets the privacy gate refuses and bindings
+  that already failed this request), one `fallback` switch event per hop. A
+  fallback does not wait for tracked tool calls, so a tool whose own model call
+  fails cannot deadlock on itself; streaming falls back only
   before the first update. `EscalateAsync` climbs the ladder;
   `CompleteTurnAsync` returns every unpinned slot to its default. Only a user
   switch pins or unpins.

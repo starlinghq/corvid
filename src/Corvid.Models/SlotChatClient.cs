@@ -23,6 +23,7 @@ internal sealed class SlotChatClient(SessionModelSlots slots, string slot, Func<
         CancellationToken cancellationToken = default)
     {
         var history = messages as IReadOnlyList<ChatMessage> ?? messages.ToList();
+        var failed = new List<ModelBinding>();
         while (true)
         {
             var binding = slots.Current(slot);
@@ -32,7 +33,7 @@ internal sealed class SlotChatClient(SessionModelSlots slots, string slot, Func<
             }
             catch (Exception exception) when (!cancellationToken.IsCancellationRequested && isFallbackError(exception))
             {
-                await FallBackOrThrowAsync(binding, exception, cancellationToken).ConfigureAwait(false);
+                await FallBackOrThrowAsync(binding, failed, exception, cancellationToken).ConfigureAwait(false);
             }
         }
     }
@@ -41,6 +42,7 @@ internal sealed class SlotChatClient(SessionModelSlots slots, string slot, Func<
         ChatOptions? options = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var history = messages as IReadOnlyList<ChatMessage> ?? messages.ToList();
+        var failed = new List<ModelBinding>();
         while (true)
         {
             var binding = slots.Current(slot);
@@ -54,7 +56,7 @@ internal sealed class SlotChatClient(SessionModelSlots slots, string slot, Func<
             catch (Exception exception) when (!cancellationToken.IsCancellationRequested && isFallbackError(exception))
             {
                 await updates.DisposeAsync().ConfigureAwait(false);
-                await FallBackOrThrowAsync(binding, exception, cancellationToken).ConfigureAwait(false);
+                await FallBackOrThrowAsync(binding, failed, exception, cancellationToken).ConfigureAwait(false);
                 continue;
             }
             catch
@@ -80,10 +82,15 @@ internal sealed class SlotChatClient(SessionModelSlots slots, string slot, Func<
         }
     }
 
-    private async Task FallBackOrThrowAsync(ModelBinding failed, Exception exception, CancellationToken cancellationToken)
+    // Remembers every binding that failed this request, so the chain never sends it back to one of them.
+    private async Task FallBackOrThrowAsync(ModelBinding binding, List<ModelBinding> failed, Exception exception,
+        CancellationToken cancellationToken)
     {
-        var result = await slots.FallBackAsync(slot, failed, cancellationToken).ConfigureAwait(false);
-        if (result.Status is SwitchStatus.Switched or SwitchStatus.Unchanged)
+        failed.Add(binding);
+        var result = await slots.FallBackAsync(slot, binding, failed, cancellationToken).ConfigureAwait(false);
+        // Unchanged means a concurrent call already moved the slot; retry on its binding unless that one failed here too.
+        if (result.Status == SwitchStatus.Switched
+            || (result.Status == SwitchStatus.Unchanged && !failed.Contains(slots.Current(slot), ReferenceEqualityComparer.Instance)))
             return;
         ExceptionDispatchInfo.Capture(exception).Throw();
     }
