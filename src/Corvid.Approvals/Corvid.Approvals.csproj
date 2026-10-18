@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Corvid's structural approval pipeline: a bash-subset parser, wrapper unwrapping, target extraction, the hardline deny list, risk through the decision fabric, approval modes, structural rules and approval events.</Description>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Corvid.Abstractions/Corvid.Abstractions.csproj" />
+    <ProjectReference Include="../Corvid.Fabric/Corvid.Fabric.csproj" />
+    <ProjectReference Include="../Corvid.Tools/Corvid.Tools.csproj" />
+    <InternalsVisibleTo Include="Corvid.Approvals.Tests" />
+  </ItemGroup>
+</Project>
