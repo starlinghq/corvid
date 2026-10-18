@@ -1,11 +1,13 @@
-# Agent foundation (C-001, C-002, C-005, C-009)
+# Agent foundation (C-001, C-002, C-005, C-006, C-009)
 
 The solution contains `Corvid.Abstractions`, `Corvid.Kernel`, and
 `Corvid.Models`, alongside the working Vault projects. Kernel and Models each
-reference Abstractions. `Corvid.Models` has no public types yet; slot contracts
-belong to C-006. C-005 added `Corvid.Tools` and its build-time generator,
-`Corvid.Tools.Generators` (see [Tools](#tools-c-005)). Add the other projects from the agent plan as their
-implementations start, rather than creating empty projects for every future surface.
+reference Abstractions; Models also references
+`Microsoft.Extensions.AI.Abstractions`. Models must not reference Kernel: the
+kernel's turn loop will depend on the slots. C-005 added `Corvid.Tools` and its
+build-time generator, `Corvid.Tools.Generators` (see [Tools](#tools-c-005)). Add
+the other projects from the agent plan as their implementations start, rather
+than creating empty projects for every future surface.
 
 ## Session event log (C-002)
 
@@ -34,7 +36,7 @@ implementations start, rather than creating empty projects for every future surf
   log cannot repair them and the session must stay readable.
 
 Not built yet: the session actor and its command channel, rendering a projection
-into a model prompt (C-006), full-text search over raw events, branch and fork
+into a model prompt, full-text search over raw events, branch and fork
 sessions that copy a prefix, and schema migrations beyond version 1. SQLite calls
 are synchronous; callers that must not block should use a storage worker.
 
@@ -75,6 +77,65 @@ thresholds and new models; that needs `IDecider` and the TurnState builder (C-00
 then a decision-set format and scoring (tool choice, argument match, escalation
 rate). Golden sets per generator profile and fabric version, a command-line runner,
 and prompt-rendering checks (C-006) also follow later.
+
+## Model slots and switching (C-006)
+
+`Corvid.Models` (core, `IsAotCompatible`) implements plan §4.1, §4.2 and the
+de-escalation rule of §6. It depends only on Abstractions and
+`Microsoft.Extensions.AI.Abstractions`; provider adapters come later in
+`Corvid.Models.*`.
+
+- `ModelProfile`: context window, accepted context, tool-call support (none,
+  template-rendered, native), structured output, prompt-caching style, cost per
+  million tokens, privacy class (`local`, `local-server`, `cloud`) and placement.
+  `ToSnapshot()` serializes it through a source-generated context (snake_case,
+  string enums); that JSON is persisted in `ModelSwitched` events, so renaming a
+  property or enum value needs a migration.
+- `ModelSlots` names the seven slots (`generator`, `summarizer`, `decider`,
+  `extractor`, `embedder.text`, `embedder.media`, `vision`) and their contracts:
+  `IChatClient` for generator, summarizer and vision,
+  `IEmbeddingGenerator<string, Embedding<float>>` for `embedder.text`. The
+  decider, extractor and media-embedder contracts are not defined yet (C-004, and
+  a Starling-typed API core cannot reference), so those slots accept any service.
+- `ModelSlotRegistry` is the process-wide catalogue: per slot a default binding,
+  an escalation ladder and a fallback chain. `SessionModelSlots` holds one
+  session's current bindings, captured from the registry at creation, so
+  rebinding the registry never silently changes a running session. Starting
+  bindings are configuration, not events, so a projection's `ModelProfiles`
+  lists only slots that have switched.
+- `SessionModelSlots.SwitchAsync` runs the switch procedure, serialized per
+  session: wait for tracked tool calls (`TrackToolCall`), outside the lock, and
+  verify from the log that every issued call has a result or is parked at an
+  approval prompt (`ParkToolCall`; parked calls are reported, not awaited, so
+  `/model` works while an approval is pending); ask the privacy gate when the target is
+  `cloud`; append `ModelSwitched` with old and new profile snapshots and the
+  reason (`user`, `escalation`, `fallback`, `de_escalation`) at the expected
+  head, re-checking on a concurrent append; then swap the binding and run the
+  budget hook. Pending approvals are left untouched and reported in the result.
+  The privacy gate runs before the event, not after as listed in §4.2, so a
+  refused move is never recorded as having happened.
+- `GetChatClient(slot)` returns an `IChatClient` that resolves the current
+  binding on every call, so a switch takes effect at the next call while calls
+  already in flight finish on the old model. A 429, 5xx or transport failure
+  moves along the fallback chain (forward only from a listed hop, from the top
+  when the default fails, skipping targets the privacy gate refuses and bindings
+  that already failed this request), one `fallback` switch event per hop. A
+  fallback does not wait for tracked tool calls, so a tool whose own model call
+  fails cannot deadlock on itself; streaming falls back only
+  before the first update. `EscalateAsync` climbs the ladder;
+  `CompleteTurnAsync` returns every unpinned slot to its default. Only a user
+  switch pins or unpins.
+- Hooks: `IBudgetPolicy` (default `AcceptedContextBudgetPolicy`, which only
+  reports whether to compact or expand) and `IPrivacyGate` (default
+  `PrivacyGates.DenyCloud`, so cloud slots are refused until a gate is
+  configured).
+
+Not built yet: compaction and expansion on a budget change (the hook only
+reports the direction), per-request redaction (§10.4), re-rendering the
+projection for the new model's format, re-embedding after an `embedder.text`
+swap (§4.3), restoring current bindings and pins from the log on resume (pins
+are not persisted), recording switch costs for `/insights`, and the
+decider/extractor/media contracts.
 
 ## Dependency rules
 
@@ -176,5 +237,5 @@ standard `obj/` path; custom intermediate paths are not supported. This is an
 architecture regression check for NuGet/project references, not a security
 sandbox or an IL analyzer for manually supplied binaries.
 
-The next milestones that build on the log are C-006 (slot registry, profiles and
-switching) and, after C-004, decision replay in the C-009 harness.
+The next milestone that builds on the log is decision replay in the C-009
+harness, after C-004.

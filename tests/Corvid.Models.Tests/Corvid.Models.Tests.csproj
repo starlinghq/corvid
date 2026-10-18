@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <Using Include="Xunit" />
+    <ProjectReference Include="../../src/Corvid.Models/Corvid.Models.csproj" />
+    <!-- The real event log and projection, so tests assert what a session persists and replays. -->
+    <ProjectReference Include="../../src/Corvid.Kernel/Corvid.Kernel.csproj" />
+  </ItemGroup>
+</Project>
