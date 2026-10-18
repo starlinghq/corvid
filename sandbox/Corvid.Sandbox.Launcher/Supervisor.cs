@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Win32.SafeHandles;
 
 namespace Corvid.Sandbox.Launcher;
 
@@ -17,20 +18,68 @@ internal static class Supervisor
 
     public static int Run(LaunchRequest request)
     {
-        SandboxPlan plan;
+        SafeFileHandle? statusFile;
         try
         {
-            plan = SandboxPlan.Create(request, Environment.GetEnvironmentVariable, LauncherLocation.Current());
+            statusFile = OpenStatus(request.StatusFile);
         }
-        catch (Exception e) when (e is RefusedException or IOException or UnauthorizedAccessException)
+        catch (RefusedException e)
         {
-            return Refuse(request.StatusFile, e.Message);
+            Console.Error.WriteLine("corvid-sandbox: " + e.Message);
+            return NotStarted;
         }
 
-        return Run(plan, request.StatusFile);
+        using (statusFile)
+        {
+            SandboxPlan plan;
+            try
+            {
+                plan = SandboxPlan.Create(request, Environment.GetEnvironmentVariable, LauncherLocation.Current());
+                CheckStatusOutside(statusFile, plan.Workspace);
+            }
+            catch (Exception e) when (e is RefusedException or IOException or UnauthorizedAccessException)
+            {
+                return Refuse(statusFile, e.Message);
+            }
+
+            return Run(plan, statusFile);
+        }
     }
 
-    private static unsafe int Run(SandboxPlan plan, string? statusFile)
+    /// <summary>
+    /// Opens the status file before anything runs and keeps the descriptor, so the final write lands in this file even
+    /// if its path is changed meanwhile. The launcher runs unconfined: following a symlink there (planted by an earlier
+    /// sandboxed command) would let a command make it overwrite any file the user owns.
+    /// </summary>
+    private static SafeFileHandle? OpenStatus(string? path)
+    {
+        if (path is null)
+        {
+            return null;
+        }
+
+        int fd = Native.open(path, Native.OWronly | Native.OCreat | Native.OTrunc | Native.ONofollow | Native.OCloexec, 0b110_000_000);
+        return fd >= 0
+            ? new SafeFileHandle(fd, ownsHandle: true)
+            : throw new RefusedException($"Cannot open the status file {path} (errno {Native.Errno}; it must not be a symlink).");
+    }
+
+    /// <summary>A status file the command can write could be replaced or forged while it runs.</summary>
+    private static void CheckStatusOutside(SafeFileHandle? statusFile, string workspace)
+    {
+        if (statusFile is null)
+        {
+            return;
+        }
+
+        string? real = new FileInfo("/proc/self/fd/" + statusFile.DangerousGetHandle().ToString(System.Globalization.CultureInfo.InvariantCulture)).LinkTarget;
+        if (real is null || SandboxPlan.Under(real, workspace))
+        {
+            throw new RefusedException($"The status file {real ?? "(unknown)"} must be outside the workspace {workspace}.");
+        }
+    }
+
+    private static unsafe int Run(SandboxPlan plan, SafeFileHandle? statusFile)
     {
         // Stage 2 reports on this pipe. Only the write end is inherited (through bubblewrap, which passes descriptors on).
         int* fds = stackalloc int[2];
@@ -93,7 +142,7 @@ internal static class Supervisor
         }
     }
 
-    private static int Refuse(string? statusFile, string error)
+    private static int Refuse(SafeFileHandle? statusFile, string error)
     {
         Console.Error.WriteLine("corvid-sandbox: " + error);
         try
@@ -108,16 +157,20 @@ internal static class Supervisor
         return NotStarted;
     }
 
-    /// <summary>{"started":…,"exitCode":…,"layers":[…],"error":…}, read by Corvid.Sandbox.</summary>
-    internal static void WriteStatus(string? path, bool started, int? exitCode, IReadOnlyList<string> layers, string? error)
+    /// <summary>
+    /// {"started":…,"exitCode":…,"layers":[…],"error":…}, read by Corvid.Sandbox. Written once, from the start of the
+    /// file, replacing anything else that reached it.
+    /// </summary>
+    internal static void WriteStatus(SafeFileHandle? statusFile, bool started, int? exitCode, IReadOnlyList<string> layers, string? error)
     {
-        if (path is null)
+        if (statusFile is null)
         {
             return;
         }
 
-        var options = new FileStreamOptions { Mode = FileMode.Create, Access = FileAccess.Write, UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite };
-        using var stream = new FileStream(path, options);
+        using var stream = new FileStream(statusFile, FileAccess.Write, bufferSize: 0);
+        stream.SetLength(0);
+        stream.Position = 0;
         using var json = new Utf8JsonWriter(stream);
         json.WriteStartObject();
         json.WriteBoolean("started", started);

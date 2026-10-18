@@ -354,12 +354,59 @@ public sealed class ConfinementTests : IDisposable
     }
 
     [Fact]
+    public async Task A_status_file_inside_the_workspace_is_refused()
+    {
+        Host.RequireBubblewrap();
+        // The command could swap the status file for a symlink, and the unconfined launcher would then write through it.
+        string target = Path.Combine(_layout.Outside, "precious");
+        File.WriteAllText(target, _layout.VisibleCanary);
+        string status = Path.Combine(_layout.Workspace, "status.json");
+        string marker = Path.Combine(_layout.Workspace, "ran");
+
+        var (exitCode, stderr) = await LaunchAsync(
+            "--workspace", _layout.Workspace, "--status-file", status, "--",
+            "/bin/sh", "-c", $"touch '{marker}'; ln -sf '{target}' '{status}'");
+
+        Assert.Equal(125, exitCode);
+        Assert.Contains("must be outside the workspace", stderr, StringComparison.Ordinal);
+        Assert.False(File.Exists(marker));
+        Assert.Equal(_layout.VisibleCanary, File.ReadAllText(target));
+    }
+
+    [Fact]
+    public async Task A_symlinked_status_file_is_not_followed()
+    {
+        string target = Path.Combine(_layout.Outside, "precious");
+        File.WriteAllText(target, _layout.VisibleCanary);
+        string status = Path.Combine(_layout.Root, "status.json");
+        File.CreateSymbolicLink(status, target);
+        string marker = Path.Combine(_layout.Workspace, "ran");
+
+        var (exitCode, stderr) = await LaunchAsync("--workspace", _layout.Workspace, "--status-file", status, "--", "/usr/bin/touch", marker);
+
+        Assert.Equal(125, exitCode);
+        Assert.Contains("must not be a symlink", stderr, StringComparison.Ordinal);
+        Assert.False(File.Exists(marker));
+        Assert.Equal(_layout.VisibleCanary, File.ReadAllText(target));
+    }
+
+    [Fact]
     public async Task A_missing_launcher_is_refused()
     {
         var e = await Assert.ThrowsAsync<SandboxRefusedException>(() => new BubblewrapSandbox(new SandboxOptions { LauncherPath = "/nonexistent/corvid-sandbox" })
             .RunAsync(_layout.Policy, new SandboxCommand("/bin/true"), Ct));
 
         Assert.Contains("refusing to run unsandboxed", e.Message, StringComparison.Ordinal);
+    }
+
+    private async Task<(int ExitCode, string Stderr)> LaunchAsync(params string[] arguments)
+    {
+        using Process launcher = Process.Start(_layout.Launcher(arguments))!;
+        Task<string> stdout = launcher.StandardOutput.ReadToEndAsync(Ct);
+        string stderr = await launcher.StandardError.ReadToEndAsync(Ct);
+        await launcher.WaitForExitAsync(Ct);
+        await stdout;
+        return (launcher.ExitCode, stderr);
     }
 
     /// <summary>A "Permission denied" message from the tool about the path (coreutils quote paths in some versions).</summary>

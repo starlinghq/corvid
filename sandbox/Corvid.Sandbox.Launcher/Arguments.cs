@@ -72,6 +72,7 @@ internal static class Arguments
           --best-effort-layers    Run without Landlock or seccomp when the kernel lacks them (never without bubblewrap).
           --bwrap PATH            bubblewrap to use (default: the first bwrap on PATH, then /usr/bin/bwrap).
           --status-file PATH      Write a JSON status: whether the command started, its exit code, the layers applied.
+                                  Must be outside the workspace and not a symlink.
 
         Exit status: the command's, or 125 when the sandbox could not be set up (nothing ran).
         """;

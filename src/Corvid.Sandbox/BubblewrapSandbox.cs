@@ -246,16 +246,18 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
     /// <summary>The launcher's status file: {"started":…,"exitCode":…,"layers":[…],"error":…}.</summary>
     private sealed record Status(bool Started, int? ExitCode, ImmutableArray<string> Layers, string? Error)
     {
+        /// <summary>Null when the launcher wrote nothing: it opens the file at start and writes it only on the way out.</summary>
         public static Status? Read(string path)
         {
-            if (!File.Exists(path))
+            byte[] bytes = File.Exists(path) ? File.ReadAllBytes(path) : [];
+            if (bytes.Length == 0)
             {
                 return null;
             }
 
             try
             {
-                using var json = JsonDocument.Parse(File.ReadAllBytes(path));
+                using var json = JsonDocument.Parse(bytes);
                 JsonElement root = json.RootElement;
                 return new Status(
                     root.GetProperty("started").GetBoolean(),

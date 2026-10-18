@@ -12,8 +12,16 @@ internal static unsafe partial class Native
     public const int EOPNOTSUPP = 95;
 
     public const int SIGKILL = 9;
+    public const int OWronly = 0x1;
+    public const int OCreat = 0x40;
+    public const int OTrunc = 0x200;
     public const int OCloexec = 0x80000;
     public const int OPath = 0x200000;
+
+    /// <summary>O_NOFOLLOW: 0400000 in the generic table (x86_64), 0100000 on arm, arm64 and powerpc.</summary>
+    public static int ONofollow => RuntimeInformation.ProcessArchitecture is Architecture.Arm or Architecture.Arm64 or Architecture.Ppc64le
+        ? 0x8000
+        : 0x20000;
     public const int FSetFd = 2;
     public const int PollIn = 0x1;
 
@@ -94,6 +102,10 @@ internal static unsafe partial class Native
 
     [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     public static partial int open(string path, int flags);
+
+    // open is variadic in C; its mode argument is passed like a fixed one on every Linux ABI .NET runs on.
+    [LibraryImport("libc", EntryPoint = "open", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    public static partial int open(string path, int flags, uint mode);
 
     [LibraryImport("libc")]
     public static partial int getppid();
