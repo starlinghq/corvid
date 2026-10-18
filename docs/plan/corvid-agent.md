@@ -1,6 +1,6 @@
 # Corvid: a local-first .NET agent with a calibrated decision fabric
 
-Version 0.3, 2026-10-16. Status: design proposal. Corvid Vault M1 is built (`vault.md`, Implementation status); C-001's initial agent projects and dependency boundary check, C-002's event log and projections, C-005's tool generator and registry, and C-009's golden-trajectory replay harness are built ([architecture](../architecture.md)). The agent loop itself is not.
+Version 0.4, 2026-10-18. Status: design proposal, being built. Corvid Vault M1 is built (`vault.md`, Implementation status); C-001 (projects and dependency boundaries), C-002 (event log and projections), C-005 (tool generator and registry), C-006 (model slots and switching) and C-009 (golden-trajectory replay) are built ([architecture](../architecture.md)). The agent loop itself is not. Until `Starlings.Models.Kev` is published, v0.1 runs on the degraded decider (§5.6); see "Building without Kev" in §18.
 
 ## 0. Thesis
 
@@ -568,19 +568,45 @@ ACP, OpenAI-compatible API, MCP client and server, gateway with Telegram, Discor
 
 Subagents, code mode, media memory, remaining gateway adapters, voice, two-tier decider, architect/editor, desktop UI, decision-data export, and personal Kev adapters if U-5 lands.
 
-### Backlog (first items)
+### Building without Kev (decided 2026-10-18)
+
+Kev is merged in Starling (`main` at `7dd1f19`, Experimental) but `Starlings.Models.Kev` is not on nuget.org. Rather than wait, v0.1 is built against the `IDecider` contract with the degraded tier (§5.6) as its only implementation:
+
+- `risk`, `skill_write_safe` and `memory_op` have no calibrated confidence, so those gates ask the user (or stage the change). Routing questions use embedding similarity and the generator, as §5.6 describes.
+- Every degraded answer is still logged as a `Decision` event with its outcome, so the calibration data exists when Kev arrives.
+- The Kev adapter (C-004b) and spikes S1, S2 and S4 (C-003) are deferred until the package is published. S3 and S5 can run independently.
+
+### Backlog
+
 
 | ID | Item | Depends on |
 | --- | --- | --- |
 | C-001 | **Built:** repository, initial core solution layout, resolved dependency boundary check (no provider SDK outside `Corvid.Models.*`); see [architecture](../architecture.md) | — |
 | C-002 | **Built:** typed session events, append-only SQLite log with optimistic per-session sequences, and a projection that honours compaction and keeps goals, todos, approvals and decision outcomes; session actor, prompt rendering, FTS and branch sessions deferred; see [architecture](../architecture.md) | C-001 |
 | C-003 | Spikes S1–S5 and their write-ups | Kev branch, GPU lease |
-| C-004 | `IDecider` with Kev and degraded implementations; TurnState builder with budgets | C-003 |
+| C-004 | Split into C-004a (no Kev) and C-004b (Kev adapter) below | C-003 for C-004b only |
 | C-005 | **Built:** `Corvid.Tools` (tool attributes, risk metadata, argument binding, registry) and the `Corvid.Tools.Generators` source generator (reflection-free `AIFunction` wrappers, JSON Schema written at compile time and tested against `AIJsonUtilities`, `SecretRef` parameters offered as an enum of Vault catalogue names). Deferred: argument validators beyond type binding, the embedding-examples file, object-typed parameters and return values, toolsets and `check_fn`; see [architecture](../architecture.md#tools-c-005) | C-001 |
 | C-006 | **Built:** model profiles, the seven per-role slots, a registry with per-session runtime switching that waits for issued tool calls, keeps approvals and logs `ModelSwitched` snapshots; escalation, fallback chains and de-escalation unless pinned, with budget and privacy hooks (privacy checked before the event); real compaction, redaction, projection re-rendering, decider/extractor/media contracts and resume of slot state deferred; see [architecture](../architecture.md) | C-002 |
 | C-007 | Sandbox (bubblewrap, Landlock, seccomp) and the structural approval pipeline. Must deny every tool access to Vault's data and config directories: until then, a shell tool can decrypt the default-tier store (`vault.md`, Implementation status). | S3 |
 | C-008 | Memory store: FTS5, sqlite-vec, graph tables, write and read paths | C-004 |
 | C-009 | **Built:** versioned golden-trajectory fixtures under `evals/golden`, a replay harness that loads them into the SQLite log, projects any position and diffs against the recorded projection, and a five-trajectory seed set; decision replay against new thresholds or models waits for `IDecider` (C-004); see [architecture](../architecture.md) | C-002 |
+| C-004a | `Corvid.Fabric` without Kev: `IDecider` contract (Kev-shaped request, typed answers with probabilities and confidence), the §5.3 question catalogue with floors as versioned configuration, the TurnState builder with per-field token budgets and the hard stop, the degraded decider (§5.6), and `Decision` events for every answer | C-002, C-006 |
+| C-004b | Kev decider adapter (`Corvid.Models.Starling`), two-tier escalation to Kev-4B | C-004a, `Starlings.Models.Kev` on nuget.org |
+| C-010 | `Corvid.Models.Starling`: Qwen3.5-0.8B generator (`IChatClient`), GLiNER2 extractor (`IExtractor`), EmbeddingGemma 2 and e5 text embedders, their model profiles, explicit model acquisition; CPU natives in CI, model-backed tests opt-in | C-006 |
+| C-007a | `corvid-sandbox` launcher (separate Native AOT executable, no `Corvid.*` dependencies) and `Corvid.Sandbox`: bubblewrap with workspace read-write, home read-only, secret paths and Vault's data and config directories denied, network off by default; Landlock and seccomp layers | C-001 |
+| C-007b | Structural approval pipeline (§10.2): shell parser (D-5), recursive unwrapping, static target extraction, hardline deny, `risk` through `IDecider`, approval modes and structural rules, approval events; GLiNER2 target extraction after S3 | C-004a |
+| C-008 | Memory store (§9): core blocks with budgets, FTS5 over events and facts, a vector index behind an interface, the bi-temporal graph, hybrid retrieval with reciprocal rank fusion, and the write path gated by `memory_op` | C-004a |
+| C-011 | Session actor and turn loop (§3.3, §7): envelopes over channels, the four checkpoints, embedding shortlist, one-schema generation, validate and repair once, escalation, approvals, taint tracking (§10.3), result clearing, and a device scheduler | C-004a, C-005, C-006, C-007b |
+| C-012 | Built-in tools: files, shell (sandboxed), web fetch (tainted), memory, and the durable scheduler with the `wake` gate (§13) | C-007a, C-008, C-011 |
+| C-013 | `Corvid.Host` composition root, `Corvid.Cli` (Spectre.Console, slash-command registry, `corvid chat`, `model`, `doctor`), and OpenTelemetry GenAI spans (§16) | C-010, C-011 |
+| C-014 | Shadow-repository checkpoints with `/rollback` and `/undo` on log positions (§15) | C-011, C-012 |
+| C-015 | Phase 2: cloud slots (Anthropic with prompt caching, OpenAI-compatible, Gemini) authenticated through Vault, and the privacy egress gate (§10.4) | C-010, C-011 |
+| C-016 | Phase 2: compaction with map-reduce summaries and goal re-injection (§8) | C-011 |
+| C-017 | Phase 2: skills (§11): loader, selection, versioning with authorship, learning loop with replay tests | C-008, C-011 |
+| C-018 | Phase 2: MCP client and server (§12) | C-011 |
+| C-019 | Phase 2: ACP endpoint and OpenAI-compatible HTTP endpoint (§12) | C-013 |
+| C-020 | Phase 2: gateway host, delivery ledger, pairing; Telegram, Discord and Slack adapters (§12) | C-013 |
+| C-021 | Phase 2: calibration tooling, `corvid evals calibrate` and decision export (§5.5, §16) | C-004a, C-009 |
 
 ## 19. Upstream asks for Starling
 
@@ -602,7 +628,7 @@ These belong in Starling's own plan, not here. They are the changes that make Co
 | --- | --- | --- |
 | D-1 | Product name and repository home | **Decided by Mark, 2026-10-16:** the name is Corvid; the repo is `starlinghq/corvid`, private. |
 | D-2 | Is Corvid Starling's named .NET consumer for Kev (P-028 in the Starling plan)? | yes. It is the demand evidence Kev's admission lacks. |
-| D-3 | Depend on Starling packages from nuget.org only, or on project references during phase 0 | project references until Kev ships |
+| D-3 | Depend on Starling packages from nuget.org only, or on project references during phase 0 | **Decided 2026-10-18:** nuget.org only (0.2.0 for the stable packages). Project references cannot build in CI on a private repository; Kev waits for its package. |
 | D-4 | Licence | MIT OR Apache-2.0, like Starling |
 | D-5 | Shell parser: tree-sitter-bash through a .NET binding, or a hand-written parser for the subset Corvid permits | tree-sitter |
 | D-6 | GPU placement defaults and whether Corvid uses Roost when it exists | §4.4 defaults; Roost as a local-server slot later |
@@ -649,3 +675,4 @@ Hermes issue numbers, version facts and the MCP 2026-07-28 details are as report
 | 0.1 | 2026-10-16 | First draft. |
 | 0.2 | 2026-10-16 | Corvid Vault (§10.5, `vault.md`): secrets in a separate model-free process; provider keys through Vault; parity row 1.14b; spikes S6–S7; decisions D-10 to D-12. |
 | 0.3 | 2026-10-16 | D-1 decided (name Corvid, `starlinghq/corvid` private); status line notes Vault M1 is built. |
+| 0.4 | 2026-10-18 | Build without Kev on the degraded decider; D-3 decided (nuget.org only); backlog C-004a to C-021 for the rest of phase 1 and phase 2. |
