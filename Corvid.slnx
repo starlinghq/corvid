@@ -17,6 +17,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/Corvid.Kernel.Tests/Corvid.Kernel.Tests.csproj" />
     <Project Path="tests/Corvid.Evals.Tests/Corvid.Evals.Tests.csproj" />
+    <Project Path="tests/Corvid.Models.Tests/Corvid.Models.Tests.csproj" />
     <Project Path="tests/Corvid.Architecture.Tests/Corvid.Architecture.Tests.csproj" />
     <Project Path="tests/Corvid.Vault.Tests/Corvid.Vault.Tests.csproj" />
     <Project Path="tests/Corvid.Tools.Fixtures/Corvid.Tools.Fixtures.csproj" />
