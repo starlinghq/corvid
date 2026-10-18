@@ -1,0 +1,187 @@
+using System.Globalization;
+using Corvid.Abstractions.Events;
+using Microsoft.Data.Sqlite;
+
+namespace Corvid.Kernel.Events;
+
+/// <summary>A dedicated on-disk event database. Each operation owns its connection; instances can share a file.</summary>
+public sealed class SqliteEventLog : IEventLog
+{
+    private readonly string connectionString;
+
+    public SqliteEventLog(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        if (path == ":memory:")
+            throw new ArgumentException("The event log requires an on-disk database.", nameof(path));
+        path = Path.GetFullPath(path);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = path,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Pooling = false,
+            DefaultTimeout = 5
+        }.ToString();
+
+        using var connection = Open();
+        using (var wal = connection.CreateCommand())
+        {
+            wal.CommandText = "PRAGMA journal_mode=WAL;";
+            wal.ExecuteNonQuery();
+        }
+        using var transaction = connection.BeginTransaction(deferred: false);
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "PRAGMA user_version;";
+        var version = Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+        if (version is not (0 or 1))
+            throw new InvalidDataException($"Unsupported event database schema version {version}.");
+        if (version == 0)
+        {
+            command.CommandText = """
+                CREATE TABLE events (
+                    session_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL CHECK (sequence > 0),
+                    event_id TEXT NOT NULL UNIQUE,
+                    recorded_at TEXT NOT NULL,
+                    payload_version INTEGER NOT NULL,
+                    payload TEXT NOT NULL,
+                    PRIMARY KEY (session_id, sequence)
+                );
+                CREATE TRIGGER events_no_update BEFORE UPDATE ON events
+                    BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
+                CREATE TRIGGER events_no_delete BEFORE DELETE ON events
+                    BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
+                PRAGMA user_version=1;
+                """;
+            command.ExecuteNonQuery();
+        }
+        transaction.Commit();
+    }
+
+    public long GetHead(string sessionId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        cancellationToken.ThrowIfCancellationRequested();
+        using var connection = Open();
+        return Head(connection, null, sessionId);
+    }
+
+    public IReadOnlyList<StoredEvent> Append(string sessionId, long expectedHead, IReadOnlyList<EventData> events,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentOutOfRangeException.ThrowIfNegative(expectedHead);
+        ArgumentNullException.ThrowIfNull(events);
+        if (events.Count == 0)
+            throw new ArgumentException("An append batch must not be empty.", nameof(events));
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Serialize before acquiring the writer lock, and detach JsonElements from caller-owned documents.
+        var prepared = events.Select(item =>
+        {
+            ArgumentNullException.ThrowIfNull(item);
+            ArgumentNullException.ThrowIfNull(item.Payload);
+            if (item.EventId == Guid.Empty)
+                throw new ArgumentException("An event ID must not be empty.", nameof(events));
+            return (item.EventId, Json: EventJson.Serialize(item.Payload));
+        }).ToArray();
+
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction(deferred: false);
+        var head = Head(connection, transaction, sessionId);
+        if (head != expectedHead)
+            throw new EventLogConflictException(sessionId, expectedHead, head);
+
+        var appended = new List<StoredEvent>(prepared.Length);
+        foreach (var item in prepared)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var sequence = checked(++head);
+            var payload = EventJson.Deserialize(EventJson.Version, item.Json);
+            // Other event relationships belong to the session actor. A summary can only refer to prior history.
+            if (payload is Compacted compacted && (compacted.FromSequence < 1 ||
+                compacted.ThroughSequence < compacted.FromSequence || compacted.ThroughSequence >= sequence))
+                throw new ArgumentException("Compaction must reference an existing, non-empty range of prior events.", nameof(events));
+
+            var recordedAt = DateTimeOffset.UtcNow;
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                INSERT INTO events (session_id, sequence, event_id, recorded_at, payload_version, payload)
+                VALUES ($session, $sequence, $id, $at, $version, $payload);
+                """;
+            command.Parameters.AddWithValue("$session", sessionId);
+            command.Parameters.AddWithValue("$sequence", sequence);
+            command.Parameters.AddWithValue("$id", item.EventId.ToString("D"));
+            command.Parameters.AddWithValue("$at", recordedAt.ToString("O", CultureInfo.InvariantCulture));
+            command.Parameters.AddWithValue("$version", EventJson.Version);
+            command.Parameters.AddWithValue("$payload", item.Json);
+            command.ExecuteNonQuery();
+            appended.Add(new(sessionId, sequence, item.EventId, recordedAt, payload));
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        transaction.Commit();
+        return appended.AsReadOnly();
+    }
+
+    public IReadOnlyList<StoredEvent> Read(string sessionId, long afterSequence = 0, long throughSequence = long.MaxValue,
+        int limit = 256, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentOutOfRangeException.ThrowIfNegative(afterSequence);
+        ArgumentOutOfRangeException.ThrowIfLessThan(throughSequence, afterSequence);
+        ArgumentOutOfRangeException.ThrowIfLessThan(limit, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(limit, 4096);
+        cancellationToken.ThrowIfCancellationRequested();
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT sequence, event_id, recorded_at, payload_version, payload FROM events
+            WHERE session_id=$session AND sequence>$after AND sequence<=$through
+            ORDER BY sequence LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$session", sessionId);
+        command.Parameters.AddWithValue("$after", afterSequence);
+        command.Parameters.AddWithValue("$through", throughSequence);
+        command.Parameters.AddWithValue("$limit", limit);
+        using var reader = command.ExecuteReader();
+        var result = new List<StoredEvent>();
+        while (reader.Read())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            result.Add(new(sessionId, reader.GetInt64(0), Guid.Parse(reader.GetString(1)),
+                DateTimeOffset.Parse(reader.GetString(2), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                EventJson.Deserialize(reader.GetInt32(3), reader.GetString(4))));
+        }
+        return result.AsReadOnly();
+    }
+
+    private SqliteConnection Open()
+    {
+        var connection = new SqliteConnection(connectionString);
+        try
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "PRAGMA synchronous=FULL;";
+            command.ExecuteNonQuery();
+            return connection;
+        }
+        catch
+        {
+            connection.Dispose();
+            throw;
+        }
+    }
+
+    private static long Head(SqliteConnection connection, SqliteTransaction? transaction, string sessionId)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT COALESCE(MAX(sequence), 0) FROM events WHERE session_id=$session;";
+        command.Parameters.AddWithValue("$session", sessionId);
+        return (long)command.ExecuteScalar()!;
+    }
+}

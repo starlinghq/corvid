@@ -10,6 +10,7 @@
     <Project Path="vault/Corvid.Vault/Corvid.Vault.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Corvid.Kernel.Tests/Corvid.Kernel.Tests.csproj" />
     <Project Path="tests/Corvid.Architecture.Tests/Corvid.Architecture.Tests.csproj" />
     <Project Path="tests/Corvid.Vault.Tests/Corvid.Vault.Tests.csproj" />
     <Project Path="tests/Corvid.Vault.TestClient/Corvid.Vault.TestClient.csproj" />

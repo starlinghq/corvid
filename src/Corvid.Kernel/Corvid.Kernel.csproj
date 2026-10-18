@@ -1,8 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <Description>Corvid session actors, event log and projections.</Description>
+    <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
     <ProjectReference Include="../Corvid.Abstractions/Corvid.Abstractions.csproj" />
+    <InternalsVisibleTo Include="Corvid.Kernel.Tests" />
   </ItemGroup>
 </Project>
