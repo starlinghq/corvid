@@ -45,6 +45,19 @@ public sealed class BoundaryTests
     [InlineData("Corvid.Kernel", "Microsoft.CodeAnalysis.Common", "package", false)]
     [InlineData("Corvid.Tools", "Corvid.Tools.Generators", "project", false)]
     [InlineData("Corvid.Models.Starling", "Corvid.Tools.Generators", "project", false)]
+    // C-010: Starling packages and the ONNX Runtime natives they need stay in the Starling adapter.
+    [InlineData("Corvid.Models.Starling", "Starlings.Models.Qwen35.Extensions.AI", "package", true)]
+    [InlineData("Corvid.Models.Starling", "Microsoft.ML.OnnxRuntime", "package", true)]
+    [InlineData("Corvid.Models.Starling", "Microsoft.ML.OnnxRuntimeGenAI", "package", true)]
+    [InlineData("Corvid.Models.Starling", "Corvid.Models", "project", true)]
+    [InlineData("Corvid.Models.Starling", "Corvid.Abstractions", "project", true)]
+    [InlineData("Corvid.Models", "Microsoft.ML.OnnxRuntime", "package", false)]
+    [InlineData("Corvid.Models", "Microsoft.ML.OnnxRuntime.Managed", "package", false)]
+    [InlineData("Corvid.Kernel", "Microsoft.ML.OnnxRuntimeGenAI", "package", false)]
+    [InlineData("Corvid.Kernel", "Starlings.Runtime.Onnx", "package", false)]
+    [InlineData("Corvid.Tools", "Starlings.Acquisition", "package", false)]
+    [InlineData("Corvid.Abstractions", "Starlings.Tokenizers", "package", false)]
+    [InlineData("Corvid.Kernel", "Corvid.Models.Starling", "project", false)]
     public void EnforcesLayerRules(string project, string dependency, string type, bool allowed)
     {
         using var assets = Assets(("net10.0", dependency, type));
@@ -71,6 +84,26 @@ public sealed class BoundaryTests
             ("net10.0", "Corvid.Abstractions", "project"),
             ("net10.0/linux-x64", "OpenAI", "package"));
         Assert.Contains("linux-x64", Assert.Single(BoundaryCheck.CheckAssets("Corvid.Kernel", assets.RootElement)));
+    }
+
+    [Theory]
+    [InlineData("Microsoft.ML.OnnxRuntime", "Microsoft.ML.OnnxRuntime.Gpu.Linux")]
+    [InlineData("Microsoft.ML.OnnxRuntimeGenAI", "Microsoft.ML.OnnxRuntimeGenAI.Cuda")]
+    public void AdaptersResolveOneNativeFlavourPerRuntime(string cpu, string gpu)
+    {
+        // Both ship the native library under the same file name; whichever is copied last would load.
+        using var mixed = Assets(("net10.0", cpu, "package"), ("net10.0", gpu, "package"));
+        Assert.Contains("more than one flavour", Assert.Single(BoundaryCheck.CheckAssets("Corvid.Models.Starling", mixed.RootElement)));
+
+        // The CUDA meta package and its per-platform packages are one flavour.
+        using var cuda = Assets(("net10.0", "Microsoft.ML.OnnxRuntime.Gpu", "package"), ("net10.0", "Microsoft.ML.OnnxRuntime.Gpu.Linux", "package"),
+            ("net10.0", "Microsoft.ML.OnnxRuntime.Gpu.Windows", "package"), ("net10.0", "Microsoft.ML.OnnxRuntimeGenAI.Cuda", "package"));
+        Assert.Empty(BoundaryCheck.CheckAssets("Corvid.Models.Starling", cuda.RootElement));
+
+        // What the adapter ships: GenAI's CPU package and the CPU ONNX Runtime it brings.
+        using var cpuOnly = Assets(("net10.0", "Microsoft.ML.OnnxRuntimeGenAI", "package"), ("net10.0", "Microsoft.ML.OnnxRuntime", "package"),
+            ("net10.0", "Microsoft.ML.OnnxRuntime.Managed", "package"));
+        Assert.Empty(BoundaryCheck.CheckAssets("Corvid.Models.Starling", cpuOnly.RootElement));
     }
 
     [Fact]
