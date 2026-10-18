@@ -236,12 +236,16 @@ public sealed class MemoryWriter
         if (pending.Kind == PendingKind.Block)
         {
             applied = MemoryOperations.Update;
+            // Resolve first, as for facts, so a concurrent reject or approve cannot also act; a refused write reopens it.
+            Resolve(pending, PendingStatus.Approved, applied);
             var write = _blocks.Set(proposal.Block!, proposal.Content!, proposal.BlockRevision);
             if (write.Status != BlockWriteStatus.Applied)
+            {
+                _pending.Reopen(pending.PendingId, PendingStatus.Approved);
                 throw new InvalidOperationException(write.Status == BlockWriteStatus.Conflict
                     ? $"Block '{proposal.Block}' changed since the edit was proposed; reject it and propose again."
                     : $"The edit is {write.ContentTokens} tokens, over block '{proposal.Block}' budget of {write.Block.BudgetTokens}.");
-            Resolve(pending, PendingStatus.Approved, applied);
+            }
             Append(pending.SessionId, new MemoryWritten(BlockId(proposal.Block!), applied));
             result = new MemoryWriteResult(MemoryWriteStatus.Applied, applied, BlockId(proposal.Block!), pending, null, [], [], Block: write.Block);
         }
@@ -255,14 +259,32 @@ public sealed class MemoryWriter
                 && (target is null || _facts.Get(target) is not { IsCurrent: true }))
                 throw new InvalidOperationException($"'{applied}' needs a current target fact.");
             var entities = proposal.Entities.IsDefault ? [] : proposal.Entities.Select(entity => entity.ToEntity()).ToImmutableArray();
-            // Resolve first: two reviewers approving at once must not both write.
+            // Resolve first: two reviewers approving at once must not both write. If the graph refuses the write (the target
+            // was invalidated since the check above), the write is reopened, so it is never marked approved unwritten.
             Resolve(pending, PendingStatus.Approved, applied);
-            result = applied == MemoryOperations.Noop
-                ? new MemoryWriteResult(MemoryWriteStatus.Noop, applied, null, pending, null, [], entities)
-                : (await ApplyFactAsync(pending.SessionId, applied, target,
-                    new FactInput(proposal.Text!, entities, proposal.Relation?.ToRelation(), proposal.ValidFrom, pending.SessionId,
-                        proposal.SourceSequence),
-                    cancellationToken)) with { Pending = pending, Entities = entities };
+            if (applied == MemoryOperations.Noop)
+            {
+                result = new MemoryWriteResult(MemoryWriteStatus.Noop, applied, null, pending, null, [], entities);
+            }
+            else
+            {
+                (Fact? Added, Fact? Closed) written;
+                try
+                {
+                    written = WriteFact(applied, target, new FactInput(proposal.Text!, entities, proposal.Relation?.ToRelation(),
+                        proposal.ValidFrom, pending.SessionId, proposal.SourceSequence));
+                }
+                catch
+                {
+                    _pending.Reopen(pending.PendingId, PendingStatus.Approved);
+                    throw;
+                }
+                result = (await FinishFactAsync(pending.SessionId, applied, written, cancellationToken)) with
+                {
+                    Pending = pending,
+                    Entities = entities,
+                };
+            }
         }
         if (pending.DecisionId is { } decisionId)
             _fabric.RecordOutcome(pending.SessionId, decisionId,
@@ -323,24 +345,30 @@ public sealed class MemoryWriter
         return document.RootElement.Clone();
     }
 
-    private async Task<MemoryWriteResult> ApplyFactAsync(string sessionId, string operation, string? target, FactInput input,
-        CancellationToken cancellationToken)
+    private Task<MemoryWriteResult> ApplyFactAsync(string sessionId, string operation, string? target, FactInput input,
+        CancellationToken cancellationToken) =>
+        FinishFactAsync(sessionId, operation, WriteFact(operation, target, input), cancellationToken);
+
+    private (Fact? Added, Fact? Closed) WriteFact(string operation, string? target, FactInput input)
     {
-        Fact? added = null, closed = null;
         switch (operation)
         {
             case MemoryOperations.Add:
-                added = _facts.Add(input);
-                break;
+                return (_facts.Add(input), null);
             case MemoryOperations.Update:
-                (closed, added) = _facts.Supersede(target!, input);
-                break;
+                var (closed, added) = _facts.Supersede(target!, input);
+                return (added, closed);
             case MemoryOperations.Invalidate:
-                closed = _facts.Invalidate(target!);
-                break;
+                return (null, _facts.Invalidate(target!));
             default:
                 throw new ArgumentException($"'{operation}' writes nothing.", nameof(operation));
         }
+    }
+
+    private async Task<MemoryWriteResult> FinishFactAsync(string sessionId, string operation, (Fact? Added, Fact? Closed) written,
+        CancellationToken cancellationToken)
+    {
+        var (added, closed) = written;
         var memoryId = (added ?? closed)!.FactId;
         Append(sessionId, new MemoryWritten(memoryId, operation));
         if (added is not null && _vectors is not null)

@@ -56,7 +56,7 @@ public sealed class WriterTests
         Assert.Equal((fact.FactId, Session, 4L), (approved.MemoryId, fact.SessionId, fact.SourceSequence));
         Assert.Equal(2, fact.Entities.Length);
         Assert.Empty(writer.ListPending());
-        Assert.Equal(PendingStatus.Approved, writer.GetPending(staged.Pending.PendingId)!.Status);
+        Assert.Equal(PendingStatus.Approved, writer.GetPending(staged.Pending!.PendingId)!.Status);
 
         var events = Events(store);
         Assert.Equal(new MemoryWritten(fact.FactId, "add"), events[2]);
@@ -206,5 +206,8 @@ public sealed class WriterTests
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Writer(store).ApproveAsync(staged.Pending!.PendingId, cancellationToken: Ct));
         Assert.Contains("changed", error.Message);
         Assert.Equal("Lives in York.", store.Blocks.Get("user").Content);
+        // The refused approval leaves the edit pending, so it can still be rejected.
+        Assert.Equal(PendingStatus.Pending, Writer(store).GetPending(staged.Pending!.PendingId)!.Status);
+        Assert.Equal(PendingStatus.Rejected, Writer(store).Reject(staged.Pending.PendingId, cancellationToken: Ct).Status);
     }
 }

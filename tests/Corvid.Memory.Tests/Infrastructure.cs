@@ -72,9 +72,13 @@ internal sealed class KeywordEmbedder(params string[] keywords) : IEmbeddingGene
 
     public bool Fail { get; set; }
 
+    /// <summary>Runs before each batch, so a test can write an item while a re-embed batch is in flight.</summary>
+    public Action? OnGenerate { get; set; }
+
     public Task<GeneratedEmbeddings<Embedding<float>>> GenerateAsync(IEnumerable<string> values,
         EmbeddingGenerationOptions? options = null, CancellationToken cancellationToken = default)
     {
+        OnGenerate?.Invoke();
         if (Fail)
             throw new HttpRequestException("embedder down");
         var batch = values.ToList();

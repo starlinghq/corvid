@@ -124,6 +124,33 @@ public sealed class EmbedderSwapTests
     }
 
     [Fact]
+    public async Task A_swap_does_not_complete_while_an_item_written_during_the_last_batch_lacks_its_new_vector()
+    {
+        using var store = new TempStore();
+        var newEmbedder = new KeywordEmbedder("tea", "coffee");
+        var vectors = store.Vectors(new MemoryEmbedder("old", new KeywordEmbedder("tea")), new MemoryEmbedder("new", newEmbedder));
+        vectors.BeginSwap("old");
+        var tea = store.Facts.Add(new FactInput("Sam likes tea"));
+        Assert.True(await vectors.EmbedAsync([(tea.FactId, tea.Text)], Ct));
+        vectors.BeginSwap("new");
+
+        // A write lands while the batch is embedding, and its embedding with the new embedder failed.
+        newEmbedder.OnGenerate = () =>
+        {
+            newEmbedder.OnGenerate = null;
+            store.Facts.Add(new FactInput("Ana likes coffee"));
+        };
+        Assert.Equal(new ReembedProgress("new", 1, 1, false), await vectors.ReembedAsync(batchSize: 10, Ct));
+        Assert.Equal(new EmbedderState("old", "new"), vectors.State);
+        Assert.Equal(1, store.Index.Count("old"));
+
+        Assert.Equal(new ReembedProgress("new", 1, 0, true), await vectors.ReembedAsync(batchSize: 10, Ct));
+        Assert.Equal(new EmbedderState("new", null), vectors.State);
+        Assert.Equal(0, store.Index.Count("old"));
+        Assert.Equal(2, store.Index.Count("new"));
+    }
+
+    [Fact]
     public async Task A_failed_embedding_is_backfilled_by_the_job_and_cancelling_a_swap_drops_its_vectors()
     {
         using var store = new TempStore();

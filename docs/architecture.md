@@ -503,7 +503,8 @@ and deciders.
   embedder, each row in its own transaction, so it can stop and resume anywhere. Until none is
   missing, retrieval embeds queries with the old embedder and searches the old index, and FTS
   covers everything. Then one update makes the pending embedder active, and the old vectors are
-  deleted. If the active embedder is not loaded in the process, retrieval uses FTS and the graph only.
+  deleted. A run reports `Completed` only after that switch; an item written without its new
+  vector during the run's last batch leaves the swap pending for the next run. If the active embedder is not loaded in the process, retrieval uses FTS and the graph only.
   With no swap running, the same job backfills items whose embedding failed. Invalidated facts are not re-embedded.
 - Fact graph: `FactGraph` stores entities (matched by label and normalized name: NFKC, collapsed
   whitespace, lower case), facts with optional relations (subject, predicate, object), and links
@@ -528,7 +529,8 @@ and deciders.
   `noop` writes nothing. Everything else is staged in `pending_writes` with the decider's proposal
   and the policy's reason. The degraded decider never answers a gate, so without Kev every write is
   staged and nothing unreviewed is written. `ApproveAsync` applies a staged write (the
-  reviewer may change the operation or target) and `Reject` discards it; both record the decision's
+  reviewer may change the operation or target; a write the graph or block store then refuses stays
+  pending) and `Reject` discards it; both record the decision's
   outcome (`approved`, `corrected` or `rejected`) for calibration. `EditBlockAsync` sends `user` and
   `agent` edits through the same gate; an edit over the budget is staged as `over_budget` without
   asking, and `persona` is edited only by the user. Every write appends `MemoryWritten` with the

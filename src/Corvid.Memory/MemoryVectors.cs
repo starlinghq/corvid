@@ -145,9 +145,18 @@ public sealed class MemoryVectors
         if (remaining > 0)
             return new ReembedProgress(target, batch.Count, remaining, false);
 
+        if (state.Pending is null)
+            return new ReembedProgress(target, batch.Count, 0, true);
+
         // Items written while this batch ran are embedded with the pending embedder too, so a final scan finds none unless
-        // a write's embedding failed; then the swap waits for the next run.
-        if (state.Pending is not null && Missing(target, 1, cancellationToken).Missing == 0 && Complete(state))
+        // a write's embedding failed; then the swap waits for the next run. Completed is reported only when the switch
+        // happened, because the scheduler stops running the job on it.
+        var late = Missing(target, 1, cancellationToken).Missing;
+        if (late > 0)
+            return new ReembedProgress(target, batch.Count, late, false);
+        if (!Complete(state, out var removeOld))
+            return new ReembedProgress(target, batch.Count, 0, false);
+        if (removeOld)
             Index.RemoveEmbedder(state.Active!);
         return new ReembedProgress(target, batch.Count, 0, true);
     }
@@ -174,15 +183,19 @@ public sealed class MemoryVectors
             Index.Upsert(items[i].ItemId, embedder.Id, embeddings[i].Vector.Span);
     }
 
-    private bool Complete(EmbedderState expected)
+    /// <summary>Makes the pending embedder active, unless the state changed since the run read it.</summary>
+    /// <param name="removeOld">True when there was an old active embedder whose vectors are now obsolete.</param>
+    private bool Complete(EmbedderState expected, out bool removeOld)
     {
+        removeOld = false;
         using var connection = _database.Open();
         using var transaction = connection.BeginTransaction(deferred: false);
         if (ReadState(connection, transaction) != expected)
             return false;
         WriteState(connection, transaction, new EmbedderState(expected.Pending, null));
         transaction.Commit();
-        return expected.Active is not null;
+        removeOld = expected.Active is not null;
+        return true;
     }
 
     /// <summary>Up to <paramref name="take"/> items without a vector for the embedder, and how many are missing in all.</summary>

@@ -140,6 +140,20 @@ internal sealed class PendingStore(MemoryDatabase database)
         return command.ExecuteNonQuery() == 1;
     }
 
+    /// <summary>Undoes a resolution whose write was then refused, so the write is pending again.</summary>
+    public void Reopen(string pendingId, PendingStatus from)
+    {
+        using var connection = database.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE pending_writes SET status='pending', resolved_at=NULL, resolution=NULL
+            WHERE pending_id=$id AND status=$from;
+            """;
+        command.Parameters.AddWithValue("$id", pendingId);
+        command.Parameters.AddWithValue("$from", Wire(from));
+        command.ExecuteNonQuery();
+    }
+
     private const string Columns = "pending_id, session_id, kind, proposal, decision_id, reason, created_at, status, resolved_at, resolution";
 
     private static List<PendingWrite> Read(SqliteCommand command)
