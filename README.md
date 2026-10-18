@@ -17,9 +17,10 @@ dotnet test --solution Corvid.slnx
 | Directory | Contents |
 | --- | --- |
 | `docs/plan/` | `corvid-agent.md` (the agent) and `vault.md` (secrets) |
-| `src/Corvid.Abstractions` | dependency-free agent contracts: session events and `IEventLog` |
+| `src/Corvid.Abstractions` | dependency-free agent contracts: session events, `IEventLog`, and the `IDecider`, `IExtractor` and `ITokenCounter` model contracts |
 | `src/Corvid.Kernel` | agent kernel: append-only SQLite event log and session projections (C-002) |
-| `src/Corvid.Models` | provider-independent model project; slots and profiles follow in C-006 |
+| `src/Corvid.Models` | provider-independent model slots, profiles and switching (C-006) |
+| `src/Corvid.Fabric` | decision fabric without Kev: question catalogue, versioned floors, TurnState, policy and the degraded decider (C-004a) |
 | `vault/Corvid.Vault` | `corvid-vault`, the secrets process; see [`vault/README.md`](vault/README.md) |
 | `src/Corvid.Tools` | tool attributes, risk metadata and the tool registry (C-005) |
 | `src/Corvid.Tools.Generators` | Roslyn source generator for `[Tool]` methods; build tooling, consumed as an analyzer |
@@ -27,5 +28,5 @@ dotnet test --solution Corvid.slnx
 | `src/Corvid.Vault.Client` | Corvid's side: `VaultClient`, `VaultHandler`, `SecretRef` |
 | `evals/` | golden trajectories (`evals/golden`) and the replay harness, `Corvid.Evals` (C-009); see [`evals/README.md`](evals/README.md) |
 | `tools/Corvid.Architecture` | resolved dependency graph checker; see [`docs/architecture.md`](docs/architecture.md) |
-| `tests/` | boundary regression tests, event log and replay tests, tool generator and registry tests, and Vault tests, including S6 |
+| `tests/` | boundary regression tests, event log and replay tests, decision fabric tests, tool generator and registry tests, and Vault tests, including S6 |
 

@@ -28,8 +28,12 @@ public sealed record UserMessage(string Text) : SessionEvent;
 public sealed record AssistantMessage(string Text) : SessionEvent;
 public sealed record ToolCallIssued(string CallId, string ToolName, JsonElement Arguments) : SessionEvent;
 public sealed record ToolResult(string CallId, JsonElement Result, bool IsError = false) : SessionEvent;
+// CatalogueVersion (the floors configuration in force) and Decider (which tier answered) were added by C-004a. They are
+// omitted when null, so events written before them keep their persisted form.
 public sealed record Decision(string DecisionId, string QuestionId, ImmutableDictionary<string, double> Probabilities,
-    double Confidence, double Threshold, string Action) : SessionEvent;
+    double Confidence, double Threshold, string Action,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? CatalogueVersion = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Decider = null) : SessionEvent;
 // Outcomes arrive later; never update the original decision event.
 public sealed record DecisionOutcomeRecorded(string DecisionId, string Outcome) : SessionEvent;
 public sealed record ApprovalRequested(string ApprovalId, string Action, string Reason) : SessionEvent;

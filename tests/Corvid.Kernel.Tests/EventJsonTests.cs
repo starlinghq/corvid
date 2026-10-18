@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -79,6 +80,25 @@ public sealed class EventJsonTests
         Assert.Equal("risk", decision.QuestionId);
         Assert.Equal(0.1, decision.Probabilities["high"]);
         Assert.Equal("execute", decision.Action);
+        Assert.Null(decision.CatalogueVersion);
+        Assert.Null(decision.Decider);
+    }
+
+    [Fact]
+    public void Decision_fabric_fields_are_written_only_when_set()
+    {
+        var probabilities = ImmutableDictionary<string, double>.Empty.Add("yes", 1);
+        var before = new Decision("d-1", "done", probabilities, 1, 0.8, "stop");
+
+        // Events written before C-004a keep their persisted form.
+        Assert.Equal("""{"type":"decision","decision_id":"d-1","question_id":"done","probabilities":{"yes":1},"confidence":1,"threshold":0.8,"action":"stop"}""",
+            EventJson.Serialize(before));
+        var json = EventJson.Serialize(before with { CatalogueVersion = "2026-10-18.1", Decider = "degraded" });
+        Assert.EndsWith("""
+            "action":"stop","catalogue_version":"2026-10-18.1","decider":"degraded"}
+            """, json, StringComparison.Ordinal);
+        var restored = Assert.IsType<Decision>(EventJson.Deserialize(EventJson.Version, json));
+        Assert.Equal(("2026-10-18.1", "degraded"), (restored.CatalogueVersion, restored.Decider));
     }
 
     [Theory]
