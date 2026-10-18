@@ -59,11 +59,20 @@ public static class BoundaryCheck
         ["Microsoft.ML.OnnxRuntimeGenAI.DirectML"] = ("ONNX Runtime GenAI", "directml"),
     };
 
+    // Separate executables that Corvid and Vault start by path, never reference. The sandbox launcher has no
+    // dependencies at all, so Vault can use it without taking on any of Corvid's code (corvid-agent.md §3.4).
+    private static readonly HashSet<string> LauncherProjects = new(StringComparer.Ordinal)
+    {
+        "Corvid.Sandbox.Launcher"
+    };
+
     public static IReadOnlyList<string> CheckRepository(string root)
     {
         var errors = new List<string>();
-        var projects = new[] { "src", "vault" }
-            .SelectMany(folder => Directory.GetFiles(Path.Combine(root, folder), "*.csproj", SearchOption.AllDirectories))
+        var projects = new[] { "src", "vault", "sandbox" }
+            .Select(folder => Path.Combine(root, folder))
+            .Where(Directory.Exists)
+            .SelectMany(folder => Directory.GetFiles(folder, "*.csproj", SearchOption.AllDirectories))
             .Order(StringComparer.Ordinal);
         var count = 0;
         foreach (var project in projects)
@@ -96,7 +105,8 @@ public static class BoundaryCheck
     public static IReadOnlyList<string> CheckAssets(string project, JsonElement assets)
     {
         var errors = new SortedSet<string>(StringComparer.Ordinal);
-        var independent = project is "Corvid.Abstractions" or "Corvid.Vault.Contracts";
+        var launcher = LauncherProjects.Contains(project);
+        var independent = launcher || project is "Corvid.Abstractions" or "Corvid.Vault.Contracts";
         var vault = project == "Corvid.Vault";
         var adapter = project.StartsWith("Corvid.Models.", StringComparison.Ordinal);
         var buildTool = BuildToolProjects.Contains(project);
@@ -135,6 +145,8 @@ public static class BoundaryCheck
                     : !independent && !vault && (adapter || CorePackages.Contains(name)),
                 // A build tool in another project's graph means its assembly would ship; reference it as an analyzer.
                 "project" when buildTool || BuildToolProjects.Contains(name) => false,
+                // Executables are started by path; a reference would load one into another process.
+                "project" when LauncherProjects.Contains(name) => false,
                 "project" => !independent && (vault
                     ? name == "Corvid.Vault.Contracts"
                     : name != "Corvid.Vault" && (adapter || !name.StartsWith("Corvid.Models.", StringComparison.Ordinal))),
@@ -145,6 +157,8 @@ public static class BoundaryCheck
                 errors.Add($"{project}: forbidden {type} dependency {dependency.Name} in {target.Name} (direct or transitive). " +
                     (buildTool ? "Build tooling may use only Roslyn and its netstandard2.0 dependencies, and no projects."
                     : type == "project" && BuildToolProjects.Contains(name) ? "Reference build tooling as an analyzer: OutputItemType=\"Analyzer\" ReferenceOutputAssembly=\"false\"."
+                    : launcher ? "The corvid-sandbox launcher must have no dependencies; Vault and Corvid start it by path."
+                    : type == "project" && LauncherProjects.Contains(name) ? "Start the corvid-sandbox launcher by path; do not reference it."
                     : independent ? "This contract project must have no dependencies." : vault
                         ? "Vault may depend only on Corvid.Vault.Contracts."
                         : "Provider SDKs belong in Corvid.Models.*; core infrastructure packages require an explicit allowlist entry. The Vault executable cannot be referenced by agent projects."));

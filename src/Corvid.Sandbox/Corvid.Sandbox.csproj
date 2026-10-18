@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Sandbox policies, and running commands under them through the corvid-sandbox launcher. No package or project dependencies; the launcher is found by path, never referenced.</Description>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Corvid.Sandbox.Tests" />
+  </ItemGroup>
+</Project>

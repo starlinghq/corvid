@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    corvid-sandbox: runs one command under bubblewrap, Landlock and seccomp. Corvid and Corvid Vault both spawn it by
+    path, so the confinement policy is defined once (corvid-agent.md §3.4, vault.md §3.3). Deliberately dependency-free:
+    no packages and no project references, Corvid's or anyone else's.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>corvid-sandbox</AssemblyName>
+    <RootNamespace>Corvid.Sandbox.Launcher</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Corvid.Sandbox.Tests" />
+  </ItemGroup>
+
+</Project>
