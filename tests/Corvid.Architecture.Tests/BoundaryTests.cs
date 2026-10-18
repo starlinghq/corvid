@@ -33,6 +33,18 @@ public sealed class BoundaryTests
     [InlineData("Corvid.Models.Starling", "Corvid.Vault", "project", false)]
     [InlineData("Corvid.Vault.Contracts", "Microsoft.NET.ILLink.Tasks", "package", true)]
     [InlineData("Corvid.Vault", "Microsoft.NET.ILLink.Tasks", "package", true)]
+    [InlineData("Corvid.Tools", "Microsoft.Extensions.AI.Abstractions", "package", true)]
+    [InlineData("Corvid.Tools", "Corvid.Vault.Client", "project", true)]
+    [InlineData("Corvid.Tools.Generators", "Microsoft.CodeAnalysis.CSharp", "package", true)]
+    [InlineData("Corvid.Tools.Generators", "System.Collections.Immutable", "package", true)]
+    [InlineData("Corvid.Tools.Generators", "NETStandard.Library", "package", true)]
+    [InlineData("Corvid.Tools.Generators", "Microsoft.Extensions.AI.Abstractions", "package", false)]
+    [InlineData("Corvid.Tools.Generators", "OpenAI", "package", false)]
+    [InlineData("Corvid.Tools.Generators", "Corvid.Tools", "project", false)]
+    [InlineData("Corvid.Tools", "Microsoft.CodeAnalysis.CSharp", "package", false)]
+    [InlineData("Corvid.Kernel", "Microsoft.CodeAnalysis.Common", "package", false)]
+    [InlineData("Corvid.Tools", "Corvid.Tools.Generators", "project", false)]
+    [InlineData("Corvid.Models.Starling", "Corvid.Tools.Generators", "project", false)]
     public void EnforcesLayerRules(string project, string dependency, string type, bool allowed)
     {
         using var assets = Assets(("net10.0", dependency, type));
@@ -87,6 +99,29 @@ public sealed class BoundaryTests
         finally
         {
             Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("""<ProjectReference Include="../Corvid.Tools.Generators/Corvid.Tools.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />""", true)]
+    [InlineData("""<ProjectReference Include="..\Corvid.Tools.Generators\Corvid.Tools.Generators.csproj"><OutputItemType>Analyzer</OutputItemType></ProjectReference>""", true)]
+    [InlineData("""<ProjectReference Include="../Corvid.Kernel/Corvid.Kernel.csproj" />""", true)]
+    [InlineData("""<ProjectReference Include="../Sneaky.Analyzer/Sneaky.Analyzer.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />""", false)]
+    [InlineData("""<ProjectReference Include="../Corvid.Kernel/Corvid.Kernel.csproj"><OutputItemType>analyzer</OutputItemType></ProjectReference>""", false)]
+    public void AnalyzerReferencesMustNameBuildTooling(string reference, bool allowed)
+    {
+        // These references are absent from project.assets.json, so the checker reads them from the project file.
+        var directory = Path.Combine(Path.GetTempPath(), "corvid-analyzers-" + Guid.NewGuid());
+        var path = Path.Combine(directory, "Corvid.Kernel.csproj");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            File.WriteAllText(path, $"<Project><ItemGroup>{reference}</ItemGroup></Project>");
+            Assert.Equal(allowed, BoundaryCheck.CheckAnalyzerReferences(path).Count == 0);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
         }
     }
 

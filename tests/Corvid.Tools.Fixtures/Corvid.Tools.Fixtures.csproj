@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Sample tools compiled by the generator as a real consumer would, with the trim and AOT analyzers on:
+       generated code that needed reflection would fail this build (warnings are errors). -->
+  <PropertyGroup>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Corvid.Tools/Corvid.Tools.csproj" />
+    <ProjectReference Include="../../src/Corvid.Tools.Generators/Corvid.Tools.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>

@@ -3,6 +3,8 @@
     <Project Path="src/Corvid.Abstractions/Corvid.Abstractions.csproj" />
     <Project Path="src/Corvid.Kernel/Corvid.Kernel.csproj" />
     <Project Path="src/Corvid.Models/Corvid.Models.csproj" />
+    <Project Path="src/Corvid.Tools/Corvid.Tools.csproj" />
+    <Project Path="src/Corvid.Tools.Generators/Corvid.Tools.Generators.csproj" />
     <Project Path="src/Corvid.Vault.Contracts/Corvid.Vault.Contracts.csproj" />
     <Project Path="src/Corvid.Vault.Client/Corvid.Vault.Client.csproj" />
   </Folder>
@@ -13,6 +15,8 @@
     <Project Path="tests/Corvid.Kernel.Tests/Corvid.Kernel.Tests.csproj" />
     <Project Path="tests/Corvid.Architecture.Tests/Corvid.Architecture.Tests.csproj" />
     <Project Path="tests/Corvid.Vault.Tests/Corvid.Vault.Tests.csproj" />
+    <Project Path="tests/Corvid.Tools.Fixtures/Corvid.Tools.Fixtures.csproj" />
+    <Project Path="tests/Corvid.Tools.Tests/Corvid.Tools.Tests.csproj" />
     <Project Path="tests/Corvid.Vault.TestClient/Corvid.Vault.TestClient.csproj" />
   </Folder>
   <Folder Name="/tools/">
