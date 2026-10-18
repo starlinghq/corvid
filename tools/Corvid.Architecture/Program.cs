@@ -16,7 +16,7 @@ try
     Console.WriteLine("Production dependency boundaries passed.");
     return 0;
 }
-catch (Exception exception) when (exception is IOException or System.Text.Json.JsonException or InvalidOperationException or KeyNotFoundException)
+catch (Exception exception) when (exception is IOException or System.Text.Json.JsonException or System.Xml.XmlException or InvalidOperationException or KeyNotFoundException)
 {
     Console.Error.WriteLine($"Cannot check boundaries: {exception.Message}");
     return 1;

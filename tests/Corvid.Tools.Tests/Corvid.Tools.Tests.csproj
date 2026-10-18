@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <!-- Drives the generator in-process for snapshot and diagnostic tests. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Corvid.Tools/Corvid.Tools.csproj" />
+    <ProjectReference Include="../../src/Corvid.Tools.Generators/Corvid.Tools.Generators.csproj" />
+    <ProjectReference Include="../Corvid.Tools.Fixtures/Corvid.Tools.Fixtures.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Snapshots/**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

@@ -1,6 +1,6 @@
 # Corvid: a local-first .NET agent with a calibrated decision fabric
 
-Version 0.3, 2026-10-16. Status: design proposal. Corvid Vault M1 is built (`vault.md`, Implementation status); C-001's initial agent projects and dependency boundary check, and C-002's event log and projections, are built ([architecture](../architecture.md)). The agent loop itself is not.
+Version 0.3, 2026-10-16. Status: design proposal. Corvid Vault M1 is built (`vault.md`, Implementation status); C-001's initial agent projects and dependency boundary check, C-002's event log and projections, and C-005's tool generator and registry are built ([architecture](../architecture.md)). The agent loop itself is not.
 
 ## 0. Thesis
 
@@ -576,7 +576,7 @@ Subagents, code mode, media memory, remaining gateway adapters, voice, two-tier 
 | C-002 | **Built:** typed session events, append-only SQLite log with optimistic per-session sequences, and a projection that honours compaction and keeps goals, todos, approvals and decision outcomes; session actor, prompt rendering, FTS and branch sessions deferred; see [architecture](../architecture.md) | C-001 |
 | C-003 | Spikes S1–S5 and their write-ups | Kev branch, GPU lease |
 | C-004 | `IDecider` with Kev and degraded implementations; TurnState builder with budgets | C-003 |
-| C-005 | Tool source generator and registry | C-001 |
+| C-005 | **Built:** `Corvid.Tools` (tool attributes, risk metadata, argument binding, registry) and the `Corvid.Tools.Generators` source generator (reflection-free `AIFunction` wrappers, JSON Schema written at compile time and tested against `AIJsonUtilities`, `SecretRef` parameters offered as an enum of Vault catalogue names). Deferred: argument validators beyond type binding, the embedding-examples file, object-typed parameters and return values, toolsets and `check_fn`; see [architecture](../architecture.md#tools-c-005) | C-001 |
 | C-006 | Slot registry, profiles and switch semantics (§4.2) with tests that switch mid-turn | C-002 |
 | C-007 | Sandbox (bubblewrap, Landlock, seccomp) and the structural approval pipeline. Must deny every tool access to Vault's data and config directories: until then, a shell tool can decrypt the default-tier store (`vault.md`, Implementation status). | S3 |
 | C-008 | Memory store: FTS5, sqlite-vec, graph tables, write and read paths | C-004 |
