@@ -6,4 +6,14 @@
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.10.1" />
     <PackageVersion Include="xunit.v3" Version="4.0.1" />
   </ItemGroup>
+  <!-- Corvid.Models.Starling only (decision D-3: nuget.org, 0.2.0). The checker keeps these out of core projects. -->
+  <ItemGroup>
+    <PackageVersion Include="Starlings.Acquisition" Version="0.2.0" />
+    <PackageVersion Include="Starlings.Models.E5.Extensions.AI" Version="0.2.0" />
+    <PackageVersion Include="Starlings.Models.EmbeddingGemma2.Extensions.AI" Version="0.2.0" />
+    <PackageVersion Include="Starlings.Models.Gliner2" Version="0.2.0" />
+    <PackageVersion Include="Starlings.Models.Qwen35.Extensions.AI" Version="0.2.0" />
+    <!-- CPU natives: ONNX Runtime GenAI, which brings Microsoft.ML.OnnxRuntime 1.30.0 for the ONNX models too. -->
+    <PackageVersion Include="Microsoft.ML.OnnxRuntimeGenAI" Version="0.17.1" />
+  </ItemGroup>
 </Project>

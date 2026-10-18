@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>In-process Starling model adapters: Qwen3.5 generator, GLiNER2 extractor, EmbeddingGemma 2 and e5 text embedders, and explicit model acquisition.</Description>
+    <!-- Not IsAotCompatible: the Starling packages are not AOT-qualified as a set, and warnings are errors. -->
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Starlings.Acquisition" />
+    <PackageReference Include="Starlings.Models.E5.Extensions.AI" />
+    <PackageReference Include="Starlings.Models.EmbeddingGemma2.Extensions.AI" />
+    <PackageReference Include="Starlings.Models.Gliner2" />
+    <PackageReference Include="Starlings.Models.Qwen35.Extensions.AI" />
+    <!--
+      The one native runtime package. It brings Microsoft.ML.OnnxRuntime 1.30.0 (CPU), which GLiNER2, e5 and
+      EmbeddingGemma 2 load through Starlings.Runtime.Onnx. CUDA swaps it for Microsoft.ML.OnnxRuntimeGenAI.Cuda
+      (bringing Microsoft.ML.OnnxRuntime.Gpu); never reference both.
+    -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntimeGenAI" />
+    <ProjectReference Include="../Corvid.Models/Corvid.Models.csproj" />
+    <InternalsVisibleTo Include="Corvid.Models.Starling.Tests" />
+  </ItemGroup>
+</Project>

@@ -45,6 +45,20 @@ public static class BoundaryCheck
         "System.Threading.Tasks.Extensions"
     };
 
+    // Native runtimes that adapters bring. CPU and GPU builds ship libonnxruntime (and onnxruntime-genai) under the same
+    // file names, so a graph that resolves two flavours of one runtime loads whichever copy lands last. One per runtime.
+    private static readonly Dictionary<string, (string Runtime, string Flavour)> NativeRuntimePackages = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Microsoft.ML.OnnxRuntime"] = ("ONNX Runtime", "cpu"),
+        ["Microsoft.ML.OnnxRuntime.Gpu"] = ("ONNX Runtime", "cuda"),
+        ["Microsoft.ML.OnnxRuntime.Gpu.Linux"] = ("ONNX Runtime", "cuda"),
+        ["Microsoft.ML.OnnxRuntime.Gpu.Windows"] = ("ONNX Runtime", "cuda"),
+        ["Microsoft.ML.OnnxRuntime.DirectML"] = ("ONNX Runtime", "directml"),
+        ["Microsoft.ML.OnnxRuntimeGenAI"] = ("ONNX Runtime GenAI", "cpu"),
+        ["Microsoft.ML.OnnxRuntimeGenAI.Cuda"] = ("ONNX Runtime GenAI", "cuda"),
+        ["Microsoft.ML.OnnxRuntimeGenAI.DirectML"] = ("ONNX Runtime GenAI", "directml"),
+    };
+
     public static IReadOnlyList<string> CheckRepository(string root)
     {
         var errors = new List<string>();
@@ -86,6 +100,18 @@ public static class BoundaryCheck
         var vault = project == "Corvid.Vault";
         var adapter = project.StartsWith("Corvid.Models.", StringComparison.Ordinal);
         var buildTool = BuildToolProjects.Contains(project);
+
+        foreach (var target in assets.GetProperty("targets").EnumerateObject())
+        {
+            var natives = target.Value.EnumerateObject()
+                .Where(d => d.Value.GetProperty("type").GetString() == "package")
+                .Select(d => (Library: d.Name, Found: NativeRuntimePackages.TryGetValue(d.Name[..d.Name.LastIndexOf('/')], out var native), native))
+                .Where(n => n.Found)
+                .GroupBy(n => n.native.Runtime);
+            foreach (var runtime in natives.Where(g => g.Select(n => n.native.Flavour).Distinct().Count() > 1))
+                errors.Add($"{project}: {runtime.Key} natives of more than one flavour in {target.Name}: " +
+                    $"{string.Join(", ", runtime.Select(n => n.Library).Order(StringComparer.Ordinal))}. Reference exactly one native package per runtime.");
+        }
 
         foreach (var target in assets.GetProperty("targets").EnumerateObject())
         foreach (var dependency in target.Value.EnumerateObject())

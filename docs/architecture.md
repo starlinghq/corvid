@@ -1,11 +1,12 @@
-# Agent foundation (C-001, C-002, C-005, C-006, C-009)
+# Agent foundation (C-001, C-002, C-005, C-006, C-009, C-010)
 
 The solution contains `Corvid.Abstractions`, `Corvid.Kernel`, and
 `Corvid.Models`, alongside the working Vault projects. Kernel and Models each
 reference Abstractions; Models also references
 `Microsoft.Extensions.AI.Abstractions`. Models must not reference Kernel: the
 kernel's turn loop will depend on the slots. C-005 added `Corvid.Tools` and its
-build-time generator, `Corvid.Tools.Generators` (see [Tools](#tools-c-005)). Add
+build-time generator, `Corvid.Tools.Generators` (see [Tools](#tools-c-005)). C-010 added the first adapter,
+`Corvid.Models.Starling` (see [Starling adapters](#starling-adapters-c-010)). Add
 the other projects from the agent plan as their implementations start, rather
 than creating empty projects for every future surface.
 
@@ -94,9 +95,10 @@ de-escalation rule of §6. It depends only on Abstractions and
 - `ModelSlots` names the seven slots (`generator`, `summarizer`, `decider`,
   `extractor`, `embedder.text`, `embedder.media`, `vision`) and their contracts:
   `IChatClient` for generator, summarizer and vision,
-  `IEmbeddingGenerator<string, Embedding<float>>` for `embedder.text`. The
-  decider, extractor and media-embedder contracts are not defined yet (C-004, and
-  a Starling-typed API core cannot reference), so those slots accept any service.
+  `IEmbeddingGenerator<string, Embedding<float>>` for `embedder.text`, and
+  `IExtractor` (Corvid.Abstractions, added by C-010) for `extractor`. The
+  decider and media-embedder contracts are not defined yet (C-004a, and a
+  Starling-typed API core cannot reference), so those slots accept any service.
 - `ModelSlotRegistry` is the process-wide catalogue: per slot a default binding,
   an escalation ladder and a fallback chain. `SessionModelSlots` holds one
   session's current bindings, captured from the registry at creation, so
@@ -135,7 +137,73 @@ reports the direction), per-request redaction (§10.4), re-rendering the
 projection for the new model's format, re-embedding after an `embedder.text`
 swap (§4.3), restoring current bindings and pins from the log on resume (pins
 are not persisted), recording switch costs for `/insights`, and the
-decider/extractor/media contracts.
+decider/media contracts.
+
+## Starling adapters (C-010)
+
+`Corvid.Models.Starling` is the in-process adapter for Starling's models (plan §1,
+§4.1). It references `Starlings.Models.Qwen35.Extensions.AI`, `Starlings.Models.Gliner2`,
+`Starlings.Models.EmbeddingGemma2.Extensions.AI`, `Starlings.Models.E5.Extensions.AI` and
+`Starlings.Acquisition`, all 0.2.0 from nuget.org (D-3), and `Corvid.Models`. It is not
+`IsAotCompatible`: Starling is not AOT-qualified as a set, and warnings are errors.
+
+- Natives: the project references exactly one native package, `Microsoft.ML.OnnxRuntimeGenAI`
+  0.17.1 (CPU). It brings `Microsoft.ML.OnnxRuntime` 1.30.0, the CPU ONNX Runtime that
+  GLiNER2, e5 and EmbeddingGemma 2 load through `Starlings.Runtime.Onnx`. Every service
+  runs on the CPU, and the factories refuse CUDA session options with
+  `NotSupportedException` instead of failing later at load.
+- `StarlingProfiles`: `qwen3.5-0.8b@cpu` has context window and accepted context 8,192
+  (`Qwen35ChatModel.MaxContextTokens`; Starling rejects prompt plus completion above it and
+  never truncates, and the model's own 262,144 is not reachable), template-rendered tool
+  calls, no structured output, no prompt caching (each request prefills the whole
+  conversation). Prompts above 1,666 tokens are outside Starling's Stable contract. The
+  encoders have no tool calls or structured output: `gliner2-base-v1@cpu` 512 tokens
+  including the label schema, `embeddinggemma-2@cpu` 8,192, `multilingual-e5-small@cpu`
+  512 (its tokenizer truncates on the right, as the reference does; the others throw).
+  All are `local`, free, placement `cpu`.
+- `StarlingBindings` loads a model from resolved files and returns a `ModelBinding`:
+  Qwen as an `IChatClient` for `generator` or `summarizer` (it also answers
+  `GetService(typeof(ITokenCounter))`), GLiNER2 as `IExtractor`, EmbeddingGemma 2 (the
+  default `embedder.text`) and e5 (the alternative) as `IEmbeddingGenerator`. The Qwen
+  client rejects `RequireAny`/`RequireSpecific` tool modes, JSON response formats and
+  unseeded sampling; tool calling is experimental in Starling 0.2.0. The caller owns and
+  disposes the services.
+- `Gliner2Extractor` implements `IExtractor` (Corvid.Abstractions/Extraction: text and
+  labels in, labelled spans with UTF-16 offsets and confidences out; over-long input
+  throws `ArgumentException`, nothing is truncated). Extraction is blocking native work,
+  so it runs on a `TaskScheduler` given at creation, the thread pool by default; the
+  device scheduler (C-011) will supply its own. Starling's embedders run on the calling
+  thread and return completed tasks.
+- `Qwen35TokenCounter` implements `ITokenCounter` (Corvid.Abstractions/Tokens) with
+  Qwen's own tokenizer, loaded from the model's `tokenizer.json` without the ONNX graph.
+  It counts text; counting a rendered conversation before a call is not built, and the
+  exact prompt size is the response's `Usage.InputTokenCount`.
+- `StarlingModelStore` is acquisition for a future `corvid doctor`: `StarlingModels`
+  lists the four models with their asset locks (repository, commit, file sizes and
+  SHA-256). `Check`/`CheckAll` resolve offline and report `Ready`, `Missing` (with the
+  missing paths), `Corrupt` (file, sizes, digests) or `Unreadable`, never throwing for
+  those. `OpenQwen35()` and the other `Open*` methods are for startup: offline, size-only
+  verification by default (hashing about 5 GB every start takes seconds; downloads are
+  always hashed and `Check` hashes by default), and a `StarlingModelUnavailableException`
+  that names the model, slot, missing files, download size and the `STARLING_MODELS`
+  variable. `DownloadAsync` is the only call that uses the network. The cache root is
+  the constructor's directory, else `$STARLING_MODELS`, else `~/.cache/starlings/models`.
+- Deployment: Starling requires `MALLOC_MMAP_THRESHOLD_=65536` in the environment of a
+  Linux process that runs GLiNER2; the host (C-013) must set it at process start.
+- Tests: `tests/Corvid.Models.Starling.Tests` checks profiles, the catalogue, offline
+  resolution against a temporary cache (missing, wrong size, same-size corruption under
+  SHA-256 using sparse files), extractor mapping, scheduling and validation, slot
+  binding and CUDA refusal without loading a model. Model-backed tests run only with
+  `CORVID_STARLING_MODELS` set to a model cache, skip any model that cache lacks, and
+  never download; CI does not set it.
+
+Not built yet: CUDA placement (switch the native package to
+`Microsoft.ML.OnnxRuntimeGenAI.Cuda`, which brings `Microsoft.ML.OnnxRuntime.Gpu`, and
+make placement per binding; plan §4.4 puts the generator on the 3090), the Kev decider
+adapter (C-004b, waiting for `Starlings.Models.Kev` on nuget.org), media embeddings
+(`embedder.media`), the fp16x Qwen variant, batch extraction, label descriptions,
+conversation-level token counting before a call, the `corvid doctor` command itself
+(C-013), and the device scheduler (C-011).
 
 ## Dependency rules
 
@@ -153,7 +221,12 @@ decider/extractor/media contracts.
   transitive dependencies to `CorePackages` in the checker when needed; never
   add a provider SDK there.
 - Provider SDKs and Starling model packages belong in `Corvid.Models.*` adapters.
-  Adapters may reference core projects.
+  Adapters may reference core projects. ONNX Runtime and ONNX Runtime GenAI natives
+  (and their managed packages) come only through adapters; a core project that
+  resolved one would fail the allowlist. In any project, the checker fails a target
+  that resolves two flavours of one native runtime (for example
+  `Microsoft.ML.OnnxRuntime` with `Microsoft.ML.OnnxRuntime.Gpu.Linux`, or GenAI CPU
+  with GenAI CUDA): both ship the native library under the same file name.
 - The Vault executable may reference only `Corvid.Vault.Contracts`. Agent
   projects, including adapters, may not reference the Vault executable.
 - `Microsoft.NET.ILLink.Tasks` is allowed everywhere as SDK trim/AOT build

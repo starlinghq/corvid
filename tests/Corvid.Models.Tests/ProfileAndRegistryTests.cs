@@ -1,3 +1,4 @@
+using Corvid.Abstractions.Extraction;
 using Microsoft.Extensions.AI;
 
 namespace Corvid.Models.Tests;
@@ -52,8 +53,10 @@ public sealed class ProfileAndRegistryTests
         Assert.Throws<ArgumentException>(() => registry.Bind(ModelSlots.TextEmbedder, chat));
         Assert.Throws<ArgumentException>(() => registry.Bind(ModelSlots.Summarizer, chat, fallbacks: [embedder]));
         Assert.Throws<ArgumentException>(() => registry.Bind("generator2", chat));
-        // Decider and extractor contracts arrive with C-004; until then any service binds.
+        // The decider contract arrives with C-004a; until then any service binds.
         registry.Bind(ModelSlots.Decider, new ModelBinding(Profiles.Local("kev-0.8b"), new object()));
+        Assert.Throws<ArgumentException>(() => registry.Bind(ModelSlots.Extractor, chat));
+        Assert.Equal(typeof(IExtractor), ModelSlots.ContractOf(ModelSlots.Extractor));
         Assert.Equal(typeof(IChatClient), ModelSlots.ContractOf(ModelSlots.Summarizer));
         Assert.Null(ModelSlots.ContractOf(ModelSlots.MediaEmbedder));
         Assert.Equal(7, ModelSlots.All.Count);
