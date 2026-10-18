@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Golden trajectories and the replay harness: load a fixture into an event log, project it at any position, compare.</Description>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Corvid.Kernel/Corvid.Kernel.csproj" />
+  </ItemGroup>
+</Project>

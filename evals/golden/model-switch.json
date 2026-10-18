@@ -1,0 +1,209 @@
+{
+  "format": "corvid-golden-trajectory",
+  "format_version": 1,
+  "payload_version": 1,
+  "id": "model-switch",
+  "description": "A decision escalates the generator mid-session and it later switches back; profiles are per-slot snapshots, and a checkpoint is recorded before a write.",
+  "events": [
+    {
+      "type": "model_switched",
+      "slot": "generator",
+      "old_profile": null,
+      "new_profile": {
+        "name": "qwen3.5-0.8b",
+        "placement": "local",
+        "context": 32768
+      },
+      "reason": "session start"
+    },
+    {
+      "type": "user_message",
+      "text": "refactor the parser to use spans"
+    },
+    {
+      "type": "decision",
+      "decision_id": "d-esc",
+      "question_id": "escalate",
+      "probabilities": {
+        "escalate": 0.71,
+        "stay": 0.29
+      },
+      "confidence": 0.71,
+      "threshold": 0.65,
+      "action": "escalate"
+    },
+    {
+      "type": "model_switched",
+      "slot": "generator",
+      "old_profile": {
+        "name": "qwen3.5-0.8b",
+        "placement": "local",
+        "context": 32768
+      },
+      "new_profile": {
+        "name": "cloud-large",
+        "placement": "cloud",
+        "context": 200000
+      },
+      "reason": "escalated by d-esc"
+    },
+    {
+      "type": "model_switched",
+      "slot": "summarizer",
+      "old_profile": null,
+      "new_profile": {
+        "name": "qwen3.5-0.8b",
+        "placement": "local"
+      },
+      "reason": "session start"
+    },
+    {
+      "type": "checkpoint_taken",
+      "checkpoint_id": "k1",
+      "revision": "3f2a9c1"
+    },
+    {
+      "type": "assistant_message",
+      "text": "Refactored Parser.cs to ReadOnlySpan<char>."
+    },
+    {
+      "type": "decision_outcome_recorded",
+      "decision_id": "d-esc",
+      "outcome": "task_succeeded"
+    },
+    {
+      "type": "model_switched",
+      "slot": "generator",
+      "old_profile": {
+        "name": "cloud-large",
+        "placement": "cloud",
+        "context": 200000
+      },
+      "new_profile": {
+        "name": "qwen3.5-0.8b",
+        "placement": "local",
+        "context": 32768
+      },
+      "reason": "de-escalated"
+    }
+  ],
+  "checks": [
+    {
+      "through": 4,
+      "expected": {
+        "head": 4,
+        "goal": null,
+        "todos": [],
+        "transcript": [
+          {
+            "from": 2,
+            "through": 2,
+            "event": {
+              "type": "user_message",
+              "text": "refactor the parser to use spans"
+            }
+          }
+        ],
+        "pending_approvals": [],
+        "model_profiles": [
+          {
+            "slot": "generator",
+            "profile": {
+              "name": "cloud-large",
+              "placement": "cloud",
+              "context": 200000
+            }
+          }
+        ],
+        "decisions": [
+          {
+            "decision": {
+              "type": "decision",
+              "decision_id": "d-esc",
+              "question_id": "escalate",
+              "probabilities": {
+                "escalate": 0.71,
+                "stay": 0.29
+              },
+              "confidence": 0.71,
+              "threshold": 0.65,
+              "action": "escalate"
+            },
+            "outcome": null
+          }
+        ],
+        "checkpoints": [],
+        "issues": []
+      }
+    },
+    {
+      "through": 9,
+      "expected": {
+        "head": 9,
+        "goal": null,
+        "todos": [],
+        "transcript": [
+          {
+            "from": 2,
+            "through": 2,
+            "event": {
+              "type": "user_message",
+              "text": "refactor the parser to use spans"
+            }
+          },
+          {
+            "from": 7,
+            "through": 7,
+            "event": {
+              "type": "assistant_message",
+              "text": "Refactored Parser.cs to ReadOnlySpan<char>."
+            }
+          }
+        ],
+        "pending_approvals": [],
+        "model_profiles": [
+          {
+            "slot": "generator",
+            "profile": {
+              "name": "qwen3.5-0.8b",
+              "placement": "local",
+              "context": 32768
+            }
+          },
+          {
+            "slot": "summarizer",
+            "profile": {
+              "name": "qwen3.5-0.8b",
+              "placement": "local"
+            }
+          }
+        ],
+        "decisions": [
+          {
+            "decision": {
+              "type": "decision",
+              "decision_id": "d-esc",
+              "question_id": "escalate",
+              "probabilities": {
+                "escalate": 0.71,
+                "stay": 0.29
+              },
+              "confidence": 0.71,
+              "threshold": 0.65,
+              "action": "escalate"
+            },
+            "outcome": "task_succeeded"
+          }
+        ],
+        "checkpoints": [
+          {
+            "type": "checkpoint_taken",
+            "checkpoint_id": "k1",
+            "revision": "3f2a9c1"
+          }
+        ],
+        "issues": []
+      }
+    }
+  ]
+}

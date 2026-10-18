@@ -1,0 +1,179 @@
+{
+  "format": "corvid-golden-trajectory",
+  "format_version": 1,
+  "payload_version": 1,
+  "id": "tool-call-roundtrip",
+  "description": "A user request answered with one tool call. Mid-call the transcript shows the unfinished call; at the end, call, result and reply, and the decision has its outcome.",
+  "events": [
+    {
+      "type": "user_message",
+      "text": "move the dentist reminder to friday"
+    },
+    {
+      "type": "decision",
+      "decision_id": "d-1",
+      "question_id": "intent",
+      "probabilities": {
+        "use_tools": 0.82,
+        "answer_directly": 0.18
+      },
+      "confidence": 0.82,
+      "threshold": 0.6,
+      "action": "use_tools"
+    },
+    {
+      "type": "tool_call_issued",
+      "call_id": "call-1",
+      "tool_name": "cron.update",
+      "arguments": {
+        "id": 14,
+        "day": "friday"
+      }
+    },
+    {
+      "type": "tool_result",
+      "call_id": "call-1",
+      "result": {
+        "ok": true,
+        "next_run": "2026-10-23T09:00:00Z"
+      },
+      "is_error": false
+    },
+    {
+      "type": "decision_outcome_recorded",
+      "decision_id": "d-1",
+      "outcome": "tool_succeeded"
+    },
+    {
+      "type": "assistant_message",
+      "text": "Moved it to Friday at 9:00."
+    }
+  ],
+  "checks": [
+    {
+      "through": 3,
+      "expected": {
+        "head": 3,
+        "goal": null,
+        "todos": [],
+        "transcript": [
+          {
+            "from": 1,
+            "through": 1,
+            "event": {
+              "type": "user_message",
+              "text": "move the dentist reminder to friday"
+            }
+          },
+          {
+            "from": 3,
+            "through": 3,
+            "event": {
+              "type": "tool_call_issued",
+              "call_id": "call-1",
+              "tool_name": "cron.update",
+              "arguments": {
+                "id": 14,
+                "day": "friday"
+              }
+            }
+          }
+        ],
+        "pending_approvals": [],
+        "model_profiles": [],
+        "decisions": [
+          {
+            "decision": {
+              "type": "decision",
+              "decision_id": "d-1",
+              "question_id": "intent",
+              "probabilities": {
+                "use_tools": 0.82,
+                "answer_directly": 0.18
+              },
+              "confidence": 0.82,
+              "threshold": 0.6,
+              "action": "use_tools"
+            },
+            "outcome": null
+          }
+        ],
+        "checkpoints": [],
+        "issues": []
+      }
+    },
+    {
+      "through": 6,
+      "expected": {
+        "head": 6,
+        "goal": null,
+        "todos": [],
+        "transcript": [
+          {
+            "from": 1,
+            "through": 1,
+            "event": {
+              "type": "user_message",
+              "text": "move the dentist reminder to friday"
+            }
+          },
+          {
+            "from": 3,
+            "through": 3,
+            "event": {
+              "type": "tool_call_issued",
+              "call_id": "call-1",
+              "tool_name": "cron.update",
+              "arguments": {
+                "id": 14,
+                "day": "friday"
+              }
+            }
+          },
+          {
+            "from": 4,
+            "through": 4,
+            "event": {
+              "type": "tool_result",
+              "call_id": "call-1",
+              "result": {
+                "ok": true,
+                "next_run": "2026-10-23T09:00:00Z"
+              },
+              "is_error": false
+            }
+          },
+          {
+            "from": 6,
+            "through": 6,
+            "event": {
+              "type": "assistant_message",
+              "text": "Moved it to Friday at 9:00."
+            }
+          }
+        ],
+        "pending_approvals": [],
+        "model_profiles": [],
+        "decisions": [
+          {
+            "decision": {
+              "type": "decision",
+              "decision_id": "d-1",
+              "question_id": "intent",
+              "probabilities": {
+                "use_tools": 0.82,
+                "answer_directly": 0.18
+              },
+              "confidence": 0.82,
+              "threshold": 0.6,
+              "action": "use_tools"
+            },
+            "outcome": "tool_succeeded"
+          }
+        ],
+        "checkpoints": [],
+        "issues": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,257 @@
+{
+  "format": "corvid-golden-trajectory",
+  "format_version": 1,
+  "payload_version": 1,
+  "id": "goal-across-compaction",
+  "description": "Goal, todos and a pending approval set before a compaction survive it, because they are projected from their own events. A later goal_set clears the goal.",
+  "events": [
+    {
+      "type": "goal_set",
+      "goal": "ship the release notes"
+    },
+    {
+      "type": "todos_set",
+      "items": [
+        {
+          "id": "t1",
+          "text": "collect merged PRs",
+          "completed": false
+        },
+        {
+          "id": "t2",
+          "text": "draft notes",
+          "completed": false
+        }
+      ]
+    },
+    {
+      "type": "user_message",
+      "text": "start with the PR list"
+    },
+    {
+      "type": "approval_requested",
+      "approval_id": "a1",
+      "action": "git push origin notes",
+      "reason": "publishes a branch"
+    },
+    {
+      "type": "approval_requested",
+      "approval_id": "a2",
+      "action": "rm -rf drafts",
+      "reason": "deletes files"
+    },
+    {
+      "type": "approval_resolved",
+      "approval_id": "a2",
+      "approved": false,
+      "reason": "user denied"
+    },
+    {
+      "type": "assistant_message",
+      "text": "Collected 12 PRs."
+    },
+    {
+      "type": "todos_set",
+      "items": [
+        {
+          "id": "t1",
+          "text": "collect merged PRs",
+          "completed": true
+        },
+        {
+          "id": "t2",
+          "text": "draft notes",
+          "completed": false
+        }
+      ]
+    },
+    {
+      "type": "compacted",
+      "from_sequence": 1,
+      "through_sequence": 8,
+      "summary": {
+        "goal": null,
+        "constraints": [],
+        "decisions": [],
+        "files": [],
+        "open_questions": [],
+        "next_step": null
+      }
+    },
+    {
+      "type": "user_message",
+      "text": "now draft them"
+    },
+    {
+      "type": "goal_set",
+      "goal": null
+    }
+  ],
+  "checks": [
+    {
+      "through": 8,
+      "expected": {
+        "head": 8,
+        "goal": "ship the release notes",
+        "todos": [
+          {
+            "id": "t1",
+            "text": "collect merged PRs",
+            "completed": true
+          },
+          {
+            "id": "t2",
+            "text": "draft notes",
+            "completed": false
+          }
+        ],
+        "transcript": [
+          {
+            "from": 3,
+            "through": 3,
+            "event": {
+              "type": "user_message",
+              "text": "start with the PR list"
+            }
+          },
+          {
+            "from": 7,
+            "through": 7,
+            "event": {
+              "type": "assistant_message",
+              "text": "Collected 12 PRs."
+            }
+          }
+        ],
+        "pending_approvals": [
+          {
+            "type": "approval_requested",
+            "approval_id": "a1",
+            "action": "git push origin notes",
+            "reason": "publishes a branch"
+          }
+        ],
+        "model_profiles": [],
+        "decisions": [],
+        "checkpoints": [],
+        "issues": []
+      }
+    },
+    {
+      "through": 10,
+      "expected": {
+        "head": 10,
+        "goal": "ship the release notes",
+        "todos": [
+          {
+            "id": "t1",
+            "text": "collect merged PRs",
+            "completed": true
+          },
+          {
+            "id": "t2",
+            "text": "draft notes",
+            "completed": false
+          }
+        ],
+        "transcript": [
+          {
+            "from": 1,
+            "through": 8,
+            "event": {
+              "type": "compacted",
+              "from_sequence": 1,
+              "through_sequence": 8,
+              "summary": {
+                "goal": null,
+                "constraints": [],
+                "decisions": [],
+                "files": [],
+                "open_questions": [],
+                "next_step": null
+              }
+            }
+          },
+          {
+            "from": 10,
+            "through": 10,
+            "event": {
+              "type": "user_message",
+              "text": "now draft them"
+            }
+          }
+        ],
+        "pending_approvals": [
+          {
+            "type": "approval_requested",
+            "approval_id": "a1",
+            "action": "git push origin notes",
+            "reason": "publishes a branch"
+          }
+        ],
+        "model_profiles": [],
+        "decisions": [],
+        "checkpoints": [],
+        "issues": []
+      }
+    },
+    {
+      "through": 11,
+      "expected": {
+        "head": 11,
+        "goal": null,
+        "todos": [
+          {
+            "id": "t1",
+            "text": "collect merged PRs",
+            "completed": true
+          },
+          {
+            "id": "t2",
+            "text": "draft notes",
+            "completed": false
+          }
+        ],
+        "transcript": [
+          {
+            "from": 1,
+            "through": 8,
+            "event": {
+              "type": "compacted",
+              "from_sequence": 1,
+              "through_sequence": 8,
+              "summary": {
+                "goal": null,
+                "constraints": [],
+                "decisions": [],
+                "files": [],
+                "open_questions": [],
+                "next_step": null
+              }
+            }
+          },
+          {
+            "from": 10,
+            "through": 10,
+            "event": {
+              "type": "user_message",
+              "text": "now draft them"
+            }
+          }
+        ],
+        "pending_approvals": [
+          {
+            "type": "approval_requested",
+            "approval_id": "a1",
+            "action": "git push origin notes",
+            "reason": "publishes a branch"
+          }
+        ],
+        "model_profiles": [],
+        "decisions": [],
+        "checkpoints": [],
+        "issues": []
+      }
+    }
+  ]
+}
