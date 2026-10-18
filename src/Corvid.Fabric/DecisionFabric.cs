@@ -65,6 +65,11 @@ public sealed class DecisionFabric
                 throw new ArgumentException($"'{entry.Id}' is not asked at the {checkpoint} checkpoint.", nameof(questions));
             if (entry.Kind != question.Kind)
                 throw new ArgumentException($"'{key}' must be a {entry.Kind} question.", nameof(questions));
+            // Policy reads score levels by index (risk 3–4 ask) and floors assume the catalogue's options, so a reordered
+            // or shortened list could turn "destructive" into level 0.
+            if (entry.HasFixedOptions && !question.Options.Select(option => option.Name)
+                    .SequenceEqual(entry.Options.Select(option => option.Name), StringComparer.Ordinal))
+                throw new ArgumentException($"'{key}' must use the catalogue's options in order.", nameof(questions));
         }
 
         var (result, fallback) = await AskAsync(request, state, cancellationToken);

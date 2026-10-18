@@ -195,6 +195,34 @@ public sealed class FabricTests
     }
 
     [Fact]
+    public async Task Fixed_catalogue_options_cannot_be_reordered_or_replaced()
+    {
+        using var db = new TempLog();
+        // Certain of the first option: index 0 would read as risk level 0 and auto-run in permissive mode.
+        var calibrated = FakeCalibratedDecider.Answering("kev-0.8b",
+            (_, question) => DecisionAnswer.For(question, question.Options.Select((_, i) => i == 0 ? 1.0 : 0.0)));
+        var fabric = new DecisionFabric(DecisionPolicy.Default, Degraded(), db.Log, calibrated);
+        var state = Fixtures.State();
+        var permissive = Fixtures.Conditions(FabricConditions.PermissiveMode);
+        var levels = QuestionCatalogue.Default["risk"].Options.Select(option => option.Name).Reverse().ToArray();
+
+        await Assert.ThrowsAsync<ArgumentException>(() => fabric.DecideAsync(Session, Checkpoint.PreExecute, state,
+            [KeyValuePair.Create("risk", DecisionQuestion.Score("How risky?", "destructive", "none"))], permissive, Ct));
+        await Assert.ThrowsAsync<ArgumentException>(() => fabric.DecideAsync(Session, Checkpoint.PreExecute, state,
+            [KeyValuePair.Create("risk", DecisionQuestion.Score("How risky?", levels))], permissive, Ct));
+        await Assert.ThrowsAsync<ArgumentException>(() => fabric.DecideAsync(Session, Checkpoint.PreExecute, state,
+            [KeyValuePair.Create("memory_op", DecisionQuestion.Choice("x", "add", "noop"))], cancellationToken: Ct));
+        Assert.Equal(0, db.Log.GetHead(Session, Ct));
+        Assert.Empty(calibrated.Requests);
+
+        // The catalogue's options with the caller's own instructions are accepted.
+        var risk = QuestionCatalogue.Default["risk"].ToQuestion(instructions: DecisionContent.FromText("rm -rf build/"));
+        var result = await fabric.DecideAsync(Session, Checkpoint.PreExecute, state, [KeyValuePair.Create("risk", risk)], permissive, Ct);
+        Assert.Equal(FabricActions.AutoRun, result["risk"].Verdict.Action);
+        Assert.Single(result.Events);
+    }
+
+    [Fact]
     public async Task A_concurrent_append_is_retried_at_the_new_head()
     {
         using var db = new TempLog();
