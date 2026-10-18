@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Corvid's memory store: core blocks, episodic search, vector index, bi-temporal fact graph, hybrid retrieval and the gated write path.</Description>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
+    <ProjectReference Include="../Corvid.Abstractions/Corvid.Abstractions.csproj" />
+    <!-- memory_op is a fabric gate: the write path asks it through DecisionFabric, so the gate rules and Decision events are Fabric's. -->
+    <ProjectReference Include="../Corvid.Fabric/Corvid.Fabric.csproj" />
+    <InternalsVisibleTo Include="Corvid.Memory.Tests" />
+  </ItemGroup>
+</Project>

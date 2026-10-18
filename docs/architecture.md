@@ -1,4 +1,4 @@
-# Agent foundation (C-001, C-002, C-004a, C-005, C-006, C-007a, C-009, C-010)
+# Agent foundation (C-001, C-002, C-004a, C-005, C-006, C-007a, C-008, C-009, C-010)
 
 The solution contains `Corvid.Abstractions`, `Corvid.Kernel`, and
 `Corvid.Models`, alongside the working Vault projects. Kernel and Models each
@@ -10,7 +10,9 @@ build-time generator, `Corvid.Tools.Generators` (see [Tools](#tools-c-005)). C-0
 C-004a added `Corvid.Fabric`, which references Abstractions and
 `Microsoft.Extensions.AI.Abstractions` (see [Decision fabric](#decision-fabric-c-004a)).
 C-007a added `Corvid.Sandbox` (core, no dependencies) and the `corvid-sandbox` launcher
-executable in `sandbox/Corvid.Sandbox.Launcher` (see [Sandbox](#sandbox-c-007a)). Add
+executable in `sandbox/Corvid.Sandbox.Launcher` (see [Sandbox](#sandbox-c-007a)).
+C-008 added `Corvid.Memory`, which references Abstractions, Fabric, `Microsoft.Data.Sqlite` and
+`Microsoft.Extensions.AI.Abstractions` (see [Memory store](#memory-store-c-008)). Add
 the other projects from the agent plan as their implementations start, rather
 than creating empty projects for every future surface.
 
@@ -41,7 +43,7 @@ than creating empty projects for every future surface.
   log cannot repair them and the session must stay readable.
 
 Not built yet: the session actor and its command channel, rendering a projection
-into a model prompt, full-text search over raw events, branch and fork
+into a model prompt, branch and fork
 sessions that copy a prefix, and schema migrations beyond version 1. SQLite calls
 are synchronous; callers that must not block should use a storage worker.
 
@@ -140,8 +142,8 @@ de-escalation rule of §6. It depends only on Abstractions and
 
 Not built yet: compaction and expansion on a budget change (the hook only
 reports the direction), per-request redaction (§10.4), re-rendering the
-projection for the new model's format, re-embedding after an `embedder.text`
-swap (§4.3), restoring current bindings and pins from the log on resume (pins
+projection for the new model's format, starting memory's re-embed job when
+`embedder.text` switches (§4.3; the job itself is C-008's `MemoryVectors`), restoring current bindings and pins from the log on resume (pins
 are not persisted), recording switch costs for `/insights`, and the
 media-embedder contract.
 
@@ -221,11 +223,14 @@ conversation-level token counting before a call, the `corvid doctor` command its
 - Core libraries may reference other core libraries and explicitly reviewed
   infrastructure packages. They may not reference adapters or provider SDKs,
   even indirectly. The package allowlist contains
-  `Microsoft.Extensions.AI.Abstractions` (used by Models, Tools and Fabric) and, for the event log,
-  `Microsoft.Data.Sqlite` with its resolved dependencies
+  `Microsoft.Extensions.AI.Abstractions` (used by Models, Tools, Fabric and Memory) and, for the event log
+  and the memory store, `Microsoft.Data.Sqlite` with its resolved dependencies
   (`Microsoft.Data.Sqlite.Core` and the `SQLitePCLRaw.*` e_sqlite3 bundle). Add infrastructure packages and their
   transitive dependencies to `CorePackages` in the checker when needed; never
   add a provider SDK there.
+- `Corvid.Memory` references `Corvid.Fabric`, because `memory_op` is a fabric gate. Fabric must not
+  reference Memory (the compiler rejects the cycle). Memory reads the event log through `IEventLog`
+  and does not reference Kernel.
 - Provider SDKs and Starling model packages belong in `Corvid.Models.*` adapters.
   Adapters may reference core projects. ONNX Runtime and ONNX Runtime GenAI natives
   (and their managed packages) come only through adapters; a core project that
@@ -461,6 +466,86 @@ paths such as tool caches in home, the HTTPS proxy route for sandboxed scripts (
 `corvid-exec` user and value injection for Vault's exec path, container and SSH backends,
 macOS and Windows, the structural approval pipeline (C-007b), and the shell and code tools
 that use the sandbox (C-012).
+
+## Memory store (C-008)
+
+`Corvid.Memory` (core, `IsAotCompatible`) implements plan §9.1 (tiers 1–3), §9.2, §9.3 without
+reranking, and the memory side of §4.3. It needs no new package: `Microsoft.Data.Sqlite` and
+its e_sqlite3 bundle (SQLite 3.53, with FTS5 and the trigram tokenizer) are already on the
+allowlist. No Starling or provider package is referenced; tests use fake embedders, extractors
+and deciders.
+
+- `MemoryDatabase` is one SQLite file (WAL, `synchronous=FULL`, schema version 1), separate from
+  the event log, with a connection per operation as in `SqliteEventLog`. Times are UTC ticks.
+- Core blocks: `CoreBlockStore` holds `user`, `agent` and `persona` rows, each with a token budget
+  (350, 550 and 500 by default, about Hermes' character limits at chars/4, counted with an
+  `ITokenCounter`), a local-only flag and a revision. `Set` refuses content over the budget
+  (`OverBudget`) or against a stale revision (`Conflict`) and changes nothing. `Snapshot()` is the
+  frozen per-session copy; `Render(includeLocalOnly)` leaves local-only blocks out for non-local
+  models. Nothing chooses that flag from a model profile yet.
+- Episodic: `EpisodicIndex.CatchUp(log, session)` copies the text of user and assistant messages,
+  tool calls and results (JSON values, not raw JSON, because the log escapes non-ASCII), approval
+  requests, compaction summaries, goals and todos into `episodes`, a page per transaction, behind a
+  per-session high-water mark, and returns the episodes it added so the caller can embed them
+  (`MemoryVectors.EmbedAsync`; the re-embed job also finds any item without a vector). Decisions, outcomes, switches and memory events are not indexed.
+  Rows mirror the append-only log, and triggers reject updates and deletes. `Search` ranks by FTS5
+  BM25 with the trigram tokenizer, so text without word breaks (Chinese, Japanese) is found by
+  substring; query terms of three or more characters are OR-ed phrases. A query whose terms are all
+  shorter (`東京`, `Al`) cannot use a trigram index and falls back to LIKE, newest first.
+- Vectors: `IVectorIndex` keys vectors by `(item, embedder_id)`; one embedder id has one dimension
+  count. `SqliteVectorIndex` stores normalized float32 BLOBs (native byte order) and scans every
+  vector of the embedder per query: exact, and linear in the number of items. Items are `event:<id>`
+  episodes and `fact:<id>` facts.
+- Embedder swaps (§4.3): `MemoryVectors` tracks the active and pending embedder.
+  `BeginSwap(id)` makes the first embedder active at once on an empty store, and otherwise records
+  it as pending. From then on `EmbedAsync` writes new items with both embedders.
+  `ReembedAsync(batch)` is the re-embed job: it embeds items missing a vector for the pending
+  embedder, each row in its own transaction, so it can stop and resume anywhere. Until none is
+  missing, retrieval embeds queries with the old embedder and searches the old index, and FTS
+  covers everything. Then one update makes the pending embedder active, and the old vectors are
+  deleted. A run reports `Completed` only after that switch; an item written without its new
+  vector during the run's last batch leaves the swap pending for the next run. If the active embedder is not loaded in the process, retrieval uses FTS and the graph only.
+  With no swap running, the same job backfills items whose embedding failed. Invalidated facts are not re-embedded.
+- Fact graph: `FactGraph` stores entities (matched by label and normalized name: NFKC, collapsed
+  whitespace, lower case), facts with optional relations (subject, predicate, object), and links
+  from facts to the entities they mention. Each fact has valid time (`valid_from`, `valid_to`) and
+  transaction time (`recorded_at`, `invalidated_at`). `Invalidate` and `Supersede` set `valid_to`
+  once; the schema's triggers reject deleting a fact and every other update. `AsOf(validAt, knownAt)`
+  answers both "what was true in March" and "what did Corvid believe then", because an invalidation
+  recorded after `knownAt` was not yet known. `Expand` returns current facts about the seed
+  entities (hop 0) and about entities those facts mention (hop 1).
+- Retrieval: `HybridRetriever` builds three ranked lists: BM25 (facts and episodes interleaved by
+  rank, since their BM25 scores are not comparable), vector search (over-fetched, then filtered to
+  current facts and the requested session), and the one-hop graph list from the turn's entities.
+  It fuses them with reciprocal rank fusion (k = 60), multiplies by
+  `1 + 0.5 · 0.5^(age / 30 days)`, cuts each snippet to 200 tokens and fills the token budget
+  greedily, skipping items that do not fit. An embedder failure drops the vector list and the
+  result reports no embedder. Only current facts are returned.
+- Write path: `MemoryWriter.WriteAsync` extracts entities with the §9.2 labels, retrieves up to
+  five neighbouring facts, and asks `memory_op` at the `pre_execute` checkpoint through
+  `DecisionFabric`, with the candidate and neighbours as JSON instructions and the entities in the
+  TurnState. Because `memory_op` is a gate, only a calibrated answer above its floor (0.6) writes:
+  `add` adds the fact, `update` supersedes the best-ranked neighbour, `invalidate` ends it, and
+  `noop` writes nothing. Everything else is staged in `pending_writes` with the decider's proposal
+  and the policy's reason. The degraded decider never answers a gate, so without Kev every write is
+  staged and nothing unreviewed is written. `ApproveAsync` applies a staged write (the
+  reviewer may change the operation or target; a write the graph or block store then refuses stays
+  pending) and `Reject` discards it; both record the decision's
+  outcome (`approved`, `corrected` or `rejected`) for calibration. `EditBlockAsync` sends `user` and
+  `agent` edits through the same gate; an edit over the budget is staged as `over_budget` without
+  asking, and `persona` is edited only by the user. Every write appends `MemoryWritten` with the
+  fact, block (`block:user`) or pending id and the operation; staging records `staged`.
+  The memory row is written before the event: the two files are not one transaction, so a crash
+  can leave a row without its event, never an event without a row.
+
+Not built yet: sqlite-vec (no first-party .NET package; it would replace the scan behind
+`IVectorIndex` and needs a checker rule for its native library); Kev reranking of the top 8
+(§9.3); the consolidation job that rewrites an over-budget block (§9.5); relation extraction
+(`IExtractor` returns spans, so relations come only from callers) and entity aliasing; fact
+deduplication and merging; media memory (§9.4); local-only facts and egress filtering of
+retrieved memory (C-015); the `/memory pending` command and the `memory` tool (C-012, C-013);
+running indexing and the re-embed job on the device scheduler (C-011); and the `remember` gate
+that starts a write at egress (the caller's job, C-011).
 
 ## Running the check
 

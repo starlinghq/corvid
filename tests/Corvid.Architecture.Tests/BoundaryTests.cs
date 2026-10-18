@@ -74,6 +74,17 @@ public sealed class BoundaryTests
     [InlineData("Corvid.Kernel", "Corvid.Sandbox.Launcher", "project", false)]
     [InlineData("Corvid.Vault", "Corvid.Sandbox.Launcher", "project", false)]
     [InlineData("Corvid.Models.Starling", "Corvid.Sandbox.Launcher", "project", false)]
+    // C-008: the memory store is core. It uses the allowlisted SQLite bundle (FTS5 included) and a managed vector scan;
+    // sqlite-vec and tensor packages are not allowed, and memory depends on Fabric, not the other way round.
+    [InlineData("Corvid.Memory", "Microsoft.Data.Sqlite", "package", true)]
+    [InlineData("Corvid.Memory", "SQLitePCLRaw.bundle_e_sqlite3", "package", true)]
+    [InlineData("Corvid.Memory", "Microsoft.Extensions.AI.Abstractions", "package", true)]
+    [InlineData("Corvid.Memory", "Corvid.Fabric", "project", true)]
+    [InlineData("Corvid.Memory", "Corvid.Abstractions", "project", true)]
+    [InlineData("Corvid.Memory", "sqlite-vec", "package", false)]
+    [InlineData("Corvid.Memory", "System.Numerics.Tensors", "package", false)]
+    [InlineData("Corvid.Memory", "Starlings.Models.EmbeddingGemma2.Extensions.AI", "package", false)]
+    [InlineData("Corvid.Memory", "Corvid.Models.Starling", "project", false)]
     public void EnforcesLayerRules(string project, string dependency, string type, bool allowed)
     {
         using var assets = Assets(("net10.0", dependency, type));
