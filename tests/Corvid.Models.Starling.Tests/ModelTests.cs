@@ -25,11 +25,13 @@ public sealed class ModelTests
             TestContext.Current.CancellationToken);
 
         Assert.Contains("Paris", response.Text, StringComparison.OrdinalIgnoreCase);
-        // The template's role markers are special tokens of the same tokenizer, so counting the rendered prompt
-        // must give exactly what the model prefilled.
+        // The counter must tokenize exactly as the model does: count the text of the prompt the model builds.
         var counter = client.GetService<ITokenCounter>()!;
-        var rendered = Qwen35ChatTemplate.Render([Qwen35Message.User(question)]);
-        Assert.Equal(response.Usage?.InputTokenCount, counter.CountTokens(rendered));
+        var prompt = client.GetService<Starlings.Models.Qwen35.Extensions.AI.Qwen35ChatClient>()!.Model
+            .CreatePrompt([Qwen35Message.User(question)]);
+        Assert.NotNull(prompt.Text);
+        Assert.Equal(prompt.TokenIds.Length, counter.CountTokens(prompt.Text));
+        Assert.Equal(prompt.TokenIds.Length, response.Usage?.InputTokenCount);
     }
 
     [Fact]
