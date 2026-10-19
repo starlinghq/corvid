@@ -22,6 +22,11 @@ harness are described in [`docs/architecture.md`](../docs/architecture.md).
 3. Review the diff. Recording accepts whatever the projection does today, so check each
    expected projection by hand before committing.
 
+The `turn-*` trajectories are recorded from the turn loop itself (C-011) by `tests/Corvid.Kernel.Tests/GoldenTurnTests`,
+which runs each scenario on fakes and, without the variable, checks the loop still produces the committed file (decision
+and approval ids aside). Record them with
+`CORVID_RECORD_GOLDENS=1 tests/Corvid.Kernel.Tests/bin/Release/net10.0/Corvid.Kernel.Tests -class "*GoldenTurnTests"`.
+
 ## Calibrating floors
 
 ```sh

@@ -53,6 +53,17 @@ public sealed class SessionModelSlots
         }
     }
 
+    /// <summary>The slot's current binding, or false when neither the session nor the registry binds the slot.</summary>
+    public bool TryCurrent(string slot, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out ModelBinding? binding)
+    {
+        lock (_state)
+        {
+            if (!_current.TryGetValue(slot, out binding) && _registry.TryGet(slot, out var configuration))
+                _current[slot] = binding = configuration.Default;
+            return binding is not null;
+        }
+    }
+
     public bool IsPinned(string slot)
     {
         lock (_state)
@@ -101,6 +112,24 @@ public sealed class SessionModelSlots
                 throw new InvalidOperationException($"Tool call '{callId}' is already tracked or parked.");
         }
         return new ParkedCallLease(this, callId);
+    }
+
+    /// <summary>
+    /// An approved parked call starts running: it moves from parked to tracked in one step, so a concurrent switch never
+    /// sees it as neither (and refuses it as orphaned). Dispose the returned lease after the call's result is logged; the
+    /// park's own lease then does nothing.
+    /// </summary>
+    public IDisposable RunParkedToolCall(string callId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(callId);
+        lock (_state)
+        {
+            if (!_parked.Contains(callId) || _inFlight.ContainsKey(callId))
+                throw new InvalidOperationException($"Tool call '{callId}' is not parked.");
+            _parked.Remove(callId);
+            _inFlight[callId] = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+        return new ToolCallLease(this, callId);
     }
 
     /// <summary>Switches a slot (a <c>/model</c> command, or an explicit escalation). A pinned slot is not de-escalated.</summary>

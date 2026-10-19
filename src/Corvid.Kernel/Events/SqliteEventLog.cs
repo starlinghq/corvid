@@ -20,7 +20,10 @@ public sealed class SqliteEventLog : IEventLog
         {
             DataSource = path,
             Mode = SqliteOpenMode.ReadWriteCreate,
-            Pooling = false,
+            // Pooled (C-011): without a pool every append closed the file's last connection, and SQLite checkpoints the WAL
+            // on that close, which roughly tripled an append's cost (measured 6.8 ms against 2.3 ms). Commits still fsync
+            // the WAL (synchronous=FULL); the WAL is checkpointed by SQLite's automatic threshold instead.
+            Pooling = true,
             DefaultTimeout = 5
         }.ToString();
 

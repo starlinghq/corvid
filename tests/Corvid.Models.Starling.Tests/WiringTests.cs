@@ -57,6 +57,24 @@ public sealed class WiringTests
     }
 
     [Fact]
+    public async Task Extraction_runs_on_the_device_scheduler_at_its_priority()
+    {
+        using var device = new Corvid.Kernel.Scheduling.DeviceScheduler("cpu");
+        var onDevice = false;
+        using var extractor = new Gliner2Extractor((_, _, _, _) =>
+        {
+            onDevice = device.IsCurrentThread;
+            return [];
+        }, owned: null, device.GetTaskScheduler(Corvid.Kernel.Scheduling.DevicePriority.Fabric));
+
+        await extractor.ExtractAsync(new ExtractionRequest(Text, ["person"]), TestContext.Current.CancellationToken);
+
+        Assert.True(onDevice);
+        // The caller resumes off the device, so the turn loop never runs on a model thread.
+        Assert.False(device.IsCurrentThread);
+    }
+
+    [Fact]
     public async Task Extractor_rejects_bad_requests_and_surfaces_model_refusals()
     {
         using var extractor = new Gliner2Extractor((_, _, _, _) =>

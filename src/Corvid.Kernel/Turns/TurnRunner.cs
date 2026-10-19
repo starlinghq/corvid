@@ -1,0 +1,918 @@
+using System.Buffers;
+using System.Collections.Immutable;
+using System.Globalization;
+using System.Text.Encodings.Web;
+using System.Text.Json;
+using Corvid.Abstractions.Events;
+using Corvid.Abstractions.Extraction;
+using Corvid.Abstractions.Fabric;
+using Corvid.Abstractions.Sessions;
+using Corvid.Abstractions.Tokens;
+using Corvid.Approvals;
+using Corvid.Fabric;
+using Corvid.Kernel.Events;
+using Corvid.Memory;
+using Corvid.Models;
+using Corvid.Tools;
+using Microsoft.Extensions.AI;
+
+namespace Corvid.Kernel.Turns;
+
+/// <summary>
+/// One session's turn loop (plan §5.2, §7, §8, §10.3). A turn appends the user message; runs the ingress checkpoint (one
+/// decider request: intent, difficulty, needs_recall, clarify and tool over the embedding shortlist); calls the generator
+/// with one tool schema on a confident pick or the shortlist otherwise; validates each call against its schema, the
+/// extracted slots and its binding, repairing once and escalating on a second failure; sends side-effecting calls through
+/// the approval pipeline (the pre-execute checkpoint); runs a step checkpoint after each round of results (done, stuck,
+/// tool, clear_results, injection); and at egress asks remember (starting the memory write path) and deliver.
+/// </summary>
+/// <remarks>
+/// Not thread-safe: the session actor runs one turn at a time. Every append re-reads the head, because the fabric, the
+/// approval pipeline and the memory writer append to the same log. Taint persists across turns until a user message.
+/// </remarks>
+public sealed class TurnRunner
+{
+    private const int MaxAppendAttempts = 8;
+    private const string None = "none";
+    private const string NudgeRequired = "Call the {0} tool now with the arguments the request gives. Do not describe a result before the tool has run.";
+    private const string NudgeClarify = "The request is ambiguous. Ask the user one short question that would let you act. Do not call tools.";
+    private const string NudgeFinish = "Answer the user now from the results above. Do not call tools.";
+    private const string NudgeBudget = "The step budget for this turn is used up. Answer the user now with what you have. Do not call tools.";
+
+    private static readonly JsonWriterOptions WriterOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+
+    private readonly TurnServices _services;
+    private readonly TurnOptions _options;
+
+    public TurnRunner(string sessionId, TurnServices services)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentNullException.ThrowIfNull(services);
+        if (services.Slots.SessionId != sessionId)
+            throw new ArgumentException("The slots belong to another session.", nameof(services));
+        SessionId = sessionId;
+        _services = services;
+        _options = services.Options.Validate();
+    }
+
+    public string SessionId { get; }
+
+    /// <summary>
+    /// The session's context holds content from outside the user (§10.3): a network tool's result, or an envelope from
+    /// someone else. Only an envelope from the user clears it.
+    /// </summary>
+    public bool Tainted { get; private set; }
+
+    public async Task<TurnResult> RunAsync(Envelope envelope, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        if (envelope.SessionId != SessionId)
+            throw new ArgumentException("The envelope is for another session.", nameof(envelope));
+        var turn = new Turn(this, envelope);
+        try
+        {
+            return await turn.RunAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            turn.CloseOpenCalls("cancelled: the turn was cancelled before the call finished");
+            await DeEscalateAsync(CancellationToken.None).ConfigureAwait(false);
+            return turn.Result(TurnStatus.Cancelled, null);
+        }
+        catch (Exception exception)
+        {
+            // A prompter, decider or log failure: an issued call left without a result would make every later switch
+            // refuse it as orphaned, so it is closed before the failure reaches the actor.
+            try
+            {
+                turn.CloseOpenCalls("failed: " + exception.Message);
+            }
+            catch
+            {
+                // The original failure is the one to report; a log that cannot take the result fails again on its own.
+            }
+            await DeEscalateAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private async Task DeEscalateAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _services.Slots.CompleteTurnAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException)
+        {
+            // A slot the registry no longer binds, or unfinished calls from another writer: the next turn retries.
+        }
+    }
+
+    private StoredEvent Append(SessionEvent payload) => Append([payload])[0];
+
+    /// <summary>Appends events as one batch, so no other writer (or a concurrent switch's read) sees only part of them.</summary>
+    private IReadOnlyList<StoredEvent> Append(params SessionEvent[] payloads)
+    {
+        var events = payloads.Select(EventData.Create).ToArray();
+        for (var attempt = 1; ; attempt++)
+        {
+            // Never across an await: other components append between this turn's own events.
+            var head = _services.Log.GetHead(SessionId);
+            try
+            {
+                return _services.Log.Append(SessionId, head, events);
+            }
+            catch (EventLogConflictException) when (attempt < MaxAppendAttempts)
+            {
+            }
+        }
+    }
+
+    private SessionSnapshot Snapshot() => SessionProjection.Load(_services.Log, SessionId);
+
+    private sealed record Offered(AIFunction Function, ToolDescriptor Descriptor);
+
+    /// <param name="Ask">Goes through the pre-execute checkpoint: a side effect, or a network read in a tainted session.</param>
+    private sealed record ValidCall(string CallId, Offered Tool, JsonElement Arguments, bool Ask);
+
+    private enum CallOutcome
+    {
+        Succeeded,
+        Failed,
+        BindingFailed,
+        Denied,
+    }
+
+    /// <summary>One turn's state. Lives only while the turn runs.</summary>
+    private sealed class Turn(TurnRunner runner, Envelope envelope)
+    {
+        private readonly TurnServices _services = runner._services;
+        private readonly TurnOptions _options = runner._options;
+        private readonly Lock _gate = new();
+        private readonly HashSet<string> _open = new(StringComparer.Ordinal);
+        private readonly List<string> _escalations = [];
+        private readonly List<SlotDisagreement> _disagreements = [];
+        // The tool decision that picked a tool, by tool name, so its call's result becomes the decision's outcome.
+        private readonly Dictionary<string, string> _pickDecisions = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, Offered> _catalogue = new(StringComparer.Ordinal);
+        // The calls of the latest generator response: budget clearing spares their results, and injection is asked about them.
+        private readonly HashSet<string> _lastRound = new(StringComparer.Ordinal);
+        private ImmutableSortedDictionary<string, ImmutableArray<string>> _entities = ImmutableSortedDictionary<string, ImmutableArray<string>>.Empty;
+        private ImmutableArray<Offered> _shortlist = [];
+        private string _memoryNote = "";
+        private string? _lastToolResult;
+        private int _steps;
+        private int _toolCalls;
+        private bool _prefillChecked;
+        private string? _memoryWrite;
+
+        public async Task<TurnResult> RunAsync(CancellationToken cancellationToken)
+        {
+            // §10.3: only the user's own message clears taint; anyone else's text is outside content.
+            runner.Tainted = envelope.Origin != EnvelopeOrigin.User;
+            runner.Append(new UserMessage(envelope.Text));
+
+            await ExtractEntitiesAsync(cancellationToken).ConfigureAwait(false);
+            await BuildShortlistAsync(cancellationToken).ConfigureAwait(false);
+
+            // Ingress: one request for every question this turn needs before the first generator call.
+            var ingress = new List<KeyValuePair<string, DecisionQuestion>> { Ask("intent"), Ask("difficulty"), Ask("clarify") };
+            if (_services.Retriever is not null)
+                ingress.Add(Ask("needs_recall"));
+            if (!_shortlist.IsEmpty)
+                ingress.Add(ToolQuestion());
+            var verdicts = await DecideAsync(Checkpoint.Ingress, ingress, cancellationToken).ConfigureAwait(false);
+
+            if (Acted(verdicts, "difficulty", out _) && _options.EscalationAllowed)
+                await EscalateAsync("difficulty", cancellationToken).ConfigureAwait(false);
+            if (verdicts.Verdicts.ContainsKey("needs_recall"))
+                await RecallAsync(Acted(verdicts, "needs_recall", out _), cancellationToken).ConfigureAwait(false);
+
+            var clarify = Acted(verdicts, "clarify", out _)
+                || Acted(verdicts, "intent", out var intent) && intent == "ask_clarifying_question";
+            if (clarify)
+            {
+                var question = Text(await GenerateAsync([], NudgeClarify, required: null, cancellationToken).ConfigureAwait(false));
+                return await FinishAsync(TurnStatus.Clarifying, question.Length > 0 ? question : "Could you say more about what you need?",
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            var offered = OfferFrom(verdicts, "tool");
+            if (offered is null && Acted(verdicts, "intent", out var route) && route == "answer_directly")
+                offered = [];
+            return await LoopAsync(offered ?? _shortlist, cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task<TurnResult> LoopAsync(ImmutableArray<Offered> offered, CancellationToken cancellationToken)
+        {
+            var failures = 0;
+            var noOpChecked = false;
+            string? required = null;
+            var finishing = false;
+            var status = TurnStatus.Answered;
+
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var budgetSpent = _steps >= _options.MaxSteps;
+                var tools = finishing || budgetSpent ? [] : offered;
+                var nudge = budgetSpent && !finishing ? NudgeBudget : finishing ? NudgeFinish : null;
+                if (budgetSpent && status == TurnStatus.Answered)
+                    status = TurnStatus.StepBudgetExhausted;
+
+                ChatResponse response;
+                try
+                {
+                    response = await GenerateAsync(tools, nudge, required, cancellationToken).ConfigureAwait(false);
+                }
+                catch (ContextOverBudgetException exception)
+                {
+                    if (await EscalateAsync("context", cancellationToken).ConfigureAwait(false))
+                        continue;
+                    return await FinishAsync(TurnStatus.Failed,
+                        $"This conversation no longer fits the model's context ({exception.Message}).", cancellationToken).ConfigureAwait(false);
+                }
+                required = null;
+
+                var calls = tools.IsEmpty ? [] : response.Messages.SelectMany(message => message.Contents).OfType<FunctionCallContent>().ToList();
+                if (calls.Count == 0)
+                {
+                    // No-op detection (§7 step 6): the generator narrated instead of calling. If done is low and tool is high,
+                    // re-prompt once requiring that tool; the narration is not logged.
+                    if (!tools.IsEmpty && _toolCalls == 0 && !noOpChecked)
+                    {
+                        noOpChecked = true;
+                        var check = new List<KeyValuePair<string, DecisionQuestion>> { Ask("done") };
+                        if (!_shortlist.IsEmpty)
+                            check.Add(ToolQuestion());
+                        var verdicts = await DecideAsync(Checkpoint.Step, check, cancellationToken).ConfigureAwait(false);
+                        if (!Acted(verdicts, "done", out _) && OfferFrom(verdicts, "tool") is [var pick])
+                        {
+                            offered = [pick];
+                            required = pick.Function.Name;
+                            continue;
+                        }
+                    }
+                    var text = Text(response);
+                    return await FinishAsync(status, text.Length > 0 ? text : "I have nothing to add.", cancellationToken).ConfigureAwait(false);
+                }
+
+                _steps++;
+                var (anyRan, failed) = await RunCallsAsync(calls, tools, cancellationToken).ConfigureAwait(false);
+                if (failed)
+                {
+                    // Repair once (§7 step 5): the error results carry the expected shape. A second failure escalates (§6).
+                    if (++failures >= 2)
+                    {
+                        if (!await EscalateAsync("repair", cancellationToken).ConfigureAwait(false))
+                            return await FinishAsync(TurnStatus.Failed,
+                                "I could not produce a valid tool call for this request, and no larger model is available.", cancellationToken)
+                                .ConfigureAwait(false);
+                        failures = 0;
+                    }
+                }
+                if (!anyRan)
+                    continue;
+
+                var step = await StepAsync(cancellationToken).ConfigureAwait(false);
+                if (Acted(step, "stuck", out _))
+                {
+                    if (!_options.EscalationAllowed || !await EscalateAsync("stuck", cancellationToken).ConfigureAwait(false))
+                    {
+                        finishing = true;
+                        status = TurnStatus.Stuck;
+                    }
+                }
+                if (Acted(step, "done", out _))
+                    finishing = true;
+                offered = OfferFrom(step, "tool") ?? _shortlist;
+            }
+        }
+
+        // ---- generator ----
+
+        private async Task<ChatResponse> GenerateAsync(ImmutableArray<Offered> tools, string? nudge, string? required,
+            CancellationToken cancellationToken)
+        {
+            var generator = _services.Slots.GetChatClient(ModelSlots.Generator);
+            var profile = _services.Slots.Current(ModelSlots.Generator).Profile;
+            var counter = Counter(generator);
+            var budget = profile.AcceptedContext - _options.MaxOutputTokens - _options.ContextReserve;
+            var toolTokens = tools.Sum(tool => counter.CountTokens(tool.Function.Name) + counter.CountTokens(tool.Function.Description)
+                + counter.CountTokens(tool.Function.JsonSchema.GetRawText()));
+            var snapshot = runner.Snapshot();
+            var rendered = PromptRenderer.Render(snapshot, SystemPrompt(profile), counter, budget, _lastRound, toolTokens);
+            if (rendered.OverBudget)
+                throw new ContextOverBudgetException($"{rendered.Tokens} tokens against a budget of {rendered.Budget}");
+
+            var messages = rendered.Messages.ToList();
+            var options = new ChatOptions { MaxOutputTokens = _options.MaxOutputTokens };
+            if (!tools.IsEmpty)
+            {
+                options.Tools = [.. tools.Select(tool => (AITool)tool.Function)];
+                options.ToolMode = ChatToolMode.Auto;
+            }
+            if (nudge is not null)
+                messages.Add(new ChatMessage(ChatRole.User, nudge));
+
+            if (required is not null)
+            {
+                // Native tool calling can be forced. Template-rendered clients (Starling's Qwen) reject required modes, so
+                // they get an instruction instead.
+                if (profile.ToolCalls == ToolCallSupport.Native)
+                {
+                    var forced = options.Clone();
+                    forced.ToolMode = ChatToolMode.RequireSpecific(required);
+                    try
+                    {
+                        return await generator.GetResponseAsync(messages, forced, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (NotSupportedException)
+                    {
+                    }
+                }
+                messages.Add(new ChatMessage(ChatRole.User, string.Format(CultureInfo.InvariantCulture, NudgeRequired, required)));
+            }
+            return await generator.GetResponseAsync(messages, options, cancellationToken).ConfigureAwait(false);
+        }
+
+        private string SystemPrompt(ModelProfile profile)
+        {
+            var prompt = _options.SystemPrompt;
+            if (_services.CoreBlocks is { } blocks && blocks.Render(includeLocalOnly: profile.Privacy != PrivacyClass.Cloud) is { Length: > 0 } core)
+                prompt += "\n\n" + core;
+            if (_memoryNote.Length > 0)
+                prompt += "\n\n" + _memoryNote;
+            return prompt;
+        }
+
+        private static ITokenCounter Counter(IChatClient generator) =>
+            generator.GetService(typeof(ITokenCounter)) as ITokenCounter ?? CharsPerTokenCounter.Instance;
+
+        private static string Text(ChatResponse response) => response.Text.Trim();
+
+        // ---- tool calls ----
+
+        private async Task<(bool AnyRan, bool Failed)> RunCallsAsync(List<FunctionCallContent> calls, ImmutableArray<Offered> tools,
+            CancellationToken cancellationToken)
+        {
+            var issued = new HashSet<string>(runner.Snapshot().Transcript.Select(entry => entry.Content)
+                .OfType<ToolCallIssued>().Select(call => call.CallId), StringComparer.Ordinal);
+            var valid = new List<ValidCall>();
+            var failed = false;
+            _lastRound.Clear();
+            foreach (var call in calls)
+            {
+                _toolCalls++;
+                // Small models reuse ids ("call_0") across turns; the log needs them unique within the session.
+                var callId = string.IsNullOrWhiteSpace(call.CallId) ? "call" : call.CallId;
+                for (var n = 2; issued.Contains(callId); n++)
+                    callId = $"{(string.IsNullOrWhiteSpace(call.CallId) ? "call" : call.CallId)}-{n}";
+                issued.Add(callId);
+                _lastRound.Add(callId);
+                var arguments = JsonValues.Object(call.Arguments);
+
+                // Nothing is logged until the call is judged: an issued call must never wait on an await without a lease
+                // (tracked or parked), or a concurrent /model switch would find it orphaned and refuse.
+                var tool = tools.FirstOrDefault(candidate => candidate.Function.Name == call.Name);
+                var errors = tool is null
+                    ? [$"'{call.Name}' is not one of the tools offered: {string.Join(", ", tools.Select(candidate => candidate.Function.Name))}"]
+                    : ArgumentValidator.Validate(tool.Function.JsonSchema, arguments).ToList();
+                object? extracted = null;
+                if (tool is not null && errors.Count == 0 && !_prefillChecked)
+                {
+                    var disagreements = await PrefillAsync(callId, tool, arguments, cancellationToken).ConfigureAwait(false);
+                    if (disagreements.Count > 0)
+                    {
+                        // Shown once: after the repair the generator's value stands, and the disagreement stays in the result.
+                        _prefillChecked = true;
+                        _disagreements.AddRange(disagreements);
+                        errors.AddRange(disagreements.Select(item => item.Argument is null
+                            ? $"'{item.Parameter}' was omitted, but the request says \"{item.Extracted}\""
+                            : $"'{item.Parameter}' is \"{item.Argument}\", but the request says \"{item.Extracted}\""));
+                        extracted = disagreements.ToDictionary(item => item.Parameter, item => (object?)item.Extracted, StringComparer.Ordinal);
+                    }
+                }
+                if (errors.Count > 0)
+                {
+                    failed = true;
+                    // The call and its error result go in as one append: a concurrent switch never sees the call alone.
+                    IssueRejected(callId, call.Name, arguments, Error("invalid arguments", errors, tool?.Function.JsonSchema, extracted));
+                    continue;
+                }
+                // §10.3: in a tainted session a network read asks too (C-007b forces the tainted_network_egress reason), or
+                // injected text could carry the user's data out in a URL. Taint is judged as of the response that made the call.
+                var risk = tool!.Descriptor.Risk;
+                valid.Add(new ValidCall(callId, tool, arguments, Ask: !risk.ReadOnly || risk.Network && runner.Tainted));
+            }
+
+            // Calls that need no approval run in parallel; the rest one at a time, in the order the model gave (§3.3).
+            var ran = false;
+            for (var i = 0; i < valid.Count;)
+            {
+                if (!valid[i].Ask)
+                {
+                    var group = valid.Skip(i).TakeWhile(call => !call.Ask).ToList();
+                    var outcomes = await Task.WhenAll(group.Select(call => ExecuteAsync(call, cancellationToken))).ConfigureAwait(false);
+                    failed |= outcomes.Contains(CallOutcome.BindingFailed);
+                    i += group.Count;
+                }
+                else
+                {
+                    failed |= await ExecuteAsync(valid[i], cancellationToken).ConfigureAwait(false) == CallOutcome.BindingFailed;
+                    i++;
+                }
+                ran = true;
+            }
+            return (ran, failed);
+        }
+
+        private async Task<CallOutcome> ExecuteAsync(ValidCall call, CancellationToken cancellationToken)
+        {
+            var descriptor = call.Tool.Descriptor;
+            IDisposable running;
+            // Each call takes its lease before its ToolCallIssued is appended, so a switch always finds it tracked or parked.
+            if (!call.Ask)
+            {
+                running = _services.Slots.TrackToolCall(call.CallId);
+                Issue(call.CallId, call.Tool.Function.Name, call.Arguments, running);
+            }
+            else
+            {
+                // Parked, not running, while the approval is open: a /model switch neither waits for it nor calls it
+                // orphaned. A denial's result is logged while still parked; an approval moves it to tracked in one step.
+                using var parked = _services.Slots.ParkToolCall(call.CallId);
+                Issue(call.CallId, call.Tool.Function.Name, call.Arguments, parked);
+                if (await AuthorizeAsync(call, cancellationToken).ConfigureAwait(false) is { } denial)
+                {
+                    Result(call.CallId, Error("not run", [denial], null, null), isError: true);
+                    return CallOutcome.Denied;
+                }
+                running = _services.Slots.RunParkedToolCall(call.CallId);
+            }
+
+            CallOutcome outcome;
+            using (running)
+            {
+                try
+                {
+                    var value = await call.Tool.Function.InvokeAsync(JsonValues.ToArguments(call.Arguments), cancellationToken).ConfigureAwait(false);
+                    var result = JsonValues.ToElement(value);
+                    // The result is logged before the lease is released: a model switch refuses an issued call with no result.
+                    Result(call.CallId, result, isError: false, $"{descriptor.Name}: {JsonValues.Text(result)}");
+                    outcome = CallOutcome.Succeeded;
+                }
+                catch (ToolArgumentException exception)
+                {
+                    Result(call.CallId, Error("invalid arguments", [exception.Message], call.Tool.Function.JsonSchema, null), isError: true,
+                        $"{descriptor.Name}: invalid arguments");
+                    return CallOutcome.BindingFailed;
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    Result(call.CallId, Error("cancelled", ["the turn was cancelled while the tool ran"], null, null), isError: true);
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    Result(call.CallId, Error("tool failed", [exception.Message], null, null), isError: true, $"{descriptor.Name}: failed");
+                    outcome = CallOutcome.Failed;
+                }
+            }
+            string? decisionId;
+            lock (_gate)
+            {
+                // Plan §10.3: fetched or external content taints the session until the user speaks.
+                if (descriptor.Risk.Network)
+                    runner.Tainted = true;
+                _pickDecisions.Remove(descriptor.Name, out decisionId);
+            }
+            if (decisionId is not null)
+                _services.Fabric.RecordOutcome(runner.SessionId, decisionId,
+                    outcome == CallOutcome.Succeeded ? "tool_succeeded" : "tool_failed", CancellationToken.None);
+            return outcome;
+        }
+
+        /// <summary>The pre-execute checkpoint (§5.2) through the approval pipeline. Returns why the call may not run, or null.</summary>
+        private async Task<string?> AuthorizeAsync(ValidCall call, CancellationToken cancellationToken)
+        {
+            if (_services.Approvals is not { } approvals)
+                return "no approval pipeline is configured, so side-effecting tools do not run";
+            var context = new ApprovalContext(runner.SessionId, _options.ApprovalMode, State())
+            {
+                Tainted = runner.Tainted,
+                KnownRecipients = _options.KnownRecipients,
+                CallId = call.CallId,
+            };
+            ApprovalResult result;
+            try
+            {
+                result = await approvals.AuthorizeAsync(context, new ToolAction(call.Tool.Descriptor, call.Arguments), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                Result(call.CallId, Error("cancelled", ["the turn was cancelled while the approval was pending"], null, null), isError: true);
+                throw;
+            }
+            return result.Allowed ? null : $"{WireName(result.Resolution)}: {result.Assessment.Summary}";
+        }
+
+        private static string WireName(ApprovalResolution resolution) => resolution switch
+        {
+            ApprovalResolution.UserDenied => "denied by the user",
+            ApprovalResolution.TimedOut => "the approval timed out",
+            ApprovalResolution.Hardline => "refused by the hardline list",
+            ApprovalResolution.RuleDenied => "refused by a remembered rule",
+            ApprovalResolution.NoApprover => "nobody could approve it",
+            _ => "the approval failed",
+        };
+
+        private async Task<IReadOnlyList<SlotDisagreement>> PrefillAsync(string callId, Offered tool, JsonElement arguments,
+            CancellationToken cancellationToken)
+        {
+            if (!_services.Slots.TryCurrent(ModelSlots.Extractor, out var binding) || binding.Service is not IExtractor extractor)
+                return [];
+            // Labels from the tool's free-text parameters, as GLiNER2 reads them (§7 step 4).
+            var labels = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (tool.Function.JsonSchema.TryGetProperty("properties", out var properties) && properties.ValueKind == JsonValueKind.Object)
+                foreach (var parameter in tool.Descriptor.Parameters.Where(parameter => !parameter.IsSecret))
+                    if (properties.TryGetProperty(parameter.Name, out var schema) && IsFreeText(schema))
+                        labels.TryAdd(parameter.Description is { Length: > 0 } description ? description : parameter.Name.Replace('_', ' '), parameter.Name);
+            if (labels.Count == 0)
+                return [];
+
+            ExtractionResult extraction;
+            try
+            {
+                extraction = await extractor.ExtractAsync(new ExtractionRequest(envelope.Text, [.. labels.Keys], _options.SlotPrefillConfidence),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                return [];
+            }
+            var found = new List<SlotDisagreement>();
+            foreach (var span in extraction.Spans.Where(span => span.Confidence >= _options.SlotPrefillConfidence).GroupBy(span => span.Label)
+                         .Select(group => group.MaxBy(span => span.Confidence)!))
+            {
+                if (!labels.TryGetValue(span.Label, out var parameter))
+                    continue;
+                string? argument = arguments.TryGetProperty(parameter, out var value) && value.ValueKind != JsonValueKind.Null ? JsonValues.Text(value) : null;
+                if (argument is not null && (argument.Contains(span.Text, StringComparison.OrdinalIgnoreCase)
+                    || span.Text.Contains(argument, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+                found.Add(new SlotDisagreement(callId, tool.Function.Name, parameter, argument, span.Text, span.Confidence));
+            }
+            return found;
+        }
+
+        private static bool IsFreeText(JsonElement schema)
+        {
+            if (schema.TryGetProperty("enum", out _) || !schema.TryGetProperty("type", out var type))
+                return false;
+            return type.ValueKind == JsonValueKind.String ? type.GetString() == "string"
+                : type.ValueKind == JsonValueKind.Array && type.EnumerateArray().Any(item => item.ValueKind == JsonValueKind.String && item.GetString() == "string");
+        }
+
+        /// <param name="lease">Released if the append fails, so a failed call never stays tracked or parked.</param>
+        private void Issue(string callId, string tool, JsonElement arguments, IDisposable? lease = null)
+        {
+            try
+            {
+                lock (_gate)
+                {
+                    runner.Append(new ToolCallIssued(callId, tool, arguments));
+                    _open.Add(callId);
+                }
+            }
+            catch
+            {
+                lease?.Dispose();
+                throw;
+            }
+        }
+
+        private void IssueRejected(string callId, string tool, JsonElement arguments, JsonElement error)
+        {
+            lock (_gate)
+                runner.Append(new ToolCallIssued(callId, tool, arguments), new ToolResult(callId, error, IsError: true));
+        }
+
+        // Read-only calls finish concurrently, so the shared turn state they touch is updated under the lock.
+        private void Result(string callId, JsonElement result, bool isError, string? lastToolResult = null)
+        {
+            lock (_gate)
+            {
+                runner.Append(new ToolResult(callId, result, isError));
+                _open.Remove(callId);
+                if (lastToolResult is not null)
+                    _lastToolResult = lastToolResult;
+            }
+        }
+
+        /// <summary>After cancellation: every issued call gets a result, so the log has no orphan a later switch would refuse.</summary>
+        public void CloseOpenCalls(string reason)
+        {
+            foreach (var callId in _open.ToArray())
+                Result(callId, Error("cancelled", [reason], null, null), isError: true);
+        }
+
+        private static JsonElement Error(string error, IEnumerable<string> details, JsonElement? expected, object? extracted)
+        {
+            var buffer = new ArrayBufferWriter<byte>();
+            using (var writer = new Utf8JsonWriter(buffer, WriterOptions))
+            {
+                writer.WriteStartObject();
+                writer.WriteString("error", error);
+                writer.WriteStartArray("details");
+                foreach (var detail in details)
+                    writer.WriteStringValue(detail);
+                writer.WriteEndArray();
+                if (expected is { } schema)
+                {
+                    writer.WritePropertyName("expected");
+                    schema.WriteTo(writer);
+                }
+                if (extracted is not null)
+                {
+                    writer.WritePropertyName("from_request");
+                    JsonValues.ToElement(extracted).WriteTo(writer);
+                }
+                writer.WriteEndObject();
+            }
+            using var document = JsonDocument.Parse(buffer.WrittenMemory);
+            return document.RootElement.Clone();
+        }
+
+        // ---- checkpoints ----
+
+        private async Task<CheckpointResult> StepAsync(CancellationToken cancellationToken)
+        {
+            var snapshot = runner.Snapshot();
+            var questions = new List<KeyValuePair<string, DecisionQuestion>> { Ask("done"), Ask("stuck") };
+            if (!_shortlist.IsEmpty)
+                questions.Add(ToolQuestion());
+
+            var names = snapshot.Transcript.Select(entry => entry.Content).OfType<ToolCallIssued>()
+                .ToDictionary(call => call.CallId, call => call.ToolName, StringComparer.Ordinal);
+            var results = snapshot.Transcript.Where(entry => entry.Content is ToolResult).ToList();
+            var cleared = PromptRenderer.DecidedViews(snapshot);
+            // clear_results is asked about each full result older than the last few (its below-floor rule stubs them).
+            foreach (var entry in results.Take(Math.Max(0, results.Count - _options.KeepRecentResults))
+                         .Where(entry => !cleared.ContainsKey(((ToolResult)entry.Content).CallId)).Take(_options.MaxClearQuestions))
+            {
+                var result = (ToolResult)entry.Content;
+                questions.Add(KeyValuePair.Create(PromptRenderer.ClearResultsPrefix + result.CallId,
+                    Catalogue["clear_results"].ToQuestion(instructions: Instructions(Catalogue["clear_results"], names.GetValueOrDefault(result.CallId, "tool"),
+                        result, entry.FromSequence))));
+            }
+            // injection is asked about content that came from outside (a network tool); either answer leaves it tainted.
+            var latest = _lastRound;
+            foreach (var entry in results.Where(entry => latest.Contains(((ToolResult)entry.Content).CallId)))
+            {
+                var result = (ToolResult)entry.Content;
+                var tool = names.GetValueOrDefault(result.CallId, "");
+                if (_catalogue.TryGetValue(tool, out var offered) && offered.Descriptor.Risk.Network && !result.IsError)
+                    questions.Add(KeyValuePair.Create("injection/" + result.CallId,
+                        Catalogue["injection"].ToQuestion(instructions: Instructions(Catalogue["injection"], tool, result, entry.FromSequence))));
+            }
+            return await DecideAsync(Checkpoint.Step, questions, cancellationToken).ConfigureAwait(false);
+        }
+
+        private static DecisionContent Instructions(CatalogueQuestion question, string tool, ToolResult result, long sequence)
+        {
+            var text = JsonValues.Text(result.Result);
+            var buffer = new ArrayBufferWriter<byte>();
+            using (var writer = new Utf8JsonWriter(buffer, WriterOptions))
+            {
+                writer.WriteStartObject();
+                writer.WriteString("question", question.Instructions);
+                writer.WriteString("tool", tool);
+                writer.WriteNumber("event", sequence);
+                // Kev's row budget is about 1,000 tokens (§5.1); an excerpt is enough to judge relevance or intent.
+                writer.WriteString("result", text.Length > 1_200 ? text[..1_200] + "…" : text);
+                writer.WriteEndObject();
+            }
+            using var document = JsonDocument.Parse(buffer.WrittenMemory);
+            return DecisionContent.FromJson(document.RootElement);
+        }
+
+        private async Task<CheckpointResult> DecideAsync(Checkpoint checkpoint, List<KeyValuePair<string, DecisionQuestion>> questions,
+            CancellationToken cancellationToken)
+        {
+            IReadOnlySet<string>? conditions = _options.EscalationAllowed
+                ? new HashSet<string>(StringComparer.Ordinal) { FabricConditions.EscalationAllowed }
+                : null;
+            var result = await _services.Fabric.DecideAsync(runner.SessionId, checkpoint, State(), questions, conditions, cancellationToken)
+                .ConfigureAwait(false);
+            if (result.Verdicts.TryGetValue("tool", out var tool) && tool.Verdict.Acted && tool.Verdict.Option is { } pick && pick != None)
+                lock (_gate)
+                    _pickDecisions[pick] = tool.DecisionId;
+            return result;
+        }
+
+        private QuestionCatalogue Catalogue => _services.Fabric.Policy.Catalogue;
+
+        private KeyValuePair<string, DecisionQuestion> Ask(string id) =>
+            KeyValuePair.Create(id, Catalogue[id].ToQuestion());
+
+        /// <summary>The <c>tool</c> question: the shortlist as <c>name: description</c> options, plus none (§5.2).</summary>
+        private KeyValuePair<string, DecisionQuestion> ToolQuestion() =>
+            KeyValuePair.Create("tool", Catalogue["tool"].ToQuestion(
+                [.. _shortlist.Where(tool => tool.Function.Name != None).Select(tool => new QuestionOption(tool.Function.Name, tool.Function.Description)),
+                 new QuestionOption(None, "no tool is needed")]));
+
+        private static bool Acted(CheckpointResult result, string key, out string? option)
+        {
+            option = null;
+            if (!result.Verdicts.TryGetValue(key, out var verdict) || !verdict.Verdict.Acted)
+                return false;
+            option = verdict.Verdict.Option;
+            return true;
+        }
+
+        /// <summary>What the generator may see after a <c>tool</c> verdict: one tool, none, or null for the shortlist (§5.3 rule 2).</summary>
+        private ImmutableArray<Offered>? OfferFrom(CheckpointResult result, string key)
+        {
+            if (!Acted(result, key, out var pick) || pick is null)
+                return null;
+            if (pick == None)
+                return [];
+            return _shortlist.FirstOrDefault(tool => tool.Function.Name == pick) is { } chosen ? [chosen] : null;
+        }
+
+        private TurnState State()
+        {
+            var generator = _services.Slots.GetChatClient(ModelSlots.Generator);
+            var profile = _services.Slots.Current(ModelSlots.Generator).Profile;
+            var snapshot = runner.Snapshot();
+            // The generator's own tokenizer when its binding offers one (Starling's Qwen does), so budgets are in its units.
+            var builder = new TurnStateBuilder(Counter(generator), _options.StateBudget);
+            return builder.Build(new TurnStateInput(envelope.Text, envelope.Surface, Describe(profile), Recent(snapshot), snapshot.Goal,
+                _entities.IsEmpty ? null : _entities, _steps, _lastToolResult));
+        }
+
+        private static string Describe(ModelProfile profile) =>
+            string.Create(CultureInfo.InvariantCulture, $"{profile.Id} {PrivacyName(profile.Privacy)}, {Math.Max(1, profile.AcceptedContext / 1024)}k");
+
+        private static string PrivacyName(PrivacyClass privacy) => privacy switch
+        {
+            PrivacyClass.Local => "local",
+            PrivacyClass.LocalServer => "local-server",
+            _ => "cloud",
+        };
+
+        /// <summary>One-liners for the transcript entries before this turn's message (§5.1: events, not message text).</summary>
+        private ImmutableArray<string> Recent(SessionSnapshot snapshot)
+        {
+            var names = new Dictionary<string, string>(StringComparer.Ordinal);
+            var lines = new List<string>();
+            foreach (var entry in snapshot.Transcript)
+            {
+                switch (entry.Content)
+                {
+                    case UserMessage user: lines.Add("user: " + Short(user.Text)); break;
+                    case AssistantMessage assistant: lines.Add("assistant: " + Short(assistant.Text)); break;
+                    case ToolCallIssued call:
+                        names[call.CallId] = call.ToolName;
+                        lines.Add("called " + call.ToolName);
+                        break;
+                    case ToolResult result: lines.Add($"{names.GetValueOrDefault(result.CallId, "tool")} {(result.IsError ? "failed" : "returned")}"); break;
+                    case Compacted compacted: lines.Add($"summary of events {compacted.FromSequence}–{compacted.ThroughSequence}"); break;
+                }
+            }
+            // The latest user line is this turn's message, which the state carries as user_message.
+            var current = lines.FindLastIndex(line => line.StartsWith("user: ", StringComparison.Ordinal));
+            if (current >= 0)
+                lines.RemoveAt(current);
+            return [.. lines.TakeLast(_options.RecentEvents)];
+
+            static string Short(string text) => text.Length > 80 ? text[..80] + "…" : text;
+        }
+
+        // ---- ingress helpers ----
+
+        private async Task ExtractEntitiesAsync(CancellationToken cancellationToken)
+        {
+            if (_options.EntityLabels.IsDefaultOrEmpty || !_services.Slots.TryCurrent(ModelSlots.Extractor, out var binding)
+                || binding.Service is not IExtractor extractor)
+                return;
+            try
+            {
+                var result = await extractor.ExtractAsync(new ExtractionRequest(envelope.Text, _options.EntityLabels), cancellationToken)
+                    .ConfigureAwait(false);
+                _entities = result.Spans.GroupBy(span => span.Label, StringComparer.Ordinal).ToImmutableSortedDictionary(
+                    group => group.Key, group => group.Select(span => span.Text).Distinct(StringComparer.Ordinal).ToImmutableArray(),
+                    StringComparer.Ordinal);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // Over-long input throws (the extractor never truncates); the state goes without entities.
+            }
+        }
+
+        private async Task BuildShortlistAsync(CancellationToken cancellationToken)
+        {
+            foreach (var function in _services.Tools.GetFunctions(_options.SecretNames))
+                if (function.GetService(typeof(ToolDescriptor)) is ToolDescriptor descriptor)
+                    _catalogue[function.Name] = new Offered(function, descriptor);
+            if (_catalogue.Count == 0 || !_services.Slots.TryCurrent(ModelSlots.TextEmbedder, out var binding)
+                || binding.Service is not IEmbeddingGenerator<string, Embedding<float>> embedder)
+            {
+                // Without an embedder there is no ranking; the hard filters still apply and the list is capped.
+                _shortlist = [.. _catalogue.Values.Where(tool => _options.ToolFilter?.Invoke(tool.Descriptor) ?? true)
+                    .OrderBy(tool => tool.Function.Name, StringComparer.Ordinal).Take(_services.Shortlist.Options.Size)];
+                return;
+            }
+
+            var usesAgo = new Dictionary<string, int>(StringComparer.Ordinal);
+            var calls = runner.Snapshot().Transcript.Select(entry => entry.Content).OfType<ToolCallIssued>().Reverse().ToList();
+            for (var i = 0; i < calls.Count; i++)
+                usesAgo.TryAdd(calls[i].ToolName, i);
+            var items = _catalogue.Values.Select(tool => new ShortlistItem(tool.Function.Name, tool.Function.Description,
+                _options.ToolExamples?.GetValueOrDefault(tool.Function.Name) ?? []));
+            var ranked = await _services.Shortlist.RankAsync(envelope.Text, items, embedder,
+                item => _options.ToolFilter?.Invoke(_catalogue[item.Name].Descriptor) ?? true, usesAgo, cancellationToken).ConfigureAwait(false);
+            _shortlist = [.. ranked.Items.Select(item => _catalogue[item.Name])];
+        }
+
+        private async Task RecallAsync(bool full, CancellationToken cancellationToken)
+        {
+            var entities = _entities.SelectMany(pair => pair.Value.Select(name => new EntityRef(pair.Key, name))).ToImmutableArray();
+            // needs_recall below its floor retrieves the top three core facts only (§5.3).
+            var request = full
+                ? new RetrievalRequest(envelope.Text, _options.RecallTokens, entities)
+                : new RetrievalRequest(envelope.Text, _options.RecallTokens, entities, [MemoryItemKind.Fact]);
+            try
+            {
+                var result = await _services.Retriever!.RetrieveAsync(request, cancellationToken).ConfigureAwait(false);
+                var items = full ? result.Items : result.Items.Take(3).ToImmutableArray();
+                if (!items.IsEmpty)
+                    _memoryNote = "Relevant memory:\n" + string.Join("\n", items.Select(item => "- " + item.Text));
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // Retrieval is advisory; the turn continues without it.
+            }
+        }
+
+        private async Task<bool> EscalateAsync(string reason, CancellationToken cancellationToken)
+        {
+            // The policy governs every trigger (difficulty, stuck, repair, context), not only the ones the fabric is asked about.
+            if (!_options.EscalationAllowed)
+                return false;
+            var result = await _services.Slots.EscalateAsync(ModelSlots.Generator, cancellationToken).ConfigureAwait(false);
+            if (result.Status != SwitchStatus.Switched)
+                return false;
+            _escalations.Add($"{result.To!.Id}: {reason}");
+            return true;
+        }
+
+        // ---- egress ----
+
+        private async Task<TurnResult> FinishAsync(TurnStatus status, string text, CancellationToken cancellationToken)
+        {
+            runner.Append(new AssistantMessage(text));
+            var deliver = "reply";
+            var egress = new List<KeyValuePair<string, DecisionQuestion>>();
+            if (_services.Memory is not null && status == TurnStatus.Answered)
+                egress.Add(Ask("remember"));
+            if (_options.AskDeliver)
+                egress.Add(Ask("deliver"));
+            if (egress.Count > 0)
+            {
+                var verdicts = await DecideAsync(Checkpoint.Egress, egress, cancellationToken).ConfigureAwait(false);
+                if (Acted(verdicts, "deliver", out var target) && target is not null)
+                    deliver = target;
+                if (Acted(verdicts, "remember", out _))
+                    await RememberAsync(cancellationToken).ConfigureAwait(false);
+            }
+            await runner.DeEscalateAsync(cancellationToken).ConfigureAwait(false);
+            return Result(status, text) with { Deliver = deliver };
+        }
+
+        /// <summary>remember acted: the user's message enters the memory write path (§9.2), which stages it without Kev.</summary>
+        private async Task RememberAsync(CancellationToken cancellationToken)
+        {
+            var source = runner.Snapshot().Transcript.LastOrDefault(entry => entry.Content is UserMessage)?.FromSequence;
+            var profile = _services.Slots.Current(ModelSlots.Generator).Profile;
+            try
+            {
+                var written = await _services.Memory!.WriteAsync(new MemoryWriteRequest(runner.SessionId, envelope.Text,
+                    SourceSequence: source, Surface: envelope.Surface, Generator: Describe(profile)), cancellationToken).ConfigureAwait(false);
+                _memoryWrite = written.Status == MemoryWriteStatus.Staged ? $"staged {written.MemoryId}" : $"{written.Operation} {written.MemoryId}";
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // A failed memory write never loses the answer; it is reported on the result.
+                _memoryWrite = "failed: " + exception.Message;
+            }
+        }
+
+        public TurnResult Result(TurnStatus status, string? text) =>
+            new(status, text, _steps, _toolCalls, runner.Tainted, "reply", [.. _escalations], [.. _disagreements], _memoryWrite);
+    }
+
+    private sealed class ContextOverBudgetException(string message) : Exception(message);
+}

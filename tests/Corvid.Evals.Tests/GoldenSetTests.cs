@@ -100,6 +100,34 @@ public sealed class GoldenSetTests
         Assert.Equal(4, snapshot.Transcript.Length);
     }
 
+    // Recorded from the turn loop (C-011); tests/Corvid.Kernel.Tests/GoldenTurnTests checks the loop still produces them.
+    [Fact]
+    public void A_turn_loop_tool_call_keeps_its_degraded_decisions_and_outcome()
+    {
+        using var session = ReplaySession.Create(Load("turn-read-only-tool.json"), Ct);
+
+        var snapshot = session.Project(session.Head, cancellationToken: Ct);
+        Assert.All(snapshot.Decisions.Values, state => Assert.Equal("degraded", state.Decision.Decider));
+        var ingress = snapshot.Decisions.Values.Single(state => state.Decision.QuestionId == "tool" && state.Decision.State!.Value.GetProperty("step").GetInt32() == 0);
+        Assert.Equal(("offer_tool:list_notes", "tool_succeeded"), (ingress.Decision.Action, ingress.Outcome));
+        Assert.Equal("stop", snapshot.Decisions.Values.Single(state => state.Decision.QuestionId == "done").Decision.Action);
+        Assert.IsType<AssistantMessage>(snapshot.Transcript[^1].Content);
+    }
+
+    [Fact]
+    public void A_turn_loop_repair_and_approval_link_the_prompt_to_its_call()
+    {
+        using var session = ReplaySession.Create(Load("turn-repair-then-approval.json"), Ct);
+
+        var asking = session.Project(10, cancellationToken: Ct);
+        Assert.Equal("call-2", Assert.Single(asking.PendingApprovals).Value.CallId);
+        var end = session.Project(session.Head, cancellationToken: Ct);
+        Assert.Empty(end.PendingApprovals);
+        Assert.Equal([true, false], end.Transcript.Select(entry => entry.Content).OfType<ToolResult>().Select(result => result.IsError));
+        var risk = end.Decisions.Values.Single(state => state.Decision.QuestionId == "risk");
+        Assert.Equal(("ask", "user_approved"), (risk.Decision.Action, risk.Outcome));
+    }
+
     private static string SourceGoldenDirectory([CallerFilePath] string source = "") =>
         Path.GetFullPath(Path.Combine(Path.GetDirectoryName(source)!, "..", "..", "evals", "golden"));
 }
