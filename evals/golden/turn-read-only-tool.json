@@ -1,0 +1,755 @@
+{
+  "format": "corvid-golden-trajectory",
+  "format_version": 1,
+  "payload_version": 1,
+  "id": "turn-read-only-tool",
+  "description": "A turn on the degraded decider: ingress picks list_notes by embedding margin, so the generator is offered that one schema; the read-only call runs without approval; the step checkpoint's done stops the loop and the answer is written with no tools; the tool decision's outcome is tool_succeeded.",
+  "events": [
+    {
+      "type": "user_message",
+      "text": "list my notes"
+    },
+    {
+      "type": "decision",
+      "decision_id": "0bd0674eae10423a9fab2dcbfc4de744",
+      "question_id": "clarify",
+      "probabilities": {
+        "no": 1,
+        "yes": 0
+      },
+      "confidence": 1,
+      "threshold": 0.7,
+      "action": "proceed",
+      "catalogue_version": "2026-10-18.1",
+      "decider": "degraded",
+      "state": {
+        "user_message": "list my notes",
+        "surface": "cli",
+        "recent": [],
+        "goal": null,
+        "entities": {},
+        "step": 0,
+        "last_tool_result": null,
+        "generator": "gen-small local, 8k"
+      },
+      "question": {
+        "kind": "noul",
+        "instructions": "Is the request too ambiguous to act on without asking the user one question?",
+        "options": [
+          {
+            "name": "yes"
+          },
+          {
+            "name": "no"
+          }
+        ]
+      },
+      "calibrated": false
+    },
+    {
+      "type": "decision",
+      "decision_id": "26d501466eb44f378854a022b247f73b",
+      "question_id": "difficulty",
+      "probabilities": {
+        "easy": 0,
+        "hard": 0,
+        "needs a frontier model": 0,
+        "trivial": 1,
+        "moderate": 0
+      },
+      "confidence": 1,
+      "threshold": 3.5,
+      "action": "stay_on_generator",
+      "catalogue_version": "2026-10-18.1",
+      "decider": "degraded",
+      "state": {
+        "user_message": "list my notes",
+        "surface": "cli",
+        "recent": [],
+        "goal": null,
+        "entities": {},
+        "step": 0,
+        "last_tool_result": null,
+        "generator": "gen-small local, 8k"
+      },
+      "question": {
+        "kind": "score",
+        "instructions": "How hard is this for a small local model?",
+        "options": [
+          {
+            "name": "trivial"
+          },
+          {
+            "name": "easy"
+          },
+          {
+            "name": "moderate"
+          },
+          {
+            "name": "hard"
+          },
+          {
+            "name": "needs a frontier model"
+          }
+        ]
+      },
+      "calibrated": false
+    },
+    {
+      "type": "decision",
+      "decision_id": "f7c741effb7c4c79a60903e2020fb23e",
+      "question_id": "intent",
+      "probabilities": {
+        "ask_clarifying_question": 0.2,
+        "answer_directly": 0.2,
+        "recall_memory": 0.2,
+        "run_skill": 0.2,
+        "use_tools": 0.2
+      },
+      "confidence": 0,
+      "threshold": 0.05,
+      "action": "generator_with_full_shortlist",
+      "catalogue_version": "2026-10-18.1",
+      "decider": "degraded",
+      "state": {
+        "user_message": "list my notes",
+        "surface": "cli",
+        "recent": [],
+        "goal": null,
+        "entities": {},
+        "step": 0,
+        "last_tool_result": null,
+        "generator": "gen-small local, 8k"
+      },
+      "question": {
+        "kind": "choice",
+        "instructions": "What does the user need right now?",
+        "options": [
+          {
+            "name": "answer_directly",
+            "description": "reply from what is already known, without tools"
+          },
+          {
+            "name": "use_tools",
+            "description": "run one or more tools to act or look something up"
+          },
+          {
+            "name": "recall_memory",
+            "description": "look up something remembered from earlier conversations"
+          },
+          {
+            "name": "run_skill",
+            "description": "follow a saved multi-step procedure"
+          },
+          {
+            "name": "ask_clarifying_question",
+            "description": "the request is ambiguous; ask the user one question first"
+          }
+        ]
+      },
+      "calibrated": false
+    },
+    {
+      "type": "decision",
+      "decision_id": "1cc516978c814bc7aa3c63bc7b40f904",
+      "question_id": "tool",
+      "probabilities": {
+        "none": 8.422901450746474E-09,
+        "clear_notes": 4.757270026605418E-05,
+        "list_notes": 0.9970017733524065,
+        "add_note": 0.0029506455244259046
+      },
+      "confidence": 0.9960023644698753,
+      "threshold": 0.05,
+      "action": "offer_tool:list_notes",
+      "catalogue_version": "2026-10-18.1",
+      "decider": "degraded",
+      "state": {
+        "user_message": "list my notes",
+        "surface": "cli",
+        "recent": [],
+        "goal": null,
+        "entities": {},
+        "step": 0,
+        "last_tool_result": null,
+        "generator": "gen-small local, 8k"
+      },
+      "question": {
+        "kind": "choice",
+        "instructions": "Which tool should run first?",
+        "options": [
+          {
+            "name": "list_notes",
+            "description": "List saved notes, oldest first."
+          },
+          {
+            "name": "add_note",
+            "description": "Save a note for later."
+          },
+          {
+            "name": "clear_notes",
+            "description": "Delete every saved note."
+          },
+          {
+            "name": "none",
+            "description": "no tool is needed"
+          }
+        ]
+      },
+      "calibrated": false
+    },
+    {
+      "type": "tool_call_issued",
+      "call_id": "call-1",
+      "tool_name": "list_notes",
+      "arguments": {
+        "limit": 5
+      }
+    },
+    {
+      "type": "tool_result",
+      "call_id": "call-1",
+      "result": "buy milk",
+      "is_error": false
+    },
+    {
+      "type": "decision_outcome_recorded",
+      "decision_id": "1cc516978c814bc7aa3c63bc7b40f904",
+      "outcome": "tool_succeeded"
+    },
+    {
+      "type": "decision",
+      "decision_id": "26a4d21f7b1542e1b5fb132e83fd6b50",
+      "question_id": "done",
+      "probabilities": {
+        "no": 0,
+        "yes": 1
+      },
+      "confidence": 1,
+      "threshold": 0.8,
+      "action": "stop",
+      "catalogue_version": "2026-10-18.1",
+      "decider": "degraded",
+      "state": {
+        "user_message": "list my notes",
+        "surface": "cli",
+        "recent": [
+          "called list_notes",
+          "list_notes returned"
+        ],
+        "goal": null,
+        "entities": {},
+        "step": 1,
+        "last_tool_result": "list_notes: buy milk",
+        "generator": "gen-small local, 8k"
+      },
+      "question": {
+        "kind": "noul",
+        "instructions": "Is the user's request fully handled?",
+        "options": [
+          {
+            "name": "yes"
+          },
+          {
+            "name": "no"
+          }
+        ]
+      },
+      "calibrated": false
+    },
+    {
+      "type": "decision",
+      "decision_id": "aa5772e8042f463b8f1104e672374097",
+      "question_id": "stuck",
+      "probabilities": {
+        "no": 1,
+        "yes": 0
+      },
+      "confidence": 1,
+      "threshold": 0.7,
+      "action": "continue",
+      "catalogue_version": "2026-10-18.1",
+      "decider": "degraded",
+      "state": {
+        "user_message": "list my notes",
+        "surface": "cli",
+        "recent": [
+          "called list_notes",
+          "list_notes returned"
+        ],
+        "goal": null,
+        "entities": {},
+        "step": 1,
+        "last_tool_result": "list_notes: buy milk",
+        "generator": "gen-small local, 8k"
+      },
+      "question": {
+        "kind": "noul",
+        "instructions": "Is the agent repeating itself or making no progress?",
+        "options": [
+          {
+            "name": "yes"
+          },
+          {
+            "name": "no"
+          }
+        ]
+      },
+      "calibrated": false
+    },
+    {
+      "type": "decision",
+      "decision_id": "dd9dd22309144fe39a9d392330944de5",
+      "question_id": "tool",
+      "probabilities": {
+        "none": 8.422901450746474E-09,
+        "clear_notes": 4.757270026605418E-05,
+        "list_notes": 0.9970017733524065,
+        "add_note": 0.0029506455244259046
+      },
+      "confidence": 0.9960023644698753,
+      "threshold": 0.05,
+      "action": "offer_tool:list_notes",
+      "catalogue_version": "2026-10-18.1",
+      "decider": "degraded",
+      "state": {
+        "user_message": "list my notes",
+        "surface": "cli",
+        "recent": [
+          "called list_notes",
+          "list_notes returned"
+        ],
+        "goal": null,
+        "entities": {},
+        "step": 1,
+        "last_tool_result": "list_notes: buy milk",
+        "generator": "gen-small local, 8k"
+      },
+      "question": {
+        "kind": "choice",
+        "instructions": "Which tool should run first?",
+        "options": [
+          {
+            "name": "list_notes",
+            "description": "List saved notes, oldest first."
+          },
+          {
+            "name": "add_note",
+            "description": "Save a note for later."
+          },
+          {
+            "name": "clear_notes",
+            "description": "Delete every saved note."
+          },
+          {
+            "name": "none",
+            "description": "no tool is needed"
+          }
+        ]
+      },
+      "calibrated": false
+    },
+    {
+      "type": "assistant_message",
+      "text": "One note: buy milk."
+    }
+  ],
+  "checks": [
+    {
+      "through": 12,
+      "expected": {
+        "head": 12,
+        "goal": null,
+        "todos": [],
+        "transcript": [
+          {
+            "from": 1,
+            "through": 1,
+            "event": {
+              "type": "user_message",
+              "text": "list my notes"
+            }
+          },
+          {
+            "from": 6,
+            "through": 6,
+            "event": {
+              "type": "tool_call_issued",
+              "call_id": "call-1",
+              "tool_name": "list_notes",
+              "arguments": {
+                "limit": 5
+              }
+            }
+          },
+          {
+            "from": 7,
+            "through": 7,
+            "event": {
+              "type": "tool_result",
+              "call_id": "call-1",
+              "result": "buy milk",
+              "is_error": false
+            }
+          },
+          {
+            "from": 12,
+            "through": 12,
+            "event": {
+              "type": "assistant_message",
+              "text": "One note: buy milk."
+            }
+          }
+        ],
+        "pending_approvals": [],
+        "model_profiles": [],
+        "decisions": [
+          {
+            "decision": {
+              "type": "decision",
+              "decision_id": "0bd0674eae10423a9fab2dcbfc4de744",
+              "question_id": "clarify",
+              "probabilities": {
+                "no": 1,
+                "yes": 0
+              },
+              "confidence": 1,
+              "threshold": 0.7,
+              "action": "proceed",
+              "catalogue_version": "2026-10-18.1",
+              "decider": "degraded",
+              "state": {
+                "user_message": "list my notes",
+                "surface": "cli",
+                "recent": [],
+                "goal": null,
+                "entities": {},
+                "step": 0,
+                "last_tool_result": null,
+                "generator": "gen-small local, 8k"
+              },
+              "question": {
+                "kind": "noul",
+                "instructions": "Is the request too ambiguous to act on without asking the user one question?",
+                "options": [
+                  {
+                    "name": "yes"
+                  },
+                  {
+                    "name": "no"
+                  }
+                ]
+              },
+              "calibrated": false
+            },
+            "outcome": null
+          },
+          {
+            "decision": {
+              "type": "decision",
+              "decision_id": "1cc516978c814bc7aa3c63bc7b40f904",
+              "question_id": "tool",
+              "probabilities": {
+                "none": 8.422901450746474E-09,
+                "clear_notes": 4.757270026605418E-05,
+                "list_notes": 0.9970017733524065,
+                "add_note": 0.0029506455244259046
+              },
+              "confidence": 0.9960023644698753,
+              "threshold": 0.05,
+              "action": "offer_tool:list_notes",
+              "catalogue_version": "2026-10-18.1",
+              "decider": "degraded",
+              "state": {
+                "user_message": "list my notes",
+                "surface": "cli",
+                "recent": [],
+                "goal": null,
+                "entities": {},
+                "step": 0,
+                "last_tool_result": null,
+                "generator": "gen-small local, 8k"
+              },
+              "question": {
+                "kind": "choice",
+                "instructions": "Which tool should run first?",
+                "options": [
+                  {
+                    "name": "list_notes",
+                    "description": "List saved notes, oldest first."
+                  },
+                  {
+                    "name": "add_note",
+                    "description": "Save a note for later."
+                  },
+                  {
+                    "name": "clear_notes",
+                    "description": "Delete every saved note."
+                  },
+                  {
+                    "name": "none",
+                    "description": "no tool is needed"
+                  }
+                ]
+              },
+              "calibrated": false
+            },
+            "outcome": "tool_succeeded"
+          },
+          {
+            "decision": {
+              "type": "decision",
+              "decision_id": "26a4d21f7b1542e1b5fb132e83fd6b50",
+              "question_id": "done",
+              "probabilities": {
+                "no": 0,
+                "yes": 1
+              },
+              "confidence": 1,
+              "threshold": 0.8,
+              "action": "stop",
+              "catalogue_version": "2026-10-18.1",
+              "decider": "degraded",
+              "state": {
+                "user_message": "list my notes",
+                "surface": "cli",
+                "recent": [
+                  "called list_notes",
+                  "list_notes returned"
+                ],
+                "goal": null,
+                "entities": {},
+                "step": 1,
+                "last_tool_result": "list_notes: buy milk",
+                "generator": "gen-small local, 8k"
+              },
+              "question": {
+                "kind": "noul",
+                "instructions": "Is the user's request fully handled?",
+                "options": [
+                  {
+                    "name": "yes"
+                  },
+                  {
+                    "name": "no"
+                  }
+                ]
+              },
+              "calibrated": false
+            },
+            "outcome": null
+          },
+          {
+            "decision": {
+              "type": "decision",
+              "decision_id": "26d501466eb44f378854a022b247f73b",
+              "question_id": "difficulty",
+              "probabilities": {
+                "easy": 0,
+                "hard": 0,
+                "needs a frontier model": 0,
+                "trivial": 1,
+                "moderate": 0
+              },
+              "confidence": 1,
+              "threshold": 3.5,
+              "action": "stay_on_generator",
+              "catalogue_version": "2026-10-18.1",
+              "decider": "degraded",
+              "state": {
+                "user_message": "list my notes",
+                "surface": "cli",
+                "recent": [],
+                "goal": null,
+                "entities": {},
+                "step": 0,
+                "last_tool_result": null,
+                "generator": "gen-small local, 8k"
+              },
+              "question": {
+                "kind": "score",
+                "instructions": "How hard is this for a small local model?",
+                "options": [
+                  {
+                    "name": "trivial"
+                  },
+                  {
+                    "name": "easy"
+                  },
+                  {
+                    "name": "moderate"
+                  },
+                  {
+                    "name": "hard"
+                  },
+                  {
+                    "name": "needs a frontier model"
+                  }
+                ]
+              },
+              "calibrated": false
+            },
+            "outcome": null
+          },
+          {
+            "decision": {
+              "type": "decision",
+              "decision_id": "aa5772e8042f463b8f1104e672374097",
+              "question_id": "stuck",
+              "probabilities": {
+                "no": 1,
+                "yes": 0
+              },
+              "confidence": 1,
+              "threshold": 0.7,
+              "action": "continue",
+              "catalogue_version": "2026-10-18.1",
+              "decider": "degraded",
+              "state": {
+                "user_message": "list my notes",
+                "surface": "cli",
+                "recent": [
+                  "called list_notes",
+                  "list_notes returned"
+                ],
+                "goal": null,
+                "entities": {},
+                "step": 1,
+                "last_tool_result": "list_notes: buy milk",
+                "generator": "gen-small local, 8k"
+              },
+              "question": {
+                "kind": "noul",
+                "instructions": "Is the agent repeating itself or making no progress?",
+                "options": [
+                  {
+                    "name": "yes"
+                  },
+                  {
+                    "name": "no"
+                  }
+                ]
+              },
+              "calibrated": false
+            },
+            "outcome": null
+          },
+          {
+            "decision": {
+              "type": "decision",
+              "decision_id": "dd9dd22309144fe39a9d392330944de5",
+              "question_id": "tool",
+              "probabilities": {
+                "none": 8.422901450746474E-09,
+                "clear_notes": 4.757270026605418E-05,
+                "list_notes": 0.9970017733524065,
+                "add_note": 0.0029506455244259046
+              },
+              "confidence": 0.9960023644698753,
+              "threshold": 0.05,
+              "action": "offer_tool:list_notes",
+              "catalogue_version": "2026-10-18.1",
+              "decider": "degraded",
+              "state": {
+                "user_message": "list my notes",
+                "surface": "cli",
+                "recent": [
+                  "called list_notes",
+                  "list_notes returned"
+                ],
+                "goal": null,
+                "entities": {},
+                "step": 1,
+                "last_tool_result": "list_notes: buy milk",
+                "generator": "gen-small local, 8k"
+              },
+              "question": {
+                "kind": "choice",
+                "instructions": "Which tool should run first?",
+                "options": [
+                  {
+                    "name": "list_notes",
+                    "description": "List saved notes, oldest first."
+                  },
+                  {
+                    "name": "add_note",
+                    "description": "Save a note for later."
+                  },
+                  {
+                    "name": "clear_notes",
+                    "description": "Delete every saved note."
+                  },
+                  {
+                    "name": "none",
+                    "description": "no tool is needed"
+                  }
+                ]
+              },
+              "calibrated": false
+            },
+            "outcome": null
+          },
+          {
+            "decision": {
+              "type": "decision",
+              "decision_id": "f7c741effb7c4c79a60903e2020fb23e",
+              "question_id": "intent",
+              "probabilities": {
+                "ask_clarifying_question": 0.2,
+                "answer_directly": 0.2,
+                "recall_memory": 0.2,
+                "run_skill": 0.2,
+                "use_tools": 0.2
+              },
+              "confidence": 0,
+              "threshold": 0.05,
+              "action": "generator_with_full_shortlist",
+              "catalogue_version": "2026-10-18.1",
+              "decider": "degraded",
+              "state": {
+                "user_message": "list my notes",
+                "surface": "cli",
+                "recent": [],
+                "goal": null,
+                "entities": {},
+                "step": 0,
+                "last_tool_result": null,
+                "generator": "gen-small local, 8k"
+              },
+              "question": {
+                "kind": "choice",
+                "instructions": "What does the user need right now?",
+                "options": [
+                  {
+                    "name": "answer_directly",
+                    "description": "reply from what is already known, without tools"
+                  },
+                  {
+                    "name": "use_tools",
+                    "description": "run one or more tools to act or look something up"
+                  },
+                  {
+                    "name": "recall_memory",
+                    "description": "look up something remembered from earlier conversations"
+                  },
+                  {
+                    "name": "run_skill",
+                    "description": "follow a saved multi-step procedure"
+                  },
+                  {
+                    "name": "ask_clarifying_question",
+                    "description": "the request is ambiguous; ask the user one question first"
+                  }
+                ]
+              },
+              "calibrated": false
+            },
+            "outcome": null
+          }
+        ],
+        "checkpoints": [],
+        "issues": []
+      }
+    }
+  ]
+}

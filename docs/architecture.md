@@ -1,4 +1,4 @@
-# Agent foundation (C-001, C-002, C-004a, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-021)
+# Agent foundation (C-001, C-002, C-004a, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-021)
 
 The solution contains `Corvid.Abstractions`, `Corvid.Kernel`, and
 `Corvid.Models`, alongside the working Vault projects. Kernel and Models each
@@ -16,7 +16,9 @@ C-008 added `Corvid.Memory`, which references Abstractions, Fabric, `Microsoft.D
 decision export to `evals/Corvid.Evals`, and the `corvid-evals` console in `evals/Corvid.Evals.Calibrate` (see
 [Calibration and decision export](#calibration-and-decision-export-c-021)).
 C-007b added `Corvid.Approvals`, which references Abstractions, Fabric, Tools and Sandbox and no
-package of its own (see [Approvals](#approvals-c-007b)). Add
+package of its own (see [Approvals](#approvals-c-007b)). C-011 made `Corvid.Kernel` the integration point: it now references
+Approvals, Fabric, Memory, Models and Tools as well, for the session actor, the turn loop and the device scheduler (see
+[Session actor and turn loop](#session-actor-and-turn-loop-c-011)). Add
 the other projects from the agent plan as their implementations start, rather
 than creating empty projects for every future surface.
 
@@ -30,7 +32,9 @@ than creating empty projects for every future surface.
   context (snake_case, payload version 1) and `SessionProjection`. Abstractions and
   Kernel set `IsAotCompatible`, so the trim and AOT analyzers run on them.
 - The log is one SQLite file (WAL, `synchronous=FULL`) with one row per event,
-  keyed by session and a one-based sequence. Triggers reject `UPDATE` and `DELETE`.
+  keyed by session and a one-based sequence. Connections are pooled (C-011): with one connection per operation and no
+  pool, each append closed the file's last connection and SQLite checkpointed the WAL on that close, so an append cost
+  6.8 ms against 2.3 ms pooled on the development machine (a head read 0.35 ms against 0.03 ms). Commits still fsync. Triggers reject `UPDATE` and `DELETE`.
   `Append` takes the expected head, writes a whole batch or nothing, and throws
   `EventLogConflictException` when another writer got there first. A session
   actor is expected to be the single writer; the check keeps a second writer
@@ -46,9 +50,8 @@ than creating empty projects for every future surface.
   reported in `SessionSnapshot.Issues` rather than thrown, because an append-only
   log cannot repair them and the session must stay readable.
 
-Not built yet: the session actor and its command channel, rendering a projection
-into a model prompt, branch and fork
-sessions that copy a prefix, and schema migrations beyond version 1. SQLite calls
+C-011 added the session actor and prompt rendering (see [Session actor and turn loop](#session-actor-and-turn-loop-c-011)).
+Not built yet: branch and fork sessions that copy a prefix, and schema migrations beyond version 1. SQLite calls
 are synchronous; callers that must not block should use a storage worker.
 
 ## Golden trajectories and replay (C-009)
@@ -144,8 +147,8 @@ de-escalation rule of §6. It depends only on Abstractions and
 
 Not built yet: compaction and expansion on a budget change (the hook only
 reports the direction), per-request redaction (§10.4), re-rendering the
-projection for the new model's format, starting memory's re-embed job when
-`embedder.text` switches (§4.3; the job itself is C-008's `MemoryVectors`), restoring current bindings and pins from the log on resume (pins
+projection for the new model's format (the turn loop renders `IChatClient` messages for every model; Anthropic cache
+breakpoints come with C-015), restoring current bindings and pins from the log on resume (pins
 are not persisted), recording switch costs for `/insights`, and the
 media-embedder contract.
 
@@ -183,7 +186,8 @@ media-embedder contract.
   throws `ArgumentException`, nothing is truncated). Extraction is blocking native work,
   so it runs on a `TaskScheduler` given at creation, the thread pool by default; the
   device scheduler (C-011) will supply its own. Starling's embedders run on the calling
-  thread and return completed tasks.
+  thread and return completed tasks. C-011's `DeviceScheduler.GetTaskScheduler(priority)` is the scheduler to give the
+  extractor; the embedders and the Qwen client are wrapped with `DeviceScheduling.Schedule` instead.
 - `Qwen35TokenCounter` implements `ITokenCounter` (Corvid.Abstractions/Tokens) with
   Qwen's own tokenizer, loaded from the model's `tokenizer.json` without the ONNX graph.
   It counts text; counting a rendered conversation before a call is not built, and the
@@ -212,8 +216,8 @@ Not built yet: CUDA placement (switch the native package to
 make placement per binding; plan §4.4 puts the generator on the 3090), the Kev decider
 adapter (C-004b, waiting for `Starlings.Models.Kev` on nuget.org), media embeddings
 (`embedder.media`), the fp16x Qwen variant, batch extraction, label descriptions,
-conversation-level token counting before a call, the `corvid doctor` command itself
-(C-013), and the device scheduler (C-011).
+conversation-level token counting before a call, and the `corvid doctor` command itself
+(C-013). The device scheduler is C-011's; wiring it to these bindings is the host's (C-013).
 
 ## Dependency rules
 
@@ -236,6 +240,9 @@ conversation-level token counting before a call, the `corvid doctor` command its
 - `Corvid.Approvals` references `Corvid.Fabric` (`risk` is a fabric gate), `Corvid.Tools` (`ToolRisk`) and
   `Corvid.Sandbox` (`BuiltInDenials`, so the hardline list and the sandbox protect the same paths). It parses
   bash itself (decision D-5); the boundary tests keep tree-sitter bindings out of it.
+- `Corvid.Kernel` composes the other core libraries for the turn loop (C-011): Approvals, Fabric, Memory, Models and
+  Tools. None of them may reference Kernel (the compiler rejects the cycle); Models and Memory read the log through
+  `IEventLog`. Kernel is still a core library: adapters reach it only through the contracts the host binds to slots.
 - Provider SDKs and Starling model packages belong in `Corvid.Models.*` adapters.
   Adapters may reference core projects. ONNX Runtime and ONNX Runtime GenAI natives
   (and their managed packages) come only through adapters; a core project that
@@ -354,7 +361,7 @@ unchanged.
   `ExceedsHardStop`. Counting goes through `ITokenCounter`
   (`Corvid.Abstractions.Tokens`, shared with C-010); the default is characters /
   4, rounded up. A model's own counter, such as the Qwen generator binding's, can
-  be passed in, but nothing wires one yet.
+  be passed in; the turn loop (C-011) passes the generator's (`GetService(typeof(ITokenCounter))`).
 - `DegradedDecider` (§5.6): choices by cosine similarity between the rendered state
   (`key: value` lines, as Kev reads JSON) and each option, in one embedding batch
   per request; Noul questions by asking the generator for `yes` or `no` (leading
@@ -384,10 +391,9 @@ unchanged.
   are omitted when null, so events written before C-004a keep their persisted form
   and still read. C-021 added three more, `state`, `question` and `calibrated`, the same way.
 
-Not built yet: the Kev adapter and the two-tier escalation to Kev-4B (C-004b, which
-waits for the package); wiring a model's token counter into the builder; GLiNER2 entities and the
-embedding shortlist that feed the state and the `tool` and `skill` options (§5.4,
-C-010, C-011); the `remember` durability score; the `tool` question's
+C-011 added `ToolShortlist` (see [Session actor and turn loop](#session-actor-and-turn-loop-c-011)) and feeds the state
+the extractor's entities. Not built yet: the Kev adapter and the two-tier escalation to Kev-4B (C-004b, which
+waits for the package); the `skill` options (C-017); the `remember` durability score; the `tool` question's
 below-floor variant that escalates on the 0.8B generator (the caller's choice for
 now); generator logprobs as a Noul confidence (`IChatClient` has no logprobs
 surface); per-question row budgets (1,000 tokens), which the Kev adapter enforces
@@ -552,8 +558,8 @@ Not built yet: sqlite-vec (no first-party .NET package; it would replace the sca
 (`IExtractor` returns spans, so relations come only from callers) and entity aliasing; fact
 deduplication and merging; media memory (§9.4); local-only facts and egress filtering of
 retrieved memory (C-015); the `/memory pending` command and the `memory` tool (C-012, C-013);
-running indexing and the re-embed job on the device scheduler (C-011); and the `remember` gate
-that starts a write at egress (the caller's job, C-011).
+and running `EpisodicIndex.CatchUp` after each turn (the host's job, C-013). C-011 starts the re-embed job when
+`embedder.text` switches and the write path when `remember` acts at egress.
 
 ## Calibration and decision export (C-021)
 
@@ -642,8 +648,9 @@ corvid-evals export-trajectories --log events.db --out trajectories.jsonl
 
 Not built yet: the `corvid evals` verb (C-013); Kev-0.8B against Kev-4B agreement (C-004b); fitting the degraded
 margin (the margin is not recorded); recording the caller's conditions and the permissive mode, which would make replay
-exact; a canonical outcome vocabulary written by the turn loop (C-011), and with it an acted-only fit or per-question
-outcome semantics; opening a live or read-only copied log without the log's write-mode setup (`SqliteEventLog` switches
+exact; outcomes for questions other than `tool`, `risk` and `memory_op` (C-011 records `tool_succeeded` and
+`tool_failed` on the `tool` decision that picked the tool), and with them an acted-only fit or per-question outcome
+semantics; opening a live or read-only copied log without the log's write-mode setup (`SqliteEventLog` switches
 the file to WAL on open); the system prompt and tool schemas in exported trajectories; and replaying recorded states
 against a new decider model.
 
@@ -651,7 +658,7 @@ against a new decider model.
 
 `Corvid.Approvals` (core, `IsAotCompatible`) implements plan §10.2, the approval half of §10.1, the taint
 inputs of §10.3 and the `risk` row of §5.3. It references Abstractions, Fabric, Tools and Sandbox and no
-package. Nothing calls it yet: the turn loop (C-011) and the shell tool (C-012) will.
+package. The turn loop (C-011) calls it for every side-effecting tool; the shell tool (C-012) will too.
 
 - Parser (decision D-5): `ShellParser` is hand-written for the subset Corvid permits: lists (`;`, newline,
   `&&`, `||`, `&`), pipelines, simple commands with prefix assignments, single, double and `$'...'` quotes,
@@ -709,7 +716,9 @@ package. Nothing calls it yet: the turn loop (C-011) and the shell tool (C-012) 
   for every side effect without asking the fabric; `Smart` runs a calibrated level 0–1 only when every path
   is inside the workspace and there is no network, elevation, system change or destructive tool;
   `Permissive` follows the fabric (0–1 run, 2–4 ask).
-- Asking: `AuthorizeAsync` appends `ApprovalRequested` (the action as JSON and the reasons), asks the
+- Asking: `AuthorizeAsync` appends `ApprovalRequested` (the action as JSON, the reasons and, since C-011, the
+  `ApprovalContext.CallId` of the tool call waiting on it: an optional `call_id`, omitted when null, so older events keep
+  their persisted form), asks the
   `IApprovalPrompter` with a deadline (`ApprovalOptions.Timeout`, five minutes) and appends
   `ApprovalResolved`: approved, denied, timed out, failed or cancelled, all but approval deny. The user's
   answer is recorded as the `risk` decision's outcome for calibration. With no prompter, or
@@ -731,14 +740,126 @@ package. Nothing calls it yet: the turn loop (C-011) and the shell tool (C-012) 
   variables ask. None runs automatically.
 
 Not built yet: GLiNER2 extraction of free-form targets (SQL, `curl` data, `kill` targets), which waits for
-spike S3; calibrated `risk` (C-004b); calling the pipeline from the turn loop and the shell tool (C-011,
-C-012); reversibility from checkpoint state (C-014; `ApprovalContext.Reversible` is passed through);
+spike S3; calibrated `risk` (C-004b); calling the pipeline from the shell tool (C-012); reversibility from checkpoint state (C-014; `ApprovalContext.Reversible` is passed through);
 restoring session rules on resume (they are not in the log); listing and removing always-rules
 (`/approvals`, C-013), and where the host keeps the rule file; control flow, subshells and other syntax
 outside the subset, which ask rather than run; unwrapping further launchers (`strace`, `nsenter`, `unshare`,
 `runuser`, `systemd-run`, `script -c`, `at`, `parallel`, ...), which today are programs that run code Corvid
 cannot see, so they ask unless a calibrated `risk` answer allows them, and the hardline list does not see the
 command they launch; symlinks and `/proc/<pid>/cwd` paths, which are resolved lexically and left to the sandbox.
+
+## Session actor and turn loop (C-011)
+
+Plan §3.2, §3.3, §5.2, §5.4, §6, §7, §8 levers 1–2 (lever 2 has nothing to drop until skills exist) and §10.3. The code is
+in `Corvid.Kernel` (`Sessions`, `Turns`, `Scheduling`), `Corvid.Fabric` (`ToolShortlist`) and
+`Corvid.Abstractions/Sessions` (`Envelope`). Kernel now references Approvals, Fabric, Memory, Models and Tools; none of
+them references Kernel, and no package was added, so the checker's allowlist is unchanged. Everything runs on `IDecider`
+with the degraded tier; nothing here references a Starling or provider package. There is no host yet (C-013), so the
+composition below is what tests do and what `Corvid.Host` will do.
+
+- Envelopes and actors: surfaces post an `Envelope` (session, surface, text, origin `user` or `external`, optional message
+  id) to `SessionHost.PostAsync`, a bounded channel (default 64) that waits when full. One router hands each envelope to
+  its session's `SessionActor`, created on first use, and waits while that session already holds
+  `MaxPendingMessages` (16): the backpressure surfaces see. A session that stops draining holds up routing for all.
+  Each actor reads a single-reader `Channel<SessionCommand>`: submit, cancel the running turn, switch a model, turn
+  finished. The loop owns the queue of messages and the running turn; it starts each turn as a task and keeps reading, so
+  a cancel or a `/model` switch is handled while a turn waits on a model or an approval prompt. Turns run one at a time in
+  arrival order, and each finished turn (or the exception that ended it) goes to an `IDeliverySink`. Cancellation is one
+  token per turn, linked to the actor's lifetime, passed to every model, tool, approval and log call.
+- A turn (`TurnRunner`): append `UserMessage`; extract entities from the user message when an extractor is bound
+  (labels person, organization, place, date, time, project, file, url); rank the tool shortlist; ask the ingress
+  checkpoint as one `DecisionFabric.DecideAsync` (intent, difficulty, clarify, `needs_recall` when a retriever is bound,
+  and `tool` over the shortlist plus `none`) on one TurnState. The TurnState is built per checkpoint with the generator
+  binding's own `ITokenCounter` when it offers one, the log's recent entries as one-liners, the goal, the entities, the
+  step and the last tool result. `clarify` (or `intent: ask_clarifying_question`) makes the answer one question;
+  `needs_recall` runs hybrid retrieval into the system prompt (below its floor, the top three facts only); `difficulty`
+  above its floor escalates (never in the degraded tier, which only logs a heuristic).
+- Generation (§7): a confident `tool` pick offers exactly that schema, `none` offers no tools, below the floor the
+  shortlist is offered (`intent: answer_directly` above its floor also offers none). The prompt is the projection rendered
+  by `PromptRenderer`: system prompt (with the frozen core blocks, local-only ones left out for cloud generators, and any
+  recalled memory), user and assistant text, calls as `FunctionCallContent` (consecutive calls in one assistant message),
+  results as `FunctionResultContent`, compaction summaries as notes. Each call is validated before it is logged: the
+  name must be one offered, the arguments must fit the generator's JSON Schema subset (`required`, `type` lists with null,
+  `enum`, array `items`; unknown names are errors, because the binder would drop them), and, once per turn, slot
+  pre-fill: the tool's free-text parameters become extractor labels (their descriptions), and a span at least 0.8
+  confident that the argument omits or contradicts is shown beside it. An invalid call is logged as `ToolCallIssued` with
+  an error `ToolResult` right after it (details, the expected schema and the extracted values: the repair message). A `ToolArgumentException` from the
+  tool's own binding counts the same. A second failed response escalates the generator through C-006
+  (`EscalateAsync`); with nowhere to go the turn fails with a message. No-op detection: when the first response with tools
+  on offer calls none, a step checkpoint asks `done` and `tool`; if `done` is below its floor and `tool` picks a tool, the
+  generator is asked again for that tool only (the narration is not logged), with `ChatToolMode.RequireSpecific` on a
+  `native` tool-call profile and an instruction otherwise (Starling's template-rendered Qwen rejects required modes).
+- Execution: read-only calls in one response run in parallel, side-effecting ones one at a time in order (§3.3). Each
+  valid call takes its lease before its `ToolCallIssued` is appended, so no issued call ever waits without one (a
+  response's calls may therefore alternate with their results in the log). A
+  read-only call is tracked with `TrackToolCall`. A side-effecting call is parked (`ParkToolCall`) and goes through
+  `ApprovalPipeline.AuthorizeAsync`, the pre-execute checkpoint, with the turn's taint, known recipients and its call id;
+  a denial, timeout or refusal is logged as an error result while still parked, and an approval moves it to tracked with
+  the new `SessionModelSlots.RunParkedToolCall`, so a concurrent switch never sees it as neither. Without an approval
+  pipeline side effects are refused, never run. Every result is appended before the lease is released, and a cancelled
+  turn appends an error result for each open call, so a later switch finds no orphan. The `tool` decision that picked a
+  tool gets `tool_succeeded` or `tool_failed` (C-021's vocabulary) when that tool's call finishes.
+- Step checkpoint after each round of results: `done`, `stuck`, `tool`, `clear_results/<call>` for each full result
+  older than the last two (at most eight per step, each with the old result as its instructions) and `injection/<call>`
+  for each network tool's result this round. `done` above its floor makes the next call tool-free; `stuck` escalates, or
+  finishes tool-free with status `stuck`; `tool` sets the next offer. The step budget (8 responses with calls) ends the
+  turn with a tool-free answer.
+- Result clearing (§8 lever 1): `PromptRenderer` stubs results from the log alone, so a resumed session renders the same
+  prompt. A `clear_results` decision of `apply:stub` or its below-floor `stub_older_than_last_2` stubs the result
+  (`[cleared: list_notes result, 1.2 KB; re-run or see event 14]`, citing the event sequence that holds it); `apply:drop`
+  leaves a shorter stub; clearing only narrows. Then, while the prompt (with the offered tools' schemas) is over the
+  generator profile's accepted context minus the completion (1,024) and a reserve (256), the oldest full results are
+  stubbed, sparing the latest round, then all but the newest. Still over: escalate, or fail the turn. Compaction (§8
+  lever 3) is C-016.
+- Taint (§10.3): an envelope from the user clears it, an `external` one sets it, and any result of a tool with
+  `[Network]` sets it (a page, and a webhook's response alike). It holds across turns until the user speaks and is passed
+  to every approval, so network egress and new recipients ask whatever `risk` says. `injection` adds a decision per
+  network result; without Kev it takes `treat_as_tainted`.
+- Egress: the answer is appended as `AssistantMessage`, then `remember` (when a memory writer is bound) and `deliver`
+  (when `AskDeliver`, for gateways) are asked together. `remember` above its floor sends the user message into
+  `MemoryWriter.WriteAsync`, which without Kev stages it (`MemoryWritten` `staged`). Last, `CompleteTurnAsync`
+  de-escalates unpinned slots. Every answer at every checkpoint is a `Decision` event through the fabric.
+- `ToolShortlist` (Fabric, over plain `ShortlistItem`s so Fabric does not reference Tools): hard filters first (the
+  caller's predicate: toolsets, platform, availability), then each item embedded once per embedder instance as
+  `name: description` plus one vector per example request (multi-vector), scored by the best cosine with the query, plus a
+  recency boost of 0.1 halving every 3 uses since its last call in the session, top 5. An embedder failure returns the
+  filtered items unranked. Vectors are cached per embedder instance, so switching `embedder.text` starts a new cache. C-005
+  has no examples file yet, so `TurnOptions.ToolExamples` supplies them.
+- Device scheduler (§3.3): `DeviceScheduler` per device (`cpu`, `cuda:0`) with dedicated threads (one by default) and
+  four FIFO queues, interactive generator, fabric, subagent, background; the highest non-empty queue runs next, and
+  running work is not pre-empted. `RunAsync` completes with continuations forced off the device;
+  `GetTaskScheduler(priority)` is what `Gliner2Extractor` takes (a test runs it there), and tasks completed on it do not
+  inline awaiters on the device thread. `DeviceScheduling.Schedule` wraps an `IChatClient` (each streaming step too), an
+  embedder, a decider or an extractor so its calls start on the device at one priority; the host wraps the generator at
+  interactive for the turn and at fabric for the degraded decider's yes/no questions, and memory's embedders at
+  background. Work must not wait synchronously for other work on the same device.
+- Model switches and memory: `SessionActor.SwitchModelAsync` runs C-006's switch beside the turn (it waits for running
+  calls, not parked ones). A switch of `embedder.text` starts `EmbedderSwapJob`: `MemoryVectors.BeginSwap(profile id)`,
+  then `ReembedAsync` batches until the swap completes or a batch makes no progress. `MemoryVectors` must be built with
+  every `embedder.text` binding the registry lists, keyed by profile id.
+- Events: `ApprovalRequested` gained an optional `call_id` (see [Approvals](#approvals-c-007b)). Nothing else changed in
+  the persisted format.
+- Tests: `tests/Corvid.Kernel.Tests` drive real turns on the SQLite log with a scripted fake generator (which also
+  answers the degraded decider's yes/no questions), a keyword embedder, fake extractors and prompters, C-005's generated
+  fixture tools and hand-written tools: confident and unconfident picks and `none`, repair, escalation and de-escalation,
+  failure with nowhere to escalate, binding failures, approval ask, deny and timeout, refusal without a pipeline, taint
+  from fetched content and from an external envelope forcing approval under a calibrated level-0 `risk` in permissive
+  mode, no-op detection on template and native profiles, slot pre-fill, entities in the state, the token counter,
+  clarify, the step budget, stuck, result clearing, cancellation with a switch afterwards, parallel read-only calls, the
+  egress write path, actor ordering, a switch while a call is parked at a prompt, cancellation mid-turn, backpressure,
+  the re-embed job, the device scheduler, rendering, validation and value conversion. `evals/golden/turn-read-only-tool`
+  and `turn-repair-then-approval` were recorded from the loop; `GoldenTurnTests` checks the loop still produces them (ids
+  and the hash order of probability maps aside), and `tests/Corvid.Evals.Tests` replays them like the seed set.
+
+Not built yet: the host that composes these (C-013) and with it running `EpisodicIndex.CatchUp` after each turn; built-in
+tools (C-012); compaction (C-016), so a session past its budget fails after escalation rather than compacting; cloud
+slots, privacy egress and prompt-cache breakpoints (C-015); subagents and the subagent queue's users; skills and the `skill`
+question (C-017); the `delegate`, `skill_opportunity` and `wake` questions; GLiNER2 entity boosts in the shortlist (§5.4's
+third bullet); per-tool concurrency limits beyond read-only versus side-effecting; an incremental projection in the actor
+(each checkpoint and generator call reloads the session from the log: about 2.7 ms for 300 events, linear in the session's
+length); persisting taint, which a resumed actor starts without; outcomes for `done`, `stuck`, `intent` and the other
+routing questions (user corrections and retries need a surface); `RequireAny` for no-op detection without a pick;
+recording why a turn failed beyond its answer text; and the device-placement table for `/status`.
 
 ## Running the check
 
@@ -761,5 +882,5 @@ standard `obj/` path; custom intermediate paths are not supported. This is an
 architecture regression check for NuGet/project references, not a security
 sandbox or an IL analyzer for manually supplied binaries.
 
-The next milestone that builds on the log is the session actor and turn loop (C-011), which will write the
-decisions and outcomes that calibration (C-021) reads.
+The next milestones that build on the loop are the built-in tools (C-012) and the host and CLI (C-013), which will run
+it outside tests.

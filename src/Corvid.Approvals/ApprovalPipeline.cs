@@ -36,6 +36,9 @@ public sealed record ApprovalContext(string SessionId, ApprovalMode Mode, TurnSt
 
     /// <summary>False for scheduled and background work with nobody to ask: an ask becomes a denial.</summary>
     public bool Interactive { get; init; } = true;
+
+    /// <summary>The tool call the action belongs to, recorded on <c>ApprovalRequested</c> so the log links the two.</summary>
+    public string? CallId { get; init; }
 }
 
 public enum ApprovalOutcome
@@ -247,7 +250,7 @@ public sealed class ApprovalPipeline
         var approvalId = Guid.NewGuid().ToString("N");
         var deadline = _time.GetUtcNow() + Options.Timeout;
         Append(context.SessionId, new ApprovalRequested(approvalId,
-            ActionDocuments.Json(assessment.Analysis, context.Tainted, context.Reversible), assessment.Summary), cancellationToken);
+            ActionDocuments.Json(assessment.Analysis, context.Tainted, context.Reversible), assessment.Summary, context.CallId), cancellationToken);
 
         var prompt = new ApprovalPrompt(approvalId, context.SessionId, assessment.Analysis, assessment.Reasons, assessment.Offered, deadline);
         ApprovalAnswer answer;

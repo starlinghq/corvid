@@ -153,6 +153,26 @@ public sealed class SwitchTests : IDisposable
     }
 
     [Fact]
+    public async Task An_approved_parked_call_becomes_tracked_without_a_gap()
+    {
+        var slots = Slots(new RecordingHooks(allowCloud: true));
+        Append(new ToolCallIssued("c1", "shell", Profiles.Json("""{"command":"rm notes/old.md"}""")));
+        var parked = slots.ParkToolCall("c1");
+
+        var running = slots.RunParkedToolCall("c1");
+        // The park's lease is released after the move; the call is still tracked, so a switch waits for its result.
+        parked.Dispose();
+        var switching = slots.SwitchAsync(Generator, _server, cancellationToken: Ct);
+        Assert.False(switching.IsCompleted);
+        Append(new ToolResult("c1", Profiles.Json("{}")));
+        running.Dispose();
+
+        Assert.Equal(SwitchStatus.Switched, (await switching).Status);
+        Assert.Throws<InvalidOperationException>(() => slots.RunParkedToolCall("c1"));
+        Assert.Throws<InvalidOperationException>(() => slots.RunParkedToolCall("never-parked"));
+    }
+
+    [Fact]
     public async Task A_tool_whose_model_call_fails_falls_back_without_waiting_for_itself()
     {
         var slots = Slots(new RecordingHooks(allowCloud: true), fallbacks: [_server]);

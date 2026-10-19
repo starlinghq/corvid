@@ -1,11 +1,19 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <Description>Corvid session actors, event log and projections.</Description>
+    <Description>Corvid's kernel: the event log and projections, session actors, the turn loop and the device scheduler.</Description>
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
     <ProjectReference Include="../Corvid.Abstractions/Corvid.Abstractions.csproj" />
+    <!-- The turn loop composes the core libraries: slots (C-006), the fabric (C-004a), tools (C-005), approvals (C-007b)
+         and memory (C-008). None of them references the kernel. -->
+    <ProjectReference Include="../Corvid.Approvals/Corvid.Approvals.csproj" />
+    <ProjectReference Include="../Corvid.Fabric/Corvid.Fabric.csproj" />
+    <ProjectReference Include="../Corvid.Memory/Corvid.Memory.csproj" />
+    <ProjectReference Include="../Corvid.Models/Corvid.Models.csproj" />
+    <ProjectReference Include="../Corvid.Tools/Corvid.Tools.csproj" />
     <InternalsVisibleTo Include="Corvid.Kernel.Tests" />
     <!-- The replay harness reads and writes fixtures in the persisted event format, not a copy of it. -->
     <InternalsVisibleTo Include="Corvid.Evals" />

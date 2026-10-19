@@ -49,7 +49,10 @@ public sealed record AskedOption(string Name,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Description = null);
 // Outcomes arrive later; never update the original decision event.
 public sealed record DecisionOutcomeRecorded(string DecisionId, string Outcome) : SessionEvent;
-public sealed record ApprovalRequested(string ApprovalId, string Action, string Reason) : SessionEvent;
+// CallId (C-011) links a prompt to the tool call waiting on it. Omitted when null, so events written before it keep their
+// persisted form; approvals asked outside a tool call (a memory or skill write) have none.
+public sealed record ApprovalRequested(string ApprovalId, string Action, string Reason,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? CallId = null) : SessionEvent;
 public sealed record ApprovalResolved(string ApprovalId, bool Approved, string Reason) : SessionEvent;
 // Profiles are snapshots, not mutable registry references; the slot implementation follows in C-006.
 public sealed record ModelSwitched(string Slot, JsonElement OldProfile, JsonElement NewProfile, string Reason) : SessionEvent;

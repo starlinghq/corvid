@@ -7,5 +7,11 @@
     <PackageReference Include="xunit.v3" />
     <Using Include="Xunit" />
     <ProjectReference Include="../../src/Corvid.Kernel/Corvid.Kernel.csproj" />
+    <!-- Real generated tools (read-only, side-effecting, destructive), and the golden-trajectory format. -->
+    <ProjectReference Include="../Corvid.Tools.Fixtures/Corvid.Tools.Fixtures.csproj" />
+    <ProjectReference Include="../../evals/Corvid.Evals/Corvid.Evals.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="../../evals/golden/*.json" LinkBase="golden" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

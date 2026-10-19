@@ -7,5 +7,7 @@
     <PackageReference Include="xunit.v3" />
     <Using Include="Xunit" />
     <ProjectReference Include="../../src/Corvid.Models.Starling/Corvid.Models.Starling.csproj" />
+    <!-- The device scheduler (C-011) supplies the extractor's TaskScheduler; the host will wire the two together. -->
+    <ProjectReference Include="../../src/Corvid.Kernel/Corvid.Kernel.csproj" />
   </ItemGroup>
 </Project>
