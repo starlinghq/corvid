@@ -6,7 +6,7 @@ namespace Corvid.Tools.Builtin;
 /// <summary>
 /// Where Corvid Vault keeps its store, policy and socket on this machine. The sandbox launcher and the approval pipeline
 /// already hide and protect Vault's default directories (<see cref="Corvid.Sandbox.BuiltInDenials"/>); a Vault started
-/// with <c>--data</c>, <c>--config</c> or <c>--socket</c> elsewhere is only covered when the host passes these, which the
+/// with <c>--data-dir</c>, <c>--config</c> or <c>--socket</c> elsewhere is only covered when the host passes these, which the
 /// shell tool adds to every sandbox policy as denied paths and <see cref="Protect"/> adds to the hardline list.
 /// </summary>
 /// <param name="DataDirectory">Vault's store, master key credential and audit log.</param>

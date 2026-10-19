@@ -1,4 +1,4 @@
-# Agent foundation (C-001, C-002, C-004a, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-021)
+# Agent foundation (C-001, C-002, C-004a, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-012, C-021)
 
 The solution contains `Corvid.Abstractions`, `Corvid.Kernel`, and
 `Corvid.Models`, alongside the working Vault projects. Kernel and Models each
@@ -18,7 +18,9 @@ decision export to `evals/Corvid.Evals`, and the `corvid-evals` console in `eval
 C-007b added `Corvid.Approvals`, which references Abstractions, Fabric, Tools and Sandbox and no
 package of its own (see [Approvals](#approvals-c-007b)). C-011 made `Corvid.Kernel` the integration point: it now references
 Approvals, Fabric, Memory, Models and Tools as well, for the session actor, the turn loop and the device scheduler (see
-[Session actor and turn loop](#session-actor-and-turn-loop-c-011)). Add
+[Session actor and turn loop](#session-actor-and-turn-loop-c-011)). C-012 added `Corvid.Tools.Builtin`, the built-in
+tools, which references Approvals, Kernel, Memory, Sandbox and Tools and no package, and the scheduler in Kernel (see
+[Built-in tools and scheduler](#built-in-tools-and-scheduler-c-012)). Add
 the other projects from the agent plan as their implementations start, rather
 than creating empty projects for every future surface.
 
@@ -243,6 +245,8 @@ conversation-level token counting before a call, and the `corvid doctor` command
 - `Corvid.Kernel` composes the other core libraries for the turn loop (C-011): Approvals, Fabric, Memory, Models and
   Tools. None of them may reference Kernel (the compiler rejects the cycle); Models and Memory read the log through
   `IEventLog`. Kernel is still a core library: adapters reach it only through the contracts the host binds to slots.
+- `Corvid.Tools.Builtin` (C-012) references Approvals, Kernel (the job store and the scheduler's script-runner contract),
+  Memory, Sandbox and Tools. Nothing references it but the host and tests, so Kernel never sees the tools it runs.
 - Provider SDKs and Starling model packages belong in `Corvid.Models.*` adapters.
   Adapters may reference core projects. ONNX Runtime and ONNX Runtime GenAI natives
   (and their managed packages) come only through adapters; a core project that
@@ -315,7 +319,12 @@ Deferred: argument validators beyond type binding (paths inside the
 workspace, date ranges), the embedding-examples file, object-typed parameters
 and return values (which need a `JsonSerializerContext`), toolsets, platform
 presets and `check_fn` availability, and restricting secrets by the catalogue's
-toolset bindings. Corvid.Tools contains no built-in tools yet.
+toolset bindings. The built-in tools are in `Corvid.Tools.Builtin` (C-012).
+
+C-012 added `ToolCallContext`: a parameter of that type is bound from `AIFunctionArguments.Context` (the turn's session,
+call id, taint and approval), never from the model, and is left out of the schema and the descriptor's parameters; a
+non-nullable one refuses a call made outside a turn. The schema parity test leaves it out on the `AIJsonUtilities` side
+too.
 
 ## Decision fabric (C-004a)
 
@@ -479,7 +488,8 @@ paths such as tool caches in home, the HTTPS proxy route for sandboxed scripts (
 `corvid-exec` user and value injection for Vault's exec path, container and SSH backends,
 macOS and Windows, hiding the other credential stores the approval pipeline protects (`~/.kube`,
 `~/.netrc`, `~/.docker/config.json` and others) and Corvid's own configuration (`~/.config/corvid`; Landlock
-already blocks writes to it), and the shell and code tools that use the sandbox (C-012).
+already blocks writes to it), and the code tool (§15). The shell tool (C-012) runs only through the sandbox and passes
+Vault's configured locations as denied paths (see [Built-in tools and scheduler](#built-in-tools-and-scheduler-c-012)).
 
 ## Memory store (C-008)
 
@@ -557,7 +567,7 @@ Not built yet: sqlite-vec (no first-party .NET package; it would replace the sca
 (§9.3); the consolidation job that rewrites an over-budget block (§9.5); relation extraction
 (`IExtractor` returns spans, so relations come only from callers) and entity aliasing; fact
 deduplication and merging; media memory (§9.4); local-only facts and egress filtering of
-retrieved memory (C-015); the `/memory pending` command and the `memory` tool (C-012, C-013);
+retrieved memory (C-015); the `/memory pending` command (C-013; C-012 added the memory tools);
 and running `EpisodicIndex.CatchUp` after each turn (the host's job, C-013). C-011 starts the re-embed job when
 `embedder.text` switches and the write path when `remember` acts at egress.
 
@@ -658,7 +668,8 @@ against a new decider model.
 
 `Corvid.Approvals` (core, `IsAotCompatible`) implements plan §10.2, the approval half of §10.1, the taint
 inputs of §10.3 and the `risk` row of §5.3. It references Abstractions, Fabric, Tools and Sandbox and no
-package. The turn loop (C-011) calls it for every side-effecting tool; the shell tool (C-012) will too.
+package. The turn loop (C-011) calls it for every side-effecting tool. C-012 added `ApprovalOptions.ShellTools`: a call to
+a shell tool is assessed as the command line it runs (see [Built-in tools and scheduler](#built-in-tools-and-scheduler-c-012)).
 
 - Parser (decision D-5): `ShellParser` is hand-written for the subset Corvid permits: lists (`;`, newline,
   `&&`, `||`, `&`), pipelines, simple commands with prefix assignments, single, double and `$'...'` quotes,
@@ -740,7 +751,7 @@ package. The turn loop (C-011) calls it for every side-effecting tool; the shell
   variables ask. None runs automatically.
 
 Not built yet: GLiNER2 extraction of free-form targets (SQL, `curl` data, `kill` targets), which waits for
-spike S3; calibrated `risk` (C-004b); calling the pipeline from the shell tool (C-012); reversibility from checkpoint state (C-014; `ApprovalContext.Reversible` is passed through);
+spike S3; calibrated `risk` (C-004b); reversibility from checkpoint state (C-014; `ApprovalContext.Reversible` is passed through);
 restoring session rules on resume (they are not in the log); listing and removing always-rules
 (`/approvals`, C-013), and where the host keeps the rule file; control flow, subshells and other syntax
 outside the subset, which ask rather than run; unwrapping further launchers (`strace`, `nsenter`, `unshare`,
@@ -859,15 +870,114 @@ composition below is what tests do and what `Corvid.Host` will do.
   and `turn-repair-then-approval` were recorded from the loop; `GoldenTurnTests` checks the loop still produces them (ids
   and the hash order of probability maps aside), and `tests/Corvid.Evals.Tests` replays them like the seed set.
 
-Not built yet: the host that composes these (C-013) and with it running `EpisodicIndex.CatchUp` after each turn; built-in
-tools (C-012); compaction (C-016), so a session past its budget fails after escalation rather than compacting; cloud
+C-012 added the built-in tools, `TurnOptions.Interactive` for unattended turns and the `ToolCallContext` each call
+carries (see [Built-in tools and scheduler](#built-in-tools-and-scheduler-c-012)). Not built yet: the host that composes
+these (C-013) and with it running `EpisodicIndex.CatchUp` after each turn; compaction (C-016), so a session past its budget fails after escalation rather than compacting; cloud
 slots, privacy egress and prompt-cache breakpoints (C-015); subagents and the subagent queue's users; skills and the `skill`
-question (C-017); the `delegate`, `skill_opportunity` and `wake` questions; GLiNER2 entity boosts in the shortlist (§5.4's
+question (C-017); the `delegate` and `skill_opportunity` questions (`wake` is asked by the scheduler, C-012); GLiNER2 entity boosts in the shortlist (§5.4's
 third bullet); per-tool concurrency limits beyond read-only versus side-effecting; an incremental projection in the actor
 (each checkpoint and generator call reloads the session from the log: about 2.7 ms for 300 events, linear in the session's
 length); persisting taint, which a resumed actor starts without; outcomes for `done`, `stuck`, `intent` and the other
 routing questions (user corrections and retries need a surface); `RequireAny` for no-op detection without a pick;
 recording why a turn failed beyond its answer text; and the device-placement table for `/status`.
+
+## Built-in tools and scheduler (C-012)
+
+Plan §7, §9, §10.1–§10.3 and §13. The tools are in `src/Corvid.Tools.Builtin` (core, `IsAotCompatible`), C-005 generated
+tools: it references Approvals, Kernel, Memory, Sandbox and Tools, and the generator as an analyzer. The durable scheduler
+is in `Corvid.Kernel/Jobs`, as plan §3.4 places it. No package was added, so the checker's allowlist is unchanged; nothing
+references Builtin except tests (and, later, the host). Everything runs on the degraded decider.
+
+- Contract changes. `ToolCallContext` (Corvid.Tools): the session, the call id, taint, whether anyone can be asked, and
+  the approval pipeline's result for the call. The turn loop attaches it to every call's `AIFunctionArguments.Context`; a
+  `[Tool]` method receives it by declaring a parameter of that type, which the generator binds from there (a nullable one
+  accepts a call made outside a turn; a non-nullable one refuses it) and leaves out of the schema and the descriptor's
+  parameters. `ApprovalOptions.ShellTools` maps a tool name to the string parameter holding a command line: the pipeline
+  assesses such a call as that `ShellAction`, parsed and unwrapped, so the hardline list, rules and `risk` see the commands
+  and a read-only command runs unasked; a call without its command stays a tool call that asks once.
+  `TurnOptions.Interactive` (default true) reaches `ApprovalContext.Interactive` and the call context, so an unattended
+  turn's asks are denied. `JsonValues` now writes `JsonNode` results as JSON (a `JsonObject` was written as an array of
+  pairs).
+- Files (`FileTools`): `read_file` (numbered lines, continued with `start_line`), `list_files` (optionally recursive),
+  `search_files` (plain text or a non-backtracking regular expression), `write_file` (atomic replace, creating directories)
+  and `patch_file` (replace text that must occur exactly once unless `replace_all`; LF text matches a CRLF file). Writes are
+  `[SideEffect(Filesystem)]`; `write_file` is also `[Destructive]`, because until checkpoints exist (C-014) a replaced file
+  cannot be restored. Every path parameter is named `path`, which is how C-007b finds the target. `Workspace` resolves a
+  path against the workspace and follows every symbolic link in it (realpath, missing components kept), so a link inside
+  cannot lead out; it refuses paths at or under denied paths (`Workspace.For` takes the approval environment's Vault,
+  credential-store and safety-configuration paths) and credential names (the sandbox's `.env` rule, examples included,
+  and private keys). Listings and searches leave out credential names and denied paths, never descend into `.git`,
+  `node_modules` or a link (searches skip linked files too), and stop at limits (`FileToolOptions`); files with a NUL in
+  their first 8 KiB are binary and not read.
+- Shell (`ShellTool`, `shell`, `[SideEffect(Process | Filesystem)]`, `[Destructive]`): a command line run by `/bin/bash -c`
+  (bash, because the pipeline parses the bash subset, D-5) through `SandboxedShell`, which builds one `SandboxPolicy`: the
+  workspace, no network, the default environment, and as denied paths Vault's configured locations (`VaultLocations`:
+  data directory, policy file and socket, from Vault's own defaults or from configuration) plus any extra paths.
+  `VaultLocations.Protect` adds the same locations to the approval environment's Vault paths, so the hardline list denies
+  them too. The tool runs only when its call context carries an allowed `ApprovalResult` whose analysis is the shell
+  command it was given, so a call outside a turn, with no approval, an approval of a different command, or an approval
+  of the call as an opaque tool call (no `ShellTools` mapping) is refused without running. Output is trimmed to
+  `MaxResultChars` per stream, keeping the start and most of the end.
+- Web fetch (`WebFetchTool`, `web_fetch`, `[Network]`, read-only): one `HttpClient` over an injectable `HttpMessageHandler`
+  (Vault's egress proxy can sit in front later; the request carries `VaultHandler.Tainted` and `Toolset` options). The
+  default handler follows no redirects, ignores ambient proxies, and connects only to public addresses after resolving
+  the name. Redirects are followed by the tool, at most five, only to http or https and never to a local address; URLs
+  with credentials, other schemes and literal local or private addresses are refused before any request. The body is
+  read up to `MaxBytes` while streaming, HTML is reduced to its visible text by a single forward pass (scripts, styles,
+  the head and comments dropped, blocks on their own lines), non-text content is described but not shown, and every result
+  says `"tainted": true`. As a `[Network]` tool its result taints the session (C-011), and in a tainted session the call
+  itself asks.
+- Memory (`MemoryTools`): `memory_search` (hybrid retrieval, §9.3), `memory_add` (`[SideEffect(Memory)]`: the C-008 write
+  path in the calling session, so without Kev the fact is staged), `memory_pending`, `memory_approve` and `memory_reject`
+  (`[Destructive]`: the proposal is gone). Approve and reject are side effects, so the turn loop asks the user before
+  either runs; that prompt is the review.
+- Scheduler (§13). `JobSchedule` parses Hermes' grammar: delays (`in 30m`, `2h`, `in 1h30m`), intervals (`every 30m`, at
+  least a minute), days and times (`at 9am`, `tomorrow at 9am`, `daily at 9am`, `weekdays at 9am`, `mondays at 17:30`,
+  `on mon, wed and fri at 8pm`), five-field cron with names and the `@daily` macros (Vixie day semantics), and ISO 8601
+  times (with an offset, or wall-clock in the store's zone). Wall-clock times are in a time zone: a time in a daylight-saving
+  gap does not occur and a repeated one runs once. It stores a canonical form (`once …`, `every 1800s`, `cron …`). `JobStore`
+  is its own SQLite file (jobs change, so not the event log): jobs with their schedule as written and canonical, zone,
+  optional pre-run script, `no_agent`, origin session, whether they were created in a tainted session, next run and state;
+  runs with their own session id (`job:<job>:<run>`), status, `wake` decision, script exit code, output and detail.
+  `ClaimDue` moves each due job on (missed ticks collapse into one) or completes a one-shot and records the run as running
+  in one transaction, so a crash never runs a tick twice; `InterruptStale` marks what a stopped process left running.
+  `JobScheduler.RunDueAsync` runs each claimed job: the pre-run script through `IJobScriptRunner`, then for a `no_agent`
+  job nothing more (`script_only`); otherwise, when there was a script, `wake` at the tick checkpoint with the output in its
+  instructions (below its floor: `skipped`, logged with the decision in the run's session), then the agent through
+  `IJobAgent` in the run's session (`ran`). A refused script is `script_refused`; failures are `failed`. `RunAsync` loops on
+  `TimeProvider`. `TurnJobAgent` runs one turn with services that must be unattended (`TurnOptions.Interactive` false), as
+  an external envelope when the run is tainted (script output, or a job created in a tainted session). The built-in
+  `SandboxedScriptRunner` authorizes a script through the approval pipeline non-interactively and runs it in the shell's
+  sandbox, so only a read-only script or one an always-rule allows runs; without Kev every side-effecting script is
+  refused. The cron tools (`cron_create` and `cron_remove`, `[SideEffect(Schedule)]`, remove also `[Destructive]`, and
+  `cron_list`) work on the store; a bad schedule is an argument error the generator can repair.
+- `BuiltinTools.Examples` holds five to seven example requests per tool for the multi-vector shortlist
+  (`TurnOptions.ToolExamples`), written by hand because C-005 has no examples file. `BuiltinTools.ShellToolMapping` is the
+  `ApprovalOptions.ShellTools` entry the shell needs.
+- Tests: `tests/Corvid.Tools.Builtin.Tests` covers each tool's metadata and behaviour (workspace escapes by `..`, absolute
+  paths, `~` and symbolic links; protected and credential paths; listing, search and patch rules; the shell's refusals;
+  redirects, schemes, local addresses, size caps and HTML; staged, approved and rejected memory writes; cron create, list
+  and remove). Its `Category=Confinement` tests run the shell tool and the script runner under the real launcher and
+  bubblewrap: a script the pipeline cannot see into cannot read Vault's non-default locations or `~/.ssh`, or write
+  outside the workspace; there is no network; hardline commands never reach the sandbox; unattended side-effecting and
+  Vault-touching scripts are refused; timeouts are reported. They skip only where bubblewrap cannot run, and CI's step
+  "Shell tool confinement ran and passed" fails unless all of them ran. `tests/Corvid.Kernel.Tests` drives the shell tool
+  through the real turn loop (read-only runs unasked, a side effect asks, hardline never prompts, an unattended turn denies,
+  no mapping means no run) and covers the grammar (including daylight-saving changes), the store and the scheduler.
+
+Not built yet: wiring all of this in a host (C-013): registering the tools, building the workspace and Vault locations
+from configuration, and starting the scheduler; `/memory` and `/cron` commands; delivering job results to surfaces
+(C-020; `JobScheduler.Completed` is the hook); checkpoints before writes (C-014); network for the shell per toolset and
+Vault's proxy route for sandboxed commands (V-003); the code tool and code mode (§15); container and SSH backends;
+argument validators generated with the tool and the generated examples file (C-005; paths are checked by the tools at run
+time, as argument errors the generator repairs); editing, pausing or resuming jobs, per-job toolsets, delivery targets and
+pruning run history; a calibrated `wake` (C-004b; the degraded tier asks the generator yes or no); pre-run scripts with
+side effects or network when unattended; for web fetch, the Vault handler itself, address checks after resolution when a
+caller supplies its own handler (only literal addresses are checked then), charsets declared only in a page's markup,
+PDFs and rendering JavaScript; `.gitignore`-aware search and globs; editing core blocks or a staged write's text through
+a tool; and the subagent restrictions of §14 (children may not write memory or schedule jobs). Resolving a path and
+opening it are separate calls, so a concurrent process that swaps a directory for a link in between could redirect one
+access.
 
 ## Running the check
 
@@ -890,5 +1000,5 @@ standard `obj/` path; custom intermediate paths are not supported. This is an
 architecture regression check for NuGet/project references, not a security
 sandbox or an IL analyzer for manually supplied binaries.
 
-The next milestones that build on the loop are the built-in tools (C-012) and the host and CLI (C-013), which will run
-it outside tests.
+The next milestone that builds on the loop is the host and CLI (C-013), which will compose the loop, the built-in tools
+and the scheduler and run them outside tests.
