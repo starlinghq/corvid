@@ -99,6 +99,29 @@ public sealed class PolicyTests
     {
         Assert.Equal(SandboxPlan.IsSecretLike(name), EnvironmentNames.IsSecretLike(name));
     }
+
+    // The approval pipeline reads these from the library; the launcher's own copy is what actually hides the paths.
+    [Theory]
+    [InlineData(null, null, null)]
+    [InlineData("/data", "/conf", "/run/user/1000")]
+    [InlineData("/home/u/.local/share", "/home/u/.config", null)]
+    [InlineData("relative/data", "", "relative/run")]
+    public void Library_and_launcher_agree_on_built_in_denials(string? data, string? config, string? runtime)
+    {
+        var variables = new Dictionary<string, string?> { ["XDG_DATA_HOME"] = data, ["XDG_CONFIG_HOME"] = config, ["XDG_RUNTIME_DIR"] = runtime };
+        string? Env(string name) => variables.GetValueOrDefault(name);
+
+        Assert.Equal(SandboxPlan.VaultDirectories(Env, "/home/u"), BuiltInDenials.VaultDirectories("/home/u", Env));
+        Assert.Equal(SandboxPlan.SecretDirectories, BuiltInDenials.SecretDirectories);
+        string[] gh = config is { Length: > 0 } && Path.IsPathFullyQualified(config) ? [Path.Combine(config, "gh")] : [];
+        Assert.Equal(SandboxPlan.SecretDirectories.Select(relative => Path.Combine("/home/u", relative)).Concat(gh).Distinct(),
+            BuiltInDenials.SecretPaths("/home/u", Env));
+        Assert.Equal(runtime is { } r && Path.IsPathFullyQualified(r) ? r : null, BuiltInDenials.RuntimeDirectory(Env));
+        foreach (string name in (string[])[".env", ".env.local", ".env.example", ".envrc", "env", "x.env", ".env."])
+        {
+            Assert.Equal(SandboxPlan.IsEnvFileName(name), BuiltInDenials.IsEnvFileName(name));
+        }
+    }
 }
 
 public sealed class LauncherTests

@@ -3,9 +3,9 @@ using System.Collections.Immutable;
 namespace Corvid.Sandbox;
 
 /// <summary>
-/// What a sandboxed command may reach (plan §10.1). The launcher adds denials a policy cannot remove: ~/.ssh,
-/// ~/.gnupg, ~/.aws, ~/.config/gh, Corvid Vault's data and config directories, the runtime directory, and .env files
-/// in the workspace and at the top of home.
+/// What a sandboxed command may reach (plan §10.1). The launcher adds denials a policy cannot remove
+/// (<see cref="BuiltInDenials"/>): ~/.ssh, ~/.gnupg, ~/.aws, ~/.config/gh, Corvid Vault's data and config directories,
+/// the runtime directory, and .env files in the workspace and at the top of home.
 /// </summary>
 public sealed record SandboxPolicy
 {

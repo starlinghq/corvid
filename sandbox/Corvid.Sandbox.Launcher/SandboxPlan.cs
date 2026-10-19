@@ -342,6 +342,9 @@ internal sealed partial record SandboxPlan
         return dirs.Distinct(StringComparer.Ordinal);
     }
 
+    /// <summary><c>.env</c> and <c>.env.*</c>, examples included: a copy of a real file is often named like one.</summary>
+    internal static bool IsEnvFileName(string name) => name == ".env" || name.StartsWith(".env.", StringComparison.Ordinal);
+
     /// <summary>
     /// <c>.env</c> and <c>.env.*</c> files (not directories: <c>python -m venv .env</c> is common). The workspace is
     /// scanned to a bounded size and depth, skipping <c>.git</c> and <c>node_modules</c> and not following symlinked
@@ -387,7 +390,7 @@ internal sealed partial record SandboxPlan
                         pending.Push((child.FullName, current.Depth + 1));
                     }
                 }
-                else if ((child.Name == ".env" || child.Name.StartsWith(".env.", StringComparison.Ordinal)) && File.Exists(child.FullName))
+                else if (IsEnvFileName(child.Name) && File.Exists(child.FullName))
                 {
                     found.Add(child.FullName);
                 }

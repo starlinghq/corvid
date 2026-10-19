@@ -1,4 +1,4 @@
-# Agent foundation (C-001, C-002, C-004a, C-005, C-006, C-007a, C-008, C-009, C-010, C-021)
+# Agent foundation (C-001, C-002, C-004a, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-021)
 
 The solution contains `Corvid.Abstractions`, `Corvid.Kernel`, and
 `Corvid.Models`, alongside the working Vault projects. Kernel and Models each
@@ -14,7 +14,9 @@ executable in `sandbox/Corvid.Sandbox.Launcher` (see [Sandbox](#sandbox-c-007a))
 C-008 added `Corvid.Memory`, which references Abstractions, Fabric, `Microsoft.Data.Sqlite` and
 `Microsoft.Extensions.AI.Abstractions` (see [Memory store](#memory-store-c-008)). C-021 added calibration and
 decision export to `evals/Corvid.Evals`, and the `corvid-evals` console in `evals/Corvid.Evals.Calibrate` (see
-[Calibration and decision export](#calibration-and-decision-export-c-021)). Add
+[Calibration and decision export](#calibration-and-decision-export-c-021)).
+C-007b added `Corvid.Approvals`, which references Abstractions, Fabric, Tools and Sandbox and no
+package of its own (see [Approvals](#approvals-c-007b)). Add
 the other projects from the agent plan as their implementations start, rather
 than creating empty projects for every future surface.
 
@@ -231,6 +233,9 @@ conversation-level token counting before a call, the `corvid doctor` command its
 - `Corvid.Memory` references `Corvid.Fabric`, because `memory_op` is a fabric gate. Fabric must not
   reference Memory (the compiler rejects the cycle). Memory reads the event log through `IEventLog`
   and does not reference Kernel.
+- `Corvid.Approvals` references `Corvid.Fabric` (`risk` is a fabric gate), `Corvid.Tools` (`ToolRisk`) and
+  `Corvid.Sandbox` (`BuiltInDenials`, so the hardline list and the sandbox protect the same paths). It parses
+  bash itself (decision D-5); the boundary tests keep tree-sitter bindings out of it.
 - Provider SDKs and Starling model packages belong in `Corvid.Models.*` adapters.
   Adapters may reference core projects. ONNX Runtime and ONNX Runtime GenAI natives
   (and their managed packages) come only through adapters; a core project that
@@ -442,7 +447,9 @@ Plan §10.1 and §3.4, and `vault.md` §3.3 and "Implementation status". Linux o
   `DOTNET_ROOT`), and enforces a timeout (kills the whole tree), a per-stream output limit
   (the rest is drained) and cancellation. A refusal throws `SandboxRefusedException`; it never
   falls back to running unsandboxed. Its secret-name rule repeats the launcher's so a value is
-  refused before it leaves Corvid; a test keeps them in step.
+  refused before it leaves Corvid; a test keeps them in step. `BuiltInDenials` repeats the launcher's
+  built-in denials (secret directories, Vault's directories for home and the XDG variables, the runtime
+  directory, the `.env` name rule) for the approval pipeline, kept in step by another test.
 - Tests: `tests/Corvid.Sandbox.Tests`. The confinement tests (trait `Category=Confinement`)
   run real commands under bubblewrap against a temporary HOME and XDG layout kept outside
   `/tmp`, each with a positive control, and prove that a command cannot read or list Vault's
@@ -464,8 +471,9 @@ Not built yet: `*.pem` masking and `.env` files below the top of home, Landlock 
 graceful termination (SIGTERM to the launcher ends the sandbox with SIGKILL), extra writable
 paths such as tool caches in home, the HTTPS proxy route for sandboxed scripts (V-003), the
 `corvid-exec` user and value injection for Vault's exec path, container and SSH backends,
-macOS and Windows, the structural approval pipeline (C-007b), and the shell and code tools
-that use the sandbox (C-012).
+macOS and Windows, hiding the other credential stores the approval pipeline protects (`~/.kube`,
+`~/.netrc`, `~/.docker/config.json` and others) and Corvid's own configuration (`~/.config/corvid`; Landlock
+already blocks writes to it), and the shell and code tools that use the sandbox (C-012).
 
 ## Memory store (C-008)
 
@@ -638,6 +646,99 @@ exact; a canonical outcome vocabulary written by the turn loop (C-011), and with
 outcome semantics; opening a live or read-only copied log without the log's write-mode setup (`SqliteEventLog` switches
 the file to WAL on open); the system prompt and tool schemas in exported trajectories; and replaying recorded states
 against a new decider model.
+
+## Approvals (C-007b)
+
+`Corvid.Approvals` (core, `IsAotCompatible`) implements plan §10.2, the approval half of §10.1, the taint
+inputs of §10.3 and the `risk` row of §5.3. It references Abstractions, Fabric, Tools and Sandbox and no
+package. Nothing calls it yet: the turn loop (C-011) and the shell tool (C-012) will.
+
+- Parser (decision D-5): `ShellParser` is hand-written for the subset Corvid permits: lists (`;`, newline,
+  `&&`, `||`, `&`), pipelines, simple commands with prefix assignments, single, double and `$'...'` quotes,
+  escapes, `$NAME` and `${NAME}`, `$(...)` and backquotes, a leading `~`, redirections, here-strings and
+  here-documents (bodies parsed for substitutions unless the delimiter is quoted; only an exact delimiter line
+  ends one). Everything else returns `ShellUnsupported` with a reason: control flow, functions, subshells and
+  groups, arithmetic, brace and process expansion, parameter operators, `~user`, arrays, unterminated quotes,
+  NUL, input over 64 KiB or nesting deeper than 16. Unsupported text is never guessed at: it asks, and the
+  hardline backstop still scans it for Vault's directory name and disk formatters.
+  `TreeSitter.DotNet` 1.3.0 was evaluated and rejected; the reasons are recorded in plan §20, D-5.
+- Analysis: `ShellAnalyzer` expands words statically (tilde, `$HOME` and the XDG variables, assignments made
+  earlier in the line, field splitting; anything else is dynamic), follows `cd` (both directories after `;`
+  or `||`), and unwraps wrappers recursively: `timeout`, `env` (including `-C`), `nice`, `nohup`, `stdbuf`,
+  `setsid`, `ionice`, `time`, `command`, `builtin`, `exec`, `eval`, `xargs` (its input is dynamic), `sh`,
+  `bash` and `dash` with `-c` or a literal here-string or here-document on stdin, `sudo`, `doas`, `su -c`,
+  `pkexec` (elevated), `watch` (joined and run by `sh -c`), `flock`, `taskset`, `chrt`, `busybox` and
+  `find -exec`. Wrapper options are parsed strictly: an unknown or computed option refuses. Other programs'
+  options are read tolerantly, with abbreviated long options (`rm --rec`) read as every option they could
+  stand for. Substitutions are analysed as commands of their own. Each command becomes an `AnalyzedCommand`: verb and subcommand, effects
+  (read, write, delete, recursive, execute, network, signal, elevated, system, configuration, ...), targets
+  (paths resolved against the workspace as inside, workspace root, outside or unresolved; globs by their static
+  directory; PIDs, process names, hosts, URLs) and unresolved reasons. Known programs are described by kind
+  (readers, searchers, writers, archivers, network clients, git, package managers, system tools); an
+  unknown one runs code Corvid cannot see (`execute`). After `source`, or with `PATH`, `LD_PRELOAD` and other
+  code-loading variables set, and for a program named by a path outside the system directories, a command is
+  unresolved but still described as named, so `./rm -rf /` and `env PATH=x rm -rf /` meet the hardline list.
+  Interpreters' inline code (`python3 -c`, `node -e`) is recorded for the backstop; other shells' scripts
+  (`zsh`, `ksh`, `fish`, ...) are outside the subset and ask. Readers lose their read-only standing when an
+  option writes or runs something: `git log`/`diff`/`show --output`, `git format-patch -o`, `git grep -O`,
+  `rg --pre`, `ag --pager`, `yq -i`, `sort --compress-program`, `sdiff -o`, `less -o`, and the output operand of
+  `uniq` and `xxd`. A computed argument to `git`, or a computed pattern for `rg` or `ag`, may be such an option,
+  so it is unresolved.
+- Tools: `ToolAnalyzer` describes a non-shell call from C-005's `ToolRisk` (filesystem write, destructive
+  delete, network, messaging, schedule, memory, configuration, remote) and the targets in its arguments
+  (parameters named like paths or addresses, or targets the caller passes). Recipients are targets too. A
+  filesystem tool with no path found, or a messaging tool without `Recipients`, is unresolved, so it asks
+  once and no remembered rule matches it.
+- Hardline (`Hardline`, rule names in `HardlineRules`): disk formatters; writes to devices other than the inert
+  ones (`/dev/null`, `/dev/tty`, ...) and `/dev/shm`; recursive deletes outside the workspace; writes to
+  credential stores; any access to Vault's directories (by path, by glob, by a recursive change, move or
+  deletion of an ancestor, or by name in unparsed text); writes to Corvid's safety configuration (`$XDG_CONFIG_HOME/corvid`,
+  which holds the always-rules file). `ProtectedPaths` is built from `Corvid.Sandbox.BuiltInDenials`: Vault's
+  directories at the defaults and the XDG locations, the sandbox's secret directories and the runtime
+  directory, plus stores the sandbox does not hide (`~/.kube`, `~/.netrc`, `/etc/shadow`, ...) and credential
+  file names (`.env` and `.env.*` other than examples, private keys). Hardline denials are not overridable by
+  mode, rule or score, and ask nobody.
+- Forced prompts: anything unparsed or unresolved, reading a credential store or a device or another
+  process's `/proc` entry, a recursive read over Vault's directory, elevation, signals, configuration
+  changes, and in a tainted turn any network egress and any send to a recipient not in
+  `ApprovalContext.KnownRecipients`. These always ask and offer only "once".
+- Decision: read-only actions run without asking. Then remembered rules (a denial first), then `risk` at the
+  `pre_execute` checkpoint through `DecisionFabric`, with the parsed action (commands, effects, targets,
+  taint, reversibility) as the question's JSON instructions. `risk` is a gate, so the degraded decider never
+  answers it and every side effect asks until a calibrated decider exists (C-004b). Modes: `Manual` asks
+  for every side effect without asking the fabric; `Smart` runs a calibrated level 0–1 only when every path
+  is inside the workspace and there is no network, elevation, system change or destructive tool;
+  `Permissive` follows the fabric (0–1 run, 2–4 ask).
+- Asking: `AuthorizeAsync` appends `ApprovalRequested` (the action as JSON and the reasons), asks the
+  `IApprovalPrompter` with a deadline (`ApprovalOptions.Timeout`, five minutes) and appends
+  `ApprovalResolved`: approved, denied, timed out, failed or cancelled, all but approval deny. The user's
+  answer is recorded as the `risk` decision's outcome for calibration. With no prompter, or
+  `Interactive = false`, an ask is denied without events.
+- Rules: "session" and "always" answers become `ApprovalRule`s per side-effecting command: verb,
+  subcommand, effects, elevation, the paths (a target must be at or under one) or patterns (a target must be
+  the same pattern or a path it matches) and the names (hosts, PIDs, process names, recipients) approved, so
+  approving `rm -rf build` never covers `rm -rf src` or `sudo rm`, and approving `rm *.o` never covers
+  `rm main.c`.
+  Session rules live in the pipeline; always rules in `IApprovalRuleStore`, by default in memory, or
+  `JsonFileApprovalRuleStore` (format `corvid-approval-rules` version 1, unknown fields rejected, written
+  atomically). Forced prompts offer no rule.
+- Tests: `tests/Corvid.Approvals.Tests`, against the real event log. The bypass suite runs every shape in
+  every mode with the degraded tier and with a fake calibrated decider that scores it level 0: wrappers
+  (`timeout`, `env`, `nice`, `nohup`, `xargs`, `sh -c`, `bash -c`, `watch`, `flock`, `sudo`, ...) around
+  `rm -rf`, quoting tricks, `$'...'`, here-strings and here-documents into a shell, substitutions, `find`,
+  reads of Vault's directories, raw devices, credential stores and Corvid's configuration are denied as
+  hardline; computed targets, `kill` with numeric PIDs, unparsed syntax, credential reads and code-loading
+  variables ask. None runs automatically.
+
+Not built yet: GLiNER2 extraction of free-form targets (SQL, `curl` data, `kill` targets), which waits for
+spike S3; calibrated `risk` (C-004b); calling the pipeline from the turn loop and the shell tool (C-011,
+C-012); reversibility from checkpoint state (C-014; `ApprovalContext.Reversible` is passed through);
+restoring session rules on resume (they are not in the log); listing and removing always-rules
+(`/approvals`, C-013), and where the host keeps the rule file; control flow, subshells and other syntax
+outside the subset, which ask rather than run; unwrapping further launchers (`strace`, `nsenter`, `unshare`,
+`runuser`, `systemd-run`, `script -c`, `at`, `parallel`, ...), which today are programs that run code Corvid
+cannot see, so they ask unless a calibrated `risk` answer allows them, and the hardline list does not see the
+command they launch; symlinks and `/proc/<pid>/cwd` paths, which are resolved lexically and left to the sandbox.
 
 ## Running the check
 

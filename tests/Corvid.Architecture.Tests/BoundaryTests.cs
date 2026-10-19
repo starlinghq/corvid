@@ -85,6 +85,16 @@ public sealed class BoundaryTests
     [InlineData("Corvid.Memory", "System.Numerics.Tensors", "package", false)]
     [InlineData("Corvid.Memory", "Starlings.Models.EmbeddingGemma2.Extensions.AI", "package", false)]
     [InlineData("Corvid.Memory", "Corvid.Models.Starling", "project", false)]
+    // C-007b: approvals are core. The bash parser is hand-written (D-5), so no tree-sitter binding or native grammar.
+    [InlineData("Corvid.Approvals", "Corvid.Fabric", "project", true)]
+    [InlineData("Corvid.Approvals", "Corvid.Tools", "project", true)]
+    [InlineData("Corvid.Approvals", "Corvid.Vault.Client", "project", true)]
+    [InlineData("Corvid.Approvals", "Corvid.Sandbox", "project", true)]
+    [InlineData("Corvid.Approvals", "Corvid.Sandbox.Launcher", "project", false)]
+    [InlineData("Corvid.Approvals", "Microsoft.Extensions.AI.Abstractions", "package", true)]
+    [InlineData("Corvid.Approvals", "TreeSitter.DotNet", "package", false)]
+    [InlineData("Corvid.Approvals", "Corvid.Models.Starling", "project", false)]
+    [InlineData("Corvid.Approvals", "Corvid.Vault", "project", false)]
     public void EnforcesLayerRules(string project, string dependency, string type, bool allowed)
     {
         using var assets = Assets(("net10.0", dependency, type));
