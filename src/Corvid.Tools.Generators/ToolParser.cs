@@ -94,6 +94,17 @@ internal static class ToolParser
                 continue;
             }
 
+            // The turn's context for the call (session, taint, approval) comes from AIFunctionArguments.Context, never from
+            // the model, so it is not in the schema. A nullable parameter accepts a call made outside a turn.
+            if (parameter.RefKind == RefKind.None && !parameter.IsParams
+                && parameter.Type.WithNullableAnnotation(NullableAnnotation.None).ToDisplayString() == "Corvid.Tools.ToolCallContext")
+            {
+                callArguments.Add(parameter.NullableAnnotation == NullableAnnotation.Annotated
+                    ? "global::Corvid.Tools.ToolCallContext.From(arguments)"
+                    : $"global::Corvid.Tools.ToolCallContext.Require(arguments, {Literal(toolName)})");
+                continue;
+            }
+
             // NaN and infinity have no JSON form for the schema's "default".
             bool finiteDefault = !parameter.HasExplicitDefaultValue
                 || parameter.ExplicitDefaultValue is not (double.NaN or double.PositiveInfinity or double.NegativeInfinity or float.NaN or float.PositiveInfinity or float.NegativeInfinity);

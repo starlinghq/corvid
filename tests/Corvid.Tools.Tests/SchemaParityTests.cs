@@ -13,17 +13,22 @@ namespace Corvid.Tools.Tests;
 public sealed class SchemaParityTests
 {
     public static TheoryData<string> Tools() =>
-        [.. new NoteTools().CreateTools().Concat(ApiTools.CreateTools()).Select(t => t.Name)];
+        [.. All().Select(t => t.Name)];
+
+    private static IEnumerable<ToolFunction> All() =>
+        new NoteTools().CreateTools().Concat(ApiTools.CreateTools()).Concat(new SessionTools().CreateTools());
 
     [Theory]
     [MemberData(nameof(Tools))]
     public void Generated_schema_matches_AIJsonUtilities(string name)
     {
-        ToolFunction tool = new NoteTools().CreateTools().Concat(ApiTools.CreateTools()).Single(t => t.Name == name);
-        MethodInfo method = typeof(NoteTools).GetMethods().Concat(typeof(ApiTools).GetMethods())
+        ToolFunction tool = All().Single(t => t.Name == name);
+        MethodInfo method = typeof(NoteTools).GetMethods().Concat(typeof(ApiTools).GetMethods()).Concat(typeof(SessionTools).GetMethods())
             .Single(m => m.GetCustomAttribute<ToolAttribute>() is { } attribute && (attribute.Name ?? Snake(m.Name)) == name);
 
-        JsonElement expected = AIJsonUtilities.CreateFunctionJsonSchema(method, serializerOptions: Options());
+        // The call context comes from the turn, not the model, so neither schema has it.
+        JsonElement expected = AIJsonUtilities.CreateFunctionJsonSchema(method, serializerOptions: Options(),
+            inferenceOptions: new AIJsonSchemaCreateOptions { IncludeParameter = parameter => parameter.ParameterType != typeof(ToolCallContext) });
 
         string[] secrets = [.. tool.Descriptor.Parameters.Where(p => p.IsSecret).Select(p => p.Name)];
         Assert.Equal(Normalize(expected, secrets, runtime: true), Normalize(tool.JsonSchema, secrets, runtime: false));
@@ -42,6 +47,8 @@ public sealed class SchemaParityTests
     {
         "ListNotes" => "list_notes",
         "ClearNotesAsync" => "clear_notes",
+        "WhoAmI" => "whoami",
+        "SessionOrNone" => "session_or_none",
         _ => name,
     };
 

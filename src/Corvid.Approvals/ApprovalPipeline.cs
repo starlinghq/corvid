@@ -118,6 +118,14 @@ public sealed record ApprovalOptions
 
     /// <summary>An unanswered prompt is denied after this long (plan §10.2, as in Hermes).</summary>
     public TimeSpan Timeout { get; init; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Tools whose call runs a shell command line, by tool name, with the string parameter that holds the command (the
+    /// built-in <c>shell</c> tool's is <c>command</c>). A call to one is assessed as the <see cref="ShellAction"/> it
+    /// runs, parsed and unwrapped, so the hardline list, the rules and <c>risk</c> see the commands rather than an opaque
+    /// tool call, and a read-only command runs without asking.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> ShellTools { get; init; } = ImmutableDictionary<string, string>.Empty;
 }
 
 /// <summary>
@@ -170,7 +178,7 @@ public sealed class ApprovalPipeline
     public ImmutableArray<ApprovalRule> AlwaysRules => _always.Rules;
 
     /// <summary>Parses and describes an action without deciding anything.</summary>
-    public ActionAnalysis Analyze(ProposedAction action) => action switch
+    public ActionAnalysis Analyze(ProposedAction action) => Resolve(action) switch
     {
         ShellAction shell => ShellAnalyzer.Analyze(shell.Command, Environment),
         ToolAction tool => ToolAnalyzer.Analyze(tool, Environment),
@@ -183,6 +191,7 @@ public sealed class ApprovalPipeline
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(context.SessionId);
+        action = Resolve(action);
         var analysis = Analyze(action);
 
         var hardline = Hardline.Check(analysis, Environment);
@@ -288,6 +297,17 @@ public sealed class ApprovalPipeline
         var result = Resolve(context, assessment, approvalId, answer.Approved ? ApprovalResolution.UserApproved : ApprovalResolution.UserDenied,
             $"user: {(answer.Approved ? "approved" : "denied")} ({WireNames.Scope(scope)})");
         return result with { Scope = scope };
+    }
+
+    /// <summary>A call to a shell tool (<see cref="ApprovalOptions.ShellTools"/>) is the command line it runs.</summary>
+    private ProposedAction Resolve(ProposedAction action)
+    {
+        if (action is ToolAction tool && Options.ShellTools.TryGetValue(tool.Tool.Name, out var parameter)
+            && tool.Arguments.ValueKind == System.Text.Json.JsonValueKind.Object
+            && tool.Arguments.TryGetProperty(parameter, out var command) && command.ValueKind == System.Text.Json.JsonValueKind.String)
+            return new ShellAction(command.GetString()!);
+        // Without its command the call stays a tool call: it changes files and processes with no target found, so it asks.
+        return action;
     }
 
     private ApprovalResult Resolve(ApprovalContext context, ApprovalAssessment assessment, string approvalId, ApprovalResolution resolution,

@@ -431,6 +431,10 @@ public sealed class TurnRunner
         {
             var descriptor = call.Tool.Descriptor;
             IDisposable running;
+            ApprovalResult? approval = null;
+            bool tainted;
+            lock (_gate)
+                tainted = runner.Tainted;
             // Each call takes its lease before its ToolCallIssued is appended, so a switch always finds it tracked or parked.
             if (!call.Ask)
             {
@@ -443,7 +447,8 @@ public sealed class TurnRunner
                 // orphaned. A denial's result is logged while still parked; an approval moves it to tracked in one step.
                 using var parked = _services.Slots.ParkToolCall(call.CallId);
                 Issue(call.CallId, call.Tool.Function.Name, call.Arguments, parked);
-                if (await AuthorizeAsync(call, cancellationToken).ConfigureAwait(false) is { } denial)
+                (var denial, approval) = await AuthorizeAsync(call, cancellationToken).ConfigureAwait(false);
+                if (denial is not null)
                 {
                     Result(call.CallId, Error("not run", [denial], null, null), isError: true);
                     return CallOutcome.Denied;
@@ -456,7 +461,16 @@ public sealed class TurnRunner
             {
                 try
                 {
-                    var value = await call.Tool.Function.InvokeAsync(JsonValues.ToArguments(call.Arguments), cancellationToken).ConfigureAwait(false);
+                    // The turn's context travels beside the arguments, never in them: tools that need the session or the
+                    // approval (the shell tool runs only with one) read it from there.
+                    var context = new ToolCallContext(runner.SessionId, call.CallId)
+                    {
+                        Tainted = tainted,
+                        Interactive = _options.Interactive,
+                        Approval = approval,
+                    };
+                    var arguments = context.AttachTo(JsonValues.ToArguments(call.Arguments));
+                    var value = await call.Tool.Function.InvokeAsync(arguments, cancellationToken).ConfigureAwait(false);
                     var result = JsonValues.ToElement(value);
                     // The result is logged before the lease is released: a model switch refuses an issued call with no result.
                     Result(call.CallId, result, isError: false, $"{descriptor.Name}: {JsonValues.Text(result)}");
@@ -493,16 +507,20 @@ public sealed class TurnRunner
             return outcome;
         }
 
-        /// <summary>The pre-execute checkpoint (§5.2) through the approval pipeline. Returns why the call may not run, or null.</summary>
-        private async Task<string?> AuthorizeAsync(ValidCall call, CancellationToken cancellationToken)
+        /// <summary>
+        /// The pre-execute checkpoint (§5.2) through the approval pipeline. Returns why the call may not run, or the
+        /// pipeline's result when it may.
+        /// </summary>
+        private async Task<(string? Denial, ApprovalResult? Result)> AuthorizeAsync(ValidCall call, CancellationToken cancellationToken)
         {
             if (_services.Approvals is not { } approvals)
-                return "no approval pipeline is configured, so side-effecting tools do not run";
+                return ("no approval pipeline is configured, so side-effecting tools do not run", null);
             var context = new ApprovalContext(runner.SessionId, _options.ApprovalMode, State())
             {
                 Tainted = runner.Tainted,
                 KnownRecipients = _options.KnownRecipients,
                 CallId = call.CallId,
+                Interactive = _options.Interactive,
             };
             ApprovalResult result;
             try
@@ -515,7 +533,7 @@ public sealed class TurnRunner
                 Result(call.CallId, Error("cancelled", ["the turn was cancelled while the approval was pending"], null, null), isError: true);
                 throw;
             }
-            return result.Allowed ? null : $"{WireName(result.Resolution)}: {result.Assessment.Summary}";
+            return result.Allowed ? (null, result) : ($"{WireName(result.Resolution)}: {result.Assessment.Summary}", null);
         }
 
         private static string WireName(ApprovalResolution resolution) => resolution switch

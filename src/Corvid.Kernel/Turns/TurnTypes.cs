@@ -37,6 +37,12 @@ public sealed record TurnOptions
 
     public ApprovalMode ApprovalMode { get; init; } = ApprovalMode.Smart;
 
+    /// <summary>
+    /// False for scheduled and background turns, where nobody can answer a prompt: an approval that would ask is denied
+    /// (C-007b's <see cref="ApprovalContext.Interactive"/>), and tools see it on their <see cref="ToolCallContext"/>.
+    /// </summary>
+    public bool Interactive { get; init; } = true;
+
     /// <summary>Labels the extractor looks for in the user message, for the TurnState's <c>entities</c>.</summary>
     public ImmutableArray<string> EntityLabels { get; init; } = ["person", "organization", "place", "date", "time", "project", "file", "url"];
 

@@ -83,3 +83,14 @@ public static partial class ApiTools
     {
     }
 }
+
+/// <summary>Tools that read the turn's <see cref="ToolCallContext"/>, which never appears in the schema.</summary>
+public sealed partial class SessionTools
+{
+    [Tool("whoami", Description = "Say which session and call this is.")]
+    public string WhoAmI(ToolCallContext context, [Description("How to start the answer.")] string greeting = "hi") =>
+        $"{greeting} {context.SessionId}/{context.CallId} tainted={context.Tainted}";
+
+    [Tool("session_or_none", Description = "Name the session, if the call has one.")]
+    public string SessionOrNone(ToolCallContext? context) => context?.SessionId ?? "none";
+}
