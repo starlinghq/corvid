@@ -23,13 +23,13 @@ public enum RuleDecision
 /// <summary>
 /// A remembered answer, stored as structure rather than a command string. An allow rule matches a command with the same
 /// verb and subcommand whose effects are a subset of the rule's, whose elevation is the same, whose every path is at or
-/// under one of the rule's paths, and whose every host and process is listed: approving <c>rm -rf build</c> never
-/// matches <c>rm -rf /</c>. A deny rule matches the same verb and subcommand touching any of its paths or names (or any
+/// under one of the rule's paths (or matched by one of its patterns), and whose every host and process is listed: approving
+/// <c>rm -rf build</c> never matches <c>rm -rf /</c>, and approving <c>rm *.o</c> never matches <c>rm main.c</c>. A deny rule matches the same verb and subcommand touching any of its paths or names (or any
 /// at all when it lists none). Commands with anything unresolved never match an allow rule.
 /// </summary>
 /// <param name="Kind"><c>shell</c> or <c>tool</c>.</param>
 /// <param name="Verb">The program or tool name.</param>
-/// <param name="Paths">Absolute paths; a target matches at or below one.</param>
+/// <param name="Paths">Absolute paths, where a target matches at or below one, or patterns, which match what bash would.</param>
 /// <param name="Names">Hosts and processes as <c>host:example.org</c>, <c>process:1234</c>, <c>process_name:node</c>.</param>
 /// <param name="Source">The action text the rule was made from, for display.</param>
 public sealed record ApprovalRule(
@@ -50,7 +50,7 @@ public sealed record ApprovalRule(
         ArgumentNullException.ThrowIfNull(command);
         return new ApprovalRule(decision, kind, command.Verb, command.Subcommand, command.Effects & ~ActionEffects.Elevated,
             command.Effects.HasFlag(ActionEffects.Elevated),
-            [.. command.Targets.Where(target => target.Kind == TargetKind.Path).Select(PathScope).Distinct()],
+            [.. command.Targets.Where(target => target.Kind == TargetKind.Path).Select(target => target.Value).Distinct()],
             [.. command.Targets.Where(target => target.Kind is not (TargetKind.Path or TargetKind.Url)).Select(Name).Distinct()],
             source, createdAt);
     }
@@ -67,7 +67,7 @@ public sealed record ApprovalRule(
         {
             if (target.Dynamic || target.Kind == TargetKind.Path && target.Location is PathLocation.Unresolved or null)
                 return false;
-            if (target.Kind == TargetKind.Path && !Paths.Any(path => PathMath.IsAtOrUnder(PathScope(target), path)))
+            if (target.Kind == TargetKind.Path && !Paths.Any(path => Covers(path, target)))
                 return false;
             if (target.Kind is not (TargetKind.Path or TargetKind.Url) && !Names.Contains(Name(target)))
                 return false;
@@ -84,7 +84,8 @@ public sealed record ApprovalRule(
         if (Paths.IsEmpty && Names.IsEmpty)
             return true;
         return command.Targets.Any(target =>
-            target.Kind == TargetKind.Path && Paths.Any(path => PathMath.IsAtOrUnder(PathScope(target), path) || PathMath.IsUnder(path, PathScope(target)))
+            target.Kind == TargetKind.Path && Paths.Select(path => IsPattern(path) ? StaticDirectory(path) : path)
+                .Any(path => PathMath.IsAtOrUnder(PathScope(target), path) || PathMath.IsUnder(path, PathScope(target)))
             || target.Kind is not (TargetKind.Path or TargetKind.Url) && Names.Contains(Name(target)));
     }
 
@@ -99,14 +100,30 @@ public sealed record ApprovalRule(
     private bool SameCommand(string kind, AnalyzedCommand command) =>
         Kind == kind && Verb == command.Verb && Subcommand == command.Subcommand;
 
-    // A pattern is scoped by its static directory.
-    private static string PathScope(ActionTarget target)
+    // An approved path covers itself and everything under it. An approved pattern covers only that pattern and the paths
+    // it matches, so approving "rm *.o" never covers "rm main.c" in the same directory.
+    private static bool Covers(string path, ActionTarget target)
     {
-        if (!target.Pattern)
-            return target.Value;
-        var glob = target.Value.AsSpan().IndexOfAny("*?[");
-        var slash = glob < 0 ? target.Value.Length : target.Value.LastIndexOf('/', glob);
-        return slash <= 0 ? "/" : target.Value[..slash];
+        if (!IsPattern(path))
+            return PathMath.IsAtOrUnder(PathScope(target), path);
+        if (target.Pattern)
+            return target.Value == path;
+        var parts = PathMath.Components(path);
+        var names = PathMath.Components(target.Value);
+        return parts.Length == names.Length
+            && parts.Zip(names).All(pair => ProtectedPathMatch.Component(pair.First, pair.Second, dotglob: false));
+    }
+
+    private static bool IsPattern(string path) => path.AsSpan().IndexOfAny("*?[") >= 0;
+
+    // For a denial, a pattern is scoped by its static directory.
+    private static string PathScope(ActionTarget target) => target.Pattern ? StaticDirectory(target.Value) : target.Value;
+
+    private static string StaticDirectory(string path)
+    {
+        var glob = path.AsSpan().IndexOfAny("*?[");
+        var slash = glob < 0 ? path.Length : path.LastIndexOf('/', glob);
+        return slash <= 0 ? "/" : path[..slash];
     }
 
     private static string Name(ActionTarget target) => $"{WireNames.Kind(target.Kind)}:{target.Value}";

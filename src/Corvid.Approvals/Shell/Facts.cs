@@ -189,6 +189,17 @@ internal static class Options
         return true;
     }
 
+    // Long options the verb descriptions test for by name, for expanding abbreviations in Scan.
+    private static readonly string[] SignificantLongNames =
+    [
+        "archive", "chdir", "checkpoint-action", "command", "compress-program", "delete", "dereference-recursive", "directories", "directory", "exec",
+        "expression", "file", "from-file", "in-place", "info-script", "keep", "list", "log-file", "lua-exec", "mirror", "modify", "move",
+        "output", "output-dir", "output-directory", "pager", "pgid", "pid", "pre", "recurse", "recurse-paths", "recursive",
+        "reference", "regexp", "remove", "remove-source-files", "replace", "revert", "rsh", "rsync-path", "sandbox", "scp", "set",
+        "sh-exec", "split-string", "stdout", "target-directory", "test", "to-command", "to-stdout", "uid", "unzip-command",
+        "use-compress-program",
+    ];
+
     /// <summary>
     /// Tolerant, permuting parsing for ordinary programs: unknown options count as flags, values are taken only for the
     /// options listed, and everything else is an operand. Dynamic words are operands (their targets are unresolved).
@@ -217,12 +228,19 @@ internal static class Options
             {
                 var equals = text.IndexOf('=', StringComparison.Ordinal);
                 var name = equals < 0 ? text[2..] : text[2..equals];
+                Field? value = null;
                 if (equals >= 0)
-                    options.Add((name, Field.Literal(text[(equals + 1)..])));
+                    value = Field.Literal(text[(equals + 1)..]);
                 else if (table.IsLongWithValue(name) && i + 1 < args.Count)
-                    options.Add((name, args[++i]));
-                else
-                    options.Add((name, null));
+                    value = args[++i];
+                options.Add((name, value));
+                // getopt_long accepts any unambiguous prefix ("rm --rec" is "rm --recursive"). Each long name the prefix could
+                // stand for is recorded too, so a check for "recursive" sees it; a prefix the program finds ambiguous fails
+                // there, so reading it every way errs on the safe side. Its value, if any, stays an operand.
+                if (name.Length > 0 && !table.IsLongFlag(name) && !table.IsLongWithValue(name) && !table.IsLongOptional(name))
+                    foreach (var full in SignificantLongNames.Concat(table.Long ?? []).Concat(table.LongWithValue ?? []).Concat(table.LongOptional ?? []))
+                        if (full.Length > name.Length && full.StartsWith(name, StringComparison.Ordinal))
+                            options.Add((full, value));
                 continue;
             }
 

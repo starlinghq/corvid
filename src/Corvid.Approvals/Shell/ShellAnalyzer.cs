@@ -380,6 +380,8 @@ internal sealed partial class ShellAnalyzer
                 return Xargs(args, scope, extras, nesting, text);
             case "sudo":
                 return Sudo(args, scope, extras, nesting, text);
+            case "sudoedit":
+                return Sudo([Field.Literal("-e"), .. args], scope, extras, nesting, text);
             case "doas":
                 return Doas(args, scope, extras, nesting, text);
             case "su":

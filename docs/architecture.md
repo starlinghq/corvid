@@ -668,8 +668,9 @@ package. Nothing calls it yet: the turn loop (C-011) and the shell tool (C-012) 
   `setsid`, `ionice`, `time`, `command`, `builtin`, `exec`, `eval`, `xargs` (its input is dynamic), `sh`,
   `bash` and `dash` with `-c` or a literal here-string or here-document on stdin, `sudo`, `doas`, `su -c`,
   `pkexec` (elevated), `watch` (joined and run by `sh -c`), `flock`, `taskset`, `chrt`, `busybox` and
-  `find -exec`. Wrapper options are parsed strictly: an unknown or computed option refuses. Substitutions are
-  analysed as commands of their own. Each command becomes an `AnalyzedCommand`: verb and subcommand, effects
+  `find -exec`. Wrapper options are parsed strictly: an unknown or computed option refuses. Other programs'
+  options are read tolerantly, with abbreviated long options (`rm --rec`) read as every option they could
+  stand for. Substitutions are analysed as commands of their own. Each command becomes an `AnalyzedCommand`: verb and subcommand, effects
   (read, write, delete, recursive, execute, network, signal, elevated, system, configuration, ...), targets
   (paths resolved against the workspace as inside, workspace root, outside or unresolved; globs by their static
   directory; PIDs, process names, hosts, URLs) and unresolved reasons. Known programs are described by kind
@@ -678,14 +679,20 @@ package. Nothing calls it yet: the turn loop (C-011) and the shell tool (C-012) 
   code-loading variables set, and for a program named by a path outside the system directories, a command is
   unresolved but still described as named, so `./rm -rf /` and `env PATH=x rm -rf /` meet the hardline list.
   Interpreters' inline code (`python3 -c`, `node -e`) is recorded for the backstop; other shells' scripts
-  (`zsh`, `ksh`, `fish`, ...) are outside the subset and ask.
+  (`zsh`, `ksh`, `fish`, ...) are outside the subset and ask. Readers lose their read-only standing when an
+  option writes or runs something: `git log`/`diff`/`show --output`, `git format-patch -o`, `git grep -O`,
+  `rg --pre`, `ag --pager`, `yq -i`, `sort --compress-program`, `sdiff -o`, `less -o`, and the output operand of
+  `uniq` and `xxd`. A computed argument to `git`, or a computed pattern for `rg` or `ag`, may be such an option,
+  so it is unresolved.
 - Tools: `ToolAnalyzer` describes a non-shell call from C-005's `ToolRisk` (filesystem write, destructive
   delete, network, messaging, schedule, memory, configuration, remote) and the targets in its arguments
-  (parameters named like paths or addresses, or targets the caller passes). Recipients are targets too.
+  (parameters named like paths or addresses, or targets the caller passes). Recipients are targets too. A
+  filesystem tool with no path found, or a messaging tool without `Recipients`, is unresolved, so it asks
+  once and no remembered rule matches it.
 - Hardline (`Hardline`, rule names in `HardlineRules`): disk formatters; writes to devices other than the inert
   ones (`/dev/null`, `/dev/tty`, ...) and `/dev/shm`; recursive deletes outside the workspace; writes to
-  credential stores; any access to Vault's directories (by path, by glob, by a recursive change of an
-  ancestor, or by name in unparsed text); writes to Corvid's safety configuration (`$XDG_CONFIG_HOME/corvid`,
+  credential stores; any access to Vault's directories (by path, by glob, by a recursive change, move or
+  deletion of an ancestor, or by name in unparsed text); writes to Corvid's safety configuration (`$XDG_CONFIG_HOME/corvid`,
   which holds the always-rules file). `ProtectedPaths` is built from `Corvid.Sandbox.BuiltInDenials`: Vault's
   directories at the defaults and the XDG locations, the sandbox's secret directories and the runtime
   directory, plus stores the sandbox does not hide (`~/.kube`, `~/.netrc`, `/etc/shadow`, ...) and credential
@@ -708,8 +715,10 @@ package. Nothing calls it yet: the turn loop (C-011) and the shell tool (C-012) 
   answer is recorded as the `risk` decision's outcome for calibration. With no prompter, or
   `Interactive = false`, an ask is denied without events.
 - Rules: "session" and "always" answers become `ApprovalRule`s per side-effecting command: verb,
-  subcommand, effects, elevation, the paths (a target must be at or under one) and the names (hosts, PIDs,
-  process names, recipients) approved, so approving `rm -rf build` never covers `rm -rf src` or `sudo rm`.
+  subcommand, effects, elevation, the paths (a target must be at or under one) or patterns (a target must be
+  the same pattern or a path it matches) and the names (hosts, PIDs, process names, recipients) approved, so
+  approving `rm -rf build` never covers `rm -rf src` or `sudo rm`, and approving `rm *.o` never covers
+  `rm main.c`.
   Session rules live in the pipeline; always rules in `IApprovalRuleStore`, by default in memory, or
   `JsonFileApprovalRuleStore` (format `corvid-approval-rules` version 1, unknown fields rejected, written
   atomically). Forced prompts offer no rule.
@@ -726,7 +735,10 @@ spike S3; calibrated `risk` (C-004b); calling the pipeline from the turn loop an
 C-012); reversibility from checkpoint state (C-014; `ApprovalContext.Reversible` is passed through);
 restoring session rules on resume (they are not in the log); listing and removing always-rules
 (`/approvals`, C-013), and where the host keeps the rule file; control flow, subshells and other syntax
-outside the subset, which ask rather than run.
+outside the subset, which ask rather than run; unwrapping further launchers (`strace`, `nsenter`, `unshare`,
+`runuser`, `systemd-run`, `script -c`, `at`, `parallel`, ...), which today are programs that run code Corvid
+cannot see, so they ask unless a calibrated `risk` answer allows them, and the hardline list does not see the
+command they launch; symlinks and `/proc/<pid>/cwd` paths, which are resolved lexically and left to the sandbox.
 
 ## Running the check
 

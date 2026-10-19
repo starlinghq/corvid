@@ -114,6 +114,53 @@ public sealed class PipelineTests
     }
 
     [Fact]
+    public async Task An_approved_pattern_covers_only_what_it_matches()
+    {
+        using var db = new TempLog();
+        var pipeline = Fixtures.Pipeline(db, prompter: ScriptedPrompter.Always(ApprovalAnswer.Approve(ApprovalScope.Session)));
+        var context = Fixtures.Context(ApprovalMode.Manual);
+
+        await pipeline.AuthorizeAsync(context, new ShellAction("rm *.o"), Ct);
+        Assert.Equal([Fixtures.Workspace + "/*.o"], Assert.Single(pipeline.SessionRules(Session)).Paths);
+
+        Assert.Equal(ApprovalOutcome.Auto, (await pipeline.AssessAsync(context, new ShellAction("rm *.o"), Ct)).Outcome);
+        Assert.Equal(ApprovalOutcome.Auto, (await pipeline.AssessAsync(context, new ShellAction("rm main.o util.o"), Ct)).Outcome);
+        Assert.Equal(ApprovalOutcome.Ask, (await pipeline.AssessAsync(context, new ShellAction("rm main.c"), Ct)).Outcome);
+        Assert.Equal(ApprovalOutcome.Ask, (await pipeline.AssessAsync(context, new ShellAction("rm src/main.o"), Ct)).Outcome);
+        Assert.Equal(ApprovalOutcome.Ask, (await pipeline.AssessAsync(context, new ShellAction("rm *"), Ct)).Outcome);
+        Assert.Equal(ApprovalOutcome.Ask, (await pipeline.AssessAsync(context, new ShellAction("rm .hidden.o"), Ct)).Outcome);
+    }
+
+    [Fact]
+    public async Task Tools_without_targets_ask_once_whatever_the_score()
+    {
+        using var db = new TempLog();
+        var pipeline = Fixtures.Pipeline(db, new FixedRiskDecider(level: 0), ScriptedPrompter.Always(ApprovalAnswer.Approve(ApprovalScope.Session)));
+        var context = Fixtures.Context(ApprovalMode.Permissive);
+
+        // A filesystem tool whose path the analyzer cannot find: the hardline list would have nothing to check.
+        var patch = new ToolAction(Fixtures.Tool("apply_patch", SideEffects.Filesystem, parameters: "patch"),
+            Fixtures.Json("""{"patch":"*** Update File: /home/user/.ssh/authorized_keys"}"""));
+        var assessment = await pipeline.AssessAsync(context, patch, Ct);
+        Assert.Equal(ApprovalOutcome.Ask, assessment.Outcome);
+        Assert.Equal([ApprovalScope.Once], assessment.Offered);
+        Assert.Equal(ApprovalOutcome.Auto,
+            (await pipeline.AssessAsync(context, patch with { Targets = [new ActionTarget(TargetKind.Path, "src/a.cs", TargetAccess.Write)] }, Ct)).Outcome);
+        Assert.Equal(ApprovalOutcome.Deny,
+            (await pipeline.AssessAsync(context, patch with { Targets = [new ActionTarget(TargetKind.Path, "~/.ssh/authorized_keys", TargetAccess.Write)] }, Ct)).Outcome);
+
+        // A send whose recipients were not given: a rule approving one recipient must not cover it.
+        var manual = Fixtures.Context(ApprovalMode.Manual);
+        var send = Fixtures.Tool("send_message", SideEffects.Messaging, parameters: "to");
+        var toSam = new ToolAction(send, Fixtures.Json("""{"to":"sam","text":"hi"}"""), Recipients: ["sam"]);
+        await pipeline.AuthorizeAsync(manual, toSam, Ct);
+        Assert.Equal(ApprovalOutcome.Auto, (await pipeline.AssessAsync(manual, toSam, Ct)).Outcome);
+        var unknown = await pipeline.AssessAsync(manual, toSam with { Recipients = default }, Ct);
+        Assert.Equal(ApprovalOutcome.Ask, unknown.Outcome);
+        Assert.Equal([ApprovalScope.Once], unknown.Offered);
+    }
+
+    [Fact]
     public async Task Always_rules_persist_in_a_versioned_file_and_denials_are_remembered()
     {
         using var db = new TempLog();

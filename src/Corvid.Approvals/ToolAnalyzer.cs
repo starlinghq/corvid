@@ -53,8 +53,15 @@ internal static class ToolAnalyzer
         // Recipients are targets, so a remembered approval for one recipient does not cover another.
         targets = targets.AddRange(action.Recipients.OrEmpty().Select(recipient =>
             new ActionTarget(TargetKind.Recipient, recipient, TargetAccess.Send, Written: recipient)));
+        // Without targets the hardline list has nothing to check and a remembered rule would match vacuously, so a
+        // filesystem change with no path found, or a send with no recipients given, is unresolved: it asks, once.
+        var unresolved = ImmutableArray.CreateBuilder<string>();
+        if (action.Tool.Risk.SideEffects.HasFlag(SideEffects.Filesystem) && !targets.Any(target => target.Kind == TargetKind.Path))
+            unresolved.Add($"'{action.Tool.Name}' changes files, but no path was found in its arguments");
+        if (action.Tool.Risk.SideEffects.HasFlag(SideEffects.Messaging) && action.Recipients.IsDefaultOrEmpty)
+            unresolved.Add($"'{action.Tool.Name}' sends a message, but its recipients were not given");
         var text = $"{action.Tool.Name} {action.Arguments.GetRawText()}";
-        var command = new AnalyzedCommand(action.Tool.Name, null, effects, targets, [], [], false, text,
+        var command = new AnalyzedCommand(action.Tool.Name, null, effects, targets, unresolved.ToImmutable(), [], false, text,
             [action.Tool.Name, .. Strings(action.Arguments)]);
         return new ActionAnalysis("tool", text, [command], null);
     }

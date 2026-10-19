@@ -166,9 +166,17 @@ internal static class Verbs
             return;
         }
 
-        if (SystemChangers.Contains(verb))
+        if (SystemChangers.Contains(verb) || verb is "nvme")
         {
             facts.Effects |= ActionEffects.System;
+            // Actions that overwrite a block device: its operands are device writes, so the hardline list sees them.
+            var operands = Options.Scan(args, OptionTable.Empty).Operands;
+            if (verb is "cryptsetup" && operands.Any(o => !o.Dynamic && o.Text is "luksFormat" or "erase" or "luksErase" or "reencrypt"
+                    or "repair" or "convert")
+                || verb is "nvme" && operands.Any(o => !o.Dynamic && o.Text is "format" or "sanitize" or "write" or "write-zeroes" or "dsm"
+                    or "write-uncor" or "delete-ns" or "create-ns" or "fw-download" or "fw-commit"))
+                foreach (var operand in operands.Where(o => o.Dynamic || o.Text.StartsWith('/')))
+                    facts.Path(operand, TargetAccess.Write);
             return;
         }
 
@@ -407,7 +415,9 @@ internal static class Verbs
                 "xxd" => "cglos",
                 "ls" or "dir" or "vdir" => "ITw",
                 "tree" => "LPIo",
-                "diff" or "sdiff" => "CUIxXLW",
+                "diff" => "CUIxXLW",
+                "sdiff" => "IoWw",
+                "less" or "more" => "oObhjkpPtTxyz",
                 "du" => "BdtX",
                 "column" => "cstoNOR",
                 "fold" or "fmt" => "w",
@@ -416,7 +426,7 @@ internal static class Verbs
                 _ => "",
             },
             LongWithValue: ["output", "lines", "bytes", "delimiter", "fields", "key", "field-separator", "max-depth", "exclude",
-                "ignore", "hide", "width", "tabsize", "files0-from", "label"]));
+                "ignore", "hide", "width", "tabsize", "files0-from", "label", "compress-program", "log-file", "LOG-FILE"]));
         var recursive = verb is "du" or "tree"
             || verb is "ls" or "dir" or "vdir" && options.Any(o => o.Name is "R" or "recursive")
             || verb is "diff" && options.Any(o => o.Name is "r" or "recursive");
@@ -425,14 +435,18 @@ internal static class Verbs
         {
             if (value is null)
                 continue;
-            if (verb is "sort" or "tree" && name is "o" or "output")
+            if (verb is "sort" or "tree" or "sdiff" && name is "o" or "output"
+                || verb is "less" or "more" && name is "o" or "O" or "log-file" or "LOG-FILE")
                 writes.Add(value);
+            else if (verb is "sort" && name is "compress-program")
+                facts.Effects |= ActionEffects.Execute;
             else if (name is "files0-from")
                 facts.Path(value, TargetAccess.Read);
         }
 
         var reads = operands;
-        if (verb == "uniq" && operands.Count > 1 || verb == "xxd" && operands.Count > 1 && options.Any(o => o.Name is "r" or "revert"))
+        // "uniq in out" and "xxd in out" write their second operand.
+        if (verb is "uniq" or "xxd" && operands.Count > 1)
         {
             reads = operands.Take(1).ToList();
             writes.AddRange(operands.Skip(1).Take(1));
@@ -458,6 +472,20 @@ internal static class Verbs
         foreach (var (name, value) in options)
             if (value is not null && name is "f" or "file" or "from-file")
                 facts.Path(value, TargetAccess.Read);
+        // "rg --pre <cmd>" runs a program on every file it searches; "ag --pager <cmd>" pipes its output into one.
+        if (verb is "rg" && options.Any(o => o.Name.StartsWith("pre", StringComparison.Ordinal) && o.Name != "pretty")
+            || verb is "ag" && options.Any(o => o.Name.StartsWith("pager", StringComparison.Ordinal)))
+            facts.Effects |= ActionEffects.Execute;
+        // A pattern computed at run time may be such an option.
+        if (verb is "rg" or "ag" && operands.Count > 0 && operands[0].Dynamic && !explicitPattern)
+            facts.Unresolved($"{verb} argument '{operands[0].Display}' is computed at run time and may be an option that runs a program");
+        // "yq -i" edits its files in place.
+        if (verb is "yq" && options.Any(o => o.Name is "i" or "inplace" or "in-place"))
+        {
+            foreach (var path in operands.Skip(1))
+                facts.Path(path, TargetAccess.Write);
+            return;
+        }
         var recursive = verb is "rg" or "ag" or "ack"
             || options.Any(o => o.Name is "r" or "R" or "recursive" or "dereference-recursive"
                 || o.Name is "d" or "directories" && o.Value?.Text == "recurse");
@@ -872,6 +900,34 @@ internal static class Verbs
         var repository = Under(directory, "*");
         bool Listing(params string[] listing) => rest.All(arg => !arg.Dynamic && (listing.Contains(arg.Text) || arg.Text.StartsWith("--format", StringComparison.Ordinal)
             || arg.Text.StartsWith("--sort", StringComparison.Ordinal) || arg.Text.StartsWith("--contains", StringComparison.Ordinal)));
+
+        // Options that make a reading subcommand write a file or run a program: "git log --output=<file>",
+        // "git grep -O<cmd>". They apply before the reader shortcut, which would otherwise run them unasked.
+        for (var j = 0; j < rest.Count; j++)
+        {
+            var arg = rest[j];
+            if (arg.Dynamic)
+            {
+                facts.Unresolved($"git argument '{arg.Display}' is computed at run time and may be an option that writes or runs a program");
+                continue;
+            }
+
+            var text = arg.Text;
+            if (text.StartsWith("--output=", StringComparison.Ordinal) || text.StartsWith("--output-directory=", StringComparison.Ordinal))
+                facts.Path(arg with { Text = text[(text.IndexOf('=') + 1)..] }, TargetAccess.Write, recursive: text.StartsWith("--output-directory", StringComparison.Ordinal));
+            else if (text is "--output" or "--output-directory" || text == "-o" && name is "format-patch" or "archive")
+            {
+                if (j + 1 < rest.Count)
+                    facts.Path(rest[++j], TargetAccess.Write, recursive: text != "--output" && name == "format-patch");
+                else
+                    facts.Unresolved($"git {name} {text} has no value");
+            }
+            else if (text.StartsWith("-o", StringComparison.Ordinal) && text.Length > 2 && name is "format-patch" or "archive")
+                facts.Path(arg with { Text = text[2..] }, TargetAccess.Write, recursive: name == "format-patch");
+            else if (name == "grep" && (text.StartsWith("-O", StringComparison.Ordinal) || text.StartsWith("--open-files-in-pager", StringComparison.Ordinal)
+                         || text.StartsWith("--open-", StringComparison.Ordinal)))
+                facts.Effects |= ActionEffects.Execute;
+        }
 
         if (GitReaders.Contains(name)
             || name is "branch" && Listing("-a", "-r", "-l", "--list", "-v", "-vv", "--show-current", "--all", "--remotes", "--merged", "--no-merged")

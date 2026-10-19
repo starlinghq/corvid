@@ -78,12 +78,14 @@ internal static class Hardline
         if (target.Kind != TargetKind.Path)
             return;
         var changes = target.Access is TargetAccess.Write or TargetAccess.Delete;
+        // Moving or renaming a directory (a delete at its old path) carries everything under it, recursive or not.
+        var wholeTree = target.Recursive || target.Access == TargetAccess.Delete;
         var shown = target.Written ?? target.Value;
 
         foreach (var vault in env.Protected.Vault)
         {
             var reach = ReachOf(target, vault);
-            if (reach == Reach.Direct || reach == Reach.Ancestor && target.Recursive && changes)
+            if (reach == Reach.Direct || reach == Reach.Ancestor && wholeTree && changes)
                 reasons.Add(new(HardlineRules.VaultAccess, $"'{command.Verb}' {Verb(target)} {shown}, in Vault's directory {vault}"));
         }
 
@@ -94,14 +96,14 @@ internal static class Hardline
             reasons.Add(new(HardlineRules.RecursiveDeleteOutsideWorkspace,
                 $"'{command.Verb}' deletes {shown} recursively, outside the workspace {env.Workspace}"));
 
-        if (changes && (CredentialReach(target, env) is Reach.Direct || CredentialReach(target, env) is Reach.Ancestor && target.Recursive))
+        if (changes && (CredentialReach(target, env) is Reach.Direct || CredentialReach(target, env) is Reach.Ancestor && wholeTree))
             reasons.Add(new(HardlineRules.CredentialStoreWrite, $"'{command.Verb}' {Verb(target)} the credential store {shown}"));
 
         if (changes)
             foreach (var configuration in env.Protected.SafetyConfiguration)
             {
                 var reach = ReachOf(target, configuration);
-                if (reach == Reach.Direct || reach == Reach.Ancestor && target.Recursive)
+                if (reach == Reach.Direct || reach == Reach.Ancestor && wholeTree)
                     reasons.Add(new(HardlineRules.SafetyConfigurationChange,
                         $"'{command.Verb}' {Verb(target)} {shown}, Corvid's safety configuration"));
             }
