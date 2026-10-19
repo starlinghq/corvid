@@ -40,6 +40,7 @@ internal static class WireNames
         TargetKind.ProcessName => "process_name",
         TargetKind.Host => "host",
         TargetKind.Url => "url",
+        TargetKind.Recipient => "recipient",
         _ => throw new ArgumentOutOfRangeException(nameof(kind)),
     };
 
@@ -51,6 +52,7 @@ internal static class WireNames
         TargetAccess.Execute => "execute",
         TargetAccess.Signal => "signal",
         TargetAccess.Connect => "connect",
+        TargetAccess.Send => "send",
         _ => throw new ArgumentOutOfRangeException(nameof(access)),
     };
 

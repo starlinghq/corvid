@@ -35,10 +35,44 @@ public sealed class HardlineTests
     public void Protected_paths_follow_the_xdg_directories()
     {
         var env = ApprovalEnvironment.Create("/w", "/h", "/data", "/conf", "/run/u");
-        Assert.Equal(["/data/corvid-vault", "/conf/corvid-vault", "/run/u/corvid-vault"], env.Protected.Vault);
+        // The defaults stay protected when the variables point elsewhere, as the sandbox hides both.
+        Assert.Equal(["/h/.local/share/corvid-vault", "/h/.config/corvid-vault", "/data/corvid-vault", "/conf/corvid-vault",
+            "/run/u/corvid-vault"], env.Protected.Vault);
         Assert.Equal(["/conf/corvid"], env.Protected.SafetyConfiguration);
         Assert.Contains("/h/.ssh", env.Protected.CredentialStores);
+        Assert.Contains("/conf/gh", env.Protected.CredentialStores);
+        Assert.Contains("/run/u", env.Protected.CredentialStores);
         Assert.Equal("/conf/corvid/approvals.json", JsonFileApprovalRuleStore.DefaultPath(env));
+    }
+
+    [Fact]
+    public void Protected_paths_cover_everything_the_sandbox_hides()
+    {
+        var variables = new Dictionary<string, string?> { ["XDG_DATA_HOME"] = "/data", ["XDG_CONFIG_HOME"] = "/conf", ["XDG_RUNTIME_DIR"] = "/run/u" };
+        var env = ApprovalEnvironment.Create("/w", "/h", "/data", "/conf", "/run/u");
+        Assert.Subset(env.Protected.Vault.ToHashSet(), Sandbox.BuiltInDenials.VaultDirectories("/h", variables.GetValueOrDefault).ToHashSet());
+        Assert.Subset(env.Protected.CredentialStores.ToHashSet(), Sandbox.BuiltInDenials.SecretPaths("/h", variables.GetValueOrDefault).ToHashSet());
+        Assert.Contains(Sandbox.BuiltInDenials.RuntimeDirectory(variables.GetValueOrDefault), env.Protected.CredentialStores);
+    }
+
+    [Theory]
+    [InlineData("cat /data/corvid-vault/store.bin")]
+    [InlineData("cat /h/.local/share/corvid-vault/store.bin")]
+    [InlineData("ls /conf/corvid-vault")]
+    [InlineData("cat /h/.config/corvid-vault/vault.json")]
+    public void Vault_is_denied_at_its_xdg_and_default_locations(string command)
+    {
+        var env = ApprovalEnvironment.Create("/w", "/h", "/data", "/conf", "/run/u");
+        Assert.Contains(Hardline.Check(Shell.ShellAnalyzer.Analyze(command, env), env), reason => reason.Code == HardlineRules.VaultAccess);
+    }
+
+    [Theory]
+    [InlineData("echo x > /run/u/bus", HardlineRules.CredentialStoreWrite)]
+    [InlineData("cat /run/u/corvid-vault/vault.sock", HardlineRules.VaultAccess)]
+    public void The_runtime_directory_is_a_credential_store(string command, string rule)
+    {
+        var env = ApprovalEnvironment.Create("/w", "/h", "/data", "/conf", "/run/u");
+        Assert.Contains(Hardline.Check(Shell.ShellAnalyzer.Analyze(command, env), env), reason => reason.Code == rule);
     }
 
     [Theory]

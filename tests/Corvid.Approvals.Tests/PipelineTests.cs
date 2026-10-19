@@ -273,6 +273,22 @@ public sealed class PipelineTests
     }
 
     [Fact]
+    public async Task A_remembered_send_covers_only_the_recipients_approved()
+    {
+        using var db = new TempLog();
+        var pipeline = Fixtures.Pipeline(db, prompter: ScriptedPrompter.Always(ApprovalAnswer.Approve(ApprovalScope.Session)));
+        var context = Fixtures.Context(ApprovalMode.Manual);
+        var send = Fixtures.Tool("send_message", SideEffects.Messaging, parameters: "to");
+        var toSam = new ToolAction(send, Fixtures.Json("""{"to":"sam","text":"hi"}"""), Recipients: ["sam"]);
+
+        Assert.Equal(ApprovalResolution.UserApproved, (await pipeline.AuthorizeAsync(context, toSam, Ct)).Resolution);
+        Assert.Equal(["recipient:sam"], Assert.Single(pipeline.SessionRules(Session)).Names);
+        Assert.Equal(ApprovalOutcome.Auto, (await pipeline.AssessAsync(context, toSam with { Arguments = Fixtures.Json("""{"to":"sam","text":"again"}""") }, Ct)).Outcome);
+        Assert.Equal(ApprovalOutcome.Ask, (await pipeline.AssessAsync(context, toSam with { Recipients = ["mallory"] }, Ct)).Outcome);
+        Assert.Equal(ApprovalOutcome.Ask, (await pipeline.AssessAsync(context, toSam with { Recipients = ["sam", "mallory"] }, Ct)).Outcome);
+    }
+
+    [Fact]
     public async Task Tainted_turns_ask_for_network_egress_and_new_recipients()
     {
         using var db = new TempLog();

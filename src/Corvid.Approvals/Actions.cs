@@ -40,6 +40,8 @@ public enum TargetKind
     ProcessName,
     Host,
     Url,
+    /// <summary>Who a messaging tool sends to, as the caller resolved them.</summary>
+    Recipient,
 }
 
 public enum TargetAccess
@@ -50,6 +52,7 @@ public enum TargetAccess
     Execute,
     Signal,
     Connect,
+    Send,
 }
 
 /// <summary>Where a path target lies relative to the workspace, by lexical resolution (symlinks are the sandbox's concern).</summary>

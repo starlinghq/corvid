@@ -6,6 +6,8 @@
   <ItemGroup>
     <ProjectReference Include="../Corvid.Abstractions/Corvid.Abstractions.csproj" />
     <ProjectReference Include="../Corvid.Fabric/Corvid.Fabric.csproj" />
+    <!-- For the sandbox's built-in denials, so the hardline list protects the same paths the sandbox hides. -->
+    <ProjectReference Include="../Corvid.Sandbox/Corvid.Sandbox.csproj" />
     <ProjectReference Include="../Corvid.Tools/Corvid.Tools.csproj" />
     <InternalsVisibleTo Include="Corvid.Approvals.Tests" />
   </ItemGroup>

@@ -50,6 +50,9 @@ internal static class ToolAnalyzer
         var targets = action.Targets.IsDefault
             ? FromArguments(action.Arguments, access, env)
             : [.. action.Targets.Select(target => Locate(target, env))];
+        // Recipients are targets, so a remembered approval for one recipient does not cover another.
+        targets = targets.AddRange(action.Recipients.OrEmpty().Select(recipient =>
+            new ActionTarget(TargetKind.Recipient, recipient, TargetAccess.Send, Written: recipient)));
         var text = $"{action.Tool.Name} {action.Arguments.GetRawText()}";
         var command = new AnalyzedCommand(action.Tool.Name, null, effects, targets, [], [], false, text,
             [action.Tool.Name, .. Strings(action.Arguments)]);

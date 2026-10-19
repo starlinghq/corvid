@@ -41,8 +41,11 @@ internal static class Verbs
         "python", "python2", "python3", "pypy", "pypy3", "node", "nodejs", "deno", "ruby", "perl", "php", "lua", "luajit",
         "Rscript", "julia", "java", "jshell", "pwsh", "powershell", "tclsh", "expect", "osascript", "irb", "gdb", "lldb",
         "strace", "ltrace", "valgrind", "perf", "sqlite3", "psql", "mysql", "open", "xdg-open", "vim", "vi", "nvim", "nano",
-        "emacs", "code", "watch", "flock", "nsenter", "unshare", "firejail", "bwrap", "systemd-run", "script", "parallel",
-        "zsh", "ksh", "fish", "csh", "tcsh");
+        "emacs", "code", "nsenter", "unshare", "firejail", "bwrap", "systemd-run", "script", "parallel",
+        "zsh", "ksh", "mksh", "ash", "yash", "posh", "fish", "csh", "tcsh");
+
+    private static readonly FrozenSet<string> OtherShells = FrozenSet.Create(StringComparer.Ordinal,
+        "zsh", "ksh", "mksh", "ash", "yash", "posh", "fish", "csh", "tcsh");
 
     private static readonly FrozenSet<string> BuildTools = FrozenSet.Create(StringComparer.Ordinal,
         "make", "cmake", "ninja", "meson", "gradle", "gradlew", "mvn", "ant", "bazel", "scons", "just", "task", "rake");
@@ -146,7 +149,7 @@ internal static class Verbs
 
         if (Interpreters.Contains(verb))
         {
-            Interpreter(facts, args);
+            Interpreter(facts, verb, args);
             return;
         }
 
@@ -466,7 +469,7 @@ internal static class Verbs
         facts.Effects |= ActionEffects.Read;
     }
 
-    private static void Interpreter(CommandFacts facts, List<Field> args)
+    private static void Interpreter(CommandFacts facts, string verb, List<Field> args)
     {
         // "python3 --version" and the like only report.
         if (args.Count == 1 && !args[0].Dynamic && args[0].Text is "--version" or "-V" or "-v" or "--help" or "-h" or "version")
@@ -476,9 +479,18 @@ internal static class Verbs
         }
 
         facts.Effects |= ActionEffects.Execute;
+        // Other shells' scripts are outside the parsed bash subset, so they are refused (asked about) like one.
+        if (OtherShells.Contains(verb))
+            facts.Unresolved($"{verb} runs a script outside the parsed bash subset");
+        var inline = args.Any(a => !a.Dynamic && a.Text is "-c" or "-e" or "--eval" or "-E" or "--command" or "-command");
         var script = Options.Scan(args, OptionTable.Empty).Operands.FirstOrDefault();
-        if (script is not null && !args.Any(a => !a.Dynamic && a.Text is "-c" or "-e" or "-m" or "--eval" or "-E"))
+        if (script is not null && !inline && !args.Any(a => !a.Dynamic && a.Text == "-m"))
             facts.Path(script, TargetAccess.Execute);
+        // Inline code ("python3 -c ...", "zsh -c ...") is not parsed, but the backstop still finds Vault's directory
+        // name or a disk formatter in it.
+        if (inline)
+            foreach (var argument in args.Where(a => !a.Dynamic && !a.IsOption))
+                facts.OpaqueScript(argument.Text);
     }
 
     private static void Dispatcher(CommandFacts facts, List<Field> args, FrozenSet<string> readers, ActionEffects otherwise)

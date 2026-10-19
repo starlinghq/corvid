@@ -46,6 +46,18 @@ internal static class Tables
         ["close-from", "chdir", "group", "host", "prompt", "chroot", "role", "type", "command-timeout", "other-user", "user"],
         ["preserve-env"]);
     public static readonly OptionTable Doas = new("Lns", "aCu");
+    public static readonly OptionTable Watch = new("bcegtxprw", "nq",
+        ["beep", "color", "no-color", "errexit", "chgexit", "no-title", "exec", "precise", "no-wrap", "no-rerun"],
+        ["interval", "equexit"], ["differences"], OptionalAttached: "d");
+    // flock stops at its first operand (getopt "+"), the lock file.
+    public static readonly OptionTable Flock = new("sxenouF", "wEc",
+        ["shared", "exclusive", "unlock", "nonblock", "nb", "close", "no-fork", "verbose"],
+        ["timeout", "wait", "conflict-exit-code", "command"]);
+    public static readonly OptionTable Taskset = new("apc", Long: ["all-tasks", "pid", "cpu-list"]);
+    public static readonly OptionTable Chrt = new("bdfiorRvae", "TPD",
+        ["batch", "deadline", "fifo", "idle", "other", "rr", "reset-on-fork", "verbose", "all-tasks", "ext"],
+        ["sched-runtime", "sched-period", "sched-deadline"]);
+    public static readonly OptionTable Pkexec = new(Long: ["disable-internal-agent", "keep-cwd"], LongWithValue: ["user"]);
     public static readonly OptionTable Su = new("lmpfP", "cgGsw", ["login", "preserve-environment", "fast", "pty"],
         ["command", "group", "supp-group", "shell", "whitelist-environment", "session-command"], Permute: true);
 }
@@ -256,6 +268,9 @@ internal sealed class CommandFacts(ShellAnalyzer analyzer, string verb, Scope sc
 
     public void Unresolved(string reason) => _unresolved.Add(reason);
 
+    /// <summary>Code this command runs that Corvid does not parse; the hardline backstop scans it.</summary>
+    public void OpaqueScript(string text) => analyzer.Opaque(text);
+
     public void Path(Field field, TargetAccess access, bool recursive = false)
     {
         if (field.Dynamic)
@@ -371,9 +386,16 @@ internal sealed class CommandFacts(ShellAnalyzer analyzer, string verb, Scope sc
         var effects = Effects;
         if (scope.Elevated)
             effects |= ActionEffects.Elevated;
+        IEnumerable<string> unresolved = _unresolved;
+        if (scope.Opaque is { } opaque)
+        {
+            effects |= ActionEffects.Execute;
+            unresolved = _unresolved.Prepend(opaque);
+        }
+
         if (effects == ActionEffects.None)
             effects = ActionEffects.Read;
-        return new AnalyzedCommand(verb, Subcommand, effects, [.. _targets.Distinct()], [.. _unresolved], scope.Via,
+        return new AnalyzedCommand(verb, Subcommand, effects, [.. _targets.Distinct()], [.. unresolved.Distinct()], scope.Via,
             scope.Substitution, text, arguments is null ? [] : [.. arguments.Select(field => field.Dynamic ? field.Display : field.Text)]);
     }
 

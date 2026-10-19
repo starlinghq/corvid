@@ -22,6 +22,7 @@ dotnet test --solution Corvid.slnx
 | `src/Corvid.Models` | provider-independent model slots, profiles and switching (C-006) |
 | `src/Corvid.Fabric` | decision fabric without Kev: question catalogue, versioned floors, TurnState, policy and the degraded decider (C-004a) |
 | `src/Corvid.Memory` | memory store on SQLite: core blocks, episodic FTS5, vector index, bi-temporal fact graph, hybrid retrieval and the `memory_op`-gated write path (C-008) |
+| `src/Corvid.Approvals` | structural approval pipeline: bash-subset parser, wrapper unwrapping, target extraction, the hardline deny list, `risk` through the fabric, approval modes, structural rules and approval events (C-007b) |
 | `vault/Corvid.Vault` | `corvid-vault`, the secrets process; see [`vault/README.md`](vault/README.md) |
 | `src/Corvid.Tools` | tool attributes, risk metadata and the tool registry (C-005) |
 | `src/Corvid.Tools.Generators` | Roslyn source generator for `[Tool]` methods; build tooling, consumed as an analyzer |
@@ -29,5 +30,5 @@ dotnet test --solution Corvid.slnx
 | `src/Corvid.Vault.Client` | Corvid's side: `VaultClient`, `VaultHandler`, `SecretRef` |
 | `evals/` | golden trajectories (`evals/golden`) and the replay harness, `Corvid.Evals` (C-009); calibration, floor replay and decision export, with the `corvid-evals` console in `Corvid.Evals.Calibrate` (C-021); see [`evals/README.md`](evals/README.md) |
 | `tools/Corvid.Architecture` | resolved dependency graph checker; see [`docs/architecture.md`](docs/architecture.md) |
-| `tests/` | boundary regression tests, event log, replay and calibration tests, decision fabric and memory tests, tool generator and registry tests, and Vault tests, including S6 |
+| `tests/` | boundary regression tests, event log, replay and calibration tests, decision fabric, memory and approval tests (including the shell bypass suite), tool generator and registry tests, and Vault tests, including S6 |
 

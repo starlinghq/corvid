@@ -59,6 +59,21 @@ public sealed class ParserTests
         Assert.Equal(RedirectKind.OutputAndError, Single("make >& log.txt").Redirects[0].Kind);
     }
 
+    // The two shapes tree-sitter-bash (TreeSitter.DotNet 1.3.0) parsed without an error but unlike bash (decision D-5).
+    [Fact]
+    public void Here_document_bodies_follow_bash()
+    {
+        // An unquoted body runs backquoted commands; tree-sitter's tree had no substitution in it.
+        var backquoted = Single("cat << EOF\n`rm -rf /`\nEOF");
+        var substitution = Assert.IsType<SubstitutionPart>(Assert.Single(backquoted.Redirects[0].Target.Parts, part => part is SubstitutionPart));
+        Assert.Equal("rm", Assert.Single(Assert.Single(substitution.Script.Items).Pipeline.Commands).Words[0].Literal);
+
+        // Only a line that is exactly the delimiter ends the body; "EOF " does not, so "rm -rf /" is text, not a command.
+        var parsed = Assert.IsType<ShellParsed>(ShellParser.Parse("cat <<EOF\nEOF \nrm -rf /\nEOF"));
+        var cat = Assert.Single(Assert.Single(parsed.Script.Items).Pipeline.Commands);
+        Assert.Equal("EOF \nrm -rf /\n", cat.Redirects[0].Target.Literal);
+    }
+
     [Theory]
     [InlineData("if true; then rm -rf /; fi", "'if'")]
     [InlineData("for f in *; do rm $f; done", "'for'")]

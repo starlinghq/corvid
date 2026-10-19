@@ -255,7 +255,8 @@ internal sealed partial class ShellAnalyzer
         _commands.Add(facts.Build(text, _arguments));
     }
 
-    private void Opaque(string text) => _opaqueScripts.Add(text);
+    /// <summary>Records text Corvid runs but cannot analyse (a script outside the subset, an interpreter's inline code).</summary>
+    internal void Opaque(string text) => _opaqueScripts.Add(text);
 
     /// <summary>The program and its arguments after expansion: unwrap wrappers, follow builtins, then describe the verb.</summary>
     private StateChange? Invocation(List<Field> fields, Scope scope, Extras extras, int nesting, string text)
@@ -289,13 +290,15 @@ internal sealed partial class ShellAnalyzer
         var verb = program.Text;
         if (verb.Contains('/'))
         {
-            // /usr/bin/rm is rm; ./rm or ~/bin/rm is a program Corvid cannot see.
+            // /usr/bin/rm is rm; ./rm or ~/bin/rm is a program Corvid cannot see. Its arguments are still read as the
+            // program it is named after, so "./rm -rf /" meets the hardline list as well as asking.
             var directory = Path.GetDirectoryName(verb);
             if (directory is not null && SystemBinaries.Contains(directory))
                 verb = Path.GetFileName(verb);
             else
             {
                 var facts = NewFacts(verb, scope);
+                Verbs.Describe(facts, Path.GetFileName(verb), args);
                 facts.Effects |= ActionEffects.Execute;
                 facts.Path(program, TargetAccess.Execute);
                 facts.AddRedirects(extras.Redirects);
@@ -304,14 +307,12 @@ internal sealed partial class ShellAnalyzer
             }
         }
 
-        if (scope.Opaque is { } opaque)
+        // After "source" or with PATH-like variables set, a name may not be the program it names. Every command is then
+        // unresolved (CommandFacts.Build), but it is still described as named, so the hardline list sees its targets.
+        if (scope.Opaque is not null && verb is "cd" or "pushd" or "popd")
         {
-            var facts = NewFacts(verb, scope);
-            facts.Effects |= ActionEffects.Execute;
-            facts.Unresolved(opaque);
-            facts.AddRedirects(extras.Redirects);
-            Emit(facts, text);
-            return verb is "cd" or "pushd" or "popd" ? new StateChange(Cwds: [null]) : null;
+            ChangeDirectory(verb, args, scope, extras, text);
+            return new StateChange(Cwds: [null]);
         }
 
         switch (verb)
@@ -383,6 +384,17 @@ internal sealed partial class ShellAnalyzer
                 return Doas(args, scope, extras, nesting, text);
             case "su":
                 return Su(args, scope, extras, nesting, text);
+            case "pkexec":
+                return Wrapper(verb, args, Tables.Pkexec, scope with { Elevated = true }, extras, nesting, text, operandsBeforeCommand: 0,
+                    emptyReason: "pkexec without a program starts a root shell");
+            case "watch":
+                return Watch(args, scope, extras, nesting, text);
+            case "flock":
+                return Flock(args, scope, extras, nesting, text);
+            case "taskset" or "chrt":
+                return Scheduler(verb, args, scope, extras, nesting, text);
+            case "busybox":
+                return Busybox(args, scope, extras, nesting, text);
             case "chroot":
             {
                 var facts = NewFacts(verb, Elevate(scope, verb));
@@ -425,7 +437,8 @@ internal sealed partial class ShellAnalyzer
     }
 
     private StateChange? Wrapper(string verb, List<Field> args, OptionTable table, Scope scope, Extras extras, int nesting,
-        string text, int operandsBeforeCommand, Action<CommandFacts, List<(string Name, Field? Value)>>? describe = null)
+        string text, int operandsBeforeCommand, Action<CommandFacts, List<(string Name, Field? Value)>>? describe = null,
+        string? emptyReason = null)
     {
         if (!Options.Parse(args, table, out var options, out var operand, out var problem))
             return Refuse(verb, scope, extras, text, $"{verb}: {problem}");
@@ -439,8 +452,105 @@ internal sealed partial class ShellAnalyzer
         }
 
         if (inner.Count == 0)
-            return null;
+            return emptyReason is null ? null : Refuse(verb, scope, extras, text, emptyReason);
         return Invocation(inner, Via(scope, verb), extras, nesting, text);
+    }
+
+    // watch joins its arguments with spaces and runs them with "sh -c", unless -x runs them directly.
+    private StateChange? Watch(List<Field> args, Scope scope, Extras extras, int nesting, string text)
+    {
+        if (!Options.Parse(args, Tables.Watch, out var options, out var operand, out var problem))
+            return Refuse("watch", scope, extras, text, $"watch: {problem}");
+        var inner = args.Skip(operand).ToList();
+        if (inner.Count == 0)
+            return null;
+        if (options.Any(option => option.Name is "x" or "exec"))
+            return Invocation(inner, Via(scope, "watch"), extras, nesting, text);
+        if (inner.Any(field => field.Dynamic))
+            return Refuse("watch", scope, extras, text, "watch: the command is computed at run time");
+        NestedScript("watch", string.Join(' ', inner.Select(field => field.Text)), ChildShell(Via(scope, "watch")), nesting, text,
+            extras.Redirects);
+        return null;
+    }
+
+    // flock [options] FILE COMMAND [ARGS], or FILE -c 'COMMAND' (run by sh -c), or a descriptor number and nothing else.
+    private StateChange? Flock(List<Field> args, Scope scope, Extras extras, int nesting, string text)
+    {
+        if (!Options.Parse(args, Tables.Flock, out var options, out var operand, out var problem))
+            return Refuse("flock", scope, extras, text, $"flock: {problem}");
+        var operands = args.Skip(operand).ToList();
+        if (operands.Count == 0)
+            return Refuse("flock", scope, extras, text, "flock without a lock file");
+        var lockFile = operands[0];
+        var rest = operands.Skip(1).ToList();
+        // "-c" may also follow the lock file, where getopt has already stopped.
+        var command = options.LastOrDefault(option => option.Name is "c" or "command").Value;
+        if (command is null && rest.Count >= 2 && !rest[0].Dynamic && rest[0].Text is "-c" or "--command")
+        {
+            command = rest[1];
+            rest = [];
+        }
+
+        var facts = NewFacts("flock", scope);
+        if (lockFile.Dynamic || !lockFile.Text.All(char.IsAsciiDigit))
+            facts.Path(lockFile, TargetAccess.Write);
+        facts.AddRedirects(extras.Redirects);
+        Emit(facts, text);
+        if (command is not null)
+        {
+            if (command.Dynamic)
+                return Refuse("flock", scope, Extras.None, text, "flock -c: the command is computed at run time");
+            NestedScript("flock", command.Text, ChildShell(Via(scope, "flock -c")), nesting, text);
+            return null;
+        }
+
+        return rest.Count == 0 ? null : Invocation(rest, Via(scope, "flock"), Extras.None, nesting, text);
+    }
+
+    // taskset MASK COMMAND and chrt PRIORITY COMMAND run a command; with -p they change a running process instead.
+    private StateChange? Scheduler(string verb, List<Field> args, Scope scope, Extras extras, int nesting, string text)
+    {
+        var table = verb == "taskset" ? Tables.Taskset : Tables.Chrt;
+        if (!Options.Parse(args, table, out var options, out var operand, out var problem))
+            return Refuse(verb, scope, extras, text, $"{verb}: {problem}");
+        var operands = args.Skip(operand).ToList();
+        if (options.Any(option => option.Name is "p" or "pid"))
+        {
+            var facts = NewFacts(verb, scope);
+            facts.Effects |= ActionEffects.System;
+            if (operands.Count > 0)
+                facts.Process(operands[^1]);
+            facts.AddRedirects(extras.Redirects);
+            Emit(facts, text);
+            return null;
+        }
+
+        var inner = operands.Skip(1).ToList();
+        if (inner.Count == 0)
+        {
+            var facts = NewFacts(verb, scope);
+            facts.AddRedirects(extras.Redirects);
+            Emit(facts, text);
+            return null;
+        }
+
+        return Invocation(inner, Via(scope, verb), extras, nesting, text);
+    }
+
+    // busybox APPLET ARGS is the applet; options other than listing (--install writes links) are refused.
+    private StateChange? Busybox(List<Field> args, Scope scope, Extras extras, int nesting, string text)
+    {
+        if (args.Count == 0 || !args[0].Dynamic && args[0].Text is "--list" or "--list-full" or "--help")
+        {
+            var facts = NewFacts("busybox", scope);
+            facts.AddRedirects(extras.Redirects);
+            Emit(facts, text);
+            return null;
+        }
+
+        if (args[0].Dynamic || args[0].Text.StartsWith('-'))
+            return Refuse("busybox", scope, extras, text, $"busybox: '{args[0].Display}' is not an applet");
+        return Invocation(args, Via(scope, "busybox"), extras, nesting, text);
     }
 
     private StateChange? Nice(List<Field> args, Scope scope, Extras extras, int nesting, string text)
