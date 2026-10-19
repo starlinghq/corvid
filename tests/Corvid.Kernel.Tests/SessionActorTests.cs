@@ -124,6 +124,24 @@ public sealed class SessionActorTests
     }
 
     [Fact]
+    public async Task A_session_whose_actor_cannot_be_built_does_not_stop_routing_for_others()
+    {
+        using var harness = new TurnHarness(new FakeGenerator(Reply.Say("still routing")));
+        var sink = new CollectingSink();
+        var failures = new List<(Envelope Envelope, Exception Error)>();
+        await using var host = new SessionHost(
+            id => id == TurnHarness.Session ? harness.Actor(sink) : throw new InvalidOperationException("no such session"),
+            new SessionHostOptions { RoutingFailed = (envelope, error) => { lock (failures) failures.Add((envelope, error)); } });
+
+        await host.PostAsync(new Envelope("s-missing", "cli", "hello"), Ct);
+        await host.PostAsync(Message("hello there"), Ct);
+
+        Assert.Equal("still routing", (await sink.NextAsync()).Result!.Text);
+        lock (failures)
+            Assert.Equal("s-missing", Assert.Single(failures).Envelope.SessionId);
+    }
+
+    [Fact]
     public async Task Switching_the_text_embedder_starts_the_re_embed_job()
     {
         var generator = new FakeGenerator();

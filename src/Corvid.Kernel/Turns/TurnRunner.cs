@@ -79,6 +79,21 @@ public sealed class TurnRunner
             await DeEscalateAsync(CancellationToken.None).ConfigureAwait(false);
             return turn.Result(TurnStatus.Cancelled, null);
         }
+        catch (Exception exception)
+        {
+            // A prompter, decider or log failure: an issued call left without a result would make every later switch
+            // refuse it as orphaned, so it is closed before the failure reaches the actor.
+            try
+            {
+                turn.CloseOpenCalls("failed: " + exception.Message);
+            }
+            catch
+            {
+                // The original failure is the one to report; a log that cannot take the result fails again on its own.
+            }
+            await DeEscalateAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
     }
 
     private async Task DeEscalateAsync(CancellationToken cancellationToken)
@@ -93,16 +108,19 @@ public sealed class TurnRunner
         }
     }
 
-    private StoredEvent Append(SessionEvent payload)
+    private StoredEvent Append(SessionEvent payload) => Append([payload])[0];
+
+    /// <summary>Appends events as one batch, so no other writer (or a concurrent switch's read) sees only part of them.</summary>
+    private IReadOnlyList<StoredEvent> Append(params SessionEvent[] payloads)
     {
-        var events = new[] { EventData.Create(payload) };
+        var events = payloads.Select(EventData.Create).ToArray();
         for (var attempt = 1; ; attempt++)
         {
             // Never across an await: other components append between this turn's own events.
             var head = _services.Log.GetHead(SessionId);
             try
             {
-                return _services.Log.Append(SessionId, head, events)[0];
+                return _services.Log.Append(SessionId, head, events);
             }
             catch (EventLogConflictException) when (attempt < MaxAppendAttempts)
             {
@@ -114,7 +132,8 @@ public sealed class TurnRunner
 
     private sealed record Offered(AIFunction Function, ToolDescriptor Descriptor);
 
-    private sealed record ValidCall(string CallId, Offered Tool, JsonElement Arguments);
+    /// <param name="Ask">Goes through the pre-execute checkpoint: a side effect, or a network read in a tainted session.</param>
+    private sealed record ValidCall(string CallId, Offered Tool, JsonElement Arguments, bool Ask);
 
     private enum CallOutcome
     {
@@ -377,21 +396,23 @@ public sealed class TurnRunner
                 if (errors.Count > 0)
                 {
                     failed = true;
-                    // The call and its error result go in back to back, with nothing awaited between them.
-                    Issue(callId, call.Name, arguments);
-                    Result(callId, Error("invalid arguments", errors, tool?.Function.JsonSchema, extracted), isError: true);
+                    // The call and its error result go in as one append: a concurrent switch never sees the call alone.
+                    IssueRejected(callId, call.Name, arguments, Error("invalid arguments", errors, tool?.Function.JsonSchema, extracted));
                     continue;
                 }
-                valid.Add(new ValidCall(callId, tool!, arguments));
+                // §10.3: in a tainted session a network read asks too (C-007b forces the tainted_network_egress reason), or
+                // injected text could carry the user's data out in a URL. Taint is judged as of the response that made the call.
+                var risk = tool!.Descriptor.Risk;
+                valid.Add(new ValidCall(callId, tool, arguments, Ask: !risk.ReadOnly || risk.Network && runner.Tainted));
             }
 
-            // Read-only calls run in parallel; side-effecting ones one at a time, in the order the model gave (§3.3).
+            // Calls that need no approval run in parallel; the rest one at a time, in the order the model gave (§3.3).
             var ran = false;
             for (var i = 0; i < valid.Count;)
             {
-                if (valid[i].Tool.Descriptor.Risk.ReadOnly)
+                if (!valid[i].Ask)
                 {
-                    var group = valid.Skip(i).TakeWhile(call => call.Tool.Descriptor.Risk.ReadOnly).ToList();
+                    var group = valid.Skip(i).TakeWhile(call => !call.Ask).ToList();
                     var outcomes = await Task.WhenAll(group.Select(call => ExecuteAsync(call, cancellationToken))).ConfigureAwait(false);
                     failed |= outcomes.Contains(CallOutcome.BindingFailed);
                     i += group.Count;
@@ -411,7 +432,7 @@ public sealed class TurnRunner
             var descriptor = call.Tool.Descriptor;
             IDisposable running;
             // Each call takes its lease before its ToolCallIssued is appended, so a switch always finds it tracked or parked.
-            if (descriptor.Risk.ReadOnly)
+            if (!call.Ask)
             {
                 running = _services.Slots.TrackToolCall(call.CallId);
                 Issue(call.CallId, call.Tool.Function.Name, call.Arguments, running);
@@ -570,6 +591,12 @@ public sealed class TurnRunner
                 lease?.Dispose();
                 throw;
             }
+        }
+
+        private void IssueRejected(string callId, string tool, JsonElement arguments, JsonElement error)
+        {
+            lock (_gate)
+                runner.Append(new ToolCallIssued(callId, tool, arguments), new ToolResult(callId, error, IsError: true));
         }
 
         // Read-only calls finish concurrently, so the shared turn state they touch is updated under the lock.
@@ -832,6 +859,9 @@ public sealed class TurnRunner
 
         private async Task<bool> EscalateAsync(string reason, CancellationToken cancellationToken)
         {
+            // The policy governs every trigger (difficulty, stuck, repair, context), not only the ones the fabric is asked about.
+            if (!_options.EscalationAllowed)
+                return false;
             var result = await _services.Slots.EscalateAsync(ModelSlots.Generator, cancellationToken).ConfigureAwait(false);
             if (result.Status != SwitchStatus.Switched)
                 return false;

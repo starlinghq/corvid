@@ -10,6 +10,12 @@ public sealed record SessionHostOptions
 
     /// <summary>Envelopes waiting to be routed before <see cref="SessionHost.PostAsync"/> waits.</summary>
     public int Capacity { get; init; } = 64;
+
+    /// <summary>
+    /// Told about an envelope that could not reach its actor (the actor factory threw, or the actor was disposed). The router
+    /// keeps routing other envelopes either way.
+    /// </summary>
+    public Action<Envelope, Exception>? RoutingFailed { get; init; }
 }
 
 /// <summary>
@@ -25,6 +31,7 @@ public sealed class SessionHost : IAsyncDisposable
     private readonly ConcurrentDictionary<string, SessionActor> _actors = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _lifetime = new();
     private readonly Task _router;
+    private readonly Action<Envelope, Exception>? _routingFailed;
 
     /// <param name="createActor">Builds a session's actor from its id: its slots, turn services and delivery sink.</param>
     public SessionHost(Func<string, SessionActor> createActor, SessionHostOptions? options = null)
@@ -33,6 +40,7 @@ public sealed class SessionHost : IAsyncDisposable
         var settings = options ?? SessionHostOptions.Default;
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(settings.Capacity);
         _create = createActor;
+        _routingFailed = settings.RoutingFailed;
         _ingress = Channel.CreateBounded<Envelope>(new BoundedChannelOptions(settings.Capacity)
         {
             FullMode = BoundedChannelFullMode.Wait,
@@ -84,6 +92,16 @@ public sealed class SessionHost : IAsyncDisposable
     private async Task RouteAsync()
     {
         await foreach (var envelope in _ingress.Reader.ReadAllAsync(_lifetime.Token).ConfigureAwait(false))
-            await GetOrCreate(envelope.SessionId).SubmitAsync(envelope, _lifetime.Token).ConfigureAwait(false);
+        {
+            try
+            {
+                await GetOrCreate(envelope.SessionId).SubmitAsync(envelope, _lifetime.Token).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (!_lifetime.IsCancellationRequested)
+            {
+                // One session's failure must not stop routing for every other session.
+                _routingFailed?.Invoke(envelope, exception);
+            }
+        }
     }
 }

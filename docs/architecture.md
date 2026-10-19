@@ -760,7 +760,8 @@ composition below is what tests do and what `Corvid.Host` will do.
 - Envelopes and actors: surfaces post an `Envelope` (session, surface, text, origin `user` or `external`, optional message
   id) to `SessionHost.PostAsync`, a bounded channel (default 64) that waits when full. One router hands each envelope to
   its session's `SessionActor`, created on first use, and waits while that session already holds
-  `MaxPendingMessages` (16): the backpressure surfaces see. A session that stops draining holds up routing for all.
+  `MaxPendingMessages` (16): the backpressure surfaces see. A session that stops draining holds up routing for all. An
+  envelope whose actor cannot be built (or was disposed) goes to `SessionHostOptions.RoutingFailed`, and routing goes on.
   Each actor reads a single-reader `Channel<SessionCommand>`: submit, cancel the running turn, switch a model, turn
   finished. The loop owns the queue of messages and the running turn; it starts each turn as a task and keeps reading, so
   a cancel or a `/model` switch is handled while a turn waits on a model or an approval prompt. Turns run one at a time in
@@ -782,22 +783,26 @@ composition below is what tests do and what `Corvid.Host` will do.
   name must be one offered, the arguments must fit the generator's JSON Schema subset (`required`, `type` lists with null,
   `enum`, array `items`; unknown names are errors, because the binder would drop them), and, once per turn, slot
   pre-fill: the tool's free-text parameters become extractor labels (their descriptions), and a span at least 0.8
-  confident that the argument omits or contradicts is shown beside it. An invalid call is logged as `ToolCallIssued` with
-  an error `ToolResult` right after it (details, the expected schema and the extracted values: the repair message). A `ToolArgumentException` from the
+  confident that the argument omits or contradicts is shown beside it. An invalid call is logged as `ToolCallIssued` and
+  an error `ToolResult` in one append (details, the expected schema and the extracted values: the repair message), so a
+  concurrent switch never reads the call without its result. A `ToolArgumentException` from the
   tool's own binding counts the same. A second failed response escalates the generator through C-006
-  (`EscalateAsync`); with nowhere to go the turn fails with a message. No-op detection: when the first response with tools
+  (`EscalateAsync`); with nowhere to go, or with `TurnOptions.EscalationAllowed` off (which every trigger respects), the
+  turn fails with a message. No-op detection: when the first response with tools
   on offer calls none, a step checkpoint asks `done` and `tool`; if `done` is below its floor and `tool` picks a tool, the
   generator is asked again for that tool only (the narration is not logged), with `ChatToolMode.RequireSpecific` on a
   `native` tool-call profile and an instruction otherwise (Starling's template-rendered Qwen rejects required modes).
-- Execution: read-only calls in one response run in parallel, side-effecting ones one at a time in order (§3.3). Each
+- Execution: calls that need no approval run in parallel, the rest one at a time in order (§3.3). Each
   valid call takes its lease before its `ToolCallIssued` is appended, so no issued call ever waits without one (a
   response's calls may therefore alternate with their results in the log). A
-  read-only call is tracked with `TrackToolCall`. A side-effecting call is parked (`ParkToolCall`) and goes through
+  read-only call is tracked with `TrackToolCall`. A side-effecting call, and a read-only network call in a tainted
+  session (taint as of the response that made it), is parked (`ParkToolCall`) and goes through
   `ApprovalPipeline.AuthorizeAsync`, the pre-execute checkpoint, with the turn's taint, known recipients and its call id;
   a denial, timeout or refusal is logged as an error result while still parked, and an approval moves it to tracked with
   the new `SessionModelSlots.RunParkedToolCall`, so a concurrent switch never sees it as neither. Without an approval
-  pipeline side effects are refused, never run. Every result is appended before the lease is released, and a cancelled
-  turn appends an error result for each open call, so a later switch finds no orphan. The `tool` decision that picked a
+  pipeline side effects are refused, never run. Every result is appended before the lease is released, and a turn that
+  is cancelled or fails with an exception appends an error result for each open call before it ends, so a later switch
+  finds no orphan. The `tool` decision that picked a
   tool gets `tool_succeeded` or `tool_failed` (C-021's vocabulary) when that tool's call finishes.
 - Step checkpoint after each round of results: `done`, `stuck`, `tool`, `clear_results/<call>` for each full result
   older than the last two (at most eight per step, each with the old result as its instructions) and `injection/<call>`
@@ -813,7 +818,9 @@ composition below is what tests do and what `Corvid.Host` will do.
   lever 3) is C-016.
 - Taint (§10.3): an envelope from the user clears it, an `external` one sets it, and any result of a tool with
   `[Network]` sets it (a page, and a webhook's response alike). It holds across turns until the user speaks and is passed
-  to every approval, so network egress and new recipients ask whatever `risk` says. `injection` adds a decision per
+  to every approval, so network egress and new recipients ask whatever `risk` says. That includes network reads: a
+  read-only `[Network]` tool goes through the pipeline in a tainted session (C-007b gives it `tainted_network_egress`),
+  because injected text could carry data out in a URL. Untainted network reads run unasked. `injection` adds a decision per
   network result; without Kev it takes `treat_as_tainted`.
 - Egress: the answer is appended as `AssistantMessage`, then `remember` (when a memory writer is bound) and `deliver`
   (when `AskDeliver`, for gateways) are asked together. `remember` above its floor sends the user message into
@@ -844,7 +851,8 @@ composition below is what tests do and what `Corvid.Host` will do.
   fixture tools and hand-written tools: confident and unconfident picks and `none`, repair, escalation and de-escalation,
   failure with nowhere to escalate, binding failures, approval ask, deny and timeout, refusal without a pipeline, taint
   from fetched content and from an external envelope forcing approval under a calibrated level-0 `risk` in permissive
-  mode, no-op detection on template and native profiles, slot pre-fill, entities in the state, the token counter,
+  mode, a network read asking under taint, an exception after a call is issued closing it, escalation disabled by policy,
+  routing past a session whose actor cannot be built, no-op detection on template and native profiles, slot pre-fill, entities in the state, the token counter,
   clarify, the step budget, stuck, result clearing, cancellation with a switch afterwards, parallel read-only calls, the
   egress write path, actor ordering, a switch while a call is parked at a prompt, cancellation mid-turn, backpressure,
   the re-embed job, the device scheduler, rendering, validation and value conversion. `evals/golden/turn-read-only-tool`
