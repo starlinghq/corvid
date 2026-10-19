@@ -254,6 +254,8 @@ public sealed class BypassTests
     [InlineData("git show --output log.txt HEAD")]
     [InlineData("git grep -O'rm -rf ~' TODO")]
     [InlineData("git grep --open-files-in-pager=vim TODO")]
+    [InlineData("git grep --open='sh -c id' TODO")]
+    [InlineData("git grep -nO'sh -c id' TODO")]
     [InlineData("rg --pre ./decode TODO")]
     [InlineData("rg --pre=./decode TODO .")]
     [InlineData("ag --pager 'sh -c id' TODO")]

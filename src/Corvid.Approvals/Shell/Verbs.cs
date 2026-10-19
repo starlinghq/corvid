@@ -166,7 +166,7 @@ internal static class Verbs
             return;
         }
 
-        if (SystemChangers.Contains(verb) || verb is "nvme")
+        if (SystemChangers.Contains(verb))
         {
             facts.Effects |= ActionEffects.System;
             // Actions that overwrite a block device: its operands are device writes, so the hardline list sees them.
@@ -924,8 +924,10 @@ internal static class Verbs
             }
             else if (text.StartsWith("-o", StringComparison.Ordinal) && text.Length > 2 && name is "format-patch" or "archive")
                 facts.Path(arg with { Text = text[2..] }, TargetAccess.Write, recursive: name == "format-patch");
-            else if (name == "grep" && (text.StartsWith("-O", StringComparison.Ordinal) || text.StartsWith("--open-files-in-pager", StringComparison.Ordinal)
-                         || text.StartsWith("--open-", StringComparison.Ordinal)))
+            // git accepts any unique prefix of a long option ("--open" is --open-files-in-pager) and clustered short
+            // options ("-nOless"); a cluster with an O in it is read as -O, which errs toward asking.
+            else if (name == "grep" && (text.StartsWith("--open", StringComparison.Ordinal)
+                         || text.Length > 1 && text[0] == '-' && text[1] != '-' && text.Contains('O', StringComparison.Ordinal)))
                 facts.Effects |= ActionEffects.Execute;
         }
 
