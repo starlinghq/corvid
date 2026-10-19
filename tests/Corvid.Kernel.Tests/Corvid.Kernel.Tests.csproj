@@ -10,6 +10,8 @@
     <!-- Real generated tools (read-only, side-effecting, destructive), and the golden-trajectory format. -->
     <ProjectReference Include="../Corvid.Tools.Fixtures/Corvid.Tools.Fixtures.csproj" />
     <ProjectReference Include="../../evals/Corvid.Evals/Corvid.Evals.csproj" />
+    <!-- The built-in shell tool (C-012), driven through the real turn loop and approval pipeline. -->
+    <ProjectReference Include="../../src/Corvid.Tools.Builtin/Corvid.Tools.Builtin.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="../../evals/golden/*.json" LinkBase="golden" CopyToOutputDirectory="PreserveNewest" />

@@ -308,7 +308,7 @@ public sealed partial class JobSchedule
     [GeneratedRegex(@"^every (?<d>.+)$")]
     private static partial Regex Interval();
 
-    [GeneratedRegex(@"(?<n>\d+) ?(?<u>seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d|weeks|week|w)\b")]
+    [GeneratedRegex(@"(?<n>\d+) ?(?<u>seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d|weeks|week|w)(?![a-z])")]
     private static partial Regex DurationPart();
 
     [GeneratedRegex(@"^(?<every>(every|each|on) )?(?<days>[a-z, ]*?) ?at (?<time>noon|midnight|\d{1,2}(:\d{2})? ?(am|pm|a\.m\.|p\.m\.)?)$")]

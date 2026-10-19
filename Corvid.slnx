@@ -36,6 +36,7 @@
     <Project Path="tests/Corvid.Vault.Tests/Corvid.Vault.Tests.csproj" />
     <Project Path="tests/Corvid.Tools.Fixtures/Corvid.Tools.Fixtures.csproj" />
     <Project Path="tests/Corvid.Tools.Tests/Corvid.Tools.Tests.csproj" />
+    <Project Path="tests/Corvid.Tools.Builtin.Tests/Corvid.Tools.Builtin.Tests.csproj" />
     <Project Path="tests/Corvid.Sandbox.Tests/Corvid.Sandbox.Tests.csproj" />
     <Project Path="tests/Corvid.Vault.TestClient/Corvid.Vault.TestClient.csproj" />
   </Folder>

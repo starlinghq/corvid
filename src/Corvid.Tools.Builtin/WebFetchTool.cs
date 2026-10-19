@@ -321,7 +321,8 @@ public sealed partial class WebFetchTool : IDisposable
                 continue;
             }
 
-            text.Append(name == "li" ? "\n- " : BlockTags.Contains(name) ? "\n" : " ");
+            var closing = html[open + 1] == '/';
+            text.Append(name == "li" ? closing ? "\n" : "\n- " : BlockTags.Contains(name) ? "\n" : " ");
         }
 
         var lines = WebUtility.HtmlDecode(text.ToString()).Split('\n').Select(Collapse).Where(line => line.Length > 0);

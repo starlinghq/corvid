@@ -125,8 +125,7 @@ public sealed partial class MemoryTools
             throw new ToolArgumentException("Argument 'pending_id' must not be empty.", nameof(pending_id));
         if (operation is not (null or MemoryOperations.Add or MemoryOperations.Update or MemoryOperations.Invalidate or MemoryOperations.Noop))
             throw ToolArguments.NotAllowed(nameof(operation), operation, "add, update, invalidate, noop");
-        if (_writer.GetPending(pending_id) is null)
-            throw new ToolArgumentException($"There is no pending memory write '{pending_id}'; call memory_pending for the ids.", nameof(pending_id));
+        RequirePending(pending_id);
         var written = await _writer.ApproveAsync(pending_id, operation, cancellationToken: cancellationToken).ConfigureAwait(false);
         var result = new JsonObject { ["pending_id"] = pending_id, ["status"] = written.Status == MemoryWriteStatus.Noop ? "nothing_to_write" : "saved" };
         if (written.Operation is { } applied)
@@ -146,9 +145,20 @@ public sealed partial class MemoryTools
     {
         if (string.IsNullOrWhiteSpace(pending_id))
             throw new ToolArgumentException("Argument 'pending_id' must not be empty.", nameof(pending_id));
-        if (_writer.GetPending(pending_id) is null)
-            throw new ToolArgumentException($"There is no pending memory write '{pending_id}'; call memory_pending for the ids.", nameof(pending_id));
+        RequirePending(pending_id);
         var rejected = _writer.Reject(pending_id, string.IsNullOrWhiteSpace(reason) ? "rejected by the user" : reason);
         return new JsonObject { ["pending_id"] = rejected.PendingId, ["status"] = "rejected" };
+    }
+
+    /// <summary>A missing or already reviewed id is the model's mistake to repair, not a tool failure.</summary>
+    private void RequirePending(string pendingId)
+    {
+        switch (_writer.GetPending(pendingId))
+        {
+            case null:
+                throw new ToolArgumentException($"There is no pending memory write '{pendingId}'; call memory_pending for the ids.", "pending_id");
+            case { Status: not PendingStatus.Pending } resolved:
+                throw new ToolArgumentException($"Memory write '{pendingId}' was already {resolved.Status.ToString().ToLowerInvariant()}.", "pending_id");
+        }
     }
 }
