@@ -158,6 +158,20 @@ public sealed class SqliteEventLog : IEventLog
         return result.AsReadOnly();
     }
 
+    /// <summary>Every session with at least one event, in ordinal order. For tools that read a whole log, such as calibration.</summary>
+    public IReadOnlyList<string> ListSessions(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT DISTINCT session_id FROM events ORDER BY session_id COLLATE BINARY;";
+        using var reader = command.ExecuteReader();
+        var result = new List<string>();
+        while (reader.Read())
+            result.Add(reader.GetString(0));
+        return result.AsReadOnly();
+    }
+
     private SqliteConnection Open()
     {
         var connection = new SqliteConnection(connectionString);

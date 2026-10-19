@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
 using Corvid.Abstractions.Events;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Corvid.Abstractions.Fabric;
 
 namespace Corvid.Fabric;
@@ -86,7 +88,8 @@ public sealed class DecisionFabric
             verdicts[key] = new FabricVerdict(decisionId, answer, verdict);
             events.Add(EventData.Create(new Decision(decisionId, key,
                 answer?.ToProbabilityMap() ?? ImmutableDictionary<string, double>.Empty,
-                answer?.Confidence ?? 0, verdict.Threshold, verdict.Action, Policy.Floors.Version, decider)));
+                answer?.Confidence ?? 0, verdict.Threshold, verdict.Action, Policy.Floors.Version, decider,
+                request.State, Asked(question))));
         }
 
         var stored = Append(sessionId, events, cancellationToken);
@@ -131,6 +134,25 @@ public sealed class DecisionFabric
         return (await _degraded.DecideAsync(request, cancellationToken), fallback);
     }
 
+    /// <summary>The persisted form of a question as asked, for calibration and Kev training export (C-021).</summary>
+    public static AskedQuestion Asked(DecisionQuestion question)
+    {
+        ArgumentNullException.ThrowIfNull(question);
+        var instructions = question.Instructions.Json ?? JsonSerializer.SerializeToElement(question.Instructions.Text!,
+            FabricJsonContext.Default.String);
+        return new AskedQuestion(KindWireName(question.Kind), instructions,
+            [.. question.Options.Select(option => new AskedOption(option.Name, option.Description))]);
+    }
+
+    /// <summary>The persisted name of a question kind. Renaming one changes the meaning of recorded decisions.</summary>
+    public static string KindWireName(QuestionKind kind) => kind switch
+    {
+        QuestionKind.Noul => "noul",
+        QuestionKind.Choice => "choice",
+        QuestionKind.Score => "score",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+    };
+
     // A malformed answer is not trusted: the question takes its below-floor action instead.
     private static bool Fits(DecisionAnswer answer, DecisionQuestion question)
     {
@@ -169,3 +191,6 @@ public sealed class DecisionFabric
         _ => throw new ArgumentOutOfRangeException(nameof(reason)),
     };
 }
+
+[JsonSerializable(typeof(string))]
+internal sealed partial class FabricJsonContext : JsonSerializerContext;

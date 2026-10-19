@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>corvid-evals: calibrate floors, report, replay candidate floors and export decisions from event logs (C-021).</Description>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>corvid-evals</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Corvid.Evals/Corvid.Evals.csproj" />
+  </ItemGroup>
+</Project>

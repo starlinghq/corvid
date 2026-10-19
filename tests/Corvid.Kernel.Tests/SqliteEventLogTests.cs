@@ -27,6 +27,17 @@ public sealed class SqliteEventLogTests : IDisposable
     }
 
     [Fact]
+    public void Sessions_are_listed_in_ordinal_order()
+    {
+        Assert.Empty(_db.Log.ListSessions(Ct));
+        _db.Log.Append("b", 0, Samples.Data(new UserMessage("b1")), cancellationToken: Ct);
+        _db.Log.Append("a", 0, Samples.Data(new UserMessage("a1"), new UserMessage("a2")), cancellationToken: Ct);
+        _db.Log.Append("B", 0, Samples.Data(new UserMessage("B1")), cancellationToken: Ct);
+
+        Assert.Equal(["B", "a", "b"], _db.Log.ListSessions(Ct));
+    }
+
+    [Fact]
     public void Sessions_have_independent_sequences()
     {
         _db.Log.Append("a", 0, Samples.Data(new UserMessage("a1"), new UserMessage("a2")), cancellationToken: Ct);

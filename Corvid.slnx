@@ -20,6 +20,7 @@
   </Folder>
   <Folder Name="/evals/">
     <Project Path="evals/Corvid.Evals/Corvid.Evals.csproj" />
+    <Project Path="evals/Corvid.Evals.Calibrate/Corvid.Evals.Calibrate.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Corvid.Kernel.Tests/Corvid.Kernel.Tests.csproj" />
