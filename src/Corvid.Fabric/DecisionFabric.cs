@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using Corvid.Abstractions.Events;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -60,6 +61,11 @@ public sealed class DecisionFabric
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentNullException.ThrowIfNull(state);
         var request = new DecisionRequest(state.Json, questions);
+        using var activity = FabricTelemetry.Source.StartActivity(ActivityKind.Internal, tags:
+        [
+            new("gen_ai.conversation.id", sessionId),
+            new("corvid.checkpoint", CheckpointWireName(checkpoint)),
+        ], name: FabricTelemetry.DecideSpan);
         foreach (var (key, question) in request.Questions)
         {
             var entry = Policy.Catalogue.Resolve(key);
@@ -93,7 +99,10 @@ public sealed class DecisionFabric
         }
 
         var stored = Append(sessionId, events, cancellationToken);
-        return new CheckpointResult(checkpoint, verdicts.ToImmutable(), decider, fallback, [.. stored]);
+        var checkpointResult = new CheckpointResult(checkpoint, verdicts.ToImmutable(), decider, fallback, [.. stored]);
+        if (activity is not null)
+            Describe(activity, checkpointResult);
+        return checkpointResult;
     }
 
     /// <summary>Appends a later outcome for a decision (plan §5.2): the tool succeeded, the user approved, corrected or retried.</summary>
@@ -152,6 +161,42 @@ public sealed class DecisionFabric
         QuestionKind.Score => "score",
         _ => throw new ArgumentOutOfRangeException(nameof(kind)),
     };
+
+    /// <summary>The checkpoint's name as spans and surfaces show it.</summary>
+    public static string CheckpointWireName(Checkpoint checkpoint) => checkpoint switch
+    {
+        Checkpoint.Ingress => "ingress",
+        Checkpoint.Step => "step",
+        Checkpoint.PreExecute => "pre_execute",
+        Checkpoint.Egress => "egress",
+        Checkpoint.Tick => "tick",
+        _ => throw new ArgumentOutOfRangeException(nameof(checkpoint)),
+    };
+
+    // Arrays in key order, so a trace viewer lines a question up with its confidence and action; and one event per
+    // question for viewers that show events rather than array attributes.
+    private static void Describe(Activity activity, CheckpointResult result)
+    {
+        var verdicts = result.Verdicts.OrderBy(pair => pair.Key, StringComparer.Ordinal).ToArray();
+        activity.SetTag("corvid.decider", result.Decider);
+        if (result.Fallback is { } fallback)
+            activity.SetTag("corvid.decider.fallback", WireName(fallback.Reason));
+        activity.SetTag("corvid.decide.questions", verdicts.Select(pair => pair.Key).ToArray());
+        activity.SetTag("corvid.decide.confidences", verdicts.Select(pair => pair.Value.Answer?.Confidence ?? 0).ToArray());
+        activity.SetTag("corvid.decide.actions", verdicts.Select(pair => pair.Value.Verdict.Action).ToArray());
+        activity.SetTag("corvid.decide.acted", verdicts.Select(pair => pair.Value.Verdict.Acted).ToArray());
+        foreach (var (key, verdict) in verdicts)
+            activity.AddEvent(new ActivityEvent("corvid.decision", tags: new ActivityTagsCollection
+            {
+                ["corvid.question.id"] = key,
+                ["corvid.decision.id"] = verdict.DecisionId,
+                ["corvid.confidence"] = verdict.Answer?.Confidence ?? 0,
+                ["corvid.threshold"] = verdict.Verdict.Threshold,
+                ["corvid.action"] = verdict.Verdict.Action,
+                ["corvid.acted"] = verdict.Verdict.Acted,
+                ["corvid.answered"] = verdict.Answer is not null,
+            }));
+    }
 
     // A malformed answer is not trusted: the question takes its below-floor action instead.
     private static bool Fits(DecisionAnswer answer, DecisionQuestion question)

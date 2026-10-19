@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Corvid's composition root: the generic host, typed configuration validated at startup, slots composed from configuration (Starling by default), the runtime, the slash-command registry and OpenTelemetry.</Description>
+    <!-- Not IsAotCompatible: it composes the Starling adapter, which is not AOT-qualified. -->
+    <!-- LibraryImport for execve (GlibcMalloc), which re-executes the process with glibc's malloc setting for GLiNER2. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
+    <!-- The composition root is the one production project that may reference adapters (the checker's CompositionProjects). -->
+    <ProjectReference Include="../Corvid.Approvals/Corvid.Approvals.csproj" />
+    <ProjectReference Include="../Corvid.Fabric/Corvid.Fabric.csproj" />
+    <ProjectReference Include="../Corvid.Kernel/Corvid.Kernel.csproj" />
+    <ProjectReference Include="../Corvid.Memory/Corvid.Memory.csproj" />
+    <ProjectReference Include="../Corvid.Models/Corvid.Models.csproj" />
+    <ProjectReference Include="../Corvid.Models.Starling/Corvid.Models.Starling.csproj" />
+    <ProjectReference Include="../Corvid.Sandbox/Corvid.Sandbox.csproj" />
+    <ProjectReference Include="../Corvid.Tools/Corvid.Tools.csproj" />
+    <ProjectReference Include="../Corvid.Vault.Client/Corvid.Vault.Client.csproj" />
+    <InternalsVisibleTo Include="Corvid.Host.Tests" />
+    <InternalsVisibleTo Include="Corvid.Cli.Tests" />
+  </ItemGroup>
+</Project>

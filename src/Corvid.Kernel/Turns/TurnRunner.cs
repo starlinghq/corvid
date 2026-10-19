@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Globalization;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -69,18 +70,30 @@ public sealed class TurnRunner
         if (envelope.SessionId != SessionId)
             throw new ArgumentException("The envelope is for another session.", nameof(envelope));
         var turn = new Turn(this, envelope);
+        using var activity = KernelTelemetry.Source.StartActivity(ActivityKind.Internal, tags:
+        [
+            new(KernelTelemetry.OperationName, "invoke_agent"),
+            new(KernelTelemetry.AgentNameTag, KernelTelemetry.AgentName),
+            new(KernelTelemetry.ConversationId, SessionId),
+            new("corvid.surface", envelope.Surface),
+        ], name: KernelTelemetry.InvokeAgentSpan);
         try
         {
-            return await turn.RunAsync(cancellationToken).ConfigureAwait(false);
+            var result = await turn.RunAsync(cancellationToken).ConfigureAwait(false);
+            Describe(activity, result);
+            return result;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             turn.CloseOpenCalls("cancelled: the turn was cancelled before the call finished");
             await DeEscalateAsync(CancellationToken.None).ConfigureAwait(false);
-            return turn.Result(TurnStatus.Cancelled, null);
+            var result = turn.Result(TurnStatus.Cancelled, null);
+            Describe(activity, result);
+            return result;
         }
         catch (Exception exception)
         {
+            activity?.SetStatus(ActivityStatusCode.Error, exception.Message);
             // A prompter, decider or log failure: an issued call left without a result would make every later switch
             // refuse it as orphaned, so it is closed before the failure reaches the actor.
             try
@@ -95,6 +108,32 @@ public sealed class TurnRunner
             throw;
         }
     }
+
+    private static void Describe(Activity? activity, TurnResult result)
+    {
+        if (activity is null)
+            return;
+        activity.SetTag("corvid.turn.status", StatusName(result.Status));
+        activity.SetTag("corvid.turn.steps", result.Steps);
+        activity.SetTag("corvid.turn.tool_calls", result.ToolCalls);
+        activity.SetTag("corvid.tainted", result.Tainted);
+        if (!result.Escalations.IsEmpty)
+            activity.SetTag("corvid.turn.escalations", result.Escalations.ToArray());
+        if (result.Status == TurnStatus.Failed)
+            activity.SetStatus(ActivityStatusCode.Error, result.Text);
+    }
+
+    /// <summary>The status as spans and surfaces show it.</summary>
+    public static string StatusName(TurnStatus status) => status switch
+    {
+        TurnStatus.Answered => "answered",
+        TurnStatus.Clarifying => "clarifying",
+        TurnStatus.Stuck => "stuck",
+        TurnStatus.StepBudgetExhausted => "step_budget_exhausted",
+        TurnStatus.Failed => "failed",
+        TurnStatus.Cancelled => "cancelled",
+        _ => throw new ArgumentOutOfRangeException(nameof(status)),
+    };
 
     private async Task DeEscalateAsync(CancellationToken cancellationToken)
     {
@@ -429,6 +468,44 @@ public sealed class TurnRunner
 
         private async Task<CallOutcome> ExecuteAsync(ValidCall call, CancellationToken cancellationToken)
         {
+            // The span covers the approval wait too: that is where a side-effecting call spends its time.
+            using var activity = StartToolActivity(call.CallId, call.Tool.Function.Name, call.Ask);
+            try
+            {
+                var outcome = await ExecuteCoreAsync(call, cancellationToken).ConfigureAwait(false);
+                activity?.SetTag(KernelTelemetry.ToolOutcome, outcome switch
+                {
+                    CallOutcome.Succeeded => "succeeded",
+                    CallOutcome.BindingFailed => "invalid_arguments",
+                    CallOutcome.Denied => "denied",
+                    _ => "failed",
+                });
+                if (outcome != CallOutcome.Succeeded)
+                    activity?.SetStatus(ActivityStatusCode.Error);
+                return outcome;
+            }
+            catch (Exception exception)
+            {
+                activity?.SetTag(KernelTelemetry.ToolOutcome, exception is OperationCanceledException ? "cancelled" : "failed");
+                activity?.SetStatus(ActivityStatusCode.Error, exception.Message);
+                throw;
+            }
+        }
+
+        // Tags given at creation, so a listener's ActivityStarted (the CLI's tool panel) already sees them.
+        private Activity? StartToolActivity(string callId, string tool, bool approval) =>
+            KernelTelemetry.Source.StartActivity(ActivityKind.Internal, tags:
+            [
+                new(KernelTelemetry.OperationName, "execute_tool"),
+                new(KernelTelemetry.ToolName, tool),
+                new(KernelTelemetry.ToolCallId, callId),
+                new(KernelTelemetry.ToolType, "function"),
+                new(KernelTelemetry.ConversationId, runner.SessionId),
+                new(KernelTelemetry.ToolApproval, approval),
+            ], name: KernelTelemetry.ExecuteToolPrefix + tool);
+
+        private async Task<CallOutcome> ExecuteCoreAsync(ValidCall call, CancellationToken cancellationToken)
+        {
             var descriptor = call.Tool.Descriptor;
             IDisposable running;
             // Each call takes its lease before its ToolCallIssued is appended, so a switch always finds it tracked or parked.
@@ -595,6 +672,10 @@ public sealed class TurnRunner
 
         private void IssueRejected(string callId, string tool, JsonElement arguments, JsonElement error)
         {
+            // A call that never ran still gets its span, so a trace shows the repair the next response is asked for.
+            using var activity = StartToolActivity(callId, tool, approval: false);
+            activity?.SetTag(KernelTelemetry.ToolOutcome, "invalid_arguments");
+            activity?.SetStatus(ActivityStatusCode.Error);
             lock (_gate)
                 runner.Append(new ToolCallIssued(callId, tool, arguments), new ToolResult(callId, error, IsError: true));
         }

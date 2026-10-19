@@ -6,6 +6,15 @@
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.10.1" />
     <PackageVersion Include="xunit.v3" Version="4.0.1" />
   </ItemGroup>
+  <!-- Corvid.Host and Corvid.Cli only (C-013): the generic host, OpenTelemetry export and the terminal UI. The checker
+       allows these in the composition root and the CLI, never in core projects. -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.13" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.20.0" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.20.0" />
+    <PackageVersion Include="Spectre.Console" Version="0.57.2" />
+    <PackageVersion Include="Spectre.Console.Testing" Version="0.57.2" />
+  </ItemGroup>
   <!-- Corvid.Models.Starling only (decision D-3: nuget.org, 0.2.0). The checker keeps these out of core projects. -->
   <ItemGroup>
     <PackageVersion Include="Starlings.Acquisition" Version="0.2.0" />

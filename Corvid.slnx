@@ -2,7 +2,9 @@
   <Folder Name="/src/">
     <Project Path="src/Corvid.Abstractions/Corvid.Abstractions.csproj" />
     <Project Path="src/Corvid.Approvals/Corvid.Approvals.csproj" />
+    <Project Path="src/Corvid.Cli/Corvid.Cli.csproj" />
     <Project Path="src/Corvid.Fabric/Corvid.Fabric.csproj" />
+    <Project Path="src/Corvid.Host/Corvid.Host.csproj" />
     <Project Path="src/Corvid.Kernel/Corvid.Kernel.csproj" />
     <Project Path="src/Corvid.Memory/Corvid.Memory.csproj" />
     <Project Path="src/Corvid.Models/Corvid.Models.csproj" />
@@ -27,7 +29,9 @@
     <Project Path="tests/Corvid.Approvals.Tests/Corvid.Approvals.Tests.csproj" />
     <Project Path="tests/Corvid.Kernel.Tests/Corvid.Kernel.Tests.csproj" />
     <Project Path="tests/Corvid.Evals.Tests/Corvid.Evals.Tests.csproj" />
+    <Project Path="tests/Corvid.Cli.Tests/Corvid.Cli.Tests.csproj" />
     <Project Path="tests/Corvid.Fabric.Tests/Corvid.Fabric.Tests.csproj" />
+    <Project Path="tests/Corvid.Host.Tests/Corvid.Host.Tests.csproj" />
     <Project Path="tests/Corvid.Memory.Tests/Corvid.Memory.Tests.csproj" />
     <Project Path="tests/Corvid.Models.Tests/Corvid.Models.Tests.csproj" />
     <Project Path="tests/Corvid.Models.Starling.Tests/Corvid.Models.Starling.Tests.csproj" />

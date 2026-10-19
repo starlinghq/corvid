@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="Spectre.Console.Testing" />
+    <Using Include="Xunit" />
+    <ProjectReference Include="../../src/Corvid.Cli/Corvid.Cli.csproj" />
+    <!-- So corvid-evals is built next to the tests, where `corvid evals` looks for it. Production code starts it by path. -->
+    <ProjectReference Include="../../evals/Corvid.Evals.Calibrate/Corvid.Evals.Calibrate.csproj" />
+    <!-- The host tests' fake slots, so both suites drive the host the same way. -->
+    <Compile Include="../Corvid.Host.Tests/Fakes.cs" Link="Fakes.cs" />
+  </ItemGroup>
+</Project>

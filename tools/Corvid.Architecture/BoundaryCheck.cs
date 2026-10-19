@@ -66,6 +66,61 @@ public static class BoundaryCheck
         "Corvid.Sandbox.Launcher"
     };
 
+    // The composition root and the CLI executable (C-013). They are not core: they may reference adapters, and through
+    // them resolve whatever an adapter brings (Starling, ONNX Runtime). Their own packages are listed here, and nothing
+    // else may reference them except the CLI, which references the host. The core rule is unchanged.
+    private static readonly HashSet<string> CompositionProjects = new(StringComparer.Ordinal)
+    {
+        "Corvid.Host",
+        "Corvid.Cli"
+    };
+
+    private static readonly HashSet<string> CompositionPackages = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // The generic host: configuration, DI, logging, options and their providers, as Microsoft.Extensions.Hosting resolves them.
+        "Microsoft.Extensions.Configuration",
+        "Microsoft.Extensions.Configuration.Abstractions",
+        "Microsoft.Extensions.Configuration.Binder",
+        "Microsoft.Extensions.Configuration.CommandLine",
+        "Microsoft.Extensions.Configuration.EnvironmentVariables",
+        "Microsoft.Extensions.Configuration.FileExtensions",
+        "Microsoft.Extensions.Configuration.Json",
+        "Microsoft.Extensions.Configuration.UserSecrets",
+        "Microsoft.Extensions.DependencyInjection",
+        "Microsoft.Extensions.DependencyInjection.Abstractions",
+        "Microsoft.Extensions.Diagnostics",
+        "Microsoft.Extensions.Diagnostics.Abstractions",
+        "Microsoft.Extensions.FileProviders.Abstractions",
+        "Microsoft.Extensions.FileProviders.Physical",
+        "Microsoft.Extensions.FileSystemGlobbing",
+        "Microsoft.Extensions.Hosting",
+        "Microsoft.Extensions.Hosting.Abstractions",
+        "Microsoft.Extensions.Logging",
+        "Microsoft.Extensions.Logging.Abstractions",
+        "Microsoft.Extensions.Logging.Configuration",
+        "Microsoft.Extensions.Logging.Console",
+        "Microsoft.Extensions.Logging.Debug",
+        "Microsoft.Extensions.Logging.EventLog",
+        "Microsoft.Extensions.Logging.EventSource",
+        "Microsoft.Extensions.Options",
+        "Microsoft.Extensions.Options.ConfigurationExtensions",
+        "Microsoft.Extensions.Primitives",
+        "System.Diagnostics.EventLog",
+        // OpenTelemetry export of the spans the core libraries emit through System.Diagnostics (plan §16).
+        "OpenTelemetry",
+        "OpenTelemetry.Api",
+        "OpenTelemetry.Api.ProviderBuilderExtensions",
+        "OpenTelemetry.Exporter.OpenTelemetryProtocol",
+        "OpenTelemetry.Extensions.Hosting"
+    };
+
+    // The terminal UI, in the CLI only; the host stays free of it so the gateway (C-020) can share the command registry.
+    private static readonly HashSet<string> CliPackages = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Spectre.Console",
+        "Spectre.Console.Ansi"
+    };
+
     public static IReadOnlyList<string> CheckRepository(string root)
     {
         var errors = new List<string>();
@@ -110,6 +165,7 @@ public static class BoundaryCheck
         var vault = project == "Corvid.Vault";
         var adapter = project.StartsWith("Corvid.Models.", StringComparison.Ordinal);
         var buildTool = BuildToolProjects.Contains(project);
+        var composition = CompositionProjects.Contains(project);
 
         foreach (var target in assets.GetProperty("targets").EnumerateObject())
         {
@@ -124,47 +180,92 @@ public static class BoundaryCheck
         }
 
         foreach (var target in assets.GetProperty("targets").EnumerateObject())
-        foreach (var dependency in target.Value.EnumerateObject())
         {
-            var name = dependency.Name[..dependency.Name.LastIndexOf('/')];
-            var type = dependency.Value.GetProperty("type").GetString();
-            // AssemblyName/PackageId can differ from the project name (Vault is "corvid-vault").
-            if (type == "project")
-                name = Path.GetFileNameWithoutExtension(assets.GetProperty("libraries")
-                    .GetProperty(dependency.Name).GetProperty("msbuildProject").GetString())
-                    ?? throw new InvalidOperationException($"Missing project identity for {dependency.Name}; restore the solution first.");
-
-            // The SDK injects the trim/AOT analyzer even into dependency-free contracts.
-            if (type == "package" && name.Equals("Microsoft.NET.ILLink.Tasks", StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            var allowed = type switch
+            // Packages a composition project resolves only because an adapter brings them (Starling, ONNX Runtime).
+            var adapterPackages = composition ? AdapterPackages(assets, target.Value) : null;
+            foreach (var dependency in target.Value.EnumerateObject())
             {
-                "package" => buildTool
-                    ? BuildToolPackages.Contains(name)
-                    : !independent && !vault && (adapter || CorePackages.Contains(name)),
-                // A build tool in another project's graph means its assembly would ship; reference it as an analyzer.
-                "project" when buildTool || BuildToolProjects.Contains(name) => false,
-                // Executables are started by path; a reference would load one into another process.
-                "project" when LauncherProjects.Contains(name) => false,
-                "project" => !independent && (vault
-                    ? name == "Corvid.Vault.Contracts"
-                    : name != "Corvid.Vault" && (adapter || !name.StartsWith("Corvid.Models.", StringComparison.Ordinal))),
-                _ => false
-            };
+                var name = dependency.Name[..dependency.Name.LastIndexOf('/')];
+                var type = dependency.Value.GetProperty("type").GetString();
+                // AssemblyName/PackageId can differ from the project name (Vault is "corvid-vault").
+                if (type == "project")
+                    name = ProjectName(assets, dependency.Name);
 
-            if (!allowed)
-                errors.Add($"{project}: forbidden {type} dependency {dependency.Name} in {target.Name} (direct or transitive). " +
-                    (buildTool ? "Build tooling may use only Roslyn and its netstandard2.0 dependencies, and no projects."
-                    : type == "project" && BuildToolProjects.Contains(name) ? "Reference build tooling as an analyzer: OutputItemType=\"Analyzer\" ReferenceOutputAssembly=\"false\"."
-                    : launcher ? "The corvid-sandbox launcher must have no dependencies; Vault and Corvid start it by path."
-                    : type == "project" && LauncherProjects.Contains(name) ? "Start the corvid-sandbox launcher by path; do not reference it."
-                    : independent ? "This contract project must have no dependencies." : vault
-                        ? "Vault may depend only on Corvid.Vault.Contracts."
-                        : "Provider SDKs belong in Corvid.Models.*; core infrastructure packages require an explicit allowlist entry. The Vault executable cannot be referenced by agent projects."));
+                // The SDK injects the trim/AOT analyzer even into dependency-free contracts.
+                if (type == "package" && name.Equals("Microsoft.NET.ILLink.Tasks", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var allowed = type switch
+                {
+                    "package" when composition => CorePackages.Contains(name) || CompositionPackages.Contains(name)
+                        || project == "Corvid.Cli" && CliPackages.Contains(name) || adapterPackages!.Contains(name),
+                    "package" => buildTool
+                        ? BuildToolPackages.Contains(name)
+                        : !independent && !vault && (adapter || CorePackages.Contains(name)),
+                    // A build tool in another project's graph means its assembly would ship; reference it as an analyzer.
+                    "project" when buildTool || BuildToolProjects.Contains(name) => false,
+                    // Executables are started by path; a reference would load one into another process.
+                    "project" when LauncherProjects.Contains(name) => false,
+                    // Nothing composes the composition root but the CLI; nothing references the CLI.
+                    "project" when CompositionProjects.Contains(name) => project == "Corvid.Cli" && name == "Corvid.Host",
+                    "project" => !independent && (vault
+                        ? name == "Corvid.Vault.Contracts"
+                        : name != "Corvid.Vault" && (adapter || composition || !name.StartsWith("Corvid.Models.", StringComparison.Ordinal))),
+                    _ => false
+                };
+
+                if (!allowed)
+                    errors.Add($"{project}: forbidden {type} dependency {dependency.Name} in {target.Name} (direct or transitive). " +
+                        (buildTool ? "Build tooling may use only Roslyn and its netstandard2.0 dependencies, and no projects."
+                        : type == "project" && BuildToolProjects.Contains(name) ? "Reference build tooling as an analyzer: OutputItemType=\"Analyzer\" ReferenceOutputAssembly=\"false\"."
+                        : launcher ? "The corvid-sandbox launcher must have no dependencies; Vault and Corvid start it by path."
+                        : type == "project" && LauncherProjects.Contains(name) ? "Start the corvid-sandbox launcher by path; do not reference it."
+                        : type == "project" && CompositionProjects.Contains(name) ? "Only the CLI may reference the composition root, and nothing may reference the CLI."
+                        : composition ? "The composition root and the CLI may use core packages, their reviewed hosting, telemetry and UI packages, and what adapters bring; add a package to CompositionPackages after review."
+                        : independent ? "This contract project must have no dependencies." : vault
+                            ? "Vault may depend only on Corvid.Vault.Contracts."
+                            : "Provider SDKs belong in Corvid.Models.*; core infrastructure packages require an explicit allowlist entry. The Vault executable cannot be referenced by agent projects."));
+            }
         }
 
         return errors.ToArray();
+    }
+
+    private static string ProjectName(JsonElement assets, string library) =>
+        Path.GetFileNameWithoutExtension(assets.GetProperty("libraries").GetProperty(library).GetProperty("msbuildProject").GetString())
+        ?? throw new InvalidOperationException($"Missing project identity for {library}; restore the solution first.");
+
+    /// <summary>
+    /// The packages reachable from an adapter (<c>Corvid.Models.*</c>) in one restored target, following each library's
+    /// <c>dependencies</c>. A package that is also reachable another way is still allowed only if that way allows it.
+    /// </summary>
+    private static HashSet<string> AdapterPackages(JsonElement assets, JsonElement target)
+    {
+        var entries = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in target.EnumerateObject())
+            entries[entry.Name[..entry.Name.LastIndexOf('/')]] = entry.Value;
+
+        var pending = new Stack<string>(target.EnumerateObject()
+            .Where(entry => entry.Value.GetProperty("type").GetString() == "project"
+                && ProjectName(assets, entry.Name).StartsWith("Corvid.Models.", StringComparison.Ordinal))
+            .Select(entry => entry.Name[..entry.Name.LastIndexOf('/')]));
+        var seen = new HashSet<string>(pending, StringComparer.OrdinalIgnoreCase);
+        var packages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        while (pending.TryPop(out var library))
+        {
+            if (!entries.TryGetValue(library, out var entry) || !entry.TryGetProperty("dependencies", out var dependencies))
+                continue;
+            foreach (var dependency in dependencies.EnumerateObject())
+            {
+                if (!seen.Add(dependency.Name))
+                    continue;
+                pending.Push(dependency.Name);
+                if (entries.TryGetValue(dependency.Name, out var resolved) && resolved.GetProperty("type").GetString() == "package")
+                    packages.Add(dependency.Name);
+            }
+        }
+
+        return packages;
     }
 
     /// <summary>
