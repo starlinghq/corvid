@@ -9,6 +9,7 @@
     <Project Path="src/Corvid.Models.Starling/Corvid.Models.Starling.csproj" />
     <Project Path="src/Corvid.Sandbox/Corvid.Sandbox.csproj" />
     <Project Path="src/Corvid.Tools/Corvid.Tools.csproj" />
+    <Project Path="src/Corvid.Tools.Builtin/Corvid.Tools.Builtin.csproj" />
     <Project Path="src/Corvid.Tools.Generators/Corvid.Tools.Generators.csproj" />
     <Project Path="src/Corvid.Vault.Contracts/Corvid.Vault.Contracts.csproj" />
     <Project Path="src/Corvid.Vault.Client/Corvid.Vault.Client.csproj" />

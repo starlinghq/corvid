@@ -114,6 +114,9 @@ public sealed class RenderingTests
         Assert.Equal("""{"text":"note","count":3,"ratio":0.5,"when":"2026-10-19T09:00:00+00:00","tags":["a","b"],"nested":{"ok":true,"none":null},"json":{"x":1}}""",
             value.GetRawText());
         Assert.Equal("plain", JsonValues.Text(JsonValues.ToElement("plain")));
+        // A JsonObject is also a collection of pairs; it must stay an object.
+        Assert.Equal("""{"a":[1,"b"]}""",
+            JsonValues.ToElement(new System.Text.Json.Nodes.JsonObject { ["a"] = new System.Text.Json.Nodes.JsonArray(1, "b") }).GetRawText());
     }
 
     private static Decision Clear(string callId, string action) =>
