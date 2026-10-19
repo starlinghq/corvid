@@ -28,12 +28,25 @@ public sealed record UserMessage(string Text) : SessionEvent;
 public sealed record AssistantMessage(string Text) : SessionEvent;
 public sealed record ToolCallIssued(string CallId, string ToolName, JsonElement Arguments) : SessionEvent;
 public sealed record ToolResult(string CallId, JsonElement Result, bool IsError = false) : SessionEvent;
-// CatalogueVersion (the floors configuration in force) and Decider (which tier answered) were added by C-004a. They are
-// omitted when null, so events written before them keep their persisted form.
+// CatalogueVersion (the floors configuration in force) and Decider (which tier answered) were added by C-004a; State (the
+// TurnState the decider saw) and Question (instructions and options as asked) by C-021, so a decision can be exported as
+// a Kev training record; Calibrated (whether the answer came from a calibrated model, DecisionAnswer.Calibrated), also by
+// C-021, so calibration never infers it from the decider's name. All are omitted when null, so events written before
+// them keep their persisted form. Calibrated is null when there was no answer.
+// QuestionId is the request key: a catalogue id, possibly with an instance suffix (clear_results/call-7).
 public sealed record Decision(string DecisionId, string QuestionId, ImmutableDictionary<string, double> Probabilities,
     double Confidence, double Threshold, string Action,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? CatalogueVersion = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Decider = null) : SessionEvent;
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Decider = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] JsonElement? State = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AskedQuestion? Question = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Calibrated = null) : SessionEvent;
+/// <summary>A question as the decider received it. Options keep their order, so score levels keep their index.</summary>
+/// <param name="Kind">The wire name of the question kind: <c>noul</c>, <c>choice</c> or <c>score</c>.</param>
+/// <param name="Instructions">A JSON string for text instructions, or the JSON object given.</param>
+public sealed record AskedQuestion(string Kind, JsonElement Instructions, ImmutableArray<AskedOption> Options);
+public sealed record AskedOption(string Name,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Description = null);
 // Outcomes arrive later; never update the original decision event.
 public sealed record DecisionOutcomeRecorded(string DecisionId, string Outcome) : SessionEvent;
 public sealed record ApprovalRequested(string ApprovalId, string Action, string Reason) : SessionEvent;

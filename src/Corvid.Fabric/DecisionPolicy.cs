@@ -86,13 +86,25 @@ public sealed class DecisionPolicy
         };
     }
 
-    private static bool Clears(CatalogueQuestion question, DecisionAnswer answer, double floor) => question.Measure switch
+    private static bool Clears(CatalogueQuestion question, DecisionAnswer answer, double floor) =>
+        MeasureOf(question, answer) is { } measure && measure >= floor;
+
+    /// <summary>
+    /// The value a question's floor is compared with (<see cref="CatalogueQuestion.Measure"/>): choice confidence, P(yes)
+    /// or the expected score level. Calibration fits floors against this value, so it is the policy's own definition.
+    /// </summary>
+    public static double? MeasureOf(CatalogueQuestion question, DecisionAnswer answer)
     {
-        FloorMeasure.Confidence or FloorMeasure.RiskLevel => answer.Confidence >= floor,
-        FloorMeasure.YesProbability => answer.ProbabilityOf(DecisionQuestion.Yes) >= floor,
-        FloorMeasure.ExpectedScore => answer.ExpectedScore >= floor,
-        _ => false,
-    };
+        ArgumentNullException.ThrowIfNull(question);
+        ArgumentNullException.ThrowIfNull(answer);
+        return question.Measure switch
+        {
+            FloorMeasure.Confidence or FloorMeasure.RiskLevel => answer.Confidence,
+            FloorMeasure.YesProbability => answer.ProbabilityOf(DecisionQuestion.Yes),
+            FloorMeasure.ExpectedScore => answer.ExpectedScore,
+            _ => null,
+        };
+    }
 
     // Plan §5.3: levels 3–4 always ask; 0–1 may auto-run in permissive modes; otherwise the approval mode decides (C-007b).
     // A low score never overrides the hardline deny list or the sandbox; those run outside the fabric. Acted is true even

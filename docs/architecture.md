@@ -1,4 +1,4 @@
-# Agent foundation (C-001, C-002, C-004a, C-005, C-006, C-007a, C-008, C-009, C-010)
+# Agent foundation (C-001, C-002, C-004a, C-005, C-006, C-007a, C-008, C-009, C-010, C-021)
 
 The solution contains `Corvid.Abstractions`, `Corvid.Kernel`, and
 `Corvid.Models`, alongside the working Vault projects. Kernel and Models each
@@ -12,7 +12,9 @@ C-004a added `Corvid.Fabric`, which references Abstractions and
 C-007a added `Corvid.Sandbox` (core, no dependencies) and the `corvid-sandbox` launcher
 executable in `sandbox/Corvid.Sandbox.Launcher` (see [Sandbox](#sandbox-c-007a)).
 C-008 added `Corvid.Memory`, which references Abstractions, Fabric, `Microsoft.Data.Sqlite` and
-`Microsoft.Extensions.AI.Abstractions` (see [Memory store](#memory-store-c-008)). Add
+`Microsoft.Extensions.AI.Abstractions` (see [Memory store](#memory-store-c-008)). C-021 added calibration and
+decision export to `evals/Corvid.Evals`, and the `corvid-evals` console in `evals/Corvid.Evals.Calibrate` (see
+[Calibration and decision export](#calibration-and-decision-export-c-021)). Add
 the other projects from the agent plan as their implementations start, rather
 than creating empty projects for every future surface.
 
@@ -79,12 +81,10 @@ are synchronous; callers that must not block should use a storage worker.
 - Corvid.Kernel grants `InternalsVisibleTo` to Corvid.Evals so fixtures use the
   persisted serializer itself rather than a copy of the format.
 
-Not built yet: decision replay. The plan (§3.2, §16) replays logs against new
-thresholds and new models. `IDecider`, the TurnState builder and versioned floors
-now exist (C-004a), and every `Decision` event records its floor version and decider;
-replay still needs a decision-set format and scoring (tool choice, argument match, escalation
-rate). Golden sets per generator profile and fabric version, a command-line runner,
-and prompt-rendering checks (C-006) also follow later.
+Replaying decisions against new floors is C-021 (see [Calibration and decision
+export](#calibration-and-decision-export-c-021)). Not built yet: replaying decisions against new models (re-asking a
+decider over recorded states) and scoring golden sets (tool choice, argument match, escalation rate), golden sets per
+generator profile and fabric version, a command-line runner for the golden set, and prompt-rendering checks (C-006).
 
 ## Model slots and switching (C-006)
 
@@ -377,7 +377,7 @@ unchanged.
   `DecisionOutcomeRecorded`.
 - `Decision` gained two optional fields, `catalogue_version` and `decider`. They
   are omitted when null, so events written before C-004a keep their persisted form
-  and still read.
+  and still read. C-021 added three more, `state`, `question` and `calibrated`, the same way.
 
 Not built yet: the Kev adapter and the two-tier escalation to Kev-4B (C-004b, which
 waits for the package); wiring a model's token counter into the builder; GLiNER2 entities and the
@@ -386,7 +386,7 @@ C-010, C-011); the `remember` durability score; the `tool` question's
 below-floor variant that escalates on the 0.8B generator (the caller's choice for
 now); generator logprobs as a Noul confidence (`IChatClient` has no logprobs
 surface); per-question row budgets (1,000 tokens), which the Kev adapter enforces
-by declining; decision replay and calibration tooling (C-021).
+by declining. Decision replay against new floors and calibration tooling are C-021.
 
 ## Sandbox (C-007a)
 
@@ -547,6 +547,98 @@ retrieved memory (C-015); the `/memory pending` command and the `memory` tool (C
 running indexing and the re-embed job on the device scheduler (C-011); and the `remember` gate
 that starts a write at egress (the caller's job, C-011).
 
+## Calibration and decision export (C-021)
+
+Plan §5.5, §16 and the replay half of §3.2. The code is in `evals/Corvid.Evals/Calibration` (namespace
+`Corvid.Evals.Calibration`), which now references `Corvid.Fabric` for the catalogue, floors and the policy's measure. The
+entry point is `corvid-evals` (`evals/Corvid.Evals.Calibrate`, a console app with no logic of its own; `CalibrationCli` in
+the library parses the command line so tests drive it). It becomes `corvid evals calibrate` when the CLI exists (C-013).
+Neither project is production code, so the checker does not scan them and no package was added.
+
+```sh
+corvid-evals calibrate --log events.db [--log more.db] --version 2026-11-01.1 --out floors.json [--floors current.json] [--report-json report.json]
+corvid-evals report --log events.db [--json report.json]
+corvid-evals replay --log events.db --candidate floors.json [--json replay.json]
+corvid-evals export-decisions --log events.db --out decisions.jsonl [--labelled-only] [--calibrated-only]
+corvid-evals export-trajectories --log events.db --out trajectories.jsonl
+```
+
+- Reading: `DecisionSet.Load` reads every session of each log (`SqliteEventLog.ListSessions`, added for this) and joins
+  each `Decision` with its `DecisionOutcomeRecorded` events. A path that does not exist is an error, because opening a log
+  creates it. The stored `question_id` is the request key, split on the first `/` into the catalogue id and an instance
+  (`clear_results/call-7`); keys the catalogue does not know are counted and ignored. The first decision keeps an ID, as in
+  the projection; outcomes for unknown decisions are counted. The last outcome labels a decision.
+- Outcomes are free text in the log. `OutcomeClassifier.Default` lists the ones Corvid writes today: positive `accepted`,
+  `approved`, `succeeded`, `task_succeeded`, `tool_succeeded`, `user_accepted`, `user_approved`; negative `corrected`,
+  `denied`, `failed`, `rejected`, `retried`, `task_failed`, `tool_failed` and the `user_` forms (§5.5: corrections,
+  denials, retries and tool failures are negative). Anything else is unlabelled, reported, and never used for fitting;
+  `--positive` and `--negative` extend the lists.
+- Tier: fails closed. `degraded` and `degraded after …` deciders are the degraded tier whatever else is recorded, as is
+  an answer recorded with `calibrated: false`. An answer is calibrated only when its event records `calibrated: true`;
+  a missing decider (before C-004a) or an answer without the flag (before C-021) is unknown, so a decider's name alone
+  never makes its answers fitting evidence. A decision with no answer keeps its decider's tier. Only calibrated decisions are fitting evidence, for gates and
+  routing questions alike, since floors apply to a calibrated decider's confidence. The degraded and unknown tiers are
+  reported in their own section. With no Kev every decision is degraded, so on today's logs `calibrate` fits nothing and
+  writes the current floors under the new version.
+- Measure: the answer is rebuilt from the stored probabilities with the options in the order asked (from the recorded
+  question, else the catalogue's fixed options; the stored map is unordered, so score levels never come from it), and
+  measured by `DecisionPolicy.MeasureOf`, the policy's own definition: choice confidence, P(yes) or expected score.
+  "Acted" is derived, not read from the action name alone: for `risk`, `ask` is both the act for levels 3–4 and the
+  below-floor action, so a risk decision acted when its measure reached the recorded threshold. For every other row the
+  act differs from the below-floor action, which also covers a missing condition. An empty probability map (a degraded
+  gate) has no answer.
+- Fitting (`FloorFitter`): per catalogue question, the floor is the lowest observed measure at which the calibrated,
+  labelled decisions at or above it number at least `--min-support` (20) and have a positive share at or above the target
+  (`--gate-precision` 0.9, `--routing-precision` 0.8). Labelled decisions count whether or not they were acted on: a
+  staged memory write that the reviewer approves is evidence for a lower floor. This assumes an outcome judges the
+  decider's answer whichever action followed, which holds for today's outcomes (C-008's review) but not, for example, for
+  an "accepted" after a `done` that fell below its floor and continued. Below the minimum support the floor is kept
+  (`insufficient_data`); when no floor reaches the target it is kept and reported (`target_unreachable`) rather than
+  raised automatically. The output keeps the degraded margin and every other floor, must have a new version, and is
+  parsed back through `FloorConfiguration.Parse` before it is written.
+- Report (`CalibrationReport`, text and JSON, format `corvid-calibration-report` 1): decisions per tier, decider and floor
+  version; per question the acted rate, the escalation rate (the share that took the below-floor action: handed to the
+  generator, the user or review), outcome coverage, precision when acted and, for calibrated decisions, ten reliability
+  bins over the measure (an expected score divided by its top level) with the observed positive rate; unknown questions,
+  unlabelled outcomes, and the fit per question with precision and coverage at the current and the new floor.
+- Replay (`FloorReplay`, text and JSON, format `corvid-floor-replay` 1): each answered decision's measure is compared with
+  the threshold it was held to (recorded on the event) and with the candidate floor, and decisions whose action would
+  change are listed with their outcomes. The policy is not re-run, because the caller's conditions are not in the log and
+  a missing one would read as failed. A decision held back by a condition stays held back; a decision that now acts on a
+  question with required conditions is flagged `conditions_unverified`; a risk level of 0–1 is reported as
+  `approval_mode` because the permissive mode is not recorded. Degraded gates, heuristics and conservative defaults never
+  change. Degraded generator yes/no answers are compared with the floor as the policy does. Degraded embedding choices
+  cannot be replayed against a new margin (the margin itself is not recorded) and are counted as not replayable.
+- `Decision` events now also carry `state`, the TurnState JSON the decider saw, `question`, the question as asked
+  (`kind`, `instructions` as a JSON string or object, `options` with descriptions, in order), and `calibrated`, the
+  answer's `DecisionAnswer.Calibrated` (null when there was no answer). All are optional and
+  omitted when null, as `catalogue_version` and `decider` were in C-004a, so older events keep their persisted form. The
+  state is repeated on each decision of a checkpoint (up to about 600 tokens each by default). Instructions are whatever
+  the caller sent, so `memory_op` decisions now hold the candidate fact and its retrieved neighbours.
+- Kev training records (`KevTrainingExport`, JSON lines, format `corvid-kev-decision` 1): one per answered decision, with
+  the source, session and sequence, question and instance, kind and role, the state (null for decisions recorded before
+  C-021), the instructions and options (the catalogue's when the question was not recorded), each option's probability,
+  the top answer, the measure, whether it acted and the acted answer (`yes` for a Noul question that acted), the action,
+  threshold, floor version, decider, tier, outcome and label. Unanswered decisions are skipped; degraded answers are
+  included and marked unless `--calibrated-only`.
+- Trajectories (`ShareGptExport`, JSON lines): one per session with a conversation, `{"id", "source", "conversations":
+  [{"from", "value"}]}` in the ShareGPT form Hermes uses. User messages are `human`; assistant text and tool calls are
+  `gpt`, each call as `<tool_call>{"name", "arguments"}</tool_call>`; tool results are `tool`, as
+  `<tool_response>{"tool_call_id", "name", "content"}</tool_response>`. Consecutive turns from one speaker are joined
+  with a newline. Compactions are expanded, so the raw history is exported rather than summaries.
+- Tests: `tests/Corvid.Evals.Tests` builds synthetic logs (`SyntheticLog`) and covers outcome joining and key splitting,
+  tiers, measures per kind with option order, the risk rule, unlabelled outcomes, fitting (lowering, raising a gate,
+  degraded data excluded, insufficient data, an unreachable target, score floors), the emitted file, the report, replay
+  in both directions with held and unverified conditions and the margin case, both exports, the command line, and a
+  round trip through `DecisionFabric` with a calibrated test decider.
+
+Not built yet: the `corvid evals` verb (C-013); Kev-0.8B against Kev-4B agreement (C-004b); fitting the degraded
+margin (the margin is not recorded); recording the caller's conditions and the permissive mode, which would make replay
+exact; a canonical outcome vocabulary written by the turn loop (C-011), and with it an acted-only fit or per-question
+outcome semantics; opening a live or read-only copied log without the log's write-mode setup (`SqliteEventLog` switches
+the file to WAL on open); the system prompt and tool schemas in exported trajectories; and replaying recorded states
+against a new decider model.
+
 ## Running the check
 
 ```sh
@@ -568,5 +660,5 @@ standard `obj/` path; custom intermediate paths are not supported. This is an
 architecture regression check for NuGet/project references, not a security
 sandbox or an IL analyzer for manually supplied binaries.
 
-The next milestone that builds on the log is decision replay in the C-009
-harness, now that C-004a records floor versions on every decision.
+The next milestone that builds on the log is the session actor and turn loop (C-011), which will write the
+decisions and outcomes that calibration (C-021) reads.

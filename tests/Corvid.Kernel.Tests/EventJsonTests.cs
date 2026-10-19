@@ -101,6 +101,27 @@ public sealed class EventJsonTests
         Assert.Equal(("2026-10-18.1", "degraded"), (restored.CatalogueVersion, restored.Decider));
     }
 
+    [Fact]
+    public void Decision_state_and_question_are_written_only_when_set()
+    {
+        var probabilities = ImmutableDictionary<string, double>.Empty.Add("yes", 1);
+        var decision = new Decision("d-1", "done", probabilities, 1, 0.8, "stop", "v1", "degraded",
+            Samples.Json("""{"step":2}"""), new AskedQuestion("noul", Samples.Json("\"Done?\""), [new AskedOption("yes"), new AskedOption("no")]), Calibrated: false);
+
+        var json = EventJson.Serialize(decision);
+
+        Assert.EndsWith("""
+            "decider":"degraded","state":{"step":2},"question":{"kind":"noul","instructions":"Done?","options":[{"name":"yes"},{"name":"no"}]},"calibrated":false}
+            """, json, StringComparison.Ordinal);
+        var restored = Assert.IsType<Decision>(EventJson.Deserialize(EventJson.Version, json));
+        Assert.Equal(2, restored.State!.Value.GetProperty("step").GetInt32());
+        Assert.Equal(["yes", "no"], restored.Question!.Options.Select(option => option.Name));
+        Assert.False(restored.Calibrated);
+        var bare = EventJson.Serialize(decision with { State = null, Question = null, Calibrated = null });
+        Assert.DoesNotContain("\"state\"", bare, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"calibrated\"", bare, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("""{"type":"no_such_event","text":"x"}""")]
     [InlineData("""{"text":"missing discriminator"}""")]
