@@ -55,6 +55,8 @@ public sealed class FabricTests
         Assert.Equal(Fixtures.Tools.Select(option => (option.Name, option.Description)),
             tool.Question.Options.Select(option => (option.Name, option.Description)));
         Assert.Equal(["yes", "no"], decisions.Single(d => d.QuestionId == "clarify").Question!.Options.Select(option => option.Name));
+        // The degraded tier's answer is recorded as uncalibrated, so calibration never reads it from the decider's name.
+        Assert.False(tool.Calibrated);
         Assert.Equal(0.05, tool.Threshold);
         Assert.Equal(3, tool.Probabilities.Count);
         Assert.Equal("ask_clarifying_question", decisions.Single(d => d.QuestionId == "clarify").Action);
@@ -120,6 +122,7 @@ public sealed class FabricTests
         Assert.Equal(2, kev.Requests[0].Questions.Count);
         Assert.Empty(chat.Prompts);
         Assert.All(db.Log.Read(Session, cancellationToken: Ct), e => Assert.Equal("kev-test", ((Decision)e.Payload).Decider));
+        Assert.All(db.Log.Read(Session, cancellationToken: Ct), e => Assert.True(((Decision)e.Payload).Calibrated));
     }
 
     [Theory]

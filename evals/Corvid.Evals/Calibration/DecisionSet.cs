@@ -7,14 +7,20 @@ using Corvid.Kernel.Events;
 
 namespace Corvid.Evals.Calibration;
 
-/// <summary>Which tier answered, read from the <c>decider</c> field of a <c>Decision</c> event.</summary>
+/// <summary>Whether a recorded answer counts as calibrated, read from the <c>Decision</c> event.</summary>
 public enum DecisionTier
 {
-    /// <summary>A calibrated decider (Kev, C-004b). Only these answers fit floors.</summary>
+    /// <summary>A calibrated decider (Kev, C-004b) that recorded its answer as calibrated. Only these answers fit floors.</summary>
     Calibrated,
-    /// <summary>The degraded tier (plan §5.6), including a fallback after the calibrated decider declined. Uncalibrated.</summary>
+    /// <summary>
+    /// An uncalibrated answer: the degraded tier (plan §5.6), including a fallback after the calibrated decider declined,
+    /// or an answer its decider marked uncalibrated. The policy applies the degraded rules to both.
+    /// </summary>
     Degraded,
-    /// <summary>No decider recorded: a decision written before C-004a. Treated as uncalibrated.</summary>
+    /// <summary>
+    /// No calibration evidence: no decider recorded (before C-004a), or an answer recorded without its calibrated flag
+    /// (before C-021). Treated as uncalibrated.
+    /// </summary>
     Unknown,
 }
 
@@ -184,12 +190,26 @@ public sealed class DecisionSet
         return new DecisionSet(records.ToImmutable(), orphans.ToImmutable(), histories);
     }
 
-    /// <summary>The tier a recorded decider name stands for. Every degraded answer, including a fallback, is uncalibrated.</summary>
-    public static DecisionTier TierOf(string? decider) =>
-        decider is null ? DecisionTier.Unknown
-        : decider == DegradedDecider.DeciderName || decider.StartsWith(DegradedDecider.DeciderName + " ", StringComparison.Ordinal)
-            ? DecisionTier.Degraded
-            : DecisionTier.Calibrated;
+    /// <summary>
+    /// The tier of a recorded decision. Fails closed: an answer is calibrated only when the event says so, never because
+    /// of the decider's name. A degraded decider name is uncalibrated whatever the flag says.
+    /// </summary>
+    public static DecisionTier TierOf(Decision decision)
+    {
+        ArgumentNullException.ThrowIfNull(decision);
+        var decider = decision.Decider;
+        if (decider is null)
+            return DecisionTier.Unknown;
+        if (decider == DegradedDecider.DeciderName || decider.StartsWith(DegradedDecider.DeciderName + " ", StringComparison.Ordinal))
+            return DecisionTier.Degraded;
+        return decision.Calibrated switch
+        {
+            true => DecisionTier.Calibrated,
+            false => DecisionTier.Degraded,
+            // No answer: nothing to calibrate, so the decider's own tier stands. An answer without the flag is unproven.
+            null => decision.Probabilities.IsEmpty ? DecisionTier.Calibrated : DecisionTier.Unknown,
+        };
+    }
 
     /// <summary>
     /// The option names in the order the decider saw them: as recorded on the event, else the catalogue's fixed options,
@@ -216,7 +236,7 @@ public sealed class DecisionSet
         var questionId = separator < 0 ? decision.QuestionId : decision.QuestionId[..separator];
         var instance = separator < 0 ? null : decision.QuestionId[(separator + 1)..];
         var question = catalogue.TryResolve(decision.QuestionId, out var row) ? row : null;
-        var tier = TierOf(decision.Decider);
+        var tier = TierOf(decision);
         var answer = question is null ? null : Rebuild(decision, question, tier);
         var measure = answer is null ? null : DecisionPolicy.MeasureOf(question!, answer);
         var label = classifier.Classify(outcomes.IsEmpty ? null : outcomes[^1]);

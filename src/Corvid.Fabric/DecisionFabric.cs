@@ -89,7 +89,7 @@ public sealed class DecisionFabric
             events.Add(EventData.Create(new Decision(decisionId, key,
                 answer?.ToProbabilityMap() ?? ImmutableDictionary<string, double>.Empty,
                 answer?.Confidence ?? 0, verdict.Threshold, verdict.Action, Policy.Floors.Version, decider,
-                request.State, Asked(question))));
+                request.State, Asked(question), answer?.Calibrated)));
         }
 
         var stored = Append(sessionId, events, cancellationToken);

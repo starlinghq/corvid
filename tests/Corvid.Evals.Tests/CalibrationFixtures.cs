@@ -56,7 +56,7 @@ internal static class Decisions
     public static Decision Noul(string key, double yes, double threshold, string act, string below, string decider = Kev,
         string? id = null) =>
         new(id ?? NewId(), key, Map(("yes", yes), ("no", 1 - yes)), Math.Abs(2 * yes - 1), threshold,
-            yes >= threshold ? act : below, FloorsVersion, decider);
+            yes >= threshold ? act : below, FloorsVersion, decider, Calibrated: IsCalibrated(decider));
 
     public static Decision Done(double yes, string decider = Kev, string? id = null) =>
         Noul("done", yes, 0.8, "stop", "continue", decider, id);
@@ -69,8 +69,11 @@ internal static class Decisions
         var confidence = (p - 0.25) / 0.75;
         var acted = decider == Kev && confidence >= threshold;
         return new(id ?? NewId(), "memory_op", Map([.. options.Select((option, i) => (option, i == 0 ? p : rest))]), confidence,
-            threshold, acted ? "apply:add" : "stage_for_review", FloorsVersion, decider);
+            threshold, acted ? "apply:add" : "stage_for_review", FloorsVersion, decider, Calibrated: IsCalibrated(decider));
     }
+
+    // As the fabric records it: the degraded tier's answers are uncalibrated.
+    private static bool IsCalibrated(string? decider) => decider?.StartsWith(Degraded, StringComparison.Ordinal) == false;
 
     public static SessionEvent[] WithOutcome(Decision decision, string outcome) =>
         [decision, new DecisionOutcomeRecorded(decision.DecisionId, outcome)];

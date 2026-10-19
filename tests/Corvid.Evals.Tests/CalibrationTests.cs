@@ -18,8 +18,8 @@ public sealed class DecisionSetTests : IDisposable
     {
         var done = Done(0.9);
         var clear = new Decision(NewId(), "clear_results/call-7", Map(("keep", 0.8), ("stub", 0.1), ("drop", 0.1)), 0.7, 0.6,
-            "apply:keep", FloorsVersion, Kev);
-        var unknown = new Decision(NewId(), "no_such_question", Map(("yes", 1)), 1, 0.5, "x", FloorsVersion, Kev);
+            "apply:keep", FloorsVersion, Kev, Calibrated: true);
+        var unknown = new Decision(NewId(), "no_such_question", Map(("yes", 1)), 1, 0.5, "x", FloorsVersion, Kev, Calibrated: true);
         _log.Add("s-1", done, clear, unknown,
             new DecisionOutcomeRecorded(done.DecisionId, "tool_succeeded"),
             new DecisionOutcomeRecorded(done.DecisionId, "user_retried"),
@@ -52,13 +52,27 @@ public sealed class DecisionSetTests : IDisposable
     }
 
     [Theory]
-    [InlineData("degraded", DecisionTier.Degraded)]
-    [InlineData("degraded after kev-0.8b: state_over_budget", DecisionTier.Degraded)]
-    [InlineData("kev-0.8b", DecisionTier.Calibrated)]
-    [InlineData("degraded-but-not-really", DecisionTier.Calibrated)]
-    [InlineData(null, DecisionTier.Unknown)]
-    public void Tiers_come_from_the_recorded_decider(string? decider, DecisionTier tier) =>
-        Assert.Equal(tier, DecisionSet.TierOf(decider));
+    [InlineData("degraded", true, DecisionTier.Degraded)]
+    [InlineData("degraded", null, DecisionTier.Degraded)]
+    [InlineData("degraded after kev-0.8b: state_over_budget", true, DecisionTier.Degraded)]
+    [InlineData("kev-0.8b", true, DecisionTier.Calibrated)]
+    [InlineData("kev-0.8b", false, DecisionTier.Degraded)]
+    [InlineData("degraded-but-not-really", false, DecisionTier.Degraded)]
+    // Fails closed: a decider name alone never makes an answer calibrated.
+    [InlineData("kev-0.8b", null, DecisionTier.Unknown)]
+    [InlineData("mystery-decider", null, DecisionTier.Unknown)]
+    [InlineData(null, true, DecisionTier.Unknown)]
+    public void Tiers_come_from_the_recorded_calibration_flag_and_decider(string? decider, bool? calibrated, DecisionTier tier) =>
+        Assert.Equal(tier, DecisionSet.TierOf(Done(0.9, decider: decider!) with { Calibrated = calibrated }));
+
+    [Fact]
+    public void An_unanswered_decision_keeps_its_deciders_tier()
+    {
+        var unanswered = new Decision(NewId(), "done", ImmutableDictionary<string, double>.Empty, 0, 0.8, "continue", FloorsVersion, Kev);
+
+        Assert.Equal(DecisionTier.Calibrated, DecisionSet.TierOf(unanswered));
+        Assert.Equal(DecisionTier.Degraded, DecisionSet.TierOf(unanswered with { Decider = Degraded }));
+    }
 
     [Fact]
     public void Measures_follow_each_questions_floor_measure_and_option_order()
@@ -66,9 +80,9 @@ public sealed class DecisionSetTests : IDisposable
         // The stored map is unordered; difficulty's levels must come from the catalogue, not the map.
         var difficulty = new Decision(NewId(), "difficulty",
             Map(("needs a frontier model", 0.6), ("hard", 0.3), ("moderate", 0.1), ("easy", 0), ("trivial", 0)), 0.5, 3.5,
-            "escalate_generator", FloorsVersion, Kev);
+            "escalate_generator", FloorsVersion, Kev, Calibrated: true);
         var tool = new Decision(NewId(), "tool", Map(("cron.update", 0.7), ("none", 0.2), ("message.send", 0.1)), 0.55, 0.45,
-            "offer_tool:cron.update", FloorsVersion, Kev);
+            "offer_tool:cron.update", FloorsVersion, Kev, Calibrated: true);
         _log.Add("s", difficulty, tool, Done(0.85));
 
         var records = _log.Load().Records;
@@ -86,7 +100,8 @@ public sealed class DecisionSetTests : IDisposable
     {
         string[] levels = ["none", "low", "moderate", "high", "destructive"];
         Decision Risk(int level, double p, string action) => new(NewId(), "risk",
-            Map([.. levels.Select((name, i) => (name, i == level ? p : (1 - p) / 4))]), (p - 0.2) / 0.8, 0.9, action, FloorsVersion, Kev);
+            Map([.. levels.Select((name, i) => (name, i == level ? p : (1 - p) / 4))]), (p - 0.2) / 0.8, 0.9, action, FloorsVersion, Kev,
+            Calibrated: true);
         _log.Add("s", Risk(4, 0.98, "ask"), Risk(4, 0.5, "ask"), Risk(1, 0.95, "approval_mode"));
         _log.Add("t", new Decision(NewId(), "risk", ImmutableDictionary<string, double>.Empty, 0, 0.9, "ask", FloorsVersion, Degraded));
 
@@ -123,6 +138,7 @@ public sealed class DecisionSetTests : IDisposable
 
         var record = Assert.Single(_log.Load().Records);
         Assert.Equal(DecisionTier.Calibrated, record.Tier);
+        Assert.True(record.Event.Calibrated);
         Assert.True(record.Acted);
         Assert.Equal(OutcomeLabel.Positive, record.Label);
         Assert.Equal("is it done?", record.Event.State!.Value.GetProperty("user_message").GetString());
@@ -203,6 +219,22 @@ public sealed class FloorFitterTests : IDisposable
     }
 
     [Fact]
+    public void Answers_without_calibration_evidence_fit_nothing_whatever_the_decider_is_called()
+    {
+        // An unknown decider with no recorded flag, and a calibrated decider's answer marked uncalibrated.
+        Many(30, () => MemoryOp(0.4, decider: "mystery-decider") with { Calibrated = null }, "approved");
+        Many(30, () => MemoryOp(0.4) with { Calibrated = false }, "approved");
+
+        var fit = Fit().Questions.Single(question => question.QuestionId == "memory_op");
+
+        Assert.Equal((FitStatus.InsufficientData, 0, 60), (fit.Status, fit.Samples, fit.Excluded));
+        Assert.False(fit.Changed);
+        var report = CalibrationReport.Build(_log.Load());
+        Assert.Empty(report.Calibrated);
+        Assert.Equal(60, Assert.Single(report.Uncalibrated).Decisions);
+    }
+
+    [Fact]
     public void Too_little_data_or_an_unreachable_target_keeps_the_current_floor()
     {
         Many(5, () => Noul("clarify", 0.9, 0.7, "ask_clarifying_question", "proceed"), "accepted");
@@ -223,7 +255,7 @@ public sealed class FloorFitterTests : IDisposable
     {
         string[] levels = ["trivial", "easy", "moderate", "hard", "needs a frontier model"];
         Decision Difficulty(int level) => new(NewId(), "difficulty", Map([.. levels.Select((name, i) => (name, i == level ? 1.0 : 0))]),
-            1, 3.5, level >= 3.5 ? "escalate_generator" : "stay_on_generator", FloorsVersion, Kev);
+            1, 3.5, level >= 3.5 ? "escalate_generator" : "stay_on_generator", FloorsVersion, Kev, Calibrated: true);
         Many(20, () => Difficulty(4), "accepted");
         Many(20, () => Difficulty(3), "accepted");
         Many(20, () => Difficulty(1), "user_corrected");
@@ -355,7 +387,8 @@ public sealed class ExportTests : IDisposable
         var tool = new Decision(NewId(), "tool", Map(("cron.update", 0.7), ("message.send", 0.1), ("none", 0.2)), 0.55, 0.45,
             "offer_tool:cron.update", FloorsVersion, Kev, Json("""{"user_message":"move it","step":0}"""),
             new AskedQuestion("choice", Json("\"Which tool should run first?\""),
-                [new AskedOption("message.send", "send a message"), new AskedOption("cron.update", "change a reminder"), new AskedOption("none")]));
+                [new AskedOption("message.send", "send a message"), new AskedOption("cron.update", "change a reminder"), new AskedOption("none")]),
+            Calibrated: true);
         var unanswered = new Decision(NewId(), "risk", ImmutableDictionary<string, double>.Empty, 0, 0.9, "ask", FloorsVersion, Degraded);
         var legacy = Done(0.6);
         _log.Add("s", WithOutcome(tool, "tool_succeeded"));

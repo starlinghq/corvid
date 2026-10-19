@@ -377,7 +377,7 @@ unchanged.
   `DecisionOutcomeRecorded`.
 - `Decision` gained two optional fields, `catalogue_version` and `decider`. They
   are omitted when null, so events written before C-004a keep their persisted form
-  and still read. C-021 added two more, `state` and `question`, the same way.
+  and still read. C-021 added three more, `state`, `question` and `calibrated`, the same way.
 
 Not built yet: the Kev adapter and the two-tier escalation to Kev-4B (C-004b, which
 waits for the package); wiring a model's token counter into the builder; GLiNER2 entities and the
@@ -573,8 +573,10 @@ corvid-evals export-trajectories --log events.db --out trajectories.jsonl
   `denied`, `failed`, `rejected`, `retried`, `task_failed`, `tool_failed` and the `user_` forms (§5.5: corrections,
   denials, retries and tool failures are negative). Anything else is unlabelled, reported, and never used for fitting;
   `--positive` and `--negative` extend the lists.
-- Tier: from the recorded `decider`. `degraded` and `degraded after …` are the degraded tier, a missing decider (before
-  C-004a) is unknown, and anything else is calibrated. Only calibrated decisions are fitting evidence, for gates and
+- Tier: fails closed. `degraded` and `degraded after …` deciders are the degraded tier whatever else is recorded, as is
+  an answer recorded with `calibrated: false`. An answer is calibrated only when its event records `calibrated: true`;
+  a missing decider (before C-004a) or an answer without the flag (before C-021) is unknown, so a decider's name alone
+  never makes its answers fitting evidence. A decision with no answer keeps its decider's tier. Only calibrated decisions are fitting evidence, for gates and
   routing questions alike, since floors apply to a calibrated decider's confidence. The degraded and unknown tiers are
   reported in their own section. With no Kev every decision is degraded, so on today's logs `calibrate` fits nothing and
   writes the current floors under the new version.
@@ -607,8 +609,9 @@ corvid-evals export-trajectories --log events.db --out trajectories.jsonl
   `approval_mode` because the permissive mode is not recorded. Degraded gates, heuristics and conservative defaults never
   change. Degraded generator yes/no answers are compared with the floor as the policy does. Degraded embedding choices
   cannot be replayed against a new margin (the margin itself is not recorded) and are counted as not replayable.
-- `Decision` events now also carry `state`, the TurnState JSON the decider saw, and `question`, the question as asked
-  (`kind`, `instructions` as a JSON string or object, `options` with descriptions, in order). Both are optional and
+- `Decision` events now also carry `state`, the TurnState JSON the decider saw, `question`, the question as asked
+  (`kind`, `instructions` as a JSON string or object, `options` with descriptions, in order), and `calibrated`, the
+  answer's `DecisionAnswer.Calibrated` (null when there was no answer). All are optional and
   omitted when null, as `catalogue_version` and `decider` were in C-004a, so older events keep their persisted form. The
   state is repeated on each decision of a checkpoint (up to about 600 tokens each by default). Instructions are whatever
   the caller sent, so `memory_op` decisions now hold the candidate fact and its retrieved neighbours.

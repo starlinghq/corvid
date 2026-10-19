@@ -31,6 +31,7 @@ evals/Corvid.Evals.Calibrate/bin/Release/net10.0/corvid-evals calibrate --log ~/
 evals/Corvid.Evals.Calibrate/bin/Release/net10.0/corvid-evals replay --log ~/path/to/events.db --candidate floors.json
 ```
 
-Only calibrated decisions fit floors; degraded-tier decisions are reported separately. `report`,
+Only calibrated decisions (recorded with `calibrated: true` by a non-degraded decider) fit floors; degraded-tier and
+unproven decisions are reported separately. `report`,
 `export-decisions` (Kev training records) and `export-trajectories` (ShareGPT) take the same `--log` options; run
 `corvid-evals --help` for the rest. Replaying recorded states against a new decider model is not built.
