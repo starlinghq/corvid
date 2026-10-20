@@ -225,6 +225,10 @@ public sealed class TurnRunner
         private ImmutableSortedDictionary<string, ImmutableArray<string>> _entities = ImmutableSortedDictionary<string, ImmutableArray<string>>.Empty;
         private ImmutableArray<Offered> _shortlist = [];
         private string _memoryNote = "";
+        private ImmutableArray<SkillOption> _skills = [];
+        private string _skillNote = "";
+        private string? _skill;
+        private bool _skillQueued;
         private string? _lastToolResult;
         private int _steps;
         private int _toolCalls;
@@ -242,6 +246,7 @@ public sealed class TurnRunner
 
             await ExtractEntitiesAsync(cancellationToken).ConfigureAwait(false);
             await BuildShortlistAsync(cancellationToken).ConfigureAwait(false);
+            await BuildSkillShortlistAsync(cancellationToken).ConfigureAwait(false);
 
             // Ingress: one request for every question this turn needs before the first generator call.
             var ingress = new List<KeyValuePair<string, DecisionQuestion>> { Ask("intent"), Ask("difficulty"), Ask("clarify") };
@@ -249,7 +254,10 @@ public sealed class TurnRunner
                 ingress.Add(Ask("needs_recall"));
             if (!_shortlist.IsEmpty)
                 ingress.Add(ToolQuestion());
+            if (!_skills.IsEmpty)
+                ingress.Add(SkillQuestion());
             var verdicts = await DecideAsync(Checkpoint.Ingress, ingress, cancellationToken).ConfigureAwait(false);
+            await LoadSkillAsync(verdicts, cancellationToken).ConfigureAwait(false);
 
             if (Acted(verdicts, "difficulty", out _) && _options.EscalationAllowed)
                 await EscalateAsync("difficulty", cancellationToken).ConfigureAwait(false);
@@ -474,6 +482,8 @@ public sealed class TurnRunner
                 prompt += "\n\n" + core;
             if (_memoryNote.Length > 0)
                 prompt += "\n\n" + _memoryNote;
+            if (_skillNote.Length > 0)
+                prompt += "\n\n" + _skillNote;
             return prompt;
         }
 
@@ -663,13 +673,14 @@ public sealed class TurnRunner
             }
 
             CallOutcome outcome;
+            ToolCallContext? callContext = null;
             using (running)
             {
                 try
                 {
                     // The turn's context travels beside the arguments, never in them: tools that need the session or the
                     // approval (the shell tool runs only with one) read it from there.
-                    var context = new ToolCallContext(runner.SessionId, call.CallId)
+                    var context = callContext = new ToolCallContext(runner.SessionId, call.CallId)
                     {
                         Tainted = tainted,
                         Interactive = _options.Interactive,
@@ -706,8 +717,9 @@ public sealed class TurnRunner
             string? decisionId;
             lock (_gate)
             {
-                // Plan §10.3: fetched or external content taints the session until the user speaks.
-                if (descriptor.Risk.Network)
+                // Plan §10.3: fetched or external content taints the session until the user speaks. A tool that returns outside
+                // content without the network (a hub skill's file) says so on its context.
+                if (descriptor.Risk.Network || callContext?.ResultTainted == true)
                     runner.Tainted = true;
                 _pickDecisions.Remove(descriptor.Name, out decisionId);
             }
@@ -951,11 +963,11 @@ public sealed class TurnRunner
         }
 
         private async Task<CheckpointResult> DecideAsync(Checkpoint checkpoint, List<KeyValuePair<string, DecisionQuestion>> questions,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken, params string[] extraConditions)
         {
-            IReadOnlySet<string>? conditions = _options.EscalationAllowed
-                ? new HashSet<string>(StringComparer.Ordinal) { FabricConditions.EscalationAllowed }
-                : null;
+            var conditions = new HashSet<string>(extraConditions, StringComparer.Ordinal);
+            if (_options.EscalationAllowed)
+                conditions.Add(FabricConditions.EscalationAllowed);
             var result = await _services.Fabric.DecideAsync(runner.SessionId, checkpoint, State(), questions, conditions, cancellationToken)
                 .ConfigureAwait(false);
             if (result.Verdicts.TryGetValue("tool", out var tool) && tool.Verdict.Acted && tool.Verdict.Option is { } pick && pick != None)
@@ -1089,6 +1101,70 @@ public sealed class TurnRunner
             _shortlist = [.. ranked.Items.Select(item => _catalogue[item.Name])];
         }
 
+        // ---- skills (plan §11) ----
+
+        private async Task BuildSkillShortlistAsync(CancellationToken cancellationToken)
+        {
+            if (_services.Skills is not { } skills || _options.PinnedSkill is not null)
+                return;
+            var available = skills.Available([.. _catalogue.Keys]);
+            if (available.Count == 0)
+                return;
+            var byName = available.DistinctBy(skill => skill.Name, StringComparer.Ordinal).ToDictionary(skill => skill.Name, StringComparer.Ordinal);
+            var size = _services.SkillShortlist.Options.Size;
+            if (!_services.Slots.TryCurrent(ModelSlots.TextEmbedder, out var binding)
+                || binding.Service is not IEmbeddingGenerator<string, Embedding<float>> embedder)
+            {
+                _skills = [.. byName.Values.OrderBy(skill => skill.Name, StringComparer.Ordinal).Take(size)];
+                return;
+            }
+            var ranked = await _services.SkillShortlist.RankAsync(envelope.Text,
+                byName.Values.Select(skill => new ShortlistItem(skill.Name, skill.Description, skill.Examples)), embedder,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            _skills = [.. ranked.Items.Select(item => byName[item.Name])];
+        }
+
+        /// <summary>The <c>skill</c> question: the skill shortlist as <c>name: description</c> options, plus none.</summary>
+        private KeyValuePair<string, DecisionQuestion> SkillQuestion() =>
+            KeyValuePair.Create("skill", Catalogue["skill"].ToQuestion(
+                [.. _skills.Where(skill => skill.Name != None).Select(skill => new QuestionOption(skill.Name, skill.Description)),
+                 new QuestionOption(None, "no saved skill applies")]));
+
+        /// <summary>
+        /// A confident <c>skill</c> pick (or a pinned skill) loads the body (L1) into the system prompt; otherwise only the
+        /// shortlist's names and descriptions (L0) are shown. A body from outside (a hub skill) taints the session (§10.3),
+        /// and <c>injection</c> is asked about it, which taints either way.
+        /// </summary>
+        private async Task LoadSkillAsync(CheckpointResult verdicts, CancellationToken cancellationToken)
+        {
+            if (_services.Skills is not { } skills)
+                return;
+            var picked = Acted(verdicts, "skill", out var pick) ? pick : null;
+            var name = _options.PinnedSkill ?? (picked is not null && picked != None ? picked : null);
+            var body = name is null ? null : skills.Load(name);
+            if (body is null)
+            {
+                // A confident "none" means no skill applies, so not even the index is shown.
+                if (!_skills.IsEmpty && picked != None)
+                    _skillNote = "Saved skills that may apply (not loaded" +
+                        (_catalogue.ContainsKey(SkillTools.Read) ? $"; {SkillTools.Read} loads one" : "") + "):\n" +
+                        string.Join("\n", _skills.Select(skill => $"- {skill.Name}: {skill.Description}"));
+                return;
+            }
+            _skill = body.Name;
+            _skillNote = $"Skill {body.Name}: follow it for this request.\n{body.Text.Trim()}" +
+                (body.Resources.IsDefaultOrEmpty ? "" : $"\nFiles in this skill ({SkillTools.Read} reads them): {string.Join(", ", body.Resources)}");
+            if (body.Trusted)
+                return;
+            lock (_gate)
+                runner.Tainted = true;
+            var question = Catalogue["injection"];
+            var instructions = DecisionContent.FromText($"{question.Instructions}\nskill {body.Name}:\n" +
+                (body.Text.Length > 1_200 ? body.Text[..1_200] + "…" : body.Text));
+            await DecideAsync(Checkpoint.Ingress, [KeyValuePair.Create("injection/skill:" + body.Name, question.ToQuestion(instructions: instructions))],
+                cancellationToken).ConfigureAwait(false);
+        }
+
         private async Task RecallAsync(bool full, CancellationToken cancellationToken)
         {
             var entities = _entities.SelectMany(pair => pair.Value.Select(name => new EntityRef(pair.Key, name))).ToImmutableArray();
@@ -1126,20 +1202,33 @@ public sealed class TurnRunner
 
         private async Task<TurnResult> FinishAsync(TurnStatus status, string text, CancellationToken cancellationToken)
         {
-            runner.Append(new AssistantMessage(text));
+            var answer = runner.Append(new AssistantMessage(text)).Sequence;
             var deliver = "reply";
             var egress = new List<KeyValuePair<string, DecisionQuestion>>();
             if (_services.Memory is not null && status == TurnStatus.Answered)
                 egress.Add(Ask("remember"));
             if (_options.AskDeliver)
                 egress.Add(Ask("deliver"));
+            // skill_opportunity acts only after three tool calls (its required condition), so a shorter turn is not asked:
+            // in the degraded tier each ask is a generator call. A replay or eval turn is never distilled again.
+            var opportunity = _services.SkillLearning is not null && status == TurnStatus.Answered && _toolCalls >= 3
+                && _options.PinnedSkill is null;
+            if (opportunity)
+                egress.Add(Ask("skill_opportunity"));
             if (egress.Count > 0)
             {
-                var verdicts = await DecideAsync(Checkpoint.Egress, egress, cancellationToken).ConfigureAwait(false);
+                var verdicts = await DecideAsync(Checkpoint.Egress, egress, cancellationToken,
+                    opportunity ? [FabricConditions.ToolStepsAtLeastThree] : []).ConfigureAwait(false);
                 if (Acted(verdicts, "deliver", out var target) && target is not null)
                     deliver = target;
                 if (Acted(verdicts, "remember", out _))
                     await RememberAsync(cancellationToken).ConfigureAwait(false);
+                if (Acted(verdicts, "skill_opportunity", out _))
+                {
+                    _services.SkillLearning!.Queue(new SkillOpportunity(runner.SessionId, _turnStart, answer,
+                        verdicts["skill_opportunity"].DecisionId, envelope.Text));
+                    _skillQueued = true;
+                }
             }
             await runner.DeEscalateAsync(cancellationToken).ConfigureAwait(false);
             return Result(status, text) with { Deliver = deliver };
@@ -1168,7 +1257,11 @@ public sealed class TurnRunner
         }
 
         public TurnResult Result(TurnStatus status, string? text) =>
-            new(status, text, _steps, _toolCalls, runner.Tainted, "reply", [.. _escalations], [.. _disagreements], _memoryWrite, [.. _compactions]);
+            new(status, text, _steps, _toolCalls, runner.Tainted, "reply", [.. _escalations], [.. _disagreements], _memoryWrite, [.. _compactions])
+            {
+                Skill = _skill,
+                SkillQueued = _skillQueued,
+            };
     }
 
     private sealed class ContextOverBudgetException(string message) : Exception(message);

@@ -16,6 +16,7 @@ using Corvid.Kernel.Sessions;
 using Corvid.Kernel.Turns;
 using Corvid.Memory;
 using Corvid.Models;
+using Corvid.Skills;
 using Corvid.Tools;
 using Corvid.Tools.Builtin;
 
@@ -43,18 +44,21 @@ public sealed class CorvidRuntime : IAsyncDisposable
     private readonly ApprovalRouter _prompters;
     private readonly EmbedderSwapJob? _swap;
     private readonly ToolShortlist _shortlist = new();
+    private readonly ToolShortlist _skillShortlist = new(new ShortlistOptions(Size: 3));
     private readonly Lock _maintenanceGate = new();
     private readonly CancellationTokenSource _lifetime = new();
     private Task _maintenance = Task.CompletedTask;
     private FileStream? _schedulerLock;
     private Task? _scheduler;
+    private Task? _learning;
 
     internal CorvidRuntime(CorvidOptions options, ModelCatalogue catalogue, ModelComposer composer, DeviceSchedulers devices,
         ModelMetrics metrics, TurnFeed feed, SqliteEventLog log, ModelSlotRegistry registry, DecisionFabric fabric,
         ApprovalPipeline approvals, ApprovalRouter prompters, ToolRegistry tools, MemoryServices? memory, ITokenCounter? counter,
-        BuiltinServices builtin, CheckpointService? checkpoints = null)
+        BuiltinServices builtin, CheckpointService? checkpoints = null, SkillServices? skills = null)
     {
         Checkpoints = checkpoints;
+        Skills = skills ?? new SkillServices(null, null, null, null, "off");
         Options = options;
         Catalogue = catalogue;
         _composer = composer;
@@ -78,7 +82,13 @@ public sealed class CorvidRuntime : IAsyncDisposable
             _swap!.Start(embedder.Default.Profile.Id);
         if (options.Scheduler.Enabled)
             StartScheduler();
+        // The learning loop (plan §11): queued opportunities are drafted and replay-tested in the background.
+        if (Skills.Learner is { } learner)
+            _learning = Task.Run(() => learner.RunAsync(_lifetime.Token));
     }
+
+    /// <summary>Skills (C-017): the store, the learning loop and the curator, or why they are off.</summary>
+    public SkillServices Skills { get; }
 
     public CorvidOptions Options { get; }
 
@@ -165,6 +175,8 @@ public sealed class CorvidRuntime : IAsyncDisposable
         await _lifetime.CancelAsync().ConfigureAwait(false);
         if (_scheduler is not null)
             await _scheduler.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        if (_learning is not null)
+            await _learning.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         _schedulerLock?.Dispose();
         await Sessions.DisposeAsync().ConfigureAwait(false);
         await MaintenanceIdleAsync().ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
@@ -228,6 +240,10 @@ public sealed class CorvidRuntime : IAsyncDisposable
             // Frozen per session (plan §9.1): an edit made during the session shows from the next one.
             CoreBlocks = Memory?.Blocks.Snapshot(),
             Shortlist = _shortlist,
+            Skills = Skills.Store,
+            // Unattended job turns are not distilled into skills: nobody saw them.
+            SkillLearning = interactive ? Skills.Learner : null,
+            SkillShortlist = _skillShortlist,
             Options = new TurnOptions
             {
                 SystemPrompt = turn.SystemPrompt is { Length: > 0 } prompt ? prompt : TurnOptions.DefaultSystemPrompt,

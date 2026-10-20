@@ -293,6 +293,8 @@ internal sealed class FakeModels
     {
         ["Corvid:DataDirectory"] = Path.Combine(root, "data"),
         ["Corvid:Workspace"] = Path.Combine(root, "work"),
+        // Never the user's own skills directory.
+        ["Corvid:Skills:Directory"] = Path.Combine(root, "skills"),
         ["Corvid:Approvals:RulesFile"] = Path.Combine(root, "approvals.json"),
         ["Corvid:Models:Slots:generator:Model"] = "fake-gen",
         ["Corvid:Models:Slots:generator:Escalation:0"] = "fake-gen-large",

@@ -1,4 +1,4 @@
-# Agent foundation (C-001, C-002, C-004a, C-004b, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-012, C-013, C-014, C-016, C-021)
+# Agent foundation (C-001, C-002, C-004a, C-004b, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-012, C-013, C-014, C-016, C-017, C-021)
 
 The solution contains `Corvid.Abstractions`, `Corvid.Kernel`, and
 `Corvid.Models`, alongside the working Vault projects. Kernel and Models each
@@ -24,7 +24,9 @@ tools, which references Approvals, Kernel, Memory, Sandbox and Tools and no pack
 and the `corvid` executable, `Corvid.Cli` (see [Host and CLI](#host-and-cli-c-013)). C-004b added the Kev decider to
 `Corvid.Models.Starling` and the two-tier escalation to `Corvid.Fabric` (see [Kev decider](#kev-decider-c-004b)). C-016
 added compaction to the kernel (see [Compaction](#compaction-c-016)). C-014 added checkpoints to
-`Corvid.Kernel` (`Checkpoints`), with no new project or package (see [Checkpoints](#checkpoints-c-014)). Add
+`Corvid.Kernel` (`Checkpoints`), with no new project or package (see [Checkpoints](#checkpoints-c-014)). C-017 added `Corvid.Skills`, which
+references Abstractions, Approvals, Fabric, Kernel, Models, Tools and Tools.Builtin, `Microsoft.Data.Sqlite` and
+`Microsoft.Extensions.AI.Abstractions` (see [Skills](#skills-c-017)). Add
 the other projects from the agent plan as their implementations start, rather
 than creating empty projects for every future surface.
 
@@ -255,6 +257,10 @@ C-011's device scheduler to these bindings.
   `IEventLog`. Kernel is still a core library: adapters reach it only through the contracts the host binds to slots.
 - `Corvid.Tools.Builtin` (C-012) references Approvals, Kernel (the job store and the scheduler's script-runner contract),
   Memory, Sandbox and Tools. Nothing references it but the host and tests, so Kernel never sees the tools it runs.
+- `Corvid.Skills` (C-017) references Kernel (the turn-loop contract `ISkillSource`/`ISkillLearning` and the turn runner its
+  replay test drives), Fabric (`skill_write_safe`), Tools.Builtin (the sandboxed shell for skill scripts) and their
+  dependencies, and no package beyond the allowlist. Nothing references it but the host and tests, so the kernel never sees
+  the skill store.
 - Provider SDKs and Starling model packages belong in `Corvid.Models.*` adapters.
   Adapters may reference core projects. ONNX Runtime and ONNX Runtime GenAI natives
   (and their managed packages) come only through adapters; a core project that
@@ -418,8 +424,7 @@ unchanged.
 
 C-011 added `ToolShortlist` (see [Session actor and turn loop](#session-actor-and-turn-loop-c-011)) and feeds the state
 the extractor's entities. C-004b added the two-tier escalation, the record of declined questions and the rule that an
-uncalibrated answer never diverts the turn (see [Kev decider](#kev-decider-c-004b)). Not built yet: the `skill` options
-(C-017); the `remember` durability score; the `tool` question's below-floor variant that escalates on the 0.8B generator
+uncalibrated answer never diverts the turn (see [Kev decider](#kev-decider-c-004b)). Not built yet: the `remember` durability score; the `tool` question's below-floor variant that escalates on the 0.8B generator
 (the caller's choice for now); generator logprobs as a Noul confidence (`IChatClient` has no logprobs surface). Decision
 replay against new floors and calibration tooling are C-021.
 
@@ -889,8 +894,8 @@ described below (see [Host and CLI](#host-and-cli-c-013)).
 C-012 added the built-in tools, `TurnOptions.Interactive` for unattended turns and the `ToolCallContext` each call
 carries (see [Built-in tools and scheduler](#built-in-tools-and-scheduler-c-012)); C-013 composes them in the host. Not
 built yet (compaction came with C-016): cloud
-slots, privacy egress and prompt-cache breakpoints (C-015); subagents and the subagent queue's users; skills and the `skill`
-question (C-017); the `delegate` and `skill_opportunity` questions (`wake` is asked by the scheduler, C-012); GLiNER2 entity boosts in the shortlist (§5.4's
+slots, privacy egress and prompt-cache breakpoints (C-015); subagents and the subagent queue's users; the `delegate`
+question (`wake` is asked by the scheduler, C-012; `skill` and `skill_opportunity` by C-017); GLiNER2 entity boosts in the shortlist (§5.4's
 third bullet); per-tool concurrency limits beyond read-only versus side-effecting; an incremental projection in the actor
 (each checkpoint and generator call reloads the session from the log: about 2.7 ms for 300 events, linear in the session's
 length); persisting taint, which a resumed actor starts without; outcomes for `done`, `stuck`, `intent` and the other
@@ -1102,8 +1107,8 @@ decider otherwise (C-004b, see [Kev decider](#kev-decider-c-004b)); Starling pac
 
 Not built yet: Ctrl+P; typing while a turn runs (the chat reads the next line after the delivery, so `/model` mid-turn is
 available to the gateway and a later CLI, not this one); removing approval rules (`IApprovalRuleStore` has no removal);
-`/memory` block edits; a `/cron` command; the rest of the ~35-command v1 set (`/skills`, `/insights` and
-others arrive with their items); the `config`, `gateway`, `skills`, `memory`, `cron` and `export` verbs; a scheduler
+`/memory` block edits; a `/cron` command; the rest of the ~35-command v1 set (`/insights` and
+others arrive with their items; `/skills` came with C-017); the `config`, `gateway`, `skills`, `memory`, `cron` and `export` verbs; a scheduler
 that runs without a chat open (a daemon, or the gateway, C-020); delivering job results to chats (C-020); metrics and logs export; an Aspire
 dashboard recipe; shipping `corvid-sandbox` and `corvid-evals` inside the publish (doctor reports where it looked);
 per-device memory in `/status`; CUDA placement (C-010's); Vault-backed secret names for tools (`TurnOptions.SecretNames`
@@ -1408,6 +1413,117 @@ a concurrent second process fail closed); and an approval prompt for restores, w
 edit made in the moment between a call's before checkpoint and its after checkpoint is counted as Corvid's. Commands
 typed through a future gateway (C-020) reach `/undo` and `/rollback` like any other command, so pairing must decide who
 may use them.
+
+## Skills (C-017)
+
+Plan §11 entirely, the `skill`, `skill_opportunity` and `skill_write_safe` rows of §5.3, the curator of §9.5, §10.6's skill
+half and D-9's skills. The code is in `src/Corvid.Skills` (core, `IsAotCompatible`), the turn-loop contract in
+`Corvid.Kernel/Turns/Skills.cs`, and the host wiring and `/skills` in `Corvid.Host`. No package was added; the checker's
+allowlist is unchanged. Everything runs on the degraded decider.
+
+- Format (`SkillDocument`, `Frontmatter`): agentskills.io `SKILL.md` folders as Hermes and Claude Code write them: a `---`
+  frontmatter block with `name` (1–64 lowercase letters, digits, `-` or `_`) and `description` (up to 1,024 characters), then
+  the Markdown body; SKILL.md is capped at 256 KiB. The frontmatter is read by a hand-written parser for the YAML subset these
+  files use (block maps and lists, plain and quoted scalars, flow lists, `|` and `>` blocks, comments). Anchors, aliases, tags,
+  flow maps, tabs, maps in list items and duplicate keys are refused, so a skill whose metadata cannot be read exactly is
+  reported and not loaded; no YAML package enters a core project. Unknown keys (`license`, `allowed-tools`, `compatibility`)
+  are kept and ignored. Hermes' activation fields are read from `metadata.hermes` (or the top level), `platforms` from the
+  top level, and example requests for the shortlist from `metadata.corvid.examples`.
+- Activation (`SkillAvailability`): `platforms` (`linux`, `macos`, `windows`), `requires_toolsets` and `requires_tools`
+  (hidden unless all are present), `fallback_for_toolsets` and `fallback_for_tools` (hidden while any is present). Corvid has
+  no toolsets (C-005), so Hermes toolsets map to Corvid tools (`terminal` → `shell`, `file` → the file tools, `web` →
+  `web_fetch`, `memory`, `cronjob` → the cron tools, `skills` → `skill_read`; available when any member is registered), and
+  some Hermes tool names to Corvid's (`terminal`, `patch`, `web_extract`, `skill_view`). Anything unknown is unavailable.
+- Store (`SkillStore`, `SkillRepository`): the skills directory, `Corvid:Skills:Directory`, default
+  `$XDG_DATA_HOME/corvid-skills` (beside the data directory, not in it: the sandbox hides the data directory, and skill
+  scripts must be readable there). Skills are found at any depth up to four (Hermes' category folders), never through links
+  or hidden folders (`.git`, `.archive`, `.hub`); a duplicate name is reported. The directory is a git repository: every
+  change is a commit whose author is `user`, `agent` or `hub:<source>` (committer `corvid`). git runs with a cleared
+  environment, no system or global configuration, `core.hooksPath=/dev/null`, no fsmonitor, pager, editor, askpass, ssh
+  command, signing, credential helper or external diff, `core.symlinks=false`, the repository named explicitly and
+  `GIT_CEILING_DIRECTORIES` set, so the user's git setup never runs. The repository's own `.git/config` is checked on open:
+  any key beyond what `git init` writes (a hooks path, a filter or diff driver) refuses the repository. `.git` is added to
+  the approval environment's safety configuration, so no tool writes it and the sandbox hides it. Before every change (and
+  at each refresh) whatever changed on disk is committed as the user's; a file's author is the author of the last commit
+  that touched it. A skill is agent-owned when every file in it was last changed by the agent; it is trusted when no file
+  came from a hub. `WriteAgentSkillAsync` and `ArchiveAsync` check ownership under the repository lock, after recording
+  outside edits, and refuse anything else: the curator and the learning loop can change only agent-authored skills (the
+  structural fix for Hermes #20273 and #64338). Each change made in a session appends `SkillChanged` (skill, revision,
+  author). The kernel reads a snapshot taken at open, after each change and on `/skills`, never waiting on git.
+- Levels: L0 is `ISkillSource.Available` (name, description, examples, trusted) after the activation rules; L1 is
+  `Load` (the body, and the L2 file list), which records a use for the curator; L2 is `ReadResource`, confined to the
+  folder (no absolute paths, `..`, hidden entries, links or binary files).
+- Turn loop (C-011's `TurnRunner`): with `TurnServices.Skills` bound, the available skills are ranked by
+  `TurnServices.SkillShortlist` (C-011's multi-vector `ToolShortlist`, top three) and `skill` joins the ingress checkpoint
+  with them as `name: description` options plus `none`. A confident pick (or `TurnOptions.PinnedSkill`, used by replays and
+  evals) puts the L1 body in the system prompt; below the floor the shortlist's L0 lines are shown, naming `skill_read`
+  when it is registered; a confident `none` shows nothing. A body that is not trusted (a hub skill) taints the session
+  (§10.3: outside content) and an `injection/skill:<name>` decision is recorded (without Kev, `treat_as_tainted`). With
+  `TurnServices.SkillLearning` bound, an answered turn with at least three tool calls asks `skill_opportunity` at egress with
+  the `tool_steps_at_least_3` condition (shorter turns are not asked: in the degraded tier each ask is a generator call);
+  acting queues `SkillOpportunity` (the user message's and the answer's sequences, the decision id, the request).
+  `TurnResult` gained `Skill` and `SkillQueued`. `ToolCallContext.MarkResultTainted` lets a tool that returns outside
+  content without the network taint the session after its call.
+- Learning loop (`SkillLearner`, `SkillsDatabase`): `Queue` writes the opportunity to `skills.db` (in the data directory:
+  the queue, staged drafts, usage, pins and eval results) and wakes `RunAsync`, which the runtime runs in the background;
+  leftovers from an earlier run go first. For each: the generator (the host's default generator wrapped at background
+  priority on the device scheduler) drafts a SKILL.md from the turn's events (request, calls, results cut to 400
+  characters, answer); the draft must parse, pass the scanner, and not name a skill the agent does not own; then it must
+  pass its replay test; then `skill_write_safe` is asked at the pre-execute checkpoint in the source session with the
+  `agent_authored` condition and the draft and replay in its instructions. A calibrated answer above 0.85 commits it as the
+  agent's; anything else stages it (`/skills pending`), so without Kev every draft is staged. `/skills approve` commits a
+  staged draft as `agent` (ownership checked again: a skill the user wrote meanwhile refuses it), runs its evals and records
+  the decision's outcome `approved`; `/skills reject` records `rejected`. Interactive sessions only: unattended job turns
+  are never distilled.
+- Replay test (`SkillReplayer`): the source session's events before the turn are copied into a fresh SQLite log under the
+  temporary directory (as C-009's `ReplaySession` does; removed afterwards), and the turn is run again by a real
+  `TurnRunner` with the draft pinned, not interactive and without escalation, over a degraded-decider fabric on that log.
+  Every registered tool is replaced by a read-only stand-in with the same name and schema that returns the result recorded
+  for that tool's next call, so a replay changes nothing, asks nobody and touches no network; a call the source never made
+  fails. It passes when the successful calls are the source's, in order, with no failed call, and the turn answered.
+- Evals: `evals/*.json` in a skill folder, each `{"prompt": ..., "expected_tools": [...]}` (unknown fields refused). The
+  curator (`SkillCurator.RunEvalsAsync`) runs each case on an empty log with stand-ins returning a placeholder, and a case
+  passes when the successful calls begin with the expected tools and the turn answered; results go to `skills.db` and
+  `/skills list`. They run after the learning loop applies or a draft is approved, and on `/skills evals <name>`.
+- Curator: `StaleAsync`/`ArchiveStaleAsync` find agent-owned, unpinned skills unused for the idle limit (or, never used,
+  unchanged since their last commit) and move them to `.archive/` as the agent (`/skills stale [days] [--archive]`, default
+  90 days). Pinned skills (`/skills pin`) and anything the user or a hub wrote are never touched.
+- Supply chain (§10.6, `SkillScanner`, `ImportAsync`): an import copies the skills under a folder (one skill or a tree such as
+  `~/.hermes/skills`, or `$HERMES_HOME/skills`; D-9) as `hub:<source>` in one commit. Each skill is all or nothing: a link,
+  a special file, a `.git` entry or git attributes, an unreadable SKILL.md, a name already in use, more than 5 MB or 500
+  files, or a scanner finding refuses it and the rest import. Hidden files are not copied and nothing runs. The scanner
+  flags instruction overrides, hiding things from the user, downloads piped to a shell, credential-store and Vault paths,
+  environment dumps, reverse shells, recursive deletes of home or root, encoded execution and invisible characters, over
+  SKILL.md and every text file; drafts are scanned too. It is a screen: hub skills are tainted whatever it says.
+- Tools (`SkillFileTools`, C-005 generated): `skill_read` (read-only; a skill's body or one file) and `skill_run_script`
+  (`[SideEffect(Process | Filesystem)]`, `[Destructive]`): a `.sh` (bash) or `.py` (python3) file under the skill's
+  `scripts/`, run by C-012's `SandboxedShell` (workspace writable, no network, Vault and Corvid's state hidden) with its
+  path and arguments single-quoted, and only when the call's context carries an allowed `ApprovalResult`; as a side effect
+  the turn loop always asks first, and without Kev nothing runs unasked. Both mark a hub skill's result as tainted.
+- Host: `Corvid:Skills` (`Enabled`, `Directory`, `Learning`, `Git`). The runtime opens the store (skills are off, with the
+  reason in `/status`, when git is missing or the repository is refused), registers the skill tools, builds the replayer on
+  `ModelComposer.CreateBackgroundSlots` (the default generator and embedder at background priority, with a degraded
+  decider on them), the curator and the learner, and runs the learner in the background. `/skills` (list, show, pending,
+  approve, reject, log, diff, revert, import `<folder> [source]` or `hermes`, evals, pin, unpin, stale); `/skills revert`
+  reverts a commit as the user, so the files it touched become the user's. `corvid doctor` checks that git runs.
+- Tests: `tests/Corvid.Skills.Tests` (frontmatter subset and refusals, Hermes and Claude Code files, activation rules, the
+  scanner; real git repositories under TMPDIR: discovery, outside edits recorded as the user's, agent writes refused on user
+  and hub skills, history, diff and revert, hooks in the repository and a global configuration never running, a repository
+  configuration that could run code refused, resource confinement; imports from a Hermes tree and refusals; the learning
+  loop staged without Kev, approved, rejected, applied under a calibrated yes, a replay that diverges, malformed and flagged
+  drafts, an approval after a user edit; evals and the curator; the turn loop's `skill` question, L0, L1, `none`, pinned
+  skills, hub taint forcing approval, `skill_opportunity`; the skill tools). Host and CLI tests cover `/skills` and the
+  doctor check, and point the skills directory at temporary folders.
+
+Not built yet: curator merge proposals and running evals on model swaps; dropping a skill body once it has completed
+(§8 lever 2) and showing a cloud generator the top-10 index; drafting on the escalated generator (drafts use the default
+local generator); a stale scan on a schedule (the curator runs on `/skills stale`); refreshing the snapshot when files
+change on disk between `/skills` calls; the `corvid skills` verb; installing from hubs over the network and plugins in a
+collectible `AssemblyLoadContext` (§10.6); importing Hermes memories and sessions (D-9); approvals that show a script's
+content (the prompt shows the tool call); toolsets (C-005), which would replace the Hermes map; using an existing clone as
+the skills directory (its `remote.*` and `branch.*` keys are outside the configuration allowlist, so it is refused with the
+key named). A workspace that contains
+the skills directory lets the file tools write skill files after approval; such edits are recorded as the user's.
 
 ## Running the check
 

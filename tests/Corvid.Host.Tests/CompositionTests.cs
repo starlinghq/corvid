@@ -46,7 +46,8 @@ public sealed class CompositionTests
     {
         await using var host = TestHost.Create();
         await using var runtime = await host.StartAsync();
-        Assert.Equal(["add_note", "list_notes"], runtime.Tools.List().Select(tool => tool.Name).Order(StringComparer.Ordinal));
+        // The skill tools (C-017) come with skills, which are on by default.
+        Assert.Equal(["add_note", "list_notes", "skill_read", "skill_run_script"], runtime.Tools.List().Select(tool => tool.Name).Order(StringComparer.Ordinal));
     }
 
     [Fact]

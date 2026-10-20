@@ -12,6 +12,7 @@ using Corvid.Kernel.Jobs;
 using Corvid.Memory;
 using Corvid.Models;
 using Corvid.Sandbox;
+using Corvid.Skills;
 using Corvid.Tools;
 using Corvid.Tools.Builtin;
 using Microsoft.Extensions.Options;
@@ -21,6 +22,12 @@ namespace Corvid.Host.Composition;
 /// <summary>What C-012's tools and scheduler share: the protected approval environment, the sandboxed shell and the job store.</summary>
 /// <param name="Web">The web fetch tool's client, owned by the runtime; null when the built-in tools are off.</param>
 public sealed record BuiltinServices(ApprovalEnvironment Environment, SandboxedShell Shell, JobStore Jobs, WebFetchTool? Web);
+
+/// <summary>
+/// Skills (C-017): the store, the loop's database, the learning loop and the curator. <paramref name="Store"/> is null when
+/// skills are off or the repository could not be opened; <paramref name="State"/> says which.
+/// </summary>
+public sealed record SkillServices(SkillStore? Store, SkillsDatabase? Database, SkillLearner? Learner, SkillCurator? Curator, string State);
 
 /// <summary>The sandbox is Linux only (C-007a): elsewhere every command is refused, never run unconfined.</summary>
 internal sealed class NoSandbox : ISandbox
@@ -92,6 +99,10 @@ public sealed class CorvidRuntimeFactory(
             var environment = vault.Protect(ApprovalEnvironment.FromProcess(CorvidPaths.Workspace(settings)));
             var rulesFile = settings.Approvals.RulesFile is { Length: > 0 } file ? CorvidPaths.ExpandHome(file) : JsonFileApprovalRuleStore.DefaultPath(environment);
             environment = ProtectCorvidState(environment, settings, rulesFile, configFile?.Path ?? CorvidPaths.UserConfigFile);
+            // The skills repository's history is how authorship is known (C-017), so no tool may write it; the skill files
+            // themselves stay readable in the sandbox, where skill scripts run.
+            if (settings.Skills.Enabled)
+                environment = Protect(environment, Path.Combine(CorvidPaths.SkillsDirectory(settings), ".git"));
             var prompters = new ApprovalRouter();
             var approvals = new ApprovalPipeline(environment, fabric, log, prompters, new JsonFileApprovalRuleStore(rulesFile),
                 new ApprovalOptions
@@ -129,9 +140,14 @@ public sealed class CorvidRuntimeFactory(
                 if (memory?.Writer is { } writer)
                     toolRegistry.Add(new MemoryTools(writer, memory.Retriever));
             }
+            var skills = OpenSkills(settings, log);
+            if (skills.Store is { } store)
+                toolRegistry.Add(new SkillFileTools(store, shell));
             foreach (var provider in toolProviders)
                 toolRegistry.Add(provider);
             toolRegistry.AddRange(tools);
+            if (skills.Store is { } skillStore && skills.Database is { } skillsDatabase)
+                skills = AddLearning(skills, settings, skillStore, skillsDatabase, composer, log, fabric, toolRegistry);
 
             // C-014: the store leaves out what the environment protects (Vault, credential stores, Corvid's own state,
             // credential file names), so it never holds a copy of anything Corvid may not read.
@@ -145,7 +161,7 @@ public sealed class CorvidRuntimeFactory(
                 : null;
 
             return new CorvidRuntime(settings, catalogue, composer, devices, metrics, feed, log, registry, fabric, approvals, prompters,
-                toolRegistry, memory, counter, builtin, checkpoints);
+                toolRegistry, memory, counter, builtin, checkpoints, skills);
         }
         catch
         {
@@ -183,6 +199,73 @@ public sealed class CorvidRuntimeFactory(
             SafetyConfiguration = [.. environment.Protected.SafetyConfiguration.Concat(added).Distinct(StringComparer.Ordinal)],
         };
         return new ApprovalEnvironment(environment.Workspace, environment.Home, protectedPaths, environment.Variables);
+    }
+
+    private static ApprovalEnvironment Protect(ApprovalEnvironment environment, string path)
+    {
+        var protectedPaths = environment.Protected with
+        {
+            SafetyConfiguration = [.. environment.Protected.SafetyConfiguration.Append(Path.GetFullPath(path)).Distinct(StringComparer.Ordinal)],
+        };
+        return new ApprovalEnvironment(environment.Workspace, environment.Home, protectedPaths, environment.Variables);
+    }
+
+    /// <summary>The skill store. Without git, or with a repository Corvid will not use, skills are off and the reason is kept.</summary>
+    private static SkillServices OpenSkills(CorvidOptions settings, SqliteEventLog log)
+    {
+        if (!settings.Skills.Enabled)
+            return new SkillServices(null, null, null, null, "off (Corvid:Skills:Enabled)");
+        var directory = CorvidPaths.SkillsDirectory(settings);
+        try
+        {
+            var database = new SkillsDatabase(CorvidPaths.SkillsDatabase(settings));
+            var store = SkillStore.OpenAsync(new SkillStoreOptions
+            {
+                Root = directory,
+                GitExecutable = settings.Skills.Git,
+                Database = database,
+                Log = log,
+            }).GetAwaiter().GetResult();
+            return new SkillServices(store, database, null, null, $"{store.Skills.Count} skill(s) in {directory}");
+        }
+        catch (Exception exception) when (exception is GitException or System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException)
+        {
+            return new SkillServices(null, null, null, null, $"off: {exception.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The learning loop and the curator (plan §11): drafts and replay turns run on the default generator at background
+    /// priority, with a degraded-decider fabric over each replay's own log, and stand-ins for every registered tool.
+    /// </summary>
+    private static SkillServices AddLearning(SkillServices skills, CorvidOptions settings, SkillStore store, SkillsDatabase database,
+        ModelComposer composer, SqliteEventLog log, DecisionFabric fabric, ToolRegistry tools)
+    {
+        var background = composer.CreateBackgroundSlots();
+        var chat = (Microsoft.Extensions.AI.IChatClient)background.Get(ModelSlots.Generator).Default.Service;
+        var embedder = (Microsoft.Extensions.AI.IEmbeddingGenerator<string, Microsoft.Extensions.AI.Embedding<float>>)background.Get(ModelSlots.TextEmbedder).Default.Service;
+        // Replay checkpoints are background work too, so their degraded answers queue behind the user's own.
+        var decider = new DegradedDecider(embedder, chat, counter: chat.GetService(typeof(Abstractions.Tokens.ITokenCounter)) as Abstractions.Tokens.ITokenCounter);
+        var replayer = new SkillReplayer(new SkillReplayServices
+        {
+            Registry = background,
+            Fabric = replayLog => new DecisionFabric(DecisionPolicy.Default, decider, replayLog),
+            Tools = tools,
+            Turn = new Kernel.Turns.TurnOptions
+            {
+                MaxSteps = settings.Turn.MaxSteps,
+                MaxOutputTokens = settings.Turn.MaxOutputTokens,
+                SystemPrompt = settings.Turn.SystemPrompt is { Length: > 0 } prompt ? prompt : Kernel.Turns.TurnOptions.DefaultSystemPrompt,
+                ToolExamples = BuiltinTools.Examples,
+            },
+        });
+        var curator = new SkillCurator(store, database, replayer);
+        var generator = background.Get(ModelSlots.Generator).Default;
+        var learner = settings.Skills.Learning
+            ? new SkillLearner(store, database, log, fabric, replayer, (Microsoft.Extensions.AI.IChatClient)generator.Service, curator,
+                new SkillLearnerOptions { Generator = generator.Profile.Id, MaxOutputTokens = settings.Turn.MaxOutputTokens })
+            : null;
+        return skills with { Learner = learner, Curator = curator };
     }
 
     /// <summary>Vault's own defaults for this user, with the socket from configuration when it is set.</summary>

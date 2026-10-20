@@ -12,8 +12,8 @@ namespace Corvid.Host.Commands;
 
 /// <summary>
 /// The v1 core set (plan §17 row 1.3): <c>/model</c>, <c>/status</c>, <c>/goal</c>, <c>/approvals</c>, <c>/memory</c>,
-/// <c>/undo</c> and <c>/rollback</c> (C-014), <c>/help</c>, <c>/exit</c>, and commands that map directly onto existing APIs:
-/// <c>/tools</c>, <c>/todos</c> and <c>/cancel</c>.
+/// <c>/undo</c> and <c>/rollback</c> (C-014), <c>/skills</c> (C-017), <c>/help</c>, <c>/exit</c>, and commands that map
+/// directly onto existing APIs: <c>/tools</c>, <c>/todos</c> and <c>/cancel</c>.
 /// </summary>
 public static class CoreCommands
 {
@@ -28,6 +28,7 @@ public static class CoreCommands
             .Add(new SlashCommand("goal", "Show, set or clear the standing goal.", "[text | clear]", Goal))
             .Add(new SlashCommand("approvals", "Pending approvals and the remembered approval rules.", "", Approvals))
             .Add(new SlashCommand("memory", "Review staged memory writes.", "[pending] | approve <id> [operation] | reject <id>", MemoryAsync))
+            .Add(new SlashCommand("skills", "Saved skills: list, review drafts, history, import, evals.", SkillCommands.Usage, SkillCommands.RunAsync))
             .Add(new SlashCommand("tools", "The tools the model can be offered, with their risk.", "", Tools))
             .Add(new SlashCommand("todos", "The session's todo list.", "", Todos))
             .Add(new SlashCommand("undo", "Revert the last turn's file changes and take it out of the conversation.", "", UndoAsync))
@@ -177,6 +178,8 @@ public static class CoreCommands
                 $"goal: {snapshot.Goal ?? "none"}",
                 $"decider: {runtime.DeciderState}",
                 $"scheduler: {runtime.SchedulerState}",
+                $"skills: {(runtime.Skills.Store is { } skills ? $"{skills.Skills.Count} in {skills.Root}" : runtime.Skills.State)}" +
+                (runtime.Skills.Database?.Pending() is { Count: > 0 } drafts ? $", {drafts.Count} draft(s) to review" : ""),
                 $"log: {Configuration.CorvidPaths.EventLog(runtime.Options)}",
             ],
         });

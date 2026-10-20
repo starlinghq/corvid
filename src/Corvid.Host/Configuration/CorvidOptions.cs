@@ -40,6 +40,8 @@ public sealed class CorvidOptions
     public SandboxSettings Sandbox { get; set; } = new();
 
     public CheckpointSettings Checkpoints { get; set; } = new();
+
+    public SkillsSettings Skills { get; set; } = new();
 }
 
 public sealed class CheckpointSettings
@@ -190,6 +192,24 @@ public sealed class VaultSettings
 {
     /// <summary>Default <c>$XDG_RUNTIME_DIR/corvid-vault/vault.sock</c>.</summary>
     public string? SocketPath { get; set; }
+}
+
+public sealed class SkillsSettings
+{
+    /// <summary>Skills (plan §11): the SKILL.md store, the <c>skill</c> question, the skill tools and <c>/skills</c>.</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// The skills directory, a git repository. Default <c>$XDG_DATA_HOME/corvid-skills</c>: outside the data directory, which
+    /// the sandbox hides, so skill scripts are readable inside it.
+    /// </summary>
+    public string? Directory { get; set; }
+
+    /// <summary>The learning loop: <c>skill_opportunity</c> queues turns, and a background job drafts and tests skills.</summary>
+    public bool Learning { get; set; } = true;
+
+    /// <summary>The git executable. It runs with a cleared environment and none of the user's git configuration.</summary>
+    public string Git { get; set; } = "git";
 }
 
 public sealed class SandboxSettings

@@ -37,6 +37,14 @@ public static class CorvidPaths
     /// <summary>The checkpoint stores (C-014): one shadow git repository per workspace, never inside it.</summary>
     public static string Checkpoints(CorvidOptions options) => Path.Combine(DataDirectory(options), "checkpoints");
 
+    /// <summary>The skills repository (C-017). Default <c>$XDG_DATA_HOME/corvid-skills</c>, beside the data directory, not in it.</summary>
+    public static string SkillsDirectory(CorvidOptions options) =>
+        options.Skills.Directory is { Length: > 0 } directory ? ExpandHome(directory)
+            : Path.Combine(Xdg("XDG_DATA_HOME", Path.Combine(".local", "share")), "corvid-skills");
+
+    /// <summary>The skill loop's queue, staged drafts, usage and eval results.</summary>
+    public static string SkillsDatabase(CorvidOptions options) => Path.Combine(DataDirectory(options), "skills.db");
+
     /// <summary>A leading <c>~/</c> means the home directory; anything else is returned as given.</summary>
     public static string ExpandHome(string path)
     {

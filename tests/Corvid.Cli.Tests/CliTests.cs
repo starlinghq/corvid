@@ -35,6 +35,7 @@ internal sealed class CliRun : IDisposable
             settings = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
             {
                 ["Corvid:DataDirectory"] = Path.Combine(Root, "data"),
+                ["Corvid:Skills:Directory"] = Path.Combine(Root, "skills"),
                 ["Corvid:Models:Cache"] = Path.Combine(Root, "empty-cache"),
                 ["Corvid:Approvals:RulesFile"] = Path.Combine(Root, "approvals.json"),
             };
@@ -68,7 +69,7 @@ public sealed class ChatTests
 
         Assert.Equal(ExitCodes.Success, exit);
         var output = run.Output;
-        Assert.Contains("corvid · fake-gen@cpu · 2 tool(s)", output, StringComparison.Ordinal);
+        Assert.Contains("corvid · fake-gen@cpu · 4 tool(s)", output, StringComparison.Ordinal);
         // The tool panel, in line mode on a non-interactive console.
         Assert.Contains("⏺ list_notes running", output, StringComparison.Ordinal);
         Assert.Contains("✓ list_notes succeeded", output, StringComparison.Ordinal);
