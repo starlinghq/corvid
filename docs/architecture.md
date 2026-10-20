@@ -1419,7 +1419,8 @@ may use them.
 Plan §11 entirely, the `skill`, `skill_opportunity` and `skill_write_safe` rows of §5.3, the curator of §9.5, §10.6's skill
 half and D-9's skills. The code is in `src/Corvid.Skills` (core, `IsAotCompatible`), the turn-loop contract in
 `Corvid.Kernel/Turns/Skills.cs`, and the host wiring and `/skills` in `Corvid.Host`. No package was added; the checker's
-allowlist is unchanged. Everything runs on the degraded decider.
+allowlist is unchanged. The skill questions go through the fabric like any other: Kev (C-004b) when it is downloaded, the
+degraded tier otherwise; `skill_write_safe` is a gate, so Kev-4B is its second tier when configured.
 
 - Format (`SkillDocument`, `Frontmatter`): agentskills.io `SKILL.md` folders as Hermes and Claude Code write them: a `---`
   frontmatter block with `name` (1–64 lowercase letters, digits, `-` or `_`) and `description` (up to 1,024 characters), then
@@ -1446,7 +1447,9 @@ allowlist is unchanged. Everything runs on the degraded decider.
   the approval environment's safety configuration, so no tool writes it and the sandbox hides it. When the workspace contains
   the skills directory (the home directory, say), the directory is also bound read-only in the shell's sandbox and denied to
   the file tools, so no tool edit can reach a skill and then be committed as the user's; a workspace at or inside the skills
-  directory turns skills off, with the reason in `/status`. Before every change (and
+  directory turns skills off, with the reason in `/status`. Checkpoints (C-014) leave such a skills directory out, so a
+restore never reverts what the learning loop wrote there (which the store would then commit as the user's); the skills
+directory has its own history and `/skills revert`. Before every change (and
   at each refresh) whatever changed on disk is committed as the user's; a file's author is the author of the last commit
   that touched it. A skill is agent-owned when every file in it was last changed by the agent; it is trusted when no file
   came from a hub. `WriteAgentSkillAsync` and `ArchiveAsync` check ownership under the repository lock, after recording
@@ -1476,7 +1479,8 @@ allowlist is unchanged. Everything runs on the degraded decider.
   `agent_authored` condition and the draft and replay in its instructions. A calibrated answer above 0.85 commits it as the
   agent's; anything else stages it (`/skills pending`), so without Kev every draft is staged. A turn that was tainted when it
   answered (§10.3) queues its opportunity marked tainted, and its draft is staged whatever the gate says: a skill written
-  from outside content would otherwise load as trusted. `/skills approve` commits a
+  from outside content would otherwise load as trusted. A turn taken back with `/undo` or `/rollback` (C-014) before its
+opportunity is processed is not distilled: the opportunity fails with that reason. `/skills approve` commits a
   staged draft as `agent` (ownership checked again: a skill the user wrote meanwhile refuses it), runs its evals and records
   the decision's outcome `approved`; `/skills reject` records `rejected`. Interactive sessions only: unattended job turns
   are never distilled.
@@ -1517,9 +1521,10 @@ allowlist is unchanged. Everything runs on the degraded decider.
   and hub skills, history, diff and revert, hooks in the repository and a global configuration never running, a repository
   configuration that could run code refused, resource confinement; imports from a Hermes tree and refusals; the learning
   loop staged without Kev, approved, rejected, applied under a calibrated yes, a replay that diverges, malformed and flagged
-  drafts, an approval after a user edit; evals and the curator; the turn loop's `skill` question, L0, L1, `none`, pinned
+  drafts, an approval after a user edit, a turn undone before its draft; evals and the curator; the turn loop's `skill` question, L0, L1, `none`, pinned
   skills, hub taint forcing approval, `skill_opportunity`; the skill tools). Host and CLI tests cover `/skills` and the
-  doctor check, and point the skills directory at temporary folders.
+  doctor check, and point the skills directory at temporary folders; a composition test checks that checkpoints leave the
+skills directory out.
 
 Not built yet: curator merge proposals and running evals on model swaps; dropping a skill body once it has completed
 (§8 lever 2) and showing a cloud generator the top-10 index; drafting on the escalated generator (drafts use the default

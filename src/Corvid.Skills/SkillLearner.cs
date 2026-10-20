@@ -6,6 +6,7 @@ using System.Text.Json;
 using Corvid.Abstractions.Events;
 using Corvid.Abstractions.Fabric;
 using Corvid.Fabric;
+using Corvid.Kernel.Events;
 using Corvid.Kernel.Turns;
 using Microsoft.Extensions.AI;
 
@@ -145,6 +146,10 @@ public sealed class SkillLearner : ISkillLearning
         var turn = _log.Read(opportunity.SessionId, opportunity.FromSequence - 1, opportunity.ThroughSequence, 4_096, cancellationToken);
         if (turn.Count == 0)
             return Fail("the source turn is not in the log");
+        // /undo or /rollback (C-014) after the turn was queued: the user took it back, so it is no procedure to learn from.
+        var session = SessionProjection.Load(_log, opportunity.SessionId, cancellationToken: cancellationToken);
+        if (!session.IsVisible(opportunity.FromSequence) || !session.IsVisible(opportunity.ThroughSequence))
+            return Fail("the source turn was undone, so it is not distilled");
 
         // 2. Draft (System Two work).
         var response = await _drafter.GetResponseAsync(

@@ -66,6 +66,14 @@ public sealed class CompositionTests
             Assert.Null(refusal);
             Assert.True(Directory.Exists(skills));
 
+            // Checkpoints leave the skills directory out (C-014 with C-017): a restore never reverts what the learning loop
+            // wrote, which the skill store would then commit as the user's edit.
+            options.DataDirectory = Path.Combine(root, "state");
+            var store = new Kernel.Checkpoints.ShadowStore(CorvidRuntimeFactory.CheckpointOptionsFor(options,
+                Approvals.ApprovalEnvironment.FromProcess(root), readOnly));
+            Assert.True(store.Excluded("data/corvid-skills/devops/SKILL.md"));
+            Assert.False(store.Excluded("data/notes.md"));
+
             // A workspace elsewhere needs nothing more: the sandbox leaves everything outside it read-only.
             Assert.Empty(CorvidRuntimeFactory.SkillsGuard(options, Path.Combine(root, "work")).ReadOnly);
 

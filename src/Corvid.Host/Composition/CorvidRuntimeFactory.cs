@@ -156,15 +156,8 @@ public sealed class CorvidRuntimeFactory(
             if (skills.Store is { } skillStore && skills.Database is { } skillsDatabase)
                 skills = AddLearning(skills, settings, skillStore, skillsDatabase, composer, log, fabric, toolRegistry);
 
-            // C-014: the store leaves out what the environment protects (Vault, credential stores, Corvid's own state,
-            // credential file names), so it never holds a copy of anything Corvid may not read.
             var checkpoints = settings.Checkpoints.Enabled
-                ? new CheckpointService(new ShadowStore(CheckpointOptions.For(environment, CorvidPaths.Checkpoints(settings),
-                    CorvidPaths.ExpandHome(settings.Checkpoints.GitPath)) with
-                {
-                    MaxFileBytes = settings.Checkpoints.MaxFileBytes,
-                    MaxFiles = settings.Checkpoints.MaxFiles,
-                }))
+                ? new CheckpointService(new ShadowStore(CheckpointOptionsFor(settings, environment, skillsGuard.ReadOnly)))
                 : null;
 
             return new CorvidRuntime(settings, catalogue, composer, devices, metrics, feed, log, registry, fabric, approvals, prompters,
@@ -234,6 +227,24 @@ public sealed class CorvidRuntimeFactory(
         // The sandbox launcher binds only paths that exist.
         Directory.CreateDirectory(directory);
         return ([directory], null);
+    }
+
+    /// <summary>
+    /// C-014: the store leaves out what the environment protects (Vault, credential stores, Corvid's own state, credential
+    /// file names), so it never holds a copy of anything Corvid may not read. A skills directory inside the workspace is left
+    /// out too: it has its own history, and the learning loop writes it in the background, so a restore across a tool call
+    /// could otherwise revert an agent skill, and the skill store would then commit that as the user's edit.
+    /// </summary>
+    internal static CheckpointOptions CheckpointOptionsFor(CorvidOptions settings, ApprovalEnvironment environment,
+        ImmutableArray<string> skillsReadOnly)
+    {
+        var options = CheckpointOptions.For(environment, CorvidPaths.Checkpoints(settings), CorvidPaths.ExpandHome(settings.Checkpoints.GitPath));
+        return options with
+        {
+            ExcludedPaths = [.. options.ExcludedPaths, .. skillsReadOnly],
+            MaxFileBytes = settings.Checkpoints.MaxFileBytes,
+            MaxFiles = settings.Checkpoints.MaxFiles,
+        };
     }
 
     /// <summary>The skill store. Without git, or with a repository Corvid will not use, skills are off and the reason is kept.</summary>

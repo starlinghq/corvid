@@ -178,6 +178,26 @@ public sealed class LearningTests
     }
 
     [Fact]
+    public async Task ATurnUndoneBeforeItsDraftIsNeverDistilled()
+    {
+        var drafter = new FakeGenerator(Reply.Say(LearningHarness.DraftText()));
+        using var harness = new LearningHarness(drafter, LearningHarness.ReplayScript("list_notes", "list_notes", "list_notes"),
+            new WriteSafeDecider(0.99));
+        var (from, through) = harness.RecordSourceTurn();
+        harness.Learner.Queue(new SkillOpportunity(TurnHarness.Session, from, through, "decision-1", LearningHarness.Request));
+
+        // /undo (C-014) hides the turn before the background job reaches it.
+        harness.Turns.Log.Append(TurnHarness.Session, through, [EventData.Create(new SessionRewound(from - 1, "undo", []))], Token);
+        var result = Assert.Single(await harness.Learner.ProcessQueuedAsync(Token));
+
+        Assert.Equal(LearningStatus.Failed, result.Status);
+        Assert.Contains("undone", result.Detail, StringComparison.Ordinal);
+        Assert.Empty(drafter.Calls);
+        Assert.Empty(harness.Learner.Pending());
+        Assert.Empty(harness.Store.Skills);
+    }
+
+    [Fact]
     public async Task ADraftWhoseReplayCallsOtherToolsFailsAndIsNeverStaged()
     {
         using var harness = new LearningHarness(new FakeGenerator(Reply.Say(LearningHarness.DraftText())),

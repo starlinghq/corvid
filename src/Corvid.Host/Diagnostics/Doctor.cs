@@ -71,7 +71,7 @@ public sealed class Doctor(IConfiguration configuration, ModelCatalogue catalogu
         checks.Add(SandboxLauncher(options));
         checks.Add(Git(options));
         checks.Add(await VaultAsync(options, cancellationToken).ConfigureAwait(false));
-        checks.Add(Git(options));
+        checks.Add(SkillsGit(options));
         return checks;
     }
 
@@ -132,7 +132,7 @@ public sealed class Doctor(IConfiguration configuration, ModelCatalogue catalogu
     }
 
     // The skills directory is a git repository (C-017); without git, skills still load but no change can be recorded.
-    private static DoctorCheck Git(CorvidOptions options)
+    private static DoctorCheck SkillsGit(CorvidOptions options)
     {
         if (!options.Skills.Enabled)
             return new DoctorCheck("skills", "git", CheckStatus.Info, "skills are off (Corvid:Skills:Enabled)");
