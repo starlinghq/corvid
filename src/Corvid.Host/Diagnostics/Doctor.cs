@@ -69,6 +69,7 @@ public sealed class Doctor(IConfiguration configuration, ModelCatalogue catalogu
 
         checks.Add(Bubblewrap());
         checks.Add(SandboxLauncher(options));
+        checks.Add(Git(options));
         checks.Add(await VaultAsync(options, cancellationToken).ConfigureAwait(false));
         return checks;
     }
@@ -151,6 +152,21 @@ public sealed class Doctor(IConfiguration configuration, ModelCatalogue catalogu
             : new DoctorCheck("sandbox", "corvid-sandbox", CheckStatus.Failed, $"not found at {path}; sandboxed tools refuse to run without it.",
                 "Publish it (dotnet publish sandbox/Corvid.Sandbox.Launcher -c Release -r linux-x64 -p:PublishAot=true) next to corvid, " +
                 "or set CORVID_SANDBOX.");
+    }
+
+    // Checkpoints (C-014) run git from Corvid; without it writes still ask, but nothing can be undone.
+    private static DoctorCheck Git(CorvidOptions options)
+    {
+        if (!options.Checkpoints.Enabled)
+            return new DoctorCheck("checkpoints", "git", CheckStatus.Info, "checkpoints are off (Corvid:Checkpoints:Enabled); /undo and /rollback " +
+                "move the conversation only, and refuse when a turn changed files.");
+        var configured = CorvidPaths.ExpandHome(options.Checkpoints.GitPath);
+        var path = configured.Contains('/') ? File.Exists(configured) ? configured : null : FindOnPath(configured);
+        return path is null
+            ? new DoctorCheck("checkpoints", "git", CheckStatus.Warning,
+                $"{configured} was not found; changes to files are not reversible, and /undo and /rollback refuse to put files back.",
+                "Install git, or set Corvid:Checkpoints:GitPath.")
+            : new DoctorCheck("checkpoints", "git", CheckStatus.Ok, $"{path}; stores under {CorvidPaths.Checkpoints(options)}");
     }
 
     private static async Task<DoctorCheck> VaultAsync(CorvidOptions options, CancellationToken cancellationToken)

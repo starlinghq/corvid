@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using Corvid.Abstractions.Events;
 using Corvid.Approvals;
 using Corvid.Fabric;
+using Corvid.Kernel.Checkpoints;
 using Corvid.Kernel.Context;
 using Corvid.Memory;
 using Corvid.Models;
@@ -110,6 +111,12 @@ public sealed class TurnServices
 
     /// <summary>Required for side-effecting tools: without it they are refused, never run unasked.</summary>
     public ApprovalPipeline? Approvals { get; init; }
+
+    /// <summary>
+    /// Checkpoints (C-014): a tool call that changes files runs only after a checkpoint, and the approval's
+    /// <c>reversible</c> comes from the store. Without it nothing is checkpointed and reversibility is unknown.
+    /// </summary>
+    public CheckpointService? Checkpoints { get; init; }
 
     /// <summary>The write path <c>remember</c> starts at egress (§9.2); without it <c>remember</c> is not asked.</summary>
     public MemoryWriter? Memory { get; init; }

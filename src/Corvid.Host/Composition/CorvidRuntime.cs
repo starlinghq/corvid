@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Globalization;
 using Corvid.Abstractions.Events;
 using Corvid.Abstractions.Sessions;
@@ -8,6 +9,7 @@ using Corvid.Fabric;
 using Corvid.Host.Configuration;
 using Corvid.Host.Models;
 using Corvid.Host.Telemetry;
+using Corvid.Kernel.Checkpoints;
 using Corvid.Kernel.Events;
 using Corvid.Kernel.Jobs;
 using Corvid.Kernel.Sessions;
@@ -50,8 +52,9 @@ public sealed class CorvidRuntime : IAsyncDisposable
     internal CorvidRuntime(CorvidOptions options, ModelCatalogue catalogue, ModelComposer composer, DeviceSchedulers devices,
         ModelMetrics metrics, TurnFeed feed, SqliteEventLog log, ModelSlotRegistry registry, DecisionFabric fabric,
         ApprovalPipeline approvals, ApprovalRouter prompters, ToolRegistry tools, MemoryServices? memory, ITokenCounter? counter,
-        BuiltinServices builtin)
+        BuiltinServices builtin, CheckpointService? checkpoints = null)
     {
+        Checkpoints = checkpoints;
         Options = options;
         Catalogue = catalogue;
         _composer = composer;
@@ -117,6 +120,9 @@ public sealed class CorvidRuntime : IAsyncDisposable
 
     /// <summary>Why the decider is on the degraded tier or without its second tier: a configured Kev that is not downloaded or did not load.</summary>
     public IReadOnlyList<string> DeciderNotices => _composer.DeciderNotices;
+
+    /// <summary>The workspace's checkpoints (C-014); null when <c>Corvid:Checkpoints:Enabled</c> is off.</summary>
+    public CheckpointService? Checkpoints { get; }
 
     /// <summary>Whether this process runs due jobs, and if not, why.</summary>
     public string SchedulerState { get; private set; } = "off (Corvid:Scheduler:Enabled)";
@@ -218,6 +224,7 @@ public sealed class CorvidRuntime : IAsyncDisposable
             Approvals = Approvals,
             Memory = Memory?.Writer,
             Retriever = Memory?.Retriever,
+            Checkpoints = Checkpoints,
             // Frozen per session (plan §9.1): an edit made during the session shows from the next one.
             CoreBlocks = Memory?.Blocks.Snapshot(),
             Shortlist = _shortlist,
@@ -342,6 +349,49 @@ public sealed class CorvidSession
     public void Cancel() => Actor.CancelTurn();
 
     public SessionSnapshot Snapshot() => SessionProjection.Load(_runtime.Log, Id);
+
+    /// <summary>The session's write ledger still in the transcript, oldest first (<c>/rollback</c> lists it).</summary>
+    public ImmutableArray<LedgerEntry> Checkpoints() => CheckpointService.Ledger(Snapshot());
+
+    /// <summary>
+    /// <c>/undo</c> (C-014): reverts the last turn's file changes and moves the transcript to before its message. Runs when
+    /// no turn is running. Null when there is no turn to undo.
+    /// </summary>
+    public Task<RestoreResult?> UndoAsync(CancellationToken cancellationToken = default) =>
+        RestoreAsync(snapshot => CheckpointService.PlanUndo(snapshot, ChangesFiles), cancellationToken);
+
+    /// <summary><c>/rollback N</c>: back to before the Nth latest checkpoint's call. Null when there are fewer checkpoints.</summary>
+    public Task<RestoreResult?> RollbackAsync(int number, CancellationToken cancellationToken = default) =>
+        RestoreAsync(snapshot => CheckpointService.PlanRollback(snapshot, number, ChangesFiles), cancellationToken);
+
+    private Task<RestoreResult?> RestoreAsync(Func<SessionSnapshot, RestorePlan?> plan, CancellationToken cancellationToken) =>
+        // On the actor, so no turn changes files or the log while the restore decides and writes.
+        Actor.RunExclusiveAsync<RestoreResult?>(async token =>
+        {
+            if (plan(SessionProjection.Load(_runtime.Log, Id, cancellationToken: token)) is not { } chosen)
+                return null;
+            return _runtime.Checkpoints is { } checkpoints
+                ? await checkpoints.RestoreAsync(_runtime.Log, Id, chosen, token).ConfigureAwait(false)
+                : CheckpointService.Rewind(_runtime.Log, Id, chosen, token);
+        }, cancellationToken);
+
+    /// <summary>A call that would have taken a checkpoint: a tool that changes files, running something other than a read-only command.</summary>
+    private bool ChangesFiles(ToolCallIssued call)
+    {
+        // A tool no longer registered cannot be analysed, so its call counts as one that may have changed files (fail closed).
+        if (_runtime.Tools.List().FirstOrDefault(tool => tool.Name == call.ToolName) is not { } descriptor)
+            return true;
+        if (!descriptor.Risk.SideEffects.HasFlag(SideEffects.Filesystem))
+            return false;
+        try
+        {
+            return CheckpointService.Covers(descriptor, _runtime.Approvals.Analyze(new ToolAction(descriptor, call.Arguments)));
+        }
+        catch (ArgumentException)
+        {
+            return true;
+        }
+    }
 
     /// <summary>Sets or clears the standing goal (plan §13): a <c>GoalSet</c> event, so it survives compaction and restarts.</summary>
     public void SetGoal(string? goal)

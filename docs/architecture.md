@@ -1,4 +1,4 @@
-# Agent foundation (C-001, C-002, C-004a, C-004b, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-012, C-013, C-016, C-021)
+# Agent foundation (C-001, C-002, C-004a, C-004b, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-012, C-013, C-014, C-016, C-021)
 
 The solution contains `Corvid.Abstractions`, `Corvid.Kernel`, and
 `Corvid.Models`, alongside the working Vault projects. Kernel and Models each
@@ -23,7 +23,8 @@ tools, which references Approvals, Kernel, Memory, Sandbox and Tools and no pack
 [Built-in tools and scheduler](#built-in-tools-and-scheduler-c-012)). C-013 added the composition root, `Corvid.Host`,
 and the `corvid` executable, `Corvid.Cli` (see [Host and CLI](#host-and-cli-c-013)). C-004b added the Kev decider to
 `Corvid.Models.Starling` and the two-tier escalation to `Corvid.Fabric` (see [Kev decider](#kev-decider-c-004b)). C-016
-added compaction to the kernel (see [Compaction](#compaction-c-016)). Add
+added compaction to the kernel (see [Compaction](#compaction-c-016)). C-014 added checkpoints to
+`Corvid.Kernel` (`Checkpoints`), with no new project or package (see [Checkpoints](#checkpoints-c-014)). Add
 the other projects from the agent plan as their implementations start, rather
 than creating empty projects for every future surface.
 
@@ -57,6 +58,8 @@ than creating empty projects for every future surface.
   log cannot repair them and the session must stay readable.
 
 C-011 added the session actor and prompt rendering (see [Session actor and turn loop](#session-actor-and-turn-loop-c-011)).
+C-014 added `SessionRewound`, which shows the transcript as it was at an earlier position, and `CheckpointTaken`'s ledger
+fields (see [Checkpoints](#checkpoints-c-014)).
 Not built yet: branch and fork sessions that copy a prefix, and schema migrations beyond version 1. SQLite calls
 are synchronous; callers that must not block should use a storage worker.
 
@@ -764,7 +767,7 @@ a shell tool is assessed as the command line it runs (see [Built-in tools and sc
   variables ask. None runs automatically.
 
 Not built yet: GLiNER2 extraction of free-form targets (SQL, `curl` data, `kill` targets), which waits for
-spike S3; calibrated `risk` (C-004b); reversibility from checkpoint state (C-014; `ApprovalContext.Reversible` is passed through);
+spike S3; calibrated `risk` (C-004b); reversibility now comes from checkpoint state (C-014 sets `ApprovalContext.Reversible`);
 restoring session rules on resume (they are not in the log); removing rules (C-013's `/approvals` lists them, and the
 host keeps always-rules in `Corvid:Approvals:RulesFile`, by default `$XDG_CONFIG_HOME/corvid/approvals.json`); control flow, subshells and other syntax
 outside the subset, which ask rather than run; unwrapping further launchers (`strace`, `nsenter`, `unshare`,
@@ -1038,7 +1041,8 @@ decider otherwise (C-004b, see [Kev decider](#kev-decider-c-004b)); Starling pac
   `/model unpin <slot>`); it refuses a model missing from the cache (with the download command) and an `embedder.text`
   model memory was not built with. `/status`: per slot the model, device, queue depth (all priorities), median latency of
   the last 128 calls and call count, plus the degraded decider's row, the session's head, pending approvals, taint and goal.
-  `/goal [text|clear]` appends `GoalSet`. `/approvals` lists pending approvals and session and always rules. `/memory`
+  `/goal [text|clear]` appends `GoalSet`. `/undo` and `/rollback [N]` came with C-014 (see [Checkpoints](#checkpoints-c-014)).
+  `/approvals` lists pending approvals and session and always rules. `/memory`
   lists staged writes, `approve <id> [operation]` and `reject <id>` resolve them. `/tools`, `/todos`, `/cancel`, `/help`,
   `/exit` (`/quit`). A line is a command only when its first word is `/name`, so a pasted path is a message.
 - Telemetry (plan §16): the kernel (`KernelTelemetry`, source `Corvid.Kernel`) starts `invoke_agent corvid` per turn
@@ -1098,7 +1102,7 @@ decider otherwise (C-004b, see [Kev decider](#kev-decider-c-004b)); Starling pac
 
 Not built yet: Ctrl+P; typing while a turn runs (the chat reads the next line after the delivery, so `/model` mid-turn is
 available to the gateway and a later CLI, not this one); removing approval rules (`IApprovalRuleStore` has no removal);
-`/memory` block edits; a `/cron` command; the rest of the ~35-command v1 set (`/rollback`, `/skills`, `/insights` and
+`/memory` block edits; a `/cron` command; the rest of the ~35-command v1 set (`/skills`, `/insights` and
 others arrive with their items); the `config`, `gateway`, `skills`, `memory`, `cron` and `export` verbs; a scheduler
 that runs without a chat open (a daemon, or the gateway, C-020); delivering job results to chats (C-020); metrics and logs export; an Aspire
 dashboard recipe; shipping `corvid-sandbox` and `corvid-evals` inside the publish (doctor reports where it looked);
@@ -1125,8 +1129,8 @@ references Builtin except tests and the host (C-013). Everything runs on the deg
 - Files (`FileTools`): `read_file` (numbered lines, continued with `start_line`), `list_files` (optionally recursive),
   `search_files` (plain text or a non-backtracking regular expression), `write_file` (atomic replace, creating directories)
   and `patch_file` (replace text that must occur exactly once unless `replace_all`; LF text matches a CRLF file). Writes are
-  `[SideEffect(Filesystem)]`; `write_file` is also `[Destructive]`, because until checkpoints exist (C-014) a replaced file
-  cannot be restored. Every path parameter is named `path`, which is how C-007b finds the target. `Workspace` resolves a
+  `[SideEffect(Filesystem)]`; `write_file` is also `[Destructive]`: C-014's checkpoints can usually restore a replaced file,
+  but not when they are off, git is missing or the file is too large, which the approval's per-call `reversible` says. Every path parameter is named `path`, which is how C-007b finds the target. `Workspace` resolves a
   path against the workspace and follows every symbolic link in it (realpath, missing components kept), so a link inside
   cannot lead out; it refuses paths at or under denied paths (`Workspace.For` takes the approval environment's Vault,
   credential-store and safety-configuration paths) and credential names (the sandbox's `.env` rule, examples included,
@@ -1194,7 +1198,8 @@ references Builtin except tests and the host (C-013). Everything runs on the deg
 
 C-013 wires all of this in the host (see [Host and CLI](#host-and-cli-c-013)) and added `/memory`. Not built yet: a
 `/cron` command; delivering job results to surfaces
-(C-020; `JobScheduler.Completed` is the hook); checkpoints before writes (C-014); network for the shell per toolset and
+(C-020; `JobScheduler.Completed` is the hook); checkpoints before a scheduled pre-run script (C-014 checkpoints the turn
+loop's calls only); network for the shell per toolset and
 Vault's proxy route for sandboxed commands (V-003); the code tool and code mode (§15); container and SSH backends;
 argument validators generated with the tool and the generated examples file (C-005; paths are checked by the tools at run
 time, as argument errors the generator repairs); editing, pausing or resuming jobs, per-job toolsets, delivery targets and
@@ -1297,6 +1302,112 @@ C-021's report (the replaced first-tier answer is not recorded); switching the d
 process-wide); asking the degraded tier about the questions Kev declined while keeping Kev's other answers; Kev state
 prefix reuse across checkpoints (Unsupported upstream, U-4); spikes S1, S2 and S4 (C-003) on the published package; and
 fitted floors, which wait for Kev decisions with outcomes in real logs.
+
+## Checkpoints (C-014)
+
+Plan §15 (checkpoints), §3.2 (undo and rollback as log positions), §10.2 step 4 (reversibility) and §17 row 1.13. The code
+is in `Corvid.Kernel/Checkpoints`; the host wires it and adds `/undo` and `/rollback`. No project or package was added:
+git is the CLI, started through `System.Diagnostics.Process`, so the checker's allowlist is unchanged.
+
+- Store (`ShadowStore`): one git repository per workspace at `DataDirectory/checkpoints/<sha256 of the workspace's real
+  path, 16 hex>`, created owner-only (0700) with no templates, the workspace's path written beside it (a store that names
+  another workspace is refused). Every git command runs with `GIT_DIR` set to the store and `GIT_WORK_TREE` to the
+  workspace, so the workspace's own `.git` is never read or written, from a cleared environment (`PATH` of the system
+  directories, `HOME` and `XDG_CONFIG_HOME` a private directory in the store, `GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL=/dev/null`,
+  `GIT_TERMINAL_PROMPT=0`, a fixed author), and with `-c` settings on every call that switch off hooks (`core.hooksPath=/dev/null`),
+  fsmonitor, the untracked cache, credential helpers, pagers, editors, gpg signing, automatic gc and every transport
+  protocol. The store's `info/attributes` (`* -text -filter -ident -diff !eol !working-tree-encoding`) outranks any
+  `.gitattributes` in the workspace, so files are stored and restored byte for byte, and no filter configured anywhere
+  runs. `info/exclude` lists the protected directories inside the workspace so listing never walks them. Both files are
+  rewritten when the store is first used in a process. A workspace configured through a symbolic link is keyed by its real
+  path, and targets named through either path are recognised. Operations on one store are serialized in the process; a second
+  process using it at the same moment fails on git's index lock, which fails closed.
+- A snapshot (`SnapshotAsync`) lists what changed since the last one (`ls-files --modified --deleted --others
+  --exclude-standard`, cheap after the first thanks to the index's stat data), plus the call's own file targets even when a
+  `.gitignore` leaves them out, and updates the index with `update-index` before `write-tree`, `commit-tree` on one chain
+  and `update-ref`. Left out, and removed from the index if they were in it: any path with a `.git` component, credential
+  names (the sandbox's `.env` rule and the approval pipeline's key names, `CheckpointOptions.For`), anything at or under
+  the approval environment's Vault, credential-store and safety-configuration paths (which include Corvid's data
+  directory, and so the store itself, when the workspace contains them), nested repositories (an untracked directory that
+  is itself a repository; their contents are not checkpointed), and files over `MaxFileBytes` (32 MiB). A snapshot that
+  would add more than `MaxFiles` (50,000) files fails.
+- The write ledger: for a call that changes files (a tool with `[SideEffect(Filesystem)]` whose parsed action is not
+  read-only: `write_file`, `patch_file`, and `shell` unless the command only reads), the turn loop takes a checkpoint after
+  the approval and before the call runs, and another once it has finished, failed or been cancelled, before its result.
+  Both are `CheckpointTaken` events with the call's id: `kind: "before"`, with `paths` naming target files that existed but
+  could not be captured; and `kind: "after"`, with `paths` naming what changed between the two (`diff-tree`). A store that
+  is available but cannot take the before checkpoint stops the call with an error result ("no checkpoint could be taken
+  before this change, so it was not made"): the approval was given knowing the change was reversible. An after checkpoint
+  that fails leaves the entry without its after state, and a restore across it is refused rather than guessed. With no
+  store (git missing), calls run as before C-014, without checkpoints.
+- Reversibility: before the approval pipeline runs, the turn loop analyses the action and sets
+  `ApprovalContext.Reversible`, which reaches the `risk` state and the `ApprovalRequested` action. It is true only when the
+  store works and the action only writes or deletes files at resolved paths inside the workspace, none excluded, none an
+  existing file over the size limit, and no directory, pattern or recursive target ignored by the workspace's
+  `.gitignore`; network, signals, elevation, system, configuration, messaging, schedule, memory, remote and running
+  unseen code (`Execute`) are irreversible. Without checkpoints it stays null.
+- Undo and rollback are one operation (`CheckpointService.RestoreAsync`) on a `RestorePlan`: a log position and the
+  ledger entries after it. `/undo` goes to just before the last user message still in the transcript; `/rollback N` to just
+  before the call of the Nth latest checkpoint still in the transcript (1 is the latest), where no call is open. The
+  restore snapshots the workspace first (a `restore` checkpoint, kept so a later redo could use it), then reverts the
+  entries newest first, path by path: a path that still holds what Corvid wrote goes back to what it was before the call;
+  a path already back is left; a regular file the user has changed since is merged three ways (`git merge-file`: the
+  change from Corvid's content back to the earlier one, applied to the current content), so the user's edits elsewhere in
+  it stay; anything else (an overlapping edit, a binary, a link, a file deleted or recreated since, a target that was never
+  captured) is a conflict. Any conflict refuses the whole restore and nothing is written. Before writing, every path is
+  checked again: not excluded, not reached through a symbolic link or a file, and nothing on disk the snapshot did not
+  capture (a directory, an oversized or ignored file) would be replaced. Deletions come first, then files are written
+  through a temporary file and a rename, links as links, with git's mode (644 or 755). Paths the user changed that no
+  ledger entry touched are never looked at. `CheckpointTaken(kind: "restore")` is appended before the first write and
+  `SessionRewound` after the last, so a restore that a disk or permission error stops part way leaves the conversation
+  where it was, reports the path it stopped at, and names the restore checkpoint that holds the workspace as it was.
+  A store that cannot be created (an unwritable data directory) is a checkpoint that cannot be taken: the call is not run.
+- A plan also lists calls after its position that changed files without a ledger entry (checkpoints off or git missing):
+  the host passes the test (the tool's risk and the parsed action; a tool no longer registered counts as one that did), and a
+  restore across any of them is refused, so the
+  transcript never moves back over a change that stays on disk. With checkpoints off, a turn without such calls can still
+  be undone (the conversation only, `CheckpointService.Rewind`).
+- `SessionRewound(through_sequence, reason, restored, checkpoint_id)` (`session_rewound`, a new discriminator) hides the
+  events between its position and itself from the transcript, and drops summaries and C-016 expansions appended in that
+  range for good (a later compaction or expansion does not bring them back); a rewind that
+  would leave a call without its result is reported in `Issues` and ignored. Goals, todos, approvals, decisions, model
+  switches and checkpoints are not rewound. `SessionSnapshot` gained `Hidden`, `IssuedCallIds` (every call id ever issued,
+  which the turn loop now uses so a model reusing `call_0` after an undo gets `call_0-2`) and `CheckpointEvents`.
+  `CheckpointTaken` gained `call_id`, `kind` and `paths`, omitted when null, so older events keep their form.
+- The session actor gained `RunExclusiveAsync`: work that runs when no turn is running and before the next one starts.
+  `CorvidSession.UndoAsync` and `RollbackAsync` run there, so a restore never races a turn's writes or appends.
+- Host: `Corvid:Checkpoints` (`Enabled`, default on; `GitPath`, default `git` on `PATH`; `MaxFileBytes`; `MaxFiles`),
+  validated at start; the store lives under `CorvidPaths.Checkpoints`. `/undo` and `/rollback [N]` are in the core command
+  registry: they report the files put back, the files merged with the user's edits, where the conversation now ends and the
+  restore checkpoint, or, when refused, why and each conflicting path; `/rollback` alone lists the checkpoints newest
+  first. `corvid doctor` checks for git (a warning when missing: writes still ask, but nothing can be undone).
+- Tests: `tests/Corvid.Kernel.Tests` (`CheckpointTests`) run the real git: byte-exact binary, CRLF, executable and link
+  storage; secrets, protected paths, nested repositories and oversized files left out; a file that grows past the limit
+  leaving the checkpoint; a workspace that is itself a git repository, with `.gitattributes` that would convert line
+  endings and hooks and an fsmonitor that would leave a mark, whose `.git` is byte-identical afterwards; git missing
+  (unavailable with the reason, nothing created, writes marked irreversible, restore refused); reversibility per action;
+  and through the real turn loop with the file tools and the shell: the before and after events around a write, undo and
+  repeated undo, rollback N, the user's edits in the same file merged and in another file untouched, an overlapping edit
+  refused with nothing changed, an edit made between two of Corvid's writes kept, binaries restored exactly and never
+  merged, an oversized target refused, a failing checkpoint stopping the write, a destructive shell command checkpointed
+  and undone while a read-only one is not, and undo queued behind a running turn with call ids kept unique. The
+  projection tests cover rewinds, nested rewinds and refused positions; `tests/Corvid.Host.Tests` the commands, the
+  store's location and exclusions, checkpoints off, the doctor and the settings' validation.
+
+An undo or rollback reverts files only: other side effects of the turns it takes out of the conversation (a job created,
+a fact written or staged, a page fetched) stay, as do the events that record them. A call cancelled while its approval
+prompt was open is now closed with `error: "not run"` (it was `cancelled`), so a plan knows it changed nothing.
+
+Not built yet: redo; checkpoints before scheduled pre-run scripts (they run only when read-only or allowed by an always
+rule); restoring files a shell command writes that the workspace ignores, or ignored and oversized files inside a directory
+it deletes (the target is checked, not every file under it); the contents of nested repositories; pruning or garbage
+collecting the store, which grows with every checkpoint; rewinding goals, todos and taint with the transcript (taint stays
+until the user speaks, which errs closed); hiding rewound turns from episodic memory, which indexes the raw log; running git
+inside the sandbox (it runs as Corvid, with the protections above); a cross-process lock on a store (git's index lock makes
+a concurrent second process fail closed); and an approval prompt for restores, which the user starts explicitly. A user
+edit made in the moment between a call's before checkpoint and its after checkpoint is counted as Corvid's. Commands
+typed through a future gateway (C-020) reach `/undo` and `/rollback` like any other command, so pairing must decide who
+may use them.
 
 ## Running the check
 

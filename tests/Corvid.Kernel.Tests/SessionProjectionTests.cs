@@ -267,4 +267,96 @@ public sealed class SessionProjectionTests : IDisposable
         Assert.Throws<ArgumentException>(() => Load(through: 4));
         Assert.Equal(0, SessionProjection.Load(_db.Log, "empty", cancellationToken: Ct).Head);
     }
+
+    [Fact]
+    public void A_rewind_shows_the_transcript_as_it_was_and_keeps_everything_else()
+    {
+        Append(new UserMessage("one"), new AssistantMessage("first"),                                       // 1-2
+            new UserMessage("two"), new ToolCallIssued("call-1", "write_file", Samples.Json("{}")), Decide("d1"), // 3-5
+            new ToolResult("call-1", Samples.Json("{}")), new AssistantMessage("second"), new GoalSet("kept"));  // 6-8
+        Append(new SessionRewound(2, "undo", ["a.txt"]));                                                    // 9
+        Append(new UserMessage("three"));                                                                   // 10
+
+        var snapshot = Load();
+
+        Assert.Equal(["one", "first", "three"], snapshot.Transcript.Select(entry => entry.Content switch
+        {
+            UserMessage user => user.Text,
+            AssistantMessage assistant => assistant.Text,
+            _ => "?",
+        }));
+        Assert.Equal("kept", snapshot.Goal);
+        Assert.Contains("d1", snapshot.Decisions.Keys);
+        Assert.Contains("call-1", snapshot.IssuedCallIds);
+        Assert.Equal([new HiddenRange(2, 9)], snapshot.Hidden);
+        Assert.False(snapshot.IsVisible(4));
+        Assert.True(snapshot.IsVisible(10));
+        Assert.Empty(snapshot.Issues);
+        // Any earlier position still projects without the rewind.
+        Assert.Equal(6, Load(through: 8).Transcript.Length);
+    }
+
+    [Fact]
+    public void Rewinds_nest_and_a_summary_written_after_the_position_goes_with_it()
+    {
+        Append(new UserMessage("1"), new UserMessage("2"), new UserMessage("3"), new Compacted(2, 3, Summary)); // 1-4
+        Append(new SessionRewound(1, "undo", []));                                                                 // 5
+        Append(new UserMessage("4"));                                                                             // 6
+        Append(new SessionRewound(0, "rollback", []));                                                             // 7
+
+        Assert.Empty(Load().Transcript);
+        Assert.Equal(["1", "4"], Load(through: 6).Transcript.Select(entry => ((UserMessage)entry.Content).Text));
+        Assert.Empty(Load().Issues);
+    }
+
+    [Fact]
+    public void A_summary_a_rewind_hid_stays_hidden_after_a_later_compaction()
+    {
+        Append(new UserMessage("1"), new UserMessage("2"), new Compacted(1, 2, Summary with { NextStep = "undone" })); // 1-3
+        Append(new SessionRewound(2, "undo", []));                                                                   // 4
+        Append(new UserMessage("5"), new UserMessage("6"), new Compacted(5, 6, Summary with { NextStep = "later" })); // 5-7
+
+        var snapshot = Load();
+
+        Assert.Empty(snapshot.Issues);
+        Assert.Collection(snapshot.Transcript,
+            entry => Assert.Equal("1", ((UserMessage)entry.Content).Text),
+            entry => Assert.Equal("2", ((UserMessage)entry.Content).Text),
+            entry => Assert.Equal("later", ((Compacted)entry.Content).Summary.NextStep));
+    }
+
+    [Fact]
+    public void A_rewind_takes_back_an_expansion_written_after_the_position()
+    {
+        Append(new UserMessage("1"), new UserMessage("2"), new Compacted(1, 2, Summary), new UserMessage("4")); // 1-4
+        Append(new CompactionExpanded(3));                                                                      // 5
+        Assert.Equal([1L, 2L, 4L], Load().Transcript.Select(entry => entry.FromSequence));
+        Append(new SessionRewound(4, "undo", []));                                                              // 6
+
+        var snapshot = Load();
+
+        Assert.Empty(snapshot.Issues);
+        Assert.Collection(snapshot.Transcript,
+            entry => Assert.IsType<Compacted>(entry.Content),
+            entry => Assert.Equal(4, entry.FromSequence));
+    }
+
+    [Fact]
+    public void A_rewind_that_would_split_a_call_from_its_result_is_an_issue_and_is_ignored()
+    {
+        Append(new UserMessage("a"), new ToolCallIssued("call-1", "t", Samples.Json("{}")), new ToolResult("call-1", Samples.Json("{}")),
+            new ToolCallIssued("call-2", "t", Samples.Json("{}")));                                         // 1-4, call-2 still open
+        Assert.NotNull(SessionProjection.CheckRewind(_db.Log, "s", 2, Ct));
+        Assert.NotNull(SessionProjection.CheckRewind(_db.Log, "s", 3, Ct));
+        Assert.NotNull(SessionProjection.CheckRewind(_db.Log, "s", 9, Ct));
+        Append(new ToolResult("call-2", Samples.Json("{}")));                                               // 5
+        Assert.Null(SessionProjection.CheckRewind(_db.Log, "s", 3, Ct));
+        Append(new SessionRewound(2, "undo", []));                                                          // 6
+
+        var snapshot = Load();
+
+        Assert.Equal(6, Assert.Single(snapshot.Issues).Sequence);
+        Assert.Equal(5, snapshot.Transcript.Length);
+        Assert.Empty(snapshot.Hidden);
+    }
 }

@@ -297,7 +297,7 @@ internal sealed class TurnHarness : IDisposable
         IApprovalPrompter? prompter = null, IDecider? calibrated = null, TurnOptions? options = null, ApprovalOptions? approvalOptions = null,
         ToolCallSupport toolCalls = ToolCallSupport.TemplateRendered, Action<ToolRegistry>? tools = null, DecisionPolicy? policy = null,
         int generatorContext = 8_192, IChatClient? summarizer = null, int summarizerContext = 8_192,
-        IChatClient? summarizerEscalation = null, int summarizerEscalationContext = 32_768)
+        IChatClient? summarizerEscalation = null, int summarizerEscalationContext = 32_768, string? workspace = null)
     {
         policy ??= DecisionPolicy.Default;
         Log = new SqliteEventLog(Path.Combine(_root, "events.db"));
@@ -326,7 +326,7 @@ internal sealed class TurnHarness : IDisposable
         Tools.Add(Notes);
         tools?.Invoke(Tools);
         Prompter = prompter;
-        Approvals = new ApprovalPipeline(ApprovalEnvironment.Create(Workspace, "/home/user"), Fabric, Log, prompter, options: approvalOptions);
+        Approvals = new ApprovalPipeline(ApprovalEnvironment.Create(workspace ?? Workspace, "/home/user"), Fabric, Log, prompter, options: approvalOptions);
         Options = options ?? TurnOptions.Default;
     }
 
@@ -368,6 +368,8 @@ internal sealed class TurnHarness : IDisposable
     public long Seed(params SessionEvent[] events) =>
         Log.Append(Session, Log.GetHead(Session), [.. events.Select(EventData.Create)])[^1].Sequence;
 
+    public Corvid.Kernel.Checkpoints.CheckpointService? Checkpoints { get; init; }
+
     public TurnServices Services() => new()
     {
         Log = Log,
@@ -376,6 +378,7 @@ internal sealed class TurnHarness : IDisposable
         Tools = Tools,
         Approvals = Approvals,
         Memory = Memory,
+        Checkpoints = Checkpoints,
         Options = Options,
     };
 

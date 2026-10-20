@@ -28,6 +28,7 @@ public sealed class EventJsonTests
         [typeof(GoalSet)] = "goal_set",
         [typeof(TodosSet)] = "todos_set",
         [typeof(CheckpointTaken)] = "checkpoint_taken",
+        [typeof(SessionRewound)] = "session_rewound",
     };
 
     [Fact]
@@ -121,6 +122,17 @@ public sealed class EventJsonTests
         var bare = EventJson.Serialize(decision with { State = null, Question = null, Calibrated = null });
         Assert.DoesNotContain("\"state\"", bare, StringComparison.Ordinal);
         Assert.DoesNotContain("\"calibrated\"", bare, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Checkpoint_ledger_fields_are_written_only_when_set_so_older_checkpoints_keep_their_form()
+    {
+        Assert.Equal("""{"type":"checkpoint_taken","checkpoint_id":"c-1","revision":"abc"}""", EventJson.Serialize(new CheckpointTaken("c-1", "abc")));
+        Assert.Equal("""{"type":"checkpoint_taken","checkpoint_id":"c-2","revision":"def","call_id":"call-1","kind":"after","paths":["a.txt"]}""",
+            EventJson.Serialize(new CheckpointTaken("c-2", "def", "call-1", CheckpointKinds.After, ["a.txt"])));
+        var stored = Assert.IsType<CheckpointTaken>(EventJson.Deserialize(1, """{"type":"checkpoint_taken","checkpoint_id":"k","revision":"r"}"""));
+        Assert.Null(stored.CallId);
+        Assert.Null(stored.Paths);
     }
 
     [Theory]
