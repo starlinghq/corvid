@@ -378,8 +378,9 @@ public sealed class CorvidSession
     /// <summary>A call that would have taken a checkpoint: a tool that changes files, running something other than a read-only command.</summary>
     private bool ChangesFiles(ToolCallIssued call)
     {
+        // A tool no longer registered cannot be analysed, so its call counts as one that may have changed files (fail closed).
         if (_runtime.Tools.List().FirstOrDefault(tool => tool.Name == call.ToolName) is not { } descriptor)
-            return false;
+            return true;
         if (!descriptor.Risk.SideEffects.HasFlag(SideEffects.Filesystem))
             return false;
         try

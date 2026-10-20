@@ -300,16 +300,33 @@ public sealed class CheckpointService
             return new RestoreResult(RestoreStatus.Refused, plan, [], [], [.. conflicts.DistinctBy(conflict => conflict.Path)],
                 "nothing was changed: putting these back would lose content that is not Corvid's");
 
-        // Deletions first, deepest first, so a file can replace what was a directory of Corvid's files.
-        foreach (var (path, _) in changes.Where(change => change.Value is null).OrderByDescending(change => change.Key.Length))
-            File.Delete(Path.Combine(Store.Workspace, path));
-        foreach (var (path, file) in changes.Where(change => change.Value is not null))
-            await WriteAsync(path, file!.Value).ConfigureAwait(false);
-
+        // The workspace as it is now is logged before anything is written, so a restore that stops part way (a disk error,
+        // a permission) still leaves a recorded checkpoint of what was there.
         var restoreId = NewId();
         var restored = changes.Select(change => change.Key).ToImmutableArray();
-        Append(log, sessionId, new CheckpointTaken(restoreId, current, Kind: CheckpointKinds.Restore, Paths: restored),
-            new SessionRewound(plan.Position, plan.Reason, restored, restoreId));
+        Append(log, sessionId, new CheckpointTaken(restoreId, current, Kind: CheckpointKinds.Restore, Paths: restored));
+        var writing = "";
+        try
+        {
+            // Deletions first, deepest first, so a file can replace what was a directory of Corvid's files.
+            foreach (var (path, _) in changes.Where(change => change.Value is null).OrderByDescending(change => change.Key.Length))
+            {
+                writing = path;
+                File.Delete(Path.Combine(Store.Workspace, path));
+            }
+            foreach (var (path, file) in changes.Where(change => change.Value is not null))
+            {
+                writing = path;
+                await WriteAsync(path, file!.Value).ConfigureAwait(false);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new CheckpointException($"the restore stopped at {writing} ({exception.Message}): some files were put back and the " +
+                $"conversation was not moved; the workspace as it was before is checkpoint {restoreId} (revision {current})", exception);
+        }
+
+        Append(log, sessionId, new SessionRewound(plan.Position, plan.Reason, restored, restoreId));
         return new RestoreResult(RestoreStatus.Restored, plan, restored, [.. merged.Where(restored.Contains)], [], CheckpointId: restoreId);
     }
 

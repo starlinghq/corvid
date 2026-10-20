@@ -1358,9 +1358,13 @@ git is the CLI, started through `System.Diagnostics.Process`, so the checker's a
   checked again: not excluded, not reached through a symbolic link or a file, and nothing on disk the snapshot did not
   capture (a directory, an oversized or ignored file) would be replaced. Deletions come first, then files are written
   through a temporary file and a rename, links as links, with git's mode (644 or 755). Paths the user changed that no
-  ledger entry touched are never looked at. Last, `CheckpointTaken(kind: "restore")` and `SessionRewound` are appended.
+  ledger entry touched are never looked at. `CheckpointTaken(kind: "restore")` is appended before the first write and
+  `SessionRewound` after the last, so a restore that a disk or permission error stops part way leaves the conversation
+  where it was, reports the path it stopped at, and names the restore checkpoint that holds the workspace as it was.
+  A store that cannot be created (an unwritable data directory) is a checkpoint that cannot be taken: the call is not run.
 - A plan also lists calls after its position that changed files without a ledger entry (checkpoints off or git missing):
-  the host passes the test (the tool's risk and the parsed action), and a restore across any of them is refused, so the
+  the host passes the test (the tool's risk and the parsed action; a tool no longer registered counts as one that did), and a
+  restore across any of them is refused, so the
   transcript never moves back over a change that stays on disk. With checkpoints off, a turn without such calls can still
   be undone (the conversation only, `CheckpointService.Rewind`).
 - `SessionRewound(through_sequence, reason, restored, checkpoint_id)` (`session_rewound`, a new discriminator) hides the

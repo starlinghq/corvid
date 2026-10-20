@@ -236,9 +236,9 @@ public sealed class ShadowStore
     public async Task<byte[]?> MergeAsync(byte[] current, byte[] @base, byte[] other)
     {
         var scratch = Path.Combine(Directory, "tmp", Guid.NewGuid().ToString("N"));
-        CreatePrivate(scratch);
         try
         {
+            CreatePrivate(scratch);
             string[] files = [Path.Combine(scratch, "current"), Path.Combine(scratch, "base"), Path.Combine(scratch, "other")];
             await File.WriteAllBytesAsync(files[0], current).ConfigureAwait(false);
             await File.WriteAllBytesAsync(files[1], @base).ConfigureAwait(false);
@@ -246,9 +246,14 @@ public sealed class ShadowStore
             var result = await LockedAsync(git => git.RunRawAsync(["merge-file", "-p", "-q", .. files])).ConfigureAwait(false);
             return result.ExitCode == 0 ? result.Output : null;
         }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new CheckpointException($"A merge could not be prepared in {scratch}: {exception.Message}", exception);
+        }
         finally
         {
-            System.IO.Directory.Delete(scratch, recursive: true);
+            if (System.IO.Directory.Exists(scratch))
+                System.IO.Directory.Delete(scratch, recursive: true);
         }
     }
 
@@ -322,6 +327,21 @@ public sealed class ShadowStore
             throw new CheckpointException("Checkpoints are unavailable: " + _unavailable + ".");
         if (_runner is not null)
             return _runner;
+        try
+        {
+            var runner = await CreateAsync().ConfigureAwait(false);
+            _runner = runner;
+            return runner;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // A store that cannot be created is a checkpoint that cannot be taken: callers stop the change, never run it unrecorded.
+            throw new CheckpointException($"The checkpoint store {Directory} could not be set up: {exception.Message}", exception);
+        }
+    }
+
+    private async Task<GitRunner> CreateAsync()
+    {
         // Owner-only: the store holds copies of the workspace's files.
         CreatePrivate(_options.StoreRoot);
         CreatePrivate(Directory);
@@ -344,7 +364,6 @@ public sealed class ShadowStore
             "# Corvid: store bytes as they are, whatever the workspace's .gitattributes ask for.\n" +
             "* -text -filter -ident -diff !eol !working-tree-encoding\n").ConfigureAwait(false);
         await File.WriteAllTextAsync(Path.Combine(info, "exclude"), ExcludeFile()).ConfigureAwait(false);
-        _runner = runner;
         return runner;
     }
 

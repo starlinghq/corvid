@@ -587,6 +587,27 @@ public sealed class CheckpointTurnTests : IDisposable
         Assert.Contains("no checkpoint could be taken", result.Result.GetRawText(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task A_store_that_cannot_be_created_stops_the_write_instead_of_failing_the_turn()
+    {
+        // The store root sits under a regular file, so creating it is an I/O error, not a git one.
+        var blocker = _fixture.PathOf("../blocker");
+        File.WriteAllText(blocker, "a file, not a directory");
+        using var broken = new CheckpointFixture(options => options with { StoreRoot = Path.Combine(Path.GetFullPath(blocker), "checkpoints") });
+        using var harness = new TurnHarness(new FakeGenerator(Write("three.txt", "3"), Reply.Say("Tried.")),
+            prompter: FakePrompter.Always(approve: true), workspace: broken.Workspace,
+            options: TurnOptions.Default with { ToolFilter = tool => tool.Name is "write_file" },
+            tools: tools => tools.Add(new FileTools(new Workspace(broken.Workspace)))) { Checkpoints = broken.Service };
+
+        await harness.RunAsync("write three");
+
+        Assert.False(File.Exists(broken.PathOf("three.txt")));
+        var result = Assert.Single(harness.Payloads().OfType<ToolResult>());
+        Assert.True(result.IsError);
+        Assert.Contains("could not be set up", result.Result.GetRawText(), StringComparison.Ordinal);
+        Assert.DoesNotContain(harness.Payloads(), payload => payload is CheckpointTaken);
+    }
+
     /// <summary>Stands in for bubblewrap: <c>rm</c> deletes inside the workspace, anything else only prints.</summary>
     private sealed class DeletingSandbox(string workspace) : Corvid.Sandbox.ISandbox
     {
