@@ -235,6 +235,25 @@ public sealed class RuntimeTests
     }
 
     [Fact]
+    public async Task The_call_context_is_bound_from_the_turn_and_not_offered_to_the_model()
+    {
+        ToolFunction whoami = new SessionTools().CreateTools().Single(t => t.Name == "whoami");
+
+        Assert.Equal(["greeting"], whoami.Descriptor.Parameters.Select(p => p.Name));
+        Assert.False(whoami.JsonSchema.GetProperty("properties").TryGetProperty("context", out _));
+        AIFunctionArguments arguments = new ToolCallContext("s1", "call-1") { Tainted = true }.AttachTo(Json("""{"greeting":"hello"}"""));
+        Assert.Equal("hello s1/call-1 tainted=True", await whoami.InvokeAsync(arguments, TestContext.Current.CancellationToken));
+
+        // A tool that needs the context refuses a call made outside a turn; a nullable one gets null.
+        InvalidOperationException outside = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await whoami.InvokeAsync(Json("{}"), TestContext.Current.CancellationToken));
+        Assert.Contains("whoami", outside.Message, StringComparison.Ordinal);
+        ToolFunction optional = new SessionTools().CreateTools().Single(t => t.Name == "session_or_none");
+        Assert.Equal("none", await optional.InvokeAsync(Json("{}"), TestContext.Current.CancellationToken));
+        Assert.Equal("s2", await optional.InvokeAsync(new ToolCallContext("s2", "c").AttachTo(Json("{}")), TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public void Corvid_Tools_has_no_compiler_dependency_at_runtime()
     {
         // The generator is build tooling: nothing it uses may reach the runtime library's references.

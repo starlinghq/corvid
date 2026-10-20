@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Corvid's built-in tools (C-012): files confined to the workspace, the sandboxed shell, web fetch, memory and the scheduler's cron tools. Wrappers are generated at compile time by Corvid.Tools.Generators.</Description>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Tools (C-005) for the attributes and registry; Approvals (C-007b) and Sandbox (C-007a) for the shell; Memory (C-008)
+         for the memory tools; Kernel (C-011) for the job store and the scheduler's script runner contract. Nothing
+         references this project except the host and tests. -->
+    <ProjectReference Include="../Corvid.Approvals/Corvid.Approvals.csproj" />
+    <ProjectReference Include="../Corvid.Kernel/Corvid.Kernel.csproj" />
+    <ProjectReference Include="../Corvid.Memory/Corvid.Memory.csproj" />
+    <ProjectReference Include="../Corvid.Sandbox/Corvid.Sandbox.csproj" />
+    <ProjectReference Include="../Corvid.Tools/Corvid.Tools.csproj" />
+    <ProjectReference Include="../Corvid.Tools.Generators/Corvid.Tools.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <InternalsVisibleTo Include="Corvid.Tools.Builtin.Tests" />
+  </ItemGroup>
+</Project>

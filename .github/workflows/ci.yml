@@ -76,6 +76,15 @@ jobs:
           tests/Corvid.Sandbox.Tests/bin/Release/net10.0/Corvid.Sandbox.Tests -trait "Category=Confinement" -noColor | tee sandbox.log
           grep -q "Total: 26, Errors: 0, Failed: 0, Skipped: 0, Not Run: 0" sandbox.log
 
+      # The same for the built-in shell tool (C-012): commands and scheduled scripts run under the real launcher, and Vault's
+      # configured locations stay hidden. Update the count when these tests are added.
+      - name: Shell tool confinement ran and passed
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          tests/Corvid.Tools.Builtin.Tests/bin/Release/net10.0/Corvid.Tools.Builtin.Tests -trait "Category=Confinement" -noColor | tee builtin-sandbox.log
+          grep -q "Total: 6, Errors: 0, Failed: 0, Skipped: 0, Not Run: 0" builtin-sandbox.log
+
   cli:
     name: Single-file publish (corvid)
     runs-on: ubuntu-latest

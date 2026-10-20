@@ -24,7 +24,7 @@ internal static class Diagnostics
 
     public static readonly DiagnosticDescriptor UnsupportedParameter = new(
         "CVTOOL004", "Unsupported tool parameter",
-        "Parameter '{0}' of tool '{1}' has unsupported type '{2}': use string, bool, int, long, float, double, decimal, Guid, DateTime, DateTimeOffset, Uri, an enum, SecretRef, a nullable of these, an array or list of them (not SecretRef), or CancellationToken; ref, out and params are not supported",
+        "Parameter '{0}' of tool '{1}' has unsupported type '{2}': use string, bool, int, long, float, double, decimal, Guid, DateTime, DateTimeOffset, Uri, an enum, SecretRef, a nullable of these, an array or list of them (not SecretRef), CancellationToken or ToolCallContext; ref, out and params are not supported",
         Category, DiagnosticSeverity.Error, isEnabledByDefault: true);
 
     public static readonly DiagnosticDescriptor UnsupportedReturn = new(

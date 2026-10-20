@@ -70,6 +70,10 @@ internal static class JsonValues
             case JsonDocument document:
                 document.RootElement.WriteTo(writer);
                 break;
+            // Before the collection cases: a JsonObject is also an IEnumerable of pairs. Tools may return JsonNode (C-005).
+            case System.Text.Json.Nodes.JsonNode node:
+                node.WriteTo(writer);
+                break;
             case string text:
                 writer.WriteStringValue(text);
                 break;
