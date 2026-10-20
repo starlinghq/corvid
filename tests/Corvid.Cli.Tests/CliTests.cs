@@ -11,7 +11,7 @@ internal sealed class CliRun : IDisposable
     public CliRun(FakeModels? models = null, bool useStarling = false)
     {
         Root = Path.Combine(Path.GetTempPath(), "corvid-cli-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(Root);
+        Directory.CreateDirectory(Path.Combine(Root, "work"));
         Models = useStarling ? null : models ?? new FakeModels();
         Console.Profile.Width = 240;
     }

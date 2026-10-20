@@ -29,6 +29,10 @@ public sealed class CorvidOptions
 
     public MemorySettings Memory { get; set; } = new();
 
+    public ToolSettings Tools { get; set; } = new();
+
+    public SchedulerSettings Scheduler { get; set; } = new();
+
     public TelemetrySettings Telemetry { get; set; } = new();
 
     public VaultSettings Vault { get; set; } = new();
@@ -114,6 +118,24 @@ public sealed class TurnSettings
 public sealed class MemorySettings
 {
     /// <summary>The memory store (plan §9). It needs an extractor and a text embedder; without them it stays off.</summary>
+    public bool Enabled { get; set; } = true;
+}
+
+public sealed class ToolSettings
+{
+    /// <summary>
+    /// C-012's built-in tools: files in the workspace, the sandboxed shell, web fetch, memory and cron. Tools registered as
+    /// <c>IToolProvider</c> in DI are offered either way.
+    /// </summary>
+    public bool Builtin { get; set; } = true;
+}
+
+public sealed class SchedulerSettings
+{
+    /// <summary>
+    /// Run due jobs (plan §13) while this process runs. Only one process on the machine runs them (a lock beside the job
+    /// store); others leave it to that one.
+    /// </summary>
     public bool Enabled { get; set; } = true;
 }
 

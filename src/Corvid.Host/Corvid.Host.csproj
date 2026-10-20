@@ -18,6 +18,7 @@
     <ProjectReference Include="../Corvid.Models.Starling/Corvid.Models.Starling.csproj" />
     <ProjectReference Include="../Corvid.Sandbox/Corvid.Sandbox.csproj" />
     <ProjectReference Include="../Corvid.Tools/Corvid.Tools.csproj" />
+    <ProjectReference Include="../Corvid.Tools.Builtin/Corvid.Tools.Builtin.csproj" />
     <ProjectReference Include="../Corvid.Vault.Client/Corvid.Vault.Client.csproj" />
     <InternalsVisibleTo Include="Corvid.Host.Tests" />
     <InternalsVisibleTo Include="Corvid.Cli.Tests" />

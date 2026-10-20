@@ -267,6 +267,9 @@ internal sealed class FakeModels
         ["Corvid:Models:Slots:embedder.text:Model"] = "fake-embed",
         ["Corvid:Models:Slots:embedder.text:Fallbacks:0"] = "fake-embed-alt",
         ["Corvid:Models:Slots:extractor:Model"] = "fake-extract",
+        // The fake scripts would be consumed by tools and jobs they do not expect; tests that want them turn them on.
+        ["Corvid:Tools:Builtin"] = "false",
+        ["Corvid:Scheduler:Enabled"] = "false",
     };
 
     /// <summary>Replaces the model providers (Starling by default) with these fakes and registers the note tools.</summary>
@@ -300,7 +303,7 @@ internal sealed class TestHost : IAsyncDisposable
         Action<IServiceCollection>? services = null)
     {
         var root = Path.Combine(Path.GetTempPath(), "corvid-host-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
+        Directory.CreateDirectory(Path.Combine(root, "work"));
         models ??= new FakeModels();
         var overrides = FakeModels.Settings(root);
         foreach (var (key, value) in settings ?? ImmutableDictionary<string, string?>.Empty)

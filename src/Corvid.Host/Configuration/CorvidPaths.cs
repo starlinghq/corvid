@@ -31,6 +31,9 @@ public static class CorvidPaths
 
     public static string MemoryDatabase(CorvidOptions options) => Path.Combine(DataDirectory(options), "memory.db");
 
+    /// <summary>The durable job store (C-012), its own SQLite file because jobs change.</summary>
+    public static string JobStore(CorvidOptions options) => Path.Combine(DataDirectory(options), "jobs.db");
+
     /// <summary>A leading <c>~/</c> means the home directory; anything else is returned as given.</summary>
     public static string ExpandHome(string path)
     {

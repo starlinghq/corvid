@@ -159,6 +159,7 @@ public static class CoreCommands
                 $"session {session.Id}: {snapshot.Head} events, {snapshot.PendingApprovals.Count} pending approval(s)" +
                 (session.Tainted ? ", tainted by outside content" : ""),
                 $"goal: {snapshot.Goal ?? "none"}",
+                $"scheduler: {runtime.SchedulerState}",
                 $"log: {Configuration.CorvidPaths.EventLog(runtime.Options)}",
             ],
         });

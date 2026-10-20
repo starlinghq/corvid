@@ -57,6 +57,11 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue) : IValidate
             if (path is { Length: > 0 } && !Path.IsPathFullyQualified(CorvidPaths.ExpandHome(path)))
                 errors.Add($"Corvid:{key} must be an absolute path (or start with ~/), not '{path}'.");
 
+        // The file tools and the shell are confined to it, so it must be there before anything runs.
+        if (options.Workspace is { Length: > 0 } workspace && Path.IsPathFullyQualified(CorvidPaths.ExpandHome(workspace))
+            && !Directory.Exists(CorvidPaths.ExpandHome(workspace)))
+            errors.Add($"Corvid:Workspace: '{workspace}' is not an existing directory.");
+
         return errors.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(errors);
     }
 

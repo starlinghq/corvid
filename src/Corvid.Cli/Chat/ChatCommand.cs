@@ -1,5 +1,6 @@
 using Corvid.Host.Commands;
 using Corvid.Host.Composition;
+using Corvid.Kernel.Jobs;
 using Corvid.Kernel.Sessions;
 using Corvid.Models;
 using Microsoft.Extensions.DependencyInjection;
@@ -41,6 +42,10 @@ internal static class ChatCommand
             var renderer = new ChatRenderer(console, verbose: arguments.Flag("--verbose"));
             using var feed = runtime.Feed.Subscribe(session.Id, renderer);
             using var prompter = runtime.AttachPrompter(session.Id, new CliApprovalPrompter(renderer, context.Input));
+            // Scheduled runs happen in their own sessions; until the gateway delivers them (C-020), the chat says that they ran.
+            void OnJob(ScheduledJob job, JobRun run) =>
+                renderer.Notice($"[grey]⏰ job {Markup.Escape(job.Name)}: {Markup.Escape(run.Status)} (session {Markup.Escape(run.SessionId)})[/]");
+            runtime.JobCompleted += OnJob;
             renderer.Banner(session.Id, session.Slots.Current(ModelSlots.Generator).Profile.Id, runtime.Tools.List().Count);
             if (session.Snapshot().Head > 0)
                 renderer.Notice($"[grey]Resumed: {session.Snapshot().Transcript.Length} entries in this session's log.[/]");
@@ -110,6 +115,7 @@ internal static class ChatCommand
             finally
             {
                 context.Interrupts.Interrupted -= OnInterrupt;
+                runtime.JobCompleted -= OnJob;
             }
             console.MarkupLine($"[grey]Session {Markup.Escape(session.Id)} is in the log; resume it with `corvid chat --session {Markup.Escape(session.Id)}`.[/]");
             await runtime.MaintenanceIdleAsync().ConfigureAwait(false);

@@ -919,13 +919,25 @@ nuget.org through `Corvid.Models.Starling` only.
 - Runtime (`CorvidRuntimeFactory.StartAsync`): first checks every configured model offline by size and, if any is
   missing or corrupt, throws `ModelsUnavailableException` listing all of them with the command that fetches each, before
   loading anything. Then the SQLite event log (`events.db`), `DecisionFabric` on the degraded decider, the approval
-  pipeline (workspace from configuration, `JsonFileApprovalRuleStore`, timeout) with a per-session prompter router (a
-  session with no surface attached fails the prompt, which the pipeline records and denies, never answering for the user),
-  the tool registry from every `IToolProvider` and `ToolFunction` in DI (C-012 only adds registrations), and memory
-  (`memory.db`: core blocks counted with the generator's tokenizer, episodic index, vectors, hybrid retrieval, and the
-  write path when an extractor is bound). When the configured text embedder differs from the store's active one, C-011's
-  `EmbedderSwapJob` starts. Sessions are C-011's actors, one `SessionModelSlots` and `TurnRunner` each, sharing the rest;
-  after each delivery the episodic index catches up with the log and embeds the new episodes in the background.
+  pipeline with a per-session prompter router (a session with no surface attached fails the prompt, which the pipeline
+  records and denies, never answering for the user), memory (`memory.db`: core blocks counted with the generator's
+  tokenizer, episodic index, vectors, hybrid retrieval, and the write path when an extractor is bound), and C-012's
+  built-in tools. When the configured text embedder differs from the store's active one, C-011's `EmbedderSwapJob` starts.
+  Sessions are C-011's actors, one `SessionModelSlots` and `TurnRunner` each, sharing the rest; after each delivery the
+  episodic index catches up with the log and embeds the new episodes in the background, queued before the sender hears back.
+- Built-in tools and scheduler (C-012, wired here): the approval environment is the configured workspace (it must exist)
+  with Vault's locations for this user (`VaultLocations.Default`, the socket from `Corvid:Vault:SocketPath`) added by
+  `VaultLocations.Protect`; the pipeline gets the rules file, the timeout and `BuiltinTools.ShellToolMapping`, so the
+  `shell` tool is assessed as its command line. The file tools work in `Workspace.For` that environment; the shell runs
+  through `BubblewrapSandbox` (the launcher from `Corvid:Sandbox:LauncherPath`, `$CORVID_SANDBOX` or next to `corvid`;
+  on other platforms every command is refused) with the same Vault locations hidden; `web_fetch` uses its default handler;
+  the memory tools need the write path; the cron tools use `jobs.db`. Turns get `BuiltinTools.Examples` for the
+  shortlist. `Corvid:Tools:Builtin` turns them off; `IToolProvider`s and `ToolFunction`s registered in DI are added
+  either way. With `Corvid:Scheduler:Enabled` (default on) the runtime runs C-012's `JobScheduler` with the
+  `SandboxedScriptRunner` and a `TurnJobAgent` whose turns are not interactive. `JobScheduler.RunAsync` marks runs other
+  processes left running as interrupted, so only the process holding an exclusive lock beside the job store
+  (`jobs.db.lock`) runs it; `/status` says which. Completed runs raise `CorvidRuntime.JobCompleted`, which `corvid chat`
+  prints as a notice; delivering results to chats is C-020's.
 - Slash commands (`SlashCommandRegistry`, `CoreCommands`): surface-neutral, returning `CommandOutput` (title, lines, a
   table, a tone, exit) that the CLI renders with Spectre and a gateway can send as `ToPlainText()`. `/model` lists slots or
   switches one through `SessionActor.SwitchModelAsync` (`/model <model>`, `/model <slot> <model> [--pin]`,
@@ -975,21 +987,25 @@ nuget.org through `Corvid.Models.Starling` only.
   background loop into a channel so cancelled reads never swallow a line; piped input is echoed.
 - Tests: `tests/Corvid.Host.Tests` (configuration validation and binding, composition with fake providers, missing models
   reported before loading, DI tools, a scripted turn, resume, approval routing, the episodic catch-up, streaming and the
-  tool feed, the span tree and its attributes, every core command, the doctor) and `tests/Corvid.Cli.Tests` (scripted chat
+  tool feed, the span tree and its attributes, every core command, the doctor; the built-in tools registered, the shell
+  mapped to its command, Vault protected, a file tool turn in the configured workspace, a due job run by the one process
+  holding the scheduler lock) and `tests/Corvid.Cli.Tests` (scripted chat
   sessions on fake slots through `CorvidCli.RunAsync` and Spectre's `TestConsole`: streaming without duplication, the tool
   panel, inline approvals approved, denied and unanswered, resume, invalid configuration; the real Starling provider over
   an empty cache for `chat`, `model` and `doctor`; `model switch` and `download`; `evals` running the real `corvid-evals`;
   argument parsing; the live panel). They share `Fakes.cs`. The checker's tests cover the composition rule.
 - Checked by hand on the development machine with the Starling models in the cache: `corvid chat` (from `dotnet run` and
   from the single-file publish) answered through GLiNER2, the degraded decider and Qwen3.5-0.8B, with `/status` showing
-  latencies and the re-executed process carrying `MALLOC_MMAP_THRESHOLD_=65536`. With Qwen as the degraded decider's yes/no
-  answerer, `clarify` acted on both prompts tried, so those turns ended with a clarifying question: a fabric policy matter
-  for C-004a/C-004b, not changed here.
+  latencies, the 15 built-in tools listed and the scheduler running, and the re-executed process carrying
+  `MALLOC_MMAP_THRESHOLD_=65536`. With Qwen as the degraded decider's yes/no answerer, `clarify` acted on all three
+  prompts tried (one of them a request to read a file in the workspace), so those turns ended with a clarifying question
+  before any tool was offered to the generator: a fabric policy matter for C-004a/C-004b, not changed here.
 
 Not built yet: Ctrl+P; typing while a turn runs (the chat reads the next line after the delivery, so `/model` mid-turn is
 available to the gateway and a later CLI, not this one); removing approval rules (`IApprovalRuleStore` has no removal);
-`/memory` block edits; the rest of the ~35-command v1 set (`/rollback`, `/skills`, `/insights` and others arrive with their
-items); the `config`, `gateway`, `skills`, `memory`, `cron` and `export` verbs; metrics and logs export; an Aspire
+`/memory` block edits; a `/cron` command; the rest of the ~35-command v1 set (`/rollback`, `/skills`, `/insights` and
+others arrive with their items); the `config`, `gateway`, `skills`, `memory`, `cron` and `export` verbs; a scheduler
+that runs without a chat open (a daemon, or the gateway, C-020); delivering job results to chats (C-020); metrics and logs export; an Aspire
 dashboard recipe; shipping `corvid-sandbox` and `corvid-evals` inside the publish (doctor reports where it looked);
 per-device memory in `/status`; CUDA placement (C-010's); Vault-backed secret names for tools (`TurnOptions.SecretNames`
 is not set, so secret-bearing tools are not offered); and persisting pins and taint across a resume.
@@ -999,7 +1015,7 @@ is not set, so secret-bearing tools are not offered); and persisting pins and ta
 Plan §7, §9, §10.1–§10.3 and §13. The tools are in `src/Corvid.Tools.Builtin` (core, `IsAotCompatible`), C-005 generated
 tools: it references Approvals, Kernel, Memory, Sandbox and Tools, and the generator as an analyzer. The durable scheduler
 is in `Corvid.Kernel/Jobs`, as plan §3.4 places it. No package was added, so the checker's allowlist is unchanged; nothing
-references Builtin except tests (and, later, the host). Everything runs on the degraded decider.
+references Builtin except tests and the host (C-013). Everything runs on the degraded decider.
 
 - Contract changes. `ToolCallContext` (Corvid.Tools): the session, the call id, taint, whether anyone can be asked, and
   the approval pipeline's result for the call. The turn loop attaches it to every call's `AIFunctionArguments.Context`; a
@@ -1081,8 +1097,8 @@ references Builtin except tests (and, later, the host). Everything runs on the d
   through the real turn loop (read-only runs unasked, a side effect asks, hardline never prompts, an unattended turn denies,
   no mapping means no run) and covers the grammar (including daylight-saving changes), the store and the scheduler.
 
-Not built yet: wiring all of this in a host (C-013): registering the tools, building the workspace and Vault locations
-from configuration, and starting the scheduler; `/memory` and `/cron` commands; delivering job results to surfaces
+C-013 wires all of this in the host (see [Host and CLI](#host-and-cli-c-013)) and added `/memory`. Not built yet: a
+`/cron` command; delivering job results to surfaces
 (C-020; `JobScheduler.Completed` is the hook); checkpoints before writes (C-014); network for the shell per toolset and
 Vault's proxy route for sandboxed commands (V-003); the code tool and code mode (§15); container and SSH backends;
 argument validators generated with the tool and the generated examples file (C-005; paths are checked by the tools at run

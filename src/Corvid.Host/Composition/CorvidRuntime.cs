@@ -9,11 +9,13 @@ using Corvid.Host.Configuration;
 using Corvid.Host.Models;
 using Corvid.Host.Telemetry;
 using Corvid.Kernel.Events;
+using Corvid.Kernel.Jobs;
 using Corvid.Kernel.Sessions;
 using Corvid.Kernel.Turns;
 using Corvid.Memory;
 using Corvid.Models;
 using Corvid.Tools;
+using Corvid.Tools.Builtin;
 
 namespace Corvid.Host.Composition;
 
@@ -40,11 +42,15 @@ public sealed class CorvidRuntime : IAsyncDisposable
     private readonly EmbedderSwapJob? _swap;
     private readonly ToolShortlist _shortlist = new();
     private readonly Lock _maintenanceGate = new();
+    private readonly CancellationTokenSource _lifetime = new();
     private Task _maintenance = Task.CompletedTask;
+    private FileStream? _schedulerLock;
+    private Task? _scheduler;
 
     internal CorvidRuntime(CorvidOptions options, ModelCatalogue catalogue, ModelComposer composer, DeviceSchedulers devices,
         ModelMetrics metrics, TurnFeed feed, SqliteEventLog log, ModelSlotRegistry registry, DecisionFabric fabric,
-        ApprovalPipeline approvals, ApprovalRouter prompters, ToolRegistry tools, MemoryServices? memory, ITokenCounter? counter)
+        ApprovalPipeline approvals, ApprovalRouter prompters, ToolRegistry tools, MemoryServices? memory, ITokenCounter? counter,
+        BuiltinServices builtin)
     {
         Options = options;
         Catalogue = catalogue;
@@ -60,12 +66,15 @@ public sealed class CorvidRuntime : IAsyncDisposable
         Tools = tools;
         Memory = memory;
         Counter = counter;
+        Builtin = builtin;
         _swap = memory is null ? null : new EmbedderSwapJob(memory.Vectors);
         Sessions = new SessionHost(CreateActor);
         if (memory is not null && registry.TryGet(ModelSlots.TextEmbedder, out var embedder)
             && memory.Vectors.State.Active != embedder.Default.Profile.Id)
             // The configured embedder changed since the store was written (or the store is new): §4.3's swap, in the background.
             _swap!.Start(embedder.Default.Profile.Id);
+        if (options.Scheduler.Enabled)
+            StartScheduler();
     }
 
     public CorvidOptions Options { get; }
@@ -92,6 +101,15 @@ public sealed class CorvidRuntime : IAsyncDisposable
     public MemoryServices? Memory { get; }
 
     public SessionHost Sessions { get; }
+
+    /// <summary>C-012's shared services: the protected approval environment, the sandboxed shell and the job store.</summary>
+    public BuiltinServices Builtin { get; }
+
+    /// <summary>Whether this process runs due jobs, and if not, why.</summary>
+    public string SchedulerState { get; private set; } = "off (Corvid:Scheduler:Enabled)";
+
+    /// <summary>Raised after each scheduled run is recorded; a surface can say so (delivery to chats is C-020's).</summary>
+    public event Action<ScheduledJob, JobRun>? JobCompleted;
 
     internal ITokenCounter? Counter { get; }
 
@@ -125,14 +143,20 @@ public sealed class CorvidRuntime : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        await _lifetime.CancelAsync().ConfigureAwait(false);
+        if (_scheduler is not null)
+            await _scheduler.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        _schedulerLock?.Dispose();
         await Sessions.DisposeAsync().ConfigureAwait(false);
         await MaintenanceIdleAsync().ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         if (_swap is not null)
             await _swap.DisposeAsync().ConfigureAwait(false);
         foreach (var waiter in _waiting.Values)
             waiter.TrySetCanceled();
+        Builtin.Web?.Dispose();
         _composer.Dispose();
         Devices.Dispose();
+        _lifetime.Dispose();
     }
 
     internal static string NewSessionId(string surface) =>
@@ -162,8 +186,17 @@ public sealed class CorvidRuntime : IAsyncDisposable
     private SessionActor CreateActor(string sessionId)
     {
         var slots = new SessionModelSlots(Registry, Log, sessionId);
+        var runner = new TurnRunner(sessionId, Services(slots, interactive: true));
+        var actor = new SessionActor(runner, slots, new Sink(this), new SessionActorOptions { EmbedderSwap = _swap });
+        _sessions[sessionId] = new CorvidSession(this, sessionId, slots, runner, actor);
+        return actor;
+    }
+
+    /// <summary>One session's turn services over the shared ones. Scheduled runs are not interactive: nobody can be asked.</summary>
+    private TurnServices Services(SessionModelSlots slots, bool interactive)
+    {
         var turn = Options.Turn;
-        var services = new TurnServices
+        return new TurnServices
         {
             Log = Log,
             Slots = slots,
@@ -181,12 +214,39 @@ public sealed class CorvidRuntime : IAsyncDisposable
                 MaxSteps = turn.MaxSteps,
                 MaxOutputTokens = turn.MaxOutputTokens,
                 ApprovalMode = Options.Approvals.Mode,
+                Interactive = interactive,
+                // C-005 has no examples file; C-012 wrote the built-in tools' examples by hand.
+                ToolExamples = BuiltinTools.Examples,
             },
         };
-        var runner = new TurnRunner(sessionId, services);
-        var actor = new SessionActor(runner, slots, new Sink(this), new SessionActorOptions { EmbedderSwap = _swap });
-        _sessions[sessionId] = new CorvidSession(this, sessionId, slots, runner, actor);
-        return actor;
+    }
+
+    // C-012's scheduler (plan §13). JobScheduler.RunAsync marks runs another process left running as interrupted, so only
+    // one process may run it: an exclusive lock beside the job store decides which, and the others leave it alone.
+    private void StartScheduler()
+    {
+        try
+        {
+            _schedulerLock = new FileStream(Builtin.Jobs.Path + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        }
+        catch (IOException)
+        {
+            SchedulerState = "run by another corvid process";
+            return;
+        }
+        var scripts = new SandboxedScriptRunner(Builtin.Shell, Approvals, Options.Approvals.Mode);
+        var agent = new TurnJobAgent(sessionId => Services(new SessionModelSlots(Registry, Log, sessionId), interactive: false));
+        var scheduler = new JobScheduler(Builtin.Jobs, Fabric, scripts, agent,
+            options: new JobSchedulerOptions { Generator = Registry.Get(ModelSlots.Generator).Default.Profile.Id })
+        {
+            Completed = (job, run, _) =>
+            {
+                JobCompleted?.Invoke(job, run);
+                return Task.CompletedTask;
+            },
+        };
+        SchedulerState = "running in this process";
+        _scheduler = Task.Run(() => scheduler.RunAsync(_lifetime.Token));
     }
 
     private void Delivered(Delivery delivery)

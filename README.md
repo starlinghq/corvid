@@ -34,7 +34,7 @@ dotnet test --solution Corvid.slnx
 | `src/Corvid.Models` | provider-independent model slots, profiles and switching (C-006) |
 | `src/Corvid.Fabric` | decision fabric without Kev: question catalogue, versioned floors, TurnState, policy and the degraded decider (C-004a); the embedding tool shortlist (C-011) |
 | `src/Corvid.Memory` | memory store on SQLite: core blocks, episodic FTS5, vector index, bi-temporal fact graph, hybrid retrieval and the `memory_op`-gated write path (C-008) |
-| `src/Corvid.Host` | the composition root (C-013): typed configuration validated at start, slots composed from configuration (Starling by default), the runtime, the slash-command registry shared by surfaces, `corvid doctor`'s checks, and OpenTelemetry export |
+| `src/Corvid.Host` | the composition root (C-013): typed configuration validated at start, slots composed from configuration (Starling by default), the runtime with C-012's built-in tools and scheduler wired in, the slash-command registry shared by surfaces, `corvid doctor`'s checks, and OpenTelemetry export |
 | `src/Corvid.Cli` | `corvid` (C-013): `chat` (Spectre.Console, scrollback-first, streaming, live tool panel, inline approvals), `model`, `doctor`, `evals` |
 | `src/Corvid.Approvals` | structural approval pipeline: bash-subset parser, wrapper unwrapping, target extraction, the hardline deny list, `risk` through the fabric, approval modes, structural rules and approval events (C-007b) |
 | `vault/Corvid.Vault` | `corvid-vault`, the secrets process; see [`vault/README.md`](vault/README.md) |

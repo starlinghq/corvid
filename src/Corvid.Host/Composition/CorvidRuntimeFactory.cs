@@ -6,12 +6,26 @@ using Corvid.Host.Configuration;
 using Corvid.Host.Models;
 using Corvid.Host.Telemetry;
 using Corvid.Kernel.Events;
+using Corvid.Kernel.Jobs;
 using Corvid.Memory;
 using Corvid.Models;
+using Corvid.Sandbox;
 using Corvid.Tools;
+using Corvid.Tools.Builtin;
 using Microsoft.Extensions.Options;
 
 namespace Corvid.Host.Composition;
+
+/// <summary>What C-012's tools and scheduler share: the protected approval environment, the sandboxed shell and the job store.</summary>
+/// <param name="Web">The web fetch tool's client, owned by the runtime; null when the built-in tools are off.</param>
+public sealed record BuiltinServices(ApprovalEnvironment Environment, SandboxedShell Shell, JobStore Jobs, WebFetchTool? Web);
+
+/// <summary>The sandbox is Linux only (C-007a): elsewhere every command is refused, never run unconfined.</summary>
+internal sealed class NoSandbox : ISandbox
+{
+    public Task<SandboxResult> RunAsync(SandboxPolicy policy, SandboxCommand command, CancellationToken cancellationToken = default) =>
+        throw new SandboxRefusedException("The sandbox runs on Linux only; commands are not run on this platform.");
+}
 
 /// <summary>Configured models that are not usable offline. Corvid never downloads implicitly.</summary>
 public sealed class ModelsUnavailableException(ImmutableArray<ModelAvailability> missing)
@@ -61,22 +75,47 @@ public sealed class CorvidRuntimeFactory(
             var log = new SqliteEventLog(CorvidPaths.EventLog(settings));
             var fabric = new DecisionFabric(DecisionPolicy.Default, composer.CreateDegradedDecider(), log);
 
-            var environment = ApprovalEnvironment.FromProcess(CorvidPaths.Workspace(settings));
+            // Vault's locations are protected twice (C-012): the hardline list refuses them, and the shell's sandbox hides them.
+            var vault = VaultLocationsFor(settings);
+            var environment = vault.Protect(ApprovalEnvironment.FromProcess(CorvidPaths.Workspace(settings)));
             var rulesFile = settings.Approvals.RulesFile is { Length: > 0 } file ? CorvidPaths.ExpandHome(file) : JsonFileApprovalRuleStore.DefaultPath(environment);
             var prompters = new ApprovalRouter();
             var approvals = new ApprovalPipeline(environment, fabric, log, prompters, new JsonFileApprovalRuleStore(rulesFile),
-                new ApprovalOptions { Timeout = TimeSpan.FromSeconds(settings.Approvals.TimeoutSeconds) });
-
-            // Built-in tools (C-012) and any later toolset register providers in DI; the registry offers whatever is there.
-            var registry_ = new ToolRegistry();
-            foreach (var provider in toolProviders)
-                registry_.Add(provider);
-            registry_.AddRange(tools);
+                new ApprovalOptions
+                {
+                    Timeout = TimeSpan.FromSeconds(settings.Approvals.TimeoutSeconds),
+                    // Without the mapping the shell tool never runs: it requires the approval of its command line.
+                    ShellTools = BuiltinTools.ShellToolMapping,
+                });
 
             var counter = composer.GeneratorCounter();
             var memory = settings.Memory.Enabled ? BuildMemory(settings, composer, registry, fabric, log, counter) : null;
+
+            var launcher = settings.Sandbox.LauncherPath is { Length: > 0 } path ? CorvidPaths.ExpandHome(path) : null;
+            ISandbox sandbox = OperatingSystem.IsLinux()
+                ? new BubblewrapSandbox(new SandboxOptions { LauncherPath = launcher })
+                : new NoSandbox();
+            var shell = new SandboxedShell(sandbox, new ShellOptions { Workspace = environment.Workspace, Vault = vault });
+            var jobs = new JobStore(CorvidPaths.JobStore(settings));
+            var builtin = new BuiltinServices(environment, shell, jobs, settings.Tools.Builtin ? new WebFetchTool() : null);
+
+            // Tools registered in DI (any later toolset) are offered alongside the built-in ones.
+            var toolRegistry = new ToolRegistry();
+            if (settings.Tools.Builtin)
+            {
+                toolRegistry.Add(new FileTools(Workspace.For(environment)));
+                toolRegistry.Add(new ShellTool(shell));
+                toolRegistry.Add(builtin.Web!);
+                toolRegistry.Add(new CronTools(jobs));
+                if (memory?.Writer is { } writer)
+                    toolRegistry.Add(new MemoryTools(writer, memory.Retriever));
+            }
+            foreach (var provider in toolProviders)
+                toolRegistry.Add(provider);
+            toolRegistry.AddRange(tools);
+
             return new CorvidRuntime(settings, catalogue, composer, devices, metrics, feed, log, registry, fabric, approvals, prompters,
-                registry_, memory, counter);
+                toolRegistry, memory, counter, builtin);
         }
         catch
         {
@@ -84,6 +123,15 @@ public sealed class CorvidRuntimeFactory(
             devices.Dispose();
             throw;
         }
+    }
+
+    /// <summary>Vault's own defaults for this user, with the socket from configuration when it is set.</summary>
+    private static VaultLocations VaultLocationsFor(CorvidOptions settings)
+    {
+        var defaults = VaultLocations.Default(CorvidPaths.Home, Environment.GetEnvironmentVariable);
+        return settings.Vault.SocketPath is { Length: > 0 } socket
+            ? new VaultLocations(defaults.DataDirectory, defaults.ConfigPath, CorvidPaths.ExpandHome(socket))
+            : defaults;
     }
 
     private static MemoryServices BuildMemory(CorvidOptions settings, ModelComposer composer, ModelSlotRegistry registry,
