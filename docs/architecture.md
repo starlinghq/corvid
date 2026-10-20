@@ -483,10 +483,11 @@ Plan §10.1 and §3.4, and `vault.md` §3.3 and "Implementation status". Linux o
   outside the workspace, has no network by default, gets only the allowlisted environment,
   cannot create namespaces, and dies on timeout, cancellation and launcher death; and that
   the refusals above run nothing. Landlock and seccomp are also tested on their own (stage 2
-  outside bubblewrap), and a small BPF interpreter checks the filter's decisions. CI installs
-  bubblewrap, sets `kernel.apparmor_restrict_unprivileged_userns=0` (Ubuntu 24.04 limits
-  unprivileged user namespaces to AppArmor-profiled programs), and the required step "Sandbox
-  confinement ran and passed" fails unless all of them ran with none skipped.
+  outside bubblewrap), and a small BPF interpreter checks the filter's decisions. CI runs on
+  the org's self-hosted runner (an Arch Linux host with bubblewrap and unprivileged user
+  namespaces; the runner has no root), first checks that bubblewrap and `unshare -U` work,
+  and the required step "Sandbox confinement ran and passed" fails unless all of them ran
+  with none skipped.
 
 Limits: masking is by path, so the same files reached another way (a hard link, another
 mount of the same file system, a snapshot directory) stay readable; Landlock grants only and
