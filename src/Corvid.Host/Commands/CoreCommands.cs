@@ -85,6 +85,10 @@ public static class CoreCommands
             return CommandOutput.Error("Usage: /model [slot] <model> [--pin], or /model unpin <slot>.");
         }
 
+        // The fabric, approvals and memory share one decider across sessions, so a per-session switch would not reach them.
+        if (slot == ModelSlots.Decider)
+            return CommandOutput.Error($"The decider is shared by every session ({context.Runtime.DeciderState}). Change it with " +
+                $"`corvid model switch {ModelSlots.Decider} <model>` and restart.");
         if (slot == ModelSlots.TextEmbedder && !context.Runtime.IsConfigured(slot, name))
             return CommandOutput.Error($"Memory embeds only with the embedder.text models configured at start. Add {name} to " +
                 "Corvid:Models:Slots:embedder.text:Fallbacks, then restart.");
@@ -127,7 +131,7 @@ public static class CoreCommands
         {
             Title = "Model slots",
             Table = CommandTable.Of(["slot", "current", "default", "escalation", "models"], rows),
-            Lines = ["Switch with /model [slot] <model> [--pin]. The decider runs on the degraded tier until Kev is published."],
+            Lines = ["Switch with /model [slot] <model> [--pin].", $"decider: {context.Runtime.DeciderState}."],
         };
     }
 
@@ -144,9 +148,15 @@ public static class CoreCommands
                 continue;
             rows.Add(Row(slot, binding.Profile.Id, binding.Profile.Placement, runtime.Metrics.TryGet(slot, binding.Profile.Id, out var latency) ? latency : null));
         }
-        // The decider slot is the degraded tier: the generator's and embedder's yes/no and similarity answers at fabric priority.
-        if (!session.Slots.TryCurrent(ModelSlots.Decider, out _) && runtime.Registry.TryGet(ModelSlots.Generator, out var generator))
-            rows.Add(Row(ModelSlots.Decider, DegradedDecider.DeciderName, generator.Default.Profile.Placement,
+        // Kev's second tier, when configured, answers only gates below their floor (§5.5).
+        if (runtime.Registry.TryGet(ModelSlots.Decider, out var kev))
+            foreach (var second in kev.Escalation)
+                rows.Add(Row(ModelSlots.Decider, second.Profile.Id + " (second tier)", second.Profile.Placement,
+                    runtime.Metrics.TryGet(ModelSlots.Decider, second.Profile.Id, out var tier) ? tier : null));
+        // The degraded tier: the generator's and embedder's yes/no and similarity answers at fabric priority. Without Kev it is
+        // the decider; with Kev, the fallback for states over the hard stop and requests Kev refuses.
+        if (runtime.Registry.TryGet(ModelSlots.Generator, out var generator))
+            rows.Add(Row(ModelSlots.Decider, DegradedDecider.DeciderName + (kev is null ? "" : " (fallback)"), generator.Default.Profile.Placement,
                 runtime.Metrics.TryGet(ModelSlots.Decider, DegradedDecider.DeciderName, out var decider) ? decider : null));
 
         var snapshot = session.Snapshot();
@@ -159,6 +169,7 @@ public static class CoreCommands
                 $"session {session.Id}: {snapshot.Head} events, {snapshot.PendingApprovals.Count} pending approval(s)" +
                 (session.Tainted ? ", tainted by outside content" : ""),
                 $"goal: {snapshot.Goal ?? "none"}",
+                $"decider: {runtime.DeciderState}",
                 $"scheduler: {runtime.SchedulerState}",
                 $"log: {Configuration.CorvidPaths.EventLog(runtime.Options)}",
             ],

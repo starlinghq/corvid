@@ -4,6 +4,7 @@ using Starlings.Acquisition;
 using Starlings.Models.E5;
 using Starlings.Models.EmbeddingGemma2;
 using Starlings.Models.Gliner2;
+using Starlings.Models.Kev;
 using Starlings.Models.Qwen35;
 
 namespace Corvid.Models.Starling;
@@ -111,6 +112,9 @@ public sealed class StarlingModelStore(string? cacheDirectory = null, HttpClient
 
     public E5ModelFiles OpenE5(CacheVerification verification = CacheVerification.Size) =>
         E5ModelFiles.From(Open(StarlingModels.E5, verification));
+
+    public KevModelFiles OpenKev(KevModel model, CacheVerification verification = CacheVerification.Size) =>
+        KevModelFiles.From(KevModelProfile.For(model), Open(model == KevModel.Kev4B ? StarlingModels.Kev4B : StarlingModels.Kev08B, verification));
 
     private ModelSnapshot Open(StarlingModelInfo model, CacheVerification verification)
     {

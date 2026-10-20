@@ -15,6 +15,9 @@ namespace Corvid.Fabric;
 /// <item>Noul questions: the generator answers yes or no. An unparseable reply or a failed call leaves the question unanswered.</item>
 /// <item>Gates and questions without a cheap signal: no answer, so the conservative default applies. The generator is not called.</item>
 /// <item><c>difficulty</c>: a token-length and tool-step heuristic, logged but not acted on (escalation is manual).</item>
+/// <item>Questions that divert the turn (<see cref="CatalogueQuestion.BlocksTurn"/>: <c>clarify</c>, <c>stuck</c>): not asked
+/// unless <c>askTurnBlocking</c> is set, because policy would not act on the answer (it proceeds), and each yes/no is a full
+/// generator prefill.</item>
 /// </list>
 /// Questions not in the catalogue follow their shape: Choice by embedding, Noul by the generator, Score unanswered.
 /// </summary>
@@ -32,11 +35,13 @@ public sealed class DegradedDecider : IDecider
     private readonly IChatClient _generator;
     private readonly QuestionCatalogue _catalogue;
     private readonly ITokenCounter _counter;
+    private readonly bool _askTurnBlocking;
 
     /// <param name="embedder">The <c>embedder.text</c> slot.</param>
     /// <param name="generator">The <c>generator</c> slot, for yes/no answers.</param>
+    /// <param name="askTurnBlocking">Ask the generator about questions that divert the turn; pass <see cref="FloorConfiguration.DegradedTurnBlocking"/>.</param>
     public DegradedDecider(IEmbeddingGenerator<string, Embedding<float>> embedder, IChatClient generator,
-        QuestionCatalogue? catalogue = null, ITokenCounter? counter = null)
+        QuestionCatalogue? catalogue = null, ITokenCounter? counter = null, bool askTurnBlocking = false)
     {
         ArgumentNullException.ThrowIfNull(embedder);
         ArgumentNullException.ThrowIfNull(generator);
@@ -44,6 +49,7 @@ public sealed class DegradedDecider : IDecider
         _generator = generator;
         _catalogue = catalogue ?? QuestionCatalogue.Default;
         _counter = counter ?? CharsPerTokenCounter.Instance;
+        _askTurnBlocking = askTurnBlocking;
     }
 
     public string Name => DeciderName;
@@ -84,7 +90,7 @@ public sealed class DegradedDecider : IDecider
     private DegradedRule RuleFor(string key, DecisionQuestion question)
     {
         if (_catalogue.TryResolve(key, out var entry))
-            return entry.Kind == question.Kind ? entry.Degraded : DegradedRule.ConservativeDefault;
+            return entry.Kind != question.Kind || entry.BlocksTurn && !_askTurnBlocking ? DegradedRule.ConservativeDefault : entry.Degraded;
         return question.Kind switch
         {
             QuestionKind.Choice => DegradedRule.EmbeddingMargin,

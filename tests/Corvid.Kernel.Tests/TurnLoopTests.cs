@@ -3,6 +3,7 @@ using Corvid.Abstractions.Events;
 using Corvid.Abstractions.Sessions;
 using Corvid.Abstractions.Tokens;
 using Corvid.Approvals;
+using Corvid.Fabric;
 using Corvid.Kernel.Turns;
 using Corvid.Models;
 using Corvid.Tools;
@@ -458,17 +459,70 @@ public sealed class TurnLoopTests
         Assert.True(counter.Calls > 0);
     }
 
+    private static readonly DecisionPolicy DegradedMayBlock =
+        new(QuestionCatalogue.Default, FloorConfiguration.Default with { DegradedTurnBlocking = true });
+
     [Fact]
-    public async Task Clarify_asks_one_question_instead_of_acting()
+    public async Task A_calibrated_clarify_asks_one_question_instead_of_acting()
     {
-        var generator = new FakeGenerator(Reply.Say("Which reminder do you mean?")) { YesNo = FakeGenerator.YesTo("ambiguous") };
-        using var harness = new TurnHarness(generator);
+        var generator = new FakeGenerator(Reply.Say("Which reminder do you mean?"));
+        var kev = new ScriptedDecider((key, _) => key == "clarify" ? [0.9, 0.1] : null);
+        using var harness = new TurnHarness(generator, calibrated: kev);
 
         var result = await harness.RunAsync("move it");
 
         Assert.Equal(TurnStatus.Clarifying, result.Status);
         Assert.Empty(generator.Calls[0].ToolNames);
         Assert.Contains("Ask the user one short question", generator.Calls[0].LastText);
+    }
+
+    [Fact]
+    public async Task A_generator_that_says_yes_to_everything_does_not_stop_the_degraded_turn()
+    {
+        // C-013 found Qwen3.5-0.8B answering yes to clarify on every real prompt, so no tool was ever offered.
+        var generator = new FakeGenerator(Reply.Call("list_notes"), Reply.Say("You have no notes.")) { YesNo = _ => "yes" };
+        using var harness = new TurnHarness(generator);
+
+        var result = await harness.RunAsync("list my notes");
+
+        Assert.Equal(TurnStatus.Answered, result.Status);
+        Assert.Contains("list_notes", generator.Calls[0].ToolNames);
+        Assert.Equal(1, result.ToolCalls);
+        var decisions = harness.Decisions();
+        var clarify = Assert.Single(decisions, d => d.QuestionId == "clarify");
+        Assert.Equal("proceed", clarify.Action);
+        // Not asked at all: a yes the policy would not act on is a wasted prefill.
+        Assert.Empty(clarify.Probabilities);
+        Assert.DoesNotContain(generator.Questions, question => question.Contains("ambiguous", StringComparison.Ordinal));
+        Assert.All(decisions.Where(d => d.QuestionId == "stuck"), d => Assert.Equal("continue", d.Action));
+    }
+
+    [Fact]
+    public async Task An_uncalibrated_pick_of_ask_clarifying_question_does_not_divert_the_turn()
+    {
+        var generator = new FakeGenerator(Reply.Say("Here you go."));
+        // An embedding-style answer: uncalibrated, with a margin the policy acts on.
+        var embedding = new ScriptedDecider((key, question) => key == "intent"
+            ? [.. question.Options.Select(option => option.Name == "ask_clarifying_question" ? 0.9 : 0.025)]
+            : null) { Calibrated = false, Margin = 0.5 };
+        using var harness = new TurnHarness(generator, calibrated: embedding);
+
+        var result = await harness.RunAsync("move it");
+
+        Assert.Equal(TurnStatus.Answered, result.Status);
+        Assert.DoesNotContain("Ask the user one short question", generator.Calls[0].LastText);
+    }
+
+    [Fact]
+    public async Task Degraded_clarify_diverts_the_turn_only_when_the_floors_allow_it()
+    {
+        var generator = new FakeGenerator(Reply.Say("Which reminder do you mean?")) { YesNo = FakeGenerator.YesTo("ambiguous") };
+        using var harness = new TurnHarness(generator, policy: DegradedMayBlock);
+
+        var result = await harness.RunAsync("move it");
+
+        Assert.Equal(TurnStatus.Clarifying, result.Status);
+        Assert.Empty(generator.Calls[0].ToolNames);
     }
 
     [Fact]
@@ -488,8 +542,9 @@ public sealed class TurnLoopTests
     [Fact]
     public async Task Stuck_without_an_escalation_target_finishes_without_tools()
     {
-        var generator = new FakeGenerator(Reply.Call("list_notes"), Reply.Say("I could not get further.")) { YesNo = FakeGenerator.YesTo("repeating") };
-        using var harness = new TurnHarness(generator);
+        var generator = new FakeGenerator(Reply.Call("list_notes"), Reply.Say("I could not get further."));
+        var kev = new ScriptedDecider((key, _) => key == "stuck" ? [0.9, 0.1] : null);
+        using var harness = new TurnHarness(generator, calibrated: kev);
 
         var result = await harness.RunAsync("list my notes");
 

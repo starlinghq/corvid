@@ -224,6 +224,29 @@ internal sealed class RiskOnlyDecider(int level) : IDecider
                 Enumerable.Range(0, pair.Value.Options.Length).Select(i => i == level ? 0.96 : 0.01)), StringComparer.Ordinal)));
 }
 
+/// <summary>
+/// A decider in the calibrated slot that answers each question with the probabilities <see cref="Answer"/> gives (null: no
+/// answer, so the question falls below its floor), calibrated unless <see cref="Calibrated"/> says otherwise.
+/// </summary>
+internal sealed class ScriptedDecider(Func<string, DecisionQuestion, double[]?> answer) : IDecider
+{
+    public string Name => "kev-test";
+
+    public bool Calibrated { get; init; } = true;
+
+    /// <summary>The similarity margin to attach, as the degraded tier does for embedding choices.</summary>
+    public double? Margin { get; init; }
+
+    public ValueTask<DeciderResult> DecideAsync(DecisionRequest request, CancellationToken cancellationToken = default)
+    {
+        var answers = ImmutableDictionary.CreateBuilder<string, DecisionAnswer>(StringComparer.Ordinal);
+        foreach (var (key, question) in request.Questions)
+            if (answer(key, question) is { } probabilities)
+                answers[key] = DecisionAnswer.For(question, probabilities, Calibrated, Margin);
+        return ValueTask.FromResult<DeciderResult>(new DeciderAnswers(Name, answers.ToImmutable()));
+    }
+}
+
 /// <summary>Answers prompts from a function that may wait; records every prompt.</summary>
 internal sealed class FakePrompter(Func<ApprovalPrompt, CancellationToken, Task<ApprovalAnswer>> answer) : IApprovalPrompter
 {
@@ -272,8 +295,9 @@ internal sealed class TurnHarness : IDisposable
 
     public TurnHarness(FakeGenerator generator, FakeGenerator? escalation = null, IExtractor? extractor = null,
         IApprovalPrompter? prompter = null, IDecider? calibrated = null, TurnOptions? options = null, ApprovalOptions? approvalOptions = null,
-        ToolCallSupport toolCalls = ToolCallSupport.TemplateRendered, Action<ToolRegistry>? tools = null)
+        ToolCallSupport toolCalls = ToolCallSupport.TemplateRendered, Action<ToolRegistry>? tools = null, DecisionPolicy? policy = null)
     {
+        policy ??= DecisionPolicy.Default;
         Log = new SqliteEventLog(Path.Combine(_root, "events.db"));
         Generator = generator;
         Escalation = escalation;
@@ -286,7 +310,8 @@ internal sealed class TurnHarness : IDisposable
         if (extractor is not null)
             Registry.Bind(ModelSlots.Extractor, new ModelBinding(Profile("fake-extractor", ToolCallSupport.None, 512), extractor));
         Slots = new SessionModelSlots(Registry, Log, Session);
-        Fabric = new DecisionFabric(DecisionPolicy.Default, new DegradedDecider(Embedder, generator), Log, calibrated);
+        Fabric = new DecisionFabric(policy, new DegradedDecider(Embedder, generator, askTurnBlocking: policy.Floors.DegradedTurnBlocking),
+            Log, calibrated);
         Notes = new NoteTools();
         Tools = new ToolRegistry();
         Tools.Add(Notes);

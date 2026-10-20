@@ -1,4 +1,4 @@
-# Agent foundation (C-001, C-002, C-004a, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-012, C-013, C-021)
+# Agent foundation (C-001, C-002, C-004a, C-004b, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-012, C-013, C-021)
 
 The solution contains `Corvid.Abstractions`, `Corvid.Kernel`, and
 `Corvid.Models`, alongside the working Vault projects. Kernel and Models each
@@ -21,7 +21,8 @@ Approvals, Fabric, Memory, Models and Tools as well, for the session actor, the 
 [Session actor and turn loop](#session-actor-and-turn-loop-c-011)). C-012 added `Corvid.Tools.Builtin`, the built-in
 tools, which references Approvals, Kernel, Memory, Sandbox and Tools and no package, and the scheduler in Kernel (see
 [Built-in tools and scheduler](#built-in-tools-and-scheduler-c-012)). C-013 added the composition root, `Corvid.Host`,
-and the `corvid` executable, `Corvid.Cli` (see [Host and CLI](#host-and-cli-c-013)). Add
+and the `corvid` executable, `Corvid.Cli` (see [Host and CLI](#host-and-cli-c-013)). C-004b added the Kev decider to
+`Corvid.Models.Starling` and the two-tier escalation to `Corvid.Fabric` (see [Kev decider](#kev-decider-c-004b)). Add
 the other projects from the agent plan as their implementations start, rather
 than creating empty projects for every future surface.
 
@@ -160,7 +161,8 @@ media-embedder contract.
 `Corvid.Models.Starling` is the in-process adapter for Starling's models (plan §1,
 §4.1). It references `Starlings.Models.Qwen35.Extensions.AI`, `Starlings.Models.Gliner2`,
 `Starlings.Models.EmbeddingGemma2.Extensions.AI`, `Starlings.Models.E5.Extensions.AI` and
-`Starlings.Acquisition`, all 0.2.0 from nuget.org (D-3), and `Corvid.Models`. It is not
+`Starlings.Acquisition` and, from C-004b, `Starlings.Models.Kev`, all 0.3.0 from nuget.org (D-3; 0.3.0 changed nothing
+these adapters use: batching options are opt-in and off), and `Corvid.Models`. It is not
 `IsAotCompatible`: Starling is not AOT-qualified as a set, and warnings are errors.
 
 - Natives: the project references exactly one native package, `Microsoft.ML.OnnxRuntimeGenAI`
@@ -182,7 +184,7 @@ media-embedder contract.
   `GetService(typeof(ITokenCounter))`), GLiNER2 as `IExtractor`, EmbeddingGemma 2 (the
   default `embedder.text`) and e5 (the alternative) as `IEmbeddingGenerator`. The Qwen
   client rejects `RequireAny`/`RequireSpecific` tool modes, JSON response formats and
-  unseeded sampling; tool calling is experimental in Starling 0.2.0. The caller owns and
+  unseeded sampling; tool calling is experimental in Starling 0.3.0. The caller owns and
   disposes the services.
 - `Gliner2Extractor` implements `IExtractor` (Corvid.Abstractions/Extraction: text and
   labels in, labelled spans with UTF-16 offsets and confidences out; over-long input
@@ -217,8 +219,7 @@ media-embedder contract.
 
 Not built yet: CUDA placement (switch the native package to
 `Microsoft.ML.OnnxRuntimeGenAI.Cuda`, which brings `Microsoft.ML.OnnxRuntime.Gpu`, and
-make placement per binding; plan §4.4 puts the generator on the 3090), the Kev decider
-adapter (C-004b, waiting for `Starlings.Models.Kev` on nuget.org), media embeddings
+make placement per binding; plan §4.4 puts the generator on the 3090), media embeddings
 (`embedder.media`), the fp16x Qwen variant, batch extraction, label descriptions,
 and conversation-level token counting before a call. C-013 built `corvid doctor` on `StarlingModelStore` and wires
 C-011's device scheduler to these bindings.
@@ -340,9 +341,8 @@ too.
 ## Decision fabric (C-004a)
 
 `Corvid.Fabric` (core, `IsAotCompatible`) implements plan §5.1, §5.3, the policy
-side of §5.2 and §5.5, and the degraded tier of §5.6. Kev is not used:
-`Starlings.Models.Kev` is not on nuget.org, so the degraded decider is the only
-`IDecider` implementation, and nothing in Fabric references a Starling or provider
+side of §5.2 and §5.5, and the degraded tier of §5.6. The degraded decider is its own `IDecider`; Kev's lives in
+`Corvid.Models.Starling` (C-004b), and nothing in Fabric references a Starling or provider
 package. It needs no new infrastructure package, so the checker's allowlist is
 unchanged.
 
@@ -412,12 +412,11 @@ unchanged.
   and still read. C-021 added three more, `state`, `question` and `calibrated`, the same way.
 
 C-011 added `ToolShortlist` (see [Session actor and turn loop](#session-actor-and-turn-loop-c-011)) and feeds the state
-the extractor's entities. Not built yet: the Kev adapter and the two-tier escalation to Kev-4B (C-004b, which
-waits for the package); the `skill` options (C-017); the `remember` durability score; the `tool` question's
-below-floor variant that escalates on the 0.8B generator (the caller's choice for
-now); generator logprobs as a Noul confidence (`IChatClient` has no logprobs
-surface); per-question row budgets (1,000 tokens), which the Kev adapter enforces
-by declining. Decision replay against new floors and calibration tooling are C-021.
+the extractor's entities. C-004b added the two-tier escalation, the record of declined questions and the rule that an
+uncalibrated answer never diverts the turn (see [Kev decider](#kev-decider-c-004b)). Not built yet: the `skill` options
+(C-017); the `remember` durability score; the `tool` question's below-floor variant that escalates on the 0.8B generator
+(the caller's choice for now); generator logprobs as a Noul confidence (`IChatClient` has no logprobs surface). Decision
+replay against new floors and calibration tooling are C-021.
 
 ## Sandbox (C-007a)
 
@@ -668,7 +667,7 @@ corvid-evals export-trajectories --log events.db --out trajectories.jsonl
   in both directions with held and unverified conditions and the margin case, both exports, the command line, and a
   round trip through `DecisionFabric` with a calibrated test decider.
 
-`corvid evals` (C-013) runs `corvid-evals` with `--log` defaulting to the user's event log. Not built yet: Kev-0.8B against Kev-4B agreement (C-004b); fitting the degraded
+`corvid evals` (C-013) runs `corvid-evals` with `--log` defaulting to the user's event log. Not built yet: Kev-0.8B against Kev-4B agreement (C-004b records which tier answered an escalated gate, not the answer it replaced); fitting the degraded
 margin (the margin is not recorded); recording the caller's conditions and the permissive mode, which would make replay
 exact; outcomes for questions other than `tool`, `risk` and `memory_op` (C-011 records `tool_succeeded` and
 `tool_failed` on the `tool` decision that picked the tool), and with them an acted-only fit or per-question outcome
@@ -795,7 +794,7 @@ described below (see [Host and CLI](#host-and-cli-c-013)).
   checkpoint as one `DecisionFabric.DecideAsync` (intent, difficulty, clarify, `needs_recall` when a retriever is bound,
   and `tool` over the shortlist plus `none`) on one TurnState. The TurnState is built per checkpoint with the generator
   binding's own `ITokenCounter` when it offers one, the log's recent entries as one-liners, the goal, the entities, the
-  step and the last tool result. `clarify` (or `intent: ask_clarifying_question`) makes the answer one question;
+  step and the last tool result. `clarify` (or a calibrated `intent: ask_clarifying_question`; C-004b) makes the answer one question;
   `needs_recall` runs hybrid retrieval into the system prompt (below its floor, the top three facts only); `difficulty`
   above its floor escalates (never in the degraded tier, which only logs a heuristic).
 - Generation (§7): a confident `tool` pick offers exactly that schema, `none` offers no tools, below the floor the
@@ -897,8 +896,9 @@ depth and median latency).
 ## Host and CLI (C-013)
 
 Plan §3.4, §12 (CLI), §16 (spans), §17 rows 1.2 and 1.3, and §4.4's `/status`. `Corvid.Host` is the composition root,
-`Corvid.Cli` the `corvid` executable over it. Everything runs on the degraded decider; Starling packages come from
-nuget.org through `Corvid.Models.Starling` only.
+`Corvid.Cli` the `corvid` executable over it. The fabric runs on Kev-0.8B when it is downloaded and on the degraded
+decider otherwise (C-004b, see [Kev decider](#kev-decider-c-004b)); Starling packages come from nuget.org through
+`Corvid.Models.Starling` only.
 
 - Configuration (`CorvidOptions`, section `Corvid`): data directory, workspace, per-slot model, escalation ladder and
   fallbacks by catalogue name (defaults `qwen3.5-0.8b`, `gliner2-base-v1`, `embeddinggemma-2`; no decider model),
@@ -969,8 +969,9 @@ nuget.org through `Corvid.Models.Starling` only.
   non-streamed contents, tool calls included). Without a watcher it does not stream. Its listener also makes sure the spans
   exist when nothing exports them.
 - `corvid doctor` (`Doctor`): configuration (validated, with the file in use), the data directory (writable), every
-  catalogue model (`Check`, by size; `--thorough` hashes), marked failed only when configured, the decider (degraded until
-  Kev), `MALLOC_MMAP_THRESHOLD_` in this process, bubblewrap on `PATH`, `corvid-sandbox` where `Corvid.Sandbox` looks for it,
+  catalogue model (`Check`, by size; `--thorough` hashes), marked failed only when configured (a missing decider model is a
+  warning), the decider (Kev with or without its second tier, or the degraded tier and the command that fetches Kev),
+  `MALLOC_MMAP_THRESHOLD_` in this process, bubblewrap on `PATH`, `corvid-sandbox` where `Corvid.Sandbox` looks for it,
   and the Vault socket (exists and answers). Nothing loads and nothing uses the network. Exit 1 when a check failed.
 - glibc: Starling requires `MALLOC_MMAP_THRESHOLD_=65536` for GLiNER2 on Linux, and glibc reads it before `Main`.
   `GlibcMalloc.EnsureMmapThreshold`, called first by `corvid chat`, re-executes the same binary (`Environment.ProcessPath`)
@@ -1005,7 +1006,7 @@ nuget.org through `Corvid.Models.Starling` only.
   latencies, the 15 built-in tools listed and the scheduler running, and the re-executed process carrying
   `MALLOC_MMAP_THRESHOLD_=65536`. With Qwen as the degraded decider's yes/no answerer, `clarify` acted on all three
   prompts tried (one of them a request to read a file in the workspace), so those turns ended with a clarifying question
-  before any tool was offered to the generator: a fabric policy matter for C-004a/C-004b, not changed here.
+  before any tool was offered to the generator. C-004b changed the policy: an uncalibrated answer no longer diverts the turn.
 
 Not built yet: Ctrl+P; typing while a turn runs (the chat reads the next line after the delivery, so `/model` mid-turn is
 available to the gateway and a later CLI, not this one); removing approval rules (`IApprovalRuleStore` has no removal);
@@ -1116,6 +1117,88 @@ PDFs and rendering JavaScript; `.gitignore`-aware search and globs; editing core
 a tool; and the subagent restrictions of §14 (children may not write memory or schedule jobs). Resolving a path and
 opening it are separate calls, so a concurrent process that swaps a directory for a link in between could redirect one
 access.
+
+## Kev decider (C-004b)
+
+Plan §2 (Kev's limits), §4.4, §5 (all), §5.5's two-tier decider and §5.6's fallback. Every `Starlings.*` package moved to
+0.3.0 together; `Starlings.Models.Kev` 0.3.0 is the new one, in `Corvid.Models.Starling` only, with no new native package
+(it loads through the CPU `Microsoft.ML.OnnxRuntime` 1.30.0 the adapter already brings), so the checker is unchanged.
+
+- `KevDecider` (`IDecider`) over `KevDecisionModel`, CPU only (CUDA session options are refused), always with the head's
+  calibrated temperature (any `KevOptions.Temperature` is refused, because answers are recorded as calibrated and C-021
+  fits floors only on those). One `KevRequest` per checkpoint: the TurnState as `KevContent.Json` (Kev renders it as
+  `key: value` lines), every question as its own row in ordinal key order, instructions as text or JSON, Choice options
+  as `name: description`, Score levels as their text. Answers come back in the question's option order (Kev's yes/no is
+  `no, yes`, so it is swapped), normalised in double precision, as `DecisionAnswer`s with `Calibrated = true`, so
+  `Confidence` and `ExpectedScore` are the fabric's own definitions. Names: `kev-0.8b`, `kev-4b`.
+- Limits. A state over Kev's 8,192 tokens (Kev's `KevInputTooLongException` without a question index) returns
+  `DeciderUnavailable(StateOverBudget)`, so the fabric falls back to the degraded tier for that checkpoint and records
+  `degraded after kev-0.8b: state_over_budget`. The fabric's own hard stop (1,500 by the generator's counter) usually
+  falls back first. Each question's row (instructions and options after the state) is held to 1,000 tokens (§5.1: the
+  0.37 s per question was measured with rows up to 853): Kev encodes once, rows over the budget are dropped from the
+  encoding without encoding again, and the question is declined: no answer (its below-floor action) and
+  `DeciderAnswers.Declined` gives the reason, recorded as the decision's decider, `kev-0.8b declined: row_over_budget`.
+  A row over Kev's own 8,192 is declined the same way after one more encode; more than 255 options is
+  `unsupported_question`. Every question declined is `Refused`, so the checkpoint falls back.
+- Threading. `DecideAsync` runs Kev synchronously and returns a completed task. The host binds it to the `decider` slot
+  through `ModelComposer`, which wraps every `IDecider` with `DeviceScheduling.Schedule` at fabric priority and a latency
+  layer, so Kev runs on the CPU device's thread, behind the interactive generator and never on a session actor.
+- Two tiers (`DecisionFabric`, §5.5). With a second decider, after the first tier answers, every calibrated answer to a
+  gate (`risk`, `skill_write_safe`, `memory_op`) whose measure is below its floor (`DecisionPolicy.ClearsFloor`, without
+  the caller's conditions) goes to the second tier in one request on the same state. Its answers replace the first's and
+  the decision records `kev-4b after kev-0.8b: below_floor`; if it declines, fails or throws, the first answer stands as
+  `kev-0.8b after kev-4b: failed` (or `refused`, `no_answer`), and either way the policy then decides, so below the floor
+  on both tiers the user is asked. Routing questions, gates above their floor and checkpoints that fell back to the
+  degraded tier never reach it. `FabricVerdict.Decider`, the span's `corvid.decider.escalated` and each
+  `corvid.decision` event's `corvid.decider` show which tier answered.
+- Degraded turn blocking. A catalogue row now says whether acting diverts the turn (`BlocksTurn`: `clarify` and
+  `stuck`). The policy never lets an uncalibrated answer do that unless `degraded_turn_blocking` is set in the floors file
+  (default false; floors version `2026-10-19.1`; older files load as false and C-021's fitter carries the setting over);
+  the degraded decider does not even ask the generator about those rows, saving a prefill per question; and the turn loop
+  takes `intent: ask_clarifying_question` only from a calibrated answer. C-013 had found Qwen3.5-0.8B saying yes to
+  `clarify` on every real prompt. Other degraded yes/no answers (`done`, `needs_recall`, `remember`, `wake`) still act.
+  The two recorded golden turns were re-recorded for the new floor version and the unasked rows.
+- Host. `kev-0.8b` is the default decider model and `kev-4b` is in the catalogue (slot `decider`, profiles
+  `kev-0.8b@cpu` and `kev-4b@cpu`, accepted context 8,192, locks from the package naming `jaredpalmer/kev-*`, files from
+  `Starlinghq/kev-0.8b-onnx` and `Starlinghq/kev-4b-onnx` at their pinned commits). The decider is optional: its models are
+  left out of the start's missing-model check, and `ModelComposer` binds the slot only with what is ready and loads,
+  keeping the reason otherwise in `DeciderNotices` (the model, what that means, and `corvid model download ...`), which
+  `corvid chat` prints at start; `CorvidRuntime.DeciderState` is on `/status` and `/model`. A second tier is
+  `Corvid:Models:Slots:decider:Escalation` (at most one; fallbacks are refused because the degraded tier is the fallback;
+  a slot with only an escalation keeps its default model, so `decider:Escalation:0=kev-4b` is enough). The fabric takes
+  the slot's default as its first tier and its escalation as the second. The fabric, approvals and memory share one
+  decider, so `/model` refuses to switch the decider per session and points at `corvid model switch decider`. `/status`
+  lists Kev, the second tier and the degraded fallback with their latencies. `corvid model download kev-0.8b` (3.1 GB)
+  and `kev-4b` (16.9 GB) use the generic acquisition path; `corvid doctor` checks both and reports the tier.
+- Tests. `tests/Corvid.Models.Starling.Tests/KevDeciderTests` (no model): the request shape, option rendering and JSON
+  instructions, answer mapping and the yes/no swap, row budget declines without re-encoding, Kev's own row and state
+  refusals, unsupported questions, malformed runs, the refusal of CUDA and raw temperatures, a run through
+  `DecisionFabric`, and Kev starting on a device thread. `tests/Corvid.Fabric.Tests/TwoTierTests`: escalation of a gate
+  below its floor on the same state, both tiers below the floor, routing questions and gates above the floor never
+  escalated, a failing or declining second tier, no escalation after a fallback, declined questions recorded, the
+  turn-blocking rule with and without the setting, and old floors files. `tests/Corvid.Kernel.Tests`: a generator that
+  says yes to everything no longer stops a degraded turn, an embedding pick of `ask_clarifying_question` does not
+  divert it, and calibrated `clarify` and `stuck` still do. `tests/Corvid.Host.Tests/DeciderTests` and a CLI chat test:
+  Kev bound and answering on the device, a missing Kev or second tier leaving the degraded tier with the download
+  command, `/model` and `/status`, and the doctor's warning. Model-backed (`KevModelTests`, opt-in through
+  `CORVID_STARLING_MODELS`; Kev-4B also needs 22 GB available): a calibrated ingress checkpoint on Kev-0.8B and Kev-4B,
+  a real row-budget decline and a state over Kev's limit.
+- Checked by hand on the development machine (CPU, bundles hashed against the locks): Kev-0.8B answered a four-question
+  ingress checkpoint in about 1.3 s and Kev-4B in about 8 to 11 s. On "list the files in my workspace" over a five-tool
+  shortlist, Kev-0.8B chose `none` at confidence 0.36 (below the 0.45 floor, so the shortlist goes to the generator) and
+  Kev-4B chose `list_files` at 0.76; in `corvid chat`'s six-tool shortlist Kev-0.8B gave `none` 0.36 and `list_files`
+  0.33 (confidence 0.17). `corvid chat` with Qwen3.5-0.8B, GLiNER2, EmbeddingGemma 2 and Kev-0.8B: "list my
+  files" ran `list_files` and streamed the answer; Kev's `done` at P(yes) 0.82 stopped the loop. "what is in the notes
+  folder?" streamed a response carrying narration and a `list_files` call through Starling's Qwen client after a failed
+  `read_file` of the directory. "list the files in my workspace" failed: Qwen's `list_files {"path": "."}` was right, but
+  C-011's slot pre-fill took GLiNER2's `workspace` span as a contradiction, and the repaired call followed it into a
+  path that does not exist (a C-011 matter, not changed here).
+
+Not built yet: Kev on CUDA (the adapter ships CPU natives only, as C-010 does); Kev-0.8B against Kev-4B agreement in
+C-021's report (the replaced first-tier answer is not recorded); switching the decider per session (the fabric is
+process-wide); asking the degraded tier about the questions Kev declined while keeping Kev's other answers; Kev state
+prefix reuse across checkpoints (Unsupported upstream, U-4); spikes S1, S2 and S4 (C-003) on the published package; and
+fitted floors, which wait for Kev decisions with outcomes in real logs.
 
 ## Running the check
 

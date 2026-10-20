@@ -11,9 +11,11 @@ namespace Corvid.Fabric;
 public sealed record PolicyVerdict(string Key, string QuestionId, string Action, double Threshold, bool Acted, string? Option, string Reason);
 
 /// <summary>
-/// Applies floors to answers (plan §5.3). Rules: an uncalibrated answer never passes a gate; a degraded choice acts only on
-/// a similarity margin above the configured one; a heuristic score is logged but never acted on; a missing answer takes
-/// the below-floor action; a question with required conditions acts only when the caller supplies all of them.
+/// Applies floors to answers (plan §5.3). Rules: an uncalibrated answer never passes a gate, and never diverts the turn
+/// (<see cref="CatalogueQuestion.BlocksTurn"/>) unless <see cref="FloorConfiguration.DegradedTurnBlocking"/> allows it; a
+/// degraded choice acts only on a similarity margin above the configured one; a heuristic score is logged but never acted
+/// on; a missing answer takes the below-floor action; a question with required conditions acts only when the caller
+/// supplies all of them.
 /// </summary>
 public sealed class DecisionPolicy
 {
@@ -50,6 +52,8 @@ public sealed class DecisionPolicy
         {
             if (question.Role == QuestionRole.Gate)
                 return Below(floor, "gate without a calibrated answer");
+            if (question.BlocksTurn && !Floors.DegradedTurnBlocking)
+                return Below(floor, "an uncalibrated answer does not divert the turn");
             switch (question.Degraded)
             {
                 case DegradedRule.EmbeddingMargin when answer.Margin is { } margin:
@@ -84,6 +88,17 @@ public sealed class DecisionPolicy
             _ => new(key, question.Id, question.Act, threshold, true, question.Kind == QuestionKind.Score ? answer.Choice : null,
                 "above threshold"),
         };
+    }
+
+    /// <summary>
+    /// Whether an answer's measure reaches its question's floor, ignoring conditions and the degraded rules: the test the
+    /// two-tier decider (§5.5) applies to a calibrated gate answer before asking the second tier.
+    /// </summary>
+    public bool ClearsFloor(string key, DecisionAnswer answer)
+    {
+        ArgumentNullException.ThrowIfNull(answer);
+        var question = Catalogue.Resolve(key);
+        return answer.Kind == question.Kind && Clears(question, answer, Floors.FloorOf(question.Id));
     }
 
     private static bool Clears(CatalogueQuestion question, DecisionAnswer answer, double floor) =>

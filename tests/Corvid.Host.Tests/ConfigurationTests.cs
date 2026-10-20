@@ -2,6 +2,7 @@ using Corvid.Host.Composition;
 using Corvid.Host.Configuration;
 using Corvid.Host.Models;
 using Corvid.Models;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
@@ -17,6 +18,7 @@ public sealed class ConfigurationTests
         options.Models.Slots[ModelSlots.Generator] = new SlotSettings { Model = "fake-gen" };
         options.Models.Slots[ModelSlots.TextEmbedder] = new SlotSettings { Model = "fake-embed" };
         options.Models.Slots[ModelSlots.Extractor] = new SlotSettings { Model = "fake-extract" };
+        options.Models.Slots[ModelSlots.Decider] = new SlotSettings { Model = "fake-kev" };
         change(options);
         return new CorvidOptionsValidator(Catalogue).Validate(null, options);
     }
@@ -30,8 +32,57 @@ public sealed class ConfigurationTests
         var starling = new ModelCatalogue([new StarlingModelProvider(new Corvid.Models.Starling.StarlingModelStore(Path.GetTempPath()))]);
         Assert.True(new CorvidOptionsValidator(starling).Validate(null, new CorvidOptions()).Succeeded);
         Assert.Equal("qwen3.5-0.8b", new CorvidOptions().Models.EffectiveSlots()[ModelSlots.Generator].Model);
-        // No decider model until Kev ships: the degraded tier is the decider.
-        Assert.False(new CorvidOptions().Models.EffectiveSlots().ContainsKey(ModelSlots.Decider));
+        // Kev-0.8B is the decider (C-004b); Kev-4B is a second tier only when configured.
+        var decider = new CorvidOptions().Models.EffectiveSlots()[ModelSlots.Decider];
+        Assert.Equal("kev-0.8b", decider.Model);
+        Assert.Empty(decider.Escalation);
+        Assert.True(new CorvidOptionsValidator(starling).Validate(null, new CorvidOptions
+        {
+            Models = { Slots = { [ModelSlots.Decider] = new SlotSettings { Model = "kev-0.8b", Escalation = ["kev-4b"] } } },
+        }).Succeeded);
+    }
+
+    [Fact]
+    public void ASlotWithOnlyAnEscalationKeepsItsDefaultAndAnEmptyOneIsUnbound()
+    {
+        var options = new CorvidOptions();
+        options.Models.Slots[ModelSlots.Decider] = new SlotSettings { Escalation = ["kev-4b"] };
+        var decider = options.Models.EffectiveSlots()[ModelSlots.Decider];
+        Assert.Equal("kev-0.8b", decider.Model);
+        Assert.Equal(["kev-4b"], decider.Escalation);
+
+        options.Models.Slots[ModelSlots.Decider] = new SlotSettings { Model = "" };
+        Assert.False(options.Models.EffectiveSlots().ContainsKey(ModelSlots.Decider));
+        options.Models.Slots[ModelSlots.Decider] = new SlotSettings();
+        Assert.False(options.Models.EffectiveSlots().ContainsKey(ModelSlots.Decider));
+    }
+
+    [Fact]
+    public async Task TheSecondTierCanBeAddedWithoutRestatingTheDecider()
+    {
+        await using var host = TestHost.Create(settings: new Dictionary<string, string?>
+        {
+            ["Corvid:Models:Slots:decider:Model"] = null,
+            ["Corvid:Models:Slots:decider:Escalation:0"] = "kev-4b",
+        });
+        // Bound without validation: the fake catalogue has no Kev.
+        var options = host.Services.GetRequiredService<IConfiguration>()
+            .GetSection(CorvidOptions.Section).Get<CorvidOptions>()!;
+        var decider = options.Models.EffectiveSlots()[ModelSlots.Decider];
+        Assert.Equal(("kev-0.8b", "kev-4b"), (decider.Model, decider.Escalation.Single()));
+    }
+
+    [Fact]
+    public void TheDeciderHasAtMostOneSecondTierAndNoFallbacks()
+    {
+        var result = Validate(options => options.Models.Slots[ModelSlots.Decider] =
+            new SlotSettings { Model = "fake-kev", Escalation = ["fake-kev-large", "fake-kev-large"], Fallbacks = ["fake-kev-large"] });
+        Assert.Contains(result.Failures!, failure => failure.Contains("at most one model", StringComparison.Ordinal));
+        Assert.Contains(result.Failures!, failure => failure.Contains("falls back to the degraded tier", StringComparison.Ordinal));
+        Assert.True(Validate(options => options.Models.Slots[ModelSlots.Decider] =
+            new SlotSettings { Model = "fake-kev", Escalation = ["fake-kev-large"] }).Succeeded);
+        // An empty model unbinds the slot: the degraded tier by choice.
+        Assert.True(Validate(options => options.Models.Slots[ModelSlots.Decider] = new SlotSettings { Model = "" }).Succeeded);
     }
 
     [Theory]
@@ -133,8 +184,11 @@ public sealed class ConfigurationTests
     {
         using var host = CorvidHost.CreateBuilder(configFile: Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "corvid.json")).Build();
         var catalogue = host.Services.GetRequiredService<ModelCatalogue>();
-        Assert.Equal(["embeddinggemma-2", "gliner2-base-v1", "multilingual-e5-small", "qwen3.5-0.8b"], catalogue.Models.Select(model => model.Name));
+        Assert.Equal(["embeddinggemma-2", "gliner2-base-v1", "kev-0.8b", "kev-4b", "multilingual-e5-small", "qwen3.5-0.8b"],
+            catalogue.Models.Select(model => model.Name));
         Assert.True(catalogue.Find("qwen3.5-0.8b").Serves(ModelSlots.Summarizer));
+        Assert.Equal([ModelSlots.Decider], catalogue.Find("kev-0.8b").Slots);
+        Assert.Equal([ModelSlots.Decider], catalogue.Find("kev-4b").Slots);
         Assert.NotNull(host.Services.GetRequiredService<CorvidRuntimeFactory>());
     }
 

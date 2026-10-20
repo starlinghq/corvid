@@ -54,14 +54,17 @@ public sealed class Doctor(IConfiguration configuration, ModelCatalogue catalogu
         foreach (var availability in models)
         {
             var slots = configured.GetValueOrDefault(availability.Model.Name);
-            var status = availability.IsReady ? CheckStatus.Ok : slots is null ? CheckStatus.Info : CheckStatus.Failed;
+            // A missing decider model is a warning: Corvid runs on the degraded tier without it (C-004b).
+            var status = availability.IsReady ? CheckStatus.Ok
+                : slots is null ? CheckStatus.Info
+                : slots == ModelSlots.Decider ? CheckStatus.Warning
+                : CheckStatus.Failed;
             var role = slots is null ? "not configured" : slots;
             checks.Add(new DoctorCheck("models", availability.Model.Name, status,
                 availability.IsReady ? $"ready ({role})" : $"{availability.Readiness.ToString().ToLowerInvariant()} ({role}). {availability.Detail}",
                 availability.IsReady ? null : availability.Acquire));
         }
-        checks.Add(new DoctorCheck("models", ModelSlots.Decider, CheckStatus.Info,
-            "degraded tier: gates ask the user and memory writes are staged until Starlings.Models.Kev is published on nuget.org (C-004b)."));
+        checks.Add(Decider(options, models));
         checks.Add(Malloc());
 
         checks.Add(Bubblewrap());
@@ -88,6 +91,29 @@ public sealed class Doctor(IConfiguration configuration, ModelCatalogue catalogu
         }
     }
 
+    /// <summary>Which tier answers the fabric's questions with this configuration and cache (plan §5.5, §5.6).</summary>
+    private DoctorCheck Decider(CorvidOptions options, IReadOnlyList<ModelAvailability> models)
+    {
+        const string degraded = "degraded tier: gates (risk, memory_op, skill_write_safe) ask the user and memory writes are staged";
+        if (!options.Models.EffectiveSlots().TryGetValue(ModelSlots.Decider, out var settings) || !catalogue.TryFind(settings.Model!, out var primary))
+            return new DoctorCheck("models", ModelSlots.Decider, CheckStatus.Info, $"{degraded} (no decider model is configured).");
+        ModelAvailability? Find(string name) =>
+            models.FirstOrDefault(item => string.Equals(item.Model.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (Find(primary.Name) is not { IsReady: true })
+            return new DoctorCheck("models", ModelSlots.Decider, CheckStatus.Warning, $"{degraded} until {primary.Name} is downloaded.",
+                $"corvid model download {primary.Name}");
+        var second = settings.Escalation.FirstOrDefault();
+        if (second is null)
+            return new DoctorCheck("models", ModelSlots.Decider, CheckStatus.Ok,
+                $"{primary.Name}, calibrated. Gates below their floor ask the user; a second tier (kev-4b) is optional: " +
+                $"Corvid:Models:Slots:{ModelSlots.Decider}:Escalation.");
+        return Find(second) is { IsReady: true }
+            ? new DoctorCheck("models", ModelSlots.Decider, CheckStatus.Ok, $"{primary.Name}, calibrated, with {second} for gates below their floor.")
+            : new DoctorCheck("models", ModelSlots.Decider, CheckStatus.Warning,
+                $"{primary.Name}, calibrated; the second tier {second} is not downloaded, so gates below their floor ask the user.",
+                $"corvid model download {second}");
+    }
+
     // glibc reads its malloc tunables when the process starts, so the variable must be in the environment before then;
     // the corvid executable re-executes itself with it set (GlibcMalloc).
     private static DoctorCheck Malloc()
@@ -96,11 +122,11 @@ public sealed class Doctor(IConfiguration configuration, ModelCatalogue catalogu
             return new DoctorCheck("models", MallocVariable, CheckStatus.Info, "not needed on this platform");
         var value = Environment.GetEnvironmentVariable(MallocVariable);
         return value == MallocValue
-            ? new DoctorCheck("models", MallocVariable, CheckStatus.Ok, $"{MallocValue}, as Starling requires for GLiNER2 on Linux")
+            ? new DoctorCheck("models", MallocVariable, CheckStatus.Ok, $"{MallocValue}, as Starling requires for GLiNER2 and Kev on Linux")
             : new DoctorCheck("models", MallocVariable, CheckStatus.Warning,
-                $"{(value is null ? "not set" : $"set to {value}")} in this process; Starling requires {MallocValue} for GLiNER2 on Linux. " +
+                $"{(value is null ? "not set" : $"set to {value}")} in this process; Starling requires {MallocValue} for GLiNER2 and Kev on Linux. " +
                 "`corvid chat` re-executes itself with it set.",
-                $"export {MallocVariable}={MallocValue} for other hosts of the extractor.");
+                $"export {MallocVariable}={MallocValue} for other hosts of the extractor or the decider.");
     }
 
     private static DoctorCheck Bubblewrap()

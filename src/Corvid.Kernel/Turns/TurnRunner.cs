@@ -227,8 +227,11 @@ public sealed class TurnRunner
             if (verdicts.Verdicts.ContainsKey("needs_recall"))
                 await RecallAsync(Acted(verdicts, "needs_recall", out _), cancellationToken).ConfigureAwait(false);
 
+            // An embedding pick of ask_clarifying_question is no confidence either: like clarify itself (BlocksTurn), only a
+            // calibrated answer diverts the turn unless the floors allow the degraded tier to.
             var clarify = Acted(verdicts, "clarify", out _)
-                || Acted(verdicts, "intent", out var intent) && intent == "ask_clarifying_question";
+                || Acted(verdicts, "intent", out var intent) && intent == "ask_clarifying_question"
+                    && (verdicts["intent"].Answer?.Calibrated == true || _services.Fabric.Policy.Floors.DegradedTurnBlocking);
             if (clarify)
             {
                 var question = Text(await GenerateAsync([], NudgeClarify, required: null, cancellationToken).ConfigureAwait(false));

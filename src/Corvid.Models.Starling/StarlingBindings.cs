@@ -6,6 +6,7 @@ using Starlings.Models.E5.Extensions.AI;
 using Starlings.Models.EmbeddingGemma2;
 using Starlings.Models.EmbeddingGemma2.Extensions.AI;
 using Starlings.Models.Gliner2;
+using Starlings.Models.Kev;
 using Starlings.Models.Qwen35;
 using Starlings.Models.Qwen35.Extensions.AI;
 using Starlings.Runtime.Onnx;
@@ -22,7 +23,7 @@ public static class StarlingBindings
 {
     /// <summary>
     /// Qwen3.5-0.8B as an <see cref="IChatClient"/> for the generator or summarizer slot. Tool calls are template-rendered
-    /// and experimental in Starling 0.2.0; <c>ChatToolMode.RequireAny</c>, <c>RequireSpecific</c>, JSON response formats
+    /// and experimental in Starling 0.3.0; <c>ChatToolMode.RequireAny</c>, <c>RequireSpecific</c>, JSON response formats
     /// and unseeded sampling are rejected with <see cref="NotSupportedException"/>. The client answers
     /// <c>GetService(typeof(ITokenCounter))</c> with a <see cref="Qwen35TokenCounter"/>.
     /// </summary>
@@ -45,6 +46,17 @@ public static class StarlingBindings
         ArgumentNullException.ThrowIfNull(files);
         RequireCpu(options?.Encoder?.Session);
         return new ModelBinding(StarlingProfiles.EmbeddingGemma2, EmbeddingGemma2EmbeddingGenerator.Create(files, options));
+    }
+
+    /// <summary>
+    /// Kev-0.8B or Kev-4B as the <c>decider</c> slot's <see cref="Corvid.Abstractions.Fabric.IDecider"/>, with the head's
+    /// calibrated temperature. Runs on the calling thread; schedule it on the device (the host does, at fabric priority).
+    /// </summary>
+    public static ModelBinding KevDecider(KevModelFiles files, KevOptions? options = null, int rowBudget = Starling.KevDecider.DefaultRowBudget)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+        var profile = files.Profile.Model == KevModel.Kev4B ? StarlingProfiles.Kev4B : StarlingProfiles.Kev08B;
+        return new ModelBinding(profile, Starling.KevDecider.Create(files, options, rowBudget));
     }
 
     /// <summary>multilingual-e5-small text embeddings (384 dimensions). Runs on the calling thread.</summary>

@@ -55,7 +55,8 @@ public sealed class CatalogueTests
     {
         var floors = FloorConfiguration.Default;
 
-        Assert.Equal("2026-10-18.1", floors.Version);
+        Assert.Equal("2026-10-19.1", floors.Version);
+        Assert.False(floors.DegradedTurnBlocking);
         Assert.Equal(0.05, floors.DegradedChoiceMargin);
         Assert.Equal(QuestionCatalogue.Default.Ids.Count, floors.Floors.Count);
         Assert.Equal(0.5, floors.FloorOf("intent"));

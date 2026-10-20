@@ -1,12 +1,14 @@
 using Corvid.Models;
 using Corvid.Models.Starling;
 using Starlings.Acquisition;
+using Starlings.Models.Kev;
 
 namespace Corvid.Host.Models;
 
 /// <summary>
-/// The default provider (plan §1): Starling's in-process models, CPU only, resolved offline from the model cache. Nothing
-/// downloads unless <c>corvid model download</c> asks.
+/// The default provider (plan §1): Starling's in-process models, CPU only, resolved offline from the model cache: Qwen3.5,
+/// GLiNER2, EmbeddingGemma 2, e5, and Kev-0.8B and Kev-4B for the decider. Nothing downloads unless
+/// <c>corvid model download</c> asks.
 /// </summary>
 public sealed class StarlingModelProvider(StarlingModelStore store) : IModelProvider
 {
@@ -36,6 +38,8 @@ public sealed class StarlingModelProvider(StarlingModelStore store) : IModelProv
                 StarlingModel.Gliner2 => StarlingBindings.Gliner2Extractor(Store.OpenGliner2(), scheduler: context.ExtractorScheduler),
                 StarlingModel.EmbeddingGemma2 => StarlingBindings.EmbeddingGemma2Embedder(Store.OpenEmbeddingGemma2()),
                 StarlingModel.E5 => StarlingBindings.E5Embedder(Store.OpenE5()),
+                StarlingModel.Kev08B => StarlingBindings.KevDecider(Store.OpenKev(KevModel.Kev08B)),
+                StarlingModel.Kev4B => StarlingBindings.KevDecider(Store.OpenKev(KevModel.Kev4B)),
                 _ => throw new ArgumentOutOfRangeException(nameof(model)),
             };
         }

@@ -1,6 +1,7 @@
 {
-  "version": "2026-10-18.1",
+  "version": "2026-10-19.1",
   "degraded_choice_margin": 0.05,
+  "degraded_turn_blocking": false,
   "floors": {
     "intent": 0.5,
     "difficulty": 3.5,

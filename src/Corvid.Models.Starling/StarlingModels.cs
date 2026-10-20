@@ -3,6 +3,7 @@ using Starlings.Acquisition;
 using Starlings.Models.E5;
 using Starlings.Models.EmbeddingGemma2;
 using Starlings.Models.Gliner2;
+using Starlings.Models.Kev;
 using Starlings.Models.Qwen35;
 
 namespace Corvid.Models.Starling;
@@ -13,6 +14,8 @@ public enum StarlingModel
     Gliner2,
     EmbeddingGemma2,
     E5,
+    Kev08B,
+    Kev4B,
 }
 
 /// <summary>A model Corvid runs in-process, the slot it serves by default, and the asset lock that pins its files.</summary>
@@ -47,7 +50,18 @@ public static class StarlingModels
     public static StarlingModelInfo E5 { get; } = new(StarlingModel.E5, "multilingual-e5-small", ModelSlots.TextEmbedder,
         E5Capabilities.StableProfile, StarlingProfiles.E5, E5ModelAssets.Lock);
 
-    public static ImmutableArray<StarlingModelInfo> All { get; } = [Qwen35, Gliner2, EmbeddingGemma2, E5];
+    /// <summary>
+    /// Kev-0.8B, the default <c>decider</c> (plan §5): an Experimental profile in Starling 0.3.0, about 3.1 GB, hosted at
+    /// <c>Starlinghq/kev-0.8b-onnx</c>. The lock names the checkpoint's repository; the files come from the hosting one.
+    /// </summary>
+    public static StarlingModelInfo Kev08B { get; } = new(StarlingModel.Kev08B, KevDecider.NameOf(KevModel.Kev08B), ModelSlots.Decider,
+        KevModelProfile.Kev08B.Id, StarlingProfiles.Kev08B, KevModelAssets.Kev08BLock);
+
+    /// <summary>Kev-4B, the optional second tier for gates below their floor (§5.5): about 17 GB, and 18 GB resident on the CPU.</summary>
+    public static StarlingModelInfo Kev4B { get; } = new(StarlingModel.Kev4B, KevDecider.NameOf(KevModel.Kev4B), ModelSlots.Decider,
+        KevModelProfile.Kev4B.Id, StarlingProfiles.Kev4B, KevModelAssets.Kev4BLock);
+
+    public static ImmutableArray<StarlingModelInfo> All { get; } = [Qwen35, Gliner2, EmbeddingGemma2, E5, Kev08B, Kev4B];
 
     public static StarlingModelInfo Get(StarlingModel model) => model switch
     {
@@ -55,6 +69,8 @@ public static class StarlingModels
         StarlingModel.Gliner2 => Gliner2,
         StarlingModel.EmbeddingGemma2 => EmbeddingGemma2,
         StarlingModel.E5 => E5,
+        StarlingModel.Kev08B => Kev08B,
+        StarlingModel.Kev4B => Kev4B,
         _ => throw new ArgumentOutOfRangeException(nameof(model), model, "Unknown Starling model."),
     };
 

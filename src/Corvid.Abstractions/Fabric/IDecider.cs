@@ -221,7 +221,7 @@ public enum DeciderUnavailableReason
 {
     /// <summary>The state exceeded the decider's hard stop (plan §5.1: 1,500 tokens).</summary>
     StateOverBudget,
-    /// <summary>The decider declined the request, for example a row over its row budget.</summary>
+    /// <summary>The decider declined the whole request, for example every question's row over its row budget.</summary>
     Refused,
     /// <summary>The model failed to run.</summary>
     Failed,
@@ -231,14 +231,21 @@ public enum DeciderUnavailableReason
 public abstract record DeciderResult(string Decider);
 
 /// <param name="Answers">By question name. A missing answer means the decider could not answer that question.</param>
-public sealed record DeciderAnswers(string Decider, ImmutableDictionary<string, DecisionAnswer> Answers) : DeciderResult(Decider);
+public sealed record DeciderAnswers(string Decider, ImmutableDictionary<string, DecisionAnswer> Answers) : DeciderResult(Decider)
+{
+    /// <summary>
+    /// Questions the decider declined while answering the rest, by name, with a short reason in snake case (for example
+    /// <c>row_over_budget</c>). They take their below-floor action; the reason is recorded on their decision.
+    /// </summary>
+    public ImmutableDictionary<string, string> Declined { get; init; } = ImmutableDictionary<string, string>.Empty;
+}
 
 public sealed record DeciderUnavailable(string Decider, DeciderUnavailableReason Reason, string Detail) : DeciderResult(Decider);
 
 /// <summary>
 /// System One's typed-question contract and the <c>decider</c> slot's service. Shaped like Kev's API: one request is
-/// one shared state plus named questions. Implementations: the degraded decider (Corvid.Fabric) and, once
-/// <c>Starlings.Models.Kev</c> is published, the Kev adapter in Corvid.Models.Starling (C-004b).
+/// one shared state plus named questions. Implementations: the degraded decider (Corvid.Fabric) and the Kev adapter in
+/// Corvid.Models.Starling (C-004b).
 /// </summary>
 public interface IDecider
 {
