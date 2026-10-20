@@ -65,6 +65,8 @@ internal static class Samples
         new ModelSwitched("generator", Json("""{"name":"qwen3.5-0.8b"}"""), Json("""{"name":"cloud"}"""), "escalated"),
         new Compacted(1, 2, new CompactionSummary("move reminder", ["no cloud"], ["use cron.update"], ["notes.md"],
             ["tell sam?"], "message sam")),
+        new Compacted(1, 4, new CompactionSummary(null, [], [], [], [], null), Summarizer: "qwen3.5-0.8b@cpu", Chunks: 2),
+        new CompactionExpanded(5),
         new MemoryWritten("m-1", "insert"),
         new SkillChanged("s-1", "r2", "agent"),
         new GoalSet("ship C-002"),

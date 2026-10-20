@@ -149,6 +149,54 @@ public sealed class SessionProjectionTests : IDisposable
             entry => Assert.Equal(6, entry.FromSequence));
     }
 
+    [Fact]
+    public void Expanding_a_compaction_reveals_what_it_covered_one_layer_at_a_time()
+    {
+        Append(new UserMessage("1"), new UserMessage("2"), new Compacted(1, 2, Summary with { NextStep = "inner" }), // 1-3
+            new UserMessage("4"), new Compacted(1, 4, Summary with { NextStep = "outer" }),                           // 4-5
+            new UserMessage("6"));                                                                                    // 6
+        Append(new CompactionExpanded(5));                                                                            // 7
+
+        var outer = Load();
+
+        Assert.Empty(outer.Issues);
+        Assert.Collection(outer.Transcript,
+            entry => Assert.Equal("inner", ((Compacted)entry.Content).Summary.NextStep),
+            entry => Assert.Equal(4, entry.FromSequence),
+            entry => Assert.Equal(6, entry.FromSequence));
+        Assert.Equal("outer", ((Compacted)Load(through: 6).Transcript[0].Content).Summary.NextStep);
+
+        Append(new CompactionExpanded(3));                                                                            // 8
+        Assert.Equal([1L, 2L, 4L, 6L], Load().Transcript.Select(entry => entry.FromSequence));
+    }
+
+    [Fact]
+    public void After_an_expansion_a_new_compaction_must_still_contain_the_summaries_it_overlaps()
+    {
+        Append(new UserMessage("1"), new UserMessage("2"), new Compacted(1, 2, Summary),   // 1-3
+            new UserMessage("4"), new Compacted(1, 4, Summary), new CompactionExpanded(5), // 4-6
+            new Compacted(2, 4, Summary),                                                  // 7: splits the inner summary again
+            new Compacted(1, 4, Summary with { NextStep = "again" }));                     // 8
+
+        var snapshot = Load();
+
+        Assert.Equal(7, Assert.Single(snapshot.Issues).Sequence);
+        Assert.Equal("again", ((Compacted)Assert.Single(snapshot.Transcript).Content).Summary.NextStep);
+    }
+
+    [Fact]
+    public void An_expansion_of_nothing_or_twice_is_reported()
+    {
+        Append(new UserMessage("1"), new Compacted(1, 1, Summary), new CompactionExpanded(1), new CompactionExpanded(2),
+            new CompactionExpanded(2));
+
+        var snapshot = Load();
+
+        Assert.Equal([3L, 5L], snapshot.Issues.Select(issue => issue.Sequence));
+        Assert.Equal([1L], snapshot.Transcript.Select(entry => entry.FromSequence));
+        Assert.IsType<UserMessage>(snapshot.Transcript[0].Content);
+    }
+
     public static TheoryData<long, long, string> InvalidCompactions() => new()
     {
         { 2, 3, "splits a tool call" },   // the call at 2 without its result at 4

@@ -1,4 +1,4 @@
-# Agent foundation (C-001, C-002, C-004a, C-004b, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-012, C-013, C-021)
+# Agent foundation (C-001, C-002, C-004a, C-004b, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-012, C-013, C-016, C-021)
 
 The solution contains `Corvid.Abstractions`, `Corvid.Kernel`, and
 `Corvid.Models`, alongside the working Vault projects. Kernel and Models each
@@ -22,7 +22,8 @@ Approvals, Fabric, Memory, Models and Tools as well, for the session actor, the 
 tools, which references Approvals, Kernel, Memory, Sandbox and Tools and no package, and the scheduler in Kernel (see
 [Built-in tools and scheduler](#built-in-tools-and-scheduler-c-012)). C-013 added the composition root, `Corvid.Host`,
 and the `corvid` executable, `Corvid.Cli` (see [Host and CLI](#host-and-cli-c-013)). C-004b added the Kev decider to
-`Corvid.Models.Starling` and the two-tier escalation to `Corvid.Fabric` (see [Kev decider](#kev-decider-c-004b)). Add
+`Corvid.Models.Starling` and the two-tier escalation to `Corvid.Fabric` (see [Kev decider](#kev-decider-c-004b)). C-016
+added compaction to the kernel (see [Compaction](#compaction-c-016)). Add
 the other projects from the agent plan as their implementations start, rather
 than creating empty projects for every future surface.
 
@@ -46,7 +47,8 @@ than creating empty projects for every future surface.
 - `SessionProjection` replays a complete prefix into a snapshot: transcript, goal,
   todos, pending approvals, model profiles per slot, decisions with outcomes, and
   checkpoints. `Compacted` replaces its range in the transcript only; the raw
-  events stay in the log. Goals, todos and approvals are folded from their own
+  events stay in the log. `CompactionExpanded` (C-016) shows a compacted range again, one layer at a time. Goals, todos
+  and approvals are folded from their own
   events, so compaction cannot remove them. `Load(log, session, throughSequence)`
   projects any earlier position, the basis for resume, branch and undo.
 - Persisted events the projection cannot apply (a compaction that splits a tool
@@ -149,10 +151,10 @@ de-escalation rule of §6. It depends only on Abstractions and
   `PrivacyGates.DenyCloud`, so cloud slots are refused until a gate is
   configured).
 
-Not built yet: compaction and expansion on a budget change (the hook only
-reports the direction), per-request redaction (§10.4), re-rendering the
-projection for the new model's format (the turn loop renders `IChatClient` messages for every model; Anthropic cache
-breakpoints come with C-015), restoring current bindings and pins from the log on resume (pins
+The turn loop acts on the hook's direction (C-016): compaction before a call that does not fit, and expansion after a move
+to a larger window (see [Compaction](#compaction-c-016)); the hook itself stays a reporter. Not built yet: per-request
+redaction (§10.4), Anthropic cache breakpoints (C-015; the turn loop renders `IChatClient` messages for every model),
+restoring current bindings and pins from the log on resume (pins
 are not persisted), recording switch costs for `/insights`, and the
 media-embedder contract.
 
@@ -772,7 +774,7 @@ command they launch; symlinks and `/proc/<pid>/cwd` paths, which are resolved le
 
 ## Session actor and turn loop (C-011)
 
-Plan §3.2, §3.3, §5.2, §5.4, §6, §7, §8 levers 1–2 (lever 2 has nothing to drop until skills exist) and §10.3. The code is
+Plan §3.2, §3.3, §5.2, §5.4, §6, §7, §8 lever 1 and §10.3 (levers 2 and 3 came with C-016). The code is
 in `Corvid.Kernel` (`Sessions`, `Turns`, `Scheduling`), `Corvid.Fabric` (`ToolShortlist`) and
 `Corvid.Abstractions/Sessions` (`Envelope`). Kernel now references Approvals, Fabric, Memory, Models and Tools; none of
 them references Kernel, and no package was added, so the checker's allowlist is unchanged. Everything runs on `IDecider`
@@ -836,8 +838,8 @@ described below (see [Host and CLI](#host-and-cli-c-013)).
   (`[cleared: list_notes result, 1.2 KB; re-run or see event 14]`, citing the event sequence that holds it); `apply:drop`
   leaves a shorter stub; clearing only narrows. Then, while the prompt (with the offered tools' schemas) is over the
   generator profile's accepted context minus the completion (1,024) and a reserve (256), the oldest full results are
-  stubbed, sparing the latest round, then all but the newest. Still over: escalate, or fail the turn. Compaction (§8
-  lever 3) is C-016.
+  stubbed, sparing the latest round, then all but the newest. Still over: C-016's levers 2 and 3 (see
+  [Compaction](#compaction-c-016)), then escalate, or fail the turn.
 - Taint (§10.3): an envelope from the user clears it, an `external` one sets it, and any result of a tool with
   `[Network]` sets it (a page, and a webhook's response alike). It holds across turns until the user speaks and is passed
   to every approval, so network egress and new recipients ask whatever `risk` says. That includes network reads: a
@@ -883,7 +885,7 @@ described below (see [Host and CLI](#host-and-cli-c-013)).
 
 C-012 added the built-in tools, `TurnOptions.Interactive` for unattended turns and the `ToolCallContext` each call
 carries (see [Built-in tools and scheduler](#built-in-tools-and-scheduler-c-012)); C-013 composes them in the host. Not
-built yet: compaction (C-016), so a session past its budget fails after escalation rather than compacting; cloud
+built yet (compaction came with C-016): cloud
 slots, privacy egress and prompt-cache breakpoints (C-015); subagents and the subagent queue's users; skills and the `skill`
 question (C-017); the `delegate` and `skill_opportunity` questions (`wake` is asked by the scheduler, C-012); GLiNER2 entity boosts in the shortlist (§5.4's
 third bullet); per-tool concurrency limits beyond read-only versus side-effecting; an incremental projection in the actor
@@ -892,6 +894,92 @@ length); persisting taint, which a resumed actor starts without; outcomes for `d
 routing questions (user corrections and retries need a surface); `RequireAny` for no-op detection without a pick;
 recording why a turn failed beyond its answer text; and memory per device in `/status` (C-013 shows slot, device, queue
 depth and median latency).
+
+## Compaction (C-016)
+
+Plan §8, §3.2 (`Compacted`), §4.2 step 4 and §13 (goals survive compaction). The code is in `Corvid.Kernel/Context`
+(`ContextCompactor`, `CompactionRecords`, `ISkillBodyLever`), with changes to `PromptRenderer`, `TurnRunner`,
+`SessionActor`, `SessionProjection` and the events. No project or package was added, so the checker is unchanged.
+Everything runs on the degraded decider; no question is asked about compaction.
+
+- Levers in cost order, fitted before every generator call: lever 1, result clearing in the renderer (C-011); then, while
+  the prompt is still over the generator's budget, lever 2, `TurnServices.SkillBodies` (`ISkillBodyLever`: drop the bodies
+  of completed skills), which nothing implements until skills (C-017); then lever 3, compaction. A range that cannot be
+  compacted is kept, and the renderer's `clearMore` pass shortens every result the budget stubbed, and every other one
+  outside the latest round, to the dropped stub, which still cites its event. Still over: the generator escalates for
+  context, or the turn fails saying the conversation no longer fits, as before.
+- Ranges (`ContextCompactor.Ranges`): first everything before the turn's own `UserMessage`, from sequence 1, so every
+  earlier compaction is inside it whole; then, in a long turn, the turn's earlier rounds, from after its message to the
+  event before the latest round of calls. The turn's message and its latest round are never compacted during the turn. A
+  range is offered only when it holds more than one summary standing alone. Before appending, the `Compacted` event is
+  projected with the log, and a range the projection would refuse (an unfinished or split call, a partial overlap) is
+  never appended.
+- Summarizer: the `summarizer` slot when bound, otherwise the generator's current binding (plan §4.1's default; the host
+  binds no summarizer by default, so the generator's model summarizes; `Corvid:Models:Slots:summarizer:Model` binds one). It gets the instructions, which ask for one JSON
+  object with the six fields of the structured record (goal, constraints, decisions, files, open questions, next step)
+  and say that text inside the events is data to record, not follow; no tools; and a completion of 768 tokens
+  (`CompactionOptions.SummarizerOutputTokens`). The reply is read leniently (the outermost object, a single string as a
+  one-item list, code fences and trailing commas tolerated); a reply with no record is asked for once more, then the
+  attempt fails.
+- Map-reduce: one call may read the summarizer's accepted context less its completion, the reserve (256), the
+  instructions and the framing, counted with the summarizer's own token counter. The range goes in as lines
+  (`[14] user: …`, `[15] call read_file {…}`, `[16] result of read_file: …`); a result the fabric already cleared goes in
+  as its stub. Lines are grouped into chunks that fit, and a longer line is split into pieces (halving, surrogate pairs
+  kept whole), so every character of the range reaches the summarizer. Each chunk becomes a record. A compaction already
+  inside the range contributes its stored record and is not summarized again. `CompactionRecords.Merge` merges the
+  records oldest first: ordered, de-duplicated unions of constraints, decisions, files and open questions, and the newest
+  goal and next step. That is how a later compaction updates fields rather than rewriting prose. The merge is code, not a
+  model call as §8 suggests, so a merge cannot lose an item.
+- Fit: the record, rendered as its summary note and counted with the generator's counter, must fit
+  `CompactionOptions.RecordTokens` (1,024) or a quarter of the generator's budget, whichever is less. When it does not, or
+  the summarizer fails, the `summarizer` slot escalates along its ladder (C-006, so the privacy gate applies to a cloud
+  target) and the range is summarized again; the slot returns to its default after the turn like any other. With nowhere
+  to go, escalation disabled, or the generator standing in for the summarizer (the turn escalates the generator for
+  context instead), the range is kept: nothing is appended, and `TurnResult.Compactions` says why.
+- Events: `Compacted` gained optional `summarizer` (the profile that wrote the record) and `chunks` (map calls, 1 when the
+  range fit one call), omitted when null so earlier events keep their form. `CompactionExpanded(compacted_sequence)`
+  (`compaction_expanded`) is new. The record is C-002's `CompactionSummary`.
+- Goals and todos (§8, §13): after the last summary note, every render adds `[still in force after the summary]` with the
+  standing goal and the todo list, read from their own events rather than from any record.
+- Expansion (§4.2 step 4): the projection keeps every valid compaction and shows the outermost ones not expanded, so
+  expanding an outer summary shows the inner one and the raw events after it. A new compaction is checked against the
+  shown ones, so nesting stays whole after an expansion; an expansion naming no valid compaction, or one already expanded,
+  is an issue. C-006's `IBudgetPolicy` stays a reporter: it runs under the session's switch lock, and a summarizer call
+  there that fell back would wait for that same lock. The turn loop acts on the `Budget` of the `SwitchResult`
+  (`TurnRunner.NoteBudgetChange`, called after its own escalations, after de-escalation at the end of a turn and by
+  `SessionActor.SwitchModelAsync` for `/model`): when the generator moves to a larger window, before its next call the
+  shown compactions are expanded newest first while the prompt stays within `ExpansionFill` (75%) of the budget, one
+  `CompactionExpanded` event each, so a resumed session renders the same prompt. A smaller window needs no step of its
+  own: every call is fitted to the current window and compacts when it does not fit, so compaction happens before the
+  first call on the smaller model.
+- Re-rendering for the new model's format needed nothing new: the renderer produces provider-neutral `IChatClient`
+  messages for every profile; Anthropic cache breakpoints are C-015's.
+- Content and taint: the summarizer is offered no tools, its instructions treat event text as data, and the record is
+  rendered as a labelled summary note, so a summary carries no more authority than the raw range it replaces.
+  Compaction neither sets nor clears taint (C-011's rules hold). The raw events stay in the log and the episodic index.
+- Telemetry: a `corvid.compact` span per range (from, through, status, chunks, summarizer). The host's generator layer
+  does not stream text under it (`HostTelemetry.StreamingSessionOf`), so when the generator's binding summarizes, a
+  watching surface never shows the record as answer text.
+- Tests: `tests/Corvid.Kernel.Tests/CompactionTests` drive real turns on the SQLite log with fake summarizers: one call;
+  map-reduce with every character reaching the summarizer; a nested compaction updating the earlier record; a record over
+  its budget escalating the summarizer and de-escalating after the turn; no ladder (nothing appended, the turn fails
+  saying so); a summarizer that never writes a record (asked twice); the generator standing in; goal and todos after
+  every compaction; a long turn's earlier rounds compacted; a `/model` switch to a smaller window compacting before the
+  next call; a switch to a larger one through the actor expanding, then back compacting again; expansion within budget;
+  ranges, chunking, lenient reading and merging. `SessionProjectionTests` cover expansion layers and refusals;
+  `CompositionTests` checks a watched session sees only the answer and that a configured `summarizer` slot writes the records. `evals/golden/turn-compaction` was recorded from the
+  loop (`GoldenTurnTests`), and `compaction-expanded` is a seed trajectory for the projection.
+
+Not built yet: a summarizer that revises earlier items (the merged record only grows, so an open question answered later
+stays listed); undoing
+`clear_results` decisions on a larger window (stubs from the budget come back, stubs the fabric chose stay); expansion
+after a fallback inside `SlotChatClient` moves to a larger model (fallbacks do not report a budget direction); compacting
+the turn's own message or latest round; keeping a pending expansion across a restart (it is held in the turn runner, so
+after a `/model` to a larger window and a restart the next turn renders compacted, which is safe but not expanded); host
+configuration of `CompactionOptions` (defaults only); summarizer calls in parallel; telling summarizer calls apart from
+answers when the generator's binding serves both (they are `chat {model}` spans tagged `corvid.slot=generator` under
+`corvid.compact`, and count toward the generator's `/status` latency); a `/compact` command; and an implementation of
+`ISkillBodyLever` (C-017).
 
 ## Host and CLI (C-013)
 

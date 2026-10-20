@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using Corvid.Abstractions.Events;
 using Corvid.Approvals;
 using Corvid.Fabric;
+using Corvid.Kernel.Context;
 using Corvid.Memory;
 using Corvid.Models;
 using Corvid.Tools;
@@ -78,8 +79,13 @@ public sealed record TurnOptions
 
     public TurnStateBudget? StateBudget { get; init; }
 
+    /// <summary>Compaction (plan §8 lever 3, C-016): the summarizer's completion, the record's budget and expansion's fill.</summary>
+    public CompactionOptions Compaction { get; init; } = CompactionOptions.Default;
+
     public TurnOptions Validate()
     {
+        ArgumentNullException.ThrowIfNull(Compaction);
+        Compaction.Validate();
         ArgumentNullException.ThrowIfNull(SystemPrompt);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxSteps);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxOutputTokens);
@@ -116,6 +122,9 @@ public sealed class TurnServices
 
     public ToolShortlist Shortlist { get; init; } = new();
 
+    /// <summary>Plan §8 lever 2, asked before compaction: drop the bodies of skills that have completed. Skills are C-017.</summary>
+    public ISkillBodyLever? SkillBodies { get; init; }
+
     public TurnOptions Options { get; init; } = TurnOptions.Default;
 
     public TimeProvider Time { get; init; } = TimeProvider.System;
@@ -142,6 +151,7 @@ public sealed record SlotDisagreement(string CallId, string Tool, string Paramet
 /// <param name="Steps">Generator responses that carried tool calls.</param>
 /// <param name="Deliver">Where the answer goes: the <c>deliver</c> option chosen, or <c>reply</c>.</param>
 /// <param name="Escalations">Profiles the generator escalated to during the turn, with the reason.</param>
+/// <param name="Compactions">What compaction did during the turn, one line per range tried (C-016).</param>
 public sealed record TurnResult(
     TurnStatus Status,
     string? Text,
@@ -151,4 +161,8 @@ public sealed record TurnResult(
     string Deliver,
     ImmutableArray<string> Escalations,
     ImmutableArray<SlotDisagreement> Disagreements,
-    string? MemoryWrite = null);
+    string? MemoryWrite = null,
+    ImmutableArray<string> Compactions = default)
+{
+    public ImmutableArray<string> Compactions { get; init; } = Compactions.IsDefault ? [] : Compactions;
+}

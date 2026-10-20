@@ -42,4 +42,16 @@ public static class HostTelemetry
                 return session;
         return null;
     }
+
+    /// <summary>
+    /// The session whose watchers see a model call's text, or null when they must not: a summarizer call under
+    /// <c>corvid.compact</c> writes a record, not an answer, even when the generator's binding serves it.
+    /// </summary>
+    public static string? StreamingSessionOf(Activity? activity)
+    {
+        for (var current = activity; current is not null; current = current.Parent)
+            if (current.OperationName == KernelTelemetry.CompactSpan)
+                return null;
+        return SessionOf(activity);
+    }
 }

@@ -295,18 +295,27 @@ internal sealed class TurnHarness : IDisposable
 
     public TurnHarness(FakeGenerator generator, FakeGenerator? escalation = null, IExtractor? extractor = null,
         IApprovalPrompter? prompter = null, IDecider? calibrated = null, TurnOptions? options = null, ApprovalOptions? approvalOptions = null,
-        ToolCallSupport toolCalls = ToolCallSupport.TemplateRendered, Action<ToolRegistry>? tools = null, DecisionPolicy? policy = null)
+        ToolCallSupport toolCalls = ToolCallSupport.TemplateRendered, Action<ToolRegistry>? tools = null, DecisionPolicy? policy = null,
+        int generatorContext = 8_192, IChatClient? summarizer = null, int summarizerContext = 8_192,
+        IChatClient? summarizerEscalation = null, int summarizerEscalationContext = 32_768)
     {
         policy ??= DecisionPolicy.Default;
         Log = new SqliteEventLog(Path.Combine(_root, "events.db"));
         Generator = generator;
         Escalation = escalation;
         Embedder = new KeywordEmbedder(Keywords);
-        GeneratorBinding = new ModelBinding(Profile("gen-small", toolCalls), generator);
+        GeneratorBinding = new ModelBinding(Profile("gen-small", toolCalls, generatorContext), generator);
         EscalationBinding = escalation is null ? null : new ModelBinding(Profile("gen-large", ToolCallSupport.Native, 32_768), escalation);
         Registry = new ModelSlotRegistry()
             .Bind(ModelSlots.Generator, GeneratorBinding, EscalationBinding is null ? null : [EscalationBinding])
             .Bind(ModelSlots.TextEmbedder, new ModelBinding(Profile("keywords", ToolCallSupport.None, 512), Embedder));
+        if (summarizer is not null)
+        {
+            SummarizerBinding = new ModelBinding(Profile("summarizer", ToolCallSupport.None, summarizerContext), summarizer);
+            SummarizerEscalationBinding = summarizerEscalation is null ? null
+                : new ModelBinding(Profile("summarizer-large", ToolCallSupport.None, summarizerEscalationContext), summarizerEscalation);
+            Registry.Bind(ModelSlots.Summarizer, SummarizerBinding, SummarizerEscalationBinding is null ? null : [SummarizerEscalationBinding]);
+        }
         if (extractor is not null)
             Registry.Bind(ModelSlots.Extractor, new ModelBinding(Profile("fake-extractor", ToolCallSupport.None, 512), extractor));
         Slots = new SessionModelSlots(Registry, Log, Session);
@@ -333,6 +342,10 @@ internal sealed class TurnHarness : IDisposable
 
     public ModelBinding? EscalationBinding { get; }
 
+    public ModelBinding? SummarizerBinding { get; }
+
+    public ModelBinding? SummarizerEscalationBinding { get; }
+
     public ModelSlotRegistry Registry { get; }
 
     public SessionModelSlots Slots { get; }
@@ -350,6 +363,10 @@ internal sealed class TurnHarness : IDisposable
     public TurnOptions Options { get; }
 
     public Corvid.Memory.MemoryWriter? Memory { get; init; }
+
+    /// <summary>Appends events directly, as earlier turns would have; returns the last sequence.</summary>
+    public long Seed(params SessionEvent[] events) =>
+        Log.Append(Session, Log.GetHead(Session), [.. events.Select(EventData.Create)])[^1].Sequence;
 
     public TurnServices Services() => new()
     {
