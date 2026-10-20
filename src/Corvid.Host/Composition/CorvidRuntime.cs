@@ -191,10 +191,11 @@ public sealed class CorvidRuntime : IAsyncDisposable
 
     private void Delivered(Delivery delivery)
     {
-        if (delivery.Request.MessageId is { } id && _waiting.TryRemove(id, out var waiter))
-            waiter.TrySetResult(delivery);
+        // Queued before the sender hears back, so MaintenanceIdleAsync after SendAsync always covers this turn.
         if (Memory is { } memory)
             QueueCatchUp(memory, delivery.Request.SessionId);
+        if (delivery.Request.MessageId is { } id && _waiting.TryRemove(id, out var waiter))
+            waiter.TrySetResult(delivery);
     }
 
     // After each turn, the episodic index catches up with the log (plan §9.1 tier 2) and the new episodes are embedded, in

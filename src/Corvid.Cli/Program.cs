@@ -4,12 +4,20 @@ using Corvid.Host.Diagnostics;
 using Spectre.Console;
 
 // Chat loads GLiNER2, which needs glibc's mmap threshold set before the process starts: re-execute with it set (Linux).
-// Nothing has been written yet, so the replacement process starts with a clean terminal.
-if (args.Length == 0 || args[0] is "chat" || args[0] is "--session")
+// Decided from the parsed command, since options may come before it. Nothing has been written yet, so the replacement
+// process starts with a clean terminal.
+bool loadsModels;
+try
 {
-    if (GlibcMalloc.EnsureMmapThreshold() is { } reason)
-        Console.Error.WriteLine($"corvid: {Doctor.MallocVariable} is not set ({reason}); GLiNER2 may use more memory than Starling supports.");
+    loadsModels = CliArguments.Parse(args) is { Command: "chat", Help: false, Version: false };
 }
+catch (ArgumentException)
+{
+    // RunAsync reports the usage error.
+    loadsModels = false;
+}
+if (loadsModels && GlibcMalloc.EnsureMmapThreshold() is { } reason)
+    Console.Error.WriteLine($"corvid: {Doctor.MallocVariable} is not set ({reason}); GLiNER2 may use more memory than Starling supports.");
 
 var interrupts = new CliInterrupts();
 Console.CancelKeyPress += (_, e) =>

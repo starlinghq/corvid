@@ -17,7 +17,12 @@ public static class HostTelemetry
     public static ActivitySource Source { get; } = new(SourceName);
 
     /// <summary>Every source Corvid emits spans from.</summary>
-    public static IReadOnlyList<string> Sources { get; } = [KernelTelemetry.SourceName, FabricTelemetry.SourceName, SourceName];
+    /// <remarks>
+    /// Built from constants on each read, not stored: creating <see cref="Source"/> calls every listener's
+    /// <c>ShouldListenTo</c> inside this class's static constructor, and a listener that reads this list there would
+    /// otherwise see it unassigned.
+    /// </remarks>
+    public static IReadOnlyList<string> Sources => [KernelTelemetry.SourceName, FabricTelemetry.SourceName, SourceName];
 
     /// <summary>A GenAI <c>chat {model}</c> client span for one model call.</summary>
     internal static Activity? StartChat(ModelProfile profile, string slot) =>

@@ -59,7 +59,11 @@ internal static class ModelCommand
         console.MarkupLine($"[grey]Model cache: {Markup.Escape(host.Services.GetRequiredService<Corvid.Models.Starling.StarlingModelStore>().CacheDirectory)}[/]");
         console.MarkupLine("[grey]The decider slot runs on the degraded tier until Starlings.Models.Kev is published.[/]");
         if (catalogue.Models.Any(model => !catalogue.Check(model.Name).IsReady))
-            console.MarkupLine("Fetch a model with [bold]corvid model download <model>[/] (or [bold]--all[/]); nothing downloads implicitly.");
+        {
+            // Short lines: a redirected console wraps at 80 columns, and the command should stay whole to copy.
+            console.MarkupLine("Nothing downloads implicitly. To fetch a model:");
+            console.MarkupLine("  [bold]corvid model download <model>[/]   (or --all)");
+        }
         return ExitCodes.Success;
     }
 
@@ -154,7 +158,8 @@ internal static class ModelCommand
             if (model.Acquire is { } acquire)
                 console.MarkupLine($"    fetch it: [bold]{Markup.Escape(acquire)}[/]");
         }
-        console.MarkupLine("Run [bold]corvid doctor[/] for the full picture, or point Corvid:Models:Cache (or STARLING_MODELS) at a cache that has them.");
+        console.MarkupLine("Run [bold]corvid doctor[/] for the full picture, or point Corvid:Models:Cache");
+        console.MarkupLine("(or STARLING_MODELS) at a model cache that has them.");
     }
 
     internal static CorvidOptions Options(IHost host) =>

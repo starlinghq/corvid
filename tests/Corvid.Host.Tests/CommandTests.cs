@@ -217,6 +217,8 @@ public sealed class CoreCommandTests
         await using (runtime)
         {
             await session.SendAsync("hi", TestContext.Current.CancellationToken);
+            // Memory embeds the turn's episodes on the device in the background; until then the queue is legitimately not empty.
+            await runtime.MaintenanceIdleAsync();
             var output = await Run(runtime, session, commands, "/status");
             Assert.Equal(["slot", "model", "device", "queue", "p50", "calls"], output.Table!.Columns);
             var generator = Assert.Single(output.Table.Rows, row => row[0] == ModelSlots.Generator);
