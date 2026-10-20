@@ -1,6 +1,11 @@
 name: ci
 
 # Build, test and publish checks. No secrets are used or exposed here.
+#
+# Jobs run on the org's self-hosted runner (labels self-hosted, omarchy): an Arch Linux workstation where the runner
+# is the unprivileged system user gh-runner with no sudo. The repository is private, so only members' branches run
+# here. Steps must not need root, must not install system packages, and must keep files they plant (fake secrets,
+# homes, caches) under $RUNNER_TEMP, which the runner clears after each job.
 on:
   pull_request:
   push:
@@ -22,11 +27,14 @@ env:
 jobs:
   test:
     name: Build and test (Linux)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: [self-hosted, omarchy]
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      # setup-dotnet installs to /usr/share/dotnet by default, which gh-runner cannot write.
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
         with:
           global-json-file: global.json
 
@@ -37,19 +45,15 @@ jobs:
       - name: Production dependency boundaries
         run: dotnet run --project tools/Corvid.Architecture -c Release --no-build -- .
 
-      # The sandbox tests (C-007a) run real commands under bubblewrap. Ubuntu 23.10 and later let AppArmor restrict
-      # unprivileged user namespaces to programs with a profile that allows them; bubblewrap needs one, and the seccomp
-      # test needs `unshare -U` to work outside the sandbox as its control. Lift the restriction on this throwaway runner.
-      - name: Install bubblewrap and allow unprivileged user namespaces
+      # The sandbox tests (C-007a) run real commands under bubblewrap, and the seccomp test needs `unshare -U` to work
+      # outside the sandbox as its control. The runner cannot install or reconfigure anything, so fail here, with the
+      # reason, if the host lacks either; the confinement steps below would otherwise fail less clearly.
+      - name: Check bubblewrap and unprivileged user namespaces
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq bubblewrap
           bwrap --version
-          echo "LSMs: $(cat /sys/kernel/security/lsm)"
-          echo "apparmor_restrict_unprivileged_userns: $(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo absent)"
-          if sysctl -n kernel.apparmor_restrict_unprivileged_userns > /dev/null 2>&1; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
+          echo "LSMs: $(cat /sys/kernel/security/lsm 2>/dev/null || echo unreadable)"
+          unshare -U true
+          bwrap --unshare-all --die-with-parent --ro-bind / / true
 
       - name: Test
         run: dotnet test --solution Corvid.slnx -c Release --no-build
@@ -87,18 +91,21 @@ jobs:
 
   cli:
     name: Single-file publish (corvid)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, omarchy]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
         with:
           global-json-file: global.json
 
       - name: Publish
         run: dotnet publish src/Corvid.Cli/Corvid.Cli.csproj -c Release -r linux-x64 -o out-cli
 
-      # No models on the runner: the binary must start, report what is missing and say how to fetch it, never download.
+      # No models for this check: the binary must start, report what is missing and say how to fetch it, never download.
+      # The model cache and data directory are empty temporary directories, so a model cached on the host is not found.
       - name: Run the single-file binary without models
         env:
           STARLING_MODELS: ${{ runner.temp }}/empty-model-cache
@@ -119,11 +126,13 @@ jobs:
 
   aot:
     name: Native AOT publish (corvid-vault, corvid-sandbox)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, omarchy]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
         with:
           global-json-file: global.json
 
@@ -135,24 +144,17 @@ jobs:
           ls -l out/corvid-vault
           out/corvid-vault --help
 
-      - name: Install bubblewrap and allow unprivileged user namespaces
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq bubblewrap
-          if sysctl -n kernel.apparmor_restrict_unprivileged_userns > /dev/null 2>&1; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-
       - name: Publish corvid-sandbox
         run: dotnet publish sandbox/Corvid.Sandbox.Launcher/Corvid.Sandbox.Launcher.csproj -c Release -r linux-x64 -p:PublishAot=true -o out-sandbox
 
       # A real confined run with the native binary: the workspace is written, a planted ~/.ssh file is not readable,
-      # and the status reports every layer.
+      # and the status reports every layer. HOME is a throwaway directory so nothing is planted in gh-runner's real home.
       - name: Run the native corvid-sandbox
         run: |
+          export HOME="$RUNNER_TEMP/home"
+          mkdir -p "$RUNNER_TEMP/ws" "$HOME/.ssh"
           ls -l out-sandbox/corvid-sandbox
           out-sandbox/corvid-sandbox --version
-          mkdir -p "$RUNNER_TEMP/ws" "$HOME/.ssh"
           echo "smoke-secret-$GITHUB_RUN_ID" > "$HOME/.ssh/corvid-smoke"
           out-sandbox/corvid-sandbox --workspace "$RUNNER_TEMP/ws" --env PATH --status-file "$RUNNER_TEMP/status.json" \
             -- /bin/sh -c 'echo sandboxed > out.txt; if cat "$0"; then echo LEAKED; fi' "$HOME/.ssh/corvid-smoke" | tee smoke.log
