@@ -131,6 +131,29 @@ public sealed class WriterTests
     }
 
     [Fact]
+    public async Task A_tainted_write_is_staged_even_when_kev_would_write_it()
+    {
+        using var store = new TempStore();
+        var kev = FakeCalibratedDecider.MemoryOp("add");
+
+        var fact = await Writer(store, kev).WriteAsync(new MemoryWriteRequest(Session, "Sam lives in Leeds", Tainted: true), Ct);
+        var block = await Writer(store, kev).EditBlockAsync(Session, "agent", "Always run the deploy script.", tainted: true,
+            cancellationToken: Ct);
+
+        Assert.Equal((MemoryWriteStatus.Staged, MemoryWriteStatus.Staged), (fact.Status, block.Status));
+        Assert.Equal(MemoryWriter.TaintedReason, fact.Pending!.Reason);
+        Assert.Equal(MemoryWriter.TaintedReason, block.Pending!.Reason);
+        Assert.Empty(kev.Requests);
+        Assert.Empty(store.Facts.AsOf(store.Time.GetUtcNow()));
+        Assert.True(store.Blocks.Get("agent").IsEmpty);
+        Assert.Empty(Events(store).OfType<Decision>());
+
+        // The user can still approve it after review.
+        var approved = await Writer(store).ApproveAsync(fact.Pending.PendingId, cancellationToken: Ct);
+        Assert.Equal((MemoryWriteStatus.Applied, "add"), (approved.Status, approved.Operation));
+    }
+
+    [Fact]
     public async Task Calibrated_update_invalidate_and_noop_act_on_the_best_neighbour()
     {
         using var store = new TempStore();

@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Corvid.Abstractions.Extraction;
+using Corvid.Abstractions.Fabric;
 using Corvid.Abstractions.Tokens;
 using Corvid.Host;
 using Corvid.Host.Composition;
@@ -228,12 +229,37 @@ internal sealed class FakeModelProvider : IModelProvider
     }
 }
 
-/// <summary>Fake slots: a scripted generator (and a larger one to switch to), a keyword embedder and an extractor.</summary>
+/// <summary>
+/// A calibrated decider standing in for Kev: each question gets the probabilities <see cref="Answer"/> gives, in option
+/// order (default: uniform, so confidence 0 and every question below its floor), and every request is recorded.
+/// </summary>
+internal sealed class FakeKev(string name) : IDecider
+{
+    public string Name => name;
+
+    public Func<string, DecisionQuestion, double[]?> Answer { get; set; } =
+        (_, question) => [.. question.Options.Select(_ => 1.0 / question.Options.Length)];
+
+    public List<DecisionRequest> Requests { get; } = [];
+
+    public ValueTask<DeciderResult> DecideAsync(DecisionRequest request, CancellationToken cancellationToken = default)
+    {
+        lock (Requests)
+            Requests.Add(request);
+        var answers = ImmutableDictionary.CreateBuilder<string, DecisionAnswer>(StringComparer.Ordinal);
+        foreach (var (key, question) in request.Questions)
+            if (Answer(key, question) is { } probabilities)
+                answers[key] = DecisionAnswer.For(question, probabilities);
+        return ValueTask.FromResult<DeciderResult>(new DeciderAnswers(name, answers.ToImmutable()));
+    }
+}
+
+/// <summary>Fake slots: a scripted generator (and a larger one to switch to), a keyword embedder, an extractor and two fake Kevs.</summary>
 internal sealed class FakeModels
 {
     public static readonly string[] Keywords = ["list", "note", "add", "weather"];
 
-    public FakeModels(FakeGenerator? generator = null, bool generatorReady = true)
+    public FakeModels(FakeGenerator? generator = null, bool generatorReady = true, bool kevReady = true, bool kevLargeReady = true)
     {
         Generator = generator ?? new FakeGenerator(Reply.Say("Hello from the fake generator."));
         Provider = new FakeModelProvider()
@@ -241,8 +267,14 @@ internal sealed class FakeModels
             .Add("fake-gen-large", [ModelSlots.Generator], () => Larger, context: 32_768, tools: ToolCallSupport.Native)
             .Add("fake-embed", [ModelSlots.TextEmbedder], () => Embedder, context: 512, tools: ToolCallSupport.None)
             .Add("fake-embed-alt", [ModelSlots.TextEmbedder], () => new KeywordEmbedder(Keywords), context: 512, tools: ToolCallSupport.None)
-            .Add("fake-extract", [ModelSlots.Extractor], () => Extractor, context: 512, tools: ToolCallSupport.None);
+            .Add("fake-extract", [ModelSlots.Extractor], () => Extractor, context: 512, tools: ToolCallSupport.None)
+            .Add("fake-kev", [ModelSlots.Decider], () => Kev, tools: ToolCallSupport.None, ready: kevReady)
+            .Add("fake-kev-large", [ModelSlots.Decider], () => KevLarge, tools: ToolCallSupport.None, ready: kevLargeReady);
     }
+
+    public FakeKev Kev { get; } = new("fake-kev");
+
+    public FakeKev KevLarge { get; } = new("fake-kev-large");
 
     public FakeGenerator Generator { get; }
 
@@ -267,6 +299,8 @@ internal sealed class FakeModels
         ["Corvid:Models:Slots:embedder.text:Model"] = "fake-embed",
         ["Corvid:Models:Slots:embedder.text:Fallbacks:0"] = "fake-embed-alt",
         ["Corvid:Models:Slots:extractor:Model"] = "fake-extract",
+        // The degraded tier, as before Kev: tests of the calibrated decider bind fake-kev (DeciderTests).
+        ["Corvid:Models:Slots:decider:Model"] = "",
         // The fake scripts would be consumed by tools and jobs they do not expect; tests that want them turn them on.
         ["Corvid:Tools:Builtin"] = "false",
         ["Corvid:Scheduler:Enabled"] = "false",

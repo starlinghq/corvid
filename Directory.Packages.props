@@ -15,13 +15,15 @@
     <PackageVersion Include="Spectre.Console" Version="0.57.2" />
     <PackageVersion Include="Spectre.Console.Testing" Version="0.57.2" />
   </ItemGroup>
-  <!-- Corvid.Models.Starling only (decision D-3: nuget.org, 0.2.0). The checker keeps these out of core projects. -->
+  <!-- Corvid.Models.Starling only (decision D-3: nuget.org, every Starlings.* package at 0.3.0 together). The checker keeps
+       these out of core projects. -->
   <ItemGroup>
-    <PackageVersion Include="Starlings.Acquisition" Version="0.2.0" />
-    <PackageVersion Include="Starlings.Models.E5.Extensions.AI" Version="0.2.0" />
-    <PackageVersion Include="Starlings.Models.EmbeddingGemma2.Extensions.AI" Version="0.2.0" />
-    <PackageVersion Include="Starlings.Models.Gliner2" Version="0.2.0" />
-    <PackageVersion Include="Starlings.Models.Qwen35.Extensions.AI" Version="0.2.0" />
+    <PackageVersion Include="Starlings.Acquisition" Version="0.3.0" />
+    <PackageVersion Include="Starlings.Models.E5.Extensions.AI" Version="0.3.0" />
+    <PackageVersion Include="Starlings.Models.EmbeddingGemma2.Extensions.AI" Version="0.3.0" />
+    <PackageVersion Include="Starlings.Models.Gliner2" Version="0.3.0" />
+    <PackageVersion Include="Starlings.Models.Kev" Version="0.3.0" />
+    <PackageVersion Include="Starlings.Models.Qwen35.Extensions.AI" Version="0.3.0" />
     <!-- CPU natives: ONNX Runtime GenAI, which brings Microsoft.ML.OnnxRuntime 1.30.0 for the ONNX models too. -->
     <PackageVersion Include="Microsoft.ML.OnnxRuntimeGenAI" Version="0.17.1" />
   </ItemGroup>

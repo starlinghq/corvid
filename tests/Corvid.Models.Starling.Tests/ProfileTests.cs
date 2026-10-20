@@ -43,15 +43,24 @@ public sealed class ProfileTests
     [Fact]
     public void Catalogue_names_each_model_once_with_its_slot_and_lock()
     {
-        Assert.Equal(["qwen3.5-0.8b", "gliner2-base-v1", "embeddinggemma-2", "multilingual-e5-small"],
+        Assert.Equal(["qwen3.5-0.8b", "gliner2-base-v1", "embeddinggemma-2", "multilingual-e5-small", "kev-0.8b", "kev-4b"],
             StarlingModels.All.Select(m => m.Name));
         Assert.Equal(Enum.GetValues<StarlingModel>(), StarlingModels.All.Select(m => m.Model));
         Assert.Equal(ModelSlots.Generator, StarlingModels.Qwen35.Slot);
         Assert.Equal(ModelSlots.Extractor, StarlingModels.Gliner2.Slot);
         Assert.Equal(ModelSlots.TextEmbedder, StarlingModels.EmbeddingGemma2.Slot);
         Assert.Equal(ModelSlots.TextEmbedder, StarlingModels.E5.Slot);
+        Assert.Equal(ModelSlots.Decider, StarlingModels.Kev08B.Slot);
+        Assert.Equal(ModelSlots.Decider, StarlingModels.Kev4B.Slot);
         Assert.Equal("qwen3.5-0.8b/ortgenai-fp32x-cpu", StarlingModels.Qwen35.StarlingProfile);
         Assert.Equal("gliner2-base-v1/onnx-fp32-cpu", StarlingModels.Gliner2.StarlingProfile);
+        Assert.Equal("kev-0.8b/onnx-fp32-cpu", StarlingModels.Kev08B.StarlingProfile);
+        Assert.Equal("kev-4b/onnx-fp32-cpu", StarlingModels.Kev4B.StarlingProfile);
+        // The locks name the checkpoints; the bytes come from the public Starlinghq hosting repositories (no token).
+        Assert.Equal("jaredpalmer/kev-0.8b", StarlingModels.Kev08B.Lock.Repository);
+        Assert.Equal("jaredpalmer/kev-4b", StarlingModels.Kev4B.Lock.Repository);
+        Assert.All(StarlingModels.Kev08B.Lock.Files, file => Assert.StartsWith("https://huggingface.co/Starlinghq/kev-0.8b-onnx/", file.Source!.ToString(), StringComparison.Ordinal));
+        Assert.All(StarlingModels.Kev4B.Lock.Files, file => Assert.StartsWith("https://huggingface.co/Starlinghq/kev-4b-onnx/", file.Source!.ToString(), StringComparison.Ordinal));
         Assert.All(StarlingModels.All, m =>
         {
             Assert.Same(m, StarlingModels.Get(m.Model));
@@ -60,10 +69,14 @@ public sealed class ProfileTests
         });
         // Qwen fp32x is about 3 GB; nobody should download it by accident.
         Assert.True(StarlingModels.Qwen35.DownloadBytes > 2L << 30);
+        Assert.True(StarlingModels.Kev08B.DownloadBytes > 3_000_000_000L);
+        Assert.True(StarlingModels.Kev4B.DownloadBytes > 15L << 30);
 
         Assert.True(StarlingModels.TryFind("GLiNER2-base-v1", out var found));
         Assert.Same(StarlingModels.Gliner2, found);
-        Assert.False(StarlingModels.TryFind("kev-0.8b", out _));
+        Assert.True(StarlingModels.TryFind("KEV-4B", out var kev));
+        Assert.Same(StarlingModels.Kev4B, kev);
+        Assert.False(StarlingModels.TryFind("kev-9b", out _));
         Assert.Throws<ArgumentOutOfRangeException>(() => StarlingModels.Get((StarlingModel)42));
     }
 

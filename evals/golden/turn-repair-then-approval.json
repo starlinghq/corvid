@@ -11,16 +11,13 @@
     },
     {
       "type": "decision",
-      "decision_id": "9944e2dc32474b0c960841af452bcfea",
+      "decision_id": "c95974089ad24fcc8f5edf2a6eb4ab5a",
       "question_id": "clarify",
-      "probabilities": {
-        "no": 1,
-        "yes": 0
-      },
-      "confidence": 1,
+      "probabilities": {},
+      "confidence": 0,
       "threshold": 0.7,
       "action": "proceed",
-      "catalogue_version": "2026-10-18.1",
+      "catalogue_version": "2026-10-19.1",
       "decider": "degraded",
       "state": {
         "user_message": "note: buy milk",
@@ -43,24 +40,23 @@
             "name": "no"
           }
         ]
-      },
-      "calibrated": false
+      }
     },
     {
       "type": "decision",
-      "decision_id": "df1a0205fbbf4ede92a8b8134eafe9c6",
+      "decision_id": "f43d56c973d445e1a734f63a64b8e06d",
       "question_id": "difficulty",
       "probabilities": {
         "easy": 0,
-        "hard": 0,
+        "moderate": 0,
         "needs a frontier model": 0,
         "trivial": 1,
-        "moderate": 0
+        "hard": 0
       },
       "confidence": 1,
       "threshold": 3.5,
       "action": "stay_on_generator",
-      "catalogue_version": "2026-10-18.1",
+      "catalogue_version": "2026-10-19.1",
       "decider": "degraded",
       "state": {
         "user_message": "note: buy milk",
@@ -97,19 +93,19 @@
     },
     {
       "type": "decision",
-      "decision_id": "a989121c6c1845f2bb0d488fff258205",
+      "decision_id": "76a83f9e1e0941f394a2298db9bb2468",
       "question_id": "intent",
       "probabilities": {
-        "ask_clarifying_question": 0.2,
-        "answer_directly": 0.2,
+        "use_tools": 0.2,
         "recall_memory": 0.2,
-        "run_skill": 0.2,
-        "use_tools": 0.2
+        "answer_directly": 0.2,
+        "ask_clarifying_question": 0.2,
+        "run_skill": 0.2
       },
       "confidence": 0,
       "threshold": 0.05,
       "action": "generator_with_full_shortlist",
-      "catalogue_version": "2026-10-18.1",
+      "catalogue_version": "2026-10-19.1",
       "decider": "degraded",
       "state": {
         "user_message": "note: buy milk",
@@ -151,18 +147,18 @@
     },
     {
       "type": "decision",
-      "decision_id": "a235836d8374428e9a940618daa0f8ec",
+      "decision_id": "a7fa6c55e9d74d0ea8535169ed58541e",
       "question_id": "tool",
       "probabilities": {
-        "none": 1.4990829429253395E-08,
-        "clear_notes": 0.0029421043617558797,
         "list_notes": 0.0029421043617558797,
-        "add_note": 0.9941157762856586
+        "none": 1.4990829429253395E-08,
+        "add_note": 0.9941157762856586,
+        "clear_notes": 0.0029421043617558797
       },
       "confidence": 0.9921543683808781,
       "threshold": 0.05,
       "action": "offer_tool:add_note",
-      "catalogue_version": "2026-10-18.1",
+      "catalogue_version": "2026-10-19.1",
       "decider": "degraded",
       "state": {
         "user_message": "note: buy milk",
@@ -259,13 +255,13 @@
     },
     {
       "type": "decision",
-      "decision_id": "62dd1a5dd46847aea5da8b40b74e7bae",
+      "decision_id": "4bb290d32f364626ab3e4d429ac78c33",
       "question_id": "risk",
       "probabilities": {},
       "confidence": 0,
       "threshold": 0.9,
       "action": "ask",
-      "catalogue_version": "2026-10-18.1",
+      "catalogue_version": "2026-10-19.1",
       "decider": "degraded",
       "state": {
         "user_message": "note: buy milk",
@@ -327,20 +323,20 @@
     },
     {
       "type": "approval_requested",
-      "approval_id": "8d6d405527f441218e6b346117aab0d1",
+      "approval_id": "0659460c521042349af659a34910ff73",
       "action": "{\"kind\":\"tool\",\"text\":\"add_note {\\u0022text\\u0022:\\u0022buy milk\\u0022}\",\"unsupported\":null,\"tainted\":false,\"reversible\":null,\"commands\":[{\"verb\":\"add_note\",\"subcommand\":null,\"effects\":[\"memory\"],\"via\":[],\"substitution\":false,\"unresolved\":[],\"targets\":[]}]}",
       "reason": "risk: ask: no answer",
       "call_id": "call-2"
     },
     {
       "type": "approval_resolved",
-      "approval_id": "8d6d405527f441218e6b346117aab0d1",
+      "approval_id": "0659460c521042349af659a34910ff73",
       "approved": true,
       "reason": "user: approved (once)"
     },
     {
       "type": "decision_outcome_recorded",
-      "decision_id": "62dd1a5dd46847aea5da8b40b74e7bae",
+      "decision_id": "4bb290d32f364626ab3e4d429ac78c33",
       "outcome": "user_approved"
     },
     {
@@ -351,21 +347,21 @@
     },
     {
       "type": "decision_outcome_recorded",
-      "decision_id": "a235836d8374428e9a940618daa0f8ec",
+      "decision_id": "a7fa6c55e9d74d0ea8535169ed58541e",
       "outcome": "tool_succeeded"
     },
     {
       "type": "decision",
-      "decision_id": "c2362c7bb5e74b90ac534c00898313cb",
+      "decision_id": "38ff3b5f4277438490645d44b4bdf11b",
       "question_id": "done",
       "probabilities": {
-        "no": 1,
-        "yes": 0
+        "yes": 0,
+        "no": 1
       },
       "confidence": 1,
       "threshold": 0.8,
       "action": "continue",
-      "catalogue_version": "2026-10-18.1",
+      "catalogue_version": "2026-10-19.1",
       "decider": "degraded",
       "state": {
         "user_message": "note: buy milk",
@@ -398,16 +394,13 @@
     },
     {
       "type": "decision",
-      "decision_id": "8be28fc625694ea6a747c82f6f8601d2",
+      "decision_id": "e428c9b0291b43e196be2a61121c2e02",
       "question_id": "stuck",
-      "probabilities": {
-        "no": 1,
-        "yes": 0
-      },
-      "confidence": 1,
+      "probabilities": {},
+      "confidence": 0,
       "threshold": 0.7,
       "action": "continue",
-      "catalogue_version": "2026-10-18.1",
+      "catalogue_version": "2026-10-19.1",
       "decider": "degraded",
       "state": {
         "user_message": "note: buy milk",
@@ -435,23 +428,22 @@
             "name": "no"
           }
         ]
-      },
-      "calibrated": false
+      }
     },
     {
       "type": "decision",
-      "decision_id": "ae0d04e561e3464eada1e4e4343bc73e",
+      "decision_id": "8613f3af169a4747a789321e31c8aeae",
       "question_id": "tool",
       "probabilities": {
-        "none": 1.4990829429253395E-08,
-        "clear_notes": 0.0029421043617558797,
         "list_notes": 0.0029421043617558797,
-        "add_note": 0.9941157762856586
+        "none": 1.4990829429253395E-08,
+        "add_note": 0.9941157762856586,
+        "clear_notes": 0.0029421043617558797
       },
       "confidence": 0.9921543683808781,
       "threshold": 0.05,
       "action": "offer_tool:add_note",
-      "catalogue_version": "2026-10-18.1",
+      "catalogue_version": "2026-10-19.1",
       "decider": "degraded",
       "state": {
         "user_message": "note: buy milk",
@@ -609,13 +601,58 @@
           {
             "decision": {
               "type": "decision",
-              "decision_id": "62dd1a5dd46847aea5da8b40b74e7bae",
+              "decision_id": "38ff3b5f4277438490645d44b4bdf11b",
+              "question_id": "done",
+              "probabilities": {
+                "yes": 0,
+                "no": 1
+              },
+              "confidence": 1,
+              "threshold": 0.8,
+              "action": "continue",
+              "catalogue_version": "2026-10-19.1",
+              "decider": "degraded",
+              "state": {
+                "user_message": "note: buy milk",
+                "surface": "cli",
+                "recent": [
+                  "called add_note",
+                  "add_note failed",
+                  "called add_note",
+                  "add_note returned"
+                ],
+                "goal": null,
+                "entities": {},
+                "step": 2,
+                "last_tool_result": "add_note: saved note 1",
+                "generator": "gen-small local, 8k"
+              },
+              "question": {
+                "kind": "noul",
+                "instructions": "Is the user's request fully handled?",
+                "options": [
+                  {
+                    "name": "yes"
+                  },
+                  {
+                    "name": "no"
+                  }
+                ]
+              },
+              "calibrated": false
+            },
+            "outcome": null
+          },
+          {
+            "decision": {
+              "type": "decision",
+              "decision_id": "4bb290d32f364626ab3e4d429ac78c33",
               "question_id": "risk",
               "probabilities": {},
               "confidence": 0,
               "threshold": 0.9,
               "action": "ask",
-              "catalogue_version": "2026-10-18.1",
+              "catalogue_version": "2026-10-19.1",
               "decider": "degraded",
               "state": {
                 "user_message": "note: buy milk",
@@ -680,156 +717,19 @@
           {
             "decision": {
               "type": "decision",
-              "decision_id": "8be28fc625694ea6a747c82f6f8601d2",
-              "question_id": "stuck",
-              "probabilities": {
-                "no": 1,
-                "yes": 0
-              },
-              "confidence": 1,
-              "threshold": 0.7,
-              "action": "continue",
-              "catalogue_version": "2026-10-18.1",
-              "decider": "degraded",
-              "state": {
-                "user_message": "note: buy milk",
-                "surface": "cli",
-                "recent": [
-                  "called add_note",
-                  "add_note failed",
-                  "called add_note",
-                  "add_note returned"
-                ],
-                "goal": null,
-                "entities": {},
-                "step": 2,
-                "last_tool_result": "add_note: saved note 1",
-                "generator": "gen-small local, 8k"
-              },
-              "question": {
-                "kind": "noul",
-                "instructions": "Is the agent repeating itself or making no progress?",
-                "options": [
-                  {
-                    "name": "yes"
-                  },
-                  {
-                    "name": "no"
-                  }
-                ]
-              },
-              "calibrated": false
-            },
-            "outcome": null
-          },
-          {
-            "decision": {
-              "type": "decision",
-              "decision_id": "9944e2dc32474b0c960841af452bcfea",
-              "question_id": "clarify",
-              "probabilities": {
-                "no": 1,
-                "yes": 0
-              },
-              "confidence": 1,
-              "threshold": 0.7,
-              "action": "proceed",
-              "catalogue_version": "2026-10-18.1",
-              "decider": "degraded",
-              "state": {
-                "user_message": "note: buy milk",
-                "surface": "cli",
-                "recent": [],
-                "goal": null,
-                "entities": {},
-                "step": 0,
-                "last_tool_result": null,
-                "generator": "gen-small local, 8k"
-              },
-              "question": {
-                "kind": "noul",
-                "instructions": "Is the request too ambiguous to act on without asking the user one question?",
-                "options": [
-                  {
-                    "name": "yes"
-                  },
-                  {
-                    "name": "no"
-                  }
-                ]
-              },
-              "calibrated": false
-            },
-            "outcome": null
-          },
-          {
-            "decision": {
-              "type": "decision",
-              "decision_id": "a235836d8374428e9a940618daa0f8ec",
-              "question_id": "tool",
-              "probabilities": {
-                "none": 1.4990829429253395E-08,
-                "clear_notes": 0.0029421043617558797,
-                "list_notes": 0.0029421043617558797,
-                "add_note": 0.9941157762856586
-              },
-              "confidence": 0.9921543683808781,
-              "threshold": 0.05,
-              "action": "offer_tool:add_note",
-              "catalogue_version": "2026-10-18.1",
-              "decider": "degraded",
-              "state": {
-                "user_message": "note: buy milk",
-                "surface": "cli",
-                "recent": [],
-                "goal": null,
-                "entities": {},
-                "step": 0,
-                "last_tool_result": null,
-                "generator": "gen-small local, 8k"
-              },
-              "question": {
-                "kind": "choice",
-                "instructions": "Which tool should run first?",
-                "options": [
-                  {
-                    "name": "add_note",
-                    "description": "Save a note for later."
-                  },
-                  {
-                    "name": "clear_notes",
-                    "description": "Delete every saved note."
-                  },
-                  {
-                    "name": "list_notes",
-                    "description": "List saved notes, oldest first."
-                  },
-                  {
-                    "name": "none",
-                    "description": "no tool is needed"
-                  }
-                ]
-              },
-              "calibrated": false
-            },
-            "outcome": "tool_succeeded"
-          },
-          {
-            "decision": {
-              "type": "decision",
-              "decision_id": "a989121c6c1845f2bb0d488fff258205",
+              "decision_id": "76a83f9e1e0941f394a2298db9bb2468",
               "question_id": "intent",
               "probabilities": {
-                "ask_clarifying_question": 0.2,
-                "answer_directly": 0.2,
+                "use_tools": 0.2,
                 "recall_memory": 0.2,
-                "run_skill": 0.2,
-                "use_tools": 0.2
+                "answer_directly": 0.2,
+                "ask_clarifying_question": 0.2,
+                "run_skill": 0.2
               },
               "confidence": 0,
               "threshold": 0.05,
               "action": "generator_with_full_shortlist",
-              "catalogue_version": "2026-10-18.1",
+              "catalogue_version": "2026-10-19.1",
               "decider": "degraded",
               "state": {
                 "user_message": "note: buy milk",
@@ -874,18 +774,18 @@
           {
             "decision": {
               "type": "decision",
-              "decision_id": "ae0d04e561e3464eada1e4e4343bc73e",
+              "decision_id": "8613f3af169a4747a789321e31c8aeae",
               "question_id": "tool",
               "probabilities": {
-                "none": 1.4990829429253395E-08,
-                "clear_notes": 0.0029421043617558797,
                 "list_notes": 0.0029421043617558797,
-                "add_note": 0.9941157762856586
+                "none": 1.4990829429253395E-08,
+                "add_note": 0.9941157762856586,
+                "clear_notes": 0.0029421043617558797
               },
               "confidence": 0.9921543683808781,
               "threshold": 0.05,
               "action": "offer_tool:add_note",
-              "catalogue_version": "2026-10-18.1",
+              "catalogue_version": "2026-10-19.1",
               "decider": "degraded",
               "state": {
                 "user_message": "note: buy milk",
@@ -931,16 +831,101 @@
           {
             "decision": {
               "type": "decision",
-              "decision_id": "c2362c7bb5e74b90ac534c00898313cb",
-              "question_id": "done",
+              "decision_id": "a7fa6c55e9d74d0ea8535169ed58541e",
+              "question_id": "tool",
               "probabilities": {
-                "no": 1,
-                "yes": 0
+                "list_notes": 0.0029421043617558797,
+                "none": 1.4990829429253395E-08,
+                "add_note": 0.9941157762856586,
+                "clear_notes": 0.0029421043617558797
               },
-              "confidence": 1,
-              "threshold": 0.8,
+              "confidence": 0.9921543683808781,
+              "threshold": 0.05,
+              "action": "offer_tool:add_note",
+              "catalogue_version": "2026-10-19.1",
+              "decider": "degraded",
+              "state": {
+                "user_message": "note: buy milk",
+                "surface": "cli",
+                "recent": [],
+                "goal": null,
+                "entities": {},
+                "step": 0,
+                "last_tool_result": null,
+                "generator": "gen-small local, 8k"
+              },
+              "question": {
+                "kind": "choice",
+                "instructions": "Which tool should run first?",
+                "options": [
+                  {
+                    "name": "add_note",
+                    "description": "Save a note for later."
+                  },
+                  {
+                    "name": "clear_notes",
+                    "description": "Delete every saved note."
+                  },
+                  {
+                    "name": "list_notes",
+                    "description": "List saved notes, oldest first."
+                  },
+                  {
+                    "name": "none",
+                    "description": "no tool is needed"
+                  }
+                ]
+              },
+              "calibrated": false
+            },
+            "outcome": "tool_succeeded"
+          },
+          {
+            "decision": {
+              "type": "decision",
+              "decision_id": "c95974089ad24fcc8f5edf2a6eb4ab5a",
+              "question_id": "clarify",
+              "probabilities": {},
+              "confidence": 0,
+              "threshold": 0.7,
+              "action": "proceed",
+              "catalogue_version": "2026-10-19.1",
+              "decider": "degraded",
+              "state": {
+                "user_message": "note: buy milk",
+                "surface": "cli",
+                "recent": [],
+                "goal": null,
+                "entities": {},
+                "step": 0,
+                "last_tool_result": null,
+                "generator": "gen-small local, 8k"
+              },
+              "question": {
+                "kind": "noul",
+                "instructions": "Is the request too ambiguous to act on without asking the user one question?",
+                "options": [
+                  {
+                    "name": "yes"
+                  },
+                  {
+                    "name": "no"
+                  }
+                ]
+              }
+            },
+            "outcome": null
+          },
+          {
+            "decision": {
+              "type": "decision",
+              "decision_id": "e428c9b0291b43e196be2a61121c2e02",
+              "question_id": "stuck",
+              "probabilities": {},
+              "confidence": 0,
+              "threshold": 0.7,
               "action": "continue",
-              "catalogue_version": "2026-10-18.1",
+              "catalogue_version": "2026-10-19.1",
               "decider": "degraded",
               "state": {
                 "user_message": "note: buy milk",
@@ -959,7 +944,7 @@
               },
               "question": {
                 "kind": "noul",
-                "instructions": "Is the user's request fully handled?",
+                "instructions": "Is the agent repeating itself or making no progress?",
                 "options": [
                   {
                     "name": "yes"
@@ -968,27 +953,26 @@
                     "name": "no"
                   }
                 ]
-              },
-              "calibrated": false
+              }
             },
             "outcome": null
           },
           {
             "decision": {
               "type": "decision",
-              "decision_id": "df1a0205fbbf4ede92a8b8134eafe9c6",
+              "decision_id": "f43d56c973d445e1a734f63a64b8e06d",
               "question_id": "difficulty",
               "probabilities": {
                 "easy": 0,
-                "hard": 0,
+                "moderate": 0,
                 "needs a frontier model": 0,
                 "trivial": 1,
-                "moderate": 0
+                "hard": 0
               },
               "confidence": 1,
               "threshold": 3.5,
               "action": "stay_on_generator",
-              "catalogue_version": "2026-10-18.1",
+              "catalogue_version": "2026-10-19.1",
               "decider": "degraded",
               "state": {
                 "user_message": "note: buy milk",

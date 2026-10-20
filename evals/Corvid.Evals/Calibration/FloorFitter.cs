@@ -97,7 +97,7 @@ public static class FloorFitter
 
         // Round-trip through the parser so the file written is exactly one the fabric will load.
         var fitted = FloorConfiguration.Parse(
-            new FloorConfiguration(options.Version, current.DegradedChoiceMargin, floors.ToImmutable()).ToJson(), catalogue);
+            (current with { Version = options.Version, Floors = floors.ToImmutable() }).ToJson(), catalogue);
         return new FitResult(current, fitted, fits.ToImmutable());
     }
 

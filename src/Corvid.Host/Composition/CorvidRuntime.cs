@@ -105,6 +105,19 @@ public sealed class CorvidRuntime : IAsyncDisposable
     /// <summary>C-012's shared services: the protected approval environment, the sandboxed shell and the job store.</summary>
     public BuiltinServices Builtin { get; }
 
+    /// <summary>
+    /// What answers the fabric's questions: Kev (with its second tier for gates when configured), or the degraded tier and
+    /// why. Shown by <c>/status</c>; a surface prints <see cref="DeciderNotices"/> when it starts.
+    /// </summary>
+    public string DeciderState => Fabric.CalibratedDecider is { } calibrated
+        ? Fabric.EscalationDecider is { } escalation
+            ? $"{calibrated}, {escalation} for gates below their floor; degraded tier when Kev declines"
+            : $"{calibrated}; degraded tier when Kev declines"
+        : "degraded tier (no calibrated decider)";
+
+    /// <summary>Why the decider is on the degraded tier or without its second tier: a configured Kev that is not downloaded or did not load.</summary>
+    public IReadOnlyList<string> DeciderNotices => _composer.DeciderNotices;
+
     /// <summary>Whether this process runs due jobs, and if not, why.</summary>
     public string SchedulerState { get; private set; } = "off (Corvid:Scheduler:Enabled)";
 

@@ -162,7 +162,7 @@ public sealed class FloorFitterTests : IDisposable
         }
     }
 
-    private FitResult Fit(string version = "2026-10-19.1", int minSupport = 20) =>
+    private FitResult Fit(string version = "2026-11-01.1", int minSupport = 20) =>
         FloorFitter.Fit(_log.Load(), FloorConfiguration.Default, new FitOptions(version, MinSupport: minSupport));
 
     [Fact]
@@ -472,14 +472,14 @@ public sealed class CalibrationCliTests : IDisposable
         var floors = Path.Combine(_log.Root, "out", "floors.json");
         var report = Path.Combine(_log.Root, "out", "report.json");
 
-        var (code, output, error) = Run("calibrate", "--log", _log.DatabasePath, "--version", "2026-10-19.1", "--out", floors,
+        var (code, output, error) = Run("calibrate", "--log", _log.DatabasePath, "--version", "2026-11-01.1", "--out", floors,
             "--report-json", report);
 
         Assert.True(code == 0, error);
-        Assert.Contains("Wrote floors 2026-10-19.1", output, StringComparison.Ordinal);
+        Assert.Contains("Wrote floors 2026-11-01.1", output, StringComparison.Ordinal);
         Assert.Equal(0.9, FloorConfiguration.Parse(File.ReadAllText(floors)).FloorOf("done"), 10);
         using var json = JsonDocument.Parse(File.ReadAllText(report));
-        Assert.Equal("2026-10-19.1", json.RootElement.GetProperty("fit").GetProperty("version").GetString());
+        Assert.Equal("2026-11-01.1", json.RootElement.GetProperty("fit").GetProperty("version").GetString());
 
         var (replayCode, replay, _) = Run("replay", "--log", _log.DatabasePath, "--candidate", floors);
         Assert.Equal(0, replayCode);

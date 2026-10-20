@@ -51,15 +51,25 @@ public sealed class ModelOptions
     /// </summary>
     public Dictionary<string, SlotSettings> Slots { get; set; } = new(StringComparer.Ordinal);
 
-    /// <summary>The defaults: Starling's in-process models on the CPU. There is no decider model until Kev ships (C-004b).</summary>
+    /// <summary>
+    /// The defaults: Starling's in-process models on the CPU. The decider is Kev-0.8B (C-004b), and it is optional: while it
+    /// is not downloaded the fabric runs on the degraded tier (plan §5.6) and says so. Kev-4B, the second tier for gates
+    /// below their floor (§5.5), is the decider's escalation when configured (<c>Corvid:Models:Slots:decider:Escalation</c>).
+    /// </summary>
     public static IReadOnlyDictionary<string, string> DefaultSlots { get; } = new Dictionary<string, string>(StringComparer.Ordinal)
     {
         [ModelSlots.Generator] = "qwen3.5-0.8b",
         [ModelSlots.Extractor] = "gliner2-base-v1",
         [ModelSlots.TextEmbedder] = "embeddinggemma-2",
+        [ModelSlots.Decider] = "kev-0.8b",
     };
 
-    /// <summary>The configured slots merged over <see cref="DefaultSlots"/>; empty models removed.</summary>
+    /// <summary>
+    /// The configured slots merged over <see cref="DefaultSlots"/>. A slot without a model but with an escalation or
+    /// fallbacks keeps its default model (so <c>decider:Escalation</c> alone adds Kev-4B to Kev-0.8B); a slot without a
+    /// model and without either is unbound. Empty and missing models are treated alike, because configuration providers
+    /// do not agree on which an empty value is.
+    /// </summary>
     public IReadOnlyDictionary<string, SlotSettings> EffectiveSlots()
     {
         var slots = new Dictionary<string, SlotSettings>(StringComparer.Ordinal);
@@ -69,7 +79,10 @@ public sealed class ModelOptions
         {
             if (settings is null)
                 continue;
-            if (string.IsNullOrWhiteSpace(settings.Model))
+            if (string.IsNullOrWhiteSpace(settings.Model) && (settings.Escalation.Count > 0 || settings.Fallbacks.Count > 0)
+                && DefaultSlots.TryGetValue(slot, out var model))
+                slots[slot] = new SlotSettings { Model = model, Escalation = settings.Escalation, Fallbacks = settings.Fallbacks };
+            else if (string.IsNullOrWhiteSpace(settings.Model))
                 slots.Remove(slot);
             else
                 slots[slot] = settings;
@@ -82,7 +95,10 @@ public sealed class SlotSettings
 {
     public string? Model { get; set; }
 
-    /// <summary>Profile-ordered targets for escalation (plan §6).</summary>
+    /// <summary>
+    /// Profile-ordered targets for escalation (plan §6). For the decider, at most one: the second tier (Kev-4B) asked about
+    /// gates the default answered below their floor (§5.5).
+    /// </summary>
     public List<string> Escalation { get; set; } = [];
 
     /// <summary>Tried in order after a provider failure.</summary>

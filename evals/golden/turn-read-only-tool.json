@@ -11,16 +11,13 @@
     },
     {
       "type": "decision",
-      "decision_id": "0bd0674eae10423a9fab2dcbfc4de744",
+      "decision_id": "8addbcad09d7449ca6835ee83715fc24",
       "question_id": "clarify",
-      "probabilities": {
-        "no": 1,
-        "yes": 0
-      },
-      "confidence": 1,
+      "probabilities": {},
+      "confidence": 0,
       "threshold": 0.7,
       "action": "proceed",
-      "catalogue_version": "2026-10-18.1",
+      "catalogue_version": "2026-10-19.1",
       "decider": "degraded",
       "state": {
         "user_message": "list my notes",
@@ -43,24 +40,23 @@
             "name": "no"
           }
         ]
-      },
-      "calibrated": false
+      }
     },
     {
       "type": "decision",
-      "decision_id": "26d501466eb44f378854a022b247f73b",
+      "decision_id": "b05cfe599ad34d00a1c190830bfb2e82",
       "question_id": "difficulty",
       "probabilities": {
         "easy": 0,
-        "hard": 0,
+        "moderate": 0,
         "needs a frontier model": 0,
         "trivial": 1,
-        "moderate": 0
+        "hard": 0
       },
       "confidence": 1,
       "threshold": 3.5,
       "action": "stay_on_generator",
-      "catalogue_version": "2026-10-18.1",
+      "catalogue_version": "2026-10-19.1",
       "decider": "degraded",
       "state": {
         "user_message": "list my notes",
@@ -97,19 +93,19 @@
     },
     {
       "type": "decision",
-      "decision_id": "f7c741effb7c4c79a60903e2020fb23e",
+      "decision_id": "7c26c1c936834eb7909047d5b1193ab9",
       "question_id": "intent",
       "probabilities": {
-        "ask_clarifying_question": 0.2,
-        "answer_directly": 0.2,
+        "use_tools": 0.2,
         "recall_memory": 0.2,
-        "run_skill": 0.2,
-        "use_tools": 0.2
+        "answer_directly": 0.2,
+        "ask_clarifying_question": 0.2,
+        "run_skill": 0.2
       },
       "confidence": 0,
       "threshold": 0.05,
       "action": "generator_with_full_shortlist",
-      "catalogue_version": "2026-10-18.1",
+      "catalogue_version": "2026-10-19.1",
       "decider": "degraded",
       "state": {
         "user_message": "list my notes",
@@ -151,18 +147,18 @@
     },
     {
       "type": "decision",
-      "decision_id": "1cc516978c814bc7aa3c63bc7b40f904",
+      "decision_id": "63474d6989e546418ef8d82f76e76bf8",
       "question_id": "tool",
       "probabilities": {
-        "none": 8.422901450746474E-09,
-        "clear_notes": 4.757270026605418E-05,
         "list_notes": 0.9970017733524065,
-        "add_note": 0.0029506455244259046
+        "none": 8.422901450746474E-09,
+        "add_note": 0.0029506455244259046,
+        "clear_notes": 4.757270026605418E-05
       },
       "confidence": 0.9960023644698753,
       "threshold": 0.05,
       "action": "offer_tool:list_notes",
-      "catalogue_version": "2026-10-18.1",
+      "catalogue_version": "2026-10-19.1",
       "decider": "degraded",
       "state": {
         "user_message": "list my notes",
@@ -214,21 +210,21 @@
     },
     {
       "type": "decision_outcome_recorded",
-      "decision_id": "1cc516978c814bc7aa3c63bc7b40f904",
+      "decision_id": "63474d6989e546418ef8d82f76e76bf8",
       "outcome": "tool_succeeded"
     },
     {
       "type": "decision",
-      "decision_id": "26a4d21f7b1542e1b5fb132e83fd6b50",
+      "decision_id": "ea04e2e904af4c7485ff97775809f483",
       "question_id": "done",
       "probabilities": {
-        "no": 0,
-        "yes": 1
+        "yes": 1,
+        "no": 0
       },
       "confidence": 1,
       "threshold": 0.8,
       "action": "stop",
-      "catalogue_version": "2026-10-18.1",
+      "catalogue_version": "2026-10-19.1",
       "decider": "degraded",
       "state": {
         "user_message": "list my notes",
@@ -259,16 +255,13 @@
     },
     {
       "type": "decision",
-      "decision_id": "aa5772e8042f463b8f1104e672374097",
+      "decision_id": "c5626626ed984e0abedf5741b9093dd5",
       "question_id": "stuck",
-      "probabilities": {
-        "no": 1,
-        "yes": 0
-      },
-      "confidence": 1,
+      "probabilities": {},
+      "confidence": 0,
       "threshold": 0.7,
       "action": "continue",
-      "catalogue_version": "2026-10-18.1",
+      "catalogue_version": "2026-10-19.1",
       "decider": "degraded",
       "state": {
         "user_message": "list my notes",
@@ -294,23 +287,22 @@
             "name": "no"
           }
         ]
-      },
-      "calibrated": false
+      }
     },
     {
       "type": "decision",
-      "decision_id": "dd9dd22309144fe39a9d392330944de5",
+      "decision_id": "693d6327ac0f459f8aa9dd3c7d40601a",
       "question_id": "tool",
       "probabilities": {
-        "none": 8.422901450746474E-09,
-        "clear_notes": 4.757270026605418E-05,
         "list_notes": 0.9970017733524065,
-        "add_note": 0.0029506455244259046
+        "none": 8.422901450746474E-09,
+        "add_note": 0.0029506455244259046,
+        "clear_notes": 4.757270026605418E-05
       },
       "confidence": 0.9960023644698753,
       "threshold": 0.05,
       "action": "offer_tool:list_notes",
-      "catalogue_version": "2026-10-18.1",
+      "catalogue_version": "2026-10-19.1",
       "decider": "degraded",
       "state": {
         "user_message": "list my notes",
@@ -407,58 +399,18 @@
           {
             "decision": {
               "type": "decision",
-              "decision_id": "0bd0674eae10423a9fab2dcbfc4de744",
-              "question_id": "clarify",
-              "probabilities": {
-                "no": 1,
-                "yes": 0
-              },
-              "confidence": 1,
-              "threshold": 0.7,
-              "action": "proceed",
-              "catalogue_version": "2026-10-18.1",
-              "decider": "degraded",
-              "state": {
-                "user_message": "list my notes",
-                "surface": "cli",
-                "recent": [],
-                "goal": null,
-                "entities": {},
-                "step": 0,
-                "last_tool_result": null,
-                "generator": "gen-small local, 8k"
-              },
-              "question": {
-                "kind": "noul",
-                "instructions": "Is the request too ambiguous to act on without asking the user one question?",
-                "options": [
-                  {
-                    "name": "yes"
-                  },
-                  {
-                    "name": "no"
-                  }
-                ]
-              },
-              "calibrated": false
-            },
-            "outcome": null
-          },
-          {
-            "decision": {
-              "type": "decision",
-              "decision_id": "1cc516978c814bc7aa3c63bc7b40f904",
+              "decision_id": "63474d6989e546418ef8d82f76e76bf8",
               "question_id": "tool",
               "probabilities": {
-                "none": 8.422901450746474E-09,
-                "clear_notes": 4.757270026605418E-05,
                 "list_notes": 0.9970017733524065,
-                "add_note": 0.0029506455244259046
+                "none": 8.422901450746474E-09,
+                "add_note": 0.0029506455244259046,
+                "clear_notes": 4.757270026605418E-05
               },
               "confidence": 0.9960023644698753,
               "threshold": 0.05,
               "action": "offer_tool:list_notes",
-              "catalogue_version": "2026-10-18.1",
+              "catalogue_version": "2026-10-19.1",
               "decider": "degraded",
               "state": {
                 "user_message": "list my notes",
@@ -499,156 +451,18 @@
           {
             "decision": {
               "type": "decision",
-              "decision_id": "26a4d21f7b1542e1b5fb132e83fd6b50",
-              "question_id": "done",
-              "probabilities": {
-                "no": 0,
-                "yes": 1
-              },
-              "confidence": 1,
-              "threshold": 0.8,
-              "action": "stop",
-              "catalogue_version": "2026-10-18.1",
-              "decider": "degraded",
-              "state": {
-                "user_message": "list my notes",
-                "surface": "cli",
-                "recent": [
-                  "called list_notes",
-                  "list_notes returned"
-                ],
-                "goal": null,
-                "entities": {},
-                "step": 1,
-                "last_tool_result": "list_notes: buy milk",
-                "generator": "gen-small local, 8k"
-              },
-              "question": {
-                "kind": "noul",
-                "instructions": "Is the user's request fully handled?",
-                "options": [
-                  {
-                    "name": "yes"
-                  },
-                  {
-                    "name": "no"
-                  }
-                ]
-              },
-              "calibrated": false
-            },
-            "outcome": null
-          },
-          {
-            "decision": {
-              "type": "decision",
-              "decision_id": "26d501466eb44f378854a022b247f73b",
-              "question_id": "difficulty",
-              "probabilities": {
-                "easy": 0,
-                "hard": 0,
-                "needs a frontier model": 0,
-                "trivial": 1,
-                "moderate": 0
-              },
-              "confidence": 1,
-              "threshold": 3.5,
-              "action": "stay_on_generator",
-              "catalogue_version": "2026-10-18.1",
-              "decider": "degraded",
-              "state": {
-                "user_message": "list my notes",
-                "surface": "cli",
-                "recent": [],
-                "goal": null,
-                "entities": {},
-                "step": 0,
-                "last_tool_result": null,
-                "generator": "gen-small local, 8k"
-              },
-              "question": {
-                "kind": "score",
-                "instructions": "How hard is this for a small local model?",
-                "options": [
-                  {
-                    "name": "trivial"
-                  },
-                  {
-                    "name": "easy"
-                  },
-                  {
-                    "name": "moderate"
-                  },
-                  {
-                    "name": "hard"
-                  },
-                  {
-                    "name": "needs a frontier model"
-                  }
-                ]
-              },
-              "calibrated": false
-            },
-            "outcome": null
-          },
-          {
-            "decision": {
-              "type": "decision",
-              "decision_id": "aa5772e8042f463b8f1104e672374097",
-              "question_id": "stuck",
-              "probabilities": {
-                "no": 1,
-                "yes": 0
-              },
-              "confidence": 1,
-              "threshold": 0.7,
-              "action": "continue",
-              "catalogue_version": "2026-10-18.1",
-              "decider": "degraded",
-              "state": {
-                "user_message": "list my notes",
-                "surface": "cli",
-                "recent": [
-                  "called list_notes",
-                  "list_notes returned"
-                ],
-                "goal": null,
-                "entities": {},
-                "step": 1,
-                "last_tool_result": "list_notes: buy milk",
-                "generator": "gen-small local, 8k"
-              },
-              "question": {
-                "kind": "noul",
-                "instructions": "Is the agent repeating itself or making no progress?",
-                "options": [
-                  {
-                    "name": "yes"
-                  },
-                  {
-                    "name": "no"
-                  }
-                ]
-              },
-              "calibrated": false
-            },
-            "outcome": null
-          },
-          {
-            "decision": {
-              "type": "decision",
-              "decision_id": "dd9dd22309144fe39a9d392330944de5",
+              "decision_id": "693d6327ac0f459f8aa9dd3c7d40601a",
               "question_id": "tool",
               "probabilities": {
-                "none": 8.422901450746474E-09,
-                "clear_notes": 4.757270026605418E-05,
                 "list_notes": 0.9970017733524065,
-                "add_note": 0.0029506455244259046
+                "none": 8.422901450746474E-09,
+                "add_note": 0.0029506455244259046,
+                "clear_notes": 4.757270026605418E-05
               },
               "confidence": 0.9960023644698753,
               "threshold": 0.05,
               "action": "offer_tool:list_notes",
-              "catalogue_version": "2026-10-18.1",
+              "catalogue_version": "2026-10-19.1",
               "decider": "degraded",
               "state": {
                 "user_message": "list my notes",
@@ -692,19 +506,19 @@
           {
             "decision": {
               "type": "decision",
-              "decision_id": "f7c741effb7c4c79a60903e2020fb23e",
+              "decision_id": "7c26c1c936834eb7909047d5b1193ab9",
               "question_id": "intent",
               "probabilities": {
-                "ask_clarifying_question": 0.2,
-                "answer_directly": 0.2,
+                "use_tools": 0.2,
                 "recall_memory": 0.2,
-                "run_skill": 0.2,
-                "use_tools": 0.2
+                "answer_directly": 0.2,
+                "ask_clarifying_question": 0.2,
+                "run_skill": 0.2
               },
               "confidence": 0,
               "threshold": 0.05,
               "action": "generator_with_full_shortlist",
-              "catalogue_version": "2026-10-18.1",
+              "catalogue_version": "2026-10-19.1",
               "decider": "degraded",
               "state": {
                 "user_message": "list my notes",
@@ -739,6 +553,176 @@
                   {
                     "name": "ask_clarifying_question",
                     "description": "the request is ambiguous; ask the user one question first"
+                  }
+                ]
+              },
+              "calibrated": false
+            },
+            "outcome": null
+          },
+          {
+            "decision": {
+              "type": "decision",
+              "decision_id": "8addbcad09d7449ca6835ee83715fc24",
+              "question_id": "clarify",
+              "probabilities": {},
+              "confidence": 0,
+              "threshold": 0.7,
+              "action": "proceed",
+              "catalogue_version": "2026-10-19.1",
+              "decider": "degraded",
+              "state": {
+                "user_message": "list my notes",
+                "surface": "cli",
+                "recent": [],
+                "goal": null,
+                "entities": {},
+                "step": 0,
+                "last_tool_result": null,
+                "generator": "gen-small local, 8k"
+              },
+              "question": {
+                "kind": "noul",
+                "instructions": "Is the request too ambiguous to act on without asking the user one question?",
+                "options": [
+                  {
+                    "name": "yes"
+                  },
+                  {
+                    "name": "no"
+                  }
+                ]
+              }
+            },
+            "outcome": null
+          },
+          {
+            "decision": {
+              "type": "decision",
+              "decision_id": "b05cfe599ad34d00a1c190830bfb2e82",
+              "question_id": "difficulty",
+              "probabilities": {
+                "easy": 0,
+                "moderate": 0,
+                "needs a frontier model": 0,
+                "trivial": 1,
+                "hard": 0
+              },
+              "confidence": 1,
+              "threshold": 3.5,
+              "action": "stay_on_generator",
+              "catalogue_version": "2026-10-19.1",
+              "decider": "degraded",
+              "state": {
+                "user_message": "list my notes",
+                "surface": "cli",
+                "recent": [],
+                "goal": null,
+                "entities": {},
+                "step": 0,
+                "last_tool_result": null,
+                "generator": "gen-small local, 8k"
+              },
+              "question": {
+                "kind": "score",
+                "instructions": "How hard is this for a small local model?",
+                "options": [
+                  {
+                    "name": "trivial"
+                  },
+                  {
+                    "name": "easy"
+                  },
+                  {
+                    "name": "moderate"
+                  },
+                  {
+                    "name": "hard"
+                  },
+                  {
+                    "name": "needs a frontier model"
+                  }
+                ]
+              },
+              "calibrated": false
+            },
+            "outcome": null
+          },
+          {
+            "decision": {
+              "type": "decision",
+              "decision_id": "c5626626ed984e0abedf5741b9093dd5",
+              "question_id": "stuck",
+              "probabilities": {},
+              "confidence": 0,
+              "threshold": 0.7,
+              "action": "continue",
+              "catalogue_version": "2026-10-19.1",
+              "decider": "degraded",
+              "state": {
+                "user_message": "list my notes",
+                "surface": "cli",
+                "recent": [
+                  "called list_notes",
+                  "list_notes returned"
+                ],
+                "goal": null,
+                "entities": {},
+                "step": 1,
+                "last_tool_result": "list_notes: buy milk",
+                "generator": "gen-small local, 8k"
+              },
+              "question": {
+                "kind": "noul",
+                "instructions": "Is the agent repeating itself or making no progress?",
+                "options": [
+                  {
+                    "name": "yes"
+                  },
+                  {
+                    "name": "no"
+                  }
+                ]
+              }
+            },
+            "outcome": null
+          },
+          {
+            "decision": {
+              "type": "decision",
+              "decision_id": "ea04e2e904af4c7485ff97775809f483",
+              "question_id": "done",
+              "probabilities": {
+                "yes": 1,
+                "no": 0
+              },
+              "confidence": 1,
+              "threshold": 0.8,
+              "action": "stop",
+              "catalogue_version": "2026-10-19.1",
+              "decider": "degraded",
+              "state": {
+                "user_message": "list my notes",
+                "surface": "cli",
+                "recent": [
+                  "called list_notes",
+                  "list_notes returned"
+                ],
+                "goal": null,
+                "entities": {},
+                "step": 1,
+                "last_tool_result": "list_notes: buy milk",
+                "generator": "gen-small local, 8k"
+              },
+              "question": {
+                "kind": "noul",
+                "instructions": "Is the user's request fully handled?",
+                "options": [
+                  {
+                    "name": "yes"
+                  },
+                  {
+                    "name": "no"
                   }
                 ]
               },

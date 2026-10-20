@@ -47,6 +47,8 @@ internal static class ChatCommand
                 renderer.Notice($"[grey]⏰ job {Markup.Escape(job.Name)}: {Markup.Escape(run.Status)} (session {Markup.Escape(run.SessionId)})[/]");
             runtime.JobCompleted += OnJob;
             renderer.Banner(session.Id, session.Slots.Current(ModelSlots.Generator).Profile.Id, runtime.Tools.List().Count);
+            foreach (var notice in runtime.DeciderNotices)
+                renderer.Notice($"[yellow]{Markup.Escape(notice)}[/]");
             if (session.Snapshot().Head > 0)
                 renderer.Notice($"[grey]Resumed: {session.Snapshot().Transcript.Length} entries in this session's log.[/]");
 

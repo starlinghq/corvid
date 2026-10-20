@@ -28,6 +28,14 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue) : IValidate
             if (settings.Escalation.Concat(settings.Fallbacks).Contains(settings.Model, StringComparer.OrdinalIgnoreCase))
                 errors.Add($"Corvid:Models:Slots:{slot}: the default model cannot also be its own escalation or fallback.");
         }
+        // The decider has two tiers at most (§5.5), and the degraded tier is its fallback: a chain would never be used.
+        if (slots.TryGetValue(ModelSlots.Decider, out var decider))
+        {
+            if (decider.Escalation.Count > 1)
+                errors.Add($"Corvid:Models:Slots:{ModelSlots.Decider}:Escalation: at most one model, the second tier for gates below their floor.");
+            if (decider.Fallbacks.Count > 0)
+                errors.Add($"Corvid:Models:Slots:{ModelSlots.Decider}:Fallbacks: the decider falls back to the degraded tier; remove the fallbacks.");
+        }
         // The degraded decider (plan §5.6) asks the generator yes/no questions and embeds choices: both are required.
         foreach (var required in new[] { ModelSlots.Generator, ModelSlots.TextEmbedder })
             if (!slots.ContainsKey(required))

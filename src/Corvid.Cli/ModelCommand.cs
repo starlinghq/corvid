@@ -57,7 +57,9 @@ internal static class ModelCommand
         }
         console.Write(table);
         console.MarkupLine($"[grey]Model cache: {Markup.Escape(host.Services.GetRequiredService<Corvid.Models.Starling.StarlingModelStore>().CacheDirectory)}[/]");
-        console.MarkupLine("[grey]The decider slot runs on the degraded tier until Starlings.Models.Kev is published.[/]");
+        // Short lines, as below: a redirected console wraps at 80 columns.
+        console.MarkupLine("[grey]Without kev-0.8b the decider runs on the degraded tier.[/]");
+        console.MarkupLine("[grey]kev-4b is an optional second tier for gates.[/]");
         if (catalogue.Models.Any(model => !catalogue.Check(model.Name).IsReady))
         {
             // Short lines: a redirected console wraps at 80 columns, and the command should stay whole to copy.

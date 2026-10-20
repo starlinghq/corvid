@@ -9,7 +9,8 @@ namespace Corvid.Fabric;
 
 /// <summary>One question's result at a checkpoint.</summary>
 /// <param name="Answer">The decider's answer, or null when it gave none (the below-floor action then applied).</param>
-public sealed record FabricVerdict(string DecisionId, DecisionAnswer? Answer, PolicyVerdict Verdict);
+/// <param name="Decider">As recorded on this question's event: the checkpoint's decider, or the second tier's for an escalated gate.</param>
+public sealed record FabricVerdict(string DecisionId, DecisionAnswer? Answer, PolicyVerdict Verdict, string? Decider = null);
 
 /// <summary>A checkpoint's results, the decider that answered, and the <c>Decision</c> events appended.</summary>
 /// <param name="Decider">As recorded on the events, for example <c>degraded</c> or <c>degraded after kev-0.8b: state_over_budget</c>.</param>
@@ -26,7 +27,8 @@ public sealed record CheckpointResult(
 
 /// <summary>
 /// Runs one checkpoint (plan §5.2): one request to the calibrated decider, falling back to the degraded tier when there is
-/// none, the state is over the hard stop, or the decider declines; then the policy; then one <c>Decision</c> event per
+/// none, the state is over the hard stop, or the decider declines; with a second tier configured, the gates the first tier
+/// answered below their floor go to it on the same state (§5.5); then the policy; then one <c>Decision</c> event per
 /// question, with its threshold, action, floor version and decider, appended as a single batch.
 /// </summary>
 public sealed class DecisionFabric
@@ -35,22 +37,36 @@ public sealed class DecisionFabric
 
     private readonly IDecider _degraded;
     private readonly IDecider? _calibrated;
+    private readonly IDecider? _escalation;
     private readonly IEventLog _log;
 
     /// <param name="degraded">The degraded tier (§5.6); always available.</param>
-    /// <param name="calibrated">The <c>decider</c> slot's calibrated decider (Kev, C-004b), or null until one exists.</param>
-    public DecisionFabric(DecisionPolicy policy, IDecider degraded, IEventLog log, IDecider? calibrated = null)
+    /// <param name="calibrated">The <c>decider</c> slot's calibrated decider (Kev-0.8B), or null when none is available.</param>
+    /// <param name="escalation">
+    /// The second tier of §5.5 (Kev-4B): asked only about gates (<c>risk</c>, <c>skill_write_safe</c>, <c>memory_op</c>) whose
+    /// calibrated answer is below the floor, before the policy falls back to the user. Requires <paramref name="calibrated"/>.
+    /// </param>
+    public DecisionFabric(DecisionPolicy policy, IDecider degraded, IEventLog log, IDecider? calibrated = null, IDecider? escalation = null)
     {
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(degraded);
         ArgumentNullException.ThrowIfNull(log);
+        if (escalation is not null && calibrated is null)
+            throw new ArgumentException("A second-tier decider needs a calibrated first tier.", nameof(escalation));
         Policy = policy;
         _degraded = degraded;
         _log = log;
         _calibrated = calibrated;
+        _escalation = escalation;
     }
 
     public DecisionPolicy Policy { get; }
+
+    /// <summary>The calibrated first tier's name, or null when every checkpoint runs on the degraded tier.</summary>
+    public string? CalibratedDecider => _calibrated?.Name;
+
+    /// <summary>The second tier's name for gates below their floor, or null when there is none.</summary>
+    public string? EscalationDecider => _escalation?.Name;
 
     /// <param name="questions">By request key: a catalogue id, or an id with an instance suffix (<c>clear_results/call-7</c>).</param>
     /// <param name="conditions">Facts some questions require before acting (<see cref="FabricConditions"/>).</param>
@@ -83,6 +99,15 @@ public sealed class DecisionFabric
         var (result, fallback) = await AskAsync(request, state, cancellationToken);
         var decider = fallback is null ? result.Decider : $"{result.Decider} after {fallback.Decider}: {WireName(fallback.Reason)}";
         var answers = result is DeciderAnswers answered ? answered.Answers : ImmutableDictionary<string, DecisionAnswer>.Empty;
+        var deciders = result is DeciderAnswers { Declined.IsEmpty: false } partial
+            ? partial.Declined.ToImmutableDictionary(pair => pair.Key, pair => $"{decider} declined: {pair.Value}", StringComparer.Ordinal)
+            : ImmutableDictionary<string, string>.Empty;
+        if (fallback is null && _escalation is not null && result is DeciderAnswers first)
+        {
+            var (escalatedAnswers, escalatedBy) = await EscalateAsync(request, first, cancellationToken);
+            answers = escalatedAnswers;
+            deciders = deciders.SetItems(escalatedBy);
+        }
 
         var verdicts = ImmutableDictionary.CreateBuilder<string, FabricVerdict>(StringComparer.Ordinal);
         var events = new List<EventData>();
@@ -91,10 +116,11 @@ public sealed class DecisionFabric
             var answer = answers.TryGetValue(key, out var candidate) && Fits(candidate, question) ? candidate : null;
             var verdict = Policy.Evaluate(key, answer, conditions);
             var decisionId = Guid.NewGuid().ToString("N");
-            verdicts[key] = new FabricVerdict(decisionId, answer, verdict);
+            var answeredBy = deciders.GetValueOrDefault(key, decider);
+            verdicts[key] = new FabricVerdict(decisionId, answer, verdict, answeredBy);
             events.Add(EventData.Create(new Decision(decisionId, key,
                 answer?.ToProbabilityMap() ?? ImmutableDictionary<string, double>.Empty,
-                answer?.Confidence ?? 0, verdict.Threshold, verdict.Action, Policy.Floors.Version, decider,
+                answer?.Confidence ?? 0, verdict.Threshold, verdict.Action, Policy.Floors.Version, answeredBy,
                 request.State, Asked(question), answer?.Calibrated)));
         }
 
@@ -143,6 +169,53 @@ public sealed class DecisionFabric
         return (await _degraded.DecideAsync(request, cancellationToken), fallback);
     }
 
+    /// <summary>
+    /// The two-tier decider (§5.5): the gates the first tier answered, calibrated, below their floor are asked again of the
+    /// second tier on the same state, in one request. Its answers replace the first tier's and are recorded as
+    /// <c>kev-4b after kev-0.8b: below_floor</c>; when it declines or fails, the first tier's answer stands, recorded as
+    /// <c>kev-0.8b after kev-4b: failed</c>, and the policy takes the below-floor action as before. Floors are compared
+    /// without the caller's conditions: a missing condition holds either answer back anyway.
+    /// </summary>
+    private async Task<(ImmutableDictionary<string, DecisionAnswer> Answers, ImmutableDictionary<string, string> Deciders)> EscalateAsync(
+        DecisionRequest request, DeciderAnswers first, CancellationToken cancellationToken)
+    {
+        var below = request.Questions
+            .Where(pair => Policy.Catalogue.Resolve(pair.Key).Role == QuestionRole.Gate
+                && first.Answers.TryGetValue(pair.Key, out var answer) && answer.Calibrated && Fits(answer, pair.Value)
+                && !Policy.ClearsFloor(pair.Key, answer))
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .ToArray();
+        if (below.Length == 0)
+            return (first.Answers, ImmutableDictionary<string, string>.Empty);
+
+        DeciderResult second;
+        try
+        {
+            second = await _escalation!.DecideAsync(new DecisionRequest(request.State, below), cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            second = new DeciderUnavailable(_escalation!.Name, DeciderUnavailableReason.Failed, exception.Message);
+        }
+
+        var answers = first.Answers.ToBuilder();
+        var deciders = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+        foreach (var (key, question) in below)
+        {
+            if (second is DeciderAnswers escalated && escalated.Answers.TryGetValue(key, out var answer) && Fits(answer, question))
+            {
+                answers[key] = answer;
+                deciders[key] = $"{escalated.Decider} after {first.Decider}: below_floor";
+            }
+            else
+            {
+                var reason = second is DeciderUnavailable unavailable ? WireName(unavailable.Reason) : "no_answer";
+                deciders[key] = $"{first.Decider} after {second.Decider}: {reason}";
+            }
+        }
+        return (answers.ToImmutable(), deciders.ToImmutable());
+    }
+
     /// <summary>The persisted form of a question as asked, for calibration and Kev training export (C-021).</summary>
     public static AskedQuestion Asked(DecisionQuestion question)
     {
@@ -181,6 +254,9 @@ public sealed class DecisionFabric
         activity.SetTag("corvid.decider", result.Decider);
         if (result.Fallback is { } fallback)
             activity.SetTag("corvid.decider.fallback", WireName(fallback.Reason));
+        var escalated = verdicts.Where(pair => pair.Value.Decider != result.Decider).Select(pair => pair.Key).ToArray();
+        if (escalated.Length > 0)
+            activity.SetTag("corvid.decider.escalated", escalated);
         activity.SetTag("corvid.decide.questions", verdicts.Select(pair => pair.Key).ToArray());
         activity.SetTag("corvid.decide.confidences", verdicts.Select(pair => pair.Value.Answer?.Confidence ?? 0).ToArray());
         activity.SetTag("corvid.decide.actions", verdicts.Select(pair => pair.Value.Verdict.Action).ToArray());
@@ -190,6 +266,7 @@ public sealed class DecisionFabric
             {
                 ["corvid.question.id"] = key,
                 ["corvid.decision.id"] = verdict.DecisionId,
+                ["corvid.decider"] = verdict.Decider,
                 ["corvid.confidence"] = verdict.Answer?.Confidence ?? 0,
                 ["corvid.threshold"] = verdict.Verdict.Threshold,
                 ["corvid.action"] = verdict.Verdict.Action,

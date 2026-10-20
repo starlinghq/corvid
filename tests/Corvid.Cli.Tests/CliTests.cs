@@ -167,6 +167,17 @@ public sealed class ChatTests
         Assert.Contains("Unknown command /frobnicate.", run.Output, StringComparison.Ordinal);
         Assert.Contains("/memory", run.Output, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task WithoutKevTheChatStartsOnTheDegradedTierAndSaysHowToFetchIt()
+    {
+        using var run = new CliRun(new FakeModels(kevReady: false));
+        var exit = await run.RunAsync(["chat", "--set", "Models:Slots:decider:Model=fake-kev"], "hello", "/exit");
+        Assert.Equal(ExitCodes.Success, exit);
+        Assert.Contains("degraded tier", run.Output, StringComparison.Ordinal);
+        Assert.Contains("corvid model download fake-kev", run.Output, StringComparison.Ordinal);
+        Assert.Contains("Hello from the fake generator.", run.Output, StringComparison.Ordinal);
+    }
 }
 
 public sealed class CommandLineTests
@@ -227,9 +238,10 @@ public sealed class ModelAndDoctorTests
         using var run = new CliRun(useStarling: true);
         Assert.Equal(ExitCodes.Success, await run.RunAsync(["model"]));
         var output = run.Output;
-        foreach (var model in new[] { "qwen3.5-0.8b", "gliner2-base-v1", "embeddinggemma-2", "multilingual-e5-small" })
+        foreach (var model in new[] { "qwen3.5-0.8b", "gliner2-base-v1", "embeddinggemma-2", "multilingual-e5-small", "kev-0.8b", "kev-4b" })
             Assert.Contains(model, output, StringComparison.Ordinal);
-        Assert.Equal(4, output.Split("missing").Length - 1);
+        Assert.Equal(6, output.Split("missing").Length - 1);
+        Assert.Contains("Without kev-0.8b the decider runs on the degraded tier.", output, StringComparison.Ordinal);
         Assert.Contains("corvid model download <model>", output, StringComparison.Ordinal);
     }
 

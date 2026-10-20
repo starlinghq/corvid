@@ -37,7 +37,7 @@ public sealed class FabricTests
         Assert.Equal(["clarify", "difficulty", "intent", "tool"], decisions.Select(d => d.QuestionId));
         Assert.All(decisions, d =>
         {
-            Assert.Equal("2026-10-18.1", d.CatalogueVersion);
+            Assert.Equal("2026-10-19.1", d.CatalogueVersion);
             Assert.Equal("degraded", d.Decider);
             var verdict = result[d.QuestionId];
             Assert.Equal(verdict.DecisionId, d.DecisionId);
@@ -59,7 +59,10 @@ public sealed class FabricTests
         Assert.False(tool.Calibrated);
         Assert.Equal(0.05, tool.Threshold);
         Assert.Equal(3, tool.Probabilities.Count);
-        Assert.Equal("ask_clarifying_question", decisions.Single(d => d.QuestionId == "clarify").Action);
+        // An uncalibrated yes never diverts the turn (C-004b): the degraded tier does not even ask, and clarify proceeds.
+        var clarify = decisions.Single(d => d.QuestionId == "clarify");
+        Assert.Equal("proceed", clarify.Action);
+        Assert.Empty(clarify.Probabilities);
         var difficulty = decisions.Single(d => d.QuestionId == "difficulty");
         Assert.Equal("stay_on_generator", difficulty.Action);
         Assert.Equal(3.5, difficulty.Threshold);

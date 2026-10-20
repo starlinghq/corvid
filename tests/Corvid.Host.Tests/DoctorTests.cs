@@ -15,7 +15,8 @@ public sealed class DoctorTests
         Assert.Contains(checks, check => check is { Name: "configuration", Status: CheckStatus.Ok });
         Assert.Contains(checks, check => check is { Name: "data directory", Status: CheckStatus.Ok });
         Assert.Contains(checks, check => check is { Name: "fake-gen", Status: CheckStatus.Ok } && check.Detail.Contains("generator", StringComparison.Ordinal));
-        Assert.Contains(checks, check => check.Name == "decider" && check.Detail.Contains("Kev", StringComparison.Ordinal));
+        // The fakes unbind the decider: the degraded tier, said as such.
+        Assert.Contains(checks, check => check is { Name: "decider", Status: CheckStatus.Info } && check.Detail.Contains("degraded tier", StringComparison.Ordinal));
         Assert.Contains(checks, check => check.Name == "bubblewrap");
         Assert.Contains(checks, check => check.Name == "corvid-sandbox");
         Assert.Contains(checks, check => check.Area == "vault");

@@ -1,5 +1,6 @@
 using Starlings.Models.EmbeddingGemma2;
 using Starlings.Models.Gliner2;
+using Starlings.Models.Kev;
 using Starlings.Models.Qwen35;
 
 namespace Corvid.Models.Starling;
@@ -43,6 +44,15 @@ public static class StarlingProfiles
     /// constant). Unlike the others, its tokenizer truncates on the right to 512, as the reference model does.
     /// </summary>
     public static ModelProfile E5 { get; } = Encoder("multilingual-e5-small@cpu", 512);
+
+    /// <summary>
+    /// Kev-0.8B: states up to <see cref="KevModelProfile.MaxStateTokens"/> (8,192, the validated context) are accepted and
+    /// longer ones refused, never truncated. It answers typed questions and generates nothing.
+    /// </summary>
+    public static ModelProfile Kev08B { get; } = Encoder("kev-0.8b@cpu", KevModelProfile.MaxStateTokens);
+
+    /// <summary>Kev-4B: the same limits as Kev-0.8B.</summary>
+    public static ModelProfile Kev4B { get; } = Encoder("kev-4b@cpu", KevModelProfile.MaxStateTokens);
 
     private static ModelProfile Encoder(string id, int maxTokens) => new ModelProfile(
         id, maxTokens, maxTokens, ToolCallSupport.None, StructuredOutputSupport.None, PromptCachingStyle.None,

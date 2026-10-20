@@ -70,6 +70,13 @@ public sealed record CatalogueQuestion(
 {
     public bool HasFixedOptions => !Options.IsEmpty;
 
+    /// <summary>
+    /// Acting on the question diverts the turn from the user's request: <c>clarify</c> asks instead of acting, <c>stuck</c>
+    /// stops or escalates. Policy never lets an uncalibrated answer do that unless
+    /// <see cref="FloorConfiguration.DegradedTurnBlocking"/> is set, because a small generator's bare yes is no confidence.
+    /// </summary>
+    public bool BlocksTurn { get; init; }
+
     /// <summary>The question to send, with the catalogue's options or the caller's shortlist.</summary>
     public DecisionQuestion ToQuestion(IEnumerable<QuestionOption>? options = null, DecisionContent? instructions = null)
     {
@@ -200,7 +207,7 @@ public sealed class QuestionCatalogue
         yield return Q("needs_recall", ingress, noul, "Does answering need facts remembered from earlier conversations?", [],
             routing, FloorMeasure.YesProbability, "hybrid_retrieval", "core_facts_top3", DegradedRule.GeneratorYesNo);
         yield return Q("clarify", ingress, noul, "Is the request too ambiguous to act on without asking the user one question?", [],
-            routing, FloorMeasure.YesProbability, "ask_clarifying_question", "proceed", DegradedRule.GeneratorYesNo);
+            routing, FloorMeasure.YesProbability, "ask_clarifying_question", "proceed", DegradedRule.GeneratorYesNo) with { BlocksTurn = true };
         yield return Q("tool", [Checkpoint.Ingress, Checkpoint.Step], choice, "Which tool should run first?", [],
             routing, FloorMeasure.Confidence, "offer_tool", "offer_shortlist", DegradedRule.EmbeddingMargin);
         yield return Q("skill", ingress, choice, "Which skill applies to this request?", [],
@@ -208,7 +215,7 @@ public sealed class QuestionCatalogue
         yield return Q("done", step, noul, "Is the user's request fully handled?", [],
             routing, FloorMeasure.YesProbability, "stop", "continue", DegradedRule.GeneratorYesNo);
         yield return Q("stuck", step, noul, "Is the agent repeating itself or making no progress?", [],
-            routing, FloorMeasure.YesProbability, "change_strategy", "continue", DegradedRule.GeneratorYesNo);
+            routing, FloorMeasure.YesProbability, "change_strategy", "continue", DegradedRule.GeneratorYesNo) with { BlocksTurn = true };
         // Keep, stub or drop say nothing an embedding can match, so the degraded tier uses the default clearing rule.
         yield return Q("clear_results", step, choice, "Should this old tool result stay in context?",
             [new("keep", "still needed for the current task"), new("stub", "replace with a one-line summary"),
