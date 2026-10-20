@@ -56,32 +56,43 @@ public sealed class CorvidRuntimeFactory(
     IEnumerable<ToolFunction> tools,
     CorvidConfigFile? configFile = null)
 {
-    /// <summary>Configured models that are missing or corrupt, checked offline by size.</summary>
-    public IReadOnlyList<ModelAvailability> CheckModels()
-    {
-        using var devices = new DeviceSchedulers();
-        using var composer = new ModelComposer(catalogue, options.Value, devices, metrics, feed);
-        return composer.CheckConfigured();
-    }
+    /// <summary>
+    /// Configured models that stop the runtime from starting, checked offline (by size for Starling's): every missing or
+    /// corrupt model, and a remote model that is unavailable (no Vault) when it is some slot's default. An unavailable
+    /// escalation or fallback target is left out instead (<see cref="CheckOptionalModels"/>), so the rest still runs.
+    /// </summary>
+    public IReadOnlyList<ModelAvailability> CheckModels() => Check().Required;
+
+    /// <summary>Unavailable escalation and fallback targets the runtime will start without (plan §10.5: cloud needs Vault).</summary>
+    public IReadOnlyList<ModelAvailability> CheckOptionalModels() => Check().Optional;
 
     /// <exception cref="ModelsUnavailableException">A configured model is not usable offline; nothing was loaded.</exception>
     public async Task<CorvidRuntime> StartAsync(CancellationToken cancellationToken = default)
     {
-        var missing = CheckModels();
-        if (missing.Count > 0)
-            throw new ModelsUnavailableException([.. missing]);
+        var (required, optional) = Check();
+        if (required.Count > 0)
+            throw new ModelsUnavailableException([.. required]);
         // Loading reads models from disk synchronously (seconds for Qwen); keep it off the caller's thread.
-        return await Task.Run(Build, cancellationToken).ConfigureAwait(false);
+        return await Task.Run(() => Build(optional), cancellationToken).ConfigureAwait(false);
     }
 
-    private CorvidRuntime Build()
+    private (IReadOnlyList<ModelAvailability> Required, IReadOnlyList<ModelAvailability> Optional) Check()
+    {
+        using var devices = new DeviceSchedulers();
+        using var composer = new ModelComposer(catalogue, options.Value, devices, metrics, feed);
+        var unready = composer.CheckConfigured();
+        var optional = unready.Where(item => item.Readiness == ModelReadiness.Unavailable && !composer.IsDefault(item.Model.Name)).ToList();
+        return ([.. unready.Except(optional)], optional);
+    }
+
+    private CorvidRuntime Build(IReadOnlyList<ModelAvailability> unavailable)
     {
         var settings = options.Value;
         var devices = new DeviceSchedulers(settings.Devices.CpuThreads);
         var composer = new ModelComposer(catalogue, settings, devices, metrics, feed);
         try
         {
-            var registry = composer.Compose();
+            var registry = composer.Compose(unavailable.Select(item => item.Model.Name).ToHashSet(StringComparer.OrdinalIgnoreCase));
             var log = new SqliteEventLog(CorvidPaths.EventLog(settings));
             // Kev when the decider slot is bound (C-004b), with Kev-4B as the second tier when configured; the degraded tier
             // always, for states over the hard stop and requests Kev refuses.
@@ -161,7 +172,7 @@ public sealed class CorvidRuntimeFactory(
                 : null;
 
             return new CorvidRuntime(settings, catalogue, composer, devices, metrics, feed, log, registry, fabric, approvals, prompters,
-                toolRegistry, memory, counter, builtin, checkpoints, skills);
+                toolRegistry, memory, counter, builtin, checkpoints, skills) { UnavailableModels = [.. unavailable] };
         }
         catch
         {

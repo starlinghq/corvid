@@ -46,7 +46,11 @@ public sealed record RetrievedItem(
     DateTimeOffset RecordedAt,
     int? Hops,
     Fact? Fact,
-    Episode? Episode);
+    Episode? Episode)
+{
+    /// <summary>A local-only fact: never put in a prompt for a model whose privacy class is cloud (plan §10.4).</summary>
+    public bool LocalOnly => Fact?.LocalOnly == true;
+}
 
 /// <param name="Embedder">The embedder whose index was searched, or null when retrieval used FTS and the graph only.</param>
 /// <param name="Dropped">Candidates left out because they did not fit the token budget.</param>

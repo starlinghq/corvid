@@ -6,5 +6,8 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
     <ProjectReference Include="../Corvid.Abstractions/Corvid.Abstractions.csproj" />
+    <!-- Remote bindings authenticate through Vault's egress proxy (plan §10.5): placeholders and the Vault handler only. -->
+    <ProjectReference Include="../Corvid.Vault.Client/Corvid.Vault.Client.csproj" />
+    <InternalsVisibleTo Include="Corvid.Models.Tests" />
   </ItemGroup>
 </Project>

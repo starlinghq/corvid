@@ -97,7 +97,7 @@ public sealed class CoreBlockStore
             using var command = connection.CreateCommand();
             command.CommandText = """
                 INSERT OR IGNORE INTO core_blocks (name, content, budget_tokens, local_only, revision, updated_at)
-                VALUES ($name, '', $budget, 0, 0, $at);
+                VALUES ($name, '', $budget, 1, 0, $at);
                 """;
             command.Parameters.AddWithValue("$name", name);
             command.Parameters.AddWithValue("$budget", budgets.BudgetOf(name));

@@ -16,6 +16,7 @@ using Corvid.Kernel.Context;
 using Corvid.Kernel.Events;
 using Corvid.Memory;
 using Corvid.Models;
+using Corvid.Models.Privacy;
 using Corvid.Tools;
 using Microsoft.Extensions.AI;
 
@@ -42,6 +43,9 @@ public sealed class TurnRunner
     private const string NudgeRequired = "Call the {0} tool now with the arguments the request gives. Do not describe a result before the tool has run.";
     private const string NudgeClarify = "The request is ambiguous. Ask the user one short question that would let you act. Do not call tools.";
     private const string NudgeFinish = "Answer the user now from the results above. Do not call tools.";
+    /// <summary>The reason on a <see cref="TurnResult.Escalations"/> entry when the egress gate kept the turn local.</summary>
+    public const string PrivacyRetreat = "privacy";
+
     private const string NudgeBudget = "The step budget for this turn is used up. Answer the user now with what you have. Do not call tools.";
 
     private static readonly JsonWriterOptions WriterOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
@@ -224,7 +228,7 @@ public sealed class TurnRunner
         private readonly HashSet<string> _lastRound = new(StringComparer.Ordinal);
         private ImmutableSortedDictionary<string, ImmutableArray<string>> _entities = ImmutableSortedDictionary<string, ImmutableArray<string>>.Empty;
         private ImmutableArray<Offered> _shortlist = [];
-        private string _memoryNote = "";
+        private ImmutableArray<RetrievedItem> _recalled = [];
         private ImmutableArray<SkillOption> _skills = [];
         private string _skillNote = "";
         private string? _skill;
@@ -379,15 +383,26 @@ public sealed class TurnRunner
             var budget = profile.AcceptedContext - _options.MaxOutputTokens - _options.ContextReserve;
             var toolTokens = tools.Sum(tool => counter.CountTokens(tool.Function.Name) + counter.CountTokens(tool.Function.Description)
                 + counter.CountTokens(tool.Function.JsonSchema.GetRawText()));
-            var system = SystemPrompt(profile);
+            // Prompt caching (plan §8): a model that caches on breakpoints keeps a frozen system prompt, so this turn's recalled
+            // memory and skill go after the history as a one-shot note instead of into the system prompt.
+            var notes = string.Join("\n\n", new[] { MemoryNote(profile), _skillNote }.Where(part => part.Length > 0));
+            var frozen = profile.Caching == PromptCachingStyle.Breakpoints;
+            var noteTokens = frozen && notes.Length > 0 ? counter.CountTokens(notes) : 0;
+            var system = SystemPrompt(profile, frozen ? "" : notes);
             var rendered = await FitAsync((snapshot, clearMore) =>
-                PromptRenderer.Render(snapshot, system, counter, budget, _lastRound, toolTokens, clearMore), profile, counter, budget,
-                cancellationToken).ConfigureAwait(false);
+                PromptRenderer.Render(snapshot, system, counter, budget, _lastRound, toolTokens + noteTokens, clearMore), profile, counter,
+                budget, cancellationToken).ConfigureAwait(false);
             if (rendered.OverBudget)
                 throw new ContextOverBudgetException($"{rendered.Tokens} tokens against a budget of {rendered.Budget}");
 
             var messages = rendered.Messages.ToList();
-            var options = new ChatOptions { MaxOutputTokens = _options.MaxOutputTokens };
+            if (noteTokens > 0)
+                messages.Add(new ChatMessage(ChatRole.User, notes));
+            // The session and its taint travel with the request: a cloud binding's egress gate keeps placeholders stable per
+            // session and is stricter for outside content, and the Vault handler tells Vault (plan §10.3, §10.4). A prompt
+            // rendered with local-only memory says so, so a fallback to a cloud model refuses it rather than sending it.
+            var options = new ModelRequestContext(runner.SessionId, runner.Tainted, HoldsLocalOnly(profile))
+                .Apply(new ChatOptions { MaxOutputTokens = _options.MaxOutputTokens });
             if (!tools.IsEmpty)
             {
                 options.Tools = [.. tools.Select(tool => (AITool)tool.Function)];
@@ -396,6 +411,7 @@ public sealed class TurnRunner
             if (nudge is not null)
                 messages.Add(new ChatMessage(ChatRole.User, nudge));
 
+            var head = _services.Log.GetHead(runner.SessionId, cancellationToken);
             if (required is not null)
             {
                 // Native tool calling can be forced. Template-rendered clients (Starling's Qwen) reject required modes, so
@@ -406,7 +422,9 @@ public sealed class TurnRunner
                     forced.ToolMode = ChatToolMode.RequireSpecific(required);
                     try
                     {
-                        return await generator.GetResponseAsync(messages, forced, cancellationToken).ConfigureAwait(false);
+                        var answer = await generator.GetResponseAsync(messages, forced, cancellationToken).ConfigureAwait(false);
+                        NotePrivacyRetreat(head, cancellationToken);
+                        return answer;
                     }
                     catch (NotSupportedException)
                     {
@@ -414,7 +432,18 @@ public sealed class TurnRunner
                 }
                 messages.Add(new ChatMessage(ChatRole.User, string.Format(CultureInfo.InvariantCulture, NudgeRequired, required)));
             }
-            return await generator.GetResponseAsync(messages, options, cancellationToken).ConfigureAwait(false);
+            var response = await generator.GetResponseAsync(messages, options, cancellationToken).ConfigureAwait(false);
+            NotePrivacyRetreat(head, cancellationToken);
+            return response;
+        }
+
+        // The egress gate refused the cloud model and the slot moved to a local one (plan §10.4); the user is told, as
+        // escalation is (plan §6).
+        private void NotePrivacyRetreat(long head, CancellationToken cancellationToken)
+        {
+            foreach (var item in _services.Log.Read(runner.SessionId, head, cancellationToken: cancellationToken))
+                if (item.Payload is ModelSwitched { Reason: "privacy", Slot: ModelSlots.Generator } change)
+                    _escalations.Add($"{ModelProfile.FromSnapshot(change.NewProfile).Id}: {PrivacyRetreat}");
         }
 
         /// <summary>
@@ -425,6 +454,8 @@ public sealed class TurnRunner
         private async Task<RenderedPrompt> FitAsync(Func<SessionSnapshot, bool, RenderedPrompt> render, ModelProfile profile,
             ITokenCounter counter, int budget, CancellationToken cancellationToken)
         {
+            // The summarizer may be a cloud binding: its gate and Vault need the session and its taint like the generator's call.
+            using var scope = RequestScope();
             if (Interlocked.Exchange(ref runner._expansionDue, 0) == 1)
             {
                 var limit = (int)Math.Min(budget, budget * _options.Compaction.ExpansionFill);
@@ -475,16 +506,31 @@ public sealed class TurnRunner
             _ => string.Create(CultureInfo.InvariantCulture, $"kept events {result.From}–{result.Through} uncompacted: {result.Detail}"),
         };
 
-        private string SystemPrompt(ModelProfile profile)
+        // Local-only core blocks and facts (plan §10.4) reach local and local-server models only; a local server is the user's
+        // own (C-015's configuration refuses a public endpoint for that class).
+        private string SystemPrompt(ModelProfile profile, string note)
         {
             var prompt = _options.SystemPrompt;
             if (_services.CoreBlocks is { } blocks && blocks.Render(includeLocalOnly: profile.Privacy != PrivacyClass.Cloud) is { Length: > 0 } core)
                 prompt += "\n\n" + core;
-            if (_memoryNote.Length > 0)
-                prompt += "\n\n" + _memoryNote;
-            if (_skillNote.Length > 0)
-                prompt += "\n\n" + _skillNote;
+            if (note.Length > 0)
+                prompt += "\n\n" + note;
             return prompt;
+        }
+
+        // Whether SystemPrompt and MemoryNote put local-only memory into this profile's prompt.
+        private bool HoldsLocalOnly(ModelProfile profile) =>
+            profile.Privacy != PrivacyClass.Cloud
+            && (_services.CoreBlocks?.Blocks.Any(block => !block.IsEmpty && block.LocalOnly) == true || _recalled.Any(item => item.LocalOnly));
+
+        // Fabric questions and memory writes reach the generator without the turn's options; the ambient context carries the
+        // session and its taint to a cloud binding's gate and to Vault all the same.
+        private IDisposable RequestScope() => new ModelRequestContext(runner.SessionId, runner.Tainted).Enter();
+
+        private string MemoryNote(ModelProfile profile)
+        {
+            var items = profile.Privacy == PrivacyClass.Cloud ? _recalled.Where(item => !item.LocalOnly).ToList() : [.. _recalled];
+            return items.Count == 0 ? "" : "Relevant memory:\n" + string.Join("\n", items.Select(item => "- " + item.Text));
         }
 
         private static ITokenCounter Counter(IChatClient generator) =>
@@ -968,8 +1014,10 @@ public sealed class TurnRunner
             var conditions = new HashSet<string>(extraConditions, StringComparer.Ordinal);
             if (_options.EscalationAllowed)
                 conditions.Add(FabricConditions.EscalationAllowed);
-            var result = await _services.Fabric.DecideAsync(runner.SessionId, checkpoint, State(), questions, conditions, cancellationToken)
-                .ConfigureAwait(false);
+            CheckpointResult result;
+            using (RequestScope())
+                result = await _services.Fabric.DecideAsync(runner.SessionId, checkpoint, State(), questions, conditions, cancellationToken)
+                    .ConfigureAwait(false);
             if (result.Verdicts.TryGetValue("tool", out var tool) && tool.Verdict.Acted && tool.Verdict.Option is { } pick && pick != None)
                 lock (_gate)
                     _pickDecisions[pick] = tool.DecisionId;
@@ -1177,7 +1225,7 @@ public sealed class TurnRunner
                 var result = await _services.Retriever!.RetrieveAsync(request, cancellationToken).ConfigureAwait(false);
                 var items = full ? result.Items : result.Items.Take(3).ToImmutableArray();
                 if (!items.IsEmpty)
-                    _memoryNote = "Relevant memory:\n" + string.Join("\n", items.Select(item => "- " + item.Text));
+                    _recalled = items;
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
@@ -1244,6 +1292,7 @@ public sealed class TurnRunner
             var profile = _services.Slots.Current(ModelSlots.Generator).Profile;
             try
             {
+                using var scope = RequestScope();
                 var written = await _services.Memory!.WriteAsync(new MemoryWriteRequest(runner.SessionId, envelope.Text,
                     SourceSequence: source, Surface: envelope.Surface, Generator: Describe(profile), Tainted: runner.Tainted),
                     cancellationToken).ConfigureAwait(false);

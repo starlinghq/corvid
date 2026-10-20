@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Anthropic's native Messages API as a Corvid model binding: the official SDK's IChatClient with prompt-cache breakpoints in Hermes' layout, authenticated only through Vault's egress proxy.</Description>
+    <!-- Not IsAotCompatible: the Anthropic SDK is not AOT-qualified, and warnings are errors. -->
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Anthropic" />
+    <ProjectReference Include="../Corvid.Models/Corvid.Models.csproj" />
+    <InternalsVisibleTo Include="Corvid.Models.Remote.Tests" />
+  </ItemGroup>
+</Project>

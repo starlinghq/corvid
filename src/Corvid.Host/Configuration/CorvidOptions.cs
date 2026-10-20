@@ -1,5 +1,6 @@
 using Corvid.Approvals;
 using Corvid.Models;
+using Corvid.Models.Privacy;
 
 namespace Corvid.Host.Configuration;
 
@@ -37,6 +38,8 @@ public sealed class CorvidOptions
 
     public VaultSettings Vault { get; set; } = new();
 
+    public PrivacySettings Privacy { get; set; } = new();
+
     public SandboxSettings Sandbox { get; set; } = new();
 
     public CheckpointSettings Checkpoints { get; set; } = new();
@@ -72,6 +75,12 @@ public sealed class ModelOptions
     /// name (<c>corvid model</c> lists them). Slots left out keep their defaults; a slot set to an empty model is unbound.
     /// </summary>
     public Dictionary<string, SlotSettings> Slots { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Remote models by catalogue name (C-015): local servers (llama.cpp, Ollama, vLLM, LM Studio) and cloud providers
+    /// (Anthropic, OpenAI, OpenRouter, Gemini). Named in <see cref="Slots"/> like any other model.
+    /// </summary>
+    public Dictionary<string, RemoteModelSettings> Remote { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// The defaults: Starling's in-process models on the CPU. The decider is Kev-0.8B (C-004b), and it is optional: while it
@@ -216,4 +225,94 @@ public sealed class SandboxSettings
 {
     /// <summary>Default <c>$CORVID_SANDBOX</c>, then <c>corvid-sandbox</c> next to the executable.</summary>
     public string? LauncherPath { get; set; }
+}
+
+/// <summary>
+/// One remote model (plan §4.1). A cloud model's key is a Vault secret, named here and never stored in Corvid (plan §10.5):
+/// without Vault the model is unavailable.
+/// </summary>
+public sealed class RemoteModelSettings
+{
+    /// <summary><c>anthropic</c>, <c>openai</c>, <c>openrouter</c>, <c>gemini</c> or <c>openai-compatible</c>.</summary>
+    public string? Provider { get; set; }
+
+    /// <summary>The provider's model id, for example <c>claude-opus-5-5</c>.</summary>
+    public string? Model { get; set; }
+
+    /// <summary>The API base. Required for <c>openai-compatible</c>; the others default to the provider's public endpoint.</summary>
+    public string? Endpoint { get; set; }
+
+    /// <summary>The Vault secret holding the key. Required for cloud models; a local server that needs no key leaves it out.</summary>
+    public string? Secret { get; set; }
+
+    /// <summary>
+    /// Only for <c>openai-compatible</c>: <c>LocalServer</c> (the default, which needs a loopback or private endpoint) or
+    /// <c>Cloud</c>. Every other provider is cloud.
+    /// </summary>
+    public PrivacyClass? Privacy { get; set; }
+
+    /// <summary>Chat slots it may serve. Default generator and summarizer.</summary>
+    public List<string> Slots { get; set; } = [];
+
+    public int ContextWindow { get; set; } = 128_000;
+
+    /// <summary>How much of the window Corvid plans to use; default the whole window.</summary>
+    public int? AcceptedContext { get; set; }
+
+    public ToolCallSupport ToolCalls { get; set; } = ToolCallSupport.Native;
+
+    public StructuredOutputSupport StructuredOutput { get; set; } = StructuredOutputSupport.None;
+
+    /// <summary>Default: breakpoints for Anthropic, automatic for the others.</summary>
+    public PromptCachingStyle? Caching { get; set; }
+
+    /// <summary>Price per million tokens, for the decision log and <c>/insights</c>.</summary>
+    public decimal InputCost { get; set; }
+
+    public decimal OutputCost { get; set; }
+
+    public decimal CachedInputCost { get; set; }
+
+    /// <summary>
+    /// Whether the model honours a required tool choice. Default false for Anthropic (current models reject it) and true
+    /// for the others; when false the turn loop asks for the tool in words.
+    /// </summary>
+    public bool? ForcedToolChoice { get; set; }
+
+    /// <summary>This model's egress policy, over <see cref="CorvidOptions.Privacy"/>.</summary>
+    public EgressSettings? Egress { get; set; }
+}
+
+/// <summary>The privacy egress gate (plan §10.4) for every model this process binds.</summary>
+public sealed class PrivacySettings
+{
+    /// <summary>What a cloud model receives when the request holds PII: <c>Redact</c> (default), <c>Send</c> or <c>Refuse</c>.</summary>
+    public EgressAction Cloud { get; set; } = EgressAction.Redact;
+
+    /// <summary>Local servers are not gated unless this is set.</summary>
+    public EgressAction? LocalServer { get; set; }
+
+    /// <summary>The least the gate does for a tainted request (plan §10.3); it only ever tightens.</summary>
+    public EgressAction Tainted { get; set; } = EgressAction.Redact;
+
+    /// <summary>The PII labels; default person, email, phone number, address, account number, credential.</summary>
+    public List<string> Labels { get; set; } = [];
+
+    /// <summary>User-defined labels scanned as well, for example "medical condition".</summary>
+    public List<string> ExtraLabels { get; set; } = [];
+
+    /// <summary>Minimum span confidence; lower is stricter.</summary>
+    public float Threshold { get; set; } = EgressPolicy.Default.Threshold;
+}
+
+/// <summary>One model's egress policy; anything left unset comes from <see cref="PrivacySettings"/>.</summary>
+public sealed class EgressSettings
+{
+    public EgressAction? Action { get; set; }
+
+    public EgressAction? Tainted { get; set; }
+
+    public List<string> ExtraLabels { get; set; } = [];
+
+    public float? Threshold { get; set; }
 }

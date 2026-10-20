@@ -180,6 +180,9 @@ public static class CoreCommands
                 $"scheduler: {runtime.SchedulerState}",
                 $"skills: {(runtime.Skills.Store is { } skills ? $"{skills.Skills.Count} in {skills.Root}" : runtime.Skills.State)}" +
                 (runtime.Skills.Database?.Pending() is { Count: > 0 } drafts ? $", {drafts.Count} draft(s) to review" : ""),
+                $"privacy egress: cloud {runtime.Options.Privacy.Cloud.ToString().ToLowerInvariant()}" +
+                (runtime.Egress.HasExtractor ? "" : ", no extractor bound: every cloud request is refused"),
+                .. runtime.UnavailableModels.Select(item => $"unavailable: {item.Detail}"),
                 $"log: {Configuration.CorvidPaths.EventLog(runtime.Options)}",
             ],
         });

@@ -5,6 +5,7 @@ using Corvid.Abstractions.Fabric;
 using Corvid.Abstractions.Sessions;
 using Corvid.Fabric;
 using Corvid.Kernel.Turns;
+using Corvid.Models.Privacy;
 
 namespace Corvid.Kernel.Jobs;
 
@@ -217,6 +218,8 @@ public sealed class JobScheduler
                 writer.WriteNumber("exit_code", code);
             writer.WriteString("script_output", output);
         });
+        // Script output is outside content (plan §10.3): a cloud generator answering the question sees the request as tainted.
+        using var scope = new ModelRequestContext(run.SessionId, Tainted: true).Enter();
         var result = await _fabric.DecideAsync(run.SessionId, Checkpoint.Tick, State(job, output),
             [KeyValuePair.Create(entry.Id, entry.ToQuestion(instructions: DecisionContent.FromJson(instructions)))],
             cancellationToken: cancellationToken).ConfigureAwait(false);

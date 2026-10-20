@@ -10,6 +10,8 @@ public enum SwitchReason
     Fallback,
     /// <summary>The automatic return to the default after an escalated or fallen-back turn (plan §6).</summary>
     DeEscalation,
+    /// <summary>The privacy egress gate refused a request to a gated model, so the slot moved to a local one (plan §10.4).</summary>
+    Privacy,
 }
 
 public static class SwitchReasons
@@ -20,6 +22,7 @@ public static class SwitchReasons
         SwitchReason.Escalation => "escalation",
         SwitchReason.Fallback => "fallback",
         SwitchReason.DeEscalation => "de_escalation",
+        SwitchReason.Privacy => "privacy",
         _ => throw new ArgumentOutOfRangeException(nameof(reason)),
     };
 }
@@ -77,7 +80,8 @@ public sealed record PrivacyVerdict(bool Allowed, string Reason)
 
 /// <summary>
 /// Consulted before any switch whose target is <see cref="PrivacyClass.Cloud"/>. A refusal leaves the slot where it
-/// is and appends nothing. Per-request redaction (plan §10.4) is a separate gate in the request pipeline, built later.
+/// is and appends nothing. Per-request redaction (plan §10.4) is a separate gate on each cloud binding
+/// (<see cref="Privacy.PrivacyEgressChatClient"/>).
 /// </summary>
 public interface IPrivacyGate
 {

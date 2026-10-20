@@ -329,7 +329,9 @@ internal sealed class ChatRenderer : ITurnObserver
         var parts = new List<string> { TurnRunner.StatusName(result.Status).Replace('_', ' ') };
         if (result.Steps > 0)
             parts.Add($"{result.Steps} step(s), {result.ToolCalls} tool call(s)");
-        parts.AddRange(result.Escalations.Select(escalation => "escalated to " + escalation));
+        parts.AddRange(result.Escalations.Select(escalation => escalation.EndsWith(": " + TurnRunner.PrivacyRetreat, StringComparison.Ordinal)
+            ? $"kept local on {escalation[..^(TurnRunner.PrivacyRetreat.Length + 2)]}: the privacy policy refused the cloud model"
+            : "escalated to " + escalation));
         if (result.MemoryWrite is { } memory)
             parts.Add("memory " + memory + (memory.StartsWith("staged", StringComparison.Ordinal) ? " (/memory pending)" : ""));
         if (result.Tainted)

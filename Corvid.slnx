@@ -8,6 +8,8 @@
     <Project Path="src/Corvid.Kernel/Corvid.Kernel.csproj" />
     <Project Path="src/Corvid.Memory/Corvid.Memory.csproj" />
     <Project Path="src/Corvid.Models/Corvid.Models.csproj" />
+    <Project Path="src/Corvid.Models.Anthropic/Corvid.Models.Anthropic.csproj" />
+    <Project Path="src/Corvid.Models.OpenAICompat/Corvid.Models.OpenAICompat.csproj" />
     <Project Path="src/Corvid.Models.Starling/Corvid.Models.Starling.csproj" />
     <Project Path="src/Corvid.Sandbox/Corvid.Sandbox.csproj" />
     <Project Path="src/Corvid.Tools/Corvid.Tools.csproj" />
@@ -37,6 +39,7 @@
     <Project Path="tests/Corvid.Memory.Tests/Corvid.Memory.Tests.csproj" />
     <Project Path="tests/Corvid.Models.Tests/Corvid.Models.Tests.csproj" />
     <Project Path="tests/Corvid.Models.Starling.Tests/Corvid.Models.Starling.Tests.csproj" />
+    <Project Path="tests/Corvid.Models.Remote.Tests/Corvid.Models.Remote.Tests.csproj" />
     <Project Path="tests/Corvid.Architecture.Tests/Corvid.Architecture.Tests.csproj" />
     <Project Path="tests/Corvid.Vault.Tests/Corvid.Vault.Tests.csproj" />
     <Project Path="tests/Corvid.Tools.Fixtures/Corvid.Tools.Fixtures.csproj" />
