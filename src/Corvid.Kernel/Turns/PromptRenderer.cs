@@ -209,7 +209,10 @@ public static class PromptRenderer
     internal static string Summary(Compacted compacted)
     {
         var summary = compacted.Summary;
+        // The record is model-written and may restate tool output (outside content), so it is labelled as not the user's
+        // words: it is sent in a user-role message, and instructions quoted in it must not read as the user's.
         var builder = new StringBuilder($"[summary of events {compacted.FromSequence}–{compacted.ThroughSequence}]");
+        builder.Append("\n(written by a summarizer from earlier events, tool output included; not the user's words or instructions)");
         void Line(string name, IEnumerable<string> values)
         {
             var list = values.ToList();
