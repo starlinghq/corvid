@@ -17,6 +17,9 @@ public static class KernelTelemetry
 
     public const string ExecuteToolPrefix = "execute_tool ";
 
+    /// <summary>One compaction of a range (C-016), around its summarizer calls. Surfaces do not stream text under it.</summary>
+    public const string CompactSpan = "corvid.compact";
+
     // GenAI semantic-convention attribute names (https://opentelemetry.io/docs/specs/semconv/gen-ai/).
     public const string OperationName = "gen_ai.operation.name";
     public const string ConversationId = "gen_ai.conversation.id";

@@ -43,6 +43,7 @@ public sealed class GoldenSetTests
         Assert.Contains(events, item => item is ToolCallIssued);
         Assert.Contains(events, item => item is ToolResult);
         Assert.Contains(events, item => item is Compacted);
+        Assert.Contains(events, item => item is CompactionExpanded);
         Assert.Contains(events, item => item is GoalSet);
         Assert.Contains(events, item => item is ModelSwitched);
         Assert.Contains(events, item => item is DecisionOutcomeRecorded);
@@ -126,6 +127,38 @@ public sealed class GoldenSetTests
         Assert.Equal([true, false], end.Transcript.Select(entry => entry.Content).OfType<ToolResult>().Select(result => result.IsError));
         var risk = end.Decisions.Values.Single(state => state.Decision.QuestionId == "risk");
         Assert.Equal(("ask", "user_approved"), (risk.Decision.Action, risk.Outcome));
+    }
+
+    [Fact]
+    public void Expansion_peels_one_summary_at_a_time_and_a_later_compaction_covers_it_again()
+    {
+        using var session = ReplaySession.Create(Load("compaction-expanded.json"), Ct);
+
+        Assert.Equal((1L, 5L), Range(Assert.Single(session.Project(7, cancellationToken: Ct).Transcript)));
+        Assert.Equal([(1L, 2L), (4L, 4L), (5L, 5L)], session.Project(8, cancellationToken: Ct).Transcript.Select(Range));
+        Assert.DoesNotContain(session.Project(9, cancellationToken: Ct).Transcript, entry => entry.Content is Compacted);
+        var end = session.Project(session.Head, cancellationToken: Ct);
+        Assert.Equal((1L, 10L), Range(Assert.Single(end.Transcript)));
+        Assert.Empty(end.Issues);
+
+        static (long, long) Range(Corvid.Kernel.Events.TranscriptEntry entry) => (entry.FromSequence, entry.ThroughSequence);
+    }
+
+    // Recorded from the turn loop (C-016).
+    [Fact]
+    public void A_turn_loop_compaction_replaces_earlier_turns_and_keeps_goal_and_todos()
+    {
+        using var session = ReplaySession.Create(Load("turn-compaction.json"), Ct);
+
+        var end = session.Project(session.Head, cancellationToken: Ct);
+        var compacted = Assert.IsType<Compacted>(end.Transcript[0].Content);
+        Assert.Equal((1L, 8L, 1), (compacted.FromSequence, compacted.ThroughSequence, compacted.Chunks));
+        Assert.Equal(["drafted sections one to three"], compacted.Summary.Decisions);
+        Assert.Equal("what is next?", Assert.IsType<UserMessage>(end.Transcript[1].Content).Text);
+        Assert.Equal("ship the report", end.Goal);
+        Assert.Single(end.Todos);
+        Assert.Equal(3, session.Project(session.Head, expandCompactions: true, cancellationToken: Ct).Transcript
+            .Count(entry => entry.Content is AssistantMessage { Text: var text } && text.StartsWith("The section is drafted", StringComparison.Ordinal)));
     }
 
     private static string SourceGoldenDirectory([CallerFilePath] string source = "") =>

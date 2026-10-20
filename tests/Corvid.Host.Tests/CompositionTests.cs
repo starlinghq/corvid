@@ -3,6 +3,7 @@ using Corvid.Host.Composition;
 using Corvid.Host.Telemetry;
 using Corvid.Kernel.Turns;
 using Corvid.Models;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Corvid.Host.Tests;
@@ -140,6 +141,28 @@ public sealed class CompositionTests
         Assert.Contains(observer.Checkpoints, checkpoint => checkpoint.Checkpoint == "ingress");
         // The turn's generator streamed; the degraded decider's yes/no calls (on their own wrapping) did not stream.
         Assert.True(models.Generator.StreamedCalls >= 2);
+    }
+
+    [Fact]
+    public async Task ACompactionInAWatchedSessionStreamsOnlyTheAnswer()
+    {
+        // No summarizer is configured, so the generator's binding writes the records (C-016); its replies are records,
+        // not answers, and must not reach the surface.
+        const string record = """{"goal":"read the history","decisions":["read it"],"next_step":"answer"}""";
+        var models = new FakeModels(new FakeGenerator([.. Enumerable.Repeat<Func<IReadOnlyList<ChatMessage>, ChatResponse>>(
+            messages => Reply.Text(messages[0].Text == Corvid.Kernel.Context.ContextCompactor.Instructions ? record : "All caught up."), 6)]));
+        await using var host = TestHost.Create(models);
+        await using var runtime = await host.StartAsync();
+        var session = runtime.OpenSession();
+        var history = string.Concat(Enumerable.Repeat("a long earlier answer, ", 1_400));
+        runtime.Log.Append(session.Id, 0, [EventData.Create(new UserMessage("tell me everything")), EventData.Create(new AssistantMessage(history))],
+            TestContext.Current.CancellationToken);
+        var observer = new RecordingObserver();
+        using (runtime.Feed.Subscribe(session.Id, observer))
+            await session.SendAsync("and now?", TestContext.Current.CancellationToken);
+
+        Assert.Equal("All caught up.", string.Concat(observer.Deltas));
+        Assert.Contains(session.Snapshot().Transcript, entry => entry.Content is Compacted);
     }
 
     [Fact]

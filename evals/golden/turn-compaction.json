@@ -1,0 +1,468 @@
+{
+  "format": "corvid-golden-trajectory",
+  "format_version": 1,
+  "payload_version": 1,
+  "id": "turn-compaction",
+  "description": "Three earlier turns no longer fit the generator's budget beside the new one, so before the generator is called events 1–8 are summarized in one summarizer call into the structured record and a compacted event replaces them in the projection; the goal and todos still project from their own events, and the raw range stays in the log.",
+  "events": [
+    {
+      "type": "goal_set",
+      "goal": "ship the report"
+    },
+    {
+      "type": "todos_set",
+      "items": [
+        {
+          "id": "t1",
+          "text": "proofread",
+          "completed": false
+        }
+      ]
+    },
+    {
+      "type": "user_message",
+      "text": "draft section one"
+    },
+    {
+      "type": "assistant_message",
+      "text": "The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. "
+    },
+    {
+      "type": "user_message",
+      "text": "draft section two"
+    },
+    {
+      "type": "assistant_message",
+      "text": "The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. "
+    },
+    {
+      "type": "user_message",
+      "text": "draft section three"
+    },
+    {
+      "type": "assistant_message",
+      "text": "The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. The section is drafted and saved. "
+    },
+    {
+      "type": "user_message",
+      "text": "what is next?"
+    },
+    {
+      "type": "decision",
+      "decision_id": "0079f68dc7de48ee8dad8979a9a003a4",
+      "question_id": "clarify",
+      "probabilities": {
+        "no": 1,
+        "yes": 0
+      },
+      "confidence": 1,
+      "threshold": 0.7,
+      "action": "proceed",
+      "catalogue_version": "2026-10-18.1",
+      "decider": "degraded",
+      "state": {
+        "user_message": "what is next?",
+        "surface": "cli",
+        "recent": [
+          "user: draft section one",
+          "assistant: The section is drafted and saved. The section is drafted and saved. The section …",
+          "user: draft section two",
+          "assistant: The section is drafted and saved. The section is drafted and saved. The section …",
+          "user: draft section three",
+          "assistant: The section is drafted and saved. The section is drafted and saved. The section …"
+        ],
+        "goal": "ship the report",
+        "entities": {},
+        "step": 0,
+        "last_tool_result": null,
+        "generator": "gen-small local, 1k"
+      },
+      "question": {
+        "kind": "noul",
+        "instructions": "Is the request too ambiguous to act on without asking the user one question?",
+        "options": [
+          {
+            "name": "yes"
+          },
+          {
+            "name": "no"
+          }
+        ]
+      },
+      "calibrated": false
+    },
+    {
+      "type": "decision",
+      "decision_id": "77e154522f7c4a058a6aed2487bf75c6",
+      "question_id": "difficulty",
+      "probabilities": {
+        "moderate": 0,
+        "needs a frontier model": 0,
+        "hard": 0,
+        "trivial": 1,
+        "easy": 0
+      },
+      "confidence": 1,
+      "threshold": 3.5,
+      "action": "stay_on_generator",
+      "catalogue_version": "2026-10-18.1",
+      "decider": "degraded",
+      "state": {
+        "user_message": "what is next?",
+        "surface": "cli",
+        "recent": [
+          "user: draft section one",
+          "assistant: The section is drafted and saved. The section is drafted and saved. The section …",
+          "user: draft section two",
+          "assistant: The section is drafted and saved. The section is drafted and saved. The section …",
+          "user: draft section three",
+          "assistant: The section is drafted and saved. The section is drafted and saved. The section …"
+        ],
+        "goal": "ship the report",
+        "entities": {},
+        "step": 0,
+        "last_tool_result": null,
+        "generator": "gen-small local, 1k"
+      },
+      "question": {
+        "kind": "score",
+        "instructions": "How hard is this for a small local model?",
+        "options": [
+          {
+            "name": "trivial"
+          },
+          {
+            "name": "easy"
+          },
+          {
+            "name": "moderate"
+          },
+          {
+            "name": "hard"
+          },
+          {
+            "name": "needs a frontier model"
+          }
+        ]
+      },
+      "calibrated": false
+    },
+    {
+      "type": "decision",
+      "decision_id": "5a74b1367b504500a3360339333e006f",
+      "question_id": "intent",
+      "probabilities": {
+        "recall_memory": 0.2,
+        "answer_directly": 0.2,
+        "run_skill": 0.2,
+        "use_tools": 0.2,
+        "ask_clarifying_question": 0.2
+      },
+      "confidence": 0,
+      "threshold": 0.05,
+      "action": "generator_with_full_shortlist",
+      "catalogue_version": "2026-10-18.1",
+      "decider": "degraded",
+      "state": {
+        "user_message": "what is next?",
+        "surface": "cli",
+        "recent": [
+          "user: draft section one",
+          "assistant: The section is drafted and saved. The section is drafted and saved. The section …",
+          "user: draft section two",
+          "assistant: The section is drafted and saved. The section is drafted and saved. The section …",
+          "user: draft section three",
+          "assistant: The section is drafted and saved. The section is drafted and saved. The section …"
+        ],
+        "goal": "ship the report",
+        "entities": {},
+        "step": 0,
+        "last_tool_result": null,
+        "generator": "gen-small local, 1k"
+      },
+      "question": {
+        "kind": "choice",
+        "instructions": "What does the user need right now?",
+        "options": [
+          {
+            "name": "answer_directly",
+            "description": "reply from what is already known, without tools"
+          },
+          {
+            "name": "use_tools",
+            "description": "run one or more tools to act or look something up"
+          },
+          {
+            "name": "recall_memory",
+            "description": "look up something remembered from earlier conversations"
+          },
+          {
+            "name": "run_skill",
+            "description": "follow a saved multi-step procedure"
+          },
+          {
+            "name": "ask_clarifying_question",
+            "description": "the request is ambiguous; ask the user one question first"
+          }
+        ]
+      },
+      "calibrated": false
+    },
+    {
+      "type": "compacted",
+      "from_sequence": 1,
+      "through_sequence": 8,
+      "summary": {
+        "goal": "ship the report",
+        "constraints": [],
+        "decisions": [
+          "drafted sections one to three"
+        ],
+        "files": [
+          "report.md"
+        ],
+        "open_questions": [],
+        "next_step": "proofread"
+      },
+      "summarizer": "summarizer",
+      "chunks": 1
+    },
+    {
+      "type": "assistant_message",
+      "text": "Next: proofread section three."
+    }
+  ],
+  "checks": [
+    {
+      "through": 14,
+      "expected": {
+        "head": 14,
+        "goal": "ship the report",
+        "todos": [
+          {
+            "id": "t1",
+            "text": "proofread",
+            "completed": false
+          }
+        ],
+        "transcript": [
+          {
+            "from": 1,
+            "through": 8,
+            "event": {
+              "type": "compacted",
+              "from_sequence": 1,
+              "through_sequence": 8,
+              "summary": {
+                "goal": "ship the report",
+                "constraints": [],
+                "decisions": [
+                  "drafted sections one to three"
+                ],
+                "files": [
+                  "report.md"
+                ],
+                "open_questions": [],
+                "next_step": "proofread"
+              },
+              "summarizer": "summarizer",
+              "chunks": 1
+            }
+          },
+          {
+            "from": 9,
+            "through": 9,
+            "event": {
+              "type": "user_message",
+              "text": "what is next?"
+            }
+          },
+          {
+            "from": 14,
+            "through": 14,
+            "event": {
+              "type": "assistant_message",
+              "text": "Next: proofread section three."
+            }
+          }
+        ],
+        "pending_approvals": [],
+        "model_profiles": [],
+        "decisions": [
+          {
+            "decision": {
+              "type": "decision",
+              "decision_id": "0079f68dc7de48ee8dad8979a9a003a4",
+              "question_id": "clarify",
+              "probabilities": {
+                "no": 1,
+                "yes": 0
+              },
+              "confidence": 1,
+              "threshold": 0.7,
+              "action": "proceed",
+              "catalogue_version": "2026-10-18.1",
+              "decider": "degraded",
+              "state": {
+                "user_message": "what is next?",
+                "surface": "cli",
+                "recent": [
+                  "user: draft section one",
+                  "assistant: The section is drafted and saved. The section is drafted and saved. The section …",
+                  "user: draft section two",
+                  "assistant: The section is drafted and saved. The section is drafted and saved. The section …",
+                  "user: draft section three",
+                  "assistant: The section is drafted and saved. The section is drafted and saved. The section …"
+                ],
+                "goal": "ship the report",
+                "entities": {},
+                "step": 0,
+                "last_tool_result": null,
+                "generator": "gen-small local, 1k"
+              },
+              "question": {
+                "kind": "noul",
+                "instructions": "Is the request too ambiguous to act on without asking the user one question?",
+                "options": [
+                  {
+                    "name": "yes"
+                  },
+                  {
+                    "name": "no"
+                  }
+                ]
+              },
+              "calibrated": false
+            },
+            "outcome": null
+          },
+          {
+            "decision": {
+              "type": "decision",
+              "decision_id": "5a74b1367b504500a3360339333e006f",
+              "question_id": "intent",
+              "probabilities": {
+                "recall_memory": 0.2,
+                "answer_directly": 0.2,
+                "run_skill": 0.2,
+                "use_tools": 0.2,
+                "ask_clarifying_question": 0.2
+              },
+              "confidence": 0,
+              "threshold": 0.05,
+              "action": "generator_with_full_shortlist",
+              "catalogue_version": "2026-10-18.1",
+              "decider": "degraded",
+              "state": {
+                "user_message": "what is next?",
+                "surface": "cli",
+                "recent": [
+                  "user: draft section one",
+                  "assistant: The section is drafted and saved. The section is drafted and saved. The section …",
+                  "user: draft section two",
+                  "assistant: The section is drafted and saved. The section is drafted and saved. The section …",
+                  "user: draft section three",
+                  "assistant: The section is drafted and saved. The section is drafted and saved. The section …"
+                ],
+                "goal": "ship the report",
+                "entities": {},
+                "step": 0,
+                "last_tool_result": null,
+                "generator": "gen-small local, 1k"
+              },
+              "question": {
+                "kind": "choice",
+                "instructions": "What does the user need right now?",
+                "options": [
+                  {
+                    "name": "answer_directly",
+                    "description": "reply from what is already known, without tools"
+                  },
+                  {
+                    "name": "use_tools",
+                    "description": "run one or more tools to act or look something up"
+                  },
+                  {
+                    "name": "recall_memory",
+                    "description": "look up something remembered from earlier conversations"
+                  },
+                  {
+                    "name": "run_skill",
+                    "description": "follow a saved multi-step procedure"
+                  },
+                  {
+                    "name": "ask_clarifying_question",
+                    "description": "the request is ambiguous; ask the user one question first"
+                  }
+                ]
+              },
+              "calibrated": false
+            },
+            "outcome": null
+          },
+          {
+            "decision": {
+              "type": "decision",
+              "decision_id": "77e154522f7c4a058a6aed2487bf75c6",
+              "question_id": "difficulty",
+              "probabilities": {
+                "moderate": 0,
+                "needs a frontier model": 0,
+                "hard": 0,
+                "trivial": 1,
+                "easy": 0
+              },
+              "confidence": 1,
+              "threshold": 3.5,
+              "action": "stay_on_generator",
+              "catalogue_version": "2026-10-18.1",
+              "decider": "degraded",
+              "state": {
+                "user_message": "what is next?",
+                "surface": "cli",
+                "recent": [
+                  "user: draft section one",
+                  "assistant: The section is drafted and saved. The section is drafted and saved. The section …",
+                  "user: draft section two",
+                  "assistant: The section is drafted and saved. The section is drafted and saved. The section …",
+                  "user: draft section three",
+                  "assistant: The section is drafted and saved. The section is drafted and saved. The section …"
+                ],
+                "goal": "ship the report",
+                "entities": {},
+                "step": 0,
+                "last_tool_result": null,
+                "generator": "gen-small local, 1k"
+              },
+              "question": {
+                "kind": "score",
+                "instructions": "How hard is this for a small local model?",
+                "options": [
+                  {
+                    "name": "trivial"
+                  },
+                  {
+                    "name": "easy"
+                  },
+                  {
+                    "name": "moderate"
+                  },
+                  {
+                    "name": "hard"
+                  },
+                  {
+                    "name": "needs a frontier model"
+                  }
+                ]
+              },
+              "calibrated": false
+            },
+            "outcome": null
+          }
+        ],
+        "checkpoints": [],
+        "issues": []
+      }
+    }
+  ]
+}

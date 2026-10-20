@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using Corvid.Abstractions.Events;
 using Corvid.Evals;
 using Corvid.Kernel.Turns;
 
@@ -16,7 +17,7 @@ public sealed partial class GoldenTurnTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    public static TheoryData<string> Scenarios() => ["turn-read-only-tool", "turn-repair-then-approval"];
+    public static TheoryData<string> Scenarios() => ["turn-read-only-tool", "turn-repair-then-approval", "turn-compaction"];
 
     [Theory]
     [MemberData(nameof(Scenarios))]
@@ -70,6 +71,25 @@ public sealed partial class GoldenTurnTests
                 return ("A side-effecting call with invalid arguments is answered with the error and the expected schema, repaired "
                     + "once, then sent through the approval pipeline: risk is a gate, so without Kev it asks; the user approves and "
                     + "the prompt names its call.", harness, "note: buy milk");
+            }
+            case "turn-compaction":
+            {
+                // 1,800 - 1,024 - 256 leaves 520 tokens of prompt: three 800-character answers do not fit beside the turn.
+                var generator = new FakeGenerator(Reply.Say("Next: proofread section three."));
+                var harness = new TurnHarness(generator, options: new TurnOptions { ToolFilter = _ => false }, generatorContext: 1_800,
+                    summarizer: new FakeSummarizer(_ => """
+                        {"goal": "ship the report", "constraints": [], "decisions": ["drafted sections one to three"],
+                         "files": ["report.md"], "open_questions": [], "next_step": "proofread"}
+                        """));
+                var answer = string.Concat(Enumerable.Repeat("The section is drafted and saved. ", 24));
+                harness.Seed(new GoalSet("ship the report"), new TodosSet([new TodoItem("t1", "proofread", false)]),
+                    new UserMessage("draft section one"), new AssistantMessage(answer),
+                    new UserMessage("draft section two"), new AssistantMessage(answer),
+                    new UserMessage("draft section three"), new AssistantMessage(answer));
+                return ("Three earlier turns no longer fit the generator's budget beside the new one, so before the generator is called "
+                    + "events 1–8 are summarized in one summarizer call into the structured record and a compacted event replaces them "
+                    + "in the projection; the goal and todos still project from their own events, and the raw range stays in the log.",
+                    harness, "what is next?");
             }
             default:
                 throw new ArgumentOutOfRangeException(nameof(id));

@@ -37,7 +37,12 @@ public enum BudgetAction
 /// <param name="SwitchSequence">The log position of the <c>ModelSwitched</c> event.</param>
 public sealed record BudgetChange(string SessionId, string Slot, ModelProfile From, ModelProfile To, long SwitchSequence);
 
-/// <summary>Runs after every switch. Compaction and expansion themselves belong to the context manager (a later item).</summary>
+/// <summary>
+/// Runs after every switch, while the session's switch lock is held, and reports the direction on the
+/// <see cref="SwitchResult"/>. It must not call a model: a summarizer call that fell back would wait for that same lock. The
+/// turn loop acts on the reported direction (C-016): it expands compacted ranges before the generator's next call on a larger
+/// window, and fits every call to the current window, compacting when it does not fit.
+/// </summary>
 public interface IBudgetPolicy
 {
     ValueTask<BudgetAction> OnProfileChangedAsync(BudgetChange change, CancellationToken cancellationToken);

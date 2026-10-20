@@ -11,6 +11,7 @@ using Corvid.Abstractions.Sessions;
 using Corvid.Abstractions.Tokens;
 using Corvid.Approvals;
 using Corvid.Fabric;
+using Corvid.Kernel.Context;
 using Corvid.Kernel.Events;
 using Corvid.Memory;
 using Corvid.Models;
@@ -25,7 +26,9 @@ namespace Corvid.Kernel.Turns;
 /// with one tool schema on a confident pick or the shortlist otherwise; validates each call against its schema, the
 /// extracted slots and its binding, repairing once and escalating on a second failure; sends side-effecting calls through
 /// the approval pipeline (the pre-execute checkpoint); runs a step checkpoint after each round of results (done, stuck,
-/// tool, clear_results, injection); and at egress asks remember (starting the memory write path) and deliver.
+/// tool, clear_results, injection); and at egress asks remember (starting the memory write path) and deliver. Before every
+/// generator call the prompt is fitted to the generator's budget with the levers of plan §8 in cost order: clearing results,
+/// dropping completed skill bodies, then compaction; after a switch to a larger window, compacted ranges are expanded.
 /// </summary>
 /// <remarks>
 /// Not thread-safe: the session actor runs one turn at a time. Every append re-reads the head, because the fabric, the
@@ -44,6 +47,9 @@ public sealed class TurnRunner
 
     private readonly TurnServices _services;
     private readonly TurnOptions _options;
+    private readonly ContextCompactor _compactor;
+    // Set when the generator moved to a larger window (plan §4.2 step 4); the next generator call expands compacted ranges.
+    private int _expansionDue;
 
     public TurnRunner(string sessionId, TurnServices services)
     {
@@ -54,6 +60,24 @@ public sealed class TurnRunner
         SessionId = sessionId;
         _services = services;
         _options = services.Options.Validate();
+        _compactor = new ContextCompactor(services.Log, services.Slots, _options.Compaction, _options.ContextReserve, _options.EscalationAllowed);
+    }
+
+    /// <summary>
+    /// Acts on a switch's budget direction (C-006's hook reports it; plan §4.2 step 4): a generator moved to a larger window
+    /// expands compacted ranges before its next call, where the budget allows; a smaller one needs nothing here, because every
+    /// call is fitted to the current generator's budget and compacts when it does not fit. Thread-safe: a <c>/model</c>
+    /// switch arrives beside a running turn.
+    /// </summary>
+    public void NoteBudgetChange(SwitchResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (result.Status != SwitchStatus.Switched || result.Slot != ModelSlots.Generator)
+            return;
+        if (result.Budget == BudgetAction.ExpandCompactedRanges)
+            Volatile.Write(ref _expansionDue, 1);
+        else if (result.Budget == BudgetAction.CompactBeforeNextCall)
+            Volatile.Write(ref _expansionDue, 0);
     }
 
     public string SessionId { get; }
@@ -139,7 +163,8 @@ public sealed class TurnRunner
     {
         try
         {
-            await _services.Slots.CompleteTurnAsync(cancellationToken).ConfigureAwait(false);
+            foreach (var result in await _services.Slots.CompleteTurnAsync(cancellationToken).ConfigureAwait(false))
+                NoteBudgetChange(result);
         }
         catch (InvalidOperationException)
         {
@@ -204,12 +229,15 @@ public sealed class TurnRunner
         private int _toolCalls;
         private bool _prefillChecked;
         private string? _memoryWrite;
+        private readonly List<string> _compactions = [];
+        // The turn's own UserMessage: compaction during the turn never summarizes it.
+        private long _turnStart;
 
         public async Task<TurnResult> RunAsync(CancellationToken cancellationToken)
         {
             // §10.3: only the user's own message clears taint; anyone else's text is outside content.
             runner.Tainted = envelope.Origin != EnvelopeOrigin.User;
-            runner.Append(new UserMessage(envelope.Text));
+            _turnStart = runner.Append(new UserMessage(envelope.Text)).Sequence;
 
             await ExtractEntitiesAsync(cancellationToken).ConfigureAwait(false);
             await BuildShortlistAsync(cancellationToken).ConfigureAwait(false);
@@ -342,8 +370,10 @@ public sealed class TurnRunner
             var budget = profile.AcceptedContext - _options.MaxOutputTokens - _options.ContextReserve;
             var toolTokens = tools.Sum(tool => counter.CountTokens(tool.Function.Name) + counter.CountTokens(tool.Function.Description)
                 + counter.CountTokens(tool.Function.JsonSchema.GetRawText()));
-            var snapshot = runner.Snapshot();
-            var rendered = PromptRenderer.Render(snapshot, SystemPrompt(profile), counter, budget, _lastRound, toolTokens);
+            var system = SystemPrompt(profile);
+            var rendered = await FitAsync((snapshot, clearMore) =>
+                PromptRenderer.Render(snapshot, system, counter, budget, _lastRound, toolTokens, clearMore), profile, counter, budget,
+                cancellationToken).ConfigureAwait(false);
             if (rendered.OverBudget)
                 throw new ContextOverBudgetException($"{rendered.Tokens} tokens against a budget of {rendered.Budget}");
 
@@ -378,6 +408,64 @@ public sealed class TurnRunner
             return await generator.GetResponseAsync(messages, options, cancellationToken).ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Plan §8 in cost order. Lever 1 (clearing results) is in the renderer. When the prompt is still over the budget:
+        /// lever 2 (completed skill bodies), then lever 3, compaction of the turn's earlier history and then of its earlier
+        /// rounds. A range that cannot be compacted to a record that fits is kept, and more results are cleared instead.
+        /// </summary>
+        private async Task<RenderedPrompt> FitAsync(Func<SessionSnapshot, bool, RenderedPrompt> render, ModelProfile profile,
+            ITokenCounter counter, int budget, CancellationToken cancellationToken)
+        {
+            if (Interlocked.Exchange(ref runner._expansionDue, 0) == 1)
+            {
+                var limit = (int)Math.Min(budget, budget * _options.Compaction.ExpansionFill);
+                var expanded = runner._compactor.Expand(snapshot => render(snapshot, false), limit, cancellationToken);
+                if (expanded > 0)
+                    _compactions.Add(string.Create(CultureInfo.InvariantCulture, $"expanded {expanded} compacted range(s) for {profile.Id}"));
+            }
+
+            var current = runner.Snapshot();
+            var rendered = render(current, false);
+            if (!rendered.OverBudget)
+                return rendered;
+            if (_services.SkillBodies is { } skills && await skills.DropCompletedAsync(runner.SessionId, cancellationToken).ConfigureAwait(false))
+            {
+                current = runner.Snapshot();
+                rendered = render(current, false);
+                if (!rendered.OverBudget)
+                    return rendered;
+            }
+
+            // The record may take a quarter of the budget at most, so a compaction always leaves room for the turn itself.
+            var recordTokens = Math.Max(1, budget / 4);
+            foreach (var range in ContextCompactor.Ranges(current, _turnStart, KeepFrom(current)))
+            {
+                var result = await runner._compactor.CompactAsync(range, counter, recordTokens, cancellationToken).ConfigureAwait(false);
+                _compactions.Add(Describe(result));
+                if (result.Status != CompactionStatus.Compacted)
+                    continue;
+                rendered = render(runner.Snapshot(), false);
+                if (!rendered.OverBudget)
+                    return rendered;
+            }
+            return render(runner.Snapshot(), true);
+        }
+
+        /// <summary>The first event of the latest round of calls, which the generator is about to act on.</summary>
+        private long? KeepFrom(SessionSnapshot snapshot)
+        {
+            var calls = snapshot.Transcript.Where(entry => entry.Content is ToolCallIssued call && _lastRound.Contains(call.CallId)).ToList();
+            return calls.Count == 0 ? null : calls.Min(entry => entry.FromSequence);
+        }
+
+        private static string Describe(CompactionResult result) => result.Status switch
+        {
+            CompactionStatus.Compacted => string.Create(CultureInfo.InvariantCulture,
+                $"compacted events {result.From}–{result.Through} by {result.Summarizer} in {result.Chunks} chunk(s)"),
+            CompactionStatus.NothingToCompact => string.Create(CultureInfo.InvariantCulture, $"nothing to compact in events {result.From}–{result.Through}"),
+            _ => string.Create(CultureInfo.InvariantCulture, $"kept events {result.From}–{result.Through} uncompacted: {result.Detail}"),
+        };
+
         private string SystemPrompt(ModelProfile profile)
         {
             var prompt = _options.SystemPrompt;
@@ -398,8 +486,9 @@ public sealed class TurnRunner
         private async Task<(bool AnyRan, bool Failed)> RunCallsAsync(List<FunctionCallContent> calls, ImmutableArray<Offered> tools,
             CancellationToken cancellationToken)
         {
-            var issued = new HashSet<string>(runner.Snapshot().Transcript.Select(entry => entry.Content)
-                .OfType<ToolCallIssued>().Select(call => call.CallId), StringComparer.Ordinal);
+            // Expanded, so ids hidden inside a compacted range are not reused.
+            var issued = new HashSet<string>(SessionProjection.Load(_services.Log, runner.SessionId, expandCompactions: true).Transcript
+                .Select(entry => entry.Content).OfType<ToolCallIssued>().Select(call => call.CallId), StringComparer.Ordinal);
             var valid = new List<ValidCall>();
             var failed = false;
             _lastRound.Clear();
@@ -967,6 +1056,7 @@ public sealed class TurnRunner
             var result = await _services.Slots.EscalateAsync(ModelSlots.Generator, cancellationToken).ConfigureAwait(false);
             if (result.Status != SwitchStatus.Switched)
                 return false;
+            runner.NoteBudgetChange(result);
             _escalations.Add($"{result.To!.Id}: {reason}");
             return true;
         }
@@ -1017,7 +1107,7 @@ public sealed class TurnRunner
         }
 
         public TurnResult Result(TurnStatus status, string? text) =>
-            new(status, text, _steps, _toolCalls, runner.Tainted, "reply", [.. _escalations], [.. _disagreements], _memoryWrite);
+            new(status, text, _steps, _toolCalls, runner.Tainted, "reply", [.. _escalations], [.. _disagreements], _memoryWrite, [.. _compactions]);
     }
 
     private sealed class ContextOverBudgetException(string message) : Exception(message);

@@ -208,6 +208,8 @@ public sealed class SessionActor : IAsyncDisposable
         {
             var result = await _slots.SwitchAsync(command.Slot, command.Target, SwitchReason.User, command.Pin, command.Cancellation)
                 .ConfigureAwait(false);
+            // A larger generator window expands compacted ranges before the next call (plan §4.2 step 4).
+            _runner.NoteBudgetChange(result);
             if (result.Status == SwitchStatus.Switched && command.Slot == ModelSlots.TextEmbedder && _options.EmbedderSwap is { } job)
                 job.Start(result.To!.Id);
             command.Completion.TrySetResult(result);

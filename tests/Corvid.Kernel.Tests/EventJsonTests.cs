@@ -22,6 +22,7 @@ public sealed class EventJsonTests
         [typeof(ApprovalResolved)] = "approval_resolved",
         [typeof(ModelSwitched)] = "model_switched",
         [typeof(Compacted)] = "compacted",
+        [typeof(CompactionExpanded)] = "compaction_expanded",
         [typeof(MemoryWritten)] = "memory_written",
         [typeof(SkillChanged)] = "skill_changed",
         [typeof(GoalSet)] = "goal_set",

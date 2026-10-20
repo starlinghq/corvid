@@ -24,7 +24,7 @@ internal sealed class InstrumentedChatClient(IChatClient inner, ModelProfile pro
         try
         {
             ChatResponse response;
-            if (stream is not null && HostTelemetry.SessionOf(Activity.Current) is { } session && stream.HasObservers(session))
+            if (stream is not null && HostTelemetry.StreamingSessionOf(Activity.Current) is { } session && stream.HasObservers(session))
             {
                 stream.Publish(session, observer => observer.GenerationStarted());
                 var updates = new List<ChatResponseUpdate>();

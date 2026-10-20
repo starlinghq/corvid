@@ -1,0 +1,316 @@
+{
+  "format": "corvid-golden-trajectory",
+  "format_version": 1,
+  "payload_version": 1,
+  "id": "compaction-expanded",
+  "description": "A switch to a larger window expands compactions one layer at a time: expanding the outer summary shows the inner one and the raw events after it, expanding the inner one shows everything. A later compaction covers the expanded range again.",
+  "events": [
+    {
+      "type": "user_message",
+      "text": "draft section one"
+    },
+    {
+      "type": "assistant_message",
+      "text": "Section one is drafted."
+    },
+    {
+      "type": "compacted",
+      "from_sequence": 1,
+      "through_sequence": 2,
+      "summary": {
+        "goal": "ship the report",
+        "constraints": [],
+        "decisions": [
+          "drafted section one"
+        ],
+        "files": [
+          "report.md"
+        ],
+        "open_questions": [],
+        "next_step": "draft section two"
+      },
+      "summarizer": "qwen3.5-0.8b@cpu",
+      "chunks": 1
+    },
+    {
+      "type": "user_message",
+      "text": "draft section two"
+    },
+    {
+      "type": "assistant_message",
+      "text": "Section two is drafted."
+    },
+    {
+      "type": "compacted",
+      "from_sequence": 1,
+      "through_sequence": 5,
+      "summary": {
+        "goal": "ship the report",
+        "constraints": [],
+        "decisions": [
+          "drafted section one",
+          "drafted section two"
+        ],
+        "files": [
+          "report.md"
+        ],
+        "open_questions": [],
+        "next_step": "proofread"
+      },
+      "summarizer": "qwen3.5-0.8b@cpu",
+      "chunks": 1
+    },
+    {
+      "type": "model_switched",
+      "slot": "generator",
+      "old_profile": {
+        "id": "qwen3.5-0.8b@cpu"
+      },
+      "new_profile": {
+        "id": "cloud-large"
+      },
+      "reason": "user"
+    },
+    {
+      "type": "compaction_expanded",
+      "compacted_sequence": 6
+    },
+    {
+      "type": "compaction_expanded",
+      "compacted_sequence": 3
+    },
+    {
+      "type": "user_message",
+      "text": "proofread both"
+    },
+    {
+      "type": "compacted",
+      "from_sequence": 1,
+      "through_sequence": 10,
+      "summary": {
+        "goal": "ship the report",
+        "constraints": [],
+        "decisions": [
+          "drafted section one",
+          "drafted section two"
+        ],
+        "files": [
+          "report.md"
+        ],
+        "open_questions": [],
+        "next_step": "proofread both"
+      },
+      "summarizer": "qwen3.5-0.8b@cpu",
+      "chunks": 1
+    }
+  ],
+  "checks": [
+    {
+      "through": 7,
+      "expected": {
+        "head": 7,
+        "goal": null,
+        "todos": [],
+        "transcript": [
+          {
+            "from": 1,
+            "through": 5,
+            "event": {
+              "type": "compacted",
+              "from_sequence": 1,
+              "through_sequence": 5,
+              "summary": {
+                "goal": "ship the report",
+                "constraints": [],
+                "decisions": [
+                  "drafted section one",
+                  "drafted section two"
+                ],
+                "files": [
+                  "report.md"
+                ],
+                "open_questions": [],
+                "next_step": "proofread"
+              },
+              "summarizer": "qwen3.5-0.8b@cpu",
+              "chunks": 1
+            }
+          }
+        ],
+        "pending_approvals": [],
+        "model_profiles": [
+          {
+            "slot": "generator",
+            "profile": {
+              "id": "cloud-large"
+            }
+          }
+        ],
+        "decisions": [],
+        "checkpoints": [],
+        "issues": []
+      }
+    },
+    {
+      "through": 8,
+      "expected": {
+        "head": 8,
+        "goal": null,
+        "todos": [],
+        "transcript": [
+          {
+            "from": 1,
+            "through": 2,
+            "event": {
+              "type": "compacted",
+              "from_sequence": 1,
+              "through_sequence": 2,
+              "summary": {
+                "goal": "ship the report",
+                "constraints": [],
+                "decisions": [
+                  "drafted section one"
+                ],
+                "files": [
+                  "report.md"
+                ],
+                "open_questions": [],
+                "next_step": "draft section two"
+              },
+              "summarizer": "qwen3.5-0.8b@cpu",
+              "chunks": 1
+            }
+          },
+          {
+            "from": 4,
+            "through": 4,
+            "event": {
+              "type": "user_message",
+              "text": "draft section two"
+            }
+          },
+          {
+            "from": 5,
+            "through": 5,
+            "event": {
+              "type": "assistant_message",
+              "text": "Section two is drafted."
+            }
+          }
+        ],
+        "pending_approvals": [],
+        "model_profiles": [
+          {
+            "slot": "generator",
+            "profile": {
+              "id": "cloud-large"
+            }
+          }
+        ],
+        "decisions": [],
+        "checkpoints": [],
+        "issues": []
+      }
+    },
+    {
+      "through": 9,
+      "expected": {
+        "head": 9,
+        "goal": null,
+        "todos": [],
+        "transcript": [
+          {
+            "from": 1,
+            "through": 1,
+            "event": {
+              "type": "user_message",
+              "text": "draft section one"
+            }
+          },
+          {
+            "from": 2,
+            "through": 2,
+            "event": {
+              "type": "assistant_message",
+              "text": "Section one is drafted."
+            }
+          },
+          {
+            "from": 4,
+            "through": 4,
+            "event": {
+              "type": "user_message",
+              "text": "draft section two"
+            }
+          },
+          {
+            "from": 5,
+            "through": 5,
+            "event": {
+              "type": "assistant_message",
+              "text": "Section two is drafted."
+            }
+          }
+        ],
+        "pending_approvals": [],
+        "model_profiles": [
+          {
+            "slot": "generator",
+            "profile": {
+              "id": "cloud-large"
+            }
+          }
+        ],
+        "decisions": [],
+        "checkpoints": [],
+        "issues": []
+      }
+    },
+    {
+      "through": 11,
+      "expected": {
+        "head": 11,
+        "goal": null,
+        "todos": [],
+        "transcript": [
+          {
+            "from": 1,
+            "through": 10,
+            "event": {
+              "type": "compacted",
+              "from_sequence": 1,
+              "through_sequence": 10,
+              "summary": {
+                "goal": "ship the report",
+                "constraints": [],
+                "decisions": [
+                  "drafted section one",
+                  "drafted section two"
+                ],
+                "files": [
+                  "report.md"
+                ],
+                "open_questions": [],
+                "next_step": "proofread both"
+              },
+              "summarizer": "qwen3.5-0.8b@cpu",
+              "chunks": 1
+            }
+          }
+        ],
+        "pending_approvals": [],
+        "model_profiles": [
+          {
+            "slot": "generator",
+            "profile": {
+              "id": "cloud-large"
+            }
+          }
+        ],
+        "decisions": [],
+        "checkpoints": [],
+        "issues": []
+      }
+    }
+  ]
+}
