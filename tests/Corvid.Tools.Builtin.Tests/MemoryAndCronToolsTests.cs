@@ -61,7 +61,7 @@ public sealed class MemoryToolsTests : IDisposable
         Assert.Equal(pendingId, item.GetProperty("pending_id").GetString());
         Assert.Equal("My sister is called Anna.", item.GetProperty("text").GetString());
 
-        var approved = await Invoke(_tools, "memory_approve", $$"""{"pending_id":"{{pendingId}}","operation":"add"}""");
+        var approved = await Invoke(_tools, "memory_approve", $$"""{"pending_id":"{{pendingId}}","operation":"add"}""", context);
         Assert.Equal("saved", approved.GetProperty("status").GetString());
         Assert.Single(_facts.Search("Anna"));
         Assert.Empty((await Invoke(_tools, "memory_pending", "{}")).GetProperty("pending").EnumerateArray());
@@ -92,6 +92,16 @@ public sealed class MemoryToolsTests : IDisposable
         Assert.Equal(MemoryWriter.TaintedReason, tainted.GetProperty("reason").GetString());
         Assert.Equal("saved", trusted.GetProperty("status").GetString());
         Assert.Equal("My sister is called Anna.", Assert.Single(facts.Search("Anna")).Fact.Text);
+
+        // Nor can the generator approve it while the session is tainted, or without a turn's context.
+        var pendingId = tainted.GetProperty("pending_id").GetString()!;
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => Invoke(tools, "memory_approve",
+            $$"""{"pending_id":"{{pendingId}}"}""", new ToolCallContext(Session, "c-3") { Tainted = true }));
+        Assert.Contains("/memory approve", refused.Message, StringComparison.Ordinal);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Invoke(tools, "memory_approve", $$"""{"pending_id":"{{pendingId}}"}"""));
+        Assert.Single(facts.Search("Anna"));
+        var approved = await Invoke(tools, "memory_approve", $$"""{"pending_id":"{{pendingId}}"}""", new ToolCallContext(Session, "c-4"));
+        Assert.Equal("saved", approved.GetProperty("status").GetString());
     }
 
     private sealed class ConfidentAdd : IDecider
@@ -114,10 +124,11 @@ public sealed class MemoryToolsTests : IDisposable
 
         Assert.Equal("rejected", rejected.GetProperty("status").GetString());
         Assert.Empty(_facts.Search("car"));
-        await Assert.ThrowsAsync<ToolArgumentException>(() => Invoke(_tools, "memory_approve", $$"""{"pending_id":"{{pendingId}}"}"""));
+        var context = new ToolCallContext(Session, "c-2");
+        await Assert.ThrowsAsync<ToolArgumentException>(() => Invoke(_tools, "memory_approve", $$"""{"pending_id":"{{pendingId}}"}""", context));
         await Assert.ThrowsAsync<ToolArgumentException>(() => Invoke(_tools, "memory_reject", """{"pending_id":"pending:nope"}"""));
         await Assert.ThrowsAsync<ToolArgumentException>(() =>
-            Invoke(_tools, "memory_approve", $$"""{"pending_id":"{{pendingId}}","operation":"delete"}"""));
+            Invoke(_tools, "memory_approve", $$"""{"pending_id":"{{pendingId}}","operation":"delete"}""", context));
     }
 
     [Fact]

@@ -1162,7 +1162,9 @@ Plan §2 (Kev's limits), §4.4, §5 (all), §5.5's two-tier decider and §5.6's 
   never did without Kev. So `MemoryWriteRequest.Tainted` (and `EditBlockAsync`'s `tainted`) stage the write for review
   without asking the gate, recorded as `MemoryWriter.TaintedReason`: `memory_add` passes its call's taint and the turn
   loop's egress `remember` passes the session's, so text from outside the user (a fetched page, another sender's
-  message) never reaches memory unreviewed. The user can still approve it from `/memory pending`.
+  message) never reaches memory unreviewed. The `memory_approve` tool now takes the call's context and refuses in a
+  tainted session (and without a turn's context), so the generator cannot approve such a write either; the user approves
+  it with `/memory approve`.
 - Host. `kev-0.8b` is the default decider model and `kev-4b` is in the catalogue (slot `decider`, profiles
   `kev-0.8b@cpu` and `kev-4b@cpu`, accepted context 8,192, locks from the package naming `jaredpalmer/kev-*`, files from
   `Starlinghq/kev-0.8b-onnx` and `Starlinghq/kev-4b-onnx` at their pinned commits). The decider is optional: its models are
@@ -1186,7 +1188,7 @@ Plan §2 (Kev's limits), §4.4, §5 (all), §5.5's two-tier decider and §5.6's 
   says yes to everything no longer stops a degraded turn, an embedding pick of `ask_clarifying_question` does not
   divert it, calibrated `clarify` and `stuck` still do, and with Kev `remember` writes the user's message but stages a
   message from outside; `WriterTests` and `MemoryToolsTests`: a tainted write or block edit is staged even when Kev would
-  write it. `tests/Corvid.Host.Tests/DeciderTests` and a CLI chat test: Kev bound and answering on the device, a missing
+  write it, and `memory_approve` refuses in a tainted session. `tests/Corvid.Host.Tests/DeciderTests` and a CLI chat test: Kev bound and answering on the device, a missing
   Kev or second tier, or a Kev that throws while loading, leaving the degraded tier with a notice, `/model` and
   `/status`, and the doctor's warning. Model-backed (`KevModelTests`, opt-in through
   `CORVID_STARLING_MODELS`; Kev-4B also needs 22 GB available): a calibrated ingress checkpoint on Kev-0.8B and Kev-4B,

@@ -118,9 +118,15 @@ public sealed partial class MemoryTools
     [SideEffect(SideEffects.Memory)]
     public async Task<JsonNode> ApproveAsync(
         [Description("The pending_id from memory_pending.")] string pending_id,
+        ToolCallContext context,
         [Description("Use this operation instead of the proposed one: add, update, invalidate or noop.")] string? operation = null,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(context);
+        // §10.3: outside content could ask for a write and then for its approval in the same session; only the user approves then.
+        if (context.Tainted)
+            throw new InvalidOperationException("This session holds content from outside the user, so only the user can approve " +
+                "memory writes now, with /memory approve.");
         if (string.IsNullOrWhiteSpace(pending_id))
             throw new ToolArgumentException("Argument 'pending_id' must not be empty.", nameof(pending_id));
         if (operation is not (null or MemoryOperations.Add or MemoryOperations.Update or MemoryOperations.Invalidate or MemoryOperations.Noop))
