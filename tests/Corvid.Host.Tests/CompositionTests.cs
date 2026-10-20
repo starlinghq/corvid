@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Corvid.Abstractions.Events;
 using Corvid.Host.Composition;
 using Corvid.Host.Telemetry;
@@ -48,6 +49,38 @@ public sealed class CompositionTests
         await using var runtime = await host.StartAsync();
         // The skill tools (C-017) come with skills, which are on by default.
         Assert.Equal(["add_note", "list_notes", "skill_read", "skill_run_script"], runtime.Tools.List().Select(tool => tool.Name).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void TheSkillsDirectoryIsReadOnlyToToolsWhenTheWorkspaceContainsIt()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "corvid-guard-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var skills = Path.Combine(root, "data", "corvid-skills");
+            var options = new Configuration.CorvidOptions { Skills = new Configuration.SkillsSettings { Directory = skills } };
+
+            // A workspace above the skills directory (the home directory, say): commands may read skills, not change them.
+            var (readOnly, refusal) = CorvidRuntimeFactory.SkillsGuard(options, root);
+            Assert.Equal([skills], readOnly);
+            Assert.Null(refusal);
+            Assert.True(Directory.Exists(skills));
+
+            // A workspace elsewhere needs nothing more: the sandbox leaves everything outside it read-only.
+            Assert.Empty(CorvidRuntimeFactory.SkillsGuard(options, Path.Combine(root, "work")).ReadOnly);
+
+            // A workspace in the skills directory would make every tool write a skill edit: skills are off.
+            Assert.Contains("inside the skills directory", CorvidRuntimeFactory.SkillsGuard(options, skills).Refusal);
+            Assert.NotNull(CorvidRuntimeFactory.SkillsGuard(options, Path.Combine(skills, "devops")).Refusal);
+
+            options.Skills.Enabled = false;
+            Assert.Equal((ImmutableArray<string>.Empty, (string?)null), CorvidRuntimeFactory.SkillsGuard(options, root));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]

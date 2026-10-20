@@ -52,19 +52,38 @@ public static partial class SkillScanner
         return findings.ToImmutable();
     }
 
-    /// <summary>Scans SKILL.md and every text file of a skill folder (binary files are skipped).</summary>
+    /// <summary>Largest file the scanner reads; a larger one is a finding, since what is not read cannot be screened.</summary>
+    public const long MaxScanBytes = 4L * 1024 * 1024;
+
+    // Files a skill's instructions or scripts are made of. Binary content in one of them would pass unread, so it is a finding;
+    // other binary files (images, say) are skipped.
+    private static readonly ImmutableHashSet<string> TextExtensions = ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase,
+        "", ".md", ".txt", ".sh", ".bash", ".zsh", ".py", ".js", ".ts", ".rb", ".pl", ".ps1", ".json", ".yaml", ".yml", ".toml");
+
+    /// <summary>
+    /// Scans SKILL.md and every text file of a skill folder. A file too large to read, or binary content in a file named as
+    /// text or a script, is itself a finding (fail closed); other binary files are skipped.
+    /// </summary>
     public static ImmutableArray<ScanFinding> ScanFolder(string folder)
     {
         var findings = ImmutableArray.CreateBuilder<ScanFinding>();
         foreach (var path in Directory.EnumerateFiles(folder, "*", new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint }))
         {
+            var relative = Path.GetRelativePath(folder, path).Replace('\\', '/');
             var info = new FileInfo(path);
-            if (info.Length > SkillDocument.MaxBytes * 4)
+            if (info.Length > MaxScanBytes)
+            {
+                findings.Add(new ScanFinding(relative, 0, "too_large_to_scan", $"{info.Length} bytes"));
                 continue;
+            }
             var bytes = File.ReadAllBytes(path);
-            if (Array.IndexOf(bytes, (byte)0, 0, Math.Min(bytes.Length, 8192)) >= 0)
+            if (Array.IndexOf(bytes, (byte)0) >= 0)
+            {
+                if (TextExtensions.Contains(Path.GetExtension(path)) || relative.StartsWith("scripts/", StringComparison.Ordinal))
+                    findings.Add(new ScanFinding(relative, 0, "binary_content", "a NUL byte in a text or script file"));
                 continue;
-            findings.AddRange(Scan(Path.GetRelativePath(folder, path).Replace('\\', '/'), System.Text.Encoding.UTF8.GetString(bytes)));
+            }
+            findings.AddRange(Scan(relative, System.Text.Encoding.UTF8.GetString(bytes)));
         }
         return findings.ToImmutable();
     }

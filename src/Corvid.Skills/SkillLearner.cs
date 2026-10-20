@@ -88,7 +88,8 @@ public sealed class SkillLearner : ISkillLearning
     public void Queue(SkillOpportunity opportunity)
     {
         ArgumentNullException.ThrowIfNull(opportunity);
-        _database.Enqueue(opportunity.SessionId, opportunity.FromSequence, opportunity.ThroughSequence, opportunity.DecisionId, opportunity.Request);
+        _database.Enqueue(opportunity.SessionId, opportunity.FromSequence, opportunity.ThroughSequence, opportunity.DecisionId, opportunity.Request,
+            opportunity.Tainted);
         _signal.Release();
     }
 
@@ -173,14 +174,17 @@ public sealed class SkillLearner : ISkillLearning
         // the store checks it again under the repository's lock before writing.
         var verdict = await AskWriteSafeAsync(opportunity.SessionId, opportunity.Request, draft, existing is null ? "create" : "update", replay,
             cancellationToken).ConfigureAwait(false);
-        if (verdict.Verdict.Acted)
+        // A turn that held outside content (§10.3) would pass it into a trusted, agent-authored skill: whatever the gate says,
+        // the user reviews such a draft.
+        if (verdict.Verdict.Acted && !opportunity.Tainted)
         {
             var revision = await _store.WriteAgentSkillAsync(draft, opportunity.SessionId, cancellationToken: cancellationToken).ConfigureAwait(false);
             await RunEvalsAsync(draft.Name, cancellationToken).ConfigureAwait(false);
             return new LearningResult(opportunity.Id, LearningStatus.Applied, draft.Name, $"applied as {revision?[..12] ?? "unchanged"}; replay {replay.Describe()}");
         }
-        var pending = _database.Stage(draft.Name, draft.Text, opportunity.SessionId, verdict.DecisionId, verdict.Verdict.Reason, replay.Describe(), opportunity.Id);
-        return new LearningResult(opportunity.Id, LearningStatus.Staged, draft.Name, $"staged as {pending.Id} ({verdict.Verdict.Reason})", pending);
+        var reason = opportunity.Tainted ? "the source turn held outside content, so the draft waits for review" : verdict.Verdict.Reason;
+        var pending = _database.Stage(draft.Name, draft.Text, opportunity.SessionId, verdict.DecisionId, reason, replay.Describe(), opportunity.Id);
+        return new LearningResult(opportunity.Id, LearningStatus.Staged, draft.Name, $"staged as {pending.Id} ({reason})", pending);
     }
 
     private async Task<FabricVerdict> AskWriteSafeAsync(string sessionId, string request, SkillDocument draft, string change, ReplayOutcome replay,

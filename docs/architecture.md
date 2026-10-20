@@ -1443,11 +1443,14 @@ allowlist is unchanged. Everything runs on the degraded decider.
   command, signing, credential helper or external diff, `core.symlinks=false`, the repository named explicitly and
   `GIT_CEILING_DIRECTORIES` set, so the user's git setup never runs. The repository's own `.git/config` is checked on open:
   any key beyond what `git init` writes (a hooks path, a filter or diff driver) refuses the repository. `.git` is added to
-  the approval environment's safety configuration, so no tool writes it and the sandbox hides it. Before every change (and
+  the approval environment's safety configuration, so no tool writes it and the sandbox hides it. When the workspace contains
+  the skills directory (the home directory, say), the directory is also bound read-only in the shell's sandbox and denied to
+  the file tools, so no tool edit can reach a skill and then be committed as the user's; a workspace at or inside the skills
+  directory turns skills off, with the reason in `/status`. Before every change (and
   at each refresh) whatever changed on disk is committed as the user's; a file's author is the author of the last commit
   that touched it. A skill is agent-owned when every file in it was last changed by the agent; it is trusted when no file
   came from a hub. `WriteAgentSkillAsync` and `ArchiveAsync` check ownership under the repository lock, after recording
-  outside edits, and refuse anything else: the curator and the learning loop can change only agent-authored skills (the
+  outside edits, and refuse anything else (a new skill's folder must still not exist then): the curator and the learning loop can change only agent-authored skills (the
   structural fix for Hermes #20273 and #64338). Each change made in a session appends `SkillChanged` (skill, revision,
   author). The kernel reads a snapshot taken at open, after each change and on `/skills`, never waiting on git.
 - Levels: L0 is `ISkillSource.Available` (name, description, examples, trusted) after the activation rules; L1 is
@@ -1471,7 +1474,9 @@ allowlist is unchanged. Everything runs on the degraded decider.
   characters, answer); the draft must parse, pass the scanner, and not name a skill the agent does not own; then it must
   pass its replay test; then `skill_write_safe` is asked at the pre-execute checkpoint in the source session with the
   `agent_authored` condition and the draft and replay in its instructions. A calibrated answer above 0.85 commits it as the
-  agent's; anything else stages it (`/skills pending`), so without Kev every draft is staged. `/skills approve` commits a
+  agent's; anything else stages it (`/skills pending`), so without Kev every draft is staged. A turn that was tainted when it
+  answered (§10.3) queues its opportunity marked tainted, and its draft is staged whatever the gate says: a skill written
+  from outside content would otherwise load as trusted. `/skills approve` commits a
   staged draft as `agent` (ownership checked again: a skill the user wrote meanwhile refuses it), runs its evals and records
   the decision's outcome `approved`; `/skills reject` records `rejected`. Interactive sessions only: unattended job turns
   are never distilled.
@@ -1494,7 +1499,8 @@ allowlist is unchanged. Everything runs on the degraded decider.
   files, or a scanner finding refuses it and the rest import. Hidden files are not copied and nothing runs. The scanner
   flags instruction overrides, hiding things from the user, downloads piped to a shell, credential-store and Vault paths,
   environment dumps, reverse shells, recursive deletes of home or root, encoded execution and invisible characters, over
-  SKILL.md and every text file; drafts are scanned too. It is a screen: hub skills are tainted whatever it says.
+  SKILL.md and every text file; a file over 4 MiB, or binary content in a text or script file, is itself a finding, so
+  nothing imports unread (other binary files, such as images, are skipped); drafts are scanned too. It is a screen: hub skills are tainted whatever it says.
 - Tools (`SkillFileTools`, C-005 generated): `skill_read` (read-only; a skill's body or one file) and `skill_run_script`
   (`[SideEffect(Process | Filesystem)]`, `[Destructive]`): a `.sh` (bash) or `.py` (python3) file under the skill's
   `scripts/`, run by C-012's `SandboxedShell` (workspace writable, no network, Vault and Corvid's state hidden) with its
@@ -1522,8 +1528,9 @@ change on disk between `/skills` calls; the `corvid skills` verb; installing fro
 collectible `AssemblyLoadContext` (§10.6); importing Hermes memories and sessions (D-9); approvals that show a script's
 content (the prompt shows the tool call); toolsets (C-005), which would replace the Hermes map; using an existing clone as
 the skills directory (its `remote.*` and `branch.*` keys are outside the configuration allowlist, so it is refused with the
-key named). A workspace that contains
-the skills directory lets the file tools write skill files after approval; such edits are recorded as the user's.
+key named). Known limits: a hub skill's description (L0, up to 1,024 characters, scanned at import) reaches the `skill`
+options and the L0 lines without tainting the session; only loading its body or files taints. The drafting prompt reads at
+most 4,096 events of the source turn.
 
 ## Running the check
 

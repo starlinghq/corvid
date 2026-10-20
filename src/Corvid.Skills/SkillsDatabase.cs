@@ -15,8 +15,9 @@ public enum OpportunityState
 }
 
 /// <summary>A turn <c>skill_opportunity</c> queued for distillation, and how far it got.</summary>
+/// <param name="Tainted">The source turn held outside content: its draft always waits for review.</param>
 public sealed record OpportunityRow(string Id, string SessionId, long FromSequence, long ThroughSequence, string DecisionId,
-    string Request, OpportunityState State, string? Detail, DateTimeOffset Created);
+    string Request, OpportunityState State, string? Detail, DateTimeOffset Created, bool Tainted = false);
 
 public enum PendingSkillStatus
 {
@@ -97,7 +98,8 @@ public sealed class SkillsDatabase
             state TEXT NOT NULL,
             detail TEXT,
             created INTEGER NOT NULL,
-            updated INTEGER NOT NULL
+            updated INTEGER NOT NULL,
+            tainted INTEGER NOT NULL
         );
         CREATE INDEX opportunities_state ON opportunities(state, created);
         CREATE TABLE pending (
@@ -177,17 +179,18 @@ public sealed class SkillsDatabase
 
     // ---- opportunities ----
 
-    public OpportunityRow Enqueue(string sessionId, long from, long through, string decisionId, string request)
+    public OpportunityRow Enqueue(string sessionId, long from, long through, string decisionId, string request, bool tainted = false)
     {
         var id = Guid.NewGuid().ToString("N")[..12];
         var now = Now;
-        Execute("INSERT INTO opportunities VALUES ($id, $session, $from, $through, $decision, $request, 'queued', NULL, $now, $now)",
-            ("$id", id), ("$session", sessionId), ("$from", from), ("$through", through), ("$decision", decisionId), ("$request", request), ("$now", now));
-        return new OpportunityRow(id, sessionId, from, through, decisionId, request, OpportunityState.Queued, null, At(now));
+        Execute("INSERT INTO opportunities VALUES ($id, $session, $from, $through, $decision, $request, 'queued', NULL, $now, $now, $tainted)",
+            ("$id", id), ("$session", sessionId), ("$from", from), ("$through", through), ("$decision", decisionId), ("$request", request), ("$now", now),
+            ("$tainted", tainted ? 1 : 0));
+        return new OpportunityRow(id, sessionId, from, through, decisionId, request, OpportunityState.Queued, null, At(now), tainted);
     }
 
     public IReadOnlyList<OpportunityRow> Opportunities(OpportunityState? state = null, int limit = 50) =>
-        Query("SELECT id, session, from_sequence, through_sequence, decision_id, request, state, detail, created FROM opportunities " +
+        Query("SELECT id, session, from_sequence, through_sequence, decision_id, request, state, detail, created, tainted FROM opportunities " +
               (state is null ? "" : "WHERE state = $state ") + "ORDER BY created LIMIT $limit", ReadOpportunity,
             ("$state", state is { } value ? StateName(value) : null), ("$limit", limit));
 
@@ -197,7 +200,7 @@ public sealed class SkillsDatabase
 
     private static OpportunityRow ReadOpportunity(SqliteDataReader reader) => new(reader.GetString(0), reader.GetString(1), reader.GetInt64(2),
         reader.GetInt64(3), reader.GetString(4), reader.GetString(5), ParseState(reader.GetString(6)),
-        reader.IsDBNull(7) ? null : reader.GetString(7), At(reader.GetInt64(8)));
+        reader.IsDBNull(7) ? null : reader.GetString(7), At(reader.GetInt64(8)), reader.GetInt64(9) != 0);
 
     private static string StateName(OpportunityState state) => state switch
     {

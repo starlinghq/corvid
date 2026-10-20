@@ -162,6 +162,22 @@ public sealed class LearningTests
     }
 
     [Fact]
+    public async Task ADraftFromATaintedTurnWaitsForReviewEvenOnACalibratedYes()
+    {
+        using var harness = new LearningHarness(new FakeGenerator(Reply.Say(LearningHarness.DraftText())),
+            LearningHarness.ReplayScript("list_notes", "list_notes", "list_notes"), new WriteSafeDecider(0.99));
+        var (from, through) = harness.RecordSourceTurn();
+
+        harness.Learner.Queue(new SkillOpportunity(TurnHarness.Session, from, through, "decision-1", LearningHarness.Request, Tainted: true));
+        Assert.True(Assert.Single(harness.Database.Opportunities()).Tainted);
+        var result = Assert.Single(await harness.Learner.ProcessQueuedAsync(Token));
+
+        Assert.Equal(LearningStatus.Staged, result.Status);
+        Assert.Empty(harness.Store.Skills);
+        Assert.Contains("outside content", Assert.Single(harness.Learner.Pending()).Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ADraftWhoseReplayCallsOtherToolsFailsAndIsNeverStaged()
     {
         using var harness = new LearningHarness(new FakeGenerator(Reply.Say(LearningHarness.DraftText())),

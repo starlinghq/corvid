@@ -1226,7 +1226,7 @@ public sealed class TurnRunner
                 if (Acted(verdicts, "skill_opportunity", out _))
                 {
                     _services.SkillLearning!.Queue(new SkillOpportunity(runner.SessionId, _turnStart, answer,
-                        verdicts["skill_opportunity"].DecisionId, envelope.Text));
+                        verdicts["skill_opportunity"].DecisionId, envelope.Text, runner.Tainted));
                     _skillQueued = true;
                 }
             }

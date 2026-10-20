@@ -21,6 +21,9 @@ public sealed record ShellOptions
     /// <summary>More paths to hide from commands. Absolute.</summary>
     public ImmutableArray<string> DeniedPaths { get; init; } = [];
 
+    /// <summary>Paths inside the workspace that commands may read but not change (the skills directory, say). Absolute; they must exist.</summary>
+    public ImmutableArray<string> ReadOnlyPaths { get; init; } = [];
+
     /// <summary>
     /// The shell that runs the command line. bash, because the approval pipeline parses the bash subset (D-5): a shell
     /// that reads <c>$'...'</c> or here-strings differently could run something other than what was approved.
@@ -66,6 +69,7 @@ public sealed class SandboxedShell
         Policy = new SandboxPolicy
         {
             Workspace = Path.GetFullPath(options.Workspace),
+            ReadOnlyPaths = options.ReadOnlyPaths,
             DeniedPaths = [.. (options.Vault?.Paths ?? []).Concat(options.DeniedPaths).Distinct(StringComparer.Ordinal)],
             Network = false,
             Environment = options.Environment,

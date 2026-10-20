@@ -160,6 +160,29 @@ public sealed class TurnSkillTests
         var events = harness.Events();
         Assert.IsType<UserMessage>(events.Single(item => item.Sequence == queued.FromSequence).Payload);
         Assert.IsType<AssistantMessage>(events.Single(item => item.Sequence == queued.ThroughSequence).Payload);
+        Assert.False(queued.Tainted);
+    }
+
+    [Fact]
+    public async Task AnOpportunityFromATurnWithOutsideContentIsMarkedTainted()
+    {
+        var tool = TestTool.Create("read_hub_file", "Read a hub file.", new ToolRisk(SideEffects.None, false, false), """{"type":"object","properties":{}}""",
+            (arguments, _) =>
+            {
+                ToolCallContext.From(arguments)!.MarkResultTainted();
+                return ValueTask.FromResult<object?>("hub text");
+            });
+        var generator = new FakeGenerator(Reply.Call("read_hub_file"), Reply.Call("read_hub_file"), Reply.Call("read_hub_file"), Reply.Say("Read."))
+        {
+            YesNo = FakeGenerator.YesTo("reusable"),
+        };
+        using var harness = new TurnHarness(generator, tools: tools => tools.Add(tool));
+        var learning = new RecordingLearning();
+
+        var result = await harness.RunAsync(Runner(harness, null, learning), "read the hub file three times");
+
+        Assert.True(result.Tainted);
+        Assert.True(Assert.Single(learning.Queued).Tainted);
     }
 
     [Fact]

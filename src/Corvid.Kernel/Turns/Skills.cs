@@ -25,7 +25,10 @@ public interface ISkillSource
 }
 
 /// <summary>A turn <c>skill_opportunity</c> said was a reusable procedure: the events from its user message to its answer.</summary>
-public sealed record SkillOpportunity(string SessionId, long FromSequence, long ThroughSequence, string DecisionId, string Request);
+/// <param name="Tainted">The turn held outside content (§10.3). A skill drafted from it would carry that content into a trusted,
+/// agent-authored skill, so the learning loop never applies such a draft without review.</param>
+public sealed record SkillOpportunity(string SessionId, long FromSequence, long ThroughSequence, string DecisionId, string Request,
+    bool Tainted = false);
 
 /// <summary>Where the turn loop queues skill opportunities (plan §11 learning loop, step 1). Distillation runs later, in the background.</summary>
 public interface ISkillLearning

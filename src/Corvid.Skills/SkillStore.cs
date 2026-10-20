@@ -221,7 +221,10 @@ public sealed class SkillStore : ISkillSource
             throw new SkillOwnershipException($"{Relative(folder)} already exists and is not a skill Corvid loaded; the agent does not write into it.");
         var revision = await Repository.CommitAsync(folder, SkillAuthor.Agent, message ?? $"{(existing is null ? "Add" : "Update")} skill {document.Name}",
             _ => File.WriteAllTextAsync(System.IO.Path.Combine(EnsureFolder(folder), SkillDocument.FileName), document.Text, cancellationToken),
-            check: existing is null ? null : token => EnsureAgentOwnedAsync(existing, token), cancellationToken).ConfigureAwait(false);
+            // A new skill's folder is checked again under the lock: one that appeared on disk since the snapshot has just been
+            // committed as the user's, and the agent must not write into it.
+            check: existing is null ? token => EnsureNewFolderAsync(folder, token) : token => EnsureAgentOwnedAsync(existing, token),
+            cancellationToken).ConfigureAwait(false);
         await AfterChangeAsync(document.Name, revision, SkillAuthor.Agent, sessionId, cancellationToken).ConfigureAwait(false);
         return revision;
     }
@@ -262,6 +265,14 @@ public sealed class SkillStore : ISkillSource
         if (authors.Count == 0 || others.Length > 0)
             throw new SkillOwnershipException($"{skill.Name} is not agent-authored ({string.Join(", ", others.Select(pair => $"{pair.Key} by {pair.Value}"))}); " +
                 "the agent may change only skills it wrote.");
+    }
+
+    private Task EnsureNewFolderAsync(string folder, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Directory.Exists(folder) || File.Exists(folder) || new FileInfo(folder).LinkTarget is not null
+            ? throw new SkillOwnershipException($"{Relative(folder)} appeared since the skills were loaded and is not the agent's; the agent does not write into it.")
+            : Task.CompletedTask;
     }
 
     private async Task AfterChangeAsync(string skill, string? revision, SkillAuthor author, string? sessionId, CancellationToken cancellationToken)

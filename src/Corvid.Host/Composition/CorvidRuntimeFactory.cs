@@ -103,6 +103,10 @@ public sealed class CorvidRuntimeFactory(
             // themselves stay readable in the sandbox, where skill scripts run.
             if (settings.Skills.Enabled)
                 environment = Protect(environment, Path.Combine(CorvidPaths.SkillsDirectory(settings), ".git"));
+            // A workspace that contains the skills directory (the home directory, say) would let the file tools and the shell
+            // edit skills, and an edit on disk is committed as the user's: the agent could rewrite a user or hub skill, or turn
+            // hub content into trusted content. The skills directory is read-only to commands and closed to the file tools.
+            var skillsGuard = SkillsGuard(settings, environment.Workspace);
             var prompters = new ApprovalRouter();
             var approvals = new ApprovalPipeline(environment, fabric, log, prompters, new JsonFileApprovalRuleStore(rulesFile),
                 new ApprovalOptions
@@ -125,6 +129,7 @@ public sealed class CorvidRuntimeFactory(
                 Workspace = environment.Workspace,
                 Vault = vault,
                 DeniedPaths = environment.Protected.SafetyConfiguration,
+                ReadOnlyPaths = skillsGuard.ReadOnly,
             });
             var jobs = new JobStore(CorvidPaths.JobStore(settings));
             var builtin = new BuiltinServices(environment, shell, jobs, settings.Tools.Builtin ? new WebFetchTool() : null);
@@ -133,14 +138,16 @@ public sealed class CorvidRuntimeFactory(
             var toolRegistry = new ToolRegistry();
             if (settings.Tools.Builtin)
             {
-                toolRegistry.Add(new FileTools(Workspace.For(environment)));
+                var workspace = Workspace.For(environment);
+                toolRegistry.Add(new FileTools(skillsGuard.ReadOnly.IsEmpty ? workspace
+                    : new Workspace(environment.Workspace, workspace.Denied.Concat(skillsGuard.ReadOnly))));
                 toolRegistry.Add(new ShellTool(shell));
                 toolRegistry.Add(builtin.Web!);
                 toolRegistry.Add(new CronTools(jobs));
                 if (memory?.Writer is { } writer)
                     toolRegistry.Add(new MemoryTools(writer, memory.Retriever));
             }
-            var skills = OpenSkills(settings, log);
+            var skills = skillsGuard.Refusal is { } refusal ? new SkillServices(null, null, null, null, refusal) : OpenSkills(settings, log);
             if (skills.Store is { } store)
                 toolRegistry.Add(new SkillFileTools(store, shell));
             foreach (var provider in toolProviders)
@@ -210,6 +217,25 @@ public sealed class CorvidRuntimeFactory(
         return new ApprovalEnvironment(environment.Workspace, environment.Home, protectedPaths, environment.Variables);
     }
 
+    /// <summary>
+    /// How the skills directory is kept from the tools: read-only (and closed to the file tools) when the workspace contains
+    /// it; skills are off when the workspace is the skills directory or inside it, since every tool write would land there.
+    /// </summary>
+    internal static (ImmutableArray<string> ReadOnly, string? Refusal) SkillsGuard(CorvidOptions settings, string workspace)
+    {
+        if (!settings.Skills.Enabled)
+            return ([], null);
+        var directory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(CorvidPaths.SkillsDirectory(settings)));
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(workspace));
+        if (root == directory || root.StartsWith(directory + "/", StringComparison.Ordinal))
+            return ([], $"off: the workspace {root} is inside the skills directory {directory}, where the tools could rewrite skills");
+        if (!directory.StartsWith(root + "/", StringComparison.Ordinal))
+            return ([], null);
+        // The sandbox launcher binds only paths that exist.
+        Directory.CreateDirectory(directory);
+        return ([directory], null);
+    }
+
     /// <summary>The skill store. Without git, or with a repository Corvid will not use, skills are off and the reason is kept.</summary>
     private static SkillServices OpenSkills(CorvidOptions settings, SqliteEventLog log)
     {
@@ -228,7 +254,8 @@ public sealed class CorvidRuntimeFactory(
             }).GetAwaiter().GetResult();
             return new SkillServices(store, database, null, null, $"{store.Skills.Count} skill(s) in {directory}");
         }
-        catch (Exception exception) when (exception is GitException or System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is GitException or System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException
+                                              or InvalidDataException or Microsoft.Data.Sqlite.SqliteException)
         {
             return new SkillServices(null, null, null, null, $"off: {exception.Message}");
         }
