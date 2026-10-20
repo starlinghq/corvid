@@ -35,7 +35,8 @@ public static partial class GlibcMalloc
                 .Select(name => $"{name}={Environment.GetEnvironmentVariable(name)}")
                 .Append($"{Doctor.MallocVariable}={Doctor.MallocValue}")
                 .ToArray();
-            Execute("/proc/self/exe", argv, environment);
+            // The real path rather than /proc/self/exe, so the process keeps its name (ps shows corvid, not exe).
+            Execute(Environment.ProcessPath ?? "/proc/self/exe", argv, environment);
             return $"execve failed (errno {Marshal.GetLastPInvokeError()}).";
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)

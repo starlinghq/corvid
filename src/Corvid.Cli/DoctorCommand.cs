@@ -14,11 +14,16 @@ internal static class DoctorCommand
         var checks = await host.Services.GetRequiredService<Doctor>().RunAsync(arguments.Flag("--thorough"), cancellationToken).ConfigureAwait(false);
         var table = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).AddColumns("", "area", "check", "detail");
         foreach (var check in checks)
-        {
-            var detail = Markup.Escape(check.Detail) + (check.Fix is { } fix ? $"\n[bold]fix:[/] {Markup.Escape(fix)}" : "");
-            table.AddRow(new Markup(Mark(check.Status)), new Text(check.Area), new Text(check.Name), new Markup(detail));
-        }
+            table.AddRow(new Markup(Mark(check.Status)), new Text(check.Area), new Text(check.Name), new Text(check.Detail));
         console.Write(table);
+        // Fixes below the table, one per line, so a command is never wrapped inside a cell and can be copied whole.
+        var fixes = checks.Where(check => check.Fix is not null && check.Status is CheckStatus.Failed or CheckStatus.Warning).ToList();
+        if (fixes.Count > 0)
+        {
+            console.MarkupLine("[bold]To fix:[/]");
+            foreach (var check in fixes)
+                console.MarkupLine($"  {Mark(check.Status)} {Markup.Escape(check.Name)}: {Markup.Escape(check.Fix!)}");
+        }
         var failed = checks.Count(check => check.Status == CheckStatus.Failed);
         var warnings = checks.Count(check => check.Status == CheckStatus.Warning);
         console.MarkupLine(failed > 0
