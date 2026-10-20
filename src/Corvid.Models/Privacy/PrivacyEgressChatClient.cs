@@ -78,12 +78,9 @@ public sealed class PrivacyEgressChatClient : DelegatingChatClient
         }
     }
 
-    // Keys first, then the ambient context of an outer layer that already stripped them.
-    private static (ChatOptions? Options, ModelRequestContext Context) Context(ChatOptions? options)
-    {
-        var (stripped, context) = ModelRequestContext.Strip(options);
-        return ReferenceEquals(stripped, options) && ModelRequestContext.Current is { } ambient ? (stripped, ambient) : (stripped, context);
-    }
+    // Keys first, then the ambient context of an outer layer that already stripped them; ambient taint is a floor.
+    private static (ChatOptions? Options, ModelRequestContext Context) Context(ChatOptions? options) =>
+        ModelRequestContext.Resolve(options);
 
     // Instructions travel in the options, beside the messages the gate scans; they become a leading system message so
     // nothing in the request leaves unscanned.

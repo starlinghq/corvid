@@ -60,11 +60,8 @@ public sealed class RemoteChatClient(IChatClient inner, Func<Exception, Exceptio
         }
     }
 
-    private static (ChatOptions? Options, ModelRequestContext Context) Context(ChatOptions? options)
-    {
-        var (stripped, context) = ModelRequestContext.Strip(options);
-        return ReferenceEquals(stripped, options) && ModelRequestContext.Current is { } ambient ? (stripped, ambient) : (stripped, context);
-    }
+    private static (ChatOptions? Options, ModelRequestContext Context) Context(ChatOptions? options) =>
+        ModelRequestContext.Resolve(options);
 
     private Exception Translate(Exception exception)
     {

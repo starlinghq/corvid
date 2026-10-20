@@ -1469,7 +1469,8 @@ directory has its own history and `/skills revert`. Before every change (and
 - Turn loop (C-011's `TurnRunner`): with `TurnServices.Skills` bound, the available skills are ranked by
   `TurnServices.SkillShortlist` (C-011's multi-vector `ToolShortlist`, top three) and `skill` joins the ingress checkpoint
   with them as `name: description` options plus `none`. A confident pick (or `TurnOptions.PinnedSkill`, used by replays and
-  evals) puts the L1 body in the system prompt; below the floor the shortlist's L0 lines are shown, naming `skill_read`
+  evals) puts the L1 body in the system prompt (after the history, with recalled memory, for a model that caches on
+  breakpoints, C-015); below the floor the shortlist's L0 lines are shown, naming `skill_read`
   when it is registered; a confident `none` shows nothing. A body that is not trusted (a hub skill) taints the session
   (§10.3: outside content) and an `injection/skill:<name>` decision is recorded (without Kev, `treat_as_tainted`). With
   `TurnServices.SkillLearning` bound, an answered turn with at least three tool calls asks `skill_opportunity` at egress with
@@ -1594,10 +1595,13 @@ Everything was verified against fake HTTP handlers and a stand-in Vault on a Uni
   chain hands that same request to a cloud model, the gate refuses it rather than send local-only memory, which is not PII
   the scan would find.
 - Requests without the turn's options: `TurnRunner` makes its session and taint the ambient `ModelRequestContext` around
-  fabric checkpoints and the memory write, and the scheduler marks a job's `wake` question tainted (script output is outside
-  content), so a cloud generator answering degraded-decider questions is gated with the right taint and Vault is told.
+  fabric checkpoints, the memory write and compaction (C-016's summarizer may be a cloud binding), the learning loop (C-017)
+  does the same with the source turn's session and taint around its draft and replay, and the scheduler marks a job's
+  `wake` question tainted (script output is outside content), so a cloud generator answering degraded-decider questions,
+  summarizing or drafting is gated with the right taint and Vault is told. `ModelRequestContext.Resolve` makes an ambient
+  context's taint and local-only mark a floor under explicit request keys, so a replay's clean session cannot lower them.
 - Prompt caching (§8): for a profile with `Breakpoints` caching the turn loop keeps the system prompt frozen (core blocks only)
-  and sends recalled memory as a one-shot user note after the history. `AnthropicCacheBreakpoints` marks the system prompt
+  and sends recalled memory and the turn's skill note (C-017's L0 lines or L1 body) as a one-shot user note after the history. `AnthropicCacheBreakpoints` marks the system prompt
   and the last content of each of the last three messages with `cache_control` (Hermes' layout: four breakpoints, the API's
   maximum; the system breakpoint covers the tool definitions), on copies, through the SDK's `WithCacheControl`.
 - Vault-only keys (`Corvid.Models/Remote`, `Corvid.Vault.Client`). `ModelHttp.Create` builds a remote binding's pipeline: a

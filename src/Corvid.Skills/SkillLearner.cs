@@ -8,6 +8,7 @@ using Corvid.Abstractions.Fabric;
 using Corvid.Fabric;
 using Corvid.Kernel.Events;
 using Corvid.Kernel.Turns;
+using Corvid.Models.Privacy;
 using Microsoft.Extensions.AI;
 
 namespace Corvid.Skills;
@@ -150,6 +151,10 @@ public sealed class SkillLearner : ISkillLearning
         var session = SessionProjection.Load(_log, opportunity.SessionId, cancellationToken: cancellationToken);
         if (!session.IsVisible(opportunity.FromSequence) || !session.IsVisible(opportunity.ThroughSequence))
             return Fail("the source turn was undone, so it is not distilled");
+
+        // The draft and the replay send the source turn to the background generator, which may be a cloud binding: its gate
+        // and Vault see the source session and its taint, which the replay's own clean session cannot lower (plan §10.3).
+        using var scope = new ModelRequestContext(opportunity.SessionId, opportunity.Tainted).Enter();
 
         // 2. Draft (System Two work).
         var response = await _drafter.GetResponseAsync(

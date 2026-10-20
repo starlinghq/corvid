@@ -224,6 +224,20 @@ public sealed class PrivacyEgressTests
     }
 
     [Fact]
+    public async Task An_ambient_tainted_context_is_a_floor_under_clean_request_keys()
+    {
+        var provider = new ScriptedChatClient(_ => new ChatResponse(new ChatMessage(ChatRole.Assistant, "ok")));
+        var client = new PrivacyEgressChatClient(provider, Cloud, Egress(Pii, EgressPolicy.Default with { Action = EgressAction.Send }));
+
+        // A skill replay of a tainted turn runs its own clean session inside the source session's tainted scope.
+        using (new ModelRequestContext("source", Tainted: true).Enter())
+            await client.GetResponseAsync([new(ChatRole.User, "Alice Smith")], Session("replay"), Ct);
+
+        Assert.Equal("<PERSON_1>", Sent(provider.Calls[0]));
+        Assert.Equal(new ModelRequestContext("replay", true), provider.Ambient.Single());
+    }
+
+    [Fact]
     public async Task Long_text_is_scanned_in_chunks_the_extractor_accepts_and_dense_text_it_refuses_is_refused()
     {
         var filler = string.Concat(Enumerable.Repeat("lorem ipsum dolor ", 200));

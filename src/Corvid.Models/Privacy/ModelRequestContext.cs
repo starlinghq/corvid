@@ -38,6 +38,21 @@ public readonly record struct ModelRequestContext(string? SessionId, bool Tainte
         return (clone, new ModelRequestContext(string.IsNullOrWhiteSpace(session) ? null : session, tainted, localOnly));
     }
 
+    /// <summary>
+    /// The context a client in the pipeline acts on: <see cref="Strip"/>'s keys first, else the ambient context of an outer
+    /// layer that already stripped them. An ambient context's taint and local-only mark are a floor under explicit keys,
+    /// so work run on behalf of a tainted session (a skill replay of its turn, say) never sends that content as clean.
+    /// </summary>
+    public static (ChatOptions? Options, ModelRequestContext Context) Resolve(ChatOptions? options)
+    {
+        var (stripped, context) = Strip(options);
+        if (Current is not { } ambient)
+            return (stripped, context);
+        if (ReferenceEquals(stripped, options))
+            return (stripped, ambient);
+        return (stripped, context with { Tainted = context.Tainted || ambient.Tainted, LocalOnly = context.LocalOnly || ambient.LocalOnly });
+    }
+
     /// <summary>Adds the context to <paramref name="options"/> (a clone) for the next client in the pipeline.</summary>
     public ChatOptions Apply(ChatOptions? options)
     {
@@ -74,7 +89,7 @@ public sealed class ModelRequestScopeChatClient(IChatClient inner) : DelegatingC
     public override async Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        var (stripped, context) = ModelRequestContext.Strip(options);
+        var (stripped, context) = ModelRequestContext.Resolve(options);
         using var scope = context.Enter();
         return await base.GetResponseAsync(messages, stripped, cancellationToken).ConfigureAwait(false);
     }
@@ -82,7 +97,7 @@ public sealed class ModelRequestScopeChatClient(IChatClient inner) : DelegatingC
     public override async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> messages,
         ChatOptions? options = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var (stripped, context) = ModelRequestContext.Strip(options);
+        var (stripped, context) = ModelRequestContext.Resolve(options);
         var updates = base.GetStreamingResponseAsync(messages, stripped, cancellationToken).GetAsyncEnumerator(cancellationToken);
         try
         {

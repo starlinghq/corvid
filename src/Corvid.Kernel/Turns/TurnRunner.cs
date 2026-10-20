@@ -454,6 +454,8 @@ public sealed class TurnRunner
         private async Task<RenderedPrompt> FitAsync(Func<SessionSnapshot, bool, RenderedPrompt> render, ModelProfile profile,
             ITokenCounter counter, int budget, CancellationToken cancellationToken)
         {
+            // The summarizer may be a cloud binding: its gate and Vault need the session and its taint like the generator's call.
+            using var scope = RequestScope();
             if (Interlocked.Exchange(ref runner._expansionDue, 0) == 1)
             {
                 var limit = (int)Math.Min(budget, budget * _options.Compaction.ExpansionFill);

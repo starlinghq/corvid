@@ -135,7 +135,8 @@ public sealed class EgressTurnTests : IDisposable
         {
             Log = _log,
             Slots = new SessionModelSlots(registry, _log, Session),
-            Fabric = new DecisionFabric(DecisionPolicy.Default, new DegradedDecider(embedder, decider), _log),
+            // askTurnBlocking: since C-004b the degraded tier asks the generator nothing else at ingress without a retriever.
+            Fabric = new DecisionFabric(DecisionPolicy.Default, new DegradedDecider(embedder, decider, askTurnBlocking: true), _log),
             Tools = new ToolRegistry(),
         };
 
