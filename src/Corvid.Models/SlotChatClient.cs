@@ -24,8 +24,9 @@ internal sealed class SlotChatClient(SessionModelSlots slots, string slot, Func<
         CancellationToken cancellationToken = default)
     {
         var history = messages as IReadOnlyList<ChatMessage> ?? messages.ToList();
-        var failed = new List<ModelBinding>();
-        var refused = new List<ModelBinding>();
+        // One list for failures and privacy refusals: a retreat must not return to a binding that just failed, nor a
+        // fallback to one the gate refused, or the two could hand the request back and forth forever.
+        var tried = new List<ModelBinding>();
         while (true)
         {
             var binding = slots.Current(slot);
@@ -35,11 +36,11 @@ internal sealed class SlotChatClient(SessionModelSlots slots, string slot, Func<
             }
             catch (PrivacyEgressRefusedException exception) when (!cancellationToken.IsCancellationRequested)
             {
-                await RetreatOrThrowAsync(binding, refused, exception, cancellationToken).ConfigureAwait(false);
+                await RetreatOrThrowAsync(binding, tried, exception, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception exception) when (!cancellationToken.IsCancellationRequested && isFallbackError(exception))
             {
-                await FallBackOrThrowAsync(binding, failed, exception, cancellationToken).ConfigureAwait(false);
+                await FallBackOrThrowAsync(binding, tried, exception, cancellationToken).ConfigureAwait(false);
             }
         }
     }
@@ -48,8 +49,9 @@ internal sealed class SlotChatClient(SessionModelSlots slots, string slot, Func<
         ChatOptions? options = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var history = messages as IReadOnlyList<ChatMessage> ?? messages.ToList();
-        var failed = new List<ModelBinding>();
-        var refused = new List<ModelBinding>();
+        // One list for failures and privacy refusals: a retreat must not return to a binding that just failed, nor a
+        // fallback to one the gate refused, or the two could hand the request back and forth forever.
+        var tried = new List<ModelBinding>();
         while (true)
         {
             var binding = slots.Current(slot);
@@ -63,13 +65,13 @@ internal sealed class SlotChatClient(SessionModelSlots slots, string slot, Func<
             catch (PrivacyEgressRefusedException exception) when (!cancellationToken.IsCancellationRequested)
             {
                 await updates.DisposeAsync().ConfigureAwait(false);
-                await RetreatOrThrowAsync(binding, refused, exception, cancellationToken).ConfigureAwait(false);
+                await RetreatOrThrowAsync(binding, tried, exception, cancellationToken).ConfigureAwait(false);
                 continue;
             }
             catch (Exception exception) when (!cancellationToken.IsCancellationRequested && isFallbackError(exception))
             {
                 await updates.DisposeAsync().ConfigureAwait(false);
-                await FallBackOrThrowAsync(binding, failed, exception, cancellationToken).ConfigureAwait(false);
+                await FallBackOrThrowAsync(binding, tried, exception, cancellationToken).ConfigureAwait(false);
                 continue;
             }
             catch

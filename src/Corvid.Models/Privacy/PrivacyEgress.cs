@@ -209,6 +209,11 @@ public sealed class PrivacyEgress
     {
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(messages);
+        // A request rendered for a local model (local-only core blocks or facts in it) that a fallback handed on: local-only
+        // memory is not PII the scan would find, so it is refused outright rather than scanned.
+        if (context.LocalOnly && target.Privacy == PrivacyClass.Cloud)
+            return new(new(EgressOutcome.Refused, null, "the request holds local-only memory, which never leaves the machine",
+                ImmutableSortedDictionary<string, int>.Empty), messages, null);
         var policy = PolicyFor(target);
         if (policy is null)
             return new(new(EgressOutcome.NotGated, null, "not gated", ImmutableSortedDictionary<string, int>.Empty), messages, null);
@@ -324,8 +329,17 @@ public sealed class PrivacyEgress
         }
     }
 
-    private static bool IsReadable(AIContent content) =>
-        content is TextContent or TextReasoningContent or FunctionCallContent or FunctionResultContent or UsageContent;
+    // A value the scan reads exactly as a provider adapter would serialize it. Any other object (a tool's own result type)
+    // would be scanned as its ToString() but sent as JSON, so it counts as unreadable and only a plain send may carry it.
+    private static bool IsReadable(AIContent content) => content switch
+    {
+        TextContent or TextReasoningContent or UsageContent => true,
+        FunctionCallContent call => call.Arguments is null || call.Arguments.Values.All(IsReadableValue),
+        FunctionResultContent result => IsReadableValue(result.Result),
+        _ => false,
+    };
+
+    private static bool IsReadableValue(object? value) => value is null or bool or string or JsonElement or IFormattable;
 
     /// <summary>Every string the request carries: text, tool-call arguments and tool results, at their leaves.</summary>
     public static IEnumerable<string> OutgoingTexts(IEnumerable<ChatMessage> messages)
@@ -395,8 +409,12 @@ public sealed class PrivacyEgress
                 break;
             case JsonValueKind.Object:
                 foreach (var property in json.EnumerateObject())
-                foreach (var leaf in Leaves(property.Value))
-                    yield return leaf;
+                {
+                    // A key can be a value too (results keyed by email address).
+                    yield return property.Name;
+                    foreach (var leaf in Leaves(property.Value))
+                        yield return leaf;
+                }
                 break;
         }
     }
@@ -473,7 +491,7 @@ public sealed class PrivacyEgress
             case JsonValueKind.Object:
                 var obj = new JsonObject();
                 foreach (var property in json.EnumerateObject())
-                    obj[property.Name] = Rewrite(property.Value, rewrite);
+                    obj[rewrite(property.Name)] = Rewrite(property.Value, rewrite);
                 return obj;
             case JsonValueKind.True:
                 return JsonValue.Create(true);

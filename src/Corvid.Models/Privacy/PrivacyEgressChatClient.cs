@@ -35,6 +35,7 @@ public sealed class PrivacyEgressChatClient : DelegatingChatClient
         CancellationToken cancellationToken = default)
     {
         var (stripped, context) = Context(options);
+        (messages, stripped) = Instructions(messages, stripped);
         var prepared = await PrepareAsync(messages, context, cancellationToken).ConfigureAwait(false);
         using var scope = context.Enter();
         var response = await base.GetResponseAsync(prepared.Messages, stripped, cancellationToken).ConfigureAwait(false);
@@ -45,6 +46,7 @@ public sealed class PrivacyEgressChatClient : DelegatingChatClient
         ChatOptions? options = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var (stripped, context) = Context(options);
+        (messages, stripped) = Instructions(messages, stripped);
         var prepared = await PrepareAsync(messages, context, cancellationToken).ConfigureAwait(false);
         if (prepared.Map is { } map)
         {
@@ -81,6 +83,17 @@ public sealed class PrivacyEgressChatClient : DelegatingChatClient
     {
         var (stripped, context) = ModelRequestContext.Strip(options);
         return ReferenceEquals(stripped, options) && ModelRequestContext.Current is { } ambient ? (stripped, ambient) : (stripped, context);
+    }
+
+    // Instructions travel in the options, beside the messages the gate scans; they become a leading system message so
+    // nothing in the request leaves unscanned.
+    private static (IEnumerable<ChatMessage> Messages, ChatOptions? Options) Instructions(IEnumerable<ChatMessage> messages, ChatOptions? options)
+    {
+        if (options?.Instructions is not { Length: > 0 } instructions)
+            return (messages, options);
+        var clone = options.Clone();
+        clone.Instructions = null;
+        return ([new ChatMessage(ChatRole.System, instructions), .. messages], clone);
     }
 
     private async Task<PreparedRequest> PrepareAsync(IEnumerable<ChatMessage> messages, ModelRequestContext context, CancellationToken cancellationToken)

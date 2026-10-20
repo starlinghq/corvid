@@ -290,6 +290,61 @@ public sealed class PrivacyEgressTests
     }
 
     [Fact]
+    public async Task A_request_holding_local_only_memory_is_refused_by_a_cloud_model_whatever_its_policy()
+    {
+        var provider = new ScriptedChatClient(_ => throw new InvalidOperationException("must not be called"));
+        var client = new PrivacyEgressChatClient(provider, Cloud, Egress(Pii, EgressPolicy.Default with { Action = EgressAction.Send }));
+        var options = new ModelRequestContext("s1", Tainted: false, LocalOnly: true).Apply(null);
+
+        var error = await Assert.ThrowsAsync<PrivacyEgressRefusedException>(() =>
+            client.GetResponseAsync([new(ChatRole.User, "hello")], options, Ct));
+
+        Assert.Contains("local-only", error.Reason, StringComparison.Ordinal);
+        Assert.Empty(provider.Calls);
+
+        // A gated local server is the user's own machine: it may receive local-only memory.
+        var server = new ScriptedChatClient(_ => new ChatResponse(new ChatMessage(ChatRole.Assistant, "ok")));
+        var gated = new PrivacyEgressChatClient(server, Profiles.LocalServer("llama"),
+            new PrivacyEgress(Pii, new PrivacyEgressOptions { PolicyFor = _ => EgressPolicy.Default }));
+        await gated.GetResponseAsync([new(ChatRole.User, "hello")], options, Ct);
+        Assert.Single(server.Calls);
+    }
+
+    [Fact]
+    public async Task Instructions_in_the_options_are_scanned_and_redacted_like_the_messages()
+    {
+        var provider = new ScriptedChatClient(_ => new ChatResponse(new ChatMessage(ChatRole.Assistant, "ok")));
+        var client = new PrivacyEgressChatClient(provider, Cloud, Egress(Pii));
+        var options = Session("s1");
+        options.Instructions = "The user is Alice Smith.";
+
+        await client.GetResponseAsync([new(ChatRole.User, "hi")], options, Ct);
+
+        Assert.Null(provider.Options.Single()!.Instructions);
+        Assert.Equal("The user is <PERSON_1>.\nhi", Sent(provider.Calls[0]));
+        Assert.Equal("The user is Alice Smith.", options.Instructions);
+    }
+
+    [Fact]
+    public async Task Json_keys_are_redacted_and_results_the_scan_cannot_read_as_sent_are_refused()
+    {
+        var provider = new ScriptedChatClient(_ => new ChatResponse(new ChatMessage(ChatRole.Assistant, "ok")));
+        var client = new PrivacyEgressChatClient(provider, Cloud, Egress(Pii));
+
+        await client.GetResponseAsync([new(ChatRole.Tool, [new FunctionResultContent("c1",
+            JsonDocument.Parse("""{"alice@example.com": {"owner": "Alice Smith"}}""").RootElement.Clone())])], Session("s1"), Ct);
+        var sent = Sent(provider.Calls[0]);
+        Assert.DoesNotContain("alice@example.com", sent, StringComparison.Ordinal);
+        Assert.Contains("\\u003CEMAIL_1\\u003E", sent, StringComparison.Ordinal);
+
+        // A tool's own result object is serialized by the adapter, not as the ToString() a scan would read.
+        var error = await Assert.ThrowsAsync<PrivacyEgressRefusedException>(() => client.GetResponseAsync(
+            [new(ChatRole.Tool, [new FunctionResultContent("c2", new { Owner = "Alice Smith" })])], Session("s1"), Ct));
+        Assert.Contains("FunctionResultContent", error.Reason, StringComparison.Ordinal);
+        Assert.Single(provider.Calls);
+    }
+
+    [Fact]
     public async Task Local_profiles_are_not_gated()
     {
         var provider = new ScriptedChatClient(_ => new ChatResponse(new ChatMessage(ChatRole.Assistant, "ok")));
@@ -378,5 +433,24 @@ public sealed class PrivacyRetreatTests : IDisposable
         await Assert.ThrowsAsync<PrivacyEgressRefusedException>(() =>
             slots.GetChatClient(ModelSlots.Generator).GetResponseAsync([new(ChatRole.User, "hi")], cancellationToken: Ct));
         Assert.Empty(_db.Log.Read(Session, cancellationToken: Ct));
+    }
+
+    [Fact]
+    public async Task A_failing_local_server_and_a_refusing_cloud_fallback_end_the_request_instead_of_trading_it_back_and_forth()
+    {
+        var server = Profiles.Chat(Profiles.LocalServer("llama"));
+        server.Client().FailWith([.. Enumerable.Range(0, 5).Select(_ => (Exception)Profiles.Status(System.Net.HttpStatusCode.ServiceUnavailable))]);
+        var cloudProfile = Profiles.Cloud("claude");
+        var cloudProvider = new ScriptedChatClient(_ => throw new InvalidOperationException("must not be called"));
+        var cloud = new ModelBinding(cloudProfile, new PrivacyEgressChatClient(cloudProvider, cloudProfile, new PrivacyEgress(null)));
+        var slots = new SessionModelSlots(new ModelSlotRegistry().Bind(ModelSlots.Generator, server, fallbacks: [cloud]), _db.Log, Session,
+            new ModelSwitchOptions { Privacy = PrivacyGates.AllowAll });
+
+        await Assert.ThrowsAsync<PrivacyEgressRefusedException>(() =>
+            slots.GetChatClient(ModelSlots.Generator).GetResponseAsync([new(ChatRole.User, "hi")], cancellationToken: Ct));
+
+        // The retreat does not go back to the server that just failed, so it is called once, and the cloud model never.
+        Assert.Single(server.Client().Calls);
+        Assert.Empty(cloudProvider.Calls);
     }
 }

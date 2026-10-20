@@ -399,8 +399,10 @@ public sealed class TurnRunner
             if (noteTokens > 0)
                 messages.Add(new ChatMessage(ChatRole.User, notes));
             // The session and its taint travel with the request: a cloud binding's egress gate keeps placeholders stable per
-            // session and is stricter for outside content, and the Vault handler tells Vault (plan §10.3, §10.4).
-            var options = new ModelRequestContext(runner.SessionId, runner.Tainted).Apply(new ChatOptions { MaxOutputTokens = _options.MaxOutputTokens });
+            // session and is stricter for outside content, and the Vault handler tells Vault (plan §10.3, §10.4). A prompt
+            // rendered with local-only memory says so, so a fallback to a cloud model refuses it rather than sending it.
+            var options = new ModelRequestContext(runner.SessionId, runner.Tainted, HoldsLocalOnly(profile))
+                .Apply(new ChatOptions { MaxOutputTokens = _options.MaxOutputTokens });
             if (!tools.IsEmpty)
             {
                 options.Tools = [.. tools.Select(tool => (AITool)tool.Function)];
@@ -513,6 +515,15 @@ public sealed class TurnRunner
                 prompt += "\n\n" + note;
             return prompt;
         }
+
+        // Whether SystemPrompt and MemoryNote put local-only memory into this profile's prompt.
+        private bool HoldsLocalOnly(ModelProfile profile) =>
+            profile.Privacy != PrivacyClass.Cloud
+            && (_services.CoreBlocks?.Blocks.Any(block => !block.IsEmpty && block.LocalOnly) == true || _recalled.Any(item => item.LocalOnly));
+
+        // Fabric questions and memory writes reach the generator without the turn's options; the ambient context carries the
+        // session and its taint to a cloud binding's gate and to Vault all the same.
+        private IDisposable RequestScope() => new ModelRequestContext(runner.SessionId, runner.Tainted).Enter();
 
         private string MemoryNote(ModelProfile profile)
         {
@@ -1001,8 +1012,10 @@ public sealed class TurnRunner
             var conditions = new HashSet<string>(extraConditions, StringComparer.Ordinal);
             if (_options.EscalationAllowed)
                 conditions.Add(FabricConditions.EscalationAllowed);
-            var result = await _services.Fabric.DecideAsync(runner.SessionId, checkpoint, State(), questions, conditions, cancellationToken)
-                .ConfigureAwait(false);
+            CheckpointResult result;
+            using (RequestScope())
+                result = await _services.Fabric.DecideAsync(runner.SessionId, checkpoint, State(), questions, conditions, cancellationToken)
+                    .ConfigureAwait(false);
             if (result.Verdicts.TryGetValue("tool", out var tool) && tool.Verdict.Acted && tool.Verdict.Option is { } pick && pick != None)
                 lock (_gate)
                     _pickDecisions[pick] = tool.DecisionId;
@@ -1277,6 +1290,7 @@ public sealed class TurnRunner
             var profile = _services.Slots.Current(ModelSlots.Generator).Profile;
             try
             {
+                using var scope = RequestScope();
                 var written = await _services.Memory!.WriteAsync(new MemoryWriteRequest(runner.SessionId, envelope.Text,
                     SourceSequence: source, Surface: envelope.Surface, Generator: Describe(profile), Tainted: runner.Tainted),
                     cancellationToken).ConfigureAwait(false);

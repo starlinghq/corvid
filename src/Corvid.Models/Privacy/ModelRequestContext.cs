@@ -4,7 +4,11 @@ using Microsoft.Extensions.AI;
 namespace Corvid.Models.Privacy;
 
 /// <summary>What a model request carries besides its messages: the session it belongs to and whether it is tainted.</summary>
-public readonly record struct ModelRequestContext(string? SessionId, bool Tainted)
+/// <param name="LocalOnly">
+/// The messages were rendered for a local model and hold local-only memory (core blocks or facts, plan §10.4). A cloud
+/// model must never receive them, even when a fallback hands the same request on: the gate refuses it.
+/// </param>
+public readonly record struct ModelRequestContext(string? SessionId, bool Tainted, bool LocalOnly = false)
 {
     private static readonly AsyncLocal<ModelRequestContext?> Ambient = new();
 
@@ -24,13 +28,14 @@ public readonly record struct ModelRequestContext(string? SessionId, bool Tainte
 
         var session = properties.TryGetValue(ModelRequestKeys.SessionId, out var value) ? value as string : null;
         var tainted = properties.TryGetValue(ModelRequestKeys.Tainted, out var flag) && flag is true;
+        var localOnly = properties.TryGetValue(ModelRequestKeys.LocalOnly, out var local) && local is true;
         var clone = options.Clone();
         var kept = new AdditionalPropertiesDictionary();
         foreach (var (key, item) in properties)
             if (!key.StartsWith(ModelRequestKeys.Prefix, StringComparison.Ordinal))
                 kept[key] = item;
         clone.AdditionalProperties = kept.Count == 0 ? null : kept;
-        return (clone, new ModelRequestContext(string.IsNullOrWhiteSpace(session) ? null : session, tainted));
+        return (clone, new ModelRequestContext(string.IsNullOrWhiteSpace(session) ? null : session, tainted, localOnly));
     }
 
     /// <summary>Adds the context to <paramref name="options"/> (a clone) for the next client in the pipeline.</summary>
@@ -41,6 +46,8 @@ public readonly record struct ModelRequestContext(string? SessionId, bool Tainte
         if (SessionId is not null)
             clone.AdditionalProperties[ModelRequestKeys.SessionId] = SessionId;
         clone.AdditionalProperties[ModelRequestKeys.Tainted] = Tainted;
+        if (LocalOnly)
+            clone.AdditionalProperties[ModelRequestKeys.LocalOnly] = true;
         return clone;
     }
 

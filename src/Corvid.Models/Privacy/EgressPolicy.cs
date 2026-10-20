@@ -72,4 +72,7 @@ public static class ModelRequestKeys
 
     /// <summary>True when the session holds content from outside the user (plan §10.3).</summary>
     public const string Tainted = "corvid.tainted";
+
+    /// <summary>True when the messages hold local-only memory: no cloud model may receive them (plan §10.4).</summary>
+    public const string LocalOnly = "corvid.local_only";
 }

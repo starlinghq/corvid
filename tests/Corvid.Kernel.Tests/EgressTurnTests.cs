@@ -94,6 +94,55 @@ public sealed class EgressTurnTests : IDisposable
         Assert.Contains("the dentist is Dr Patel", system, StringComparison.Ordinal);
         Assert.Contains("the dentist is on Main Street", system, StringComparison.Ordinal);
         Assert.Equal("where is my dentist", call.LastText);
+        // Marked, so a fallback to a cloud model refuses this request instead of sending local-only memory.
+        Assert.True((bool)call.Options!.AdditionalProperties![ModelRequestKeys.LocalOnly]!);
+    }
+
+    [Fact]
+    public async Task A_cloud_request_is_not_marked_local_only()
+    {
+        Remember();
+
+        var call = await TurnAsync(PrivacyClass.Cloud, PromptCachingStyle.Breakpoints);
+
+        Assert.False(call.Options!.AdditionalProperties!.ContainsKey(ModelRequestKeys.LocalOnly));
+    }
+
+    /// <summary>Records the ambient request context of each call, as the Vault handler under a cloud SDK would see it.</summary>
+    private sealed class AmbientRecorder(IChatClient inner) : DelegatingChatClient(inner)
+    {
+        public List<ModelRequestContext?> Seen { get; } = [];
+
+        public override Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            lock (Seen)
+                Seen.Add(ModelRequestContext.Current);
+            return base.GetResponseAsync(messages, options, cancellationToken);
+        }
+    }
+
+    [Fact]
+    public async Task Fabric_questions_carry_the_session_and_its_taint_to_the_generator()
+    {
+        var generator = new FakeGenerator(Reply.Say("Main Street."));
+        var decider = new AmbientRecorder(generator);
+        var embedder = new KeywordEmbedder(TurnHarness.Keywords);
+        var registry = new ModelSlotRegistry()
+            .Bind(ModelSlots.Generator, new ModelBinding(Generator(PrivacyClass.Cloud, PromptCachingStyle.Breakpoints), generator))
+            .Bind(ModelSlots.TextEmbedder, new ModelBinding(TurnHarness.Profile("keywords", ToolCallSupport.None, 512), embedder));
+        var services = new TurnServices
+        {
+            Log = _log,
+            Slots = new SessionModelSlots(registry, _log, Session),
+            Fabric = new DecisionFabric(DecisionPolicy.Default, new DegradedDecider(embedder, decider), _log),
+            Tools = new ToolRegistry(),
+        };
+
+        await new TurnRunner(Session, services).RunAsync(new Envelope(Session, "cli", "where is my dentist", EnvelopeOrigin.External), Ct);
+
+        Assert.NotEmpty(generator.Questions);
+        Assert.All(decider.Seen, context => Assert.Equal(new ModelRequestContext(Session, Tainted: true), context));
     }
 
     [Fact]

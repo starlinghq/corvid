@@ -1559,20 +1559,25 @@ Everything was verified against fake HTTP handlers and a stand-in Vault on a Uni
   `Redact` replaces each value, longest first, with a stable per-session placeholder (`<PERSON_1>`, `<ACCOUNT_NUMBER_1>`) from
   a `RedactionMap`; values seen earlier in the session are replaced even when the extractor misses them this time, so the
   prompt prefix stays stable for caching. Placeholder-shaped text already in the content (a page quoting `<EMAIL_1>`) is
-  rewritten to `‹EMAIL_1›`, so outside content cannot name a placeholder and have a real value restored in its place. It
-  fails closed: no extractor, an extractor exception, or content it cannot read (images, files) under `Redact` or `Refuse`
-  refuses the request. Under `Send` the scan still runs and the same extractor failures refuse, because without it the gate
+  rewritten to `‹EMAIL_1›`, so outside content cannot name a placeholder and have a real value restored in its place. JSON
+  object keys are scanned and redacted like values. It fails closed: no extractor, an extractor exception, or content it
+  cannot read under `Redact` or `Refuse` refuses the request. Unreadable means images and files, and also any tool argument
+  or result that is not a string, number, boolean or JSON (an adapter would serialize such an object, which the scan cannot
+  see). A request marked local-only (below) is refused by every cloud model, whatever its policy. Under `Send` the scan still runs and the same extractor failures refuse, because without it the gate
   cannot apply the taint rule. Maps live in memory, for at most 256 sessions (the least recently used is dropped).
 - `PrivacyEgressChatClient` wraps each gated binding. It reads the session and taint from `ChatOptions.AdditionalProperties`
   (`corvid.session_id`, `corvid.tainted`, which `TurnRunner` sets on every generator call) or the ambient
-  `ModelRequestContext`, strips every `corvid.` key, prepares the request, throws `PrivacyEgressRefusedException` before
+  `ModelRequestContext`, strips every `corvid.` key, moves `ChatOptions.Instructions` into a leading system message so it is
+  scanned too, prepares the request, throws `PrivacyEgressRefusedException` before
   anything is sent, and maps placeholders back in the response's text and tool-call arguments. A redacted request is not
   streamed: it is answered whole, restored, then replayed as updates (a placeholder could split across deltas, and Vault M1
   buffers bodies anyway). A `corvid.egress` span records the outcome and label counts, never values.
 - Refuse and stay local: `SlotChatClient` catches the refusal and calls `SessionModelSlots.RetreatAsync`, which moves the slot
   to the first listed binding that is not cloud (local first: default, fallbacks, escalation), appends `ModelSwitched` with
   the new reason `privacy`, and retries there. Like a fallback it does not wait for tool calls and keeps a pin, so a pinned
-  cloud slot stays local until the user switches back. With no local binding the refusal reaches the turn. The turn result
+  cloud slot stays local until the user switches back. With no local binding the refusal reaches the turn. Within one
+  request, fallback and retreat share one list of bindings already tried, so a failing local server and a refusing cloud
+  fallback end the request instead of handing it back and forth. The turn result
   lists the retreat among its escalations (`<model>: privacy`), and the CLI's footer says the turn was kept local.
 - Switches: `ProjectionPrivacyGate` (Kernel) is C-006's `IPrivacyGate`. Before a move to a gated model it renders the
   projection at the switch's head and asks `PrivacyEgress.AssessAsync` with the session's taint. It refuses a move that every
@@ -1584,7 +1589,13 @@ Everything was verified against fake HTTP handlers and a stand-in Vault on a Uni
   `local_only` (`FactInput.LocalOnly`, `MemoryWriteRequest.LocalOnly`, carried on staged proposals; `FactGraph.MarkLocalOnly`;
   a superseding fact inherits it; a trigger lets it change from 0 to 1 only). `RetrievedItem.LocalOnly` lets the turn loop leave
   local-only facts out of a cloud model's recalled memory. Local and local-server models see everything (a local server's
-  endpoint must be the user's own, below). Retrieved memory that remains still passes the gate.
+  endpoint must be the user's own, below). Retrieved memory that remains still passes the gate. A prompt rendered for a
+  local or local-server model that holds local-only blocks or facts carries `corvid.local_only`, so when C-006's fallback
+  chain hands that same request to a cloud model, the gate refuses it rather than send local-only memory, which is not PII
+  the scan would find.
+- Requests without the turn's options: `TurnRunner` makes its session and taint the ambient `ModelRequestContext` around
+  fabric checkpoints and the memory write, and the scheduler marks a job's `wake` question tainted (script output is outside
+  content), so a cloud generator answering degraded-decider questions is gated with the right taint and Vault is told.
 - Prompt caching (§8): for a profile with `Breakpoints` caching the turn loop keeps the system prompt frozen (core blocks only)
   and sends recalled memory as a one-shot user note after the history. `AnthropicCacheBreakpoints` marks the system prompt
   and the last content of each of the last three messages with `cache_control` (Hermes' layout: four breakpoints, the API's
@@ -1629,8 +1640,10 @@ Everything was verified against fake HTTP handlers and a stand-in Vault on a Uni
   no extractor is bound.
 - Tests: `tests/Corvid.Models.Tests` (redaction round trip in text, arguments and results; stable placeholders per session;
   refusal; no extractor or a failing one refusing under every action; taint raising send to redact; chunking and halving;
-  neutralized placeholders; opaque content; streaming; the privacy retreat with its event), `tests/Corvid.Kernel.Tests`
-  (`EgressTurnTests`: what a cloud generator sees, the request context, escalation passing over a refusing target),
+  neutralized placeholders; opaque content and opaque tool results; JSON keys; instructions; local-only requests; streaming;
+  the privacy retreat with its event, and a failing local server with a refusing cloud fallback), `tests/Corvid.Kernel.Tests`
+  (`EgressTurnTests`: what a cloud generator sees, the request context and the local-only mark, taint on fabric questions,
+  escalation passing over a refusing target),
   `tests/Corvid.Memory.Tests` (`LocalOnlyTests`, including the version 1 migration), `tests/Corvid.Models.Remote.Tests`
   (against `FakeVault`: request shape, the placeholder key, no environment key, cache breakpoints, taint and toolset, error
   mapping, re-minting, Vault absent, forced tool choice, the gate in front of the Anthropic client; local servers direct and
