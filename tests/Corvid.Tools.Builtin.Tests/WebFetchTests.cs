@@ -151,6 +151,13 @@ public sealed class WebFetchTests
     [InlineData("fe80::1", false)]
     [InlineData("fd00::1", false)]
     [InlineData("::ffff:127.0.0.1", false)]
+    [InlineData("::127.0.0.1", false)]
+    [InlineData("::", false)]
+    [InlineData("64:ff9b::10.0.0.1", false)]
+    [InlineData("64:ff9b::8.8.8.8", true)]
+    [InlineData("64:ff9b:1::c0a8:101", false)]
+    [InlineData("2002:a9fe:a9fe::1", false)]
+    [InlineData("2002:808:808::1", true)]
     public void Only_public_addresses_are_reached(string address, bool isPublic) =>
         Assert.Equal(isPublic, WebFetchTool.IsPublic(IPAddress.Parse(address)));
 

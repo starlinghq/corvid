@@ -10,7 +10,11 @@ namespace Corvid.Kernel.Jobs;
 
 /// <param name="SessionId">The run's own session: the script's approval and the <c>wake</c> decision are logged there.</param>
 /// <param name="State">The TurnState of the tick, for the approval pipeline's <c>risk</c> question.</param>
-public sealed record JobScriptRequest(string SessionId, string JobId, string Script, TurnState State);
+/// <param name="Tainted">
+/// The job was created in a tainted session, so the script may be someone else's: the approval pipeline assesses it as a
+/// tainted action (plan §10.3), and network egress asks, which at a scheduled run means it is refused.
+/// </param>
+public sealed record JobScriptRequest(string SessionId, string JobId, string Script, TurnState State, bool Tainted = false);
 
 /// <param name="Ran">False when the approval pipeline or the sandbox refused the script; nothing ran.</param>
 /// <param name="Refusal">Why it did not run.</param>
@@ -162,7 +166,7 @@ public sealed class JobScheduler
                 if (_scripts is null)
                     return Finish(run, JobRunStatus.Failed, detail: "no script runner is configured");
                 var state = State(job, null);
-                var result = await _scripts.RunAsync(new JobScriptRequest(run.SessionId, job.JobId, script, state), cancellationToken)
+                var result = await _scripts.RunAsync(new JobScriptRequest(run.SessionId, job.JobId, script, state, job.CreatedTainted), cancellationToken)
                     .ConfigureAwait(false);
                 if (!result.Ran)
                     return Finish(run, JobRunStatus.ScriptRefused, detail: result.Refusal);

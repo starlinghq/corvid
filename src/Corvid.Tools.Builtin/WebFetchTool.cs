@@ -233,6 +233,13 @@ public sealed partial class WebFetchTool : IDisposable
         if (address.AddressFamily == AddressFamily.InterNetworkV6)
         {
             var b = address.GetAddressBytes();
+            // Addresses that carry an IPv4 address are as public as it is: IPv4-compatible (::a.b.c.d), NAT64
+            // (64:ff9b::/96, 64:ff9b:1::/48, where the gateway reaches its own network) and 6to4 (2002::/16).
+            if (b.AsSpan(0, 12).IndexOfAnyExcept((byte)0) < 0 || b.AsSpan(0, 12).SequenceEqual(Nat64)
+                || b.AsSpan(0, 6).SequenceEqual(Nat64Local))
+                return IsPublic(new IPAddress(b.AsSpan(12, 4)));
+            if (b[0] == 0x20 && b[1] == 0x02)
+                return IsPublic(new IPAddress(b.AsSpan(2, 4)));
             return !(address.IsIPv6LinkLocal || address.IsIPv6SiteLocal || address.IsIPv6Multicast
                 || (b[0] & 0xfe) == 0xfc // unique local
                 || b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x0d && b[3] == 0xb8); // documentation
@@ -240,6 +247,10 @@ public sealed partial class WebFetchTool : IDisposable
 
         return false;
     }
+
+    private static ReadOnlySpan<byte> Nat64 => [0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0];
+
+    private static ReadOnlySpan<byte> Nat64Local => [0x00, 0x64, 0xff, 0x9b, 0x00, 0x01];
 
     private static bool IsRedirect(HttpStatusCode status) => status is HttpStatusCode.MovedPermanently or HttpStatusCode.Found
         or HttpStatusCode.SeeOther or HttpStatusCode.TemporaryRedirect or HttpStatusCode.PermanentRedirect or HttpStatusCode.MultipleChoices;

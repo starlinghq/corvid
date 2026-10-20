@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Globalization;
@@ -29,7 +30,10 @@ public sealed record ShellOptions
     /// <summary>Characters of output a result keeps per stream; the middle of longer output is cut.</summary>
     public int MaxResultChars { get; init; } = 16_000;
 
-    /// <summary>Environment variables passed to commands (secret-like names are refused by the sandbox).</summary>
+    /// <summary>
+    /// Environment variables passed to commands (secret-like names are refused by the sandbox, and names that change what
+    /// bash runs by <see cref="SandboxedShell"/>).
+    /// </summary>
     public ImmutableArray<string> Environment { get; init; } = SandboxPolicy.DefaultEnvironment;
 }
 
@@ -40,6 +44,14 @@ public sealed record ShellOptions
 /// </summary>
 public sealed class SandboxedShell
 {
+    /// <summary>
+    /// Variables that make bash (or the loader) run or read something other than the command line the approval pipeline
+    /// parsed: a startup file, shell options, globbing and <c>cd</c> rules, or preloaded code.
+    /// </summary>
+    private static readonly FrozenSet<string> UnparsedBehaviour = FrozenSet.ToFrozenSet(
+        ["BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "GLOBIGNORE", "CDPATH", "PS4", "LD_PRELOAD", "LD_AUDIT", "LD_LIBRARY_PATH"],
+        StringComparer.Ordinal);
+
     private readonly ISandbox _sandbox;
 
     public SandboxedShell(ISandbox sandbox, ShellOptions options)
@@ -47,6 +59,8 @@ public sealed class SandboxedShell
         ArgumentNullException.ThrowIfNull(sandbox);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(options.MaxResultChars);
+        if (options.Environment.FirstOrDefault(UnparsedBehaviour.Contains) is { } unparsed)
+            throw new ArgumentException($"{unparsed} would change what bash runs beyond the approved command line, so it is not passed to commands.", nameof(options));
         _sandbox = sandbox;
         Options = options;
         Policy = new SandboxPolicy
@@ -154,7 +168,7 @@ public sealed class SandboxedScriptRunner : IJobScriptRunner
     public async Task<JobScriptResult> RunAsync(JobScriptRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var context = new ApprovalContext(request.SessionId, _mode, request.State) { Interactive = false };
+        var context = new ApprovalContext(request.SessionId, _mode, request.State) { Interactive = false, Tainted = request.Tainted };
         var approval = await _approvals.AuthorizeAsync(context, new ShellAction(request.Script), cancellationToken).ConfigureAwait(false);
         if (!approval.Allowed)
             return JobScriptResult.Refused($"{WireNames(approval.Resolution)}: {approval.Assessment.Summary}");

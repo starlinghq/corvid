@@ -261,6 +261,21 @@ public sealed class JobSchedulerTests
     }
 
     [Fact]
+    public async Task Scripts_of_jobs_created_in_a_tainted_turn_are_authorized_as_tainted()
+    {
+        using var fixture = new JobFixture();
+        var scripts = new FakeScripts(_ => JobScriptResult.Refused("tainted egress"));
+        var scheduler = Scheduler(fixture, new FakeGenerator(), scripts, new FakeAgent());
+        fixture.Store.Add(new NewJob("feed", "summarize the feed", "in 1m", Script: "curl -s https://example.org/feed", CreatedTainted: true));
+        fixture.Store.Add(new NewJob("clean", "summarize the feed", "in 1m", Script: "curl -s https://example.org/feed"));
+        fixture.Time.Advance(TimeSpan.FromMinutes(1));
+
+        await scheduler.RunDueAsync(Ct);
+
+        Assert.Equal([true, false], scripts.Requests.OrderByDescending(request => request.Tainted).Select(request => request.Tainted));
+    }
+
+    [Fact]
     public async Task The_turn_agent_runs_one_unattended_turn_in_the_run_session()
     {
         var generator = new FakeGenerator(Reply.Say("Here is your summary."), Reply.Say("Here is your summary."));

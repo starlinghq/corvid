@@ -97,6 +97,38 @@ public sealed class ShellToolTests : IDisposable
     }
 
     [Fact]
+    public void Variables_that_change_what_bash_runs_are_not_passed_to_commands()
+    {
+        foreach (var name in (string[])["BASH_ENV", "ENV", "SHELLOPTS", "LD_PRELOAD"])
+        {
+            Assert.Throws<ArgumentException>(() => new SandboxedShell(_sandbox,
+                new ShellOptions { Workspace = Workspace, Environment = [.. SandboxPolicy.DefaultEnvironment, name] }));
+        }
+    }
+
+    [Fact]
+    public async Task A_script_from_a_tainted_job_is_assessed_as_tainted()
+    {
+        var pipeline = new ApprovalPipeline(_pipeline.Environment, DegradedFabric(_log), _log, new AlwaysApproving(),
+            options: new ApprovalOptions { ShellTools = BuiltinTools.ShellToolMapping });
+        var runner = new SandboxedScriptRunner(new SandboxedShell(_sandbox, new ShellOptions { Workspace = Workspace }), pipeline);
+        const string Fetch = "curl -s https://example.org/feed.xml";
+        // The user once said "always" to this download, so it runs unattended...
+        Assert.True((await pipeline.AuthorizeAsync(new ApprovalContext(Session, ApprovalMode.Smart, State()), new ShellAction(Fetch), Ct)).Allowed);
+
+        var clean = await runner.RunAsync(new JobScriptRequest("job:t:1", "t", Fetch, State()), Ct);
+        Assert.True(clean.Ran);
+        Assert.Single(_sandbox.Runs);
+
+        // ...but network egress from a job created in a tainted session asks whatever the rules say, and nobody can answer
+        // a scheduled run.
+        var tainted = await runner.RunAsync(new JobScriptRequest("job:t:2", "t", Fetch, State(), Tainted: true), Ct);
+        Assert.False(tainted.Ran);
+        Assert.Contains("nobody can answer", tainted.Refusal, StringComparison.Ordinal);
+        Assert.Single(_sandbox.Runs);
+    }
+
+    [Fact]
     public void Vault_locations_default_to_vaults_own_and_extend_the_hardline_list()
     {
         var defaults = VaultLocations.Default("/home/user", name => name switch
@@ -279,4 +311,10 @@ public sealed class ShellConfinementTests : IDisposable
         var other = Fixtures.Pipeline(_log, ApprovalEnvironment.Create("/elsewhere", _home));
         Assert.Throws<ArgumentException>(() => new SandboxedScriptRunner(Shell(), other));
     }
+}
+
+internal sealed class AlwaysApproving : IApprovalPrompter
+{
+    public ValueTask<ApprovalAnswer> AskAsync(ApprovalPrompt prompt, CancellationToken cancellationToken) =>
+        ValueTask.FromResult(ApprovalAnswer.Approve(ApprovalScope.Always));
 }

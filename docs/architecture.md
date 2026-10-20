@@ -911,7 +911,8 @@ references Builtin except tests (and, later, the host). Everything runs on the d
   their first 8 KiB are binary and not read.
 - Shell (`ShellTool`, `shell`, `[SideEffect(Process | Filesystem)]`, `[Destructive]`): a command line run by `/bin/bash -c`
   (bash, because the pipeline parses the bash subset, D-5) through `SandboxedShell`, which builds one `SandboxPolicy`: the
-  workspace, no network, the default environment, and as denied paths Vault's configured locations (`VaultLocations`:
+  workspace, no network, the default environment (names that change what bash runs, such as `BASH_ENV`, `SHELLOPTS` or
+  `LD_PRELOAD`, are refused), and as denied paths Vault's configured locations (`VaultLocations`:
   data directory, policy file and socket, from Vault's own defaults or from configuration) plus any extra paths.
   `VaultLocations.Protect` adds the same locations to the approval environment's Vault paths, so the hardline list denies
   them too. The tool runs only when its call context carries an allowed `ApprovalResult` whose analysis is the shell
@@ -921,7 +922,8 @@ references Builtin except tests (and, later, the host). Everything runs on the d
 - Web fetch (`WebFetchTool`, `web_fetch`, `[Network]`, read-only): one `HttpClient` over an injectable `HttpMessageHandler`
   (Vault's egress proxy can sit in front later; the request carries `VaultHandler.Tainted` and `Toolset` options). The
   default handler follows no redirects, ignores ambient proxies, and connects only to public addresses after resolving
-  the name. Redirects are followed by the tool, at most five, only to http or https and never to a local address; URLs
+  the name (an IPv6 address that carries an IPv4 one, IPv4-compatible, NAT64 or 6to4, is judged by that address).
+  Redirects are followed by the tool, at most five, only to http or https and never to a local address; URLs
   with credentials, other schemes and literal local or private addresses are refused before any request. The body is
   read up to `MaxBytes` while streaming, HTML is reduced to its visible text by a single forward pass (scripts, styles,
   the head and comments dropped, blocks on their own lines), non-text content is described but not shown, and every result
@@ -949,7 +951,8 @@ references Builtin except tests (and, later, the host). Everything runs on the d
   an external envelope when the run is tainted (script output, or a job created in a tainted session). The built-in
   `SandboxedScriptRunner` authorizes a script through the approval pipeline non-interactively and runs it in the shell's
   sandbox, so only a read-only script or one an always-rule allows runs; without Kev every side-effecting script is
-  refused. The cron tools (`cron_create` and `cron_remove`, `[SideEffect(Schedule)]`, remove also `[Destructive]`, and
+  refused. A job created in a tainted session has its script assessed as tainted, so its network egress asks (and is
+  refused) whatever an always-rule says. The cron tools (`cron_create` and `cron_remove`, `[SideEffect(Schedule)]`, remove also `[Destructive]`, and
   `cron_list`) work on the store; a bad schedule is an argument error the generator can repair.
 - `BuiltinTools.Examples` holds five to seven example requests per tool for the multi-vector shortlist
   (`TurnOptions.ToolExamples`), written by hand because C-005 has no examples file. `BuiltinTools.ShellToolMapping` is the
