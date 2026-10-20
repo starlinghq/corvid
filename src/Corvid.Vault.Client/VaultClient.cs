@@ -40,6 +40,10 @@ public sealed class VaultClient
         (await SendAsync<PlaceholderResponse>(new PlaceholderRequest { SessionId = SessionId, Secret = secret.Name }, cancellationToken)
             .ConfigureAwait(false)).Placeholder;
 
+    /// <summary>Mints a placeholder for <paramref name="secret"/>, with the time it expires.</summary>
+    public Task<PlaceholderResponse> RequestPlaceholderAsync(SecretRef secret, CancellationToken cancellationToken = default) =>
+        SendAsync<PlaceholderResponse>(new PlaceholderRequest { SessionId = SessionId, Secret = secret.Name }, cancellationToken);
+
     /// <summary>Replaces any secret value in <paramref name="text"/> with <c>[secret:name]</c>.</summary>
     public async Task<string> ScrubAsync(string text, CancellationToken cancellationToken = default) =>
         (await SendAsync<ScrubResponse>(new ScrubRequest { SessionId = SessionId, Text = text }, cancellationToken).ConfigureAwait(false)).Text;

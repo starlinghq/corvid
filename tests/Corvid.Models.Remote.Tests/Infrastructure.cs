@@ -1,0 +1,159 @@
+using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Sockets;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Corvid.Models.Remote;
+using Corvid.Vault.Contracts;
+
+namespace Corvid.Models.Remote.Tests;
+
+/// <summary>
+/// A stand-in for corvid-vault on a Unix socket: it mints placeholders and answers forward requests with a scripted
+/// provider response, recording what it was asked to send. No network and no secret values are involved.
+/// </summary>
+internal sealed class FakeVault : IAsyncDisposable
+{
+    private const string Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+    private readonly Socket _listener;
+    private readonly CancellationTokenSource _stop = new();
+    private readonly Task _loop;
+    private readonly string _root;
+
+    public FakeVault(Func<ForwardRequest, ForwardResponse> forward)
+    {
+        Forward = forward;
+        _root = Path.Combine(Path.GetTempPath(), "cv-" + Guid.NewGuid().ToString("N")[..12]);
+        Directory.CreateDirectory(_root);
+        SocketPath = Path.Combine(_root, "vault.sock");
+        _listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        _listener.Bind(new UnixDomainSocketEndPoint(SocketPath));
+        _listener.Listen(16);
+        _loop = Task.Run(AcceptAsync);
+    }
+
+    public string SocketPath { get; }
+
+    public Func<ForwardRequest, ForwardResponse> Forward { get; set; }
+
+    public ConcurrentQueue<ForwardRequest> Forwarded { get; } = new();
+
+    public ConcurrentQueue<string> Minted { get; } = new();
+
+    /// <summary>Errors returned to the next forward requests instead of forwarding them.</summary>
+    public ConcurrentQueue<(string Code, string Message)> Refusals { get; } = new();
+
+    public VaultAccess Access() => VaultAccess.Create(SocketPath);
+
+    public static JsonNode Body(ForwardRequest request) => JsonNode.Parse(request.Body!)!;
+
+    public static string? Header(ForwardRequest request, string name) =>
+        request.Headers.LastOrDefault(header => string.Equals(header.Name, name, StringComparison.OrdinalIgnoreCase))?.Value;
+
+    public static ForwardResponse Json(string json, int status = 200) => new()
+    {
+        Status = status,
+        Headers = [new WireHeader("Content-Type", "application/json")],
+        Body = Encoding.UTF8.GetBytes(json),
+    };
+
+    private async Task AcceptAsync()
+    {
+        while (!_stop.IsCancellationRequested)
+        {
+            Socket connection;
+            try
+            {
+                connection = await _listener.AcceptAsync(_stop.Token);
+            }
+            catch (Exception) when (_stop.IsCancellationRequested)
+            {
+                return;
+            }
+            _ = Task.Run(() => ServeAsync(connection));
+        }
+    }
+
+    private async Task ServeAsync(Socket connection)
+    {
+        await using var stream = new NetworkStream(connection, ownsSocket: true);
+        var request = await VaultWire.ReadRequestAsync(stream, _stop.Token);
+        VaultResponse response = request switch
+        {
+            PlaceholderRequest mint => Mint(mint),
+            ForwardRequest forward => Relay(forward),
+            _ => new ErrorResponse { Code = VaultErrorCodes.BadRequest, Message = "unexpected request" },
+        };
+        await VaultWire.WriteResponseAsync(stream, response, _stop.Token);
+    }
+
+    private PlaceholderResponse Mint(PlaceholderRequest request)
+    {
+        var placeholder = Placeholders.Format(request.Secret, RandomNumberGenerator.GetString(Alphabet, Placeholders.TokenLength));
+        Minted.Enqueue(placeholder);
+        return new PlaceholderResponse { Placeholder = placeholder, ExpiresAt = DateTimeOffset.UtcNow.AddHours(1) };
+    }
+
+    private VaultResponse Relay(ForwardRequest request)
+    {
+        Forwarded.Enqueue(request);
+        if (Refusals.TryDequeue(out var refusal))
+            return new ErrorResponse { Code = refusal.Code, Message = refusal.Message };
+        // Only a placeholder this Vault minted is substituted; anything else is refused, as the real one does.
+        var minted = Minted.ToArray();
+        if (!request.Headers.Any(header => minted.Any(placeholder => header.Value.Contains(placeholder, StringComparison.Ordinal))))
+            return new ErrorResponse { Code = VaultErrorCodes.BadPlaceholder, Message = "unknown placeholder" };
+        return Forward(request);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await _stop.CancelAsync();
+        _listener.Dispose();
+        try
+        {
+            await _loop;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        _stop.Dispose();
+        Directory.Delete(_root, recursive: true);
+    }
+}
+
+/// <summary>The direct network route: records requests and answers with a script. For cloud models it must stay empty.</summary>
+internal sealed class FakeNetwork(Func<HttpRequestMessage, string, HttpResponseMessage>? answer = null) : HttpMessageHandler
+{
+    public ConcurrentQueue<(HttpRequestMessage Request, string Body)> Requests { get; } = new();
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        var body = request.Content is null ? "" : await request.Content.ReadAsStringAsync(cancellationToken);
+        Requests.Enqueue((request, body));
+        return answer?.Invoke(request, body) ?? new HttpResponseMessage(HttpStatusCode.InternalServerError);
+    }
+
+    public static HttpResponseMessage Json(string json, HttpStatusCode status = HttpStatusCode.OK) =>
+        new(status) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+}
+
+internal static class Profiles
+{
+    public static ModelProfile Cloud(string id, PromptCachingStyle caching = PromptCachingStyle.Breakpoints) =>
+        new(id, 1_000_000, 200_000, ToolCallSupport.Native, StructuredOutputSupport.JsonSchema, caching, new ModelCost(4m, 20m, 0.4m),
+            PrivacyClass.Cloud, "remote");
+
+    public static ModelProfile LocalServer(string id) =>
+        new(id, 32_768, 32_768, ToolCallSupport.Native, StructuredOutputSupport.JsonSchema, PromptCachingStyle.Automatic, ModelCost.Free,
+            PrivacyClass.LocalServer, "http://127.0.0.1:8080");
+
+    public static JsonElement Json(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.Clone();
+    }
+}
