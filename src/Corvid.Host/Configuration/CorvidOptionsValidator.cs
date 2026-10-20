@@ -8,7 +8,7 @@ namespace Corvid.Host.Configuration;
 /// Validates <see cref="CorvidOptions"/> when the host starts, so a typo in a slot or model name fails before any model
 /// loads rather than in the middle of a turn. Every problem is reported at once.
 /// </summary>
-public sealed class CorvidOptionsValidator(ModelCatalogue catalogue) : IValidateOptions<CorvidOptions>
+public sealed class CorvidOptionsValidator(ModelCatalogue catalogue, IEnumerable<IModelProvider>? providers = null) : IValidateOptions<CorvidOptions>
 {
     public ValidateOptionsResult Validate(string? name, CorvidOptions options)
     {
@@ -40,6 +40,17 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue) : IValidate
         foreach (var required in new[] { ModelSlots.Generator, ModelSlots.TextEmbedder })
             if (!slots.ContainsKey(required))
                 errors.Add($"Corvid:Models:Slots:{required} must be bound: the turn loop and the degraded decider need it.");
+
+        // Remote models (C-015) that could not be described are left out of the catalogue; say why.
+        foreach (var remote in (providers ?? []).OfType<RemoteModelProvider>())
+            errors.AddRange(remote.Problems);
+        var privacy = options.Privacy;
+        if (!Enum.IsDefined(privacy.Cloud) || !Enum.IsDefined(privacy.Tainted) || privacy.LocalServer is { } local && !Enum.IsDefined(local))
+            errors.Add("Corvid:Privacy: Cloud, LocalServer and Tainted are Send, Redact or Refuse.");
+        if (privacy.Threshold is < 0 or > 1 || float.IsNaN(privacy.Threshold))
+            errors.Add("Corvid:Privacy:Threshold must be between 0 and 1.");
+        if (privacy.Labels.Concat(privacy.ExtraLabels).Any(string.IsNullOrWhiteSpace))
+            errors.Add("Corvid:Privacy: labels cannot be empty.");
 
         if (options.Devices.CpuThreads is < 1 or > 64)
             errors.Add("Corvid:Devices:CpuThreads must be between 1 and 64.");

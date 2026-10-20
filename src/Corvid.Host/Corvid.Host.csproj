@@ -16,6 +16,8 @@
     <ProjectReference Include="../Corvid.Memory/Corvid.Memory.csproj" />
     <ProjectReference Include="../Corvid.Models/Corvid.Models.csproj" />
     <ProjectReference Include="../Corvid.Models.Starling/Corvid.Models.Starling.csproj" />
+    <ProjectReference Include="../Corvid.Models.Anthropic/Corvid.Models.Anthropic.csproj" />
+    <ProjectReference Include="../Corvid.Models.OpenAICompat/Corvid.Models.OpenAICompat.csproj" />
     <ProjectReference Include="../Corvid.Sandbox/Corvid.Sandbox.csproj" />
     <ProjectReference Include="../Corvid.Skills/Corvid.Skills.csproj" />
     <ProjectReference Include="../Corvid.Tools/Corvid.Tools.csproj" />

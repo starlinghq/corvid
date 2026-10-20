@@ -63,6 +63,9 @@ public static class CorvidHost
                 ? CorvidPaths.ExpandHome(cache)
                 : null));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IModelProvider, StarlingModelProvider>());
+        // Remote models from Corvid:Models:Remote (C-015): local servers and cloud providers, keyed only through Vault.
+        services.TryAddSingleton<RemoteModelProvider>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IModelProvider, RemoteModelProvider>(provider => provider.GetRequiredService<RemoteModelProvider>()));
         services.TryAddSingleton(provider => new ModelCatalogue(provider.GetServices<IModelProvider>()));
 
         services.TryAddSingleton<ModelMetrics>();

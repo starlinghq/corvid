@@ -17,6 +17,8 @@ public enum ModelReadiness
     Missing,
     Corrupt,
     Unreadable,
+    /// <summary>A remote model whose service is not there: Vault is not running, or lacks the model's key (C-015).</summary>
+    Unavailable,
 }
 
 /// <param name="Detail">What is wrong and how to fix it, in a sentence or two.</param>
@@ -34,8 +36,9 @@ public sealed record ModelAvailability(ModelDescriptor Model, ModelReadiness Rea
 public sealed record ModelLoadContext(string Slot, TaskScheduler ExtractorScheduler);
 
 /// <summary>
-/// A source of slot bindings: the in-process Starling models by default; local servers and cloud providers later
-/// (C-015). Checking never loads a model and never uses the network; only <see cref="DownloadAsync"/> does.
+/// A source of slot bindings: the in-process Starling models by default, and remote models (local servers and cloud
+/// providers, C-015) from configuration. Checking never loads a model and never uses the network (a remote model's check
+/// asks Vault over its local socket); only <see cref="DownloadAsync"/> does.
 /// </summary>
 public interface IModelProvider
 {

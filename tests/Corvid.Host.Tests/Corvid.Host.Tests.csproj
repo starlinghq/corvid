@@ -7,5 +7,7 @@
     <PackageReference Include="xunit.v3" />
     <Using Include="Xunit" />
     <ProjectReference Include="../../src/Corvid.Host/Corvid.Host.csproj" />
+    <!-- The stand-in Vault on a Unix socket, shared with the adapter tests. -->
+    <Compile Include="../Corvid.Models.Remote.Tests/Infrastructure.cs" Link="FakeVault.cs" />
   </ItemGroup>
 </Project>

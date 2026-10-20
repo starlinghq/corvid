@@ -43,6 +43,9 @@ internal sealed class FakeVault : IAsyncDisposable
 
     public ConcurrentQueue<string> Minted { get; } = new();
 
+    /// <summary>What a catalogue request returns: names and bound hosts, never values.</summary>
+    public List<CatalogEntry> Catalogue { get; } = [];
+
     /// <summary>Errors returned to the next forward requests instead of forwarding them.</summary>
     public ConcurrentQueue<(string Code, string Message)> Refusals { get; } = new();
 
@@ -84,6 +87,7 @@ internal sealed class FakeVault : IAsyncDisposable
         VaultResponse response = request switch
         {
             PlaceholderRequest mint => Mint(mint),
+            CatalogRequest => new CatalogResponse { Secrets = [.. Catalogue] },
             ForwardRequest forward => Relay(forward),
             _ => new ErrorResponse { Code = VaultErrorCodes.BadRequest, Message = "unexpected request" },
         };

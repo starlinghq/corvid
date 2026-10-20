@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
 
 namespace Corvid.Models.Privacy;
@@ -54,5 +55,43 @@ public readonly record struct ModelRequestContext(string? SessionId, bool Tainte
     private sealed class Scope(ModelRequestContext? previous) : IDisposable
     {
         public void Dispose() => Ambient.Value = previous;
+    }
+}
+
+/// <summary>
+/// For a binding the egress gate does not wrap: removes Corvid's request keys before the model's client sees the options,
+/// and makes the context ambient for anything beneath it.
+/// </summary>
+public sealed class ModelRequestScopeChatClient(IChatClient inner) : DelegatingChatClient(inner)
+{
+    public override async Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        var (stripped, context) = ModelRequestContext.Strip(options);
+        using var scope = context.Enter();
+        return await base.GetResponseAsync(messages, stripped, cancellationToken).ConfigureAwait(false);
+    }
+
+    public override async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> messages,
+        ChatOptions? options = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var (stripped, context) = ModelRequestContext.Strip(options);
+        var updates = base.GetStreamingResponseAsync(messages, stripped, cancellationToken).GetAsyncEnumerator(cancellationToken);
+        try
+        {
+            while (true)
+            {
+                bool more;
+                using (context.Enter())
+                    more = await updates.MoveNextAsync().ConfigureAwait(false);
+                if (!more)
+                    yield break;
+                yield return updates.Current;
+            }
+        }
+        finally
+        {
+            await updates.DisposeAsync().ConfigureAwait(false);
+        }
     }
 }

@@ -16,6 +16,7 @@ using Corvid.Kernel.Sessions;
 using Corvid.Kernel.Turns;
 using Corvid.Memory;
 using Corvid.Models;
+using Corvid.Models.Privacy;
 using Corvid.Skills;
 using Corvid.Tools;
 using Corvid.Tools.Builtin;
@@ -134,6 +135,12 @@ public sealed class CorvidRuntime : IAsyncDisposable
     /// <summary>The workspace's checkpoints (C-014); null when <c>Corvid:Checkpoints:Enabled</c> is off.</summary>
     public CheckpointService? Checkpoints { get; }
 
+    /// <summary>Escalation and fallback targets left out at start because their service is not there (a cloud model without Vault).</summary>
+    public IReadOnlyList<ModelAvailability> UnavailableModels { get; init; } = [];
+
+    /// <summary>The privacy egress gate (plan §10.4) every gated binding and every session's switches share.</summary>
+    public PrivacyEgress Egress => _composer.Egress;
+
     /// <summary>Whether this process runs due jobs, and if not, why.</summary>
     public string SchedulerState { get; private set; } = "off (Corvid:Scheduler:Enabled)";
 
@@ -214,9 +221,15 @@ public sealed class CorvidRuntime : IAsyncDisposable
         }
     }
 
+    // C-006's privacy hook (plan §4.2 step 6): a switch to a gated model checks the conversation first, with the session's taint.
+    private SessionModelSlots NewSlots(string sessionId) => new(Registry, Log, sessionId, new ModelSwitchOptions
+    {
+        Privacy = new ProjectionPrivacyGate(Log, Egress, id => TryGetSession(id, out var session) && session.Tainted),
+    });
+
     private SessionActor CreateActor(string sessionId)
     {
-        var slots = new SessionModelSlots(Registry, Log, sessionId);
+        var slots = NewSlots(sessionId);
         var runner = new TurnRunner(sessionId, Services(slots, interactive: true));
         var actor = new SessionActor(runner, slots, new Sink(this), new SessionActorOptions { EmbedderSwap = _swap });
         _sessions[sessionId] = new CorvidSession(this, sessionId, slots, runner, actor);
@@ -277,7 +290,7 @@ public sealed class CorvidRuntime : IAsyncDisposable
             return;
         }
         var scripts = new SandboxedScriptRunner(Builtin.Shell, Approvals, Options.Approvals.Mode);
-        var agent = new TurnJobAgent(sessionId => Services(new SessionModelSlots(Registry, Log, sessionId), interactive: false));
+        var agent = new TurnJobAgent(sessionId => Services(NewSlots(sessionId), interactive: false));
         var scheduler = new JobScheduler(Builtin.Jobs, Fabric, scripts, agent,
             options: new JobSchedulerOptions { Generator = Registry.Get(ModelSlots.Generator).Default.Profile.Id })
         {

@@ -114,7 +114,8 @@ internal static class ModelCommand
     private static async Task<int> DownloadAsync(IHost host, IAnsiConsole console, IReadOnlyList<string> names, bool all, CancellationToken cancellationToken)
     {
         var catalogue = host.Services.GetRequiredService<ModelCatalogue>();
-        var models = all ? catalogue.Models.Select(model => model.Name).ToArray() : names.ToArray();
+        // --all fetches what can be fetched: remote models (C-015) have nothing to download.
+        var models = all ? catalogue.Models.Where(model => model.DownloadBytes is not null).Select(model => model.Name).ToArray() : names.ToArray();
         if (models.Length == 0)
             return Usage(console);
         var failed = false;

@@ -8,6 +8,7 @@ using Corvid.Host.Telemetry;
 using Corvid.Kernel.Scheduling;
 using Corvid.Memory;
 using Corvid.Models;
+using Corvid.Models.Privacy;
 using Microsoft.Extensions.AI;
 
 namespace Corvid.Host.Composition;
@@ -19,12 +20,15 @@ namespace Corvid.Host.Composition;
 /// wrappings of the generator and embedder at fabric priority, and memory its embedders at background priority, so one
 /// model serves all three in the device's priority order. The decider slot (Kev) runs at fabric priority and is optional:
 /// a decider model that is not usable offline leaves the slot unbound, so the fabric runs on the degraded tier, and the
-/// reason is kept in <see cref="DeciderNotices"/>.
+/// reason is kept in <see cref="DeciderNotices"/>. Every chat binding the egress policy gates (each cloud model, by
+/// default) is wrapped in the privacy egress gate (plan §10.4) beneath the span layer, so no path reaches it ungated.
 /// </summary>
 public sealed class ModelComposer : IDisposable
 {
     private readonly ModelCatalogue _catalogue;
+    private readonly CorvidOptions _options;
     private readonly IReadOnlyDictionary<string, SlotSettings> _slots;
+    private readonly Dictionary<string, RemoteModelSettings> _remoteByProfile = new(StringComparer.Ordinal);
     private readonly DeviceSchedulers _devices;
     private readonly ModelMetrics _metrics;
     private readonly TurnFeed _feed;
@@ -32,13 +36,18 @@ public sealed class ModelComposer : IDisposable
     private readonly Dictionary<string, ModelBinding> _raw = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<(string Slot, string Model), ModelBinding> _bound = [];
     private readonly List<string> _deciderNotices = [];
+    private PrivacyEgress? _egress;
 
     public ModelComposer(ModelCatalogue catalogue, CorvidOptions options, DeviceSchedulers devices, ModelMetrics metrics, TurnFeed feed)
     {
         ArgumentNullException.ThrowIfNull(catalogue);
         ArgumentNullException.ThrowIfNull(options);
         _catalogue = catalogue;
+        _options = options;
         _slots = options.Models.EffectiveSlots();
+        foreach (var model in catalogue.Models.Where(model => model.Provider == RemoteModelProvider.ProviderName))
+            if (options.Models.Remote.TryGetValue(model.Name, out var settings))
+                _remoteByProfile[model.Profile.Id] = settings;
         _devices = devices;
         _metrics = metrics;
         _feed = feed;
@@ -68,10 +77,15 @@ public sealed class ModelComposer : IDisposable
     }
 
     /// <summary>Loads every configured model and binds the registry. The decider slot is bound only with what is usable offline.</summary>
+    /// <param name="skip">
+    /// Escalation and fallback models to leave out because their service is not there (a cloud model without Vault, C-015);
+    /// a slot's default is never skipped.
+    /// </param>
     /// <exception cref="ModelUnavailableException">A model of another slot is not usable offline.</exception>
-    public ModelSlotRegistry Compose()
+    public ModelSlotRegistry Compose(IReadOnlySet<string>? skip = null)
     {
         var registry = new ModelSlotRegistry();
+        bool Keep(string model) => skip?.Contains(_catalogue.Find(model).Name) != true;
         foreach (var (slot, settings) in _slots)
         {
             if (slot == ModelSlots.Decider)
@@ -79,8 +93,8 @@ public sealed class ModelComposer : IDisposable
                 BindDecider(registry, settings);
                 continue;
             }
-            registry.Bind(slot, Bind(slot, settings.Model!), settings.Escalation.Select(model => Bind(slot, model)),
-                settings.Fallbacks.Select(model => Bind(slot, model)));
+            registry.Bind(slot, Bind(slot, settings.Model!), settings.Escalation.Where(Keep).Select(model => Bind(slot, model)),
+                settings.Fallbacks.Where(Keep).Select(model => Bind(slot, model)));
         }
         return registry;
     }
@@ -123,6 +137,54 @@ public sealed class ModelComposer : IDisposable
     {
         lock (_gate)
             _deciderNotices.Add(text);
+    }
+
+    /// <summary>Whether a model is the default of some slot (it cannot be skipped when unavailable).</summary>
+    public bool IsDefault(string model) =>
+        _slots.Values.Any(settings => string.Equals(_catalogue.Find(settings.Model!).Name, model, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// The privacy egress gate shared by every gated binding and the switch-time check: the configured extractor's model
+    /// (GLiNER2 by default) scans outgoing requests. Without an extractor every gated request is refused.
+    /// </summary>
+    public PrivacyEgress Egress
+    {
+        get
+        {
+            lock (_gate)
+            {
+                if (_egress is not null)
+                    return _egress;
+                var extractor = _slots.TryGetValue(ModelSlots.Extractor, out var settings)
+                    ? Raw(ModelSlots.Extractor, _catalogue.Find(settings.Model!)).Service as IExtractor
+                    : null;
+                return _egress = new PrivacyEgress(extractor, new PrivacyEgressOptions { PolicyFor = PolicyFor });
+            }
+        }
+    }
+
+    /// <summary>
+    /// The egress policy for a profile (plan §10.4): a remote model's own <c>Egress</c> settings over <c>Corvid:Privacy</c>.
+    /// Cloud models are gated (redact by default); local servers only when configured; in-process models never.
+    /// </summary>
+    public EgressPolicy? PolicyFor(ModelProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        if (profile.Privacy == PrivacyClass.Local)
+            return null;
+        var privacy = _options.Privacy;
+        var own = _remoteByProfile.GetValueOrDefault(profile.Id)?.Egress;
+        var action = own?.Action ?? (profile.Privacy == PrivacyClass.Cloud ? privacy.Cloud : privacy.LocalServer);
+        if (action is not { } chosen)
+            return null;
+        return new EgressPolicy
+        {
+            Action = chosen,
+            Labels = privacy.Labels.Count > 0 ? [.. privacy.Labels] : EgressPolicy.DefaultLabels,
+            ExtraLabels = [.. privacy.ExtraLabels, .. own?.ExtraLabels ?? []],
+            Threshold = own?.Threshold ?? privacy.Threshold,
+            Tainted = own?.Tainted ?? privacy.Tainted,
+        };
     }
 
     /// <summary>A model bound for a slot, loading it on first use. The same instance is returned every time, because a binding's identity is its reference.</summary>
@@ -218,6 +280,9 @@ public sealed class ModelComposer : IDisposable
         }
     }
 
+    private IChatClient Gate(IChatClient chat, ModelProfile profile) =>
+        PolicyFor(profile) is null ? new ModelRequestScopeChatClient(chat) : new PrivacyEgressChatClient(chat, profile, Egress);
+
     private object Wrap(string slot, ModelBinding raw, DevicePriority priority, TurnFeed? stream)
     {
         var profile = raw.Profile;
@@ -225,7 +290,8 @@ public sealed class ModelComposer : IDisposable
         var latency = _metrics.For(slot, profile.Id);
         return raw.Service switch
         {
-            IChatClient chat => new InstrumentedChatClient(device is null ? chat : chat.Schedule(device, priority), profile, slot, latency, stream),
+            IChatClient chat => new InstrumentedChatClient(Gate(device is null ? chat : chat.Schedule(device, priority), profile), profile, slot,
+                latency, stream),
             IEmbeddingGenerator<string, Embedding<float>> embedder =>
                 new InstrumentedEmbeddingGenerator(device is null ? embedder : embedder.Schedule(device, priority), latency),
             // Extractors take the device's TaskScheduler when they are loaded (ModelLoadContext); wrapping again would nest.
