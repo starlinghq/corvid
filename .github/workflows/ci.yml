@@ -104,6 +104,8 @@ jobs:
           STARLING_MODELS: ${{ runner.temp }}/empty-model-cache
           CORVID__DataDirectory: ${{ runner.temp }}/corvid-data
         run: |
+          # The step's shell is bash -e without pipefail; the exit codes checked below are corvid's, not tee's.
+          set -o pipefail
           ls -l out-cli/corvid
           out-cli/corvid --help
           out-cli/corvid model | tee model.log
