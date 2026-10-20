@@ -310,6 +310,38 @@ public sealed class SessionProjectionTests : IDisposable
     }
 
     [Fact]
+    public void A_summary_a_rewind_hid_stays_hidden_after_a_later_compaction()
+    {
+        Append(new UserMessage("1"), new UserMessage("2"), new Compacted(1, 2, Summary with { NextStep = "undone" })); // 1-3
+        Append(new SessionRewound(2, "undo", []));                                                                   // 4
+        Append(new UserMessage("5"), new UserMessage("6"), new Compacted(5, 6, Summary with { NextStep = "later" })); // 5-7
+
+        var snapshot = Load();
+
+        Assert.Empty(snapshot.Issues);
+        Assert.Collection(snapshot.Transcript,
+            entry => Assert.Equal("1", ((UserMessage)entry.Content).Text),
+            entry => Assert.Equal("2", ((UserMessage)entry.Content).Text),
+            entry => Assert.Equal("later", ((Compacted)entry.Content).Summary.NextStep));
+    }
+
+    [Fact]
+    public void A_rewind_takes_back_an_expansion_written_after_the_position()
+    {
+        Append(new UserMessage("1"), new UserMessage("2"), new Compacted(1, 2, Summary), new UserMessage("4")); // 1-4
+        Append(new CompactionExpanded(3));                                                                      // 5
+        Assert.Equal([1L, 2L, 4L], Load().Transcript.Select(entry => entry.FromSequence));
+        Append(new SessionRewound(4, "undo", []));                                                              // 6
+
+        var snapshot = Load();
+
+        Assert.Empty(snapshot.Issues);
+        Assert.Collection(snapshot.Transcript,
+            entry => Assert.IsType<Compacted>(entry.Content),
+            entry => Assert.Equal(4, entry.FromSequence));
+    }
+
+    [Fact]
     public void A_rewind_that_would_split_a_call_from_its_result_is_an_issue_and_is_ignored()
     {
         Append(new UserMessage("a"), new ToolCallIssued("call-1", "t", Samples.Json("{}")), new ToolResult("call-1", Samples.Json("{}")),

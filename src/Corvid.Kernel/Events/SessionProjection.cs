@@ -100,7 +100,8 @@ public static class SessionProjection
         // Every valid compaction, and the ones shown: not expanded and not inside another shown one. Validation of a new
         // range is against the shown ones, so nesting stays whole after an expansion reveals what an outer summary hid.
         var valid = new List<StoredEvent>();
-        var expanded = new HashSet<long>();
+        // Expanded compaction -> the expansion event's sequence, so a rewind past an expansion can take it back.
+        var expanded = new Dictionary<long, long>();
         var compactions = new List<StoredEvent>();
         var calls = new Dictionary<string, long>(StringComparer.Ordinal);
         var results = new Dictionary<string, long>(StringComparer.Ordinal);
@@ -145,8 +146,15 @@ public static class SessionProjection
                         break;
                     }
                     hidden.Add(new(value.ThroughSequence, item.Sequence));
-                    // A summary written after the position summarizes conversation that is no longer there.
-                    compactions.RemoveAll(old => old.Sequence > value.ThroughSequence);
+                    // Summaries and expansions written after the position go with it. They leave the valid set too, or the
+                    // next compaction or expansion, which recomputes the shown set from it, would bring them back.
+                    valid.RemoveAll(old => old.Sequence > value.ThroughSequence);
+                    foreach (var (compacted, at) in expanded.ToList())
+                    {
+                        if (at > value.ThroughSequence)
+                            expanded.Remove(compacted);
+                    }
+                    compactions = Shown(valid, expanded);
                     break;
                 case ToolCallIssued value:
                     if (!calls.TryAdd(value.CallId, item.Sequence))
@@ -170,7 +178,7 @@ public static class SessionProjection
                 case CompactionExpanded value:
                     if (!valid.Any(old => old.Sequence == value.CompactedSequence))
                         issues.Add(new(item.Sequence, $"Expansion refers to no valid compaction at event {value.CompactedSequence}."));
-                    else if (!expanded.Add(value.CompactedSequence))
+                    else if (!expanded.TryAdd(value.CompactedSequence, item.Sequence))
                         issues.Add(new(item.Sequence, $"The compaction at event {value.CompactedSequence} is already expanded."));
                     else
                         compactions = Shown(valid, expanded);
@@ -268,9 +276,9 @@ public static class SessionProjection
     }
 
     // Valid ranges are nested or disjoint, so the outermost unexpanded ones are those no other unexpanded range contains.
-    private static List<StoredEvent> Shown(List<StoredEvent> valid, HashSet<long> expanded)
+    private static List<StoredEvent> Shown(List<StoredEvent> valid, Dictionary<long, long> expanded)
     {
-        var candidates = valid.Where(item => !expanded.Contains(item.Sequence)).ToList();
+        var candidates = valid.Where(item => !expanded.ContainsKey(item.Sequence)).ToList();
         return [.. candidates.Where(item => !candidates.Any(other => !ReferenceEquals(other, item)
             && Encloses((Compacted)other.Payload, (Compacted)item.Payload, other.Sequence > item.Sequence)))];
     }

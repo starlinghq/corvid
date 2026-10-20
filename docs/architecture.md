@@ -1368,7 +1368,8 @@ git is the CLI, started through `System.Diagnostics.Process`, so the checker's a
   transcript never moves back over a change that stays on disk. With checkpoints off, a turn without such calls can still
   be undone (the conversation only, `CheckpointService.Rewind`).
 - `SessionRewound(through_sequence, reason, restored, checkpoint_id)` (`session_rewound`, a new discriminator) hides the
-  events between its position and itself from the transcript, and drops summaries appended in that range; a rewind that
+  events between its position and itself from the transcript, and drops summaries and C-016 expansions appended in that
+  range for good (a later compaction or expansion does not bring them back); a rewind that
   would leave a call without its result is reported in `Issues` and ignored. Goals, todos, approvals, decisions, model
   switches and checkpoints are not rewound. `SessionSnapshot` gained `Hidden`, `IssuedCallIds` (every call id ever issued,
   which the turn loop now uses so a model reusing `call_0` after an undo gets `call_0-2`) and `CheckpointEvents`.
