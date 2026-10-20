@@ -83,6 +83,12 @@ public sealed record TurnOptions
     /// <summary>Compaction (plan §8 lever 3, C-016): the summarizer's completion, the record's budget and expansion's fill.</summary>
     public CompactionOptions Compaction { get; init; } = CompactionOptions.Default;
 
+    /// <summary>
+    /// Load this skill's body without asking <c>skill</c>: a skill replay or eval (plan §11), where the skill under test
+    /// must be in context whatever the decider would pick.
+    /// </summary>
+    public string? PinnedSkill { get; init; }
+
     public TurnOptions Validate()
     {
         ArgumentNullException.ThrowIfNull(Compaction);
@@ -132,6 +138,15 @@ public sealed class TurnServices
     /// <summary>Plan §8 lever 2, asked before compaction: drop the bodies of skills that have completed. Skills are C-017.</summary>
     public ISkillBodyLever? SkillBodies { get; init; }
 
+    /// <summary>Skills to shortlist and load (plan §11); without it <c>skill</c> is not asked.</summary>
+    public ISkillSource? Skills { get; init; }
+
+    /// <summary>Where <c>skill_opportunity</c> queues a turn; without it the question is not asked.</summary>
+    public ISkillLearning? SkillLearning { get; init; }
+
+    /// <summary>The skill shortlist: a few candidates, since each becomes an option of <c>skill</c>.</summary>
+    public ToolShortlist SkillShortlist { get; init; } = new(new ShortlistOptions(Size: 3));
+
     public TurnOptions Options { get; init; } = TurnOptions.Default;
 
     public TimeProvider Time { get; init; } = TimeProvider.System;
@@ -172,4 +187,10 @@ public sealed record TurnResult(
     ImmutableArray<string> Compactions = default)
 {
     public ImmutableArray<string> Compactions { get; init; } = Compactions.IsDefault ? [] : Compactions;
+
+    /// <summary>The skill whose body was in context (L1), if any.</summary>
+    public string? Skill { get; init; }
+
+    /// <summary>True when <c>skill_opportunity</c> queued this turn for distillation.</summary>
+    public bool SkillQueued { get; init; }
 }

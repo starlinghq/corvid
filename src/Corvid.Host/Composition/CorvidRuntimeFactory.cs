@@ -12,6 +12,7 @@ using Corvid.Kernel.Jobs;
 using Corvid.Memory;
 using Corvid.Models;
 using Corvid.Sandbox;
+using Corvid.Skills;
 using Corvid.Tools;
 using Corvid.Tools.Builtin;
 using Microsoft.Extensions.Options;
@@ -21,6 +22,12 @@ namespace Corvid.Host.Composition;
 /// <summary>What C-012's tools and scheduler share: the protected approval environment, the sandboxed shell and the job store.</summary>
 /// <param name="Web">The web fetch tool's client, owned by the runtime; null when the built-in tools are off.</param>
 public sealed record BuiltinServices(ApprovalEnvironment Environment, SandboxedShell Shell, JobStore Jobs, WebFetchTool? Web);
+
+/// <summary>
+/// Skills (C-017): the store, the loop's database, the learning loop and the curator. <paramref name="Store"/> is null when
+/// skills are off or the repository could not be opened; <paramref name="State"/> says which.
+/// </summary>
+public sealed record SkillServices(SkillStore? Store, SkillsDatabase? Database, SkillLearner? Learner, SkillCurator? Curator, string State);
 
 /// <summary>The sandbox is Linux only (C-007a): elsewhere every command is refused, never run unconfined.</summary>
 internal sealed class NoSandbox : ISandbox
@@ -92,6 +99,14 @@ public sealed class CorvidRuntimeFactory(
             var environment = vault.Protect(ApprovalEnvironment.FromProcess(CorvidPaths.Workspace(settings)));
             var rulesFile = settings.Approvals.RulesFile is { Length: > 0 } file ? CorvidPaths.ExpandHome(file) : JsonFileApprovalRuleStore.DefaultPath(environment);
             environment = ProtectCorvidState(environment, settings, rulesFile, configFile?.Path ?? CorvidPaths.UserConfigFile);
+            // The skills repository's history is how authorship is known (C-017), so no tool may write it; the skill files
+            // themselves stay readable in the sandbox, where skill scripts run.
+            if (settings.Skills.Enabled)
+                environment = Protect(environment, Path.Combine(CorvidPaths.SkillsDirectory(settings), ".git"));
+            // A workspace that contains the skills directory (the home directory, say) would let the file tools and the shell
+            // edit skills, and an edit on disk is committed as the user's: the agent could rewrite a user or hub skill, or turn
+            // hub content into trusted content. The skills directory is read-only to commands and closed to the file tools.
+            var skillsGuard = SkillsGuard(settings, environment.Workspace);
             var prompters = new ApprovalRouter();
             var approvals = new ApprovalPipeline(environment, fabric, log, prompters, new JsonFileApprovalRuleStore(rulesFile),
                 new ApprovalOptions
@@ -114,6 +129,7 @@ public sealed class CorvidRuntimeFactory(
                 Workspace = environment.Workspace,
                 Vault = vault,
                 DeniedPaths = environment.Protected.SafetyConfiguration,
+                ReadOnlyPaths = skillsGuard.ReadOnly,
             });
             var jobs = new JobStore(CorvidPaths.JobStore(settings));
             var builtin = new BuiltinServices(environment, shell, jobs, settings.Tools.Builtin ? new WebFetchTool() : null);
@@ -122,30 +138,30 @@ public sealed class CorvidRuntimeFactory(
             var toolRegistry = new ToolRegistry();
             if (settings.Tools.Builtin)
             {
-                toolRegistry.Add(new FileTools(Workspace.For(environment)));
+                var workspace = Workspace.For(environment);
+                toolRegistry.Add(new FileTools(skillsGuard.ReadOnly.IsEmpty ? workspace
+                    : new Workspace(environment.Workspace, workspace.Denied.Concat(skillsGuard.ReadOnly))));
                 toolRegistry.Add(new ShellTool(shell));
                 toolRegistry.Add(builtin.Web!);
                 toolRegistry.Add(new CronTools(jobs));
                 if (memory?.Writer is { } writer)
                     toolRegistry.Add(new MemoryTools(writer, memory.Retriever));
             }
+            var skills = skillsGuard.Refusal is { } refusal ? new SkillServices(null, null, null, null, refusal) : OpenSkills(settings, log);
+            if (skills.Store is { } store)
+                toolRegistry.Add(new SkillFileTools(store, shell));
             foreach (var provider in toolProviders)
                 toolRegistry.Add(provider);
             toolRegistry.AddRange(tools);
+            if (skills.Store is { } skillStore && skills.Database is { } skillsDatabase)
+                skills = AddLearning(skills, settings, skillStore, skillsDatabase, composer, log, fabric, toolRegistry);
 
-            // C-014: the store leaves out what the environment protects (Vault, credential stores, Corvid's own state,
-            // credential file names), so it never holds a copy of anything Corvid may not read.
             var checkpoints = settings.Checkpoints.Enabled
-                ? new CheckpointService(new ShadowStore(CheckpointOptions.For(environment, CorvidPaths.Checkpoints(settings),
-                    CorvidPaths.ExpandHome(settings.Checkpoints.GitPath)) with
-                {
-                    MaxFileBytes = settings.Checkpoints.MaxFileBytes,
-                    MaxFiles = settings.Checkpoints.MaxFiles,
-                }))
+                ? new CheckpointService(new ShadowStore(CheckpointOptionsFor(settings, environment, skillsGuard.ReadOnly)))
                 : null;
 
             return new CorvidRuntime(settings, catalogue, composer, devices, metrics, feed, log, registry, fabric, approvals, prompters,
-                toolRegistry, memory, counter, builtin, checkpoints);
+                toolRegistry, memory, counter, builtin, checkpoints, skills);
         }
         catch
         {
@@ -183,6 +199,111 @@ public sealed class CorvidRuntimeFactory(
             SafetyConfiguration = [.. environment.Protected.SafetyConfiguration.Concat(added).Distinct(StringComparer.Ordinal)],
         };
         return new ApprovalEnvironment(environment.Workspace, environment.Home, protectedPaths, environment.Variables);
+    }
+
+    private static ApprovalEnvironment Protect(ApprovalEnvironment environment, string path)
+    {
+        var protectedPaths = environment.Protected with
+        {
+            SafetyConfiguration = [.. environment.Protected.SafetyConfiguration.Append(Path.GetFullPath(path)).Distinct(StringComparer.Ordinal)],
+        };
+        return new ApprovalEnvironment(environment.Workspace, environment.Home, protectedPaths, environment.Variables);
+    }
+
+    /// <summary>
+    /// How the skills directory is kept from the tools: read-only (and closed to the file tools) when the workspace contains
+    /// it; skills are off when the workspace is the skills directory or inside it, since every tool write would land there.
+    /// </summary>
+    internal static (ImmutableArray<string> ReadOnly, string? Refusal) SkillsGuard(CorvidOptions settings, string workspace)
+    {
+        if (!settings.Skills.Enabled)
+            return ([], null);
+        var directory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(CorvidPaths.SkillsDirectory(settings)));
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(workspace));
+        if (root == directory || root.StartsWith(directory + "/", StringComparison.Ordinal))
+            return ([], $"off: the workspace {root} is inside the skills directory {directory}, where the tools could rewrite skills");
+        if (!directory.StartsWith(root + "/", StringComparison.Ordinal))
+            return ([], null);
+        // The sandbox launcher binds only paths that exist.
+        Directory.CreateDirectory(directory);
+        return ([directory], null);
+    }
+
+    /// <summary>
+    /// C-014: the store leaves out what the environment protects (Vault, credential stores, Corvid's own state, credential
+    /// file names), so it never holds a copy of anything Corvid may not read. A skills directory inside the workspace is left
+    /// out too: it has its own history, and the learning loop writes it in the background, so a restore across a tool call
+    /// could otherwise revert an agent skill, and the skill store would then commit that as the user's edit.
+    /// </summary>
+    internal static CheckpointOptions CheckpointOptionsFor(CorvidOptions settings, ApprovalEnvironment environment,
+        ImmutableArray<string> skillsReadOnly)
+    {
+        var options = CheckpointOptions.For(environment, CorvidPaths.Checkpoints(settings), CorvidPaths.ExpandHome(settings.Checkpoints.GitPath));
+        return options with
+        {
+            ExcludedPaths = [.. options.ExcludedPaths, .. skillsReadOnly],
+            MaxFileBytes = settings.Checkpoints.MaxFileBytes,
+            MaxFiles = settings.Checkpoints.MaxFiles,
+        };
+    }
+
+    /// <summary>The skill store. Without git, or with a repository Corvid will not use, skills are off and the reason is kept.</summary>
+    private static SkillServices OpenSkills(CorvidOptions settings, SqliteEventLog log)
+    {
+        if (!settings.Skills.Enabled)
+            return new SkillServices(null, null, null, null, "off (Corvid:Skills:Enabled)");
+        var directory = CorvidPaths.SkillsDirectory(settings);
+        try
+        {
+            var database = new SkillsDatabase(CorvidPaths.SkillsDatabase(settings));
+            var store = SkillStore.OpenAsync(new SkillStoreOptions
+            {
+                Root = directory,
+                GitExecutable = settings.Skills.Git,
+                Database = database,
+                Log = log,
+            }).GetAwaiter().GetResult();
+            return new SkillServices(store, database, null, null, $"{store.Skills.Count} skill(s) in {directory}");
+        }
+        catch (Exception exception) when (exception is GitException or System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException
+                                              or InvalidDataException or Microsoft.Data.Sqlite.SqliteException)
+        {
+            return new SkillServices(null, null, null, null, $"off: {exception.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The learning loop and the curator (plan §11): drafts and replay turns run on the default generator at background
+    /// priority, with a degraded-decider fabric over each replay's own log, and stand-ins for every registered tool.
+    /// </summary>
+    private static SkillServices AddLearning(SkillServices skills, CorvidOptions settings, SkillStore store, SkillsDatabase database,
+        ModelComposer composer, SqliteEventLog log, DecisionFabric fabric, ToolRegistry tools)
+    {
+        var background = composer.CreateBackgroundSlots();
+        var chat = (Microsoft.Extensions.AI.IChatClient)background.Get(ModelSlots.Generator).Default.Service;
+        var embedder = (Microsoft.Extensions.AI.IEmbeddingGenerator<string, Microsoft.Extensions.AI.Embedding<float>>)background.Get(ModelSlots.TextEmbedder).Default.Service;
+        // Replay checkpoints are background work too, so their degraded answers queue behind the user's own.
+        var decider = new DegradedDecider(embedder, chat, counter: chat.GetService(typeof(Abstractions.Tokens.ITokenCounter)) as Abstractions.Tokens.ITokenCounter);
+        var replayer = new SkillReplayer(new SkillReplayServices
+        {
+            Registry = background,
+            Fabric = replayLog => new DecisionFabric(DecisionPolicy.Default, decider, replayLog),
+            Tools = tools,
+            Turn = new Kernel.Turns.TurnOptions
+            {
+                MaxSteps = settings.Turn.MaxSteps,
+                MaxOutputTokens = settings.Turn.MaxOutputTokens,
+                SystemPrompt = settings.Turn.SystemPrompt is { Length: > 0 } prompt ? prompt : Kernel.Turns.TurnOptions.DefaultSystemPrompt,
+                ToolExamples = BuiltinTools.Examples,
+            },
+        });
+        var curator = new SkillCurator(store, database, replayer);
+        var generator = background.Get(ModelSlots.Generator).Default;
+        var learner = settings.Skills.Learning
+            ? new SkillLearner(store, database, log, fabric, replayer, (Microsoft.Extensions.AI.IChatClient)generator.Service, curator,
+                new SkillLearnerOptions { Generator = generator.Profile.Id, MaxOutputTokens = settings.Turn.MaxOutputTokens })
+            : null;
+        return skills with { Learner = learner, Curator = curator };
     }
 
     /// <summary>Vault's own defaults for this user, with the socket from configuration when it is set.</summary>

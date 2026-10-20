@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Corvid's skills (C-017): the agentskills.io SKILL.md loader with Hermes metadata, the git-versioned skill store with authorship, the learning loop with replay tests, skill evals, the curator and the skill tools.</Description>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
+    <!-- Kernel (C-011) for the turn-loop contract (ISkillSource, ISkillLearning) and the turn runner the replay test drives;
+         Fabric for skill_write_safe; Tools.Builtin (C-012) for the sandboxed shell that runs skill scripts. Nothing references
+         this project except the host and tests, so the kernel never sees the skill store. -->
+    <ProjectReference Include="../Corvid.Abstractions/Corvid.Abstractions.csproj" />
+    <ProjectReference Include="../Corvid.Approvals/Corvid.Approvals.csproj" />
+    <ProjectReference Include="../Corvid.Fabric/Corvid.Fabric.csproj" />
+    <ProjectReference Include="../Corvid.Kernel/Corvid.Kernel.csproj" />
+    <ProjectReference Include="../Corvid.Models/Corvid.Models.csproj" />
+    <ProjectReference Include="../Corvid.Tools/Corvid.Tools.csproj" />
+    <ProjectReference Include="../Corvid.Tools.Builtin/Corvid.Tools.Builtin.csproj" />
+    <ProjectReference Include="../Corvid.Tools.Generators/Corvid.Tools.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <InternalsVisibleTo Include="Corvid.Skills.Tests" />
+  </ItemGroup>
+</Project>

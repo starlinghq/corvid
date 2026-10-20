@@ -71,6 +71,7 @@ public sealed class Doctor(IConfiguration configuration, ModelCatalogue catalogu
         checks.Add(SandboxLauncher(options));
         checks.Add(Git(options));
         checks.Add(await VaultAsync(options, cancellationToken).ConfigureAwait(false));
+        checks.Add(SkillsGit(options));
         return checks;
     }
 
@@ -128,6 +129,17 @@ public sealed class Doctor(IConfiguration configuration, ModelCatalogue catalogu
                 $"{(value is null ? "not set" : $"set to {value}")} in this process; Starling requires {MallocValue} for GLiNER2 and Kev on Linux. " +
                 "`corvid chat` re-executes itself with it set.",
                 $"export {MallocVariable}={MallocValue} for other hosts of the extractor or the decider.");
+    }
+
+    // The skills directory is a git repository (C-017); without git, skills still load but no change can be recorded.
+    private static DoctorCheck SkillsGit(CorvidOptions options)
+    {
+        if (!options.Skills.Enabled)
+            return new DoctorCheck("skills", "git", CheckStatus.Info, "skills are off (Corvid:Skills:Enabled)");
+        return Corvid.Skills.SkillRepository.IsGitAvailable(options.Skills.Git)
+            ? new DoctorCheck("skills", "git", CheckStatus.Ok, $"{options.Skills.Git} runs; skills in {CorvidPaths.SkillsDirectory(options)}")
+            : new DoctorCheck("skills", "git", CheckStatus.Warning, $"{options.Skills.Git} does not run; skills are off without it.",
+                "Install git, or set Corvid:Skills:Git.");
     }
 
     private static DoctorCheck Bubblewrap()

@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <Using Include="Xunit" />
+    <ProjectReference Include="../../src/Corvid.Skills/Corvid.Skills.csproj" />
+    <!-- The turn loop's fakes (scripted generator, keyword embedder) and the generated note tools, shared with the kernel tests. -->
+    <ProjectReference Include="../Corvid.Tools.Fixtures/Corvid.Tools.Fixtures.csproj" />
+    <Compile Include="../Corvid.Kernel.Tests/TurnHarness.cs" Link="TurnHarness.cs" />
+  </ItemGroup>
+</Project>

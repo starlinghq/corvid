@@ -11,7 +11,7 @@ public sealed class DoctorTests
         await using var host = TestHost.Create();
         var checks = await host.Services.GetRequiredService<Doctor>().RunAsync(cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(["config", "models", "sandbox", "checkpoints", "vault"], checks.Select(check => check.Area).Distinct());
+        Assert.Equal(["config", "models", "sandbox", "checkpoints", "vault", "skills"], checks.Select(check => check.Area).Distinct());
         Assert.Contains(checks, check => check is { Name: "configuration", Status: CheckStatus.Ok });
         Assert.Contains(checks, check => check is { Name: "data directory", Status: CheckStatus.Ok });
         Assert.Contains(checks, check => check is { Name: "fake-gen", Status: CheckStatus.Ok } && check.Detail.Contains("generator", StringComparison.Ordinal));

@@ -48,7 +48,7 @@ public sealed class CommandRegistryTests
     public void TheCoreSetIsRegistered()
     {
         var registry = CoreCommands.Register(new SlashCommandRegistry());
-        string[] core = ["model", "status", "goal", "approvals", "memory", "help", "exit"];
+        string[] core = ["model", "status", "goal", "approvals", "memory", "skills", "help", "exit"];
         Assert.All(core, name => Assert.True(registry.TryGet(name, out _), name));
         Assert.True(registry.TryGet("quit", out var quit) && quit.Name == "exit");
     }
@@ -269,6 +269,43 @@ public sealed class CoreCommandTests
             Assert.Equal(OutputTone.Success, rejected.Tone);
             Assert.Empty(runtime.Memory.Writer.ListPending());
             Assert.Equal(OutputTone.Error, (await Run(runtime, session, commands, "/memory approve x bogus")).Tone);
+        }
+    }
+
+    [Fact]
+    public async Task SkillsListImportShowHistoryAndRevert()
+    {
+        var (host, runtime, session, commands) = await StartAsync();
+        await using (host)
+        await using (runtime)
+        {
+            Assert.Contains("0 skill(s)", (await Run(runtime, session, commands, "/skills")).Lines[0], StringComparison.Ordinal);
+            var hub = Path.Combine(host.Root, "hub", "weather");
+            Directory.CreateDirectory(hub);
+            File.WriteAllText(Path.Combine(hub, "SKILL.md"), "---\nname: weather\ndescription: Check the weather.\n---\n1. Ask for the city.\n");
+
+            var imported = await Run(runtime, session, commands, $"/skills import {Path.Combine(host.Root, "hub")} test-hub");
+            Assert.Equal(OutputTone.Success, imported.Tone);
+            Assert.Contains("hub:test-hub", imported.Lines[0], StringComparison.Ordinal);
+            var list = await Run(runtime, session, commands, "/skills list");
+            var row = Assert.Single(list.Table!.Rows);
+            Assert.Equal(["weather", "hub:test-hub, outside content"], row[..2]);
+            Assert.Contains("1. Ask for the city.", (await Run(runtime, session, commands, "/skills show weather")).Lines, StringComparer.Ordinal);
+            Assert.Contains(runtime.Log.Read(session.Id, cancellationToken: TestContext.Current.CancellationToken),
+                item => item.Payload is SkillChanged { Author: "hub:test-hub" });
+            Assert.Empty(session.Snapshot().Issues);
+
+            var log = await Run(runtime, session, commands, "/skills log weather");
+            var commit = Assert.Single(log.Table!.Rows);
+            Assert.Equal("hub:test-hub", commit[1]);
+            Assert.Contains("+1. Ask for the city.", (await Run(runtime, session, commands, $"/skills diff {commit[0]}")).Lines[0], StringComparison.Ordinal);
+            Assert.Equal(OutputTone.Success, (await Run(runtime, session, commands, $"/skills revert {commit[0]}")).Tone);
+            Assert.Contains("0 skill(s)", (await Run(runtime, session, commands, "/skills")).Lines[0], StringComparison.Ordinal);
+
+            Assert.Equal("No drafted skill is waiting for review.", (await Run(runtime, session, commands, "/skills pending")).Lines[0]);
+            Assert.Equal(OutputTone.Error, (await Run(runtime, session, commands, "/skills revert --hard")).Tone);
+            Assert.Equal(OutputTone.Error, (await Run(runtime, session, commands, "/skills approve nope")).Tone);
+            Assert.Contains("skills:", string.Join("\n", (await Run(runtime, session, commands, "/status")).Lines), StringComparison.Ordinal);
         }
     }
 

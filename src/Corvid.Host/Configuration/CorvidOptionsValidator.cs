@@ -54,6 +54,8 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue) : IValidate
         if (options.Telemetry.OtlpEndpoint is { Length: > 0 } endpoint
             && (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https")))
             errors.Add($"Corvid:Telemetry:OtlpEndpoint must be an absolute http or https URI, not '{endpoint}'.");
+        if (options.Skills.Enabled && string.IsNullOrWhiteSpace(options.Skills.Git))
+            errors.Add("Corvid:Skills:Git cannot be empty while skills are enabled.");
         if (string.IsNullOrWhiteSpace(options.Telemetry.ServiceName))
             errors.Add("Corvid:Telemetry:ServiceName cannot be empty.");
         if (string.IsNullOrWhiteSpace(options.Checkpoints.GitPath)
@@ -67,7 +69,7 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue) : IValidate
                  {
                      ("DataDirectory", options.DataDirectory), ("Workspace", options.Workspace), ("Models:Cache", options.Models.Cache),
                      ("Approvals:RulesFile", options.Approvals.RulesFile), ("Vault:SocketPath", options.Vault.SocketPath),
-                     ("Sandbox:LauncherPath", options.Sandbox.LauncherPath),
+                     ("Sandbox:LauncherPath", options.Sandbox.LauncherPath), ("Skills:Directory", options.Skills.Directory),
                  })
             if (path is { Length: > 0 } && !Path.IsPathFullyQualified(CorvidPaths.ExpandHome(path)))
                 errors.Add($"Corvid:{key} must be an absolute path (or start with ~/), not '{path}'.");

@@ -170,6 +170,21 @@ public sealed class ModelComposer : IDisposable
             .Select(raw => new MemoryEmbedder(raw.Profile.Id,
                 (IEmbeddingGenerator<string, Embedding<float>>)Wrap("memory", raw, DevicePriority.Background, stream: null)))];
 
+    /// <summary>
+    /// The default generator and text embedder at background priority (plan §9.5), for the skill learning loop: drafting
+    /// and replay turns queue behind the user's turns and the fabric on the same device.
+    /// </summary>
+    public ModelSlotRegistry CreateBackgroundSlots()
+    {
+        var registry = new ModelSlotRegistry();
+        foreach (var slot in new[] { ModelSlots.Generator, ModelSlots.TextEmbedder })
+        {
+            var raw = Raw(slot, _catalogue.Find(_slots[slot].Model!));
+            registry.Bind(slot, new ModelBinding(raw.Profile, Wrap("background", raw, DevicePriority.Background, stream: null)));
+        }
+        return registry;
+    }
+
     /// <summary>The generator's own token counter, when its binding offers one (Starling's Qwen does).</summary>
     public ITokenCounter? GeneratorCounter() =>
         Raw(ModelSlots.Generator, _catalogue.Find(_slots[ModelSlots.Generator].Model!)).Service is IChatClient chat

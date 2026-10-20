@@ -27,6 +27,17 @@ public sealed record ToolCallContext(string SessionId, string CallId)
     /// </summary>
     public object? Approval { get; init; }
 
+    private int _resultTainted;
+
+    /// <summary>
+    /// The tool returned content from outside the user (a hub skill's resource, say) without being a <c>[Network]</c> tool.
+    /// The turn loop taints the session after the call when it is set (plan §10.3).
+    /// </summary>
+    public bool ResultTainted => Volatile.Read(ref _resultTainted) != 0;
+
+    /// <summary>Says this call's result is outside content; see <see cref="ResultTainted"/>.</summary>
+    public void MarkResultTainted() => Interlocked.Exchange(ref _resultTainted, 1);
+
     /// <summary>The context the turn loop attached, or null when the call was made outside a turn.</summary>
     public static ToolCallContext? From(AIFunctionArguments arguments)
     {
