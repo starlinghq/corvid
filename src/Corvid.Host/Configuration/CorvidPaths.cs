@@ -34,6 +34,9 @@ public static class CorvidPaths
     /// <summary>The durable job store (C-012), its own SQLite file because jobs change.</summary>
     public static string JobStore(CorvidOptions options) => Path.Combine(DataDirectory(options), "jobs.db");
 
+    /// <summary>The checkpoint stores (C-014): one shadow git repository per workspace, never inside it.</summary>
+    public static string Checkpoints(CorvidOptions options) => Path.Combine(DataDirectory(options), "checkpoints");
+
     /// <summary>A leading <c>~/</c> means the home directory; anything else is returned as given.</summary>
     public static string ExpandHome(string path)
     {

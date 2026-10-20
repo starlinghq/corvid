@@ -38,6 +38,26 @@ public sealed class CorvidOptions
     public VaultSettings Vault { get; set; } = new();
 
     public SandboxSettings Sandbox { get; set; } = new();
+
+    public CheckpointSettings Checkpoints { get; set; } = new();
+}
+
+public sealed class CheckpointSettings
+{
+    /// <summary>
+    /// Checkpoints before tool calls that change files, for <c>/undo</c> and <c>/rollback</c> (plan §15). The store is a
+    /// git repository per workspace under <c>DataDirectory/checkpoints</c>; the workspace's own <c>.git</c> is never used.
+    /// </summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>The git executable: a path, or a name looked up on <c>PATH</c>. Without git, nothing is reversible.</summary>
+    public string GitPath { get; set; } = "git";
+
+    /// <summary>Files larger than this are left out of checkpoints, so changing one is not reversible.</summary>
+    public long MaxFileBytes { get; set; } = 32L * 1024 * 1024;
+
+    /// <summary>A checkpoint that would add or update more files than this fails, and so does the change it was for.</summary>
+    public int MaxFiles { get; set; } = 50_000;
 }
 
 public sealed class ModelOptions

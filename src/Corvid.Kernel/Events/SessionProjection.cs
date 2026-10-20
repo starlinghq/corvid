@@ -19,7 +19,31 @@ public sealed record SessionSnapshot(
     ImmutableDictionary<string, JsonElement> ModelProfiles,
     ImmutableDictionary<string, DecisionState> Decisions,
     ImmutableArray<CheckpointTaken> Checkpoints,
-    ImmutableArray<ProjectionIssue> Issues);
+    ImmutableArray<ProjectionIssue> Issues)
+{
+    /// <summary>Log ranges an undo or rollback took out of the transcript (C-014). The events stay in the log.</summary>
+    public ImmutableArray<HiddenRange> Hidden { get; init; } = [];
+
+    /// <summary>
+    /// Every tool call id issued in the session, including calls a rewind or a compaction took out of the transcript, so a
+    /// new call never reuses one.
+    /// </summary>
+    public ImmutableHashSet<string> IssuedCallIds { get; init; } = ImmutableHashSet<string>.Empty;
+
+    /// <summary>Checkpoints with the sequence of the event that recorded each (C-014).</summary>
+    public ImmutableArray<RecordedCheckpoint> CheckpointEvents { get; init; } = [];
+
+    /// <summary>Whether the event at <paramref name="sequence"/> is still part of the conversation.</summary>
+    public bool IsVisible(long sequence) => !Hidden.Any(range => range.Contains(sequence));
+}
+
+/// <summary>The events after <see cref="After"/> and before <see cref="Rewind"/>, the <c>SessionRewound</c> event that hid them.</summary>
+public sealed record HiddenRange(long After, long Rewind)
+{
+    public bool Contains(long sequence) => sequence > After && sequence < Rewind;
+}
+
+public sealed record RecordedCheckpoint(long Sequence, CheckpointTaken Checkpoint);
 
 /// <summary>Pure replay of a complete session prefix. Compaction changes only the transcript view.</summary>
 /// <remarks>
@@ -70,6 +94,8 @@ public static class SessionProjection
         var profiles = ImmutableDictionary.CreateBuilder<string, JsonElement>(StringComparer.Ordinal);
         var decisions = ImmutableDictionary.CreateBuilder<string, DecisionState>(StringComparer.Ordinal);
         var checkpoints = ImmutableArray.CreateBuilder<CheckpointTaken>();
+        var recorded = ImmutableArray.CreateBuilder<RecordedCheckpoint>();
+        var hidden = ImmutableArray.CreateBuilder<HiddenRange>();
         var issues = ImmutableArray.CreateBuilder<ProjectionIssue>();
         // Every valid compaction, and the ones shown: not expanded and not inside another shown one. Validation of a new
         // range is against the shown ones, so nesting stays whole after an expansion reveals what an outer summary hid.
@@ -107,7 +133,21 @@ public static class SessionProjection
                     else
                         issues.Add(new(item.Sequence, $"Outcome for unknown decision '{value.DecisionId}'."));
                     break;
-                case CheckpointTaken value: checkpoints.Add(value); break;
+                case CheckpointTaken value:
+                    checkpoints.Add(value);
+                    recorded.Add(new(item.Sequence, value));
+                    break;
+                case SessionRewound value:
+                    var rewindError = RewindError(item, value, calls, results);
+                    if (rewindError is not null)
+                    {
+                        issues.Add(new(item.Sequence, rewindError));
+                        break;
+                    }
+                    hidden.Add(new(value.ThroughSequence, item.Sequence));
+                    // A summary written after the position summarizes conversation that is no longer there.
+                    compactions.RemoveAll(old => old.Sequence > value.ThroughSequence);
+                    break;
                 case ToolCallIssued value:
                     if (!calls.TryAdd(value.CallId, item.Sequence))
                         issues.Add(new(item.Sequence, $"Duplicate tool call ID '{value.CallId}'."));
@@ -145,6 +185,8 @@ public static class SessionProjection
         var rangeIndex = 0;
         foreach (var item in history)
         {
+            if (hidden.Any(range => range.Contains(item.Sequence)))
+                continue;
             while (rangeIndex < ranges.Length && item.Sequence > ((Compacted)ranges[rangeIndex].Payload).ThroughSequence)
                 rangeIndex++;
             if (rangeIndex < ranges.Length && ranges[rangeIndex].Payload is Compacted range && Contains(range, item.Sequence))
@@ -158,7 +200,49 @@ public static class SessionProjection
         }
 
         return new(sessionId, history.Count, transcript.ToImmutable(), goal, todos,
-            approvals.ToImmutable(), profiles.ToImmutable(), decisions.ToImmutable(), checkpoints.ToImmutable(), issues.ToImmutable());
+            approvals.ToImmutable(), profiles.ToImmutable(), decisions.ToImmutable(), checkpoints.ToImmutable(), issues.ToImmutable())
+        {
+            Hidden = hidden.ToImmutable(),
+            IssuedCallIds = calls.Keys.ToImmutableHashSet(StringComparer.Ordinal),
+            CheckpointEvents = recorded.ToImmutable(),
+        };
+    }
+
+    /// <summary>Why a rewind to <paramref name="position"/> appended now would be refused, or null when it would apply.</summary>
+    public static string? CheckRewind(IEventLog log, string sessionId, long position, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(log);
+        var head = log.GetHead(sessionId, cancellationToken);
+        var calls = new Dictionary<string, long>(StringComparer.Ordinal);
+        var results = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var item in ReadAll(log, sessionId, head, cancellationToken))
+        {
+            if (item.Payload is ToolCallIssued call)
+                calls.TryAdd(call.CallId, item.Sequence);
+            else if (item.Payload is ToolResult result)
+                results.TryAdd(result.CallId, item.Sequence);
+        }
+        var next = new StoredEvent(sessionId, head + 1, Guid.Empty, DateTimeOffset.MinValue, new SessionRewound(position, "check", []));
+        return RewindError(next, (SessionRewound)next.Payload, calls, results);
+    }
+
+    /// <summary>
+    /// A rewind must land where no call is open: neither a call before the position whose result came after it, nor a call
+    /// it hides that has no result yet, or the transcript would hold a call without its result.
+    /// </summary>
+    private static string? RewindError(StoredEvent item, SessionRewound rewind, Dictionary<string, long> calls,
+        Dictionary<string, long> results)
+    {
+        if (rewind.ThroughSequence < 0 || rewind.ThroughSequence >= item.Sequence)
+            return "Rewind position does not refer to prior history.";
+        foreach (var (callId, callSequence) in calls)
+        {
+            var hasResult = results.TryGetValue(callId, out var resultSequence);
+            // A call before the position that never got a result is an older issue the rewind does not change.
+            if (callSequence <= rewind.ThroughSequence ? hasResult && resultSequence > rewind.ThroughSequence : !hasResult)
+                return $"Rewind position {rewind.ThroughSequence} leaves tool call '{callId}' without its result.";
+        }
+        return null;
     }
 
     private static string? CompactionError(StoredEvent item, Compacted range, List<StoredEvent> active,

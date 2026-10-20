@@ -56,6 +56,13 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue) : IValidate
             errors.Add($"Corvid:Telemetry:OtlpEndpoint must be an absolute http or https URI, not '{endpoint}'.");
         if (string.IsNullOrWhiteSpace(options.Telemetry.ServiceName))
             errors.Add("Corvid:Telemetry:ServiceName cannot be empty.");
+        if (string.IsNullOrWhiteSpace(options.Checkpoints.GitPath)
+            || options.Checkpoints.GitPath.Contains('/') && !Path.IsPathFullyQualified(CorvidPaths.ExpandHome(options.Checkpoints.GitPath)))
+            errors.Add("Corvid:Checkpoints:GitPath must be a program name found on PATH or an absolute path.");
+        if (options.Checkpoints.MaxFileBytes < 1)
+            errors.Add("Corvid:Checkpoints:MaxFileBytes must be positive.");
+        if (options.Checkpoints.MaxFiles < 1)
+            errors.Add("Corvid:Checkpoints:MaxFiles must be positive.");
         foreach (var (key, path) in new[]
                  {
                      ("DataDirectory", options.DataDirectory), ("Workspace", options.Workspace), ("Models:Cache", options.Models.Cache),

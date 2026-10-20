@@ -22,6 +22,7 @@ namespace Corvid.Abstractions.Events;
 [JsonDerivedType(typeof(GoalSet), "goal_set")]
 [JsonDerivedType(typeof(TodosSet), "todos_set")]
 [JsonDerivedType(typeof(CheckpointTaken), "checkpoint_taken")]
+[JsonDerivedType(typeof(SessionRewound), "session_rewound")]
 public abstract record SessionEvent;
 
 // Text is the initial message surface. Provider-specific message objects are never stored here.
@@ -73,4 +74,25 @@ public sealed record SkillChanged(string SkillId, string Revision, string Author
 public sealed record GoalSet(string? Goal) : SessionEvent;
 public sealed record TodosSet(ImmutableArray<TodoItem> Items) : SessionEvent;
 public sealed record TodoItem(string Id, string Text, bool Completed);
-public sealed record CheckpointTaken(string CheckpointId, string Revision) : SessionEvent;
+// Revision is the shadow store's commit. CallId, Kind and Paths were added by C-014 and are omitted when null, so events
+// written before them keep their persisted form. Kind is a CheckpointKinds name: "before" is the workspace before a tool
+// call changed files (Paths: target files that existed but could not be captured, so they are never put back) and "after"
+// once it had (Paths: what the call changed); each pair is a write-ledger entry that an undo reverts. "restore" is the
+// workspace just before an undo or rollback changed it (Paths: what the restore put back).
+public sealed record CheckpointTaken(string CheckpointId, string Revision,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? CallId = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Kind = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ImmutableArray<string>? Paths = null) : SessionEvent;
+
+public static class CheckpointKinds
+{
+    public const string Before = "before";
+    public const string After = "after";
+    public const string Restore = "restore";
+}
+
+// /undo and /rollback (C-014): the transcript is shown as it was at ThroughSequence, while every event stays in the log.
+// Restored lists the workspace paths put back; CheckpointId names the "restore" checkpoint taken just before. Reason is
+// "undo" or "rollback".
+public sealed record SessionRewound(long ThroughSequence, string Reason, ImmutableArray<string> Restored,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? CheckpointId = null) : SessionEvent;

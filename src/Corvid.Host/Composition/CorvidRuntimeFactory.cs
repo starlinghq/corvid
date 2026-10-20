@@ -6,6 +6,7 @@ using Corvid.Fabric;
 using Corvid.Host.Configuration;
 using Corvid.Host.Models;
 using Corvid.Host.Telemetry;
+using Corvid.Kernel.Checkpoints;
 using Corvid.Kernel.Events;
 using Corvid.Kernel.Jobs;
 using Corvid.Memory;
@@ -132,8 +133,19 @@ public sealed class CorvidRuntimeFactory(
                 toolRegistry.Add(provider);
             toolRegistry.AddRange(tools);
 
+            // C-014: the store leaves out what the environment protects (Vault, credential stores, Corvid's own state,
+            // credential file names), so it never holds a copy of anything Corvid may not read.
+            var checkpoints = settings.Checkpoints.Enabled
+                ? new CheckpointService(new ShadowStore(CheckpointOptions.For(environment, CorvidPaths.Checkpoints(settings),
+                    CorvidPaths.ExpandHome(settings.Checkpoints.GitPath)) with
+                {
+                    MaxFileBytes = settings.Checkpoints.MaxFileBytes,
+                    MaxFiles = settings.Checkpoints.MaxFiles,
+                }))
+                : null;
+
             return new CorvidRuntime(settings, catalogue, composer, devices, metrics, feed, log, registry, fabric, approvals, prompters,
-                toolRegistry, memory, counter, builtin);
+                toolRegistry, memory, counter, builtin, checkpoints);
         }
         catch
         {

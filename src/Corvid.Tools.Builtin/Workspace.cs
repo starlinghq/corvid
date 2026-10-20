@@ -15,8 +15,6 @@ namespace Corvid.Tools.Builtin;
 /// </remarks>
 public sealed class Workspace
 {
-    private const int MaxLinks = 40;
-
     /// <param name="root">An existing directory. It is canonicalized, links included.</param>
     /// <param name="deniedPaths">Absolute paths the tools must not reach even inside the workspace.</param>
     public Workspace(string root, IEnumerable<string>? deniedPaths = null)
@@ -116,47 +114,5 @@ public sealed class Workspace
     /// Follows symbolic links in every existing component, like realpath(3), keeping missing components as written. Throws
     /// <see cref="IOException"/> on a link loop.
     /// </summary>
-    internal static string RealPath(string absolute)
-    {
-        var pending = new Stack<string>(absolute.Split('/', StringSplitOptions.RemoveEmptyEntries).Reverse());
-        var current = "/";
-        var links = 0;
-        while (pending.Count > 0)
-        {
-            var part = pending.Pop();
-            if (part == ".")
-                continue;
-            if (part == "..")
-            {
-                current = Path.GetDirectoryName(current) ?? "/";
-                continue;
-            }
-
-            var next = current == "/" ? "/" + part : current + "/" + part;
-            string? target;
-            try
-            {
-                target = new FileInfo(next).LinkTarget;
-            }
-            catch (UnauthorizedAccessException)
-            {
-                target = null;
-            }
-
-            if (target is null)
-            {
-                current = next;
-                continue;
-            }
-
-            if (++links > MaxLinks)
-                throw new IOException($"Too many levels of symbolic links at {next}.");
-            if (Path.IsPathRooted(target))
-                current = "/";
-            foreach (var component in target.Split('/', StringSplitOptions.RemoveEmptyEntries).Reverse())
-                pending.Push(component);
-        }
-
-        return current;
-    }
+    internal static string RealPath(string absolute) => Kernel.Checkpoints.RealPaths.Resolve(absolute);
 }

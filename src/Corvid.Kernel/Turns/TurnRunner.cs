@@ -11,6 +11,7 @@ using Corvid.Abstractions.Sessions;
 using Corvid.Abstractions.Tokens;
 using Corvid.Approvals;
 using Corvid.Fabric;
+using Corvid.Kernel.Checkpoints;
 using Corvid.Kernel.Context;
 using Corvid.Kernel.Events;
 using Corvid.Memory;
@@ -486,9 +487,8 @@ public sealed class TurnRunner
         private async Task<(bool AnyRan, bool Failed)> RunCallsAsync(List<FunctionCallContent> calls, ImmutableArray<Offered> tools,
             CancellationToken cancellationToken)
         {
-            // Expanded, so ids hidden inside a compacted range are not reused.
-            var issued = new HashSet<string>(SessionProjection.Load(_services.Log, runner.SessionId, expandCompactions: true).Transcript
-                .Select(entry => entry.Content).OfType<ToolCallIssued>().Select(call => call.CallId), StringComparer.Ordinal);
+            // Every id the log holds, including calls an undo took out of the transcript: ids must stay unique in the log.
+            var issued = new HashSet<string>(runner.Snapshot().IssuedCallIds, StringComparer.Ordinal);
             var valid = new List<ValidCall>();
             var failed = false;
             _lastRound.Clear();
@@ -601,6 +601,7 @@ public sealed class TurnRunner
             var descriptor = call.Tool.Descriptor;
             IDisposable running;
             ApprovalResult? approval = null;
+            CheckpointTaken? before = null;
             bool tainted;
             lock (_gate)
                 tainted = runner.Tainted;
@@ -622,7 +623,43 @@ public sealed class TurnRunner
                     Result(call.CallId, Error("not run", [denial], null, null), isError: true);
                     return CallOutcome.Denied;
                 }
+                // Plan §15: a checkpoint before anything that changes files. The approval was given knowing whether the change
+                // was reversible, so a store that works but cannot take this checkpoint stops the call (fail closed).
+                if (_services.Checkpoints is { Store.IsAvailable: true } checkpoints
+                    && CheckpointService.Covers(descriptor, approval!.Assessment.Analysis))
+                {
+                    try
+                    {
+                        var taken = await checkpoints.BeforeAsync(call.CallId, approval.Assessment.Analysis).ConfigureAwait(false);
+                        lock (_gate)
+                            runner.Append(taken);
+                        before = taken;
+                    }
+                    catch (CheckpointException exception)
+                    {
+                        Result(call.CallId, Error("not run", ["no checkpoint could be taken before this change, so it was not made: " + exception.Message],
+                            null, null), isError: true);
+                        return CallOutcome.Denied;
+                    }
+                }
                 running = _services.Slots.RunParkedToolCall(call.CallId);
+            }
+
+            // The ledger's after-state, recorded before the result whatever happened, so partial writes can be undone too.
+            async Task RecordAfterAsync()
+            {
+                if (before is null)
+                    return;
+                try
+                {
+                    var after = await _services.Checkpoints!.AfterAsync(call.CallId, before, approval!.Assessment.Analysis).ConfigureAwait(false);
+                    lock (_gate)
+                        runner.Append(after);
+                }
+                catch (CheckpointException)
+                {
+                    // The ledger entry stays without its after-state; a restore across it is refused rather than guessed.
+                }
             }
 
             CallOutcome outcome;
@@ -641,23 +678,27 @@ public sealed class TurnRunner
                     var arguments = context.AttachTo(JsonValues.ToArguments(call.Arguments));
                     var value = await call.Tool.Function.InvokeAsync(arguments, cancellationToken).ConfigureAwait(false);
                     var result = JsonValues.ToElement(value);
+                    await RecordAfterAsync().ConfigureAwait(false);
                     // The result is logged before the lease is released: a model switch refuses an issued call with no result.
                     Result(call.CallId, result, isError: false, $"{descriptor.Name}: {JsonValues.Text(result)}");
                     outcome = CallOutcome.Succeeded;
                 }
                 catch (ToolArgumentException exception)
                 {
+                    await RecordAfterAsync().ConfigureAwait(false);
                     Result(call.CallId, Error("invalid arguments", [exception.Message], call.Tool.Function.JsonSchema, null), isError: true,
                         $"{descriptor.Name}: invalid arguments");
                     return CallOutcome.BindingFailed;
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
+                    await RecordAfterAsync().ConfigureAwait(false);
                     Result(call.CallId, Error("cancelled", ["the turn was cancelled while the tool ran"], null, null), isError: true);
                     throw;
                 }
                 catch (Exception exception)
                 {
+                    await RecordAfterAsync().ConfigureAwait(false);
                     Result(call.CallId, Error("tool failed", [exception.Message], null, null), isError: true, $"{descriptor.Name}: failed");
                     outcome = CallOutcome.Failed;
                 }
@@ -684,25 +725,45 @@ public sealed class TurnRunner
         {
             if (_services.Approvals is not { } approvals)
                 return ("no approval pipeline is configured, so side-effecting tools do not run", null);
+            var action = new ToolAction(call.Tool.Descriptor, call.Arguments);
             var context = new ApprovalContext(runner.SessionId, _options.ApprovalMode, State())
             {
                 Tainted = runner.Tainted,
                 KnownRecipients = _options.KnownRecipients,
                 CallId = call.CallId,
                 Interactive = _options.Interactive,
+                Reversible = await ReversibleAsync(approvals, action).ConfigureAwait(false),
             };
             ApprovalResult result;
             try
             {
-                result = await approvals.AuthorizeAsync(context, new ToolAction(call.Tool.Descriptor, call.Arguments), cancellationToken)
-                    .ConfigureAwait(false);
+                result = await approvals.AuthorizeAsync(context, action, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                Result(call.CallId, Error("cancelled", ["the turn was cancelled while the approval was pending"], null, null), isError: true);
+                // "not run": the call never started, which is how an undo knows it changed nothing (C-014).
+                Result(call.CallId, Error("not run", ["the turn was cancelled while the approval was pending"], null, null), isError: true);
                 throw;
             }
             return result.Allowed ? (null, result) : ($"{WireName(result.Resolution)}: {result.Assessment.Summary}", null);
+        }
+
+        /// <summary>
+        /// The <c>reversible</c> the <c>risk</c> question sees (plan §10.2 step 4): whether a checkpoint could undo the parsed
+        /// action. Null without checkpoints; false when the store cannot say.
+        /// </summary>
+        private async Task<bool?> ReversibleAsync(ApprovalPipeline approvals, ToolAction action)
+        {
+            if (_services.Checkpoints is not { } checkpoints)
+                return null;
+            try
+            {
+                return await checkpoints.IsReversibleAsync(approvals.Analyze(action)).ConfigureAwait(false);
+            }
+            catch (CheckpointException)
+            {
+                return false;
+            }
         }
 
         private static string WireName(ApprovalResolution resolution) => resolution switch

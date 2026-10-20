@@ -169,7 +169,8 @@ public sealed partial class FileTools(Workspace workspace, FileToolOptions? opti
 
     [Tool("write_file", Description = "Create or replace a text file in the workspace with the given content. Missing directories are created.")]
     [SideEffect(SideEffects.Filesystem)]
-    // Replacing a file loses its old content, and nothing can restore it until checkpoints exist (C-014).
+    // Replacing a file loses its old content. Checkpoints (C-014) can usually restore it, but they can be off, git missing or
+    // the file too large; an attribute cannot know, so the approval's per-call reversible field carries that instead.
     [Destructive]
     public JsonNode WriteFile(
         [Description("The file, relative to the workspace.")] string path,

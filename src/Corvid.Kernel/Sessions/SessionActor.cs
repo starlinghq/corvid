@@ -45,6 +45,7 @@ public sealed class SessionActor : IAsyncDisposable
 
     // Loop state: touched only by the loop.
     private readonly Queue<Envelope> _pending = new();
+    private readonly Queue<Exclusive> _exclusive = new();
     private CancellationTokenSource? _turnCancellation;
     private Task? _turn;
 
@@ -95,6 +96,22 @@ public sealed class SessionActor : IAsyncDisposable
         return command.Completion.Task;
     }
 
+    /// <summary>
+    /// Runs <paramref name="work"/> when no turn is running, and starts no turn until it finishes: for <c>/undo</c> and
+    /// <c>/rollback</c> (C-014), which must not change files or move the transcript under a running turn. It goes ahead of
+    /// queued messages.
+    /// </summary>
+    public Task<T> RunExclusiveAsync<T>(Func<CancellationToken, Task<T>> work, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+        var command = new Exclusive(async token => await work(token).ConfigureAwait(false), cancellationToken);
+        if (!_commands.Writer.TryWrite(command))
+            throw new ObjectDisposedException(nameof(SessionActor));
+        return Typed();
+
+        async Task<T> Typed() => (T)(await command.Completion.Task.ConfigureAwait(false))!;
+    }
+
     /// <summary>Completes when every queued message has been answered.</summary>
     public Task IdleAsync(CancellationToken cancellationToken = default)
     {
@@ -137,16 +154,22 @@ public sealed class SessionActor : IAsyncDisposable
                     case SwitchModel switching:
                         _ = SwitchAsync(switching);
                         break;
-                    case TurnFinished:
+                    case TurnFinished finished:
                         _turn = null;
                         _turnCancellation?.Dispose();
                         _turnCancellation = null;
-                        _capacity.Release();
+                        if (!finished.Exclusive)
+                            _capacity.Release();
                         break;
                     case WhenIdle waiting:
                         idle.Add(waiting.Completion);
                         break;
+                    case Exclusive exclusive:
+                        _exclusive.Enqueue(exclusive);
+                        break;
                 }
+                if (_turn is null && _exclusive.TryDequeue(out var work))
+                    _turn = RunExclusiveAsync(work);
                 if (_turn is null && _pending.TryDequeue(out var next))
                 {
                     _turnCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
@@ -167,6 +190,30 @@ public sealed class SessionActor : IAsyncDisposable
                 await _turn.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
             foreach (var waiter in idle)
                 waiter.TrySetCanceled();
+            while (_exclusive.TryDequeue(out var abandoned))
+                abandoned.Completion.TrySetCanceled();
+        }
+    }
+
+    private async Task RunExclusiveAsync(Exclusive command)
+    {
+        await Task.Yield();
+        try
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, command.Cancellation);
+            command.Completion.TrySetResult(await command.Work(linked.Token).ConfigureAwait(false));
+        }
+        catch (OperationCanceledException exception)
+        {
+            command.Completion.TrySetCanceled(exception.CancellationToken);
+        }
+        catch (Exception exception)
+        {
+            command.Completion.TrySetException(exception);
+        }
+        finally
+        {
+            _commands.Writer.TryWrite(new TurnFinished(Exclusive: true));
         }
     }
 
@@ -235,7 +282,13 @@ public sealed class SessionActor : IAsyncDisposable
         public TaskCompletionSource<SwitchResult> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
-    private sealed record TurnFinished : SessionCommand;
+    /// <param name="Exclusive">Exclusive work finished: it held no message capacity.</param>
+    private sealed record TurnFinished(bool Exclusive = false) : SessionCommand;
+
+    private sealed record Exclusive(Func<CancellationToken, Task<object?>> Work, CancellationToken Cancellation) : SessionCommand
+    {
+        public TaskCompletionSource<object?> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
 
     private sealed record WhenIdle : SessionCommand
     {

@@ -1,5 +1,7 @@
 using System.Globalization;
+using Corvid.Abstractions.Events;
 using Corvid.Approvals;
+using Corvid.Kernel.Checkpoints;
 using Corvid.Fabric;
 using Corvid.Host.Composition;
 using Corvid.Memory;
@@ -10,7 +12,8 @@ namespace Corvid.Host.Commands;
 
 /// <summary>
 /// The v1 core set (plan §17 row 1.3): <c>/model</c>, <c>/status</c>, <c>/goal</c>, <c>/approvals</c>, <c>/memory</c>,
-/// <c>/help</c>, <c>/exit</c>, and commands that map directly onto existing APIs: <c>/tools</c>, <c>/todos</c> and <c>/cancel</c>.
+/// <c>/undo</c> and <c>/rollback</c> (C-014), <c>/help</c>, <c>/exit</c>, and commands that map directly onto existing APIs:
+/// <c>/tools</c>, <c>/todos</c> and <c>/cancel</c>.
 /// </summary>
 public static class CoreCommands
 {
@@ -27,6 +30,9 @@ public static class CoreCommands
             .Add(new SlashCommand("memory", "Review staged memory writes.", "[pending] | approve <id> [operation] | reject <id>", MemoryAsync))
             .Add(new SlashCommand("tools", "The tools the model can be offered, with their risk.", "", Tools))
             .Add(new SlashCommand("todos", "The session's todo list.", "", Todos))
+            .Add(new SlashCommand("undo", "Revert the last turn's file changes and take it out of the conversation.", "", UndoAsync))
+            .Add(new SlashCommand("rollback", "List checkpoints, or go back to before the Nth latest one (files and conversation).",
+                "[N]", RollbackAsync))
             .Add(new SlashCommand("cancel", "Cancel the running turn.", "", Cancel))
             .Add(new SlashCommand("exit", "Leave the session.", "", Exit) { Aliases = ["quit"] });
     }
@@ -271,6 +277,75 @@ public static class CoreCommands
             default:
                 return CommandOutput.Error("Usage: /memory [pending] | approve <id> [operation] | reject <id>.");
         }
+    }
+
+    // ---- /undo, /rollback (C-014) ----
+
+    private static async ValueTask<CommandOutput> UndoAsync(SlashCommandContext context, SlashInvocation invocation, CancellationToken cancellationToken)
+    {
+        if (!invocation.Arguments.IsEmpty)
+            return CommandOutput.Error("Usage: /undo.");
+        var result = await context.Session.UndoAsync(cancellationToken).ConfigureAwait(false);
+        return result is null ? CommandOutput.Text("Nothing to undo: the conversation has no turn left.") : Restored(context, result, "Undid the last turn");
+    }
+
+    private static async ValueTask<CommandOutput> RollbackAsync(SlashCommandContext context, SlashInvocation invocation, CancellationToken cancellationToken)
+    {
+        var ledger = context.Session.Checkpoints();
+        switch (invocation.Arguments)
+        {
+            case []:
+                if (ledger.IsEmpty)
+                    return CommandOutput.Text(context.Runtime.Checkpoints?.Store.UnavailableReason is { } reason
+                        ? $"No checkpoints: they are unavailable ({reason})."
+                        : "No checkpoints in this conversation yet: one is taken before each tool call that changes files.");
+                return new CommandOutput
+                {
+                    Title = "Checkpoints",
+                    Lines = ["/rollback N puts the files back as they were before checkpoint N (and every later one) and takes those calls " +
+                        "out of the conversation. /undo does the same for the last turn."],
+                    Table = CommandTable.Of(["#", "call", "tool", "changed"], ledger.Reverse().Select((entry, index) => new[]
+                    {
+                        (index + 1).ToString(CultureInfo.InvariantCulture), entry.CallId, entry.Tool,
+                        entry.After is null ? "not recorded" : entry.Paths.IsEmpty ? "nothing" : string.Join(", ", entry.Paths.Take(5))
+                            + (entry.Paths.Length > 5 ? $" and {entry.Paths.Length - 5} more" : ""),
+                    })),
+                };
+            case [var text] when int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var number) && number >= 1:
+                var result = await context.Session.RollbackAsync(number, cancellationToken).ConfigureAwait(false);
+                return result is null
+                    ? CommandOutput.Error($"There {(ledger.Length == 1 ? "is 1 checkpoint" : $"are {ledger.Length} checkpoints")}; /rollback lists them.")
+                    : Restored(context, result, $"Rolled back to before checkpoint {number}");
+            default:
+                return CommandOutput.Error("Usage: /rollback [N], where N counts from 1, the latest checkpoint.");
+        }
+    }
+
+    private static CommandOutput Restored(SlashCommandContext context, RestoreResult result, string done)
+    {
+        if (result.Status == RestoreStatus.Refused)
+            return new CommandOutput
+            {
+                Tone = OutputTone.Error,
+                Lines = [$"Nothing was changed: {result.Detail}."],
+                Table = result.Conflicts.IsEmpty ? null
+                    : CommandTable.Of(["path", "why it was kept"], result.Conflicts.Select(conflict => new[] { conflict.Path, conflict.Reason })),
+            };
+        var lines = new List<string>
+        {
+            result.Restored.IsEmpty
+                ? $"{done}. No files needed putting back."
+                : $"{done}. Put back {result.Restored.Length} file(s): {string.Join(", ", result.Restored)}.",
+        };
+        if (!result.Merged.IsEmpty)
+            lines.Add($"Kept your own edits in {string.Join(", ", result.Merged)} (merged).");
+        var last = context.Session.Snapshot().Transcript.LastOrDefault(entry => entry.Content is UserMessage)?.Content as UserMessage;
+        lines.Add(last is null ? "The conversation is back at its start." : $"The conversation is back to after \"{Short(last.Text)}\".");
+        if (result.CheckpointId is { } id)
+            lines.Add($"The workspace as it was before this is checkpoint {id}.");
+        return new CommandOutput { Tone = OutputTone.Success, Lines = [.. lines] };
+
+        static string Short(string text) => text.Length > 60 ? text[..60] + "…" : text;
     }
 
     // ---- /tools, /todos ----
