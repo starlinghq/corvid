@@ -91,6 +91,23 @@ public sealed class DeciderTests
     }
 
     [Fact]
+    public async Task AKevThatFailsToLoadForAnyReasonLeavesTheDegradedTier()
+    {
+        // ONNX Runtime throws its own exception type, for example when Kev-4B does not fit in memory.
+        var models = new FakeModels();
+        models.Provider.Add("fake-kev-broken", [ModelSlots.Decider], () => throw new BrokenModelException("bad allocation"),
+            tools: ToolCallSupport.None);
+        await using var host = TestHost.Create(models, new Dictionary<string, string?> { ["Corvid:Models:Slots:decider:Model"] = "fake-kev-broken" });
+        await using var runtime = await host.StartAsync();
+
+        Assert.Null(runtime.Fabric.CalibratedDecider);
+        Assert.Contains("did not load (bad allocation)", Assert.Single(runtime.DeciderNotices), StringComparison.Ordinal);
+        Assert.Null((await runtime.OpenSession().SendAsync("hello", Ct)).Error);
+    }
+
+    private sealed class BrokenModelException(string message) : Exception(message);
+
+    [Fact]
     public async Task TheDeciderIsSharedSoModelRefusesToSwitchItPerSessionAndStatusShowsBothTiers()
     {
         await using var host = TestHost.Create(new FakeModels(), Kev("fake-kev-large"));

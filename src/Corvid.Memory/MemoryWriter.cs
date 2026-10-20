@@ -24,6 +24,10 @@ public static class MemoryLabels
 /// <param name="SourceSequence">The event the fact came from, for lineage.</param>
 /// <param name="Surface">The TurnState's surface, for the decider.</param>
 /// <param name="Generator">The TurnState's generator description, for the decider.</param>
+/// <param name="Tainted">
+/// The write was asked for while the session held content from outside the user (plan §10.3): it is staged for review
+/// whatever the decider would say, so injected text never reaches memory unreviewed.
+/// </param>
 public sealed record MemoryWriteRequest(
     string SessionId,
     string Text,
@@ -32,7 +36,8 @@ public sealed record MemoryWriteRequest(
     DateTimeOffset? ValidFrom = null,
     long? SourceSequence = null,
     string Surface = "memory",
-    string Generator = "unknown");
+    string Generator = "unknown",
+    bool Tainted = false);
 
 public enum MemoryWriteStatus
 {
@@ -72,7 +77,7 @@ public sealed record MemoryWriterOptions(int Neighbours = 5, int NeighbourTokens
 /// The write path (plan §9.2): extract entities, retrieve neighbouring facts, ask the <c>memory_op</c> gate through the
 /// fabric, then write or stage. <c>memory_op</c> is a gate, so only a calibrated answer above its floor writes; the
 /// degraded tier (no Kev) never answers a gate, so every write is staged for <c>/memory pending</c> and nothing unreviewed
-/// reaches memory. Each write appends <c>MemoryWritten</c>; a staged one records <c>staged</c> with the pending id.
+/// reaches memory. A write asked for in a tainted session (plan §10.3) is staged without asking the gate. Each write appends <c>MemoryWritten</c>; a staged one records <c>staged</c> with the pending id.
 /// </summary>
 /// <remarks>
 /// The memory database and the event log are separate files, so a write and its event are not one transaction: the memory
@@ -82,6 +87,9 @@ public sealed class MemoryWriter
 {
     private const int MaxAppendAttempts = 8;
     private const string MemoryOp = "memory_op";
+
+    /// <summary>The reason recorded on a write staged because the session held content from outside the user.</summary>
+    public const string TaintedReason = "tainted: asked for while the session held content from outside the user";
 
     private static readonly JsonWriterOptions WriterOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
@@ -140,6 +148,15 @@ public sealed class MemoryWriter
             [MemoryItemKind.Fact]), cancellationToken);
         var neighbours = retrieved.Items.Select(item => item.Fact!).Take(_options.Neighbours).ToImmutableArray();
 
+        var input = new FactInput(request.Text, entities, request.Relation, request.ValidFrom, request.SessionId, request.SourceSequence);
+        MemoryProposal Proposal(string? operation) => new(operation, neighbours.IsEmpty ? null : neighbours[0].FactId, request.Text,
+            [.. entities.Select(ProposedEntity.From)], request.ValidFrom, request.SourceSequence,
+            [.. neighbours.Select(fact => fact.FactId)], Relation: request.Relation is { } relation ? ProposedRelation.From(relation) : null);
+
+        // §10.3: with a calibrated decider the gate can write, so a write asked for in a tainted session never reaches it.
+        if (request.Tainted)
+            return Stage(request.SessionId, PendingKind.Fact, Proposal(null), null, TaintedReason, neighbours, entities);
+
         // 3. The gate.
         var instructions = Instructions(writer =>
         {
@@ -158,10 +175,7 @@ public sealed class MemoryWriter
         var verdict = await DecideAsync(request.SessionId, request.Text, request.Surface, request.Generator, entities, instructions,
             cancellationToken);
 
-        var proposal = new MemoryProposal(verdict.Answer?.Choice, neighbours.IsEmpty ? null : neighbours[0].FactId, request.Text,
-            [.. entities.Select(ProposedEntity.From)], request.ValidFrom, request.SourceSequence,
-            [.. neighbours.Select(fact => fact.FactId)], Relation: request.Relation is { } relation ? ProposedRelation.From(relation) : null);
-        var input = new FactInput(request.Text, entities, request.Relation, request.ValidFrom, request.SessionId, request.SourceSequence);
+        var proposal = Proposal(verdict.Answer?.Choice);
 
         // 4. Write only what the gate let through; everything else waits for review.
         if (!verdict.Verdict.Acted || verdict.Verdict.Option is not { } operation)
@@ -179,8 +193,9 @@ public sealed class MemoryWriter
     /// the block's budget is staged for a rewrite instead of failing. The persona block is edited only by the user, with
     /// <see cref="CoreBlockStore.Set"/>.
     /// </summary>
+    /// <param name="tainted">Asked for while the session held outside content (plan §10.3): staged for review, never applied.</param>
     public async Task<MemoryWriteResult> EditBlockAsync(string sessionId, string block, string content, string surface = "memory",
-        string generator = "unknown", CancellationToken cancellationToken = default)
+        string generator = "unknown", bool tainted = false, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         CoreBlockStore.CheckName(block);
@@ -194,6 +209,8 @@ public sealed class MemoryWriter
         // The consolidation job that proposes a rewrite to fit (plan §9.5) is not built; the reviewer sees the reason.
         if (tokens > current.BudgetTokens)
             return Stage(sessionId, PendingKind.Block, proposal, null, $"over_budget: {tokens} of {current.BudgetTokens} tokens", [], []);
+        if (tainted)
+            return Stage(sessionId, PendingKind.Block, proposal, null, TaintedReason, [], []);
 
         var instructions = Instructions(writer =>
         {

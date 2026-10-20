@@ -994,7 +994,10 @@ public sealed class TurnRunner
             return Result(status, text) with { Deliver = deliver };
         }
 
-        /// <summary>remember acted: the user's message enters the memory write path (§9.2), which stages it without Kev.</summary>
+        /// <summary>
+        /// remember acted: the user's message enters the memory write path (§9.2), which stages it without Kev, and always in a
+        /// tainted session (§10.3), where the message may not be the user's.
+        /// </summary>
         private async Task RememberAsync(CancellationToken cancellationToken)
         {
             var source = runner.Snapshot().Transcript.LastOrDefault(entry => entry.Content is UserMessage)?.FromSequence;
@@ -1002,7 +1005,8 @@ public sealed class TurnRunner
             try
             {
                 var written = await _services.Memory!.WriteAsync(new MemoryWriteRequest(runner.SessionId, envelope.Text,
-                    SourceSequence: source, Surface: envelope.Surface, Generator: Describe(profile)), cancellationToken).ConfigureAwait(false);
+                    SourceSequence: source, Surface: envelope.Surface, Generator: Describe(profile), Tainted: runner.Tainted),
+                    cancellationToken).ConfigureAwait(false);
                 _memoryWrite = written.Status == MemoryWriteStatus.Staged ? $"staged {written.MemoryId}" : $"{written.Operation} {written.MemoryId}";
             }
             catch (Exception exception) when (exception is not OperationCanceledException)

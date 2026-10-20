@@ -110,8 +110,9 @@ public sealed class ModelComposer : IDisposable
         {
             return Bind(ModelSlots.Decider, model);
         }
-        catch (Exception exception) when (exception is ModelUnavailableException or InvalidOperationException or IOException
-            or NotSupportedException or ArgumentException)
+        // Any load failure, ONNX Runtime's own included (Kev-4B without the memory for its 18 GB, say): the decider is
+        // optional, and the degraded tier is the fail-closed answer.
+        catch (Exception exception)
         {
             Notice($"{availability.Model.Name} did not load ({exception.Message}), so {consequence}.");
             return null;

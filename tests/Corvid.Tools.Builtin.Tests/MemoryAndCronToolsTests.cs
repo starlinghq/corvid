@@ -1,4 +1,7 @@
+using System.Collections.Immutable;
 using Corvid.Abstractions.Events;
+using Corvid.Abstractions.Fabric;
+using Corvid.Fabric;
 using Corvid.Kernel.Events;
 using Corvid.Kernel.Jobs;
 using Corvid.Memory;
@@ -67,6 +70,38 @@ public sealed class MemoryToolsTests : IDisposable
         var result = Assert.Single(found.GetProperty("results").EnumerateArray());
         Assert.Equal("fact", result.GetProperty("kind").GetString());
         Assert.Equal("My sister is called Anna.", result.GetProperty("text").GetString());
+    }
+
+    [Fact]
+    public async Task With_kev_an_add_is_saved_but_one_asked_for_in_a_tainted_session_waits_for_review()
+    {
+        // §10.3: text fetched from outside can ask the generator to remember things; Kev's confident add must not save it.
+        var database = new MemoryDatabase(_tree.Path("kev-memory.db"));
+        var facts = new FactGraph(database);
+        var retriever = new HybridRetriever(new EpisodicIndex(database), facts);
+        var fabric = new DecisionFabric(DecisionPolicy.Default, new DegradedDecider(new UnusedEmbedder(), new UnusedChatClient()), _log,
+            new ConfidentAdd());
+        var tools = new MemoryTools(new MemoryWriter(database, facts, new CoreBlockStore(database), retriever,
+            new FakeExtractor(("person", "Anna")), fabric, _log), retriever);
+
+        var tainted = await Invoke(tools, "memory_add", """{"fact":"Anna's bank is Example Bank."}""",
+            new ToolCallContext(Session, "c-1") { Tainted = true });
+        var trusted = await Invoke(tools, "memory_add", """{"fact":"My sister is called Anna."}""", new ToolCallContext(Session, "c-2"));
+
+        Assert.Equal("pending_review", tainted.GetProperty("status").GetString());
+        Assert.Equal(MemoryWriter.TaintedReason, tainted.GetProperty("reason").GetString());
+        Assert.Equal("saved", trusted.GetProperty("status").GetString());
+        Assert.Equal("My sister is called Anna.", Assert.Single(facts.Search("Anna")).Fact.Text);
+    }
+
+    private sealed class ConfidentAdd : IDecider
+    {
+        public string Name => "kev-test";
+
+        public ValueTask<DeciderResult> DecideAsync(DecisionRequest request, CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult<DeciderResult>(new DeciderAnswers(Name, request.Questions.ToImmutableDictionary(pair => pair.Key,
+                pair => DecisionAnswer.For(pair.Value, pair.Value.Options.Select(option => option.Name == "add" ? 0.97 : 0.01)),
+                StringComparer.Ordinal)));
     }
 
     [Fact]

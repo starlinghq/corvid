@@ -61,8 +61,8 @@ public sealed partial class MemoryTools
         ArgumentNullException.ThrowIfNull(context);
         if (string.IsNullOrWhiteSpace(fact))
             throw new ToolArgumentException("Argument 'fact' must not be empty.", nameof(fact));
-        var written = await _writer.WriteAsync(new MemoryWriteRequest(context.SessionId, fact.Trim(), Surface: "memory_add"), cancellationToken)
-            .ConfigureAwait(false);
+        var written = await _writer.WriteAsync(new MemoryWriteRequest(context.SessionId, fact.Trim(), Surface: "memory_add",
+            Tainted: context.Tainted), cancellationToken).ConfigureAwait(false);
         var result = new JsonObject
         {
             ["status"] = written.Status switch
