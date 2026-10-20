@@ -366,4 +366,40 @@ public sealed class PipelineTests
         Assert.Equal(ApprovalOutcome.Ask,
             (await pipeline.AssessAsync(manual with { Tainted = true }, new ShellAction("curl -o page.html https://example.org"), Ct)).Outcome);
     }
+    [Fact]
+    public async Task A_shell_tool_call_is_assessed_as_the_command_it_runs()
+    {
+        using var db = new TempLog();
+        var prompter = ScriptedPrompter.Always(ApprovalAnswer.Approve());
+        var pipeline = Fixtures.Pipeline(db, prompter: prompter,
+            options: new ApprovalOptions { ShellTools = new Dictionary<string, string> { ["shell"] = "command" } });
+        var shell = Fixtures.Tool("shell", SideEffects.Process | SideEffects.Filesystem, destructive: true, parameters: "command");
+
+        // Read-only commands run without asking; the hardline list sees through the tool call to the parsed command.
+        var listing = await pipeline.AuthorizeAsync(Fixtures.Context(), new ToolAction(shell, Fixtures.Json("""{"command":"ls -la src"}""")), Ct);
+        Assert.True(listing.Allowed);
+        Assert.Equal(ApprovalResolution.Automatic, listing.Resolution);
+        Assert.Equal("shell", listing.Assessment.Analysis.Kind);
+        Assert.Equal("ls -la src", listing.Assessment.Analysis.Text);
+
+        var vault = await pipeline.AuthorizeAsync(Fixtures.Context(),
+            new ToolAction(shell, Fixtures.Json("""{"command":"timeout 5 cat ~/.local/share/corvid-vault/store.bin"}""")), Ct);
+        Assert.False(vault.Allowed);
+        Assert.Equal(ApprovalResolution.Hardline, vault.Resolution);
+        var wrapped = await pipeline.AuthorizeAsync(Fixtures.Context(),
+            new ToolAction(shell, Fixtures.Json("""{"command":"bash -c 'rm -rf /home/user/other'"}""")), Ct);
+        Assert.Equal(ApprovalResolution.Hardline, wrapped.Resolution);
+        Assert.Empty(prompter.Prompts);
+
+        // A side effect asks, with the parsed command in the request.
+        var remove = await pipeline.AuthorizeAsync(Fixtures.Context(), new ToolAction(shell, Fixtures.Json("""{"command":"rm -rf build"}""")), Ct);
+        Assert.True(remove.Allowed);
+        Assert.Equal("rm", Assert.Single(Assert.Single(prompter.Prompts).Analysis.Commands).Verb);
+
+        // Without its command the call cannot be parsed, so it stays an unresolved tool call that asks once.
+        var missing = await pipeline.AssessAsync(Fixtures.Context(), new ToolAction(shell, Fixtures.Json("""{"cmd":"rm -rf /"}""")), Ct);
+        Assert.Equal(ApprovalOutcome.Ask, missing.Outcome);
+        Assert.Equal("tool", missing.Analysis.Kind);
+        Assert.Equal([ApprovalScope.Once], missing.Offered);
+    }
 }
