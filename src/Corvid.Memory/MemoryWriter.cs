@@ -28,6 +28,7 @@ public static class MemoryLabels
 /// The write was asked for while the session held content from outside the user (plan §10.3): it is staged for review
 /// whatever the decider would say, so injected text never reaches memory unreviewed.
 /// </param>
+/// <param name="LocalOnly">The fact never leaves the machine: it is left out of prompts for cloud models (plan §10.4).</param>
 public sealed record MemoryWriteRequest(
     string SessionId,
     string Text,
@@ -37,7 +38,8 @@ public sealed record MemoryWriteRequest(
     long? SourceSequence = null,
     string Surface = "memory",
     string Generator = "unknown",
-    bool Tainted = false);
+    bool Tainted = false,
+    bool LocalOnly = false);
 
 public enum MemoryWriteStatus
 {
@@ -148,10 +150,12 @@ public sealed class MemoryWriter
             [MemoryItemKind.Fact]), cancellationToken);
         var neighbours = retrieved.Items.Select(item => item.Fact!).Take(_options.Neighbours).ToImmutableArray();
 
-        var input = new FactInput(request.Text, entities, request.Relation, request.ValidFrom, request.SessionId, request.SourceSequence);
+        var input = new FactInput(request.Text, entities, request.Relation, request.ValidFrom, request.SessionId, request.SourceSequence,
+            request.LocalOnly);
         MemoryProposal Proposal(string? operation) => new(operation, neighbours.IsEmpty ? null : neighbours[0].FactId, request.Text,
             [.. entities.Select(ProposedEntity.From)], request.ValidFrom, request.SourceSequence,
-            [.. neighbours.Select(fact => fact.FactId)], Relation: request.Relation is { } relation ? ProposedRelation.From(relation) : null);
+            [.. neighbours.Select(fact => fact.FactId)], Relation: request.Relation is { } relation ? ProposedRelation.From(relation) : null,
+            LocalOnly: request.LocalOnly ? true : null);
 
         // §10.3: with a calibrated decider the gate can write, so a write asked for in a tainted session never reaches it.
         if (request.Tainted)
@@ -289,7 +293,7 @@ public sealed class MemoryWriter
                 try
                 {
                     written = WriteFact(applied, target, new FactInput(proposal.Text!, entities, proposal.Relation?.ToRelation(),
-                        proposal.ValidFrom, pending.SessionId, proposal.SourceSequence));
+                        proposal.ValidFrom, pending.SessionId, proposal.SourceSequence, proposal.LocalOnly == true));
                 }
                 catch
                 {

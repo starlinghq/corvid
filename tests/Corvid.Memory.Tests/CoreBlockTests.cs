@@ -52,6 +52,8 @@ public sealed class CoreBlockTests
         store.Blocks.Set("user", "Lives in Leeds.");
         store.Blocks.Set("agent", "Use British spelling.");
         store.Blocks.SetLocalOnly("user", true);
+        // Blocks are local-only by default (C-015); the user shares one explicitly.
+        store.Blocks.SetLocalOnly("agent", false);
         var snapshot = store.Blocks.Snapshot();
 
         store.Blocks.Set("agent", "Changed later.");

@@ -16,6 +16,7 @@ using Corvid.Kernel.Context;
 using Corvid.Kernel.Events;
 using Corvid.Memory;
 using Corvid.Models;
+using Corvid.Models.Privacy;
 using Corvid.Tools;
 using Microsoft.Extensions.AI;
 
@@ -224,7 +225,7 @@ public sealed class TurnRunner
         private readonly HashSet<string> _lastRound = new(StringComparer.Ordinal);
         private ImmutableSortedDictionary<string, ImmutableArray<string>> _entities = ImmutableSortedDictionary<string, ImmutableArray<string>>.Empty;
         private ImmutableArray<Offered> _shortlist = [];
-        private string _memoryNote = "";
+        private ImmutableArray<RetrievedItem> _recalled = [];
         private ImmutableArray<SkillOption> _skills = [];
         private string _skillNote = "";
         private string? _skill;
@@ -379,15 +380,24 @@ public sealed class TurnRunner
             var budget = profile.AcceptedContext - _options.MaxOutputTokens - _options.ContextReserve;
             var toolTokens = tools.Sum(tool => counter.CountTokens(tool.Function.Name) + counter.CountTokens(tool.Function.Description)
                 + counter.CountTokens(tool.Function.JsonSchema.GetRawText()));
-            var system = SystemPrompt(profile);
+            // Prompt caching (plan §8): a model that caches on breakpoints keeps a frozen system prompt, so this turn's recalled
+            // memory and skill go after the history as a one-shot note instead of into the system prompt.
+            var notes = string.Join("\n\n", new[] { MemoryNote(profile), _skillNote }.Where(part => part.Length > 0));
+            var frozen = profile.Caching == PromptCachingStyle.Breakpoints;
+            var noteTokens = frozen && notes.Length > 0 ? counter.CountTokens(notes) : 0;
+            var system = SystemPrompt(profile, frozen ? "" : notes);
             var rendered = await FitAsync((snapshot, clearMore) =>
-                PromptRenderer.Render(snapshot, system, counter, budget, _lastRound, toolTokens, clearMore), profile, counter, budget,
-                cancellationToken).ConfigureAwait(false);
+                PromptRenderer.Render(snapshot, system, counter, budget, _lastRound, toolTokens + noteTokens, clearMore), profile, counter,
+                budget, cancellationToken).ConfigureAwait(false);
             if (rendered.OverBudget)
                 throw new ContextOverBudgetException($"{rendered.Tokens} tokens against a budget of {rendered.Budget}");
 
             var messages = rendered.Messages.ToList();
-            var options = new ChatOptions { MaxOutputTokens = _options.MaxOutputTokens };
+            if (noteTokens > 0)
+                messages.Add(new ChatMessage(ChatRole.User, notes));
+            // The session and its taint travel with the request: a cloud binding's egress gate keeps placeholders stable per
+            // session and is stricter for outside content, and the Vault handler tells Vault (plan §10.3, §10.4).
+            var options = new ModelRequestContext(runner.SessionId, runner.Tainted).Apply(new ChatOptions { MaxOutputTokens = _options.MaxOutputTokens });
             if (!tools.IsEmpty)
             {
                 options.Tools = [.. tools.Select(tool => (AITool)tool.Function)];
@@ -475,16 +485,22 @@ public sealed class TurnRunner
             _ => string.Create(CultureInfo.InvariantCulture, $"kept events {result.From}–{result.Through} uncompacted: {result.Detail}"),
         };
 
-        private string SystemPrompt(ModelProfile profile)
+        // Local-only core blocks and facts (plan §10.4) reach local and local-server models only; a local server is the user's
+        // own (C-015's configuration refuses a public endpoint for that class).
+        private string SystemPrompt(ModelProfile profile, string note)
         {
             var prompt = _options.SystemPrompt;
             if (_services.CoreBlocks is { } blocks && blocks.Render(includeLocalOnly: profile.Privacy != PrivacyClass.Cloud) is { Length: > 0 } core)
                 prompt += "\n\n" + core;
-            if (_memoryNote.Length > 0)
-                prompt += "\n\n" + _memoryNote;
-            if (_skillNote.Length > 0)
-                prompt += "\n\n" + _skillNote;
+            if (note.Length > 0)
+                prompt += "\n\n" + note;
             return prompt;
+        }
+
+        private string MemoryNote(ModelProfile profile)
+        {
+            var items = profile.Privacy == PrivacyClass.Cloud ? _recalled.Where(item => !item.LocalOnly).ToList() : [.. _recalled];
+            return items.Count == 0 ? "" : "Relevant memory:\n" + string.Join("\n", items.Select(item => "- " + item.Text));
         }
 
         private static ITokenCounter Counter(IChatClient generator) =>
@@ -1177,7 +1193,7 @@ public sealed class TurnRunner
                 var result = await _services.Retriever!.RetrieveAsync(request, cancellationToken).ConfigureAwait(false);
                 var items = full ? result.Items : result.Items.Take(3).ToImmutableArray();
                 if (!items.IsEmpty)
-                    _memoryNote = "Relevant memory:\n" + string.Join("\n", items.Select(item => "- " + item.Text));
+                    _recalled = items;
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {

@@ -163,6 +163,34 @@ public sealed class SessionModelSlots
                 cancellationToken),
             cancellationToken);
 
+    /// <summary>
+    /// The privacy egress gate refused a request to <paramref name="refused"/> (plan §10.4, "refuse and stay local"): move
+    /// the slot to the first binding it lists that is not cloud, preferring <see cref="PrivacyClass.Local"/> (the default,
+    /// then the fallbacks, then the escalation ladder), skipping <paramref name="alsoRefused"/>. Like a fallback it replaces
+    /// one request, so it does not wait for tracked tool calls, and a pin stays where it was.
+    /// </summary>
+    public Task<SwitchResult> RetreatAsync(string slot, ModelBinding refused, IReadOnlyCollection<ModelBinding>? alsoRefused = null,
+        CancellationToken cancellationToken = default) =>
+        SerializedAsync(waitForTools: false, async () =>
+        {
+            ArgumentNullException.ThrowIfNull(refused);
+            var current = Current(slot);
+            if (!ReferenceEquals(current, refused))
+                return new SwitchResult(SwitchStatus.Unchanged, slot, current.Profile, current.Profile, SwitchReason.Privacy,
+                    Detail: "the slot already moved");
+            var configuration = _registry.Get(slot);
+            var skip = alsoRefused ?? [];
+            var candidate = new[] { configuration.Default }.Concat(configuration.Fallbacks).Concat(configuration.Escalation)
+                .Where(binding => !ReferenceEquals(binding, refused) && !skip.Contains(binding, ReferenceEqualityComparer.Instance)
+                    && binding.Profile.Privacy != PrivacyClass.Cloud)
+                .OrderBy(binding => binding.Profile.Privacy == PrivacyClass.Local ? 0 : 1)
+                .FirstOrDefault();
+            return candidate is null
+                ? new SwitchResult(SwitchStatus.NoTarget, slot, refused.Profile, null, SwitchReason.Privacy,
+                    Detail: $"no local model is configured for {slot}")
+                : await SwitchCoreAsync(slot, candidate, SwitchReason.Privacy, pin: false, cancellationToken).ConfigureAwait(false);
+        }, cancellationToken);
+
     /// <summary>After a turn: every unpinned slot that is off its default switches back (plan §6 de-escalation).</summary>
     public Task<IReadOnlyList<SwitchResult>> CompleteTurnAsync(CancellationToken cancellationToken = default) =>
         SerializedAsync<IReadOnlyList<SwitchResult>>(waitForTools: true, async () =>
@@ -250,9 +278,9 @@ public sealed class SessionModelSlots
         for (var attempt = 1; stored is null; attempt++)
         {
             // Step 1: issued tool calls finish and their results are logged; nothing in flight is cancelled. Tracked calls
-            // were awaited before taking the lock; this checks the log. A fallback skips it (see FallBackAsync).
+            // were awaited before taking the lock; this checks the log. A fallback or a privacy retreat skips it (see FallBackAsync).
             state = ReadState(cancellationToken);
-            if (reason != SwitchReason.Fallback)
+            if (reason is not (SwitchReason.Fallback or SwitchReason.Privacy))
                 CheckIssuedWork(state);
 
             // Step 6, checked before the event so a refused move is never recorded as having happened.

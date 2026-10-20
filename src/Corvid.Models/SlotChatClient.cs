@@ -1,6 +1,7 @@
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
+using Corvid.Models.Privacy;
 using Microsoft.Extensions.AI;
 
 namespace Corvid.Models;
@@ -24,12 +25,17 @@ internal sealed class SlotChatClient(SessionModelSlots slots, string slot, Func<
     {
         var history = messages as IReadOnlyList<ChatMessage> ?? messages.ToList();
         var failed = new List<ModelBinding>();
+        var refused = new List<ModelBinding>();
         while (true)
         {
             var binding = slots.Current(slot);
             try
             {
                 return await binding.GetService<IChatClient>().GetResponseAsync(history, options, cancellationToken).ConfigureAwait(false);
+            }
+            catch (PrivacyEgressRefusedException exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                await RetreatOrThrowAsync(binding, refused, exception, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception exception) when (!cancellationToken.IsCancellationRequested && isFallbackError(exception))
             {
@@ -43,6 +49,7 @@ internal sealed class SlotChatClient(SessionModelSlots slots, string slot, Func<
     {
         var history = messages as IReadOnlyList<ChatMessage> ?? messages.ToList();
         var failed = new List<ModelBinding>();
+        var refused = new List<ModelBinding>();
         while (true)
         {
             var binding = slots.Current(slot);
@@ -52,6 +59,12 @@ internal sealed class SlotChatClient(SessionModelSlots slots, string slot, Func<
             try
             {
                 any = await updates.MoveNextAsync().ConfigureAwait(false);
+            }
+            catch (PrivacyEgressRefusedException exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                await updates.DisposeAsync().ConfigureAwait(false);
+                await RetreatOrThrowAsync(binding, refused, exception, cancellationToken).ConfigureAwait(false);
+                continue;
             }
             catch (Exception exception) when (!cancellationToken.IsCancellationRequested && isFallbackError(exception))
             {
@@ -91,6 +104,18 @@ internal sealed class SlotChatClient(SessionModelSlots slots, string slot, Func<
         // Unchanged means a concurrent call already moved the slot; retry on its binding unless that one failed here too.
         if (result.Status == SwitchStatus.Switched
             || (result.Status == SwitchStatus.Unchanged && !failed.Contains(slots.Current(slot), ReferenceEqualityComparer.Instance)))
+            return;
+        ExceptionDispatchInfo.Capture(exception).Throw();
+    }
+
+    // The gate refused this binding's request before anything was sent: the work stays on a local model (plan §10.4).
+    private async Task RetreatOrThrowAsync(ModelBinding binding, List<ModelBinding> refused, PrivacyEgressRefusedException exception,
+        CancellationToken cancellationToken)
+    {
+        refused.Add(binding);
+        var result = await slots.RetreatAsync(slot, binding, refused, cancellationToken).ConfigureAwait(false);
+        if (result.Status == SwitchStatus.Switched
+            || (result.Status == SwitchStatus.Unchanged && !refused.Contains(slots.Current(slot), ReferenceEqualityComparer.Instance)))
             return;
         ExceptionDispatchInfo.Capture(exception).Throw();
     }

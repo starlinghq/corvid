@@ -65,7 +65,8 @@ public sealed record MemoryProposal(
     string? Block = null,
     string? Content = null,
     long? BlockRevision = null,
-    ProposedRelation? Relation = null);
+    ProposedRelation? Relation = null,
+    bool? LocalOnly = null);
 
 /// <param name="Reason">Why it was staged: the policy's reason (<c>no answer</c> from the degraded tier, <c>below threshold</c>), or <c>over_budget</c>.</param>
 /// <param name="DecisionId">The <c>memory_op</c> decision, whose outcome is recorded when the write is resolved.</param>

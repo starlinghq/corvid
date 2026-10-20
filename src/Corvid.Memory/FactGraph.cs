@@ -39,7 +39,8 @@ public sealed record FactInput(
     RelationInput? Relation = null,
     DateTimeOffset? ValidFrom = null,
     string? SessionId = null,
-    long? SourceSequence = null);
+    long? SourceSequence = null,
+    bool LocalOnly = false);
 
 /// <summary>
 /// A bi-temporal fact. Valid time (<see cref="ValidFrom"/>, <see cref="ValidTo"/>) is when it held in the world; transaction
@@ -58,7 +59,8 @@ public sealed record Fact(
     DateTimeOffset? InvalidatedAt,
     string? Supersedes,
     string? SessionId,
-    long? SourceSequence)
+    long? SourceSequence,
+    bool LocalOnly = false)
 {
     public bool IsCurrent => ValidTo is null;
 
@@ -87,7 +89,7 @@ public sealed class FactGraph
 {
     private const string FactColumns = """
         f.fact_id, f.text, f.subject_id, f.predicate, f.object_id, f.valid_from, f.valid_to, f.recorded_at, f.invalidated_at,
-        f.supersedes, f.session_id, f.source_sequence
+        f.supersedes, f.session_id, f.source_sequence, f.local_only
         """;
 
     private readonly MemoryDatabase _database;
@@ -124,7 +126,10 @@ public sealed class FactGraph
         return fact;
     }
 
-    /// <summary>Replaces a current fact: the old one ends when the new one starts, and the new one records what it supersedes.</summary>
+    /// <summary>
+    /// Replaces a current fact: the old one ends when the new one starts, and the new one records what it supersedes. A
+    /// replacement of a local-only fact stays local-only.
+    /// </summary>
     public (Fact Old, Fact New) Supersede(string factId, FactInput replacement)
     {
         ArgumentNullException.ThrowIfNull(replacement);
@@ -133,9 +138,26 @@ public sealed class FactGraph
         var now = _time.GetUtcNow();
         var from = replacement.ValidFrom ?? now;
         var old = Close(connection, transaction, factId, from, now);
-        var added = Insert(connection, transaction, replacement with { ValidFrom = from }, factId, now);
+        var added = Insert(connection, transaction, replacement with { ValidFrom = from, LocalOnly = replacement.LocalOnly || old.LocalOnly },
+            factId, now);
         transaction.Commit();
         return (old, added);
+    }
+
+    /// <summary>
+    /// Keeps a fact off every model that is not local (plan §10.4). The flag only tightens: nothing makes a local-only fact
+    /// shareable again, short of the user superseding it.
+    /// </summary>
+    public Fact MarkLocalOnly(string factId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(factId);
+        using var connection = _database.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE facts SET local_only=1 WHERE fact_id=$id;";
+        command.Parameters.AddWithValue("$id", factId);
+        if (command.ExecuteNonQuery() == 0)
+            throw new KeyNotFoundException($"Unknown fact '{factId}'.");
+        return Read(connection, null, factId)!;
     }
 
     public Fact? Get(string factId)
@@ -211,7 +233,7 @@ public sealed class FactGraph
         var rows = new List<(Fact Fact, double Rank)>();
         using (var reader = command.ExecuteReader())
             while (reader.Read())
-                rows.Add((ReadFact(reader, []), reader.GetDouble(12)));
+                rows.Add((ReadFact(reader, []), reader.GetDouble(13)));
         return [.. rows.Select(row => new FactHit(WithEntities(connection, row.Fact), row.Rank))];
     }
 
@@ -287,8 +309,8 @@ public sealed class FactGraph
             command.Transaction = transaction;
             command.CommandText = """
                 INSERT INTO facts (fact_id, text, subject_id, predicate, object_id, valid_from, valid_to, recorded_at,
-                    invalidated_at, supersedes, session_id, source_sequence)
-                VALUES ($id, $text, $subject, $predicate, $object, $from, NULL, $at, NULL, $supersedes, $session, $sequence);
+                    invalidated_at, supersedes, session_id, source_sequence, local_only)
+                VALUES ($id, $text, $subject, $predicate, $object, $from, NULL, $at, NULL, $supersedes, $session, $sequence, $local);
                 """;
             command.Parameters.AddWithValue("$id", factId);
             command.Parameters.AddWithValue("$text", input.Text);
@@ -300,6 +322,7 @@ public sealed class FactGraph
             command.Parameters.AddWithValue("$supersedes", (object?)supersedes ?? DBNull.Value);
             command.Parameters.AddWithValue("$session", (object?)input.SessionId ?? DBNull.Value);
             command.Parameters.AddWithValue("$sequence", (object?)input.SourceSequence ?? DBNull.Value);
+            command.Parameters.AddWithValue("$local", input.LocalOnly ? 1 : 0);
             command.ExecuteNonQuery();
         }
         foreach (var entity in mentioned)
@@ -392,7 +415,7 @@ public sealed class FactGraph
     private static Fact ReadFact(SqliteDataReader reader, ImmutableArray<MemoryEntity> entities) =>
         new(reader.GetString(0), reader.GetString(1), entities, Nullable(reader, 2), Nullable(reader, 3), Nullable(reader, 4),
             Ticks.To(reader.GetInt64(5)), Ticks.ToNullable(reader, 6), Ticks.To(reader.GetInt64(7)), Ticks.ToNullable(reader, 8),
-            Nullable(reader, 9), Nullable(reader, 10), reader.IsDBNull(11) ? null : reader.GetInt64(11));
+            Nullable(reader, 9), Nullable(reader, 10), reader.IsDBNull(11) ? null : reader.GetInt64(11), reader.GetInt64(12) != 0);
 
     private static Fact WithEntities(SqliteConnection connection, Fact fact, SqliteTransaction? transaction = null)
     {

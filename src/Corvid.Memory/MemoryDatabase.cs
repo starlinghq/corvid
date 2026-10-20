@@ -10,7 +10,7 @@ namespace Corvid.Memory;
 /// <remarks>SQLite calls are synchronous. Call from a storage worker if the caller must not block.</remarks>
 public sealed class MemoryDatabase
 {
-    internal const int SchemaVersion = 1;
+    internal const int SchemaVersion = 2;
 
     private readonly string _connectionString;
 
@@ -40,11 +40,16 @@ public sealed class MemoryDatabase
         command.Transaction = transaction;
         command.CommandText = "PRAGMA user_version;";
         var version = Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
-        if (version is not (0 or SchemaVersion))
+        if (version is not (0 or 1 or SchemaVersion))
             throw new InvalidDataException($"Unsupported memory database schema version {version}.");
         if (version == 0)
         {
             command.CommandText = Schema;
+            command.ExecuteNonQuery();
+        }
+        if (version < 2)
+        {
+            command.CommandText = LocalOnlyMigration;
             command.ExecuteNonQuery();
         }
         transaction.Commit();
@@ -70,11 +75,31 @@ public sealed class MemoryDatabase
         }
     }
 
+    // Version 2 (C-015, plan §10.4): facts gain a local-only flag that can be set but never cleared, and core blocks become
+    // local-only. Nothing could reach a cloud model before version 2, so no block was shared on purpose: the migration marks
+    // them all local-only, and the user opts a block in. The trigger is recreated so the flag is the one other column that
+    // may change, and only from 0 to 1.
+    internal const string LocalOnlyMigration = """
+        ALTER TABLE facts ADD COLUMN local_only INTEGER NOT NULL DEFAULT 0 CHECK (local_only IN (0, 1));
+        DROP TRIGGER facts_close_once;
+        CREATE TRIGGER facts_close_once BEFORE UPDATE ON facts
+            WHEN (old.valid_to IS NOT NULL AND (new.valid_to IS NOT old.valid_to OR new.invalidated_at IS NOT old.invalidated_at))
+              OR new.id IS NOT old.id OR new.fact_id IS NOT old.fact_id OR new.text IS NOT old.text OR new.subject_id IS NOT old.subject_id
+              OR new.predicate IS NOT old.predicate OR new.object_id IS NOT old.object_id
+              OR new.valid_from IS NOT old.valid_from OR new.recorded_at IS NOT old.recorded_at
+              OR new.supersedes IS NOT old.supersedes OR new.session_id IS NOT old.session_id
+              OR new.source_sequence IS NOT old.source_sequence
+              OR new.local_only < old.local_only
+            BEGIN SELECT RAISE(ABORT, 'a fact changes only by closing its validity once, or by becoming local-only'); END;
+        UPDATE core_blocks SET local_only = 1;
+        PRAGMA user_version=2;
+        """;
+
     // Times are UTC ticks so comparisons are numeric. FTS rows are keyed by an explicit INTEGER PRIMARY KEY, because VACUUM
     // may renumber an implicit rowid and desynchronise an external-content index. FTS tables use the trigram tokenizer: it
     // indexes every three-character sequence, so text without word breaks (Chinese, Japanese) is searchable; terms shorter
     // than three characters fall back to LIKE (see FtsQuery).
-    private const string Schema = """
+    internal const string Schema = """
         CREATE TABLE core_blocks (
             name TEXT PRIMARY KEY,
             content TEXT NOT NULL,
