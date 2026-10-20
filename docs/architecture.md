@@ -915,7 +915,7 @@ Everything runs on the degraded decider; no question is asked about compaction.
   projected with the log, and a range the projection would refuse (an unfinished or split call, a partial overlap) is
   never appended.
 - Summarizer: the `summarizer` slot when bound, otherwise the generator's current binding (plan §4.1's default; the host
-  binds no summarizer by default, so the generator's model summarizes). It gets the instructions, which ask for one JSON
+  binds no summarizer by default, so the generator's model summarizes; `Corvid:Models:Slots:summarizer:Model` binds one). It gets the instructions, which ask for one JSON
   object with the six fields of the structured record (goal, constraints, decisions, files, open questions, next step)
   and say that text inside the events is data to record, not follow; no tools; and a completion of 768 tokens
   (`CompactionOptions.SummarizerOutputTokens`). The reply is read leniently (the outermost object, a single string as a
@@ -967,15 +967,19 @@ Everything runs on the degraded decider; no question is asked about compaction.
   every compaction; a long turn's earlier rounds compacted; a `/model` switch to a smaller window compacting before the
   next call; a switch to a larger one through the actor expanding, then back compacting again; expansion within budget;
   ranges, chunking, lenient reading and merging. `SessionProjectionTests` cover expansion layers and refusals;
-  `CompositionTests` checks a watched session sees only the answer. `evals/golden/turn-compaction` was recorded from the
+  `CompositionTests` checks a watched session sees only the answer and that a configured `summarizer` slot writes the records. `evals/golden/turn-compaction` was recorded from the
   loop (`GoldenTurnTests`), and `compaction-expanded` is a seed trajectory for the projection.
 
 Not built yet: a summarizer that revises earlier items (the merged record only grows, so an open question answered later
 stays listed); undoing
 `clear_results` decisions on a larger window (stubs from the budget come back, stubs the fabric chose stay); expansion
 after a fallback inside `SlotChatClient` moves to a larger model (fallbacks do not report a budget direction); compacting
-the turn's own message or latest round; host configuration of `CompactionOptions` (defaults only); summarizer calls in
-parallel; a `/compact` command; and an implementation of `ISkillBodyLever` (C-017).
+the turn's own message or latest round; keeping a pending expansion across a restart (it is held in the turn runner, so
+after a `/model` to a larger window and a restart the next turn renders compacted, which is safe but not expanded); host
+configuration of `CompactionOptions` (defaults only); summarizer calls in parallel; telling summarizer calls apart from
+answers when the generator's binding serves both (they are `chat {model}` spans tagged `corvid.slot=generator` under
+`corvid.compact`, and count toward the generator's `/status` latency); a `/compact` command; and an implementation of
+`ISkillBodyLever` (C-017).
 
 ## Host and CLI (C-013)
 

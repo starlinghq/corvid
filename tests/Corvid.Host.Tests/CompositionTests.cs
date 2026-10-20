@@ -166,6 +166,28 @@ public sealed class CompositionTests
     }
 
     [Fact]
+    public async Task AConfiguredSummarizerSlotWritesTheRecords()
+    {
+        const string record = """{"goal":"read the history","decisions":["read it"],"next_step":"answer"}""";
+        var models = new FakeModels(new FakeGenerator([.. Enumerable.Repeat<Func<IReadOnlyList<ChatMessage>, ChatResponse>>(
+            messages => Reply.Text(messages[0].Text == Corvid.Kernel.Context.ContextCompactor.Instructions ? record : "All caught up."), 6)]));
+        await using var host = TestHost.Create(models, new Dictionary<string, string?> { ["Corvid:Models:Slots:summarizer:Model"] = "fake-gen" });
+        await using var runtime = await host.StartAsync();
+        var session = runtime.OpenSession();
+        var history = string.Concat(Enumerable.Repeat("a long earlier answer, ", 1_400));
+        runtime.Log.Append(session.Id, 0, [EventData.Create(new UserMessage("tell me everything")), EventData.Create(new AssistantMessage(history))],
+            TestContext.Current.CancellationToken);
+
+        var delivery = await session.SendAsync("and now?", TestContext.Current.CancellationToken);
+
+        Assert.True(runtime.Registry.TryGet(ModelSlots.Summarizer, out _));
+        Assert.Equal("All caught up.", delivery.Result!.Text);
+        var compacted = Assert.IsType<Compacted>(session.Snapshot().Transcript[0].Content);
+        Assert.Equal("fake-gen@cpu", compacted.Summarizer);
+        Assert.Equal(["read it"], compacted.Summary.Decisions);
+    }
+
+    [Fact]
     public async Task NoObserverMeansNoStreaming()
     {
         var models = new FakeModels();
