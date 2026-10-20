@@ -1,4 +1,4 @@
-# Agent foundation (C-001, C-002, C-004a, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-012, C-021)
+# Agent foundation (C-001, C-002, C-004a, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-012, C-013, C-021)
 
 The solution contains `Corvid.Abstractions`, `Corvid.Kernel`, and
 `Corvid.Models`, alongside the working Vault projects. Kernel and Models each
@@ -20,7 +20,8 @@ package of its own (see [Approvals](#approvals-c-007b)). C-011 made `Corvid.Kern
 Approvals, Fabric, Memory, Models and Tools as well, for the session actor, the turn loop and the device scheduler (see
 [Session actor and turn loop](#session-actor-and-turn-loop-c-011)). C-012 added `Corvid.Tools.Builtin`, the built-in
 tools, which references Approvals, Kernel, Memory, Sandbox and Tools and no package, and the scheduler in Kernel (see
-[Built-in tools and scheduler](#built-in-tools-and-scheduler-c-012)). Add
+[Built-in tools and scheduler](#built-in-tools-and-scheduler-c-012)). C-013 added the composition root, `Corvid.Host`,
+and the `corvid` executable, `Corvid.Cli` (see [Host and CLI](#host-and-cli-c-013)). Add
 the other projects from the agent plan as their implementations start, rather
 than creating empty projects for every future surface.
 
@@ -205,7 +206,8 @@ media-embedder contract.
   variable. `DownloadAsync` is the only call that uses the network. The cache root is
   the constructor's directory, else `$STARLING_MODELS`, else `~/.cache/starlings/models`.
 - Deployment: Starling requires `MALLOC_MMAP_THRESHOLD_=65536` in the environment of a
-  Linux process that runs GLiNER2; the host (C-013) must set it at process start.
+  Linux process that runs GLiNER2. glibc reads it before `Main`, so `corvid chat` re-executes itself with it set (C-013,
+  `GlibcMalloc`); any other process that hosts the extractor must start with it.
 - Tests: `tests/Corvid.Models.Starling.Tests` checks profiles, the catalogue, offline
   resolution against a temporary cache (missing, wrong size, same-size corruption under
   SHA-256 using sparse files), extractor mapping, scheduling and validation, slot
@@ -218,8 +220,8 @@ Not built yet: CUDA placement (switch the native package to
 make placement per binding; plan §4.4 puts the generator on the 3090), the Kev decider
 adapter (C-004b, waiting for `Starlings.Models.Kev` on nuget.org), media embeddings
 (`embedder.media`), the fp16x Qwen variant, batch extraction, label descriptions,
-conversation-level token counting before a call, and the `corvid doctor` command itself
-(C-013). The device scheduler is C-011's; wiring it to these bindings is the host's (C-013).
+and conversation-level token counting before a call. C-013 built `corvid doctor` on `StarlingModelStore` and wires
+C-011's device scheduler to these bindings.
 
 ## Dependency rules
 
@@ -277,9 +279,18 @@ conversation-level token counting before a call, and the `corvid doctor` command
   implementations to exercise them, including Vault. Production projects should not
   reference them; the checker does not yet enforce that.
 
-When the composition root (`Corvid.Host`) is implemented, give it an explicit
-composition rule allowing adapter references. Do not relax the core library rule
-to accommodate it. The current milestone does not create or exempt a host.
+- The composition root and the CLI (C-013; `CompositionProjects` in the checker) are not core. `Corvid.Host` may
+  reference core projects and adapters, and resolve the packages it reviews (`CompositionPackages`: the generic host's
+  `Microsoft.Extensions.*` configuration, DI, logging and options packages, and OpenTelemetry with its OTLP exporter) plus
+  any package reachable from an adapter project in the restored graph (Starling, ONNX Runtime), followed through each
+  library's `dependencies`. `Corvid.Cli` may also resolve `Spectre.Console` and `Spectre.Console.Ansi` (`CliPackages`), so
+  the host stays free of the terminal UI and the gateway (C-020) can share its command registry. A package neither listed
+  nor brought by an adapter fails, as in core: a provider SDK the host took on directly is refused. Only the CLI may
+  reference the host, and nothing may reference the CLI. The core rule is unchanged: core projects still fail on adapters,
+  hosting, OpenTelemetry and Spectre packages. The kernel and fabric emit spans through `System.Diagnostics.ActivitySource`,
+  which is in the shared framework, so they take no package for telemetry.
+- `corvid evals` starts C-021's `corvid-evals` by path (found through `$CORVID_EVALS`, next to `corvid`, or on `PATH`), the
+  way Corvid starts `corvid-sandbox`, so no production project references eval code.
 
 ## Tools (C-005)
 
@@ -567,8 +578,8 @@ Not built yet: sqlite-vec (no first-party .NET package; it would replace the sca
 (§9.3); the consolidation job that rewrites an over-budget block (§9.5); relation extraction
 (`IExtractor` returns spans, so relations come only from callers) and entity aliasing; fact
 deduplication and merging; media memory (§9.4); local-only facts and egress filtering of
-retrieved memory (C-015); the `/memory pending` command (C-013; C-012 added the memory tools);
-and running `EpisodicIndex.CatchUp` after each turn (the host's job, C-013). C-011 starts the re-embed job when
+retrieved memory (C-015). C-012 added the memory tools; C-013 added `/memory` (pending, approve, reject) and runs
+`EpisodicIndex.CatchUp` after each turn. C-011 starts the re-embed job when
 `embedder.text` switches and the write path when `remember` acts at egress.
 
 ## Calibration and decision export (C-021)
@@ -576,7 +587,7 @@ and running `EpisodicIndex.CatchUp` after each turn (the host's job, C-013). C-0
 Plan §5.5, §16 and the replay half of §3.2. The code is in `evals/Corvid.Evals/Calibration` (namespace
 `Corvid.Evals.Calibration`), which now references `Corvid.Fabric` for the catalogue, floors and the policy's measure. The
 entry point is `corvid-evals` (`evals/Corvid.Evals.Calibrate`, a console app with no logic of its own; `CalibrationCli` in
-the library parses the command line so tests drive it). It becomes `corvid evals calibrate` when the CLI exists (C-013).
+the library parses the command line so tests drive it). `corvid evals calibrate` (C-013) runs it by path.
 Neither project is production code, so the checker does not scan them and no package was added.
 
 ```sh
@@ -656,7 +667,7 @@ corvid-evals export-trajectories --log events.db --out trajectories.jsonl
   in both directions with held and unverified conditions and the margin case, both exports, the command line, and a
   round trip through `DecisionFabric` with a calibrated test decider.
 
-Not built yet: the `corvid evals` verb (C-013); Kev-0.8B against Kev-4B agreement (C-004b); fitting the degraded
+`corvid evals` (C-013) runs `corvid-evals` with `--log` defaulting to the user's event log. Not built yet: Kev-0.8B against Kev-4B agreement (C-004b); fitting the degraded
 margin (the margin is not recorded); recording the caller's conditions and the permissive mode, which would make replay
 exact; outcomes for questions other than `tool`, `risk` and `memory_op` (C-011 records `tool_succeeded` and
 `tool_failed` on the `tool` decision that picked the tool), and with them an acted-only fit or per-question outcome
@@ -752,8 +763,8 @@ a shell tool is assessed as the command line it runs (see [Built-in tools and sc
 
 Not built yet: GLiNER2 extraction of free-form targets (SQL, `curl` data, `kill` targets), which waits for
 spike S3; calibrated `risk` (C-004b); reversibility from checkpoint state (C-014; `ApprovalContext.Reversible` is passed through);
-restoring session rules on resume (they are not in the log); listing and removing always-rules
-(`/approvals`, C-013), and where the host keeps the rule file; control flow, subshells and other syntax
+restoring session rules on resume (they are not in the log); removing rules (C-013's `/approvals` lists them, and the
+host keeps always-rules in `Corvid:Approvals:RulesFile`, by default `$XDG_CONFIG_HOME/corvid/approvals.json`); control flow, subshells and other syntax
 outside the subset, which ask rather than run; unwrapping further launchers (`strace`, `nsenter`, `unshare`,
 `runuser`, `systemd-run`, `script -c`, `at`, `parallel`, ...), which today are programs that run code Corvid
 cannot see, so they ask unless a calibrated `risk` answer allows them, and the hardline list does not see the
@@ -765,8 +776,8 @@ Plan §3.2, §3.3, §5.2, §5.4, §6, §7, §8 levers 1–2 (lever 2 has nothing
 in `Corvid.Kernel` (`Sessions`, `Turns`, `Scheduling`), `Corvid.Fabric` (`ToolShortlist`) and
 `Corvid.Abstractions/Sessions` (`Envelope`). Kernel now references Approvals, Fabric, Memory, Models and Tools; none of
 them references Kernel, and no package was added, so the checker's allowlist is unchanged. Everything runs on `IDecider`
-with the degraded tier; nothing here references a Starling or provider package. There is no host yet (C-013), so the
-composition below is what tests do and what `Corvid.Host` will do.
+with the degraded tier; nothing here references a Starling or provider package. C-013's `Corvid.Host` composes it as
+described below (see [Host and CLI](#host-and-cli-c-013)).
 
 - Envelopes and actors: surfaces post an `Envelope` (session, surface, text, origin `user` or `external`, optional message
   id) to `SessionHost.PostAsync`, a bounded channel (default 64) that waits when full. One router hands each envelope to
@@ -871,22 +882,145 @@ composition below is what tests do and what `Corvid.Host` will do.
   and the hash order of probability maps aside), and `tests/Corvid.Evals.Tests` replays them like the seed set.
 
 C-012 added the built-in tools, `TurnOptions.Interactive` for unattended turns and the `ToolCallContext` each call
-carries (see [Built-in tools and scheduler](#built-in-tools-and-scheduler-c-012)). Not built yet: the host that composes
-these (C-013) and with it running `EpisodicIndex.CatchUp` after each turn; compaction (C-016), so a session past its budget fails after escalation rather than compacting; cloud
+carries (see [Built-in tools and scheduler](#built-in-tools-and-scheduler-c-012)); C-013 composes them in the host. Not
+built yet: compaction (C-016), so a session past its budget fails after escalation rather than compacting; cloud
 slots, privacy egress and prompt-cache breakpoints (C-015); subagents and the subagent queue's users; skills and the `skill`
 question (C-017); the `delegate` and `skill_opportunity` questions (`wake` is asked by the scheduler, C-012); GLiNER2 entity boosts in the shortlist (§5.4's
 third bullet); per-tool concurrency limits beyond read-only versus side-effecting; an incremental projection in the actor
 (each checkpoint and generator call reloads the session from the log: about 2.7 ms for 300 events, linear in the session's
 length); persisting taint, which a resumed actor starts without; outcomes for `done`, `stuck`, `intent` and the other
 routing questions (user corrections and retries need a surface); `RequireAny` for no-op detection without a pick;
-recording why a turn failed beyond its answer text; and the device-placement table for `/status`.
+recording why a turn failed beyond its answer text; and memory per device in `/status` (C-013 shows slot, device, queue
+depth and median latency).
+
+## Host and CLI (C-013)
+
+Plan §3.4, §12 (CLI), §16 (spans), §17 rows 1.2 and 1.3, and §4.4's `/status`. `Corvid.Host` is the composition root,
+`Corvid.Cli` the `corvid` executable over it. Everything runs on the degraded decider; Starling packages come from
+nuget.org through `Corvid.Models.Starling` only.
+
+- Configuration (`CorvidOptions`, section `Corvid`): data directory, workspace, per-slot model, escalation ladder and
+  fallbacks by catalogue name (defaults `qwen3.5-0.8b`, `gliner2-base-v1`, `embeddinggemma-2`; no decider model),
+  the model cache, CPU threads, approval mode, timeout and rules file, turn limits and system prompt, memory on or off, an
+  OTLP endpoint, the Vault socket and the `corvid-sandbox` path. Sources, later winning: the user file
+  (`$XDG_CONFIG_HOME/corvid/corvid.json`, or `$CORVID_CONFIG`, or `--config`), environment variables
+  (`CORVID__Models__Cache`), then `--set key=value`. `CorvidOptionsValidator` runs at host start (`ValidateOnStart`) and
+  reports every problem at once: unknown slots or models, a model that cannot serve its slot (in the default, escalation or
+  fallbacks), a default repeated in its own ladder, a missing generator or text embedder (the degraded decider needs both),
+  thread, timeout and turn limits, a non-HTTP endpoint and relative paths (`~/` is expanded).
+- Models: `IModelProvider` (check offline, load, download explicitly) and `ModelCatalogue` (names unique across
+  providers). `StarlingModelProvider`, registered by default, wraps C-010's `StarlingModelStore`; Qwen serves `generator`
+  and `summarizer`. `ModelComposer` loads each configured model once and wraps it per use, outermost first: a span and
+  latency layer (`InstrumentedChatClient`, which also streams for the turn's generator), then C-011's device scheduling at
+  interactive priority for the slot bindings, fabric priority for the degraded decider (the default generator and embedder,
+  even when a session has escalated), and background priority for memory's embedders (every configured `embedder.text`
+  model, keyed by profile id). GLiNER2 takes the device's `TaskScheduler` at load. Bindings are cached per slot and model,
+  because a binding's identity is its reference. Only `cpu` and `cuda*` placements are device-scheduled.
+- Runtime (`CorvidRuntimeFactory.StartAsync`): first checks every configured model offline by size and, if any is
+  missing or corrupt, throws `ModelsUnavailableException` listing all of them with the command that fetches each, before
+  loading anything. Then the SQLite event log (`events.db`), `DecisionFabric` on the degraded decider, the approval
+  pipeline with a per-session prompter router (a session with no surface attached fails the prompt, which the pipeline
+  records and denies, never answering for the user), memory (`memory.db`: core blocks counted with the generator's
+  tokenizer, episodic index, vectors, hybrid retrieval, and the write path when an extractor is bound), and C-012's
+  built-in tools. When the configured text embedder differs from the store's active one, C-011's `EmbedderSwapJob` starts.
+  Sessions are C-011's actors, one `SessionModelSlots` and `TurnRunner` each, sharing the rest; after each delivery the
+  episodic index catches up with the log and embeds the new episodes in the background, queued before the sender hears back.
+- Built-in tools and scheduler (C-012, wired here): the approval environment is the configured workspace (it must exist)
+  with Vault's locations for this user (`VaultLocations.Default`, the socket from `Corvid:Vault:SocketPath`) added by
+  `VaultLocations.Protect`. Corvid's own state wherever configuration puts it (the data directory with `events.db`,
+  `jobs.db` and `memory.db`, the configuration file read, the rules file and a configured sandbox launcher) is added to
+  the environment's safety configuration, beside `$XDG_CONFIG_HOME/corvid`, so a workspace that contains it (the home
+  directory, say) cannot be used to rewrite the approval rules or the job store: the hardline list refuses writes, the
+  file tools refuse the paths and the shell's sandbox hides them. A path that is or contains the workspace is left out.
+  The pipeline gets the rules file, the timeout and `BuiltinTools.ShellToolMapping`, so the
+  `shell` tool is assessed as its command line. The file tools work in `Workspace.For` that environment; the shell runs
+  through `BubblewrapSandbox` (the launcher from `Corvid:Sandbox:LauncherPath`, `$CORVID_SANDBOX` or next to `corvid`;
+  on other platforms every command is refused) with the same Vault locations and safety configuration hidden; `web_fetch` uses its default handler;
+  the memory tools need the write path; the cron tools use `jobs.db`. Turns get `BuiltinTools.Examples` for the
+  shortlist. `Corvid:Tools:Builtin` turns them off; `IToolProvider`s and `ToolFunction`s registered in DI are added
+  either way. With `Corvid:Scheduler:Enabled` (default on) the runtime runs C-012's `JobScheduler` with the
+  `SandboxedScriptRunner` and a `TurnJobAgent` whose turns are not interactive. `JobScheduler.RunAsync` marks runs other
+  processes left running as interrupted, so only the process holding an exclusive lock beside the job store
+  (`jobs.db.lock`) runs it; `/status` says which. Completed runs raise `CorvidRuntime.JobCompleted`, which `corvid chat`
+  prints as a notice; delivering results to chats is C-020's.
+- Slash commands (`SlashCommandRegistry`, `CoreCommands`): surface-neutral, returning `CommandOutput` (title, lines, a
+  table, a tone, exit) that the CLI renders with Spectre and a gateway can send as `ToPlainText()`. `/model` lists slots or
+  switches one through `SessionActor.SwitchModelAsync` (`/model <model>`, `/model <slot> <model> [--pin]`,
+  `/model unpin <slot>`); it refuses a model missing from the cache (with the download command) and an `embedder.text`
+  model memory was not built with. `/status`: per slot the model, device, queue depth (all priorities), median latency of
+  the last 128 calls and call count, plus the degraded decider's row, the session's head, pending approvals, taint and goal.
+  `/goal [text|clear]` appends `GoalSet`. `/approvals` lists pending approvals and session and always rules. `/memory`
+  lists staged writes, `approve <id> [operation]` and `reject <id>` resolve them. `/tools`, `/todos`, `/cancel`, `/help`,
+  `/exit` (`/quit`). A line is a command only when its first word is `/name`, so a pasted path is a message.
+- Telemetry (plan §16): the kernel (`KernelTelemetry`, source `Corvid.Kernel`) starts `invoke_agent corvid` per turn
+  (status, steps, tool calls, taint, escalations) and `execute_tool {tool}` per call, covering its approval wait (call id,
+  approval, outcome: succeeded, failed, invalid_arguments, denied, cancelled; a call rejected before running gets one too).
+  The fabric (`FabricTelemetry`, `Corvid.Fabric`) starts `corvid.decide` per checkpoint with the checkpoint, decider and
+  fallback, arrays of question ids, confidences, actions and whether each acted, and one `corvid.decision` event per
+  question. The host (`Corvid.Host`) starts `chat {model}` client spans around every model call with GenAI request and
+  response model, token usage and finish reason; the degraded decider's yes/no calls appear under `corvid.decide`. Tags
+  are given at span creation so listeners see them on start. `AddCorvid` exports all three sources over OTLP when
+  `Corvid:Telemetry:OtlpEndpoint` or `OTEL_EXPORTER_OTLP_ENDPOINT` is set (an Aspire dashboard listens on
+  `http://localhost:4317`); otherwise nothing is exported.
+- `TurnFeed` turns those spans into per-session events for surfaces (tool started and finished, checkpoint decisions) and
+  carries streamed text: when a surface watches a session, the generator's span layer asks the model for a stream, forwards
+  each text delta and reassembles the response the turn loop asked for (Starling's Qwen client reassembles to the
+  non-streamed contents, tool calls included). Without a watcher it does not stream. Its listener also makes sure the spans
+  exist when nothing exports them.
+- `corvid doctor` (`Doctor`): configuration (validated, with the file in use), the data directory (writable), every
+  catalogue model (`Check`, by size; `--thorough` hashes), marked failed only when configured, the decider (degraded until
+  Kev), `MALLOC_MMAP_THRESHOLD_` in this process, bubblewrap on `PATH`, `corvid-sandbox` where `Corvid.Sandbox` looks for it,
+  and the Vault socket (exists and answers). Nothing loads and nothing uses the network. Exit 1 when a check failed.
+- glibc: Starling requires `MALLOC_MMAP_THRESHOLD_=65536` for GLiNER2 on Linux, and glibc reads it before `Main`.
+  `GlibcMalloc.EnsureMmapThreshold`, called first by `corvid chat`, re-executes the same binary (`Environment.ProcessPath`)
+  with the same argv (from `/proc/self/cmdline`) and the variable added; `CORVID_NO_REEXEC=1` turns it off.
+- `corvid` (`Corvid.Cli`): `chat` (the default; `--session <id>` resumes, `--verbose` prints checkpoint decisions),
+  `model [list]`, `model switch <slot> <model>` (validates the whole effective configuration with the change, then writes
+  the user file atomically; new sessions use it), `model download <model>... | --all` (the only network use), `doctor`
+  (`--thorough`), and `evals <command>` (see the dependency rules). Exit codes: 0, 1 failure, 2 usage or invalid
+  configuration, 3 a configured model is missing (each missing model, why, `corvid model download <name>`, and
+  `STARLING_MODELS`). `dotnet publish src/Corvid.Cli -c Release -r linux-x64` makes a self-contained single file with the
+  ONNX Runtime natives inside, extracted on first run (about 65 MB).
+- Chat UI (`ChatRenderer`, the one writer): scrollback-first. Streamed text goes straight into the scrollback; text that
+  was not streamed (a fixed message, or an answer given while tools were on offer and the model was not streaming) is
+  printed when the turn is delivered, never twice. On an interactive terminal a live panel lists the round's tools with
+  elapsed time and outcome, and is closed (left as it last looked) before text, a prompt or command output; elsewhere each
+  tool start and finish is a line. Approvals (`CliApprovalPrompter`) are a panel with the action, its commands, effects and
+  targets, the reasons and the deadline, answered on the next line (`y` once, `s` session, `a` always, `n` deny, as
+  offered); only a line typed after the prompt counts (`ConsoleChatInput` keeps typed-ahead lines for the chat), and the
+  deadline or the end of input denies. Ctrl-C cancels a running turn and leaves at the prompt. Input is read on one
+  background loop into a channel so cancelled reads never swallow a line; piped input is echoed.
+- Tests: `tests/Corvid.Host.Tests` (configuration validation and binding, composition with fake providers, missing models
+  reported before loading, DI tools, a scripted turn, resume, approval routing, the episodic catch-up, streaming and the
+  tool feed, the span tree and its attributes, every core command, the doctor; the built-in tools registered, the shell
+  mapped to its command, Vault protected, a file tool turn in the configured workspace, a due job run by the one process
+  holding the scheduler lock) and `tests/Corvid.Cli.Tests` (scripted chat
+  sessions on fake slots through `CorvidCli.RunAsync` and Spectre's `TestConsole`: streaming without duplication, the tool
+  panel, inline approvals approved, denied and unanswered, resume, invalid configuration; the real Starling provider over
+  an empty cache for `chat`, `model` and `doctor`; `model switch` and `download`; `evals` running the real `corvid-evals`;
+  argument parsing; the live panel). They share `Fakes.cs`. The checker's tests cover the composition rule.
+- Checked by hand on the development machine with the Starling models in the cache: `corvid chat` (from `dotnet run` and
+  from the single-file publish) answered through GLiNER2, the degraded decider and Qwen3.5-0.8B, with `/status` showing
+  latencies, the 15 built-in tools listed and the scheduler running, and the re-executed process carrying
+  `MALLOC_MMAP_THRESHOLD_=65536`. With Qwen as the degraded decider's yes/no answerer, `clarify` acted on all three
+  prompts tried (one of them a request to read a file in the workspace), so those turns ended with a clarifying question
+  before any tool was offered to the generator: a fabric policy matter for C-004a/C-004b, not changed here.
+
+Not built yet: Ctrl+P; typing while a turn runs (the chat reads the next line after the delivery, so `/model` mid-turn is
+available to the gateway and a later CLI, not this one); removing approval rules (`IApprovalRuleStore` has no removal);
+`/memory` block edits; a `/cron` command; the rest of the ~35-command v1 set (`/rollback`, `/skills`, `/insights` and
+others arrive with their items); the `config`, `gateway`, `skills`, `memory`, `cron` and `export` verbs; a scheduler
+that runs without a chat open (a daemon, or the gateway, C-020); delivering job results to chats (C-020); metrics and logs export; an Aspire
+dashboard recipe; shipping `corvid-sandbox` and `corvid-evals` inside the publish (doctor reports where it looked);
+per-device memory in `/status`; CUDA placement (C-010's); Vault-backed secret names for tools (`TurnOptions.SecretNames`
+is not set, so secret-bearing tools are not offered); and persisting pins and taint across a resume.
 
 ## Built-in tools and scheduler (C-012)
 
 Plan §7, §9, §10.1–§10.3 and §13. The tools are in `src/Corvid.Tools.Builtin` (core, `IsAotCompatible`), C-005 generated
 tools: it references Approvals, Kernel, Memory, Sandbox and Tools, and the generator as an analyzer. The durable scheduler
 is in `Corvid.Kernel/Jobs`, as plan §3.4 places it. No package was added, so the checker's allowlist is unchanged; nothing
-references Builtin except tests (and, later, the host). Everything runs on the degraded decider.
+references Builtin except tests and the host (C-013). Everything runs on the degraded decider.
 
 - Contract changes. `ToolCallContext` (Corvid.Tools): the session, the call id, taint, whether anyone can be asked, and
   the approval pipeline's result for the call. The turn loop attaches it to every call's `AIFunctionArguments.Context`; a
@@ -968,8 +1102,8 @@ references Builtin except tests (and, later, the host). Everything runs on the d
   through the real turn loop (read-only runs unasked, a side effect asks, hardline never prompts, an unattended turn denies,
   no mapping means no run) and covers the grammar (including daylight-saving changes), the store and the scheduler.
 
-Not built yet: wiring all of this in a host (C-013): registering the tools, building the workspace and Vault locations
-from configuration, and starting the scheduler; `/memory` and `/cron` commands; delivering job results to surfaces
+C-013 wires all of this in the host (see [Host and CLI](#host-and-cli-c-013)) and added `/memory`. Not built yet: a
+`/cron` command; delivering job results to surfaces
 (C-020; `JobScheduler.Completed` is the hook); checkpoints before writes (C-014); network for the shell per toolset and
 Vault's proxy route for sandboxed commands (V-003); the code tool and code mode (§15); container and SSH backends;
 argument validators generated with the tool and the generated examples file (C-005; paths are checked by the tools at run
@@ -1003,5 +1137,4 @@ standard `obj/` path; custom intermediate paths are not supported. This is an
 architecture regression check for NuGet/project references, not a security
 sandbox or an IL analyzer for manually supplied binaries.
 
-The next milestone that builds on the loop is the host and CLI (C-013), which will compose the loop, the built-in tools
-and the scheduler and run them outside tests.
+`corvid chat` (C-013) runs the loop and the built-in tools outside tests.

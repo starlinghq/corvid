@@ -85,6 +85,38 @@ jobs:
           tests/Corvid.Tools.Builtin.Tests/bin/Release/net10.0/Corvid.Tools.Builtin.Tests -trait "Category=Confinement" -noColor | tee builtin-sandbox.log
           grep -q "Total: 6, Errors: 0, Failed: 0, Skipped: 0, Not Run: 0" builtin-sandbox.log
 
+  cli:
+    name: Single-file publish (corvid)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          global-json-file: global.json
+
+      - name: Publish
+        run: dotnet publish src/Corvid.Cli/Corvid.Cli.csproj -c Release -r linux-x64 -o out-cli
+
+      # No models on the runner: the binary must start, report what is missing and say how to fetch it, never download.
+      - name: Run the single-file binary without models
+        env:
+          STARLING_MODELS: ${{ runner.temp }}/empty-model-cache
+          CORVID__DataDirectory: ${{ runner.temp }}/corvid-data
+        run: |
+          # The step's shell is bash -e without pipefail; the exit codes checked below are corvid's, not tee's.
+          set -o pipefail
+          ls -l out-cli/corvid
+          out-cli/corvid --help
+          out-cli/corvid model | tee model.log
+          grep -q "corvid model download" model.log
+          status=0; out-cli/corvid doctor | tee doctor.log || status=$?
+          test "$status" -eq 1
+          grep -q "corvid model download qwen3.5-0.8b" doctor.log
+          status=0; echo hello | out-cli/corvid chat | tee chat.log || status=$?
+          test "$status" -eq 3
+          grep -q "corvid model download qwen3.5-0.8b" chat.log
+
   aot:
     name: Native AOT publish (corvid-vault, corvid-sandbox)
     runs-on: ubuntu-latest

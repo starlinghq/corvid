@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>corvid: the command line and scrollback-first chat UI (Spectre.Console) over Corvid.Host.</Description>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>corvid</AssemblyName>
+    <RootNamespace>Corvid.Cli</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <!--
+    Single-file publish (plan §3.4): dotnet publish src/Corvid.Cli -c Release -r linux-x64. Self-contained, with the ONNX
+    Runtime natives inside the bundle and extracted on first run. Not Native AOT: Starling is not AOT-qualified.
+  -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Spectre.Console" />
+    <ProjectReference Include="../Corvid.Host/Corvid.Host.csproj" />
+    <InternalsVisibleTo Include="Corvid.Cli.Tests" />
+  </ItemGroup>
+</Project>
