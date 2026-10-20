@@ -1,4 +1,4 @@
-# Agent foundation (C-001, C-002, C-004a, C-004b, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-012, C-013, C-014, C-016, C-017, C-021)
+# Agent foundation (C-001, C-002, C-004a, C-004b, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-012, C-013, C-014, C-015, C-016, C-017, C-021)
 
 The solution contains `Corvid.Abstractions`, `Corvid.Kernel`, and
 `Corvid.Models`, alongside the working Vault projects. Kernel and Models each
@@ -26,7 +26,9 @@ and the `corvid` executable, `Corvid.Cli` (see [Host and CLI](#host-and-cli-c-01
 added compaction to the kernel (see [Compaction](#compaction-c-016)). C-014 added checkpoints to
 `Corvid.Kernel` (`Checkpoints`), with no new project or package (see [Checkpoints](#checkpoints-c-014)). C-017 added `Corvid.Skills`, which
 references Abstractions, Approvals, Fabric, Kernel, Models, Tools and Tools.Builtin, `Microsoft.Data.Sqlite` and
-`Microsoft.Extensions.AI.Abstractions` (see [Skills](#skills-c-017)). Add
+`Microsoft.Extensions.AI.Abstractions` (see [Skills](#skills-c-017)). C-015 added the privacy egress gate
+and the Vault-only HTTP pipeline to `Corvid.Models` (which now references `Corvid.Vault.Client`), and two adapters,
+`Corvid.Models.Anthropic` and `Corvid.Models.OpenAICompat` (see [Cloud slots and privacy egress](#cloud-slots-and-privacy-egress-c-015)). Add
 the other projects from the agent plan as their implementations start, rather
 than creating empty projects for every future surface.
 
@@ -157,9 +159,11 @@ de-escalation rule of §6. It depends only on Abstractions and
   configured).
 
 The turn loop acts on the hook's direction (C-016): compaction before a call that does not fit, and expansion after a move
-to a larger window (see [Compaction](#compaction-c-016)); the hook itself stays a reporter. Not built yet: per-request
-redaction (§10.4), Anthropic cache breakpoints (C-015; the turn loop renders `IChatClient` messages for every model),
-restoring current bindings and pins from the log on resume (pins
+to a larger window (see [Compaction](#compaction-c-016)); the hook itself stays a reporter. C-015 implemented the privacy
+hook (`ProjectionPrivacyGate`), per-request redaction on each cloud binding, the `privacy` switch reason and `RetreatAsync`
+(see [Cloud slots and privacy egress](#cloud-slots-and-privacy-egress-c-015)). Not built yet: re-rendering the projection
+for the new model's format (the turn loop renders `IChatClient` messages for every model; the Anthropic adapter adds cache
+breakpoints itself, C-015), restoring current bindings and pins from the log on resume (pins
 are not persisted), recording switch costs for `/insights`, and the
 media-embedder contract.
 
@@ -301,6 +305,9 @@ C-011's device scheduler to these bindings.
   reference the host, and nothing may reference the CLI. The core rule is unchanged: core projects still fail on adapters,
   hosting, OpenTelemetry and Spectre packages. The kernel and fabric emit spans through `System.Diagnostics.ActivitySource`,
   which is in the shared framework, so they take no package for telemetry.
+- Provider SDKs (C-015): `Anthropic` only in `Corvid.Models.Anthropic`; `OpenAI` and `Microsoft.Extensions.AI.OpenAI` (with
+  `System.ClientModel`) only in `Corvid.Models.OpenAICompat`. The host resolves them through those adapters. `Corvid.Models`
+  references `Corvid.Vault.Client` (core, no package) for the placeholder and Vault handlers; no core allowlist entry was added.
 - `corvid evals` starts C-021's `corvid-evals` by path (found through `$CORVID_EVALS`, next to `corvid`, or on `PATH`), the
   way Corvid starts `corvid-sandbox`, so no production project references eval code.
 
@@ -587,8 +594,8 @@ Not built yet: sqlite-vec (no first-party .NET package; it would replace the sca
 `IVectorIndex` and needs a checker rule for its native library); Kev reranking of the top 8
 (§9.3); the consolidation job that rewrites an over-budget block (§9.5); relation extraction
 (`IExtractor` returns spans, so relations come only from callers) and entity aliasing; fact
-deduplication and merging; media memory (§9.4); local-only facts and egress filtering of
-retrieved memory (C-015). C-012 added the memory tools; C-013 added `/memory` (pending, approve, reject) and runs
+deduplication and merging; media memory (§9.4). C-015 added local-only facts (schema version 2) and core blocks that are
+local-only by default, and the turn loop leaves both out of a cloud model's prompt. C-012 added the memory tools; C-013 added `/memory` (pending, approve, reject) and runs
 `EpisodicIndex.CatchUp` after each turn. C-011 starts the re-embed job when
 `embedder.text` switches and the write path when `remember` acts at egress.
 
@@ -893,8 +900,8 @@ described below (see [Host and CLI](#host-and-cli-c-013)).
 
 C-012 added the built-in tools, `TurnOptions.Interactive` for unattended turns and the `ToolCallContext` each call
 carries (see [Built-in tools and scheduler](#built-in-tools-and-scheduler-c-012)); C-013 composes them in the host. Not
-built yet (compaction came with C-016): cloud
-slots, privacy egress and prompt-cache breakpoints (C-015); subagents and the subagent queue's users; the `delegate`
+built yet (compaction came with C-016; C-015 added cloud slots, the request context and the frozen system prompt for
+breakpoint caching): subagents and the subagent queue's users; the `delegate`
 question (`wake` is asked by the scheduler, C-012; `skill` and `skill_opportunity` by C-017); GLiNER2 entity boosts in the shortlist (§5.4's
 third bullet); per-tool concurrency limits beyond read-only versus side-effecting; an incremental projection in the actor
 (each checkpoint and generator call reloads the session from the log: about 2.7 ms for 300 events, linear in the session's
@@ -1536,6 +1543,111 @@ the skills directory (its `remote.*` and `branch.*` keys are outside the configu
 key named). Known limits: a hub skill's description (L0, up to 1,024 characters, scanned at import) reaches the `skill`
 options and the L0 lines without tainting the session; only loading its body or files taints. The drafting prompt reads at
 most 4,096 events of the source turn.
+## Cloud slots and privacy egress (C-015)
+
+Plan §4.1, §4.2 step 6, §6 (escalation targets), §8 (prompt caching), §10.4, §10.5, `vault.md` §9 and §11, decision D-8.
+Everything was verified against fake HTTP handlers and a stand-in Vault on a Unix socket: no network and no real keys.
+
+- Privacy egress (`Corvid.Models/Privacy`, core, `IsAotCompatible`). `PrivacyEgress` is one per process. For a target profile
+  it takes an `EgressPolicy`: action `Send`, `Redact` or `Refuse`; labels person, email, phone number, address, account
+  number and credential, plus user-defined ones; a confidence threshold (0.4); and `Tainted`, the least it does for a tainted
+  request (`Redact` by default), which only tightens. The default gates every `cloud` profile with `Redact` and nothing
+  else. Before a request it scans every string the request carries (text, tool-call arguments and tool results at their
+  JSON leaves, numbers included) with the `IExtractor`, in chunks of 1,200 characters with 100 of overlap, cut at whitespace;
+  a chunk the extractor refuses as too long (GLiNER2 takes 512 tokens with the labels) is halved down to 48 characters.
+  Results are cached by chunk digest, so a growing conversation is scanned only where it changed. `Refuse` with PII refuses.
+  `Redact` replaces each value, longest first, with a stable per-session placeholder (`<PERSON_1>`, `<ACCOUNT_NUMBER_1>`) from
+  a `RedactionMap`; values seen earlier in the session are replaced even when the extractor misses them this time, so the
+  prompt prefix stays stable for caching. Placeholder-shaped text already in the content (a page quoting `<EMAIL_1>`) is
+  rewritten to `‹EMAIL_1›`, so outside content cannot name a placeholder and have a real value restored in its place. It
+  fails closed: no extractor, an extractor exception, or content it cannot read (images, files) under `Redact` or `Refuse`
+  refuses the request. Under `Send` the scan still runs and the same extractor failures refuse, because without it the gate
+  cannot apply the taint rule. Maps live in memory, for at most 256 sessions (the least recently used is dropped).
+- `PrivacyEgressChatClient` wraps each gated binding. It reads the session and taint from `ChatOptions.AdditionalProperties`
+  (`corvid.session_id`, `corvid.tainted`, which `TurnRunner` sets on every generator call) or the ambient
+  `ModelRequestContext`, strips every `corvid.` key, prepares the request, throws `PrivacyEgressRefusedException` before
+  anything is sent, and maps placeholders back in the response's text and tool-call arguments. A redacted request is not
+  streamed: it is answered whole, restored, then replayed as updates (a placeholder could split across deltas, and Vault M1
+  buffers bodies anyway). A `corvid.egress` span records the outcome and label counts, never values.
+- Refuse and stay local: `SlotChatClient` catches the refusal and calls `SessionModelSlots.RetreatAsync`, which moves the slot
+  to the first listed binding that is not cloud (local first: default, fallbacks, escalation), appends `ModelSwitched` with
+  the new reason `privacy`, and retries there. Like a fallback it does not wait for tool calls and keeps a pin, so a pinned
+  cloud slot stays local until the user switches back. With no local binding the refusal reaches the turn.
+- Switches: `ProjectionPrivacyGate` (Kernel) is C-006's `IPrivacyGate`. Before a move to a gated model it renders the
+  projection at the switch's head and asks `PrivacyEgress.AssessAsync` with the session's taint. It refuses a move that every
+  request would refuse (policy `Refuse` and the conversation holds PII, or no extractor), so `EscalateAsync` passes over that
+  target and the chain local → local-server → cloud honours the policy; `/model` reports the refusal. The host gives it to
+  every session's and every scheduled run's slots, in place of `DenyCloud`.
+- Memory: core blocks are local-only by default, and memory schema version 2 marks every existing block local-only (nothing
+  could reach a cloud model before, so none was shared on purpose); `CoreBlockStore.SetLocalOnly` shares one. Facts gain
+  `local_only` (`FactInput.LocalOnly`, `MemoryWriteRequest.LocalOnly`, carried on staged proposals; `FactGraph.MarkLocalOnly`;
+  a superseding fact inherits it; a trigger lets it change from 0 to 1 only). `RetrievedItem.LocalOnly` lets the turn loop leave
+  local-only facts out of a cloud model's recalled memory. Local and local-server models see everything (a local server's
+  endpoint must be the user's own, below). Retrieved memory that remains still passes the gate.
+- Prompt caching (§8): for a profile with `Breakpoints` caching the turn loop keeps the system prompt frozen (core blocks only)
+  and sends recalled memory as a one-shot user note after the history. `AnthropicCacheBreakpoints` marks the system prompt
+  and the last content of each of the last three messages with `cache_control` (Hermes' layout: four breakpoints, the API's
+  maximum; the system breakpoint covers the tool definitions), on copies, through the SDK's `WithCacheControl`.
+- Vault-only keys (`Corvid.Models/Remote`, `Corvid.Vault.Client`). `ModelHttp.Create` builds a remote binding's pipeline: a
+  handler that tells Vault the taint and the toolset `model-provider`; `VaultSecretHandler`, which removes every credential
+  header the SDK set and puts a placeholder minted by `VaultPlaceholders` (one Vault session per process, renewed a minute
+  before expiry, minted again and retried once on `bad_placeholder`) into the provider's header; `VaultHandler`, which sends
+  it through Vault's egress proxy; and below that, for a cloud model, a handler that refuses, so a request without a
+  placeholder can never leave unproxied. A cloud model without a secret, or without Vault, cannot be built. A keyless local
+  server is reached directly (no proxy, no redirects) with every credential header removed. The SDKs are given only a
+  sentinel key, and the Anthropic client's environment and profile credential resolution is switched off.
+  `RemoteChatClient` strips Corvid's keys, makes the context ambient for the handlers, and translates failures so C-006's
+  fallback chain works: API errors keep their status (429 and 5xx fall back, 4xx does not), an unreachable Vault or server
+  falls back, and Vault's `rate_limited` and `budget_exceeded` become 429, `upstream_error` 502 and its other refusals 403.
+  SDK retries are off; the chain decides. Vault's default `tainted` rule is `ask`, so a provider key without
+  `"tainted": "auto"` in `vault.json` is refused for a tainted turn (`approval_required`, a 403): tainted sessions stay off
+  that key unless the user allows it, which is Vault becoming stricter, as `vault.md` §6 intends.
+- `Corvid.Models.Anthropic` (package `Anthropic` 12.58.0, the official SDK, through its `IChatClient`): the native Messages API
+  at `https://api.anthropic.com`, key in `x-api-key`. A required tool choice is refused with `NotSupportedException` before
+  sending unless the model is configured to accept it (current models return 400), so the turn loop asks in words.
+- `Corvid.Models.OpenAICompat` (packages `OpenAI` 2.14.0 and `Microsoft.Extensions.AI.OpenAI` 10.10.1): Chat Completions for
+  local servers (llama.cpp, Ollama, vLLM, LM Studio), OpenAI (`https://api.openai.com/v1`), OpenRouter
+  (`https://openrouter.ai/api/v1`), Gemini through Google's OpenAI-compatible endpoint
+  (`https://generativelanguage.googleapis.com/v1beta/openai/`) and any other hosted compatible API; the key is a bearer token.
+- Host (`RemoteModelProvider`, `Corvid:Models:Remote`): each entry names a provider (`anthropic`, `openai`, `openrouter`,
+  `gemini`, `openai-compatible`), the model id, the endpoint (required for `openai-compatible`), the Vault secret (required
+  for cloud), privacy (only for `openai-compatible`: `LocalServer`, the default, or `Cloud`), chat slots (generator and
+  summarizer by default), context window and accepted context, tool-call and structured-output support, caching (breakpoints
+  for Anthropic, automatic otherwise), costs per million tokens, forced tool choice, and its own `Egress` over
+  `Corvid:Privacy` (`Cloud`, `LocalServer`, `Tainted`, `Labels`, `ExtraLabels`, `Threshold`). Profiles are
+  `<name>@<provider>` with the endpoint's authority as placement. Refused at validation: a cloud model without a secret, an
+  `http` endpoint with a secret (Vault sends keys only over verified TLS), and a `LocalServer` endpoint that is not loopback,
+  private, link-local or CGNAT, a single-label name or a `.local`, `.lan`, `.internal` or `.home.arpa` name (local servers
+  are not gated by default, so the class must be true). `Check` asks Vault over its local socket: no socket, no answer, no
+  such secret, or a secret not bound to the endpoint's host makes the model `Unavailable` (a new readiness) with the
+  `corvid-vault set` step; nothing is downloaded. At start an unavailable model that is some slot's default stops the
+  runtime; an unavailable escalation or fallback target is left out and listed by `/status`. `ModelComposer` wraps every
+  gated chat binding in the egress gate beneath the span layer (each cloud binding; a local server only when
+  `Corvid:Privacy:LocalServer` or the model's `Egress` says so) and every other one in `ModelRequestScopeChatClient`, which
+  strips the keys; the gate's extractor is the configured `extractor` model. `/status` shows the cloud policy and warns when
+  no extractor is bound.
+- Tests: `tests/Corvid.Models.Tests` (redaction round trip in text, arguments and results; stable placeholders per session;
+  refusal; no extractor or a failing one refusing under every action; taint raising send to redact; chunking and halving;
+  neutralized placeholders; opaque content; streaming; the privacy retreat with its event), `tests/Corvid.Kernel.Tests`
+  (`EgressTurnTests`: what a cloud generator sees, the request context, escalation passing over a refusing target),
+  `tests/Corvid.Memory.Tests` (`LocalOnlyTests`, including the version 1 migration), `tests/Corvid.Models.Remote.Tests`
+  (against `FakeVault`: request shape, the placeholder key, no environment key, cache breakpoints, taint and toolset, error
+  mapping, re-minting, Vault absent, forced tool choice, the gate in front of the Anthropic client; local servers direct and
+  keyless, hosted endpoints through Vault) and `tests/Corvid.Host.Tests` (`RemoteModelTests`: validation, local endpoints,
+  unavailable targets skipped or stopping the start, Vault readiness checks, a turn on a composed cloud model through Vault,
+  the sources of the egress policy).
+
+Not built yet: a native Gemini adapter (`Google.GenAI` has an `IChatClient`, but it brings `Google.Apis.Auth`, whose
+default credentials come from the environment and files, which Corvid does not read; Google's OpenAI-compatible endpoint
+gives Gemini an `IChatClient` through the same Vault handler, without Gemini's own context caching); incremental streaming
+from cloud models (Vault M1 buffers response bodies; redacted requests are answered whole by design); persisting redaction
+maps (a restart renumbers placeholders, costing one cache miss); replaying thinking blocks or exposing effort and thinking
+settings (the log keeps text and tool calls only); cache hints for Anthropic models behind OpenRouter; images and other
+non-text content to a gated model except under `Send`; the system prompt in the switch-time check (requests are checked in
+full); `/memory` commands and a tool to mark facts local-only or share a core block (API only today); Vault's
+`role = "model-provider"` policy key (requests carry the toolset `model-provider` instead); switch costs for `/insights`;
+cloud embedders, extractors and vision; `tool_search` for cloud generators (§7); Bedrock, Vertex and Foundry; spike S3's
+recall measurement of GLiNER2 on the PII labels; and a run against the real services with real keys.
 
 ## Running the check
 

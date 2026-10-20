@@ -294,6 +294,15 @@ Deviations from the text above:
 - **The scrubber does not see** a value embedded inside a larger encoded blob (for example base64 of `user:token`). The egress path keeps values out of reach in the first place.
 - **Not built yet:** websocket first-frame substitution (§9) and `allowInUrl` beyond plain substitution. `allowInUrl` exists as a policy flag and is tested only through refusal.
 
+**Model provider keys (C-015 in `corvid-agent.md`).** Corvid's cloud model slots use the forward proxy as §9 describes:
+`VaultSecretHandler` (in `Corvid.Vault.Client`) puts a placeholder, minted in one Vault session per Corvid process and renewed
+before it expires, into the provider's key header, and `VaultHandler` forwards the request; a cloud model has no other route.
+Requests carry `Tainted` and the toolset `model-provider`, so a provider key can be limited to model calls with
+`toolsets = ["model-provider"]`. A secret's `tainted` rule defaults to `ask`, so by default Vault refuses a provider key
+for a tainted turn (`approval_required`, which Corvid reports and does not fall back from); a key meant to serve tainted
+sessions sets `"tainted": "auto"`. §6's `role = "model-provider"` key is not implemented. Without Vault, cloud models are
+unavailable (§11). A key for a local server needs an https endpoint, because Vault refuses plain HTTP.
+
 Next: M2 = V-003, the sandbox proxy for scripts.
 
 ## Changelog

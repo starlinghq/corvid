@@ -45,6 +45,17 @@ public sealed class BoundaryTests
     [InlineData("Corvid.Kernel", "Microsoft.CodeAnalysis.Common", "package", false)]
     [InlineData("Corvid.Tools", "Corvid.Tools.Generators", "project", false)]
     [InlineData("Corvid.Models.Starling", "Corvid.Tools.Generators", "project", false)]
+    // C-015: provider SDKs stay in their adapters; core reaches Vault only through its client.
+    [InlineData("Corvid.Models.Anthropic", "Anthropic", "package", true)]
+    [InlineData("Corvid.Models.Anthropic", "System.Net.ServerSentEvents", "package", true)]
+    [InlineData("Corvid.Models.OpenAICompat", "Microsoft.Extensions.AI.OpenAI", "package", true)]
+    [InlineData("Corvid.Models.OpenAICompat", "System.ClientModel", "package", true)]
+    [InlineData("Corvid.Models", "Microsoft.Extensions.AI.OpenAI", "package", false)]
+    [InlineData("Corvid.Models", "System.ClientModel", "package", false)]
+    [InlineData("Corvid.Kernel", "Anthropic", "package", false)]
+    [InlineData("Corvid.Models", "Corvid.Vault.Client", "project", true)]
+    [InlineData("Corvid.Models", "Corvid.Models.Anthropic", "project", false)]
+    [InlineData("Corvid.Kernel", "Corvid.Models.Anthropic", "project", false)]
     // C-010: Starling packages and the ONNX Runtime natives they need stay in the Starling adapter.
     [InlineData("Corvid.Models.Starling", "Starlings.Models.Qwen35.Extensions.AI", "package", true)]
     [InlineData("Corvid.Models.Starling", "Microsoft.ML.OnnxRuntime", "package", true)]
