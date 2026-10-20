@@ -1572,7 +1572,8 @@ Everything was verified against fake HTTP handlers and a stand-in Vault on a Uni
 - Refuse and stay local: `SlotChatClient` catches the refusal and calls `SessionModelSlots.RetreatAsync`, which moves the slot
   to the first listed binding that is not cloud (local first: default, fallbacks, escalation), appends `ModelSwitched` with
   the new reason `privacy`, and retries there. Like a fallback it does not wait for tool calls and keeps a pin, so a pinned
-  cloud slot stays local until the user switches back. With no local binding the refusal reaches the turn.
+  cloud slot stays local until the user switches back. With no local binding the refusal reaches the turn. The turn result
+  lists the retreat among its escalations (`<model>: privacy`), and the CLI's footer says the turn was kept local.
 - Switches: `ProjectionPrivacyGate` (Kernel) is C-006's `IPrivacyGate`. Before a move to a gated model it renders the
   projection at the switch's head and asks `PrivacyEgress.AssessAsync` with the session's taint. It refuses a move that every
   request would refuse (policy `Refuse` and the conversation holds PII, or no extractor), so `EscalateAsync` passes over that
@@ -1640,7 +1641,10 @@ Everything was verified against fake HTTP handlers and a stand-in Vault on a Uni
 Not built yet: a native Gemini adapter (`Google.GenAI` has an `IChatClient`, but it brings `Google.Apis.Auth`, whose
 default credentials come from the environment and files, which Corvid does not read; Google's OpenAI-compatible endpoint
 gives Gemini an `IChatClient` through the same Vault handler, without Gemini's own context caching); incremental streaming
-from cloud models (Vault M1 buffers response bodies; redacted requests are answered whole by design); persisting redaction
+from cloud models (Vault M1 buffers response bodies; every request under `Redact` is answered whole, even when nothing was
+replaced); telling the turn loop up front that a model refuses a required tool choice (the no-op re-prompt's required mode
+is refused before sending, which `/status` and its span record as one failed call before the retry in words); a validation message for a
+remote model named like a Starling model (the catalogue refuses the duplicate when the host is built); persisting redaction
 maps (a restart renumbers placeholders, costing one cache miss); replaying thinking blocks or exposing effort and thinking
 settings (the log keeps text and tool calls only); cache hints for Anthropic models behind OpenRouter; images and other
 non-text content to a gated model except under `Send`; the system prompt in the switch-time check (requests are checked in

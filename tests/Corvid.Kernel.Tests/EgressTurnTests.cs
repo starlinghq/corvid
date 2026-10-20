@@ -104,6 +104,34 @@ public sealed class EgressTurnTests : IDisposable
         Assert.True((bool)call.Options!.AdditionalProperties![ModelRequestKeys.Tainted]!);
     }
 
+    [Fact]
+    public async Task A_turn_the_gate_keeps_local_says_so_in_its_result()
+    {
+        var local = new FakeGenerator(Reply.Say("Answered locally."));
+        var cloudProvider = new FakeGenerator(Reply.Say("Answered in the cloud."));
+        var cloudProfile = Generator(PrivacyClass.Cloud, PromptCachingStyle.Breakpoints);
+        var cloud = new ModelBinding(cloudProfile, new PrivacyEgressChatClient(cloudProvider, cloudProfile, Egress(EgressAction.Refuse)));
+        var embedder = new KeywordEmbedder(TurnHarness.Keywords);
+        var registry = new ModelSlotRegistry()
+            .Bind(ModelSlots.Generator, new ModelBinding(Generator(PrivacyClass.Local, PromptCachingStyle.None), local), escalation: [cloud])
+            .Bind(ModelSlots.TextEmbedder, new ModelBinding(TurnHarness.Profile("keywords", ToolCallSupport.None, 512), embedder));
+        var slots = new SessionModelSlots(registry, _log, Session, new ModelSwitchOptions { Privacy = PrivacyGates.AllowAll });
+        await slots.SwitchAsync(ModelSlots.Generator, cloud, SwitchReason.User, pin: true, cancellationToken: Ct);
+        var services = new TurnServices
+        {
+            Log = _log,
+            Slots = slots,
+            Fabric = new DecisionFabric(DecisionPolicy.Default, new DegradedDecider(embedder, local), _log),
+            Tools = new ToolRegistry(),
+        };
+
+        var result = await new TurnRunner(Session, services).RunAsync(new Envelope(Session, "cli", "remind Alice Smith about lunch"), Ct);
+
+        Assert.Equal("Answered locally.", result.Text);
+        Assert.Empty(cloudProvider.Calls);
+        Assert.Equal([$"gen-Local: {TurnRunner.PrivacyRetreat}"], result.Escalations);
+    }
+
     private (SessionModelSlots Slots, ModelBinding Cloud) Escalating(PrivacyEgress egress)
     {
         var local = new ModelBinding(Generator(PrivacyClass.Local, PromptCachingStyle.None), new FakeGenerator());

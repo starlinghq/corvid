@@ -154,15 +154,22 @@ internal static class ModelCommand
     /// <summary>What `chat` prints when a configured model is not in the cache: each model, why, and the command that fetches it.</summary>
     public static void ReportMissing(IAnsiConsole console, ImmutableArray<ModelAvailability> missing)
     {
-        console.MarkupLine("[yellow]Corvid cannot start: a configured model is not in the model cache.[/] Nothing is downloaded implicitly.");
+        // A remote model (C-015) is not downloaded: it is unavailable when Vault is not running or lacks its key.
+        var cached = missing.Any(model => model.Readiness != ModelReadiness.Unavailable);
+        console.MarkupLine(cached
+            ? "[yellow]Corvid cannot start: a configured model is not in the model cache.[/] Nothing is downloaded implicitly."
+            : "[yellow]Corvid cannot start: a configured remote model is unavailable.[/]");
         foreach (var model in missing)
         {
             console.MarkupLine($"  [yellow]•[/] {Markup.Escape(model.Detail)}");
             if (model.Acquire is { } acquire)
                 console.MarkupLine($"    fetch it: [bold]{Markup.Escape(acquire)}[/]");
         }
-        console.MarkupLine("Run [bold]corvid doctor[/] for the full picture, or point Corvid:Models:Cache");
-        console.MarkupLine("(or STARLING_MODELS) at a model cache that has them.");
+        console.MarkupLine(cached
+            ? "Run [bold]corvid doctor[/] for the full picture, or point Corvid:Models:Cache"
+            : "Run [bold]corvid doctor[/] for the full picture.");
+        if (cached)
+            console.MarkupLine("(or STARLING_MODELS) at a model cache that has them.");
     }
 
     internal static CorvidOptions Options(IHost host) =>

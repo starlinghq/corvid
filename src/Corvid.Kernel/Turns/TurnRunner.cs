@@ -43,6 +43,9 @@ public sealed class TurnRunner
     private const string NudgeRequired = "Call the {0} tool now with the arguments the request gives. Do not describe a result before the tool has run.";
     private const string NudgeClarify = "The request is ambiguous. Ask the user one short question that would let you act. Do not call tools.";
     private const string NudgeFinish = "Answer the user now from the results above. Do not call tools.";
+    /// <summary>The reason on a <see cref="TurnResult.Escalations"/> entry when the egress gate kept the turn local.</summary>
+    public const string PrivacyRetreat = "privacy";
+
     private const string NudgeBudget = "The step budget for this turn is used up. Answer the user now with what you have. Do not call tools.";
 
     private static readonly JsonWriterOptions WriterOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
@@ -406,6 +409,7 @@ public sealed class TurnRunner
             if (nudge is not null)
                 messages.Add(new ChatMessage(ChatRole.User, nudge));
 
+            var head = _services.Log.GetHead(runner.SessionId, cancellationToken);
             if (required is not null)
             {
                 // Native tool calling can be forced. Template-rendered clients (Starling's Qwen) reject required modes, so
@@ -416,7 +420,9 @@ public sealed class TurnRunner
                     forced.ToolMode = ChatToolMode.RequireSpecific(required);
                     try
                     {
-                        return await generator.GetResponseAsync(messages, forced, cancellationToken).ConfigureAwait(false);
+                        var answer = await generator.GetResponseAsync(messages, forced, cancellationToken).ConfigureAwait(false);
+                        NotePrivacyRetreat(head, cancellationToken);
+                        return answer;
                     }
                     catch (NotSupportedException)
                     {
@@ -424,7 +430,18 @@ public sealed class TurnRunner
                 }
                 messages.Add(new ChatMessage(ChatRole.User, string.Format(CultureInfo.InvariantCulture, NudgeRequired, required)));
             }
-            return await generator.GetResponseAsync(messages, options, cancellationToken).ConfigureAwait(false);
+            var response = await generator.GetResponseAsync(messages, options, cancellationToken).ConfigureAwait(false);
+            NotePrivacyRetreat(head, cancellationToken);
+            return response;
+        }
+
+        // The egress gate refused the cloud model and the slot moved to a local one (plan §10.4); the user is told, as
+        // escalation is (plan §6).
+        private void NotePrivacyRetreat(long head, CancellationToken cancellationToken)
+        {
+            foreach (var item in _services.Log.Read(runner.SessionId, head, cancellationToken: cancellationToken))
+                if (item.Payload is ModelSwitched { Reason: "privacy", Slot: ModelSlots.Generator } change)
+                    _escalations.Add($"{ModelProfile.FromSnapshot(change.NewProfile).Id}: {PrivacyRetreat}");
         }
 
         /// <summary>
