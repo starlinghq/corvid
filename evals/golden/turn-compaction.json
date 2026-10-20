@@ -49,16 +49,13 @@
     },
     {
       "type": "decision",
-      "decision_id": "0079f68dc7de48ee8dad8979a9a003a4",
+      "decision_id": "0ebbb214bae047f8b07732154c6b3f71",
       "question_id": "clarify",
-      "probabilities": {
-        "no": 1,
-        "yes": 0
-      },
-      "confidence": 1,
+      "probabilities": {},
+      "confidence": 0,
       "threshold": 0.7,
       "action": "proceed",
-      "catalogue_version": "2026-10-18.1",
+      "catalogue_version": "2026-10-19.1",
       "decider": "degraded",
       "state": {
         "user_message": "what is next?",
@@ -88,24 +85,23 @@
             "name": "no"
           }
         ]
-      },
-      "calibrated": false
+      }
     },
     {
       "type": "decision",
-      "decision_id": "77e154522f7c4a058a6aed2487bf75c6",
+      "decision_id": "4175ddba0b694d568af5096e7e74dad2",
       "question_id": "difficulty",
       "probabilities": {
-        "moderate": 0,
         "needs a frontier model": 0,
+        "easy": 0,
         "hard": 0,
         "trivial": 1,
-        "easy": 0
+        "moderate": 0
       },
       "confidence": 1,
       "threshold": 3.5,
       "action": "stay_on_generator",
-      "catalogue_version": "2026-10-18.1",
+      "catalogue_version": "2026-10-19.1",
       "decider": "degraded",
       "state": {
         "user_message": "what is next?",
@@ -149,19 +145,19 @@
     },
     {
       "type": "decision",
-      "decision_id": "5a74b1367b504500a3360339333e006f",
+      "decision_id": "30ca9610370749d18bd102fccfeb9649",
       "question_id": "intent",
       "probabilities": {
-        "recall_memory": 0.2,
         "answer_directly": 0.2,
+        "ask_clarifying_question": 0.2,
+        "recall_memory": 0.2,
         "run_skill": 0.2,
-        "use_tools": 0.2,
-        "ask_clarifying_question": 0.2
+        "use_tools": 0.2
       },
       "confidence": 0,
       "threshold": 0.05,
       "action": "generator_with_full_shortlist",
-      "catalogue_version": "2026-10-18.1",
+      "catalogue_version": "2026-10-19.1",
       "decider": "degraded",
       "state": {
         "user_message": "what is next?",
@@ -292,16 +288,13 @@
           {
             "decision": {
               "type": "decision",
-              "decision_id": "0079f68dc7de48ee8dad8979a9a003a4",
+              "decision_id": "0ebbb214bae047f8b07732154c6b3f71",
               "question_id": "clarify",
-              "probabilities": {
-                "no": 1,
-                "yes": 0
-              },
-              "confidence": 1,
+              "probabilities": {},
+              "confidence": 0,
               "threshold": 0.7,
               "action": "proceed",
-              "catalogue_version": "2026-10-18.1",
+              "catalogue_version": "2026-10-19.1",
               "decider": "degraded",
               "state": {
                 "user_message": "what is next?",
@@ -331,27 +324,26 @@
                     "name": "no"
                   }
                 ]
-              },
-              "calibrated": false
+              }
             },
             "outcome": null
           },
           {
             "decision": {
               "type": "decision",
-              "decision_id": "5a74b1367b504500a3360339333e006f",
+              "decision_id": "30ca9610370749d18bd102fccfeb9649",
               "question_id": "intent",
               "probabilities": {
-                "recall_memory": 0.2,
                 "answer_directly": 0.2,
+                "ask_clarifying_question": 0.2,
+                "recall_memory": 0.2,
                 "run_skill": 0.2,
-                "use_tools": 0.2,
-                "ask_clarifying_question": 0.2
+                "use_tools": 0.2
               },
               "confidence": 0,
               "threshold": 0.05,
               "action": "generator_with_full_shortlist",
-              "catalogue_version": "2026-10-18.1",
+              "catalogue_version": "2026-10-19.1",
               "decider": "degraded",
               "state": {
                 "user_message": "what is next?",
@@ -403,19 +395,19 @@
           {
             "decision": {
               "type": "decision",
-              "decision_id": "77e154522f7c4a058a6aed2487bf75c6",
+              "decision_id": "4175ddba0b694d568af5096e7e74dad2",
               "question_id": "difficulty",
               "probabilities": {
-                "moderate": 0,
                 "needs a frontier model": 0,
+                "easy": 0,
                 "hard": 0,
                 "trivial": 1,
-                "easy": 0
+                "moderate": 0
               },
               "confidence": 1,
               "threshold": 3.5,
               "action": "stay_on_generator",
-              "catalogue_version": "2026-10-18.1",
+              "catalogue_version": "2026-10-19.1",
               "decider": "degraded",
               "state": {
                 "user_message": "what is next?",
