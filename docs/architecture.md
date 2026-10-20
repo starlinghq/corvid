@@ -927,10 +927,15 @@ nuget.org through `Corvid.Models.Starling` only.
   episodic index catches up with the log and embeds the new episodes in the background, queued before the sender hears back.
 - Built-in tools and scheduler (C-012, wired here): the approval environment is the configured workspace (it must exist)
   with Vault's locations for this user (`VaultLocations.Default`, the socket from `Corvid:Vault:SocketPath`) added by
-  `VaultLocations.Protect`; the pipeline gets the rules file, the timeout and `BuiltinTools.ShellToolMapping`, so the
+  `VaultLocations.Protect`. Corvid's own state wherever configuration puts it (the data directory with `events.db`,
+  `jobs.db` and `memory.db`, the configuration file read, the rules file and a configured sandbox launcher) is added to
+  the environment's safety configuration, beside `$XDG_CONFIG_HOME/corvid`, so a workspace that contains it (the home
+  directory, say) cannot be used to rewrite the approval rules or the job store: the hardline list refuses writes, the
+  file tools refuse the paths and the shell's sandbox hides them. A path that is or contains the workspace is left out.
+  The pipeline gets the rules file, the timeout and `BuiltinTools.ShellToolMapping`, so the
   `shell` tool is assessed as its command line. The file tools work in `Workspace.For` that environment; the shell runs
   through `BubblewrapSandbox` (the launcher from `Corvid:Sandbox:LauncherPath`, `$CORVID_SANDBOX` or next to `corvid`;
-  on other platforms every command is refused) with the same Vault locations hidden; `web_fetch` uses its default handler;
+  on other platforms every command is refused) with the same Vault locations and safety configuration hidden; `web_fetch` uses its default handler;
   the memory tools need the write path; the cron tools use `jobs.db`. Turns get `BuiltinTools.Examples` for the
   shortlist. `Corvid:Tools:Builtin` turns them off; `IToolProvider`s and `ToolFunction`s registered in DI are added
   either way. With `Corvid:Scheduler:Enabled` (default on) the runtime runs C-012's `JobScheduler` with the

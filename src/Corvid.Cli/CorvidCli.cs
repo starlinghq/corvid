@@ -13,7 +13,14 @@ public sealed class CliInterrupts
 {
     public event Action? Interrupted;
 
-    public void Raise() => Interrupted?.Invoke();
+    /// <summary>Returns whether anything handled the interrupt; when nothing listens, Ctrl-C should end the process.</summary>
+    public bool Raise()
+    {
+        if (Interrupted is not { } handlers)
+            return false;
+        handlers();
+        return true;
+    }
 }
 
 /// <summary>What a command runs against: the terminal, its input, and (for tests) changes to the host's services.</summary>

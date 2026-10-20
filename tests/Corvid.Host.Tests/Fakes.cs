@@ -306,8 +306,9 @@ internal sealed class TestHost : IAsyncDisposable
         Directory.CreateDirectory(Path.Combine(root, "work"));
         models ??= new FakeModels();
         var overrides = FakeModels.Settings(root);
+        // "{root}" in a value is the temporary directory, for settings that place files in it.
         foreach (var (key, value) in settings ?? ImmutableDictionary<string, string?>.Empty)
-            overrides[key] = value;
+            overrides[key] = value?.Replace("{root}", root, StringComparison.Ordinal);
         var builder = CorvidHost.CreateBuilder(overrides, Path.Combine(root, "corvid.json"));
         models.Register(builder.Services);
         services?.Invoke(builder.Services);

@@ -22,9 +22,9 @@ if (loadsModels && GlibcMalloc.EnsureMmapThreshold() is { } reason)
 var interrupts = new CliInterrupts();
 Console.CancelKeyPress += (_, e) =>
 {
-    // The chat decides: cancel the running turn, or leave at the prompt. A second Ctrl-C while leaving ends the process.
-    e.Cancel = true;
-    interrupts.Raise();
+    // While a chat is open it decides: cancel the running turn, or leave at the prompt. Otherwise (loading, shutting down,
+    // the other commands) Ctrl-C ends the process as usual.
+    e.Cancel = interrupts.Raise();
 };
 var context = new CliContext(AnsiConsole.Console, new ConsoleChatInput()) { Interrupts = interrupts };
 return await CorvidCli.RunAsync(args, context);

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using Corvid.Abstractions.Events;
 using Corvid.Approvals;
+using Corvid.Fabric;
 using Corvid.Host.Composition;
 using Corvid.Kernel.Jobs;
 using Corvid.Kernel.Turns;
@@ -43,6 +44,46 @@ public sealed class BuiltinWiringTests
         // Vault's default locations for this user are in the approval environment's protected paths.
         Assert.NotEmpty(runtime.Builtin.Environment.Protected.Vault);
         Assert.Equal(Path.Combine(host.Root, "work"), runtime.Builtin.Environment.Workspace);
+    }
+
+    [Fact]
+    public async Task CorvidsOwnStateInsideTheWorkspaceIsProtected()
+    {
+        // A workspace that holds Corvid's data directory, rules file and configuration (the home directory, say): no tool
+        // may reach the job store, the event log or the approval rules.
+        var models = new FakeModels(new FakeGenerator(Reply.Call("list_files", """{"path":"state"}"""),
+            Reply.Say("Done.")));
+        await using var host = TestHost.Create(models, new Dictionary<string, string?>
+        {
+            ["Corvid:Tools:Builtin"] = "true",
+            ["Corvid:DataDirectory"] = "{root}/work/state",
+            ["Corvid:Approvals:RulesFile"] = "{root}/work/rules.json",
+        });
+        var work = Path.Combine(host.Root, "work");
+        await using var runtime = await host.StartAsync();
+
+        var safety = runtime.Builtin.Environment.Protected.SafetyConfiguration;
+        Assert.Contains(Path.Combine(work, "state"), safety);
+        Assert.Contains(Path.Combine(work, "rules.json"), safety);
+        Assert.Contains(Path.Combine(host.Root, "corvid.json"), safety);
+        // The workspace itself is never protected, or nothing in it could be touched.
+        Assert.DoesNotContain(work, safety);
+
+        Assert.True(runtime.Tools.TryGet("shell", out var shell));
+        foreach (var command in new[] { "rm state/jobs.db", "touch rules.json" })
+        {
+            using var arguments = JsonDocument.Parse(JsonSerializer.Serialize(new { command }));
+            var state = new TurnStateBuilder().Build(new TurnStateInput("tidy up", "cli", "fake"));
+            var assessment = await runtime.Approvals.AssessAsync(new ApprovalContext("s", ApprovalMode.Permissive, state),
+                new ToolAction(shell.Descriptor, arguments.RootElement.Clone()), TestContext.Current.CancellationToken);
+            Assert.True(assessment.Hardline, command);
+        }
+
+        var session = runtime.OpenSession();
+        await session.SendAsync("list the files in state", TestContext.Current.CancellationToken);
+        var result = Assert.Single(session.Snapshot().Transcript.Select(entry => entry.Content).OfType<ToolResult>());
+        Assert.True(result.IsError);
+        Assert.Contains("protected location", result.Result.GetRawText(), StringComparison.Ordinal);
     }
 
     [Fact]

@@ -44,7 +44,8 @@ public sealed class CorvidRuntimeFactory(
     ModelMetrics metrics,
     TurnFeed feed,
     IEnumerable<IToolProvider> toolProviders,
-    IEnumerable<ToolFunction> tools)
+    IEnumerable<ToolFunction> tools,
+    CorvidConfigFile? configFile = null)
 {
     /// <summary>Configured models that are missing or corrupt, checked offline by size.</summary>
     public IReadOnlyList<ModelAvailability> CheckModels()
@@ -79,6 +80,7 @@ public sealed class CorvidRuntimeFactory(
             var vault = VaultLocationsFor(settings);
             var environment = vault.Protect(ApprovalEnvironment.FromProcess(CorvidPaths.Workspace(settings)));
             var rulesFile = settings.Approvals.RulesFile is { Length: > 0 } file ? CorvidPaths.ExpandHome(file) : JsonFileApprovalRuleStore.DefaultPath(environment);
+            environment = ProtectCorvidState(environment, settings, rulesFile, configFile?.Path ?? CorvidPaths.UserConfigFile);
             var prompters = new ApprovalRouter();
             var approvals = new ApprovalPipeline(environment, fabric, log, prompters, new JsonFileApprovalRuleStore(rulesFile),
                 new ApprovalOptions
@@ -95,7 +97,13 @@ public sealed class CorvidRuntimeFactory(
             ISandbox sandbox = OperatingSystem.IsLinux()
                 ? new BubblewrapSandbox(new SandboxOptions { LauncherPath = launcher })
                 : new NoSandbox();
-            var shell = new SandboxedShell(sandbox, new ShellOptions { Workspace = environment.Workspace, Vault = vault });
+            // The sandbox leaves everything outside the workspace read-only, but a workspace can contain Corvid's own state.
+            var shell = new SandboxedShell(sandbox, new ShellOptions
+            {
+                Workspace = environment.Workspace,
+                Vault = vault,
+                DeniedPaths = environment.Protected.SafetyConfiguration,
+            });
             var jobs = new JobStore(CorvidPaths.JobStore(settings));
             var builtin = new BuiltinServices(environment, shell, jobs, settings.Tools.Builtin ? new WebFetchTool() : null);
 
@@ -123,6 +131,36 @@ public sealed class CorvidRuntimeFactory(
             devices.Dispose();
             throw;
         }
+    }
+
+    /// <summary>
+    /// Corvid's own state wherever configuration puts it: the data directory (the event log, the job store that feeds
+    /// unattended runs, memory), the configuration file that sets the approval mode, the approval rules and the sandbox
+    /// launcher. Approvals' safety configuration covers only <c>$XDG_CONFIG_HOME/corvid</c>; without these a workspace
+    /// that contains them (the home directory, say) would let a tool rewrite its own rules or schedule jobs. They become
+    /// safety configuration, so the hardline list refuses writes, the file tools refuse access and the shell's sandbox
+    /// hides them. A path that is the workspace or contains it is left out: denying it would deny the whole workspace.
+    /// </summary>
+    internal static ApprovalEnvironment ProtectCorvidState(ApprovalEnvironment environment, CorvidOptions settings, string rulesFile,
+        string configFile)
+    {
+        string?[] candidates =
+        [
+            CorvidPaths.DataDirectory(settings),
+            rulesFile,
+            configFile,
+            settings.Sandbox.LauncherPath is { Length: > 0 } launcher ? CorvidPaths.ExpandHome(launcher) : null,
+        ];
+        var workspace = environment.Workspace;
+        var added = candidates
+            .Where(path => path is { Length: > 0 } && Path.IsPathFullyQualified(path))
+            .Select(path => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path!)))
+            .Where(path => !(workspace == path || workspace.StartsWith(path + "/", StringComparison.Ordinal)));
+        var protectedPaths = environment.Protected with
+        {
+            SafetyConfiguration = [.. environment.Protected.SafetyConfiguration.Concat(added).Distinct(StringComparer.Ordinal)],
+        };
+        return new ApprovalEnvironment(environment.Workspace, environment.Home, protectedPaths, environment.Variables);
     }
 
     /// <summary>Vault's own defaults for this user, with the socket from configuration when it is set.</summary>

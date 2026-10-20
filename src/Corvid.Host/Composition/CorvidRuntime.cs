@@ -234,6 +234,12 @@ public sealed class CorvidRuntime : IAsyncDisposable
             SchedulerState = "run by another corvid process";
             return;
         }
+        catch (UnauthorizedAccessException exception)
+        {
+            // An unwritable lock file should not stop the chat; the jobs simply wait for a process that can run them.
+            SchedulerState = "off: " + exception.Message;
+            return;
+        }
         var scripts = new SandboxedScriptRunner(Builtin.Shell, Approvals, Options.Approvals.Mode);
         var agent = new TurnJobAgent(sessionId => Services(new SessionModelSlots(Registry, Log, sessionId), interactive: false));
         var scheduler = new JobScheduler(Builtin.Jobs, Fabric, scripts, agent,
