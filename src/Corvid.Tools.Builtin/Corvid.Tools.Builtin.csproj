@@ -2,6 +2,8 @@
   <PropertyGroup>
     <Description>Corvid's built-in tools (C-012): files confined to the workspace, the sandboxed shell, web fetch, memory and the scheduler's cron tools. Wrappers are generated at compile time by Corvid.Tools.Generators.</Description>
     <IsAotCompatible>true</IsAotCompatible>
+    <!-- The generated marshalling for FileKinds' statx call. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <!-- Tools (C-005) for the attributes and registry; Approvals (C-007b) and Sandbox (C-007a) for the shell; Memory (C-008)
