@@ -2161,7 +2161,9 @@ short regexes only; no code was copied.
   over the event's persisted JSON (`JsonElement`), so it is trim and AOT safe. A missing path is false and never throws;
   an optional field left out when null (`call_id` on a job's approval) is missing, not null, so `exists` tests it. A path
   through an array matches when any element does. `equals` or `regex` on an object tests every string under it, up to
-  64 KiB in all; a longer string is cut at 64 KiB.
+  64 KiB in all; a longer string is cut at 64 KiB, except a `derived.` field (a command line), where `regex` over more than
+  64 KiB is a rule error: padding would otherwise push a command past every pattern, and the shell parser's own 64 KiB
+  limit would be the only thing still asking.
 - Validation. The field catalogue is read from the rules' source-generated serializer metadata:
   `PolymorphismOptions.DerivedTypes` for each discriminator, `JsonTypeInfo.Properties` for names and types, recursing
   into nested records and array elements. An unknown event, a typo (`tool_nme`), a path on the wrong event, a numeric
@@ -2172,8 +2174,8 @@ short regexes only; no code was copied.
   that the rules serialize every event exactly as `EventJson` (the options are duplicated in `Corvid.Rules`, so drift
   would otherwise be silent).
 - Regexes. `RegexOptions.NonBacktracking | CultureInvariant`, a 1 s match timeout (it bounds wall-clock time on a loaded machine: NonBacktracking is linear in the capped input), compiled and run once at load. A pattern
-  NonBacktracking refuses (lookaround, backreference) fails the load. A timeout during evaluation is a rule error, never a
-  match or a no-match: scan reports it (exit 1); inline, an enforce rule that errors forces the prompt (fail closed) and a
+  NonBacktracking refuses (lookaround, backreference) fails the load. A timeout during evaluation, or a `derived.` field
+  over 64 KiB, is a rule error, never a match or a no-match: scan reports it (exit 1); inline, an enforce rule that errors forces the prompt (fail closed) and a
   detect rule records nothing.
 - Derived fields, under `derived.`, are computed from the session's own earlier events and never read from the event:
   `derived.command` on `tool_call_issued` is the command line of a call to a shell tool (`ApprovalOptions.ShellTools`,
@@ -2182,8 +2184,9 @@ short regexes only; no code was copied.
   `derived.action` (the request's action document). A job script's approval has no call, so its `derived.command` is the
   action document's `text`. This makes "a denial of a command in class X" one step, with no cross-step binding.
 - Correlation. Scope `session` only; `window` is `120s`, `5m`, `2h`, `1d` or ISO-8601 (`PT10M`), at most 7 days, over
-  `StoredEvent.RecordedAt`; `order` is `sequence` (default) or `any`; 2 to 8 steps. Candidates are filtered per step first
-  (at most 4,096 each). A sequence anchors on each candidate of the first step and takes the earliest later candidate of
+  `StoredEvent.RecordedAt`; `order` is `sequence` (default) or `any`; 2 to 8 steps. Candidates are filtered per step first,
+  all of them (a cap kept the oldest and silently missed a late match in a long session); the searches below are binary
+  over each step's ascending list, and events are taken to be in time order, as the log appends them. A sequence anchors on each candidate of the first step and takes the earliest later candidate of
   each next step, which is never worse for the steps after it or the window. Any order takes each event as the earliest,
   gives it a step it satisfies, and assigns distinct later events within the window to the other steps by bipartite
   matching (with n steps, n candidates per step suffice). A rule yields at most one finding per session; a single-event
@@ -2200,8 +2203,8 @@ short regexes only; no code was copied.
   `.kube/config`, `.docker/config.json`, `gh/hosts.yml`, `.gnupg/`, `.env`; medium, detect);
   `context-exfiltration/secret-read-then-egress` (any order, 10 min: a credential read and curl, wget, nc, scp, rsync,
   ssh, `/dev/tcp` or `web_fetch`; high, enforce); `env-dump-piped-to-network` (critical, enforce);
-  `secret-file-to-network` (a credential file as a curl or wget body, or piped or redirected into curl or netcat;
-  critical, enforce); `base64-into-url` (base64 output substituted into a request URL or piped to curl or wget; high,
+  `secret-file-to-network` (a credential file as a curl or wget body, piped or redirected into curl or netcat, or read
+  by a `$(...)` or backquote substitution on a curl, wget, netcat, socat or ssh command line; critical, enforce); `base64-into-url` (base64 output substituted into a request URL or piped to curl or wget; high,
   enforce); `approval-abuse/approval-denied-then-reissued` (sequence, 30 min: the user denied a command in a dangerous
   class, then a call in the same class; high, enforce); `approval-denied-then-executed` (the same denial, then a
   successful `tool_result` in the class; critical, detect, found by scan); `risky-command/curl-pipe-to-shell`,
@@ -2246,9 +2249,15 @@ short regexes only; no code was copied.
   `DetectionMatched` was already recorded inline. `--json` writes one document (`rules`, `sessions`, `findings`,
   `errors`). Exit codes: 0, 4 (`ExitCodes.Findings`) when a finding is at or above `--fail-on`, 1 on a rule error, a
   missing log or session, or a read error, and 2 on bad arguments.
-- Known limits. `TurnRunner` sends only calls that need approval through pre_execute (`Ask`: side-effecting, or a network
-  read in a tainted turn), so `read_file`, `list_files`, `search_files` and an untainted `web_fetch` take part inline only
-  as earlier steps: "egress by `web_fetch` after a secret read" in an untainted session is found by scan alone. "The same
+- Network reads. `TurnRunner` sends a call through pre_execute when it needs approval (`Ask`: side-effecting, or a network
+  read in a tainted turn) and, since the review of the first C-023 cut, when it is an untainted network read the rules
+  have something to say about: `ApprovalPipeline.Detects` runs the same inline evaluation, with the same response's
+  earlier calls appended as if logged, and answers true when the call completes any match or an enforce rule cannot be
+  evaluated on it. It records nothing; the pipeline then asks or records as above. So `read_file .env` then `web_fetch`
+  asks in an untainted session, in one response or two, and an unrelated `web_fetch` still runs unasked and in parallel.
+- Known limits. Read-only calls that are not network reads (`read_file`, `list_files`, `search_files`) still skip
+  pre_execute and take part inline only as earlier steps: a `read_file` of a credential after an egress completes
+  `secret-read-then-egress` without a prompt and is found by scan. "The same
   command" is the same dangerous class: a denied `rm -rf build` followed by `rm -rf dist` asks again (a false positive,
   only an extra prompt), and a command outside the class's regex escapes. Each inline evaluation reads up to 512 events
   synchronously on the approval path, beside the appends already made there; a correlation whose first step is older than

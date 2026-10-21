@@ -350,25 +350,9 @@ public sealed class ApprovalPipeline
     private (ImmutableArray<DetectionFinding> Findings, ImmutableArray<ApprovalReason> Forced) Detect(ApprovalContext context,
         ProposedAction proposed, CancellationToken cancellationToken)
     {
-        if (Options.Detections is not { } engine)
+        if (Options.Detections is not { } engine
+            || Inline(engine, context.SessionId, context.CallId, proposed, [], cancellationToken) is not var (scan, history))
             return ([], []);
-        var callId = context.CallId ?? "pending";
-        var pending = proposed switch
-        {
-            ShellAction shell => engine.ShellCall(callId, shell.Command),
-            ToolAction tool => new ToolCallIssued(callId, tool.Tool.Name, tool.Arguments),
-            _ => null,
-        };
-        if (pending is null)
-            return ([], []);
-
-        var head = _log.GetHead(context.SessionId, cancellationToken);
-        var limit = Options.DetectionHistory;
-        // The turn appends the call's ToolCallIssued before it asks; the pending event stands for it, so it is not counted twice.
-        var history = _log.Read(context.SessionId, Math.Max(0, head - limit), head, limit, cancellationToken)
-            .Where(stored => context.CallId is null || stored.Payload is not ToolCallIssued issued || issued.CallId != context.CallId)
-            .ToList();
-        var scan = engine.Inline(history, new StoredEvent(context.SessionId, head + 1, Guid.Empty, _time.GetUtcNow(), pending));
 
         var reasons = ImmutableArray.CreateBuilder<ApprovalReason>();
         foreach (var finding in scan.Findings.Where(finding => finding.Enforced))
@@ -386,6 +370,51 @@ public sealed class ApprovalPipeline
                 finding.Rule.Reason, finding.Sequences, context.CallId, finding.Enforced ? "ask" : null), cancellationToken);
         }
         return (scan.Findings, reasons.ToImmutable());
+    }
+
+    /// <summary>
+    /// Whether detection rules have something to say about a call (C-023): it completes a match, enforced or not, or an enforce
+    /// rule cannot be evaluated on it. The turn asks this of a read-only network call, which otherwise runs without coming
+    /// here in an untainted session, so a <c>web_fetch</c> after a credential read still reaches <c>secret-read-then-egress</c>
+    /// and a match is still recorded. <paramref name="preceding"/> are calls of the same response not yet logged, in order.
+    /// Records nothing; false without an engine.
+    /// </summary>
+    public bool Detects(string sessionId, string? callId, ProposedAction action, IReadOnlyList<ToolCallIssued> preceding,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentNullException.ThrowIfNull(action);
+        ArgumentNullException.ThrowIfNull(preceding);
+        if (Options.Detections is not { } engine
+            || Inline(engine, sessionId, callId, action, preceding, cancellationToken) is not var (scan, _))
+            return false;
+        return !scan.Findings.IsEmpty || scan.Errors.Any(error => engine.PostureOf(error.Rule) == RulePosture.Enforce);
+    }
+
+    /// <summary>The engine's inline evaluation of the call over the session's latest events, then <paramref name="preceding"/>.</summary>
+    private (DetectionScan Scan, List<StoredEvent> History)? Inline(DetectionEngine engine, string sessionId, string? callId,
+        ProposedAction proposed, IReadOnlyList<ToolCallIssued> preceding, CancellationToken cancellationToken)
+    {
+        var pending = proposed switch
+        {
+            ShellAction shell => engine.ShellCall(callId ?? "pending", shell.Command),
+            ToolAction tool => new ToolCallIssued(callId ?? "pending", tool.Tool.Name, tool.Arguments),
+            _ => null,
+        };
+        if (pending is null)
+            return null;
+
+        var head = _log.GetHead(sessionId, cancellationToken);
+        var limit = Options.DetectionHistory;
+        // The turn appends the call's ToolCallIssued before it asks; the pending event stands for it, so it is not counted twice.
+        var history = _log.Read(sessionId, Math.Max(0, head - limit), head, limit, cancellationToken)
+            .Where(stored => callId is null || stored.Payload is not ToolCallIssued issued || issued.CallId != callId)
+            .ToList();
+        var now = _time.GetUtcNow();
+        List<StoredEvent> evaluated = preceding.Count == 0 ? history
+            : [.. history, .. preceding.Select((call, i) => new StoredEvent(sessionId, head + 1 + i, Guid.Empty, now, call))];
+        var scan = engine.Inline(evaluated, new StoredEvent(sessionId, head + 1 + preceding.Count, Guid.Empty, now, pending));
+        return (scan, history);
     }
 
     /// <summary>A call to a shell tool (<see cref="ApprovalOptions.ShellTools"/>) is the command line it runs.</summary>

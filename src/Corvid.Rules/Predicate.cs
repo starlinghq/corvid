@@ -22,7 +22,11 @@ internal sealed class EventView(string name, JsonElement json, IReadOnlyDictiona
 /// </summary>
 internal abstract class Predicate
 {
-    /// <summary>Text tested per value: a larger tool result is cut here, so one evaluation's work is bounded.</summary>
+    /// <summary>
+    /// Text tested per value: a larger tool result is cut here, so one evaluation's work is bounded. A derived field (a shell
+    /// command line) longer than this is a rule error instead (<see cref="TextLimitException"/>): cutting it would let padding
+    /// push a command past every regex, and an error fails closed for enforce rules and makes <c>corvid scan</c> exit 1.
+    /// </summary>
     public const int MaxText = 64 * 1024;
 
     /// <summary>
@@ -199,7 +203,7 @@ internal abstract class Predicate
         {
             foreach (var value in path.Values(view))
             {
-                if (value.ValueKind == JsonValueKind.String ? regex.IsMatch(FieldPath.Cap(value.GetString()!))
+                if (value.ValueKind == JsonValueKind.String ? regex.IsMatch(path.Cap(value.GetString()!))
                     : value.ValueKind == JsonValueKind.Object && FieldPath.Strings(value).Any(text => regex.IsMatch(text)))
                     return true;
             }
@@ -289,8 +293,19 @@ internal sealed class FieldPath(string path)
         }
     }
 
-    public static string Cap(string text) => text.Length > Predicate.MaxText ? text[..Predicate.MaxText] : text;
+    /// <summary>The text a regex tests: cut at <see cref="Predicate.MaxText"/>, except that a derived field over it throws.</summary>
+    public string Cap(string text)
+    {
+        if (text.Length <= Predicate.MaxText)
+            return text;
+        if (_derived is not null)
+            throw new TextLimitException($"{path} is {text.Length} characters, over the {Predicate.MaxText} the rules read");
+        return text[..Predicate.MaxText];
+    }
 }
+
+/// <summary>A derived field too long to test (<see cref="Predicate.MaxText"/>): the rule is an error, neither a match nor not.</summary>
+internal sealed class TextLimitException(string message) : Exception(message);
 
 [System.Text.Json.Serialization.JsonSerializable(typeof(string))]
 internal sealed partial class RuleValueJsonContext : System.Text.Json.Serialization.JsonSerializerContext;

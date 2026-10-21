@@ -106,8 +106,9 @@ In `vault.json`, bind each token to its API host (`api.telegram.org`, `discord.c
 tainted session, such as a chat with a guest, are refused under the default `"tainted": "ask"`. Set `"tainted": "auto"` on a
 token only if guests should get answers.
 
-Detection rules (C-023) watch the session event log. A built-in pack of twelve rules runs before every approval: a match
-of an enforce rule (a credential read followed by network egress, the environment or a credential file sent out, base64 in
+Detection rules (C-023) watch the session event log. A built-in pack of twelve rules runs before every approval, and
+before a network read that would otherwise run unasked (a `web_fetch` after a `read_file .env`): a match of an enforce
+rule (a credential read followed by network egress, the environment or a credential file sent out, base64 in
 a request URL, a command the user just denied proposed again) asks, once only, whatever the mode or remembered approvals
 say; the others only record a `detection_matched` event. `corvid scan` runs the same rules over the whole log afterwards,
 `--session <id>` over one session, `--json` as one document, and `--fail-on high` exits 4 when a finding is at least that

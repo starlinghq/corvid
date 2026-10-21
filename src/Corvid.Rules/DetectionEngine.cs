@@ -14,7 +14,10 @@ public sealed record DetectionFinding(DetectionRule Rule, string SessionId, Immu
     public bool Enforced => Posture == RulePosture.Enforce;
 }
 
-/// <summary>A rule that could not be evaluated (a regex timed out, or a correlation exceeded its bounds): neither a match nor not.</summary>
+/// <summary>
+/// A rule that could not be evaluated (a regex timed out, or a shell command line was longer than the rules read): neither
+/// a match nor not.
+/// </summary>
 public sealed record DetectionError(DetectionRule Rule, string SessionId, string Message);
 
 public sealed record DetectionScan(ImmutableArray<DetectionFinding> Findings, ImmutableArray<DetectionError> Errors)
@@ -35,9 +38,6 @@ public sealed record RuleTestResult(DetectionRule Rule, RuleTest Test, bool Matc
 /// </summary>
 public sealed class DetectionEngine
 {
-    /// <summary>Candidates kept per correlation step; more are ignored (oldest kept).</summary>
-    public const int MaxCandidates = 4096;
-
     /// <summary>Sequences listed in one single-event finding.</summary>
     public const int MaxSequences = 64;
 
@@ -138,6 +138,10 @@ public sealed class DetectionEngine
             {
                 errors.Add(new DetectionError(rule, sessionId, $"a regex timed out after {exception.MatchTimeout.TotalMilliseconds} ms"));
             }
+            catch (TextLimitException exception)
+            {
+                errors.Add(new DetectionError(rule, sessionId, exception.Message));
+            }
         }
     }
 
@@ -162,10 +166,12 @@ public sealed class DetectionEngine
         if (pendingSteps is { Count: 0 })
             return null;
 
+        // Every candidate, ascending: a cap here would keep the oldest and silently miss a late match (a long-lived session's
+        // early fetches crowding out a later read and egress). The searches below are logarithmic in a step's list.
         var candidates = steps.Select(step =>
         {
             var list = new List<int>();
-            for (var i = 0; i < session.Count && list.Count < MaxCandidates; i++)
+            for (var i = 0; i < session.Count; i++)
             {
                 if (i != pending && session.Matches(step, i))
                     list.Add(i);
@@ -190,7 +196,8 @@ public sealed class DetectionEngine
     }
 
     // Ordered steps: for each anchor of the first step, the earliest later candidate of each next step. Earliest is never
-    // worse for the steps after it or for the window, so no other choice needs trying.
+    // worse for the steps after it or for the window, so no other choice needs trying. Events are in log order, so their
+    // times ascend.
     private static List<int>? Sequence(RuleCorrelation correlation, SessionEvents session, List<int>[] candidates)
     {
         foreach (var anchor in candidates[0])
@@ -199,8 +206,8 @@ public sealed class DetectionEngine
             var previous = anchor;
             for (var s = 1; s < candidates.Length; s++)
             {
-                var next = candidates[s].FindIndex(index => index > previous);
-                if (next < 0)
+                var next = After(candidates[s], previous);
+                if (next == candidates[s].Count)
                     return null;
                 previous = candidates[s][next];
                 if (session.Time(previous) - session.Time(anchor) > correlation.Window)
@@ -223,20 +230,32 @@ public sealed class DetectionEngine
             var end = session.Time(anchor) + correlation.Window;
             for (var s = 0; s < steps; s++)
             {
-                if (!candidates[s].Contains(anchor))
+                if (candidates[s].BinarySearch(anchor) < 0)
                     continue;
                 var lists = new List<int>[steps];
                 for (var other = 0; other < steps; other++)
-                {
-                    lists[other] = other == s
-                        ? [anchor]
-                        : [.. candidates[other].Where(index => index > anchor && session.Time(index) <= end).Take(steps)];
-                }
+                    lists[other] = other == s ? [anchor] : Within(candidates[other], anchor, end, steps, session);
                 if (Assign(lists) is { } assigned)
                     return assigned;
             }
         }
         return null;
+    }
+
+    /// <summary>The position in an ascending list of the first index after <paramref name="index"/>.</summary>
+    private static int After(List<int> list, int index)
+    {
+        var found = list.BinarySearch(index);
+        return found >= 0 ? found + 1 : ~found;
+    }
+
+    /// <summary>Up to <paramref name="count"/> candidates after <paramref name="anchor"/> and no later than <paramref name="end"/>.</summary>
+    private static List<int> Within(List<int> list, int anchor, DateTimeOffset end, int count, SessionEvents session)
+    {
+        var within = new List<int>(count);
+        for (var i = After(list, anchor); i < list.Count && within.Count < count && session.Time(list[i]) <= end; i++)
+            within.Add(list[i]);
+        return within;
     }
 
     private static List<int>? Assign(List<int>[] lists)
