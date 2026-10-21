@@ -2,7 +2,7 @@
 
 A local-first .NET 10 agent in the spirit of Hermes Agent, built on Starling's in-process models. Kev, GLiNER2 and the embedding models make the agent's many small decisions (System One); a swappable generator, local or cloud, does the writing (System Two).
 
-Vault M1, the agent's initial project layout and dependency checks, the session event log (C-002), the tool generator and registry (C-005), the golden-trajectory replay harness (C-009), calibration tooling with decision export (C-021), the session actor and turn loop (C-011), the built-in tools with the durable scheduler (C-012), the host and `corvid` CLI with OpenTelemetry spans (C-013), the Kev decider with its Kev-4B second tier (C-004b), checkpoints with `/undo` and `/rollback` (C-014), compaction with map-reduce summaries and goal re-injection (C-016), skills with the git-versioned store, the learning loop and replay tests (C-017), and cloud and local-server model slots behind the privacy egress gate, keyed only through Vault (C-015) are built. Without Kev downloaded, the decisions run on the degraded tier and `corvid chat` says so. The design is in [`docs/plan/corvid-agent.md`](docs/plan/corvid-agent.md); secrets live in a separate process, Corvid Vault ([`docs/plan/vault.md`](docs/plan/vault.md)).
+Vault M1, the agent's initial project layout and dependency checks, the session event log (C-002), the tool generator and registry (C-005), the golden-trajectory replay harness (C-009), calibration tooling with decision export (C-021), the session actor and turn loop (C-011), the built-in tools with the durable scheduler (C-012), the host and `corvid` CLI with OpenTelemetry spans (C-013), the Kev decider with its Kev-4B second tier (C-004b), checkpoints with `/undo` and `/rollback` (C-014), compaction with map-reduce summaries and goal re-injection (C-016), skills with the git-versioned store, the learning loop and replay tests (C-017), and cloud and local-server model slots behind the privacy egress gate, keyed only through Vault (C-015), and the MCP client and `corvid mcp serve` (C-018) are built. Without Kev downloaded, the decisions run on the degraded tier and `corvid chat` says so. The design is in [`docs/plan/corvid-agent.md`](docs/plan/corvid-agent.md); secrets live in a separate process, Corvid Vault ([`docs/plan/vault.md`](docs/plan/vault.md)).
 
 ## Run
 
@@ -43,6 +43,26 @@ See [`docs/architecture.md`](docs/architecture.md#cloud-slots-and-privacy-egress
 }
 ```
 
+MCP servers go under `Corvid:Mcp:Servers`. Their tools join the built-in ones as `server__tool`. A stdio server runs under
+`corvid-sandbox` with a private workspace and no network unless you allow it. An HTTP server's token is a Vault secret, never
+configuration. Servers are untrusted by default: every tool asks before it runs and every result taints the session, and
+`"Trust": "Trusted"` honours a server's read-only hints. `corvid mcp list` starts each server and shows its tools, `/mcp` shows
+them in chat, and `corvid mcp serve` offers Corvid's memory search and skills, read-only, to another agent over stdio
+([details](docs/architecture.md#mcp-client-and-server-c-018)).
+
+```json
+{
+  "Corvid": {
+    "Mcp": {
+      "Servers": {
+        "notes": { "Command": "notes-mcp", "Arguments": ["--stdio"], "ReadOnlyPaths": ["~/notes"] },
+        "tracker": { "Url": "https://mcp.tracker.example/mcp", "Secret": "tracker.token", "Trust": "Trusted" }
+      }
+    }
+  }
+}
+```
+
 ## Build and test
 
 Requires the .NET 10 SDK (10.0.401 or a later feature band). The Vault tests are Linux-only.
@@ -65,7 +85,8 @@ dotnet test --solution Corvid.slnx
 | `src/Corvid.Models.Starling` | in-process Starling adapters (0.3.0, CPU): Qwen3.5-0.8B generator, GLiNER2 extractor, EmbeddingGemma 2 and e5 embedders (C-010), the Kev-0.8B and Kev-4B decider (C-004b), and offline-first acquisition |
 | `src/Corvid.Memory` | memory store on SQLite: core blocks, episodic FTS5, vector index, bi-temporal fact graph, hybrid retrieval and the `memory_op`-gated write path (C-008) |
 | `src/Corvid.Host` | the composition root (C-013): typed configuration validated at start, slots composed from configuration (Starling by default), the runtime with C-012's built-in tools and scheduler wired in, the slash-command registry shared by surfaces, `corvid doctor`'s checks, and OpenTelemetry export |
-| `src/Corvid.Cli` | `corvid` (C-013): `chat` (Spectre.Console, scrollback-first, streaming, live tool panel, inline approvals), `model`, `doctor`, `evals` |
+| `src/Corvid.Cli` | `corvid` (C-013): `chat` (Spectre.Console, scrollback-first, streaming, live tool panel, inline approvals), `model`, `doctor`, `evals`; `mcp list` and `mcp serve` (C-018) |
+| `src/Corvid.Mcp` | MCP (C-018), the only project on the ModelContextProtocol SDK: configured servers as Corvid tools (stdio under `corvid-sandbox`, streamable HTTP with tokens only through Vault, per-server trust, timeouts, lazy restarts, the tasks extension) and Corvid as a read-only MCP server for memory search and skills |
 | `src/Corvid.Skills` | skills (C-017): the agentskills.io `SKILL.md` loader with Hermes metadata, the skills directory as a git repository with `user`/`agent`/`hub:<source>` authorship, imports (including `~/.hermes/skills`), the learning loop (draft, replay test, `skill_write_safe`), evals, the curator and the skill tools |
 | `src/Corvid.Approvals` | structural approval pipeline: bash-subset parser, wrapper unwrapping, target extraction, the hardline deny list, `risk` through the fabric, approval modes, structural rules and approval events (C-007b) |
 | `vault/Corvid.Vault` | `corvid-vault`, the secrets process; see [`vault/README.md`](vault/README.md) |
@@ -76,5 +97,5 @@ dotnet test --solution Corvid.slnx
 | `src/Corvid.Vault.Client` | Corvid's side: `VaultClient`, `VaultHandler`, `VaultSecretHandler` (placeholder credentials), `SecretRef` |
 | `evals/` | golden trajectories (`evals/golden`) and the replay harness, `Corvid.Evals` (C-009); calibration, floor replay and decision export, with the `corvid-evals` console in `Corvid.Evals.Calibrate` (C-021); see [`evals/README.md`](evals/README.md) |
 | `tools/Corvid.Architecture` | resolved dependency graph checker; see [`docs/architecture.md`](docs/architecture.md) |
-| `tests/` | boundary regression tests, host configuration, composition, telemetry and command tests, scripted CLI sessions, event log, turn loop, session actor and device scheduler tests, replay and calibration tests, decision fabric, memory and approval tests (including the shell bypass suite), tool generator and registry tests, remote model adapter tests against a stand-in Vault (C-015), built-in tool and scheduler tests (including the shell's confinement tests), checkpoint tests (the shadow store against real git, undo and rollback, the user's edits kept, a workspace that is itself a git repository, git missing), skill loader, repository, import, learning-loop and turn tests, and Vault tests, including S6 |
+| `tests/` | boundary regression tests, host configuration, composition, telemetry and command tests, scripted CLI sessions, event log, turn loop, session actor and device scheduler tests, replay and calibration tests, decision fabric, memory and approval tests (including the shell bypass suite), tool generator and registry tests, remote model adapter tests against a stand-in Vault (C-015), built-in tool and scheduler tests (including the shell's confinement tests), checkpoint tests (the shadow store against real git, undo and rollback, the user's edits kept, a workspace that is itself a git repository, git missing), skill loader, repository, import, learning-loop and turn tests, MCP client, task, HTTP and server-mode tests against an in-process server and the real `corvid mcp serve` (C-018), and Vault tests, including S6 |
 

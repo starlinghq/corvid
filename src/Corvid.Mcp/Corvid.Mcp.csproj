@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Corvid's MCP surface (C-018): configured MCP servers as Corvid tools (stdio through the sandbox launcher, streamable HTTP through Vault), and an MCP server over stdio for Corvid's memory and skills. The only project that references the ModelContextProtocol SDK.</Description>
+    <!-- Not IsAotCompatible: the MCP SDK's tasks extension is not AOT-qualified, and warnings are errors. -->
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="ModelContextProtocol.Core" />
+    <PackageReference Include="ModelContextProtocol.Extensions.Tasks" />
+    <ProjectReference Include="../Corvid.Sandbox/Corvid.Sandbox.csproj" />
+    <ProjectReference Include="../Corvid.Tools/Corvid.Tools.csproj" />
+    <ProjectReference Include="../Corvid.Vault.Client/Corvid.Vault.Client.csproj" />
+    <InternalsVisibleTo Include="Corvid.Mcp.Tests" />
+  </ItemGroup>
+</Project>

@@ -1,4 +1,4 @@
-# Agent foundation (C-001, C-002, C-004a, C-004b, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-012, C-013, C-014, C-015, C-016, C-017, C-021)
+# Agent foundation (C-001, C-002, C-004a, C-004b, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-012, C-013, C-014, C-015, C-016, C-017, C-018, C-021)
 
 The solution contains `Corvid.Abstractions`, `Corvid.Kernel`, and
 `Corvid.Models`, alongside the working Vault projects. Kernel and Models each
@@ -28,7 +28,9 @@ added compaction to the kernel (see [Compaction](#compaction-c-016)). C-014 adde
 references Abstractions, Approvals, Fabric, Kernel, Models, Tools and Tools.Builtin, `Microsoft.Data.Sqlite` and
 `Microsoft.Extensions.AI.Abstractions` (see [Skills](#skills-c-017)). C-015 added the privacy egress gate
 and the Vault-only HTTP pipeline to `Corvid.Models` (which now references `Corvid.Vault.Client`), and two adapters,
-`Corvid.Models.Anthropic` and `Corvid.Models.OpenAICompat` (see [Cloud slots and privacy egress](#cloud-slots-and-privacy-egress-c-015)). Add
+`Corvid.Models.Anthropic` and `Corvid.Models.OpenAICompat` (see [Cloud slots and privacy egress](#cloud-slots-and-privacy-egress-c-015)). C-018
+added `Corvid.Mcp`, the first surface project, which references Sandbox, Tools and Vault.Client and the ModelContextProtocol
+SDK, and nothing else references it but the host (see [MCP client and server](#mcp-client-and-server-c-018)). Add
 the other projects from the agent plan as their implementations start, rather
 than creating empty projects for every future surface.
 
@@ -308,6 +310,13 @@ C-011's device scheduler to these bindings.
 - Provider SDKs (C-015): `Anthropic` only in `Corvid.Models.Anthropic`; `OpenAI` and `Microsoft.Extensions.AI.OpenAI` (with
   `System.ClientModel`) only in `Corvid.Models.OpenAICompat`. The host resolves them through those adapters. `Corvid.Models`
   references `Corvid.Vault.Client` (core, no package) for the placeholder and Vault handlers; no core allowlist entry was added.
+- Surface projects (C-018; `SurfacePackages` in the checker) speak a protocol through its SDK. Each may reference core
+  projects and resolve the core allowlist plus its own reviewed packages (for `Corvid.Mcp`: `ModelContextProtocol`,
+  `ModelContextProtocol.Core`, `ModelContextProtocol.Extensions.Tasks` and the `Microsoft.Extensions.*` abstractions the tasks
+  extension's hosting dependency brings: caching, configuration, DI, diagnostics, file providers, hosting, logging, options and
+  primitives). It may not reference an adapter, the host, Vault, the launcher, a build tool or another surface. Only the
+  composition root may reference a surface, and it then resolves what the surface brings, as it does for adapters; a core
+  project that reached a surface or its SDK fails. Nothing was added to `CorePackages`.
 - `corvid evals` starts C-021's `corvid-evals` by path (found through `$CORVID_EVALS`, next to `corvid`, or on `PATH`), the
   way Corvid starts `corvid-sandbox`, so no production project references eval code.
 
@@ -1669,6 +1678,109 @@ full); `/memory` commands and a tool to mark facts local-only or share a core bl
 `role = "model-provider"` policy key (requests carry the toolset `model-provider` instead); switch costs for `/insights`;
 cloud embedders, extractors and vision; `tool_search` for cloud generators (§7); Bedrock, Vertex and Foundry; spike S3's
 recall measurement of GLiNER2 on the PII labels; and a run against the real services with real keys.
+
+## MCP client and server (C-018)
+
+Plan §3.1 (the MCP client capability and the MCP server surface), §7 ("MCP tools arrive as `McpClientTool`"), §10.1, §10.3,
+§10.5, §10.6, §12 and §17 row 1.15, against MCP 2026-07-28 (sampling deprecated and not relied on; the tasks extension for long
+calls). The code is in `src/Corvid.Mcp`, the only project that references the official SDK (`ModelContextProtocol.Core` and
+`ModelContextProtocol.Extensions.Tasks` 2.2.0; 2.3.0 was published the day this was built and is not taken yet). It is a
+surface project with its own checker rule (see [Dependency rules](#dependency-rules)), not `IsAotCompatible` (the tasks
+extension is not AOT-qualified). The host composes it; `Corvid.Cli` adds `corvid mcp`.
+
+- Definitions (`McpServerDefinition`, from `Corvid:Mcp:Servers:<name>` by `McpComposition.Definitions`, checked by
+  `CorvidOptionsValidator` with everything else): a name (lower-case letters, digits, `-`, `_`, at most 24) that prefixes the
+  server's tools; transport `stdio` or `http` (default `http` when `Url` is set); trust `Untrusted` (the default) or
+  `Trusted`; for stdio a command, arguments, plain environment settings (invalid or secret-like names refused, the sandbox's
+  own rule), `Sandboxed` (default true), `Network` (default false), a workspace and read-only paths (absolute, `~/` expanded);
+  for HTTP a URL (no user info) and an optional Vault `Secret` (then https is required: Vault sends credentials only over
+  verified TLS); `Tools` (only these, by the server's names), `ReadOnlyTools` (the user vouches for them), start, call and task
+  timeouts (30 s, 60 s, 10 min), `MaxResultChars` (16,000) and `MaxTools` (64). `Enabled: false` skips a server unchecked.
+- Transports (`McpTransports`): a sandboxed stdio server is started through `BubblewrapSandbox.Prepare` (new in
+  `Corvid.Sandbox`: the launcher's command line and complete environment for a long-lived process whose streams the caller
+  owns, with the same policy checks as `RunAsync`, refusing a missing launcher): the server's workspace (by default
+  `$XDG_STATE_HOME/corvid-mcp/<name>`, outside the data directory, which is denied) read-write, everything else read-only, the
+  configured read-only paths, Vault's configured locations and Corvid's state (the data directory, the configuration and rules
+  files, the launcher; `McpDeniedPaths`, as for the shell) denied on top of the launcher's own denials, no network unless
+  `Network`, and the default environment plus the server's own settings, nothing inherited. Off Linux a sandboxed server does
+  not start. `Sandboxed: false` runs the command directly in its workspace (created if missing) with the SDK's minimal
+  environment and the server's settings, and `corvid doctor` warns about it. An HTTP server uses streamable HTTP only (no SSE fallback, no standalone GET stream, no
+  reconnection): with a secret, through `VaultSecretHandler` (a placeholder in `Authorization: Bearer`) and `VaultHandler` (Vault's
+  egress proxy), above a handler that refuses, so no request leaves unproxied, and without Vault the server does not start;
+  without one, directly (no proxy, no redirects) with credential headers removed. Every request tells Vault the toolset
+  `mcp:<name>` and whether the calling session is tainted (`McpRequestScope`, an async-local set around each call; connecting
+  and listing are untainted), so a secret's taint rule applies. No token is ever in configuration or in Corvid.
+- Connections (`McpServerConnection`): connected on first use under a gate and kept; the handshake declares only the tasks
+  extension (no sampling, elicitation or roots, so nothing a server asks reaches the user or a model except through a tool
+  result). Listing is bounded by the start timeout; a call by the call timeout; a failure records the reason with the last 20
+  lines of standard error (each cut to 300 characters) and makes later calls fail at once for 30 s (`RetryDelay`) before the
+  next attempt (a start cancelled with its turn or the host is not a failure: the next call starts the server again); a server
+  that exited or dropped its connection is started again for the next call. `McpClients.Start` runs every
+  server's first start in the background (`Started` completes when each is ready or failed, never faulting) and registers
+  each server's tools as soon as it has listed them; the runtime starts it after the built-in and DI tools, so they keep their
+  names, and stops every server after the sessions on dispose. A server that never answers costs only its own tools; turns read
+  the registry, so tools appear in the next turn after their server lists them.
+- Tasks: when the server's capabilities include the tasks extension, a call is made with `CallToolAsTaskAsync`; a created
+  task is polled with `tasks/get` at the server's interval (clamped to 0.1–5 s) until it completes, fails or is cancelled, within
+  `TaskTimeout`. A turn that is cancelled or a task that times out cancels the task on the server; a task that asks for input
+  is cancelled too, since Corvid gives servers no input. Without the extension a call is an ordinary `tools/call`.
+- Tools (`McpTool`, `McpToolMapping`): each listed tool becomes a C-005 `ToolFunction` named `server__tool` (characters outside
+  `[A-Za-z0-9_-]` replaced; a name over 64 characters cut with a hash of the full name), with the server's input schema (object
+  schemas only, at most 16 KiB) and its description (bidirectional, zero-width and control characters removed, at most 1,024
+  characters). So MCP tools are embedded in the shortlist by name and description, offered, validated against their schema and
+  repaired like built-in ones. A tool listed twice, refused, over `MaxTools` or named like an existing tool is left out and
+  reported in `/mcp`. The result is `{server, content, structured?, truncated?, tainted?}`: text blocks joined, images, audio
+  and binary resources described by type and size, structured content only when there is no text, cut at `MaxResultChars`. An
+  error result is thrown as `McpToolException`, so the turn logs an error result with the server's text.
+- Risk and taint (§10.1, §10.3, §10.6): an untrusted server's annotations are ignored (a claim of read-only would let a tool run
+  unasked), so each tool is `SideEffects.Remote` and destructive, asks on every call unless a remembered approval rule covers it,
+  and its result or error taints the session (`ToolCallContext.MarkResultTainted`, set before the call). A trusted server's
+  `readOnlyHint`, `destructiveHint` and `openWorldHint` are honoured, with MCP's defaults when a hint is absent (not read-only,
+  destructive, open world). `ReadOnlyTools` makes a tool read-only whatever the server says; an untrusted server's results
+  still taint. A tool is `[Network]` when what it is sent can leave the machine (an HTTP server, or a stdio one with network or
+  unconfined; for a trusted server only when open world), so in a tainted session even a read-only one asks, and its result
+  taints. Calls made outside a turn tell Vault the session is tainted.
+- Server mode (`CorvidMcpServer`, `corvid mcp serve`): an MCP server on standard input and output for another agent (§12),
+  opened without loading any model. It accepts read-only tools only (a tool with any side effect is refused at construction),
+  answers `tools/list` and `tools/call` with read-only, non-destructive annotations, runs each call as unattended and tainted
+  (an agent's request is outside content, so anything that would ask refuses), returns a tool's argument errors as error results,
+  and cuts results at 32,000 characters. The tools: `search_memory` (`SharedMemoryTools` in `Corvid.Tools.Builtin`: hybrid
+  retrieval over FTS and the fact graph, never local-only facts and without a count of them, earlier conversations only with
+  `Corvid:Mcp:Serve:Conversations`), and `skill_list` (`SkillCatalogTools` in `Corvid.Skills`: name, description and whether the
+  skill is trusted) with `skill_read`. `Corvid:Mcp:Serve:Memory` and `:Skills` turn each part off. Standard output is the
+  protocol; notes and errors go to standard error.
+- Host and CLI: `CorvidRuntime.Mcp`; `/mcp` lists each server's transport (and whether it offers tasks), trust, state, tools and
+  detail, with what was left out, warning when one failed; `corvid mcp [list]` starts each configured server into a registry of
+  its own, prints the same with each tool's risk, and exits 1 when a server is not ready; `corvid mcp serve`; `corvid doctor`
+  reports each server without starting it (an unconfined one, or a sandboxed one off Linux, is a warning; a secret names the
+  `corvid-vault set` step). A missing Vault runtime directory makes only the servers with a secret fail.
+- Tests: `tests/Corvid.Mcp.Tests`, against an in-process SDK server on pipes (`FakeMcpServer`, shared with the host tests):
+  prefixed tools with the server's schema, untrusted annotations ignored, taint from untrusted results and errors and none from
+  a trusted read-only tool, cut results and described non-text content, a hanging call timing out, a server that never answers
+  not stalling the start, a failed server failing fast until its retry time, a start cancelled with its turn not counted as a
+  failure, a server that exits started again, filtering,
+  limits and name clashes, name sanitizing, description cleaning, definition validation; tasks (`McpTaskTests`, the SDK's task
+  store on a hosted server: a long call polled to its result, a task over its timeout cancelled on the server); HTTP
+  (`McpHttpTests`, with C-015's stand-in Vault: every request through Vault with the placeholder, the toolset and the caller's
+  taint, none direct; no Vault, no start; a keyless server reached directly without credentials); server mode (side-effecting
+  tools refused, memory search over the protocol without local-only facts, argument errors as error results, and the real
+  `corvid mcp serve` as a stdio server for Corvid's own client, unconfined (also in a workspace that does not exist yet) and
+  under the launcher, which CI requires to run).
+  `tests/Corvid.Host.Tests` (`McpHostTests`: validation, denied paths and private workspaces, a runtime whose server cannot start
+  answering turns at once with `/mcp` and doctor reporting it, and real turns where an untrusted tool asks and taints while a
+  trusted read-only one runs unasked), `tests/Corvid.Cli.Tests` (`corvid mcp` with nothing configured, a failing server and a
+  usage error), `tests/Corvid.Sandbox.Tests` (`Prepare`) and the checker's tests (the surface rule).
+
+Not built yet: OAuth authorization flows (a token is a static bearer secret in Vault); writes from server mode through the gated
+paths (a staged memory proposal needs the extractor and the event log in the serve process, so server mode is read-only only);
+resources, prompts and completions in either direction; `notifications/tools/list_changed` (a server's first listing is kept
+until Corvid restarts) and retrying a server that failed its first start without a restart (`corvid mcp list` diagnoses it);
+example requests for MCP tools in the shortlist; Vault's exec path for stdio servers that need a secret (a secret-like
+environment name is refused instead); address checks for keyless HTTP servers (the URL is the user's own configuration); the
+privacy egress gate over MCP arguments (an untrusted server's calls are each approved with their arguments shown, and a
+trusted read-only tool's are not); tainting a turn for an untrusted server's tool descriptions, which reach the prompt cleaned and
+capped but untainted, like a hub skill's L0 description; stdio servers where the sandbox does not run; server mode over HTTP
+(C-019's endpoint); and SDK 2.3.0.
 
 ## Running the check
 

@@ -121,6 +121,31 @@ public static class BoundaryCheck
         "Spectre.Console.Ansi"
     };
 
+    // Surface projects (plan §3.1) speak a protocol through its SDK. Each may reference core projects and its own reviewed
+    // packages (with what they resolve), never adapters, the host or another surface; only the composition root may
+    // reference one, and it may then resolve what the surface brings, as it does for adapters. The core rule is unchanged:
+    // a core project that reached a surface or its SDK fails.
+    private static readonly Dictionary<string, HashSet<string>> SurfacePackages = new(StringComparer.Ordinal)
+    {
+        // C-018: the official MCP C# SDK. The tasks extension pins the hosting package, which brings the DI, hosting,
+        // caching and options abstractions; nothing in Corvid.Mcp uses the generic host.
+        ["Corvid.Mcp"] = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "ModelContextProtocol",
+            "ModelContextProtocol.Core",
+            "ModelContextProtocol.Extensions.Tasks",
+            "Microsoft.Extensions.Caching.Abstractions",
+            "Microsoft.Extensions.Configuration.Abstractions",
+            "Microsoft.Extensions.DependencyInjection.Abstractions",
+            "Microsoft.Extensions.Diagnostics.Abstractions",
+            "Microsoft.Extensions.FileProviders.Abstractions",
+            "Microsoft.Extensions.Hosting.Abstractions",
+            "Microsoft.Extensions.Logging.Abstractions",
+            "Microsoft.Extensions.Options",
+            "Microsoft.Extensions.Primitives"
+        }
+    };
+
     public static IReadOnlyList<string> CheckRepository(string root)
     {
         var errors = new List<string>();
@@ -166,6 +191,7 @@ public static class BoundaryCheck
         var adapter = project.StartsWith("Corvid.Models.", StringComparison.Ordinal);
         var buildTool = BuildToolProjects.Contains(project);
         var composition = CompositionProjects.Contains(project);
+        var surface = SurfacePackages.TryGetValue(project, out var surfacePackages);
 
         foreach (var target in assets.GetProperty("targets").EnumerateObject())
         {
@@ -181,7 +207,8 @@ public static class BoundaryCheck
 
         foreach (var target in assets.GetProperty("targets").EnumerateObject())
         {
-            // Packages a composition project resolves only because an adapter brings them (Starling, ONNX Runtime).
+            // Packages a composition project resolves only because an adapter or a surface brings them (Starling, ONNX Runtime,
+            // the MCP SDK).
             var adapterPackages = composition ? AdapterPackages(assets, target.Value) : null;
             foreach (var dependency in target.Value.EnumerateObject())
             {
@@ -199,9 +226,14 @@ public static class BoundaryCheck
                 {
                     "package" when composition => CorePackages.Contains(name) || CompositionPackages.Contains(name)
                         || project == "Corvid.Cli" && CliPackages.Contains(name) || adapterPackages!.Contains(name),
+                    "package" when surface => CorePackages.Contains(name) || surfacePackages!.Contains(name),
                     "package" => buildTool
                         ? BuildToolPackages.Contains(name)
                         : !independent && !vault && (adapter || CorePackages.Contains(name)),
+                    // Only the composition root composes a surface; a surface references core projects only.
+                    "project" when SurfacePackages.ContainsKey(name) => composition,
+                    "project" when surface => name != "Corvid.Vault" && !name.StartsWith("Corvid.Models.", StringComparison.Ordinal)
+                        && !CompositionProjects.Contains(name) && !BuildToolProjects.Contains(name) && !LauncherProjects.Contains(name),
                     // A build tool in another project's graph means its assembly would ship; reference it as an analyzer.
                     "project" when buildTool || BuildToolProjects.Contains(name) => false,
                     // Executables are started by path; a reference would load one into another process.
@@ -221,6 +253,8 @@ public static class BoundaryCheck
                         : launcher ? "The corvid-sandbox launcher must have no dependencies; Vault and Corvid start it by path."
                         : type == "project" && LauncherProjects.Contains(name) ? "Start the corvid-sandbox launcher by path; do not reference it."
                         : type == "project" && CompositionProjects.Contains(name) ? "Only the CLI may reference the composition root, and nothing may reference the CLI."
+                        : type == "project" && SurfacePackages.ContainsKey(name) ? "Only the composition root may reference a surface project."
+                        : surface ? "A surface project may use core packages and its own reviewed SDK packages (SurfacePackages), and reference core projects only."
                         : composition ? "The composition root and the CLI may use core packages, their reviewed hosting, telemetry and UI packages, and what adapters bring; add a package to CompositionPackages after review."
                         : independent ? "This contract project must have no dependencies." : vault
                             ? "Vault may depend only on Corvid.Vault.Contracts."
@@ -236,7 +270,7 @@ public static class BoundaryCheck
         ?? throw new InvalidOperationException($"Missing project identity for {library}; restore the solution first.");
 
     /// <summary>
-    /// The packages reachable from an adapter (<c>Corvid.Models.*</c>) in one restored target, following each library's
+    /// The packages reachable from an adapter (<c>Corvid.Models.*</c>) or a surface project in one restored target, following each library's
     /// <c>dependencies</c>. A package that is also reachable another way is still allowed only if that way allows it.
     /// </summary>
     private static HashSet<string> AdapterPackages(JsonElement assets, JsonElement target)
@@ -247,7 +281,8 @@ public static class BoundaryCheck
 
         var pending = new Stack<string>(target.EnumerateObject()
             .Where(entry => entry.Value.GetProperty("type").GetString() == "project"
-                && ProjectName(assets, entry.Name).StartsWith("Corvid.Models.", StringComparison.Ordinal))
+                && ProjectName(assets, entry.Name) is var name
+                && (name.StartsWith("Corvid.Models.", StringComparison.Ordinal) || SurfacePackages.ContainsKey(name)))
             .Select(entry => entry.Name[..entry.Name.LastIndexOf('/')]));
         var seen = new HashSet<string>(pending, StringComparer.OrdinalIgnoreCase);
         var packages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

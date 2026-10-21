@@ -21,6 +21,12 @@
     <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.10.1" />
     <PackageVersion Include="OpenAI" Version="2.14.0" />
   </ItemGroup>
+  <!-- Corvid.Mcp only (C-018): the official MCP C# SDK and its tasks extension. The checker allows them in that surface
+       project and, through it, in the composition root; never in core projects. -->
+  <ItemGroup>
+    <PackageVersion Include="ModelContextProtocol.Core" Version="2.2.0" />
+    <PackageVersion Include="ModelContextProtocol.Extensions.Tasks" Version="2.2.0" />
+  </ItemGroup>
   <!-- Corvid.Models.Starling only (decision D-3: nuget.org, every Starlings.* package at 0.3.0 together). The checker keeps
        these out of core projects. -->
   <ItemGroup>

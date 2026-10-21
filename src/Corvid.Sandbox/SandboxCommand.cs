@@ -26,6 +26,12 @@ public sealed record SandboxCommand
     public static SandboxCommand Shell(string script) => new("/bin/sh", "-c", script);
 }
 
+/// <summary>
+/// The launcher's command line and environment for a process the caller starts itself
+/// (<see cref="BubblewrapSandbox.Prepare"/>). The environment is complete: start the process with nothing inherited.
+/// </summary>
+public sealed record SandboxLaunch(string Launcher, ImmutableArray<string> Arguments, IReadOnlyDictionary<string, string> Environment);
+
 /// <summary>What happened. Thrown instead when the sandbox could not be set up: see <see cref="SandboxRefusedException"/>.</summary>
 public sealed record SandboxResult
 {

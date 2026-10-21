@@ -45,6 +45,83 @@ public sealed class CorvidOptions
     public CheckpointSettings Checkpoints { get; set; } = new();
 
     public SkillsSettings Skills { get; set; } = new();
+
+    public McpSettings Mcp { get; set; } = new();
+}
+
+/// <summary>MCP (C-018, plan §12): servers whose tools Corvid offers, and what <c>corvid mcp serve</c> shares.</summary>
+public sealed class McpSettings
+{
+    /// <summary>Configured servers by name; the name prefixes their tools (<c>github__create_issue</c>).</summary>
+    public Dictionary<string, McpServerSettings> Servers { get; set; } = new(StringComparer.Ordinal);
+
+    public McpServeSettings Serve { get; set; } = new();
+}
+
+/// <summary>
+/// One MCP server. Nothing here is a secret: an HTTP server's token is a Vault secret named in <see cref="Secret"/>, and a
+/// stdio server gets only plain settings (secret-like names are refused).
+/// </summary>
+public sealed class McpServerSettings
+{
+    public bool Enabled { get; set; } = true;
+
+    /// <summary><c>stdio</c> or <c>http</c>; default <c>http</c> when <see cref="Url"/> is set, else <c>stdio</c>.</summary>
+    public string? Transport { get; set; }
+
+    /// <summary><c>Untrusted</c> (the default: annotations ignored, every tool asks, every result taints) or <c>Trusted</c>.</summary>
+    public Corvid.Mcp.McpTrust Trust { get; set; } = Corvid.Mcp.McpTrust.Untrusted;
+
+    public string? Command { get; set; }
+
+    public List<string> Arguments { get; set; } = [];
+
+    public Dictionary<string, string> Environment { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>Run a stdio server under <c>corvid-sandbox</c> (default). False runs it unconfined: only for a server you trust.</summary>
+    public bool Sandboxed { get; set; } = true;
+
+    /// <summary>Let a sandboxed stdio server use the network.</summary>
+    public bool Network { get; set; }
+
+    /// <summary>The directory a stdio server may write. Default its own, <c>$XDG_STATE_HOME/corvid-mcp/&lt;name&gt;</c>.</summary>
+    public string? Workspace { get; set; }
+
+    public List<string> ReadOnlyPaths { get; set; } = [];
+
+    public string? Url { get; set; }
+
+    /// <summary>The Vault secret sent as a bearer token, through Vault's proxy.</summary>
+    public string? Secret { get; set; }
+
+    /// <summary>Only these of the server's tools (by the server's names); empty for all.</summary>
+    public List<string> Tools { get; set; } = [];
+
+    /// <summary>Tools you declare read-only (by the server's names): they run without asking.</summary>
+    public List<string> ReadOnlyTools { get; set; } = [];
+
+    public int StartTimeoutSeconds { get; set; } = 30;
+
+    public int CallTimeoutSeconds { get; set; } = 60;
+
+    public int TaskTimeoutSeconds { get; set; } = 600;
+
+    public int MaxResultChars { get; set; } = 16_000;
+
+    public int MaxTools { get; set; } = 64;
+}
+
+/// <summary>What <c>corvid mcp serve</c> offers another agent. Read-only always; each part can be turned off.</summary>
+public sealed class McpServeSettings
+{
+    /// <summary><c>search_memory</c>: facts, never local-only ones.</summary>
+    public bool Memory { get; set; } = true;
+
+    /// <summary>Let <c>search_memory</c> also return earlier conversations, which hold tool results and outside content.</summary>
+    public bool Conversations { get; set; }
+
+    /// <summary><c>skill_list</c> and <c>skill_read</c>.</summary>
+    public bool Skills { get; set; } = true;
 }
 
 public sealed class CheckpointSettings

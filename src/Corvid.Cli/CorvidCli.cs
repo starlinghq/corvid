@@ -42,7 +42,7 @@ public static class ExitCodes
 }
 
 /// <summary>
-/// <c>corvid</c> (plan §17 row 1.2): <c>chat</c>, <c>model</c>, <c>doctor</c> and <c>evals</c>, with typed configuration
+/// <c>corvid</c> (plan §17 row 1.2): <c>chat</c>, <c>model</c>, <c>doctor</c>, <c>mcp</c> and <c>evals</c>, with typed configuration
 /// validated before anything runs.
 /// </summary>
 public static class CorvidCli
@@ -56,6 +56,8 @@ public static class CorvidCli
           model switch <slot> <model>  bind a slot by default (written to the user config file)
           model download <model>...  fetch models explicitly (--all for every model); the only command that downloads
           doctor                     check models, sandbox, Vault and configuration     [--thorough]
+          mcp [list]                 start each configured MCP server and list the tools it adds
+          mcp serve                  Corvid as an MCP server on stdin/stdout: memory search and skills, read-only
           evals <command> ...        calibration tooling (corvid-evals): calibrate, report, replay, export-decisions,
                                      export-trajectories; --log defaults to this user's event log
 
@@ -104,6 +106,7 @@ public static class CorvidCli
                 "model" or "models" => await ModelCommand.RunAsync(host, parsed, context, cancellationToken).ConfigureAwait(false),
                 "doctor" => await DoctorCommand.RunAsync(host, parsed, context, cancellationToken).ConfigureAwait(false),
                 "evals" => await EvalsCommand.RunAsync(host, parsed, context, cancellationToken).ConfigureAwait(false),
+                "mcp" => await McpCommand.RunAsync(host, parsed, context, cancellationToken).ConfigureAwait(false),
                 _ => UnknownCommand(console, parsed.Command),
             };
         }

@@ -140,6 +140,34 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
         }
     }
 
+    /// <summary>
+    /// How to start <paramref name="command"/> under the launcher as a long-lived process whose standard streams the caller
+    /// owns (an MCP server over stdio, C-018), instead of running it to completion. The same policy checks, arguments and
+    /// cleared environment as <see cref="RunAsync"/>; the caller starts the launcher, kills the tree when done, and may read
+    /// <paramref name="statusFile"/> (in a directory outside the workspace) to tell a refusal from a command that exited.
+    /// </summary>
+    /// <exception cref="SandboxRefusedException">The launcher is missing; nothing may run unconfined.</exception>
+    public SandboxLaunch Prepare(SandboxPolicy policy, SandboxCommand command, string? statusFile = null)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        ArgumentNullException.ThrowIfNull(command);
+        policy.Validate();
+        if (command.StandardInput is not null)
+            throw new ArgumentException("A prepared launch owns its standard input; StandardInput must be null.", nameof(command));
+        var environment = new Dictionary<string, string>(StringComparer.Ordinal);
+        IReadOnlyDictionary<string, string> source = _options.Environment ?? CurrentEnvironment();
+        foreach (string name in policy.Environment.Concat(LauncherEnvironment).Distinct(StringComparer.Ordinal))
+        {
+            if (source.TryGetValue(name, out string? value))
+                environment[name] = value;
+        }
+
+        return new SandboxLaunch(LocateLauncher(), [.. Arguments(policy, command, statusFile, _options)], environment);
+    }
+
+    /// <summary>The launcher's exit code when it refused and nothing ran; its status file says why.</summary>
+    public const int RefusedExitCode = NotStarted;
+
     /// <summary>The launcher's command line for a policy; the launcher's usage text is the contract.</summary>
     internal static List<string> Arguments(SandboxPolicy policy, SandboxCommand command, string? statusFile, SandboxOptions options)
     {

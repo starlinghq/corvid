@@ -6,6 +6,7 @@
     <Project Path="src/Corvid.Fabric/Corvid.Fabric.csproj" />
     <Project Path="src/Corvid.Host/Corvid.Host.csproj" />
     <Project Path="src/Corvid.Kernel/Corvid.Kernel.csproj" />
+    <Project Path="src/Corvid.Mcp/Corvid.Mcp.csproj" />
     <Project Path="src/Corvid.Memory/Corvid.Memory.csproj" />
     <Project Path="src/Corvid.Models/Corvid.Models.csproj" />
     <Project Path="src/Corvid.Models.Anthropic/Corvid.Models.Anthropic.csproj" />
@@ -32,6 +33,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/Corvid.Approvals.Tests/Corvid.Approvals.Tests.csproj" />
     <Project Path="tests/Corvid.Kernel.Tests/Corvid.Kernel.Tests.csproj" />
+    <Project Path="tests/Corvid.Mcp.Tests/Corvid.Mcp.Tests.csproj" />
     <Project Path="tests/Corvid.Evals.Tests/Corvid.Evals.Tests.csproj" />
     <Project Path="tests/Corvid.Cli.Tests/Corvid.Cli.Tests.csproj" />
     <Project Path="tests/Corvid.Fabric.Tests/Corvid.Fabric.Tests.csproj" />

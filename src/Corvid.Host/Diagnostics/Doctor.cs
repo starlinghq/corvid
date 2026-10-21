@@ -72,6 +72,7 @@ public sealed class Doctor(IConfiguration configuration, ModelCatalogue catalogu
         checks.Add(Git(options));
         checks.Add(await VaultAsync(options, cancellationToken).ConfigureAwait(false));
         checks.Add(SkillsGit(options));
+        checks.AddRange(Mcp(options));
         return checks;
     }
 
@@ -129,6 +130,32 @@ public sealed class Doctor(IConfiguration configuration, ModelCatalogue catalogu
                 $"{(value is null ? "not set" : $"set to {value}")} in this process; Starling requires {MallocValue} for GLiNER2 and Kev on Linux. " +
                 "`corvid chat` re-executes itself with it set.",
                 $"export {MallocVariable}={MallocValue} for other hosts of the extractor or the decider.");
+    }
+
+    /// <summary>
+    /// C-018: what the configured MCP servers need, without starting them (doctor uses no network and runs nothing): the
+    /// sandbox for sandboxed stdio servers, Vault for servers with a secret, and a warning for each unconfined one.
+    /// </summary>
+    private static IEnumerable<DoctorCheck> Mcp(CorvidOptions options)
+    {
+        var (servers, _) = Composition.McpComposition.Definitions(options);
+        foreach (var server in servers)
+        {
+            var http = server.Transport == Corvid.Mcp.McpTransportKind.Http;
+            var kind = http ? $"http {server.Url}" : $"stdio {server.Command}";
+            var trust = server.Trust.ToString().ToLowerInvariant();
+            if (!http && !server.Sandboxed)
+                yield return new DoctorCheck("mcp", server.Name, CheckStatus.Warning, $"{kind}, {trust}, runs unconfined",
+                    "Remove Sandboxed=false unless you trust this server with everything your user can reach.");
+            else if (!http && !OperatingSystem.IsLinux())
+                yield return new DoctorCheck("mcp", server.Name, CheckStatus.Warning, $"{kind}: the sandbox runs on Linux only, so it will not start");
+            else if (server.Secret is { } secret)
+                yield return new DoctorCheck("mcp", server.Name, CheckStatus.Info, $"{kind}, {trust}, token from the Vault secret '{secret.Name}'",
+                    $"corvid-vault set {secret.Name}, bound to {server.Url?.Host}");
+            else
+                yield return new DoctorCheck("mcp", server.Name, CheckStatus.Ok,
+                    $"{kind}, {trust}{(server.Network ? ", network" : "")}; corvid mcp list starts it");
+        }
     }
 
     // The skills directory is a git repository (C-017); without git, skills still load but no change can be recorded.

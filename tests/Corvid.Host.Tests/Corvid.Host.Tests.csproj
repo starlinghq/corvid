@@ -9,5 +9,7 @@
     <ProjectReference Include="../../src/Corvid.Host/Corvid.Host.csproj" />
     <!-- The stand-in Vault on a Unix socket, shared with the adapter tests. -->
     <Compile Include="../Corvid.Models.Remote.Tests/Infrastructure.cs" Link="FakeVault.cs" />
+    <!-- The in-process MCP server, shared with the MCP tests (C-018). -->
+    <Compile Include="../Corvid.Mcp.Tests/FakeMcpServer.cs" Link="FakeMcpServer.cs" />
   </ItemGroup>
 </Project>

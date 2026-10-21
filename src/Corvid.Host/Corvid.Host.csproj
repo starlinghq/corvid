@@ -13,6 +13,7 @@
     <ProjectReference Include="../Corvid.Approvals/Corvid.Approvals.csproj" />
     <ProjectReference Include="../Corvid.Fabric/Corvid.Fabric.csproj" />
     <ProjectReference Include="../Corvid.Kernel/Corvid.Kernel.csproj" />
+    <ProjectReference Include="../Corvid.Mcp/Corvid.Mcp.csproj" />
     <ProjectReference Include="../Corvid.Memory/Corvid.Memory.csproj" />
     <ProjectReference Include="../Corvid.Models/Corvid.Models.csproj" />
     <ProjectReference Include="../Corvid.Models.Starling/Corvid.Models.Starling.csproj" />
