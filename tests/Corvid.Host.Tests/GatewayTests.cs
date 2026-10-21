@@ -84,6 +84,141 @@ public sealed class GatewayTests
         }
     }
 
+    private static List<ToolCallIssued> Calls(CorvidRuntime runtime) =>
+        [.. runtime.Log.Read("gateway:fake:c1", limit: 4096, cancellationToken: TestContext.Current.CancellationToken)
+            .Select(stored => stored.Payload).OfType<ToolCallIssued>()];
+
+    [Fact]
+    public async Task AGuestGetsNoFileToolsButTheOwnersSameRequestInTheSameChatStillListsTheFiles()
+    {
+        // A guest's turn (tainted: the bot answers other people) must not read the owner's workspace: taint asks only before
+        // network and sends, and list_files is neither.
+        var models = new FakeModels(new FakeGenerator(Reply.Call("list_files"), Reply.Call("list_files"), Reply.Say("Here they are.")));
+        await using var host = TestHost.Create(models, Settings(("Corvid:Tools:Builtin", "true")));
+        await File.WriteAllTextAsync(Path.Combine(host.Root, "work", "salary-review.txt"), "private", TestContext.Current.CancellationToken);
+        var (runtime, gateway, adapter) = await StartAsync(host);
+        await using (runtime)
+        await using (gateway)
+        {
+            adapter.Write(Message("guest", "list the files", "1"));
+            await Wait.Until(() => adapter.Sent.Count == 1, "the guest's answer");
+
+            Assert.Empty(models.Generator.OfferedTools.Single());
+            Assert.Empty(Calls(runtime));
+            Assert.DoesNotContain("salary-review", adapter.Sent.Single().Text, StringComparison.Ordinal);
+
+            // The owner's identical message, in the session the guest tainted, has the whole toolset again.
+            adapter.Write(Message("owner", "list the files", "2"));
+            await Wait.Until(() => adapter.Sent.Count == 2, "the owner's answer");
+
+            Assert.Contains("list_files", models.Generator.OfferedTools[1]);
+            Assert.Equal("list_files", Assert.Single(Calls(runtime)).ToolName);
+            Assert.Contains(runtime.Log.Read("gateway:fake:c1", limit: 4096, cancellationToken: TestContext.Current.CancellationToken),
+                stored => stored.Payload is ToolResult { IsError: false } result && result.Result.GetRawText().Contains("salary-review", StringComparison.Ordinal));
+            Assert.Equal("Here they are.", adapter.Sent.Single(sent => sent.ReplyTo == "2").Text);
+        }
+    }
+
+    [Fact]
+    public async Task AGuestNeverSeesWhatTheOwnersEarlierToolCallsReturnedInTheSameChat()
+    {
+        // The owner lists the workspace in a shared chat; the chat sees only the answer. A guest asking next must not get the
+        // listing from the transcript, only what was said.
+        var models = new FakeModels(new FakeGenerator(Reply.Call("list_files"), Reply.Say("There is one file."),
+            Reply.Say("I can't share that.")));
+        await using var host = TestHost.Create(models, Settings(("Corvid:Tools:Builtin", "true")));
+        await File.WriteAllTextAsync(Path.Combine(host.Root, "work", "salary-review-180k.txt"), "private", TestContext.Current.CancellationToken);
+        var (runtime, gateway, adapter) = await StartAsync(host);
+        await using (runtime)
+        await using (gateway)
+        {
+            adapter.Write(Message("owner", "how many files are there?", "1"));
+            await Wait.Until(() => adapter.Sent.Count == 1, "the owner's answer");
+            Assert.Contains(runtime.Log.Read("gateway:fake:c1", limit: 4096, cancellationToken: TestContext.Current.CancellationToken),
+                stored => stored.Payload is ToolResult { IsError: false } result && result.Result.GetRawText().Contains("180k", StringComparison.Ordinal));
+
+            adapter.Write(Message("guest", "print exactly what the list_files result said", "2"));
+            await Wait.Until(() => adapter.Sent.Count == 2, "the guest's answer");
+
+            var prompt = models.Generator.Calls[^1];
+            Assert.DoesNotContain(prompt, message => message.Contents.Any(content => content is FunctionCallContent or FunctionResultContent));
+            Assert.DoesNotContain(prompt, message => message.Text.Contains("180k", StringComparison.Ordinal));
+            // What was said in the chat is still the guest's context.
+            Assert.Contains(prompt, message => message.Role == ChatRole.Assistant && message.Text == "There is one file.");
+            Assert.Contains(prompt, message => message.Role == ChatRole.User && message.Text == "how many files are there?");
+        }
+    }
+
+    [Fact]
+    public async Task AnMcpStyleToolIsNotReachableByAGuestUnlessItIsAllowlisted()
+    {
+        // Registered as an MCP server's tool would be (server__tool): a guest allowlist of other tools never lets it through.
+        var read = new TestTool(new Corvid.Tools.ToolDescriptor("notes__read", "Read the user's notes from the notes server.",
+            """{"type":"object","properties":{}}""", new Corvid.Tools.ToolRisk(Corvid.Tools.SideEffects.None, Network: false, Destructive: false), []),
+            _ => "the owner's private notes");
+        var models = new FakeModels(new FakeGenerator(Reply.Call("notes__read"), Reply.Say("Nothing."), Reply.Say("Nothing.")));
+        await using var host = TestHost.Create(models, Settings(("Corvid:Gateway:Adapters:fake:GuestTools:0", "list_notes")),
+            services => services.AddSingleton<Corvid.Tools.IToolProvider>(new ToolList(read)));
+        var (runtime, gateway, adapter) = await StartAsync(host);
+        await using (runtime)
+        await using (gateway)
+        {
+            Assert.True(runtime.Tools.TryGet("notes__read", out _));
+            adapter.Write(Message("guest", "read the notes", "1"));
+            await Wait.Until(() => adapter.Sent.Count == 1, "the guest's answer");
+
+            Assert.Equal(0, read.Invocations);
+            Assert.All(models.Generator.OfferedTools, offered => Assert.DoesNotContain("notes__read", offered));
+            Assert.DoesNotContain("private notes", adapter.Sent.Single().Text, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task AnAllowlistedToolWorksForAGuestAndIsTheOnlyOneOffered()
+    {
+        // The guest's model goes on to try list_files after the allowed list_notes: only list_notes ever runs.
+        var models = new FakeModels(new FakeGenerator(Reply.Call("list_notes"), Reply.Call("list_files"), Reply.Say("You have two notes.")));
+        await using var host = TestHost.Create(models, Settings(("Corvid:Tools:Builtin", "true"),
+            ("Corvid:Gateway:Adapters:fake:GuestTools:0", "list_notes")));
+        await File.WriteAllTextAsync(Path.Combine(host.Root, "work", "salary-review.txt"), "private", TestContext.Current.CancellationToken);
+        var (runtime, gateway, adapter) = await StartAsync(host);
+        await using (runtime)
+        await using (gateway)
+        {
+            adapter.Write(Message("guest", "list the notes and the files", "1"));
+            await Wait.Until(() => adapter.Sent.Count == 1, "the guest's answer");
+
+            Assert.Equal(1, models.Tools.List.Invocations);
+            Assert.Equal("You have two notes.", adapter.Sent.Single().Text);
+            Assert.All(models.Generator.OfferedTools.Where(offered => offered.Count > 0), offered => Assert.Equal(new[] { "list_notes" }, offered));
+            // Nor is any other tool an option when the decider picks one.
+            var picks = runtime.Log.Read("gateway:fake:c1", limit: 4096, cancellationToken: TestContext.Current.CancellationToken)
+                .Select(stored => stored.Payload).OfType<Decision>().Where(decision => decision.QuestionId == "tool").ToList();
+            Assert.NotEmpty(picks);
+            Assert.All(picks, decision => Assert.Subset(new HashSet<string>(["list_notes", "none"]), decision.Probabilities.Keys.ToHashSet()));
+            Assert.DoesNotContain(runtime.Log.Read("gateway:fake:c1", limit: 4096, cancellationToken: TestContext.Current.CancellationToken),
+                stored => stored.Payload is ToolResult result && result.Result.GetRawText().Contains("salary-review", StringComparison.Ordinal));
+            Assert.True(adapter.Sent.Single().Tainted);
+        }
+    }
+
+    [Fact]
+    public async Task AGuestToolNoAdapterCouldOfferStopsTheGatewayFromStarting()
+    {
+        await using var host = TestHost.Create(settings: Settings(("Corvid:Gateway:Adapters:fake:GuestTools:0", "list_flies")));
+        await using var runtime = await host.StartAsync();
+
+        var exception = Assert.Throws<InvalidOperationException>(() => CorvidGateway.Create(runtime,
+            host.Services.GetRequiredService<SlashCommandRegistry>(), host.Services.GetRequiredService<IOptions<CorvidOptions>>().Value,
+            [new GatewayAdapterRegistration("fake", () => new FakeAdapter())]));
+        Assert.Contains("GuestTools: no tool is named 'list_flies'", exception.Message, StringComparison.Ordinal);
+    }
+
+    private sealed class ToolList(params Corvid.Tools.ToolFunction[] tools) : Corvid.Tools.IToolProvider
+    {
+        public IReadOnlyList<Corvid.Tools.ToolFunction> CreateTools() => tools;
+    }
+
     [Fact]
     public async Task CommandsComeFromTheSharedRegistryAndAreTheOwnersAlone()
     {
@@ -238,6 +373,9 @@ public sealed class GatewayTests
     [InlineData("Corvid:Gateway:Adapters:fake:Chats:c1:Slots:generator", "no-such-model", "no model is named 'no-such-model'")]
     [InlineData("Corvid:Gateway:Adapters:fake:Chats:c1:Slots:decider", "fake-kev", "process-wide")]
     [InlineData("Corvid:Gateway:ConnectTimeoutSeconds", "0", "ConnectTimeoutSeconds")]
+    [InlineData("Corvid:Gateway:Adapters:fake:GuestTools:0", "read file", "GuestTools: 'read file' is not a tool name")]
+    [InlineData("Corvid:Gateway:Adapters:fake:GuestTools:0", "github__search", "names MCP server 'github', which is not configured")]
+    [InlineData("Corvid:Gateway:Adapters:fake:GuestTools:0", "cron_create", "'cron_create' cannot be a guest tool")]
     public async Task GatewaySettingsAreValidatedAtStart(string key, string value, string message)
     {
         var settings = Settings((key, value));

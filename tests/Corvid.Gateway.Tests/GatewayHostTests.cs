@@ -46,6 +46,26 @@ public sealed class GatewayHostTests
     }
 
     [Fact]
+    public async Task OnlyTheOwnersTurnsGetTheWholeToolsetAndGuestsGetTheAdaptersGuestToolsOrNone()
+    {
+        await using var fixture = new GatewayFixture();
+        var adapter = new FakeAdapter();
+        var other = new FakeAdapter("other");
+        await fixture.StartAsync(GatewayFixture.Options(Fake with { GuestTools = ["list_notes"] },
+            new AdapterOptions("other") { Owners = ["owner"], Guests = ["guest"] }), adapter, other);
+
+        adapter.Write(Direct("owner", "owner asks"));
+        adapter.Write(Direct("guest", "guest asks"));
+        other.Write(Direct("guest", "guest elsewhere") with { Adapter = "other" });
+        await Wait.Until(() => fixture.Agent.Posts.Count == 3, "three messages");
+
+        Assert.Null(fixture.Agent.Scopes["owner asks"]);
+        Assert.Equal("list_notes", Assert.Single(fixture.Agent.Scopes["guest asks"]!.Tools));
+        // Without GuestTools a guest's turn gets no tools at all.
+        Assert.Empty(fixture.Agent.Scopes["guest elsewhere"]!.Tools);
+    }
+
+    [Fact]
     public async Task GroupMessagesThatDoNotAddressTheBotAreIgnoredAndStrangersInGroupsGetNoCode()
     {
         await using var fixture = new GatewayFixture();

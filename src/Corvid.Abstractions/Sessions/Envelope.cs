@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+
 namespace Corvid.Abstractions.Sessions;
 
 /// <summary>Who wrote an envelope's text, for taint (plan §10.3).</summary>
@@ -23,4 +25,27 @@ public sealed record Envelope(string SessionId, string Surface, string Text, Env
     public string Surface { get; } = !string.IsNullOrWhiteSpace(Surface) ? Surface : throw new ArgumentException("An envelope needs a surface.", nameof(Surface));
 
     public string Text { get; } = Text ?? throw new ArgumentNullException(nameof(Text));
+
+    /// <summary>
+    /// Set for a message from someone who is not the user and may use only some tools (a gateway guest); null for the
+    /// session's own user, whose turns get the whole toolset.
+    /// </summary>
+    public GuestScope? Guest { get; init; }
+}
+
+/// <summary>
+/// What a turn driven by someone other than the user may reach (a gateway guest, C-020). The turn is offered only the tools
+/// named here, by exact name, so a tool added later (an MCP server's <c>server__tool</c>, a skill's tools) is never reached
+/// unless named; and it gets none of the user's own context: no skills, no memory recall and no core blocks.
+/// </summary>
+public sealed class GuestScope(IEnumerable<string> tools)
+{
+    /// <summary>No tools at all: the default for guests.</summary>
+    public static GuestScope None { get; } = new([]);
+
+    /// <summary>Tool names compared exactly (ordinal), whatever comparer the caller's set used.</summary>
+    public ImmutableHashSet<string> Tools { get; } = ImmutableHashSet.CreateRange(StringComparer.Ordinal,
+        tools ?? throw new ArgumentNullException(nameof(tools)));
+
+    public bool Allows(string tool) => Tools.Contains(tool);
 }

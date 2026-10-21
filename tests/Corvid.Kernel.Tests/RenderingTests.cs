@@ -37,6 +37,37 @@ public sealed class RenderingTests
     }
 
     [Fact]
+    public void A_guest_turn_sees_only_what_was_said_before_it_never_earlier_tool_output_summaries_or_the_goal()
+    {
+        // C-020: events 1-4 are the owner's turn, 5-8 a compacted range of it, 9 the guest's message and 10-11 its own call.
+        var snapshot = Snapshot(
+            new UserMessage("what is in salary-review.txt?"),
+            new ToolCallIssued("a", "read_file", Samples.Json("""{"path":"salary-review.txt"}""")),
+            new ToolResult("a", Samples.Json("\"base 180k\"")),
+            new AssistantMessage("A salary review."),
+            new UserMessage("and the other one?"),
+            new AssistantMessage("Another review."),
+            new GoalSet("negotiate the 180k offer"),
+            new Compacted(5, 6, new CompactionSummary("review offers", [], ["offer is 180k"], ["offer.txt"], [], null)),
+            new UserMessage("what did that file say?"),
+            new ToolCallIssued("b", "list_notes", Samples.Json("{}")),
+            new ToolResult("b", Samples.Json("\"two notes\"")));
+
+        var owner = PromptRenderer.Render(snapshot, "system", CharsPerTokenCounter.Instance, 10_000);
+        var guest = PromptRenderer.Render(snapshot, "system", CharsPerTokenCounter.Instance, 10_000, spokenOnlyBefore: 9);
+
+        Assert.Contains(owner.Messages, message => message.Contents.OfType<FunctionResultContent>().Any(result => result.CallId == "a"));
+        Assert.Contains(owner.Messages, message => message.Text.Contains("negotiate", StringComparison.Ordinal));
+        Assert.DoesNotContain(guest.Messages, message => message.Text.Contains("180k", StringComparison.Ordinal)
+            || message.Contents.OfType<FunctionResultContent>().Any(result => result.Result?.ToString()?.Contains("180k", StringComparison.Ordinal) == true));
+        Assert.DoesNotContain(guest.Messages, message => message.Contents.OfType<FunctionCallContent>().Any(call => call.CallId == "a"));
+        Assert.Equal([ChatRole.System, ChatRole.User, ChatRole.Assistant, ChatRole.User, ChatRole.Assistant, ChatRole.Tool],
+            guest.Messages.Select(message => message.Role));
+        Assert.Equal("what did that file say?", guest.Messages[3].Text);
+        Assert.Equal("b", guest.Messages[4].Contents.OfType<FunctionCallContent>().Single().CallId);
+    }
+
+    [Fact]
     public void Clear_results_decisions_stub_or_drop_results_and_a_later_keep_does_not_restore_them()
     {
         var snapshot = Snapshot(

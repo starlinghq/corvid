@@ -198,6 +198,12 @@ public sealed class GatewayAdapterSettings
     /// <summary>Platform user ids allowed without pairing; their messages are outside content (tainted).</summary>
     public List<string> Guests { get; set; } = [];
 
+    /// <summary>
+    /// Tools a non-owner's turn may use, by exact name (an MCP tool as <c>server__tool</c>). Empty by default: guests get
+    /// answers, but no tools, skills or memory of the owner's.
+    /// </summary>
+    public List<string> GuestTools { get; set; } = [];
+
     /// <summary>Where <c>deliver: home_channel</c> sends.</summary>
     public string? HomeChat { get; set; }
 

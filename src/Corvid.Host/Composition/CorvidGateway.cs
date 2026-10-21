@@ -31,6 +31,32 @@ public static class CorvidGateway
         return [.. options.Gateway.Adapters.Where(pair => pair.Value is { Enabled: true }).Select(pair => pair.Key.ToLowerInvariant()).Order(StringComparer.Ordinal)];
     }
 
+    /// <summary>The MCP server an MCP tool name (<c>server__tool</c>) belongs to, or null for any other name.</summary>
+    public static string? McpServerOf(string tool)
+    {
+        ArgumentNullException.ThrowIfNull(tool);
+        var separator = tool.IndexOf("__", StringComparison.Ordinal);
+        return separator > 0 ? tool[..separator] : null;
+    }
+
+    /// <summary>
+    /// Guest tools (C-020) no adapter could ever offer: not in the runtime's registry and not an MCP server's (whose tools are
+    /// listed in the background; the validator has already checked that the server is configured). Reported when the
+    /// gateway starts, so a typo is not silently a tool nobody gets.
+    /// </summary>
+    public static IReadOnlyList<string> UnknownGuestTools(CorvidOptions options, IEnumerable<string> registered)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(registered);
+        var known = registered.ToHashSet(StringComparer.Ordinal);
+        var problems = new List<string>();
+        foreach (var (name, settings) in options.Gateway.Adapters.Where(pair => pair.Value is { Enabled: true }).OrderBy(pair => pair.Key, StringComparer.Ordinal))
+            foreach (var tool in settings.GuestTools.Where(tool => !known.Contains(tool) && McpServerOf(tool) is null))
+                problems.Add($"Corvid:Gateway:Adapters:{name}:GuestTools: no tool is named '{tool}'; the tools are " +
+                    $"{string.Join(", ", known.Order(StringComparer.Ordinal))}.");
+        return problems;
+    }
+
     public static GatewayOptions OptionsFor(CorvidOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -43,6 +69,7 @@ public static class CorvidGateway
             {
                 Owners = [.. settings.Owners],
                 Guests = [.. settings.Guests],
+                GuestTools = ImmutableHashSet.CreateRange(StringComparer.Ordinal, settings.GuestTools),
                 HomeChat = settings.HomeChat is { Length: > 0 } home ? home : null,
                 Chats = settings.Chats.Where(chat => chat.Value is not null).ToImmutableDictionary(chat => chat.Key,
                     chat => new ChatSettings(chat.Value.Persona, chat.Value.Slots), StringComparer.Ordinal),
@@ -63,6 +90,8 @@ public static class CorvidGateway
         ArgumentNullException.ThrowIfNull(runtime);
         ArgumentNullException.ThrowIfNull(commands);
         ArgumentNullException.ThrowIfNull(options);
+        if (UnknownGuestTools(options, runtime.Tools.List().Select(tool => tool.Name)) is { Count: > 0 } unknown)
+            throw new InvalidOperationException(string.Join(Environment.NewLine, unknown));
         var extra = (supplied ?? []).ToDictionary(registration => registration.Name, StringComparer.OrdinalIgnoreCase);
         var registrations = new List<GatewayAdapterRegistration>();
         GatewayVault? vault = null;
@@ -129,11 +158,14 @@ internal sealed class RuntimeGatewayAgent(CorvidRuntime runtime, SlashCommandReg
         }
     }
 
-    public async ValueTask<Task<AgentReply>> PostAsync(string sessionId, string text, bool fromOwner, CancellationToken cancellationToken)
+    public async ValueTask<Task<AgentReply>> PostAsync(string sessionId, string text, GuestScope? guest, CancellationToken cancellationToken)
     {
         var session = Session(sessionId);
-        // Anyone but the owner is outside content (plan §10.3): their message taints the session until the owner speaks.
-        var delivery = await session.PostAsync(text, fromOwner ? EnvelopeOrigin.User : EnvelopeOrigin.External, cancellationToken).ConfigureAwait(false);
+        // Anyone but the owner is outside content (plan §10.3): their message taints the session until the owner speaks, and
+        // their turn gets only the adapter's guest tools. The owner's next turn has the whole toolset again.
+        var delivery = await (guest is null
+            ? session.PostAsync(text, EnvelopeOrigin.User, cancellationToken)
+            : session.PostAsGuestAsync(text, guest, cancellationToken)).ConfigureAwait(false);
         return ReplyAsync(session, delivery);
     }
 
