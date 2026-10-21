@@ -32,7 +32,7 @@ public sealed class ScanCommandTests
         using var run = new CliRun();
         Seed(run);
 
-        Assert.Equal(ExitCodes.Success, await run.RunAsync(["scan"]));
+        Assert.True(await run.RunAsync(["scan"]) == ExitCodes.Success, run.Output);
 
         Assert.Contains("3 sessions · 2 findings", run.Output, StringComparison.Ordinal);
         Assert.Contains("session exfil", run.Output, StringComparison.Ordinal);

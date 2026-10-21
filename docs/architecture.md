@@ -1,4 +1,4 @@
-# Agent foundation (C-001, C-002, C-004a, C-004b, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-012, C-013, C-014, C-015, C-016, C-017, C-018, C-019, C-020, C-021)
+# Agent foundation (C-001, C-002, C-004a, C-004b, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-012, C-013, C-014, C-015, C-016, C-017, C-018, C-019, C-020, C-021, C-023)
 
 The solution contains `Corvid.Abstractions`, `Corvid.Kernel`, and
 `Corvid.Models`, alongside the working Vault projects. Kernel and Models each
@@ -33,7 +33,8 @@ added `Corvid.Mcp`, the first surface project, which references Sandbox, Tools a
 SDK, and nothing else references it but the host (see [MCP client and server](#mcp-client-and-server-c-018)). C-020
 added `Corvid.Gateway`, which references Abstractions, Approvals, `Corvid.Vault.Client` and `Microsoft.Data.Sqlite`, and the
 platform adapters `Corvid.Gateway.Telegram`, `.Discord` and `.Slack`, which reference only the gateway (see
-[Gateway](#gateway-c-020)). Add
+[Gateway](#gateway-c-020)). C-023 added `Corvid.Rules`, which references Abstractions only; Approvals references it (see
+[Detection rules](#detection-rules-c-023)). Add
 the other projects from the agent plan as their implementations start, rather
 than creating empty projects for every future surface.
 
@@ -2131,6 +2132,136 @@ sends (refused or allowed per token today); pairing from a chat; a cap on the le
 stay in the log); taint that follows content rather than turns (by C-011's rule the owner's next message clears it,
 though a guest's earlier text in a group chat stays in the projection, as a fetched page does); and a run against the real
 platforms with real tokens.
+
+## Detection rules (C-023)
+
+Plan §10.2 (approval on structure), §10.3 (taint) and §16 (observability). Declarative detection rules over the typed
+session events, evaluated inline at pre_execute and post-hoc by `corvid scan`. The format follows Beacon's threat-rules
+spec v1.1 (Asymptote-Labs/agent-beacon, MIT): one of `match` or `correlation`, `order: sequence|any`, at most one finding
+per session, no event filling two steps, rules that carry their own fixtures and a maturity ladder. Conditions are a small
+typed predicate tree instead of CEL, and fields are Corvid's own event fields. Beacon was read for the format and a few
+short regexes only; no code was copied.
+
+- Project. `Corvid.Rules` (core, `IsAotCompatible`) references Abstractions only and no package, so the checker's core
+  rule accepts it as is. `Corvid.Approvals` references it, and Host, Kernel and the CLI reach it through Approvals. Rules
+  cannot use Approvals' `ShellAnalyzer` without a cycle, which is one reason "the same command" is approximated by command
+  class (below).
+- Format. One JSON file per rule, `<id>.rule.json` (YAML would need a package), read through a source-generated context
+  with `UnmappedMemberHandling.Disallow`, so a misspelt key fails the load. Fields: `id` (`^[a-z0-9][a-z0-9-]*$`, unique in
+  the pack, and the file's name), `version` (≥ 1), `title`, `description` (optional), `severity`
+  (`info|low|medium|high|critical`), `status` (`experimental|stable|deprecated`), `posture` (`detect|enforce`), `enforce`
+  (optional, `ask` only: `deny` is a load error that names the follow-up), `reason`, `category` (Beacon's directory name),
+  exactly one of `match` or `correlation`, and `tests`. A `match` or a correlation step is
+  `{ "event": "<wire name>", "where": <predicate> }`; the event is a `SessionEvent` discriminator (`tool_call_issued`,
+  `tool_result`, `approval_resolved`, ...), and a step may not select `detection_matched`, so a detection never feeds
+  another.
+- Predicates. `all`, `any`, `not`, and leaves `{ "field": "<path>", "<op>": <value> }` with exactly one of `equals`
+  (string, number, boolean or null), `in`, `regex`, `gt`, `gte`, `lt`, `lte` (numbers) or `exists`. Paths are dotted
+  snake_case wire names relative to the event (`tool_name`, `arguments.command`, `result`, `approved`). Evaluation runs
+  over the event's persisted JSON (`JsonElement`), so it is trim and AOT safe. A missing path is false and never throws;
+  an optional field left out when null (`call_id` on a job's approval) is missing, not null, so `exists` tests it. A path
+  through an array matches when any element does. `equals` or `regex` on an object tests every string under it, up to
+  64 KiB in all; a longer string is cut at 64 KiB.
+- Validation. The field catalogue is read from the rules' source-generated serializer metadata:
+  `PolymorphismOptions.DerivedTypes` for each discriminator, `JsonTypeInfo.Properties` for names and types, recursing
+  into nested records and array elements. An unknown event, a typo (`tool_nme`), a path on the wrong event, a numeric
+  operator on a string, a string compared with a number, or `regex` on a number fails the load with the path and what the
+  event has instead. Paths into `JsonElement` fields (`ToolCallIssued.arguments`, `ToolResult.result`, `Decision.state`,
+  the `ModelSwitched` profiles) and dictionaries are validated up to that field and open beyond it. A test cross-checks
+  the catalogue by reflection against every `SessionEvent` type, as `EventJsonTests` does for wire names, and another
+  that the rules serialize every event exactly as `EventJson` (the options are duplicated in `Corvid.Rules`, so drift
+  would otherwise be silent).
+- Regexes. `RegexOptions.NonBacktracking | CultureInvariant`, a 1 s match timeout (it bounds wall-clock time on a loaded machine: NonBacktracking is linear in the capped input), compiled and run once at load. A pattern
+  NonBacktracking refuses (lookaround, backreference) fails the load. A timeout during evaluation is a rule error, never a
+  match or a no-match: scan reports it (exit 1); inline, an enforce rule that errors forces the prompt (fail closed) and a
+  detect rule records nothing.
+- Derived fields, under `derived.`, are computed from the session's own earlier events and never read from the event:
+  `derived.command` on `tool_call_issued` is the command line of a call to a shell tool (`ApprovalOptions.ShellTools`,
+  `{shell: command}`); `tool_result` adds the call's `derived.tool_name` and `derived.command`; `approval_resolved` adds
+  `derived.call_id` (from its `ApprovalRequested`, C-011), that call's `derived.tool_name` and `derived.command`, and
+  `derived.action` (the request's action document). A job script's approval has no call, so its `derived.command` is the
+  action document's `text`. This makes "a denial of a command in class X" one step, with no cross-step binding.
+- Correlation. Scope `session` only; `window` is `120s`, `5m`, `2h`, `1d` or ISO-8601 (`PT10M`), at most 7 days, over
+  `StoredEvent.RecordedAt`; `order` is `sequence` (default) or `any`; 2 to 8 steps. Candidates are filtered per step first
+  (at most 4,096 each). A sequence anchors on each candidate of the first step and takes the earliest later candidate of
+  each next step, which is never worse for the steps after it or the window. Any order takes each event as the earliest,
+  gives it a step it satisfies, and assigns distinct later events within the window to the other steps by bipartite
+  matching (with n steps, n candidates per step suffice). A rule yields at most one finding per session; a single-event
+  rule's finding lists up to 64 matched sequences.
+- Tests. Each test has a `name`, a `verdict` (`match` or `no_match`) and `events` in the log's persisted form (payload
+  version 1, `type` discriminator anywhere in the object), each optionally with `at` (seconds from the test's start;
+  default one per event) and `session` (default `s1`), so cross-session and window cases can be written. Fixtures are read
+  into `SessionEvent` with unknown fields refused, so a malformed fixture fails the load. Maturity: experimental needs a
+  test, stable a `match` and a `no_match`, deprecated none. Duplicate ids fail the pack. `Corvid.Rules.Tests` runs every
+  shipped rule's tests in one Theory.
+- Built-in pack. Embedded resources `Pack/<category>/<id>.rule.json` (logical name `Corvid.Rules.Pack.<id>.rule.json`, as
+  Fabric embeds `floors.json`), loaded once by `RulePack.BuiltIn()`. Twelve rules, all stable:
+  `credential-access/credential-file-read` (shell or `read_file` on SSH private keys, `.aws/credentials`, `.netrc`,
+  `.kube/config`, `.docker/config.json`, `gh/hosts.yml`, `.gnupg/`, `.env`; medium, detect);
+  `context-exfiltration/secret-read-then-egress` (any order, 10 min: a credential read and curl, wget, nc, scp, rsync,
+  ssh, `/dev/tcp` or `web_fetch`; high, enforce); `env-dump-piped-to-network` (critical, enforce);
+  `secret-file-to-network` (a credential file as a curl or wget body, or piped or redirected into curl or netcat;
+  critical, enforce); `base64-into-url` (base64 output substituted into a request URL or piped to curl or wget; high,
+  enforce); `approval-abuse/approval-denied-then-reissued` (sequence, 30 min: the user denied a command in a dangerous
+  class, then a call in the same class; high, enforce); `approval-denied-then-executed` (the same denial, then a
+  successful `tool_result` in the class; critical, detect, found by scan); `risky-command/curl-pipe-to-shell`,
+  `base64-decode-piped-to-shell` and `fork-bomb` (high, detect); `prompt-injection/injection-in-tool-result`
+  (instruction-override or covert-action phrases in a result; medium, detect); and
+  `sensitive-edit/agent-or-ci-surface-modified` (writes, patches, redirects, `tee`, `cp`, `mv` or `sed -i` to CI
+  workflows, git hooks, `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, login dotfiles or `authorized_keys`; medium, detect).
+  Each enforce rule has negative fixtures for the common benign forms (`curl -d @payload.json`, `env | grep PATH`,
+  `.env.example`, `$(date)` in a URL). Short regexes are adapted from Beacon's rules and from `Corvid.Skills`'
+  `SkillScanner`; each adapted rule says so in its description.
+- Inline, at pre_execute. `ApprovalOptions.Detections` holds a `DetectionEngine`; null leaves `ApprovalPipeline` exactly
+  as before. `AssessAsync` runs, in order: (1) parse and resolve; (2) the hardline list, whose denial returns before any
+  rule runs, so no rule can relax or pre-empt it; (3) detection rules; (4) the rest unchanged: forced reasons, the
+  read-only auto-run, remembered rules, `risk` through the fabric, the mode mapping, the prompt. For (3) the pending call is
+  built from the action before it is resolved to a `ShellAction` (a job's bare `ShellAction` becomes a synthetic shell
+  `ToolCallIssued`), the session's last 512 events (`DetectionHistory`) are read from the pipeline's `IEventLog`, and the
+  `ToolCallIssued` with the context's call id is dropped, since `TurnRunner` appends it before it asks. Only matches the
+  pending call takes part in count: single-event rules on it, and correlations where it fills a step (in a sequence, the
+  last) and every other step is in the history within the window. An enforce match adds an `ApprovalReasons.Detection`
+  (`detection`) reason, `<rule id>: <reason>`, to the forced reasons, which already stop the read-only auto-run, the
+  remembered-allow auto-run and an `Auto` from risk and the mode, and limit the offered scopes to `once`; a remembered
+  denial still denies, and with nobody to ask (`Interactive = false`: scheduled scripts, a gateway guest with approvals
+  failing) the ask becomes `NoApprover`, a denial. A detect match only records. Enforcement only ever adds a prompt: v1
+  has no rule-made denial and no rule-made allow. `Detection` is not a hardline code, so `ApprovalAssessment.Hardline` is
+  unchanged.
+- `DetectionMatched` (`detection_matched`): a new event at payload version 1, following C-016 and C-020 (optional fields
+  `JsonIgnore` `WhenWritingNull`): `RuleId`, `RuleVersion`, `Severity`, `Posture` (effective), `Reason`, `Sequences`
+  (the logged events that matched; the pending call is not one), `CallId` (the pending call) and `Enforced` (`ask` when
+  it forced a prompt). It is appended in `AssessAsync`, as the fabric appends `risk`'s `Decision` there, at most once per
+  rule per session (the tail's `detection_matched` events and an in-process set are checked); enforcement still applies to
+  every call that completes a match. `SessionProjection` leaves it out of the transcript, so prompts and golden replay
+  are unaffected. As with C-016's and C-020's events, a binary from before C-023 cannot read a session that holds one.
+- Telemetry. `ApprovalAssessment.Detections` carries the findings; `TurnRunner.AuthorizeAsync` tags the call's
+  `execute_tool` span with the rule ids (`corvid.detection.rules`), on the denial path too.
+- Configuration. `Corvid:Detections:Enabled` (default true) and `Corvid:Detections:Enforce` (default true; false records
+  every match as detect). `CorvidRuntimeFactory` loads the built-in pack once and passes the engine with
+  `BuiltinTools.ShellToolMapping`.
+- `corvid scan [--session <id>] [--fail-on <severity>] [--json]` reads the event log without starting the host (as
+  `gateway status` does) and refuses when `events.db` does not exist rather than letting `SqliteEventLog` create it. It
+  walks `ListSessions` (or one session), pages each through a captured head 4,096 events at a time into `Scan`, and prints
+  findings by session: severity, rule id and version, effective posture, title, reason, matched sequences, and whether a
+  `DetectionMatched` was already recorded inline. `--json` writes one document (`rules`, `sessions`, `findings`,
+  `errors`). Exit codes: 0, 4 (`ExitCodes.Findings`) when a finding is at or above `--fail-on`, 1 on a rule error, a
+  missing log or session, or a read error, and 2 on bad arguments.
+- Known limits. `TurnRunner` sends only calls that need approval through pre_execute (`Ask`: side-effecting, or a network
+  read in a tainted turn), so `read_file`, `list_files`, `search_files` and an untainted `web_fetch` take part inline only
+  as earlier steps: "egress by `web_fetch` after a secret read" in an untainted session is found by scan alone. "The same
+  command" is the same dangerous class: a denied `rm -rf build` followed by `rm -rf dist` asks again (a false positive,
+  only an extra prompt), and a command outside the class's regex escapes. Each inline evaluation reads up to 512 events
+  synchronously on the approval path, beside the appends already made there; a correlation whose first step is older than
+  that is found only by scan.
+
+Not built yet: `enforce: deny` (it needs its own `ApprovalResolution`, so a rule's denial is never reported as a remembered
+rule's or the hardline list's); cross-step binding (`same: [path]` or `$step.field`) and structural command equivalence
+through the shell analyzer; a detect-only pass over read-only calls in `TurnRunner`; a large-single-call-cost rule (no
+event carries per-call usage); user rule directories, per-rule enable and severity overrides, `corvid rules
+list|lint|test` and `scan --rules`; YAML rules, taxonomy fields and a `spec` version with skip-if-newer; SARIF, `--since`
+and incremental scans; alerts or records from scan findings; and Beacon categories that need events Corvid does not emit
+(MCP tool-list poisoning, system-prompt and skill-index text, browser session stores, `skill_changed` and
+`memory_written` content).
 
 ## Running the check
 
