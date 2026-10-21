@@ -232,7 +232,7 @@ public sealed partial class SharedMemoryTools
             return new Scope(null, FromNone);
         }
         if (_options.Lessons is null)
-            return new Scope(null, FromNone);
+            return new Scope(null, string.IsNullOrWhiteSpace(project) ? FromNone : FromArgument);
         var known = _options.Lessons.KnownProjects();
         if (!string.IsNullOrWhiteSpace(project))
         {
