@@ -579,7 +579,7 @@ public sealed class TurnRunner
                 {
                     failed = true;
                     var hints = tool is null ? []
-                        : await HintsAsync(callId, tool, arguments,
+                        : await HintsAsync(tool, arguments,
                             spans.Where(item => errors.Any(error => error.Contains($"'{item.Parameter}'", StringComparison.Ordinal))),
                             cancellationToken).ConfigureAwait(false);
                     // The call and its error result go in as one append: a concurrent switch never sees the call alone.
@@ -745,7 +745,7 @@ public sealed class TurnRunner
                     await RecordAfterAsync().ConfigureAwait(false);
                     // The binding names the argument it refused; a span for that argument is the hint (no name, no hint).
                     var hints = exception.ParamName is { } refused && !PrefillShown()
-                        ? await HintsAsync(call.CallId, call.Tool, call.Arguments, call.Spans.Where(item => item.Parameter == refused),
+                        ? await HintsAsync(call.Tool, call.Arguments, call.Spans.Where(item => item.Parameter == refused),
                             cancellationToken).ConfigureAwait(false)
                         : [];
                     Result(call.CallId, Error("invalid arguments", [exception.Message, .. Describe(hints)], call.Tool.Function.JsonSchema,
@@ -890,12 +890,12 @@ public sealed class TurnRunner
         /// a tool that declares [Probe], the tool's own binding (a probe run; a span naming a path that does not exist is dropped).
         /// The hints kept are recorded and end pre-fill for the turn.
         /// </summary>
-        private async Task<IReadOnlyList<SlotDisagreement>> HintsAsync(string callId, Offered tool, JsonElement arguments,
+        private async Task<IReadOnlyList<SlotDisagreement>> HintsAsync(Offered tool, JsonElement arguments,
             IEnumerable<SlotDisagreement> spans, CancellationToken cancellationToken)
         {
             var hints = new List<SlotDisagreement>();
             foreach (var span in spans)
-                if (await HintValidatesAsync(callId, tool, arguments, span, cancellationToken).ConfigureAwait(false))
+                if (await HintValidatesAsync(tool, arguments, span, cancellationToken).ConfigureAwait(false))
                     hints.Add(span);
             if (hints.Count == 0)
                 return hints;
@@ -909,7 +909,7 @@ public sealed class TurnRunner
             return hints;
         }
 
-        private async Task<bool> HintValidatesAsync(string callId, Offered tool, JsonElement arguments, SlotDisagreement span,
+        private async Task<bool> HintValidatesAsync(Offered tool, JsonElement arguments, SlotDisagreement span,
             CancellationToken cancellationToken)
         {
             var values = JsonValues.ToDictionary(arguments);
@@ -928,7 +928,9 @@ public sealed class TurnRunner
             bool tainted;
             lock (_gate)
                 tainted = runner.Tainted;
-            var context = new ToolCallContext(runner.SessionId, callId) { Tainted = tainted, Interactive = _options.Interactive };
+            // The trial gets an id of its own, never the real call's: it is no call in the log, and nothing keyed by call id
+            // (events, approvals, checkpoints, telemetry, a tool's own records) may take the discarded trial for the call.
+            var context = new ToolCallContext(runner.SessionId, ProbeCallId()) { Tainted = tainted, Interactive = _options.Interactive };
             try
             {
                 await tool.Function.InvokeAsync(context.AttachTo(JsonValues.ToArguments(substituted)), cancellationToken).ConfigureAwait(false);
@@ -945,6 +947,9 @@ public sealed class TurnRunner
                 return true;
             }
         }
+
+        /// <summary>A probe's own call id, unique and unlike any issued id (those are the model's, or <c>call</c>, with a counter).</summary>
+        private static string ProbeCallId() => "probe-" + Guid.NewGuid().ToString("N");
 
         private static IEnumerable<string> Describe(IReadOnlyList<SlotDisagreement> hints) => hints.Select(item => item.Argument is null
             ? $"'{item.Parameter}' was omitted, but the request says \"{item.Extracted}\""

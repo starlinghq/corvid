@@ -865,7 +865,9 @@ described below (see [Host and CLI](#host-and-cli-c-013)).
   it must fit the schema and, for a tool that declares `[Probe]` (`list_files` and `read_file`), survive a probe run of
   the tool (its result discarded), so `list_files` is never steered to a directory that does not exist. The probe is
   opt-in, never inferred from `ReadOnly`: an MCP tool is read-only on its server's or the user's word, and a probe runs
-  unlogged and unasked with the user's words. Other tools get the schema check only. An invalid call is logged as
+  unlogged and unasked with the user's words. It runs under a call id of its own (`probe-` and a GUID), never the failed
+  call's, so nothing keyed by call id (events, approvals, checkpoints, telemetry, a tool's own records) can take the
+  discarded trial for the real call. Other tools get the schema check only. An invalid call is logged as
   `ToolCallIssued` and an error `ToolResult` in one append (details, the expected schema and any hints: the repair
   message), so a concurrent switch never reads the call without its result. A `ToolArgumentException` from the
   tool's own binding counts the same. A second failed response escalates the generator through C-006
