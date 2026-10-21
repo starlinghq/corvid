@@ -35,13 +35,27 @@ internal sealed class TestVault : IDisposable
             AllowPlainHttpLoopback = true,
             Secrets = { [SecretName] = new SecretPolicy { Hosts = ["127.0.0.1"] } },
         };
-        configure?.Invoke(Policy);
-        Directory.CreateDirectory(Root);
-        WritePolicy();
-        Core = new VaultCore(Options);
-        Core.Store.Set(SecretName, Encoding.UTF8.GetBytes(SecretValue), "Test API token");
-        _server = new VaultServer(Core, Options.SocketPath);
-        _server.Start(_stop.Token);
+        // A failure from here on (configure, Vault's start) leaves no directory behind.
+        (Core, _server) = Corvid.Tests.ShortTemp.SetUp(Root, () =>
+        {
+            configure?.Invoke(Policy);
+            WritePolicy();
+            var core = new VaultCore(Options);
+            VaultServer? server = null;
+            try
+            {
+                core.Store.Set(SecretName, Encoding.UTF8.GetBytes(SecretValue), "Test API token");
+                server = new VaultServer(core, Options.SocketPath);
+                server.Start(_stop.Token);
+                return (core, server);
+            }
+            catch
+            {
+                server?.Dispose();
+                core.Dispose();
+                throw;
+            }
+        });
     }
 
     public string Root { get; }

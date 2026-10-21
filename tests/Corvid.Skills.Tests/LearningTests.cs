@@ -8,6 +8,7 @@ using Corvid.Kernel.Turns;
 using Corvid.Models;
 using Corvid.Skills;
 using Corvid.Tools;
+using Microsoft.Data.Sqlite;
 
 namespace Corvid.Skills.Tests;
 
@@ -152,7 +153,8 @@ public sealed class LearningTests
             LearningHarness.ReplayScript("list_notes", "list_notes", "list_notes"), new WriteSafeDecider(0.97));
         var (from, through) = harness.RecordSourceTurn();
 
-        harness.Learner.Queue(new SkillOpportunity(TurnHarness.Session, from, through, "decision-1", LearningHarness.Request));
+        harness.Learner.Queue(new SkillOpportunity(TurnHarness.Session, from, through, "decision-1", LearningHarness.Request,
+            SuccessDecisionId: "success-1", SuccessCalibrated: true));
         var result = Assert.Single(await harness.Learner.ProcessQueuedAsync(Token));
 
         Assert.Equal(LearningStatus.Applied, result.Status);
@@ -282,6 +284,148 @@ public sealed class LearningTests
         Assert.Empty(harness.Learner.Pending());
         Assert.Contains(harness.Turns.Payloads(), payload => payload is DecisionOutcomeRecorded { Outcome: "rejected" });
         Assert.Throws<ArgumentException>(() => harness.Learner.Reject(pending.Id, Token));
+    }
+
+    // ---- C-026 ----
+
+    [Fact]
+    public async Task AnUnconfirmedSuccessIsStagedEvenOnACalibratedWriteSafeYes()
+    {
+        using var harness = new LearningHarness(new FakeGenerator(Reply.Say(LearningHarness.DraftText())),
+            LearningHarness.ReplayScript("list_notes", "list_notes", "list_notes"), new WriteSafeDecider(0.99));
+        var (from, through) = harness.RecordSourceTurn();
+
+        // Egress fell back to the degraded tier (or ran without Kev): its yes to task_succeeded was not calibrated.
+        harness.Learner.Queue(new SkillOpportunity(TurnHarness.Session, from, through, "decision-1", LearningHarness.Request,
+            SuccessDecisionId: "success-1"));
+        var result = Assert.Single(await harness.Learner.ProcessQueuedAsync(Token));
+
+        Assert.Equal(LearningStatus.Staged, result.Status);
+        Assert.Empty(harness.Store.Skills);
+        Assert.Equal("apply_skill_change", Assert.Single(harness.Turns.Decisions("skill_write_safe")).Action);
+        Assert.Equal("task success was not confirmed by a calibrated decider, so the draft waits for review",
+            Assert.Single(harness.Learner.Pending()).Reason);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AReviewRecordsItsOutcomeOnAllThreeDecisions(bool approve)
+    {
+        using var harness = new LearningHarness(new FakeGenerator(Reply.Say(LearningHarness.DraftText())),
+            LearningHarness.ReplayScript("list_notes", "list_notes", "list_notes"));
+        var (from, through) = harness.RecordSourceTurn();
+        harness.Learner.Queue(new SkillOpportunity(TurnHarness.Session, from, through, "decision-1", LearningHarness.Request,
+            SuccessDecisionId: "success-1"));
+        await harness.Learner.ProcessQueuedAsync(Token);
+        var pending = Assert.Single(harness.Learner.Pending());
+
+        if (approve)
+            await harness.Learner.ApproveAsync(pending.Id, cancellationToken: Token);
+        else
+            harness.Learner.Reject(pending.Id, Token);
+
+        var outcomes = harness.Turns.Payloads().OfType<DecisionOutcomeRecorded>().Select(outcome => (outcome.DecisionId, outcome.Outcome)).ToArray();
+        var (direct, review) = approve ? ("approved", SkillLearner.SkillApproved) : ("rejected", SkillLearner.SkillRejected);
+        Assert.Equal([(pending.DecisionId, direct), ("decision-1", review), ("success-1", review)], outcomes);
+    }
+
+    private static StoredEvent Event(long sequence, SessionEvent payload) => new(TurnHarness.Session, sequence, Guid.NewGuid(), DateTimeOffset.UnixEpoch, payload);
+
+    private static JsonElement Json(string text) => JsonDocument.Parse(text).RootElement.Clone();
+
+    [Fact]
+    public void TheDraftingWindowKeepsTheHeadAndTailOfALongTurn()
+    {
+        using var harness = new LearningHarness(new FakeGenerator(), new FakeGenerator());
+        var events = new List<StoredEvent> { Event(1, new UserMessage("start " + new string('u', 5_000))) };
+        for (var i = 1; i <= 100; i++)
+        {
+            events.Add(Event(events.Count + 1, new ToolCallIssued($"c{i}", "list_notes", Json($$"""{"page":{{i}}}"""))));
+            events.Add(Event(events.Count + 1, new ToolResult($"c{i}", Json($"\"page {i} " + new string('r', 2_000) + "\""))));
+        }
+        events.Add(Event(events.Count + 1, new AssistantMessage("finished")));
+
+        var prompt = harness.Learner.DraftPrompt(events);
+
+        // 202 events: the first 40, then 122 omitted, then the last 40.
+        var lines = prompt.Split('\n');
+        Assert.Contains("[… 122 events omitted from the middle of this turn …]", prompt, StringComparison.Ordinal);
+        Assert.Equal(80, lines.Count(line => line.StartsWith("User: ", StringComparison.Ordinal) || line.StartsWith("Tool ", StringComparison.Ordinal)
+            || line.StartsWith("Assistant: ", StringComparison.Ordinal)));
+        Assert.Contains("Tool call: list_notes {\"page\":20}", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("{\"page\":21}", prompt, StringComparison.Ordinal);
+        Assert.Contains("Tool call: list_notes {\"page\":82}", prompt, StringComparison.Ordinal);
+        Assert.Contains("Assistant: finished", prompt, StringComparison.Ordinal);
+        // Each event's text, the user's message included, is cut to 1,200 characters.
+        Assert.Contains("User: start " + new string('u', 1_194) + "… [3806 more]", prompt, StringComparison.Ordinal);
+        Assert.Contains("Tool result (list_notes): page 100 ", prompt, StringComparison.Ordinal);
+        Assert.Contains("… [809 more]", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("recovered", prompt, StringComparison.Ordinal);
+        Assert.Single(lines, line => line.StartsWith("[…", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AShortTurnHasNoOmissionMarkerAndARecoveryIsNamed()
+    {
+        using var harness = new LearningHarness(new FakeGenerator(), new FakeGenerator());
+        StoredEvent[] events =
+        [
+            Event(1, new UserMessage("find my shopping note")),
+            Event(2, new ToolCallIssued("c1", "read_note", Json("{}"))),
+            Event(3, new ToolResult("c1", Json("""{"error":"tool failed","details":["no note"]}"""), IsError: true)),
+            Event(4, new ToolCallIssued("c2", "list_notes", Json("{}"))),
+            Event(5, new ToolResult("c2", Json("\"shopping: milk\""))),
+            Event(6, new AssistantMessage("Found it.")),
+        ];
+
+        var prompt = harness.Learner.DraftPrompt(events, ToolRecovery.Scan(events));
+
+        Assert.DoesNotContain("omitted", prompt, StringComparison.Ordinal);
+        Assert.Contains("The turn recovered: read_note failed, then list_notes succeeded; write the skill around the approach that worked.",
+            prompt, StringComparison.Ordinal);
+        Assert.Contains("Tool error (read_note): ", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WindowOptionsMustBePositive()
+    {
+        using var harness = new LearningHarness(new FakeGenerator(), new FakeGenerator());
+        Assert.Throws<ArgumentOutOfRangeException>(() => new SkillLearner(harness.Store, harness.Database, harness.Turns.Log, harness.Fabric,
+            harness.Replayer, new FakeGenerator(), options: new SkillLearnerOptions { TailEvents = 0 }));
+    }
+
+    [Fact]
+    public void AVersionOneSkillsDatabaseMigratesToVersionTwo()
+    {
+        using var root = new TempRoot();
+        var path = root["skills.db"];
+        using (var connection = new SqliteConnection($"Data Source={path};Pooling=False"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = SkillsDatabase.Schema
+                + "INSERT INTO opportunities VALUES ('old', 's', 1, 9, 'decision-0', 'list notes', 'queued', NULL, 0, 0, 0);";
+            command.ExecuteNonQuery();
+        }
+
+        var database = new SkillsDatabase(path);
+        var queued = database.Enqueue("s", 10, 20, "decision-1", "again", successDecisionId: "success-1", successCalibrated: true);
+
+        var old = database.FindOpportunity("old")!;
+        Assert.Equal(("decision-0", (string?)null, false), (old.DecisionId, old.SuccessDecisionId, old.SuccessCalibrated));
+        Assert.Equal(queued, database.FindOpportunity(queued.Id));
+        Assert.Equal(2, database.Opportunities().Count);
+        Assert.Null(database.FindOpportunity("missing"));
+        using (var connection = new SqliteConnection($"Data Source={path};Pooling=False"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "PRAGMA user_version;";
+            Assert.Equal(2L, command.ExecuteScalar());
+        }
+        // Opening again is a no-op.
+        Assert.Equal(2, new SkillsDatabase(path).Opportunities().Count);
     }
 }
 

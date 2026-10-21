@@ -52,6 +52,21 @@ public sealed class CorvidOptions
     public ServeSettings Serve { get; set; } = new();
 
     public GatewaySettings Gateway { get; set; } = new();
+
+    /// <summary>Detection rules over the session event log (C-023), inline at pre_execute and by <c>corvid scan</c>.</summary>
+    public DetectionSettings Detections { get; set; } = new();
+}
+
+public sealed class DetectionSettings
+{
+    /// <summary>Evaluate the built-in rules at pre_execute. <c>corvid scan</c> runs them whatever this says.</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// Let enforce rules force an approval prompt. False records every match as detect only, which keeps scheduled and
+    /// other non-interactive work from being denied by a rule (an ask with nobody to answer is a denial).
+    /// </summary>
+    public bool Enforce { get; set; } = true;
 }
 
 /// <summary>MCP (C-018, plan §12): servers whose tools Corvid offers, and what <c>corvid mcp serve</c> shares.</summary>
@@ -124,6 +139,12 @@ public sealed class McpServeSettings
 
     /// <summary>Let <c>search_memory</c> also return earlier conversations, which hold tool results and outside content.</summary>
     public bool Conversations { get; set; }
+
+    /// <summary>
+    /// C-028, off by default: <c>get_memory</c>, <c>get_memory_context</c>, approved non-local-only lessons of a known project
+    /// in <c>search_memory</c>, and the <c>project</c> argument. Needs <see cref="Memory"/>; lessons need Memory:Lessons.
+    /// </summary>
+    public bool ProjectMemory { get; set; }
 
     /// <summary><c>skill_list</c> and <c>skill_read</c>.</summary>
     public bool Skills { get; set; } = true;
@@ -344,6 +365,18 @@ public sealed class TurnSettings
 public sealed class MemorySettings
 {
     /// <summary>The memory store (plan §9). It needs an extractor and a text embedder; without them it stays off.</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>The lessons tier (C-025); it needs memory on.</summary>
+    public LessonsSettings Lessons { get; set; } = new();
+}
+
+public sealed class LessonsSettings
+{
+    /// <summary>
+    /// Lessons per project (C-025): <c>lesson_opportunity</c> queues turns, a background job drafts lessons on the background
+    /// generator, and approved lessons of the workspace's project join recall. <c>/memory lessons</c> reviews them.
+    /// </summary>
     public bool Enabled { get; set; } = true;
 }
 

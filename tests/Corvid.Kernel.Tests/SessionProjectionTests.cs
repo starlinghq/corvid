@@ -83,6 +83,19 @@ public sealed class SessionProjectionTests : IDisposable
     }
 
     [Fact]
+    public void The_latest_project_binding_is_the_sessions_project_and_stays_out_of_the_transcript()
+    {
+        Assert.Null(Load().ProjectId);
+        Append(new ProjectBound("p1", "remote"), new UserMessage("one"), new ProjectBound("p2", "path"));
+
+        var snapshot = Load();
+
+        Assert.Equal("p2", snapshot.ProjectId);
+        Assert.Equal("p1", Load(through: 2).ProjectId);
+        Assert.Equal("one", Assert.IsType<UserMessage>(Assert.Single(snapshot.Transcript).Content).Text);
+    }
+
+    [Fact]
     public void Decision_outcomes_are_separate_events_and_the_decision_is_unchanged()
     {
         Append(Decide("d1"), Decide("d2"), new DecisionOutcomeRecorded("d1", "user_approved"));

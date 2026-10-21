@@ -1,0 +1,48 @@
+{
+  "id": "base64-decode-piped-to-shell",
+  "version": 1,
+  "title": "Decoded base64 piped into a shell",
+  "description": "base64 -d output piped into a shell: an obfuscated command. Pattern from Corvid.Skills' SkillScanner.",
+  "severity": "high",
+  "status": "stable",
+  "posture": "detect",
+  "category": "risky-command",
+  "reason": "Decoded base64 is run as a command",
+  "match": {
+    "event": "tool_call_issued",
+    "where": {
+      "field": "derived.command",
+      "regex": "(?i)\\bbase64\\s+(-d|--decode)\\b[^\\n]{0,80}\\|\\s*(sudo\\s+)?(ba|z|da)?sh\\b"
+    }
+  },
+  "tests": [
+    {
+      "name": "echo_decode_sh",
+      "verdict": "match",
+      "events": [
+        {
+          "type": "tool_call_issued",
+          "call_id": "c1",
+          "tool_name": "shell",
+          "arguments": {
+            "command": "echo cm0gLXJmIH4K | base64 -d | sh"
+          }
+        }
+      ]
+    },
+    {
+      "name": "decode_to_file",
+      "verdict": "no_match",
+      "events": [
+        {
+          "type": "tool_call_issued",
+          "call_id": "c1",
+          "tool_name": "shell",
+          "arguments": {
+            "command": "base64 -d blob.b64 > blob.bin"
+          }
+        }
+      ]
+    }
+  ]
+}

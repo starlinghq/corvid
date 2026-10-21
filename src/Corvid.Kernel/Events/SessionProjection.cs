@@ -33,6 +33,9 @@ public sealed record SessionSnapshot(
     /// <summary>Checkpoints with the sequence of the event that recorded each (C-014).</summary>
     public ImmutableArray<RecordedCheckpoint> CheckpointEvents { get; init; } = [];
 
+    /// <summary>The project the session last bound (C-025, <c>ProjectBound</c>), or null.</summary>
+    public string? ProjectId { get; init; }
+
     /// <summary>Whether the event at <paramref name="sequence"/> is still part of the conversation.</summary>
     public bool IsVisible(long sequence) => !Hidden.Any(range => range.Contains(sequence));
 }
@@ -66,9 +69,14 @@ public static class SessionProjection
     }
 
     internal static IEnumerable<StoredEvent> ReadAll(IEventLog log, string sessionId, long through,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) => ReadRange(log, sessionId, 0, through, cancellationToken);
+
+    /// <summary>Every event in (<paramref name="afterSequence"/>, <paramref name="through"/>], read page by page.</summary>
+    public static IEnumerable<StoredEvent> ReadRange(IEventLog log, string sessionId, long afterSequence, long through,
+        CancellationToken cancellationToken = default)
     {
-        for (long after = 0; after < through;)
+        ArgumentNullException.ThrowIfNull(log);
+        for (var after = afterSequence; after < through;)
         {
             var page = log.Read(sessionId, after, through, PageSize, cancellationToken);
             if (page.Count == 0)
@@ -89,6 +97,7 @@ public static class SessionProjection
 
         var history = new List<StoredEvent>();
         string? goal = null;
+        string? project = null;
         var todos = ImmutableArray<TodoItem>.Empty;
         var approvals = ImmutableDictionary.CreateBuilder<string, ApprovalRequested>(StringComparer.Ordinal);
         var profiles = ImmutableDictionary.CreateBuilder<string, JsonElement>(StringComparer.Ordinal);
@@ -116,6 +125,7 @@ public static class SessionProjection
             switch (item.Payload)
             {
                 case GoalSet value: goal = value.Goal; break;
+                case ProjectBound value: project = value.ProjectId; break;
                 case TodosSet value: todos = value.Items; break;
                 case ApprovalRequested value: approvals[value.ApprovalId] = value; break;
                 case ApprovalResolved value:
@@ -213,6 +223,7 @@ public static class SessionProjection
             Hidden = hidden.ToImmutable(),
             IssuedCallIds = calls.Keys.ToImmutableHashSet(StringComparer.Ordinal),
             CheckpointEvents = recorded.ToImmutable(),
+            ProjectId = project,
         };
     }
 

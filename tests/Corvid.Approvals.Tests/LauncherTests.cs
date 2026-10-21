@@ -125,6 +125,20 @@ public sealed class LauncherTests
     [InlineData("script --frobnicate -c ls")]
     [InlineData("parallel --ssh host ls ::: a")]
     [InlineData("parallel -q ls ::: a")]
+    [InlineData("runuser -Z -u bob -- ls")]
+    [InlineData("runuser --us=bob -- ls")]
+    [InlineData("runuser --comm=ls bob")]
+    [InlineData("runuser -u bob -c ls")]
+    [InlineData("runuser -u bob ls -l")]
+    [InlineData("at -Z now <<< ls")]
+    [InlineData("at --file=x now <<< ls")]
+    [InlineData("gdb --frobnicate ls")]
+    [InlineData("gdb --arg ls")]
+    [InlineData("gdb -bat ls")]
+    [InlineData("gdb --eval=run ls")]
+    [InlineData("gdb -p1234 ls")]
+    [InlineData("gdb -batch -ex")]
+    [InlineData("gdb ls core 1234")]
     public void Unknown_launcher_options_are_refused_not_skipped(string command)
     {
         var analysis = Fixtures.Analyze(command);
@@ -193,5 +207,119 @@ public sealed class LauncherTests
         // script runs the command with $SHELL, which may be zsh or fish; only a shell set here is known.
         Assert.NotEmpty(Only("script -qc ls /dev/null", "script").Unresolved);
         Assert.Empty(Only("SHELL=/bin/bash script -qc ls /dev/null", "script").Unresolved);
+    }
+
+    [Fact]
+    public void Valgrind_always_asks_but_still_reads_the_command_it_runs()
+    {
+        // ./.valgrindrc, ~/.valgrindrc and $VALGRIND_OPTS can redirect --log-file or set --trace-children.
+        Assert.NotEmpty(Only("valgrind ls", "valgrind").Unresolved);
+        var rm = Only("valgrind rm -rf build", "rm");
+        Assert.Contains("valgrind", rm.Via);
+        Assert.Empty(rm.Unresolved);
+        Assert.Equal(Fixtures.Workspace + "/build", Assert.Single(rm.Targets).Value);
+    }
+
+    [Theory]
+    [InlineData("runuser -u bob -- rm -rf build", "runuser -u")]
+    [InlineData("runuser -u bob rm build", "runuser -u")]
+    [InlineData("runuser --user=bob -- rm -rf build", "runuser -u")]
+    [InlineData("runuser -c 'rm -rf build' bob", "runuser -c")]
+    [InlineData("runuser bob --session-command='rm -rf build'", "runuser -c")]
+    [InlineData("runuser -s /bin/bash -c 'rm -rf build'", "runuser -c")]
+    public void Runuser_unwraps_and_elevates_what_it_runs(string command, string via)
+    {
+        var rm = Only(command, "rm");
+        Assert.Contains(via, rm.Via);
+        Assert.True(rm.Effects.HasFlag(ActionEffects.Elevated));
+        Assert.Equal(Fixtures.Workspace + "/build", Assert.Single(rm.Targets).Value);
+    }
+
+    [Fact]
+    public void Runuser_login_starts_in_an_unknown_directory_and_unknown_shells_are_unresolved()
+    {
+        Assert.Equal(PathLocation.Unresolved, Assert.Single(Only("runuser -l bob -c 'rm -rf build'", "rm").Targets).Location);
+        Assert.Equal(PathLocation.Unresolved, Assert.Single(Only("runuser - bob -c 'rm -rf build'", "rm").Targets).Location);
+        Assert.NotEmpty(Only("runuser bob -c ls", "runuser").Unresolved);
+        Assert.Empty(Only("runuser -s /bin/sh bob -c ls", "runuser").Unresolved);
+        // Arguments after the user go to the shell, which reads them as a script file.
+        Assert.DoesNotContain(Fixtures.Analyze("runuser bob x.sh -c ls").Commands, c => c.Verb == "ls");
+        Assert.DoesNotContain(Fixtures.Analyze("runuser -u bob").Commands, c => c.Unresolved.IsEmpty);
+    }
+
+    [Theory]
+    [InlineData("echo 'rm -rf build' | at now")]
+    [InlineData("echo rm -rf build | at now + 1 hour")]
+    [InlineData("echo -n 'rm -rf build' | at -m teatime tomorrow")]
+    [InlineData("at now <<< 'rm -rf build'")]
+    [InlineData("at -t 202610211200 <<< 'rm -rf build'")]
+    [InlineData("at now -q c <<< 'rm -rf build'")]
+    [InlineData("batch <<'EOF'\nrm -rf build\nEOF")]
+    [InlineData("at -b <<< 'rm -rf build'")]
+    public void At_reads_a_static_job_as_a_script_that_runs_later(string command)
+    {
+        var analysis = Fixtures.Analyze(command);
+        var rm = Assert.Single(analysis.Commands, c => c.Verb == "rm");
+        Assert.True(rm.Via.Contains("at") || rm.Via.Contains("batch"));
+        Assert.Equal(Fixtures.Workspace + "/build", Assert.Single(rm.Targets).Value);
+        // The time spec is consumed, never read as a command, and the job itself always asks.
+        var at = Assert.Single(analysis.Commands, c => c.Verb is "at" or "batch");
+        Assert.True(at.Effects.HasFlag(ActionEffects.Schedule));
+        Assert.NotEmpty(at.Unresolved);
+        Assert.All(analysis.Commands, c => Assert.Contains(c.Verb, new[] { "echo", "at", "batch", "rm" }));
+    }
+
+    [Fact]
+    public void At_jobs_it_cannot_read_ask_and_its_queue_commands_are_their_own_verbs()
+    {
+        var file = Only("at -f job.sh now", "at");
+        Assert.Contains(file.Targets, t => t.Value == Fixtures.Workspace + "/job.sh" && t.Access == TargetAccess.Read);
+        Assert.Contains(file.Unresolved, reason => reason.Contains("job.sh", StringComparison.Ordinal));
+        // Only a pipe from echo of static words is known; anything else is input Corvid cannot see.
+        Assert.DoesNotContain(Fixtures.Analyze("cat job | at now").Commands, c => c.Verb == "rm");
+        Assert.DoesNotContain(Fixtures.Analyze("echo -e 'rm\\x20-rf build' | at now").Commands, c => c.Verb == "rm");
+        Assert.DoesNotContain(Fixtures.Analyze("echo rm -rf * | at now").Commands, c => c.Verb == "rm");
+        Assert.DoesNotContain(Fixtures.Analyze("echo \"rm -rf $X\" | at now").Commands, c => c.Verb == "rm");
+        Assert.DoesNotContain(Fixtures.Analyze("echo rm -rf build > log | at now").Commands, c => c.Verb == "rm");
+        // A pipe from echo is read only by at: a shell reading it still asks as before.
+        Assert.DoesNotContain(Fixtures.Analyze("echo 'rm -rf build' | bash").Commands, c => c.Verb == "rm");
+        Assert.True(Only("at -l", "atq").ReadOnly);
+        Assert.True(Only("atq", "atq").ReadOnly);
+        Assert.True(Only("atq -q b", "atq").ReadOnly);
+        Assert.True(Only("at -r 3", "atrm").Effects.HasFlag(ActionEffects.Schedule));
+        Assert.True(Only("atrm 3", "atrm").Effects.HasFlag(ActionEffects.Schedule));
+    }
+
+    [Theory]
+    [InlineData("gdb --args rm -rf build")]
+    [InlineData("gdb -q -batch -ex run --args rm -rf build")]
+    [InlineData("gdb --batch --eval-command=run --args rm -rf build")]
+    [InlineData("gdb -nx -- rm")]
+    public void Gdb_reads_the_program_it_debugs_and_always_asks(string command)
+    {
+        var analysis = Fixtures.Analyze(command);
+        var rm = Assert.Single(analysis.Commands, c => c.Verb == "rm");
+        Assert.Contains("gdb", rm.Via);
+        Assert.NotEmpty(Assert.Single(analysis.Commands, c => c.Verb == "gdb").Unresolved);
+    }
+
+    [Fact]
+    public void Gdb_options_add_targets()
+    {
+        Assert.Equal(Fixtures.Workspace + "/build", Assert.Single(Only("gdb --args rm -rf build", "rm").Targets).Value);
+        Assert.Equal("/srv/build", Assert.Single(Only("gdb -cd=/srv --args rm -rf build", "rm").Targets).Value);
+        Assert.Contains(Only("gdb -p 1234", "gdb").Targets, t => t.Kind == TargetKind.Process && t.Value == "1234");
+        Assert.Contains(Only("gdb --pid=1234", "gdb").Targets, t => t.Kind == TargetKind.Process && t.Value == "1234");
+        Assert.Contains(Only("gdb prog 4321", "gdb").Targets, t => t.Kind == TargetKind.Process && t.Value == "4321");
+        var core = Only("gdb prog core.123", "gdb");
+        Assert.Contains(core.Targets, t => t.Value == Fixtures.Workspace + "/core.123" && t.Access == TargetAccess.Read);
+        Assert.Contains(Only("gdb -c core prog", "gdb").Targets, t => t.Value == Fixtures.Workspace + "/core" && t.Access == TargetAccess.Read);
+        var script = Only("gdb -batch -x cmds.gdb prog", "gdb");
+        Assert.Contains(script.Targets, t => t.Value == Fixtures.Workspace + "/cmds.gdb" && t.Access == TargetAccess.Read);
+        Assert.Contains(script.Unresolved, reason => reason.Contains("cmds.gdb", StringComparison.Ordinal));
+        // -ex text is kept for the hardline backstop.
+        var ex = Fixtures.Analyze("gdb -batch -ex 'shell id' ls");
+        Assert.Contains("shell id", ex.OpaqueScripts);
+        Assert.Contains(Assert.Single(ex.Commands, c => c.Verb == "gdb").Unresolved, reason => reason.Contains("shell id", StringComparison.Ordinal));
     }
 }

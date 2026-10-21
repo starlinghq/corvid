@@ -7,7 +7,11 @@ namespace Corvid.Tools;
 /// Declared with <see cref="ProbeAttribute"/>: the tool may be tried with a substitute argument and the result discarded.
 /// Never inferred from <see cref="ReadOnly"/>, which can be a claim (an MCP server's annotation, a user's configuration).
 /// </param>
-public sealed record ToolRisk(SideEffects SideEffects, bool Network, bool Destructive, bool Probe = false)
+/// <param name="OutsideDescription">
+/// The tool's description and schema text came from outside the user (an untrusted MCP server's listing, C-022): a turn that
+/// shows them to the generator is tainted as an untrusted result would taint it (plan §10.3). Never set by the generator.
+/// </param>
+public sealed record ToolRisk(SideEffects SideEffects, bool Network, bool Destructive, bool Probe = false, bool OutsideDescription = false)
 {
     /// <summary>Changes nothing outside the process. Network reads still count as read-only; taint applies separately.</summary>
     public bool ReadOnly => SideEffects == SideEffects.None;
@@ -52,6 +56,9 @@ public sealed class ToolDescriptor
     public IReadOnlyList<ToolParameter> Parameters { get; }
 
     public bool HasSecretParameters { get; }
+
+    /// <summary>Where the tool came from when it is not built in: <c>mcp:&lt;server&gt;</c> for an MCP server's tool (C-022).</summary>
+    public string? Origin { get; init; }
 
     public override string ToString() => Name;
 }

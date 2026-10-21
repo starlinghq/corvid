@@ -68,6 +68,19 @@ public sealed record MemoryWriteResult(
     Fact? Closed = null,
     CoreBlock? Block = null);
 
+public enum MemoryImportStatus
+{
+    /// <summary>Staged for review in <c>/memory pending</c>.</summary>
+    Staged,
+    /// <summary>The same text already waits for review; nothing was staged.</summary>
+    AlreadyPending,
+    /// <summary>The same text is already a current fact; nothing was staged.</summary>
+    AlreadyKnown,
+}
+
+/// <param name="Pending">The staged write, when <see cref="Status"/> is <see cref="MemoryImportStatus.Staged"/>.</param>
+public sealed record MemoryImportResult(MemoryImportStatus Status, PendingWrite? Pending);
+
 /// <param name="Neighbours">How many neighbouring facts the decider sees.</param>
 /// <param name="NeighbourTokens">The token budget for retrieving them.</param>
 public sealed record MemoryWriterOptions(int Neighbours = 5, int NeighbourTokens = 400)
@@ -87,7 +100,6 @@ public sealed record MemoryWriterOptions(int Neighbours = 5, int NeighbourTokens
 /// </remarks>
 public sealed class MemoryWriter
 {
-    private const int MaxAppendAttempts = 8;
     private const string MemoryOp = "memory_op";
 
     /// <summary>The reason recorded on a write staged because the session held content from outside the user.</summary>
@@ -138,17 +150,8 @@ public sealed class MemoryWriter
         ArgumentException.ThrowIfNullOrWhiteSpace(request.SessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Text);
 
-        // 1. Entities. Over-long text throws from the extractor; nothing is truncated (IExtractor's contract).
-        var labels = request.Labels.IsDefaultOrEmpty ? MemoryLabels.Default : request.Labels;
-        var extraction = await _extractor.ExtractAsync(new ExtractionRequest(request.Text, labels), cancellationToken);
-        var entities = extraction.Spans.Select(span => new EntityRef(span.Label, span.Text))
-            .Where(entity => !string.IsNullOrWhiteSpace(entity.Name))
-            .DistinctBy(entity => (entity.NormalizedLabel, entity.Key)).ToImmutableArray();
-
-        // 2. Neighbours: current facts about the same entities or with similar text.
-        var retrieved = await _retriever.RetrieveAsync(new RetrievalRequest(request.Text, _options.NeighbourTokens, entities,
-            [MemoryItemKind.Fact]), cancellationToken);
-        var neighbours = retrieved.Items.Select(item => item.Fact!).Take(_options.Neighbours).ToImmutableArray();
+        // 1-2. Entities and neighbours.
+        var (entities, neighbours) = await ContextAsync(request.Text, request.Labels, cancellationToken);
 
         var input = new FactInput(request.Text, entities, request.Relation, request.ValidFrom, request.SessionId, request.SourceSequence,
             request.LocalOnly);
@@ -190,6 +193,37 @@ public sealed class MemoryWriter
             return new MemoryWriteResult(MemoryWriteStatus.Noop, operation, null, null, verdict, neighbours, entities);
         var written = await ApplyFactAsync(request.SessionId, operation, proposal.TargetFactId, input, cancellationToken);
         return written with { Decision = verdict, Neighbours = neighbours, Entities = entities };
+    }
+
+    /// <summary>
+    /// Stages one imported memory (C-027: a Hermes <c>MEMORY.md</c> or <c>USER.md</c> entry) as a fact proposal for
+    /// <c>/memory pending</c>, local-only, without asking the gate: the import is the user's request, but the text came from
+    /// another agent's files, so it is never applied unreviewed. Entities and neighbours are found as for
+    /// <see cref="WriteAsync"/>, so the reviewer sees them and an approved fact keeps its entities. Nothing is staged when the
+    /// text is already a current fact or already waits for review, so importing twice stages nothing new.
+    /// </summary>
+    /// <param name="reason">Recorded as why the write was staged, for example <c>import:hermes MEMORY.md</c>.</param>
+    /// <exception cref="ArgumentException">The extractor refused the text (too long); nothing was staged.</exception>
+    public async Task<MemoryImportResult> StageImportAsync(string sessionId, string text, string reason,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(text);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        var key = NormalizeText(text);
+        if (_pending.List(PendingStatus.Pending).Any(pending => pending.Kind == PendingKind.Fact
+                && pending.Proposal.Text is { } waiting && NormalizeText(waiting) == key))
+            return new MemoryImportResult(MemoryImportStatus.AlreadyPending, null);
+
+        var (entities, neighbours) = await ContextAsync(text, default, cancellationToken);
+        // The exact text as a current fact: among the neighbours, or found by its own words.
+        if (neighbours.Concat(_facts.Search(text, 5).Select(hit => hit.Fact)).Any(fact => fact.IsCurrent && NormalizeText(fact.Text) == key))
+            return new MemoryImportResult(MemoryImportStatus.AlreadyKnown, null);
+
+        var proposal = new MemoryProposal(null, neighbours.IsEmpty ? null : neighbours[0].FactId, text,
+            [.. entities.Select(ProposedEntity.From)], null, null, [.. neighbours.Select(fact => fact.FactId)], LocalOnly: true);
+        var staged = Stage(sessionId, PendingKind.Fact, proposal, null, reason, neighbours, entities);
+        return new MemoryImportResult(MemoryImportStatus.Staged, staged.Pending);
     }
 
     /// <summary>
@@ -352,6 +386,27 @@ public sealed class MemoryWriter
         return result[MemoryOp];
     }
 
+    // Steps 1 and 2 of the write path. Over-long text throws from the extractor; nothing is truncated (IExtractor's contract).
+    private async Task<(ImmutableArray<EntityRef> Entities, ImmutableArray<Fact> Neighbours)> ContextAsync(string text,
+        ImmutableArray<string> labels, CancellationToken cancellationToken)
+    {
+        // 1. Entities.
+        var extraction = await _extractor.ExtractAsync(new ExtractionRequest(text, labels.IsDefaultOrEmpty ? MemoryLabels.Default : labels),
+            cancellationToken);
+        var entities = extraction.Spans.Select(span => new EntityRef(span.Label, span.Text))
+            .Where(entity => !string.IsNullOrWhiteSpace(entity.Name))
+            .DistinctBy(entity => (entity.NormalizedLabel, entity.Key)).ToImmutableArray();
+
+        // 2. Neighbours: current facts about the same entities or with similar text.
+        var retrieved = await _retriever.RetrieveAsync(new RetrievalRequest(text, _options.NeighbourTokens, entities,
+            [MemoryItemKind.Fact]), cancellationToken);
+        return (entities, retrieved.Items.Select(item => item.Fact!).Take(_options.Neighbours).ToImmutableArray());
+    }
+
+    // Equal memories differ at most in case and spacing.
+    private static string NormalizeText(string text) =>
+        string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).ToLowerInvariant();
+
     private JsonElement Instructions(Action<Utf8JsonWriter> body)
     {
         var buffer = new ArrayBufferWriter<byte>();
@@ -405,21 +460,5 @@ public sealed class MemoryWriter
         return new MemoryWriteResult(MemoryWriteStatus.Staged, proposal.Operation, pending.PendingId, pending, verdict, neighbours, entities);
     }
 
-    // MemoryWritten does not depend on the head, so a concurrent writer only means retrying at the new head (as the fabric
-    // does). It is not cancellable: the memory row it records is already written.
-    private void Append(string sessionId, SessionEvent payload)
-    {
-        for (var attempt = 1; ; attempt++)
-        {
-            var head = _log.GetHead(sessionId);
-            try
-            {
-                _log.Append(sessionId, head, [EventData.Create(payload)]);
-                return;
-            }
-            catch (EventLogConflictException) when (attempt < MaxAppendAttempts)
-            {
-            }
-        }
-    }
+    private void Append(string sessionId, SessionEvent payload) => EventAppend.Append(_log, sessionId, payload);
 }

@@ -4,6 +4,7 @@ using Corvid.Abstractions.Events;
 using Corvid.Abstractions.Fabric;
 using Corvid.Approvals.Shell;
 using Corvid.Fabric;
+using Corvid.Rules;
 
 namespace Corvid.Approvals;
 
@@ -66,6 +67,13 @@ public sealed record ApprovalAssessment(
         or HardlineRules.SafetyConfigurationChange);
 
     public string Summary => Reasons.IsEmpty ? Outcome.ToString().ToLowerInvariant() : string.Join("; ", Reasons);
+
+    /// <summary>
+    /// Detection rules (C-023) the call completed a match of, enforced or not. An enforced one is also among
+    /// <see cref="Reasons"/> as an <see cref="ApprovalReasons.Detection"/> reason. Empty after a hardline denial, which is
+    /// decided before any rule runs.
+    /// </summary>
+    public ImmutableArray<DetectionFinding> Detections { get; init; } = [];
 }
 
 /// <summary>A prompt shown to the user. <see cref="Deadline"/> is when an unanswered prompt is denied.</summary>
@@ -130,6 +138,15 @@ public sealed record ApprovalOptions
     /// tool call, and a read-only command runs without asking.
     /// </summary>
     public IReadOnlyDictionary<string, string> ShellTools { get; init; } = ImmutableDictionary<string, string>.Empty;
+
+    /// <summary>
+    /// Detection rules evaluated at pre_execute (C-023), after the hardline list and before everything else. Null (the
+    /// default) leaves the pipeline exactly as it is without them. Build the engine with the same <see cref="ShellTools"/>.
+    /// </summary>
+    public DetectionEngine? Detections { get; init; }
+
+    /// <summary>How many of the session's latest events detection rules see inline; older steps are found only by a scan.</summary>
+    public int DetectionHistory { get; init; } = 512;
 }
 
 /// <summary>
@@ -154,6 +171,8 @@ public sealed class ApprovalPipeline
     private readonly IApprovalPrompter? _prompter;
     private readonly TimeProvider _time;
     private readonly ConcurrentDictionary<string, ImmutableArray<ApprovalRule>> _session = new(StringComparer.Ordinal);
+    // Rules already recorded per session, beside the DetectionMatched events in the inline window (C-023).
+    private readonly ConcurrentDictionary<(string Session, string Rule), byte> _detected = new();
 
     public ApprovalPipeline(ApprovalEnvironment environment, DecisionFabric fabric, IEventLog log, IApprovalPrompter? prompter = null,
         IApprovalRuleStore? alwaysRules = null, ApprovalOptions? options = null, TimeProvider? timeProvider = null)
@@ -169,6 +188,8 @@ public sealed class ApprovalPipeline
         Options = options ?? ApprovalOptions.Default;
         if (Options.Timeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(options), "The approval timeout must be positive.");
+        if (Options.DetectionHistory < 1)
+            throw new ArgumentOutOfRangeException(nameof(options), "The detection history must hold at least one event.");
         _time = timeProvider ?? TimeProvider.System;
     }
 
@@ -190,11 +211,18 @@ public sealed class ApprovalPipeline
         _ => throw new ArgumentException($"Unknown action type {action.GetType().Name}.", nameof(action)),
     };
 
+    /// <remarks>
+    /// Order (plan §10.2, C-023): the hardline list first, so nothing can relax or pre-empt its denials; then detection
+    /// rules, where an enforced match is a forced reason; then forced reasons, remembered rules, <c>risk</c> and the mode.
+    /// Like the fabric's <c>risk</c> <c>Decision</c>, a detection is recorded here: a <c>DetectionMatched</c> event, once per
+    /// rule per session.
+    /// </remarks>
     public async Task<ApprovalAssessment> AssessAsync(ApprovalContext context, ProposedAction action,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(context.SessionId);
+        var proposed = action;
         action = Resolve(action);
         var analysis = Analyze(action);
 
@@ -202,7 +230,15 @@ public sealed class ApprovalPipeline
         if (!hardline.IsEmpty)
             return new ApprovalAssessment(ApprovalOutcome.Deny, analysis, hardline, [], null, null);
 
-        var forced = Forced(analysis, action, context);
+        var (detections, enforced) = Detect(context, proposed, cancellationToken);
+        var assessment = await DecideAsync(context, action, analysis, enforced, cancellationToken);
+        return detections.IsEmpty ? assessment : assessment with { Detections = detections };
+    }
+
+    private async Task<ApprovalAssessment> DecideAsync(ApprovalContext context, ProposedAction action, ActionAnalysis analysis,
+        ImmutableArray<ApprovalReason> detected, CancellationToken cancellationToken)
+    {
+        var forced = Forced(analysis, action, context).AddRange(detected);
         var parsed = analysis.Unsupported is null;
         // A tool declared read-only (C-005) needs no approval even when it reads the network; taint is a forced reason.
         var sideEffecting = action is ToolAction { Tool.Risk.ReadOnly: true }
@@ -304,6 +340,81 @@ public sealed class ApprovalPipeline
         var result = Resolve(context, assessment, approvalId, answer.Approved ? ApprovalResolution.UserApproved : ApprovalResolution.UserDenied,
             $"user: {(answer.Approved ? "approved" : "denied")} ({WireNames.Scope(scope)})");
         return result with { Scope = scope };
+    }
+
+    /// <summary>
+    /// Detection rules over the session's latest events with the pending call as the next one (C-023). Returns the matches it
+    /// completes and the reasons they force: an enforced match, or an enforce rule that could not be evaluated (fail closed).
+    /// A detect match only records.
+    /// </summary>
+    private (ImmutableArray<DetectionFinding> Findings, ImmutableArray<ApprovalReason> Forced) Detect(ApprovalContext context,
+        ProposedAction proposed, CancellationToken cancellationToken)
+    {
+        if (Options.Detections is not { } engine
+            || Inline(engine, context.SessionId, context.CallId, proposed, [], cancellationToken) is not var (scan, history))
+            return ([], []);
+
+        var reasons = ImmutableArray.CreateBuilder<ApprovalReason>();
+        foreach (var finding in scan.Findings.Where(finding => finding.Enforced))
+            reasons.Add(new(ApprovalReasons.Detection, $"{finding.Rule.Id}: {finding.Rule.Reason}"));
+        foreach (var error in scan.Errors.Where(error => engine.PostureOf(error.Rule) == RulePosture.Enforce))
+            reasons.Add(new(ApprovalReasons.Detection, $"{error.Rule.Id}: could not be evaluated ({error.Message})"));
+
+        var recorded = history.Select(stored => stored.Payload).OfType<DetectionMatched>().Select(matched => matched.RuleId)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var finding in scan.Findings)
+        {
+            if (recorded.Contains(finding.Rule.Id) || !_detected.TryAdd((context.SessionId, finding.Rule.Id), 0))
+                continue;
+            Append(context.SessionId, new DetectionMatched(finding.Rule.Id, finding.Rule.Version, finding.Rule.Severity, finding.Posture,
+                finding.Rule.Reason, finding.Sequences, context.CallId, finding.Enforced ? "ask" : null), cancellationToken);
+        }
+        return (scan.Findings, reasons.ToImmutable());
+    }
+
+    /// <summary>
+    /// Whether detection rules have something to say about a call (C-023): it completes a match, enforced or not, or an enforce
+    /// rule cannot be evaluated on it. The turn asks this of a read-only network call, which otherwise runs without coming
+    /// here in an untainted session, so a <c>web_fetch</c> after a credential read still reaches <c>secret-read-then-egress</c>
+    /// and a match is still recorded. <paramref name="preceding"/> are calls of the same response not yet logged, in order.
+    /// Records nothing; false without an engine.
+    /// </summary>
+    public bool Detects(string sessionId, string? callId, ProposedAction action, IReadOnlyList<ToolCallIssued> preceding,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentNullException.ThrowIfNull(action);
+        ArgumentNullException.ThrowIfNull(preceding);
+        if (Options.Detections is not { } engine
+            || Inline(engine, sessionId, callId, action, preceding, cancellationToken) is not var (scan, _))
+            return false;
+        return !scan.Findings.IsEmpty || scan.Errors.Any(error => engine.PostureOf(error.Rule) == RulePosture.Enforce);
+    }
+
+    /// <summary>The engine's inline evaluation of the call over the session's latest events, then <paramref name="preceding"/>.</summary>
+    private (DetectionScan Scan, List<StoredEvent> History)? Inline(DetectionEngine engine, string sessionId, string? callId,
+        ProposedAction proposed, IReadOnlyList<ToolCallIssued> preceding, CancellationToken cancellationToken)
+    {
+        var pending = proposed switch
+        {
+            ShellAction shell => engine.ShellCall(callId ?? "pending", shell.Command),
+            ToolAction tool => new ToolCallIssued(callId ?? "pending", tool.Tool.Name, tool.Arguments),
+            _ => null,
+        };
+        if (pending is null)
+            return null;
+
+        var head = _log.GetHead(sessionId, cancellationToken);
+        var limit = Options.DetectionHistory;
+        // The turn appends the call's ToolCallIssued before it asks; the pending event stands for it, so it is not counted twice.
+        var history = _log.Read(sessionId, Math.Max(0, head - limit), head, limit, cancellationToken)
+            .Where(stored => callId is null || stored.Payload is not ToolCallIssued issued || issued.CallId != callId)
+            .ToList();
+        var now = _time.GetUtcNow();
+        List<StoredEvent> evaluated = preceding.Count == 0 ? history
+            : [.. history, .. preceding.Select((call, i) => new StoredEvent(sessionId, head + 1 + i, Guid.Empty, now, call))];
+        var scan = engine.Inline(evaluated, new StoredEvent(sessionId, head + 1 + preceding.Count, Guid.Empty, now, pending));
+        return (scan, history);
     }
 
     /// <summary>A call to a shell tool (<see cref="ApprovalOptions.ShellTools"/>) is the command line it runs.</summary>

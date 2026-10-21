@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Corvid's detection rules (C-023): a declarative rule format over the typed session events, its loader and validator, the predicate evaluator and correlation matcher, and the built-in pack.</Description>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Corvid.Abstractions/Corvid.Abstractions.csproj" />
+    <!-- One file per rule, embedded by id; RulePack.BuiltIn reads every resource under this prefix. -->
+    <EmbeddedResource Include="Pack/**/*.rule.json" LogicalName="Corvid.Rules.Pack.%(Filename)%(Extension)" />
+    <InternalsVisibleTo Include="Corvid.Rules.Tests" />
+  </ItemGroup>
+</Project>

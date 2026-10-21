@@ -18,6 +18,7 @@
     <Project Path="src/Corvid.Models.Anthropic/Corvid.Models.Anthropic.csproj" />
     <Project Path="src/Corvid.Models.OpenAICompat/Corvid.Models.OpenAICompat.csproj" />
     <Project Path="src/Corvid.Models.Starling/Corvid.Models.Starling.csproj" />
+    <Project Path="src/Corvid.Rules/Corvid.Rules.csproj" />
     <Project Path="src/Corvid.Sandbox/Corvid.Sandbox.csproj" />
     <Project Path="src/Corvid.Tools/Corvid.Tools.csproj" />
     <Project Path="src/Corvid.Skills/Corvid.Skills.csproj" />
@@ -58,6 +59,7 @@
     <Project Path="tests/Corvid.Skills.Tests/Corvid.Skills.Tests.csproj" />
     <Project Path="tests/Corvid.Tools.Builtin.Tests/Corvid.Tools.Builtin.Tests.csproj" />
     <Project Path="tests/Corvid.Sandbox.Tests/Corvid.Sandbox.Tests.csproj" />
+    <Project Path="tests/Corvid.Rules.Tests/Corvid.Rules.Tests.csproj" />
     <Project Path="tests/Corvid.Vault.TestClient/Corvid.Vault.TestClient.csproj" />
   </Folder>
   <Folder Name="/tools/">

@@ -38,7 +38,8 @@ public sealed class McpTool : ToolFunction
         var context = ToolCallContext.From(arguments);
         // Plan §10.3: whatever an untrusted server returns (a result or an error message) is outside content. Marked before the
         // call, so an error text that reaches the model taints the session too.
-        if (_server.Definition.Trust == McpTrust.Untrusted)
+        // A flagged tool the user allowed (C-022) is treated as an untrusted server's whatever the server's trust.
+        if (Outside)
             context?.MarkResultTainted();
         var values = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         foreach (var (name, value) in arguments)
@@ -58,10 +59,12 @@ public sealed class McpTool : ToolFunction
             output["structured"] = shaped.Structured;
         if (shaped.Truncated)
             output["truncated"] = true;
-        if (_server.Definition.Trust == McpTrust.Untrusted || Descriptor.Risk.Network)
+        if (Outside || Descriptor.Risk.Network)
             output["tainted"] = true;
         return output;
     }
+
+    private bool Outside => _server.Definition.Trust == McpTrust.Untrusted || Descriptor.Risk.OutsideDescription;
 }
 
 /// <summary>The server ran the tool and said it failed; the message is the server's own text.</summary>
@@ -113,23 +116,30 @@ public static class McpToolMapping
     /// destructive remote side effect unless the user listed it as read-only. A trusted server's hints are honoured, with
     /// the MCP defaults when a hint is absent (not read-only, destructive, open world). <c>Network</c> is set when what the
     /// tool is sent can leave the machine, so a tainted session asks before any call that could carry its data out, and the
-    /// turn loop taints the session with the result.
+    /// turn loop taints the session with the result. An untrusted server's description is outside content as well
+    /// (<see cref="ToolRisk.OutsideDescription"/>, C-022): a turn that shows it to the generator is tainted.
     /// </summary>
-    public static ToolRisk Risk(McpServerDefinition server, Tool tool)
+    /// <param name="untrusted">
+    /// Treat the tool as an untrusted server's whatever the configured trust, ignoring the user's read-only declaration too:
+    /// a tool whose description was flagged as poisoned and that the user allowed anyway (C-022).
+    /// </param>
+    public static ToolRisk Risk(McpServerDefinition server, Tool tool, bool untrusted = false)
     {
         ArgumentNullException.ThrowIfNull(server);
         ArgumentNullException.ThrowIfNull(tool);
-        var declaredReadOnly = server.ReadOnlyTools.Contains(tool.Name, StringComparer.Ordinal);
-        var hints = server.Trust == McpTrust.Trusted ? tool.Annotations : null;
+        var outside = untrusted || server.Trust == McpTrust.Untrusted;
+        var declaredReadOnly = !untrusted && server.ReadOnlyTools.Contains(tool.Name, StringComparer.Ordinal);
+        var hints = outside ? null : tool.Annotations;
         var readOnly = declaredReadOnly || hints?.ReadOnlyHint == true;
         var effects = readOnly ? SideEffects.None : SideEffects.Remote;
         var destructive = !readOnly && (hints?.DestructiveHint ?? true);
-        var network = server.ReachesNetwork && (server.Trust == McpTrust.Untrusted || (hints?.OpenWorldHint ?? true));
-        return new ToolRisk(effects, network, destructive);
+        var network = server.ReachesNetwork && (outside || (hints?.OpenWorldHint ?? true));
+        return new ToolRisk(effects, network, destructive, OutsideDescription: outside);
     }
 
     /// <summary>The descriptor for one listed tool, or the reason it is left out.</summary>
-    public static (ToolDescriptor? Descriptor, string? Problem) Describe(McpServerDefinition server, Tool tool)
+    /// <param name="untrusted">See <see cref="Risk"/>.</param>
+    public static (ToolDescriptor? Descriptor, string? Problem) Describe(McpServerDefinition server, Tool tool, bool untrusted = false)
     {
         ArgumentNullException.ThrowIfNull(server);
         ArgumentNullException.ThrowIfNull(tool);
@@ -140,7 +150,7 @@ public static class McpToolMapping
         if (problem is not null)
             return (null, $"'{tool.Name}': {problem}");
         var description = Clean(string.IsNullOrWhiteSpace(tool.Description) ? tool.Title ?? tool.Name : tool.Description!);
-        return (new ToolDescriptor(name, description, schema!, Risk(server, tool), parameters), null);
+        return (new ToolDescriptor(name, description, schema!, Risk(server, tool, untrusted), parameters) { Origin = "mcp:" + server.Name }, null);
     }
 
     /// <summary>Control characters (other than newlines and tabs) removed, whitespace trimmed, and the text capped.</summary>

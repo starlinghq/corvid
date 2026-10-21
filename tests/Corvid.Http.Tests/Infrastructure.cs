@@ -122,9 +122,7 @@ internal sealed class ScrubbingVault : IAsyncDisposable
         // Short, because a Unix socket path is limited to 108 bytes.
         _root = Corvid.Tests.ShortTemp.Create("cvh-");
         SocketPath = Path.Combine(_root, "v.sock");
-        _listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-        _listener.Bind(new UnixDomainSocketEndPoint(SocketPath));
-        _listener.Listen(16);
+        _listener = Corvid.Tests.ShortTemp.Listen(_root, SocketPath);
         _loop = Task.Run(AcceptAsync);
     }
 

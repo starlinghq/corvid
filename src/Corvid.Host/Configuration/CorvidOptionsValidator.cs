@@ -143,8 +143,9 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue, IEnumerable
             if (adapter.Owners.Concat(adapter.Guests).Concat(adapter.Channels).Any(string.IsNullOrWhiteSpace))
                 errors.Add($"{key}: user and channel ids cannot be empty.");
             // Guest tools (C-020) are an allowlist by exact name. Whether a built-in or DI tool exists is known only once the
-            // runtime has its registry, so the gateway checks that when it starts (CorvidGateway.UnknownGuestTools); here, the
-            // shape, and that an MCP tool names a configured server (its tools are listed only once it runs).
+            // runtime has its registry, so the gateway checks that when it starts (CorvidGateway.GuestToolProblems), and there
+            // too refuses a tool whose risk metadata declares SideEffects.Memory (the turn loop never offers one to a guest);
+            // here, the shape, and that an MCP tool names a configured server (its tools are listed only once it runs).
             foreach (var tool in adapter.GuestTools)
             {
                 if (string.IsNullOrWhiteSpace(tool) || !tool.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-'))

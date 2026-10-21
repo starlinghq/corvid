@@ -17,7 +17,7 @@
       "confidence": 0,
       "threshold": 0.7,
       "action": "proceed",
-      "catalogue_version": "2026-10-19.1",
+      "catalogue_version": "2026-10-21.1",
       "decider": "degraded",
       "state": {
         "user_message": "list my notes",
@@ -56,7 +56,7 @@
       "confidence": 1,
       "threshold": 3.5,
       "action": "stay_on_generator",
-      "catalogue_version": "2026-10-19.1",
+      "catalogue_version": "2026-10-21.1",
       "decider": "degraded",
       "state": {
         "user_message": "list my notes",
@@ -105,7 +105,7 @@
       "confidence": 0,
       "threshold": 0.05,
       "action": "generator_with_full_shortlist",
-      "catalogue_version": "2026-10-19.1",
+      "catalogue_version": "2026-10-21.1",
       "decider": "degraded",
       "state": {
         "user_message": "list my notes",
@@ -158,7 +158,7 @@
       "confidence": 0.9960023644698753,
       "threshold": 0.05,
       "action": "offer_tool:list_notes",
-      "catalogue_version": "2026-10-19.1",
+      "catalogue_version": "2026-10-21.1",
       "decider": "degraded",
       "state": {
         "user_message": "list my notes",
@@ -200,7 +200,9 @@
       "tool_name": "list_notes",
       "arguments": {
         "limit": 5
-      }
+      },
+      "round": 1,
+      "read_only": true
     },
     {
       "type": "tool_result",
@@ -224,7 +226,7 @@
       "confidence": 1,
       "threshold": 0.8,
       "action": "stop",
-      "catalogue_version": "2026-10-19.1",
+      "catalogue_version": "2026-10-21.1",
       "decider": "degraded",
       "state": {
         "user_message": "list my notes",
@@ -261,7 +263,7 @@
       "confidence": 0,
       "threshold": 0.7,
       "action": "continue",
-      "catalogue_version": "2026-10-19.1",
+      "catalogue_version": "2026-10-21.1",
       "decider": "degraded",
       "state": {
         "user_message": "list my notes",
@@ -302,7 +304,7 @@
       "confidence": 0.9960023644698753,
       "threshold": 0.05,
       "action": "offer_tool:list_notes",
-      "catalogue_version": "2026-10-19.1",
+      "catalogue_version": "2026-10-21.1",
       "decider": "degraded",
       "state": {
         "user_message": "list my notes",
@@ -371,7 +373,9 @@
               "tool_name": "list_notes",
               "arguments": {
                 "limit": 5
-              }
+              },
+              "round": 1,
+              "read_only": true
             }
           },
           {
@@ -410,7 +414,7 @@
               "confidence": 0.9960023644698753,
               "threshold": 0.05,
               "action": "offer_tool:list_notes",
-              "catalogue_version": "2026-10-19.1",
+              "catalogue_version": "2026-10-21.1",
               "decider": "degraded",
               "state": {
                 "user_message": "list my notes",
@@ -462,7 +466,7 @@
               "confidence": 0.9960023644698753,
               "threshold": 0.05,
               "action": "offer_tool:list_notes",
-              "catalogue_version": "2026-10-19.1",
+              "catalogue_version": "2026-10-21.1",
               "decider": "degraded",
               "state": {
                 "user_message": "list my notes",
@@ -518,7 +522,7 @@
               "confidence": 0,
               "threshold": 0.05,
               "action": "generator_with_full_shortlist",
-              "catalogue_version": "2026-10-19.1",
+              "catalogue_version": "2026-10-21.1",
               "decider": "degraded",
               "state": {
                 "user_message": "list my notes",
@@ -569,7 +573,7 @@
               "confidence": 0,
               "threshold": 0.7,
               "action": "proceed",
-              "catalogue_version": "2026-10-19.1",
+              "catalogue_version": "2026-10-21.1",
               "decider": "degraded",
               "state": {
                 "user_message": "list my notes",
@@ -611,7 +615,7 @@
               "confidence": 1,
               "threshold": 3.5,
               "action": "stay_on_generator",
-              "catalogue_version": "2026-10-19.1",
+              "catalogue_version": "2026-10-21.1",
               "decider": "degraded",
               "state": {
                 "user_message": "list my notes",
@@ -657,7 +661,7 @@
               "confidence": 0,
               "threshold": 0.7,
               "action": "continue",
-              "catalogue_version": "2026-10-19.1",
+              "catalogue_version": "2026-10-21.1",
               "decider": "degraded",
               "state": {
                 "user_message": "list my notes",
@@ -699,7 +703,7 @@
               "confidence": 1,
               "threshold": 0.8,
               "action": "stop",
-              "catalogue_version": "2026-10-19.1",
+              "catalogue_version": "2026-10-21.1",
               "decider": "degraded",
               "state": {
                 "user_message": "list my notes",

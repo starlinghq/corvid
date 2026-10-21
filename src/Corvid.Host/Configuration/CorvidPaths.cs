@@ -45,6 +45,12 @@ public static class CorvidPaths
     /// <summary>The gateway's pairings, polling cursors and ledger mark (C-020); the ledger itself is in the event log.</summary>
     public static string GatewayDatabase(CorvidOptions options) => Path.Combine(DataDirectory(options), "gateway.db");
 
+    /// <summary>
+    /// The pinned MCP tool definitions (C-022): Corvid state in the data directory, which no tool and no sandboxed server
+    /// may write, never in the user's configuration.
+    /// </summary>
+    public static string McpPins(CorvidOptions options) => Path.Combine(DataDirectory(options), "mcp-pins.json");
+
     /// <summary>The skill loop's queue, staged drafts, usage and eval results.</summary>
     public static string SkillsDatabase(CorvidOptions options) => Path.Combine(DataDirectory(options), "skills.db");
 

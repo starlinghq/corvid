@@ -1,4 +1,4 @@
-# Agent foundation (C-001, C-002, C-004a, C-004b, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-012, C-013, C-014, C-015, C-016, C-017, C-018, C-019, C-020, C-021)
+# Agent foundation (C-001, C-002, C-004a, C-004b, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-012, C-013, C-014, C-015, C-016, C-017, C-018, C-019, C-020, C-021, C-023)
 
 The solution contains `Corvid.Abstractions`, `Corvid.Kernel`, and
 `Corvid.Models`, alongside the working Vault projects. Kernel and Models each
@@ -33,7 +33,8 @@ added `Corvid.Mcp`, the first surface project, which references Sandbox, Tools a
 SDK, and nothing else references it but the host (see [MCP client and server](#mcp-client-and-server-c-018)). C-020
 added `Corvid.Gateway`, which references Abstractions, Approvals, `Corvid.Vault.Client` and `Microsoft.Data.Sqlite`, and the
 platform adapters `Corvid.Gateway.Telegram`, `.Discord` and `.Slack`, which reference only the gateway (see
-[Gateway](#gateway-c-020)). Add
+[Gateway](#gateway-c-020)). C-023 added `Corvid.Rules`, which references Abstractions only; Approvals references it (see
+[Detection rules](#detection-rules-c-023)). Add
 the other projects from the agent plan as their implementations start, rather
 than creating empty projects for every future surface.
 
@@ -758,8 +759,20 @@ a shell tool is assessed as the command line it runs (see [Built-in tools and sc
   extraction as if it ran alone. Unwrapping never lowers risk. Tracers add their own targets: `strace` and
   `ltrace` (`-o` writes a file, or pipes to a shell command that is analysed; `-p` attaches to PIDs; `-u` elevates;
   `strace -E` sets the environment; fault injection is unresolved), `valgrind` (`--log-file` and the profilers' output
-  files, with `%p` as a pattern; it reads option files Corvid cannot see, so it executes) and `perf stat`, `record`
-  (`perf.data`) and `trace`. Launchers that change namespaces, mounts or the user mark the launcher and everything
+  files, with `%p` as a pattern; it also reads `./.valgrindrc`, `~/.valgrindrc` and `$VALGRIND_OPTS`, which can
+  redirect `--log-file` or set `--trace-children`, so it always asks) and `perf stat`, `record` (`perf.data`) and
+  `trace`. `gdb` (`getopt_long_only`: one- or two-dash long names, exact only) always asks, since a debugger runs
+  whatever it is told and reads `.gdbinit`; `--args PROGRAM ARGS` and a bare `PROGRAM` are analysed as the command it
+  would run (in its `-cd` directory), `-p`/`--pid` and a numeric second operand are process targets, core and symbol
+  files are reads, `-x`/`-ix` scripts are reads plus unresolved, and `-ex`/`-iex` commands are unresolved and kept for
+  the hardline backstop. `runuser` (permuted util-linux options) elevates: `-u USER [--] COMMAND` is unwrapped like
+  `sudo`, `-c`/`--session-command` strings go through the subset parser (with `-l` or `-` the working directory is
+  unknown; a shell other than `sh`/`bash`/`dash`, or the user's login shell, is unresolved), and `-u` with `-c`, `-l`,
+  `-s` or `-f` refuses as util-linux does. `at` and `batch` defer the job to atd, so they always ask (`Schedule`); the
+  time spec is consumed, a job from a static here-string, here-document or a pipe from `echo` of static words (no
+  option other than `-n`, no backslash, glob or expansion) is parsed as a `/bin/sh` script in the current directory,
+  `-f FILE` is a read target and unresolved, input Corvid cannot see refuses, `at -l` is `atq` (read-only) and
+  `at -r`/`-d` is `atrm`. Only `at` and `batch` read a piped `echo`; a shell reading one still asks. Launchers that change namespaces, mounts or the user mark the launcher and everything
   it runs unresolved, so they always ask: `nsenter`, `unshare`, `firejail` (a short list of options), `bwrap`
   (writable binds are write targets, read-only binds recursive reads; the working directory is unknown) and
   `systemd-run` (elevated for the system manager; a service runs in `/` or the home directory with the manager's
@@ -820,8 +833,8 @@ Not built yet: GLiNER2 extraction of free-form targets (SQL, `curl` data, `kill`
 spike S3; calibrated `risk` (C-004b); reversibility now comes from checkpoint state (C-014 sets `ApprovalContext.Reversible`);
 restoring session rules on resume (they are not in the log); removing rules (C-013's `/approvals` lists them, and the
 host keeps always-rules in `Corvid:Approvals:RulesFile`, by default `$XDG_CONFIG_HOME/corvid/approvals.json`); control flow, subshells and other syntax
-outside the subset, which ask rather than run; unwrapping launchers not yet read (`runuser`, `at`, `gdb`, `perf`
-subcommands other than `stat`, `record` and `trace`, moreutils `parallel`, which is read as GNU's), which remain programs that
+outside the subset, which ask rather than run; unwrapping launchers not yet read (`perf` subcommands other than `stat`, `record` and `trace`, `lldb`, moreutils
+`parallel`, which is read as GNU's), which remain programs that
 run code Corvid cannot see; symlinks and `/proc/<pid>/cwd` paths, which are resolved lexically and left to the sandbox.
 
 ## Session actor and turn loop (C-011)
@@ -842,7 +855,13 @@ described below (see [Host and CLI](#host-and-cli-c-013)).
   finished. The loop owns the queue of messages and the running turn; it starts each turn as a task and keeps reading, so
   a cancel or a `/model` switch is handled while a turn waits on a model or an approval prompt. Turns run one at a time in
   arrival order, and each finished turn (or the exception that ended it) goes to an `IDeliverySink`. Cancellation is one
-  token per turn, linked to the actor's lifetime, passed to every model, tool, approval and log call.
+  token per turn, linked to the actor's lifetime, passed to every model, tool, approval and log call. `CancelTurn` targets
+  one turn, fixed at the call. If a turn is running, its token is cancelled before `CancelTurn` returns (callbacks run on
+  the thread pool), so a caller that cancels and then unblocks the turn finds it already cancelled; the posted command
+  names that turn, and the loop ignores it if the turn has finished and the next one started meanwhile. If none is
+  running, the posted command cancels the turn running when the loop reads it: a message submitted before the call whose
+  turn had not started yet. A message submitted after the call is never cancelled, and with nothing queued the cancel does
+  nothing.
 - A turn (`TurnRunner`): append `UserMessage`; extract entities from the user message when an extractor is bound
   (labels person, organization, place, date, time, project, file, url); rank the tool shortlist; ask the ingress
   checkpoint as one `DecisionFabric.DecideAsync` (intent, difficulty, clarify, `needs_recall` when a retriever is bound,
@@ -865,7 +884,9 @@ described below (see [Host and CLI](#host-and-cli-c-013)).
   it must fit the schema and, for a tool that declares `[Probe]` (`list_files` and `read_file`), survive a probe run of
   the tool (its result discarded), so `list_files` is never steered to a directory that does not exist. The probe is
   opt-in, never inferred from `ReadOnly`: an MCP tool is read-only on its server's or the user's word, and a probe runs
-  unlogged and unasked with the user's words. Other tools get the schema check only. An invalid call is logged as
+  unlogged and unasked with the user's words. It runs under a call id of its own (`probe-` and a GUID), never the failed
+  call's, so nothing keyed by call id (events, approvals, checkpoints, telemetry, a tool's own records) can take the
+  discarded trial for the real call. Other tools get the schema check only. An invalid call is logged as
   `ToolCallIssued` and an error `ToolResult` in one append (details, the expected schema and any hints: the repair
   message), so a concurrent switch never reads the call without its result. A `ToolArgumentException` from the
   tool's own binding counts the same. A second failed response escalates the generator through C-006
@@ -1191,7 +1212,16 @@ references Builtin except tests and the host (C-013). Everything runs on the deg
   credential-store and safety-configuration paths) and credential names (the sandbox's `.env` rule, examples included,
   and private keys). Listings and searches leave out credential names and denied paths, never descend into `.git`,
   `node_modules` or a link (searches skip linked files too), and stop at limits (`FileToolOptions`); files with a NUL in
-  their first 8 KiB are binary and not read.
+  their first 8 KiB are binary and not read, and a file the user may not read (EACCES) is a "permission denied" tool
+  error for `read_file` and `patch_file` (not reported as binary) and skipped by a search. Only regular files are opened: .NET reports a FIFO, a socket or a device as a
+  file, and reading a FIFO nobody writes to blocks the turn for ever (a device may never end). `FileKinds.Special` asks
+  Linux's `statx` (one layout on every architecture), links followed as `Workspace.Resolve` already did, so `read_file`,
+  `patch_file`, `write_file` (which would otherwise replace the pipe) and a `search_files` naming one refuse it with a
+  tool error, a search walking past one skips it, and a listing shows its kind instead of a size. Elsewhere the kind is
+  not told and these files are treated as before. The path check gives the error its wording; the read itself
+  (`FileKinds.ReadRegular`) opens with `O_NONBLOCK | O_NOFOLLOW` and checks the kind of the opened descriptor, so a
+  path swapped for a FIFO (or a final link) after the check is refused, not read. `write_file` replaces by rename, so a
+  swap there cannot block it.
 - Shell (`ShellTool`, `shell`, `[SideEffect(Process | Filesystem)]`, `[Destructive]`): a command line run by `/bin/bash -c`
   (bash, because the pipeline parses the bash subset, D-5) through `SandboxedShell`, which builds one `SandboxPolicy`: the
   workspace, no network, the default environment (names that change what bash runs, such as `BASH_ENV`, `SHELLOPTS` or
@@ -1515,8 +1545,10 @@ directory has its own history and `/skills revert`. Before every change (and
   breakpoints, C-015); below the floor the shortlist's L0 lines are shown, naming `skill_read`
   when it is registered; a confident `none` shows nothing. A body that is not trusted (a hub skill) taints the session
   (§10.3: outside content) and an `injection/skill:<name>` decision is recorded (without Kev, `treat_as_tainted`). With
-  `TurnServices.SkillLearning` bound, an answered turn with at least three tool calls asks `skill_opportunity` at egress with
-  the `tool_steps_at_least_3` condition (shorter turns are not asked: in the degraded tier each ask is a generator call);
+  `TurnServices.SkillLearning` bound, an answered turn with at least three tool calls (or, since C-026, a recovery pattern)
+  asks `skill_opportunity` at egress with the `procedure_evidence` condition, beside `task_succeeded`, whose acting it also
+  requires (other turns are not asked: in the degraded tier each ask is a generator call; see
+  [Skill learning signals](#skill-learning-signals-c-026));
   acting queues `SkillOpportunity` (the user message's and the answer's sequences, the decision id, the request).
   `TurnResult` gained `Skill` and `SkillQueued`. `ToolCallContext.MarkResultTainted` lets a tool that returns outside
   content without the network taint the session after its call.
@@ -1811,9 +1843,123 @@ until Corvid restarts) and retrying a server that failed its first start without
 example requests for MCP tools in the shortlist; Vault's exec path for stdio servers that need a secret (a secret-like
 environment name is refused instead); address checks for keyless HTTP servers (the URL is the user's own configuration); the
 privacy egress gate over MCP arguments (an untrusted server's calls are each approved with their arguments shown, and a
-trusted read-only tool's are not); tainting a turn for an untrusted server's tool descriptions, which reach the prompt cleaned and
-capped but untainted, like a hub skill's L0 description; stdio servers where the sandbox does not run; server mode over HTTP
-(C-019's endpoint); and SDK 2.3.0.
+trusted read-only tool's are not); stdio servers where the sandbox does not run; server mode over HTTP (C-019's endpoint); and
+SDK 2.3.0. Tainting a turn for an untrusted server's tool descriptions (and a hub skill's L0 description) is built by C-022
+(see [MCP tool pinning and poisoned descriptions](#mcp-tool-pinning-and-poisoned-descriptions-c-022)).
+
+## MCP tool pinning and poisoned descriptions (C-022)
+
+Plan §10.3, §10.6, §12. C-018 lists each server once per process and registers what it lists; C-022 checks each listed definition
+before it is registered, so a server cannot change what a tool says or does after the user started relying on it (a "rug
+pull"), and a description written to steer the model rather than describe the tool is not offered unreviewed. It also closes
+C-018's gap that descriptions from an untrusted server reached the prompt untainted. All of it is in `Corvid.Mcp` (no new
+project, package or checker rule), with events and spans in the host through a callback.
+
+- Canonical definition (`McpToolDefinition`): one JSON object with `annotations`, `description`, `inputSchema`, `name` and
+  `title`, every object's keys sorted ordinally and recursively, no whitespace, numbers as the server wrote them, arrays in
+  order, text as the server sent it (before `McpToolMapping.Clean`, so an added zero-width or bidirectional character is a
+  change); the hash is SHA-256 over its UTF-8 bytes. Sorted keys mean a server that re-emits the same schema in another order is
+  not held. Annotations are pinned for every server, although an untrusted server's do not affect risk, so every change is
+  visible.
+- Pins (`IMcpPinStore`; `JsonFileMcpPinStore`, format `corvid-mcp-pins` version 1, `InMemoryMcpPinStore` for tests and
+  the default constructor): per server and tool the hash, the canonical definition (a diff needs the old text; the size is bounded
+  by C-018's limits), when it was pinned and `allowed_flagged`, the hash of a flagged definition the user allowed. The file is
+  `mcp-pins.json` in the data directory (`CorvidPaths.McpPins`), Corvid state rather than the user's configuration, already in
+  the protected safety configuration and in every sandboxed server's denied paths, so neither a tool nor a server can rewrite
+  its own pins. Every read goes to the file, and every write re-reads it, merges by server and tool, and replaces it through
+  `<path>.tmp` and a move, so `corvid mcp list` and a running chat do not drop each other's pins. A file of another format or
+  version, an unknown key or a pin without a SHA-256 hash is refused with `InvalidDataException`; then nothing from any server
+  is offered (`/mcp` says why), since a broken store must not turn into trust on first use. `IMcpPinStore.Listed` says whether
+  a server has an entry at all: a first listing writes one even when it pins nothing (an empty object in the file), so trust on
+  first use is spent once per server.
+- Holding (`McpClients.Register`, after the allowlist, duplicate, limit and schema checks): a server never listed before
+  (`Listed` false) pins every tool it lists (trust on first use) and registers it, and is recorded even when every tool was
+  flagged, taken or outside the allowlist, so a decoy first listing cannot keep the next one on trust on first use; after that
+  a tool without a pin is held as `new`, one whose hash differs from its pin as `changed`, and a match registers as before.
+  Held tools count toward `MaxTools` as registered ones do, so accepting them never takes a server over its limit; `Accept`
+  also refuses when the server already offers `MaxTools` tools. A removed tool is not registered and its pin stays. Held tools
+  are never added to the registry; they are kept, with the exact `Tool` the server listed, on the connection
+  (`McpServerStatus.Held`) and reported among its issues, e.g. `'send': held, its definition changed since it was pinned (/mcp
+  diff fake send; /mcp accept fake send)`, so `/mcp` and `corvid mcp list` show them without new plumbing.
+  Pins are checked once per process start, which is when C-018 lists.
+- Poisoned descriptions (`McpDescriptionScan`): a `[GeneratedRegex]` (case-insensitive, culture-invariant, 1 s timeout) with
+  the alternatives of the `mcp-poisoned-tool-description` rule of Beacon (Asymptote-Labs/agent-beacon, MIT): an instruction tag
+  (`<important`, `<system`, `<secret`, `<instruction`, `<admin`), concealment (`do not tell|mention|inform|reveal|report|
+  disclose|notify|let`), `ignore (the|all|any) previous|prior|above|earlier|foregoing`, `before using|calling|invoking|running
+  this|the tool`, and `read` followed within 60 characters by `.ssh`, `.env`, `.aws`, an `id_rsa`-style key, `credentials`,
+  `/etc/passwd`, `mcp.json` or `secret(s)`. It runs over the description, the title, and every string value and property name
+  anywhere in the input schema (`description` and `title`, but also `default`, `enum`, `const`, `examples`, `$comment`,
+  `pattern` and the properties' names), since the generator is given the whole schema, after format and control characters
+  are dropped and whitespace runs collapsed,
+  so a hidden character or a line break cannot split a marker; only the regex alternatives are taken from Beacon. It runs for
+  trusted and untrusted servers alike and before pinning, so a match is held as `flagged`, with the matched text in the issue,
+  even on a first listing (and is not pinned). The fabric's `injection` question is asked about untrusted descriptions too
+  (below).
+- Review (`/mcp`, `McpCommands`): `[list] | diff <server> <tool> | accept <server> <tool|--all> | allow <server> <tool>`. The
+  list gains a `held` column and a line on how to review. `diff` shows the held definition against its pin: description and
+  title before and after (hidden characters shown as `\uXXXX`), schema and annotations as a line diff of the indented canonical
+  JSON, the matched text for a flagged tool, and the hashes. `accept` (`McpClients.Accept`) pins exactly the definition this
+  process holds, the one `diff` showed, so the server cannot swap it in between, registers it (turns read the registry per
+  turn, so it is offered from the next one) and refuses a flagged tool, naming `allow`; `--all` accepts every held tool that is
+  not flagged. `allow` is only for flagged tools: it records `allowed_flagged` for that hash and registers the tool as an
+  untrusted server's whatever the configured trust (`McpToolMapping.Risk`/`Describe` with `untrusted`: annotations and
+  `ReadOnlyTools` ignored, a destructive remote side effect that asks on every call unless an approval rule covers it, results
+  tainted, description tainting); any later change flags it again. `corvid mcp list` uses the same store, so a first listing
+  there pins, and prints held tools with a hint to review them in `corvid chat`; it has no review commands of its own.
+- Events and spans: `McpClients` takes an optional `Action<McpDefinitionNotice>` (server, tool, kind `new`, `changed`,
+  `flagged`, `accepted` or `allowed`, hash, pinned hash, matched text), so `Corvid.Mcp` stays free of the event log and the
+  host's telemetry. The host (`McpComposition.Notices`) starts a short `corvid.mcp.pin` span on `HostTelemetry.Source` with
+  `corvid.mcp.server`, `corvid.mcp.tool`, `corvid.mcp.pin.status` and `corvid.mcp.pin.hash`, and appends `McpToolHeld`
+  (`mcp_tool_held`) or `McpToolAccepted` (`mcp_tool_accepted`) to the `mcp-pins` session (`McpSessions.Pins`), retrying on a
+  head conflict as the delivery ledger does; no chat transcript carries them and ACP's `session/list` lists only chat sessions.
+  `corvid mcp list` passes no log.
+- Description taint (§10.3): `ToolRisk` gains `OutsideDescription` (a trailing optional parameter, so generated tools are
+  unchanged), set by `McpToolMapping.Risk` for an untrusted server's tools and for an allowed flagged one, and `ToolDescriptor`
+  an `Origin` (`mcp:<server>`). `TurnRunner.GenerateAsync` taints the turn when any tool it offers the generator has
+  `OutsideDescription`, before it builds the request's `ModelRequestContext`, so the egress gate and Vault see the taint for
+  that very request; a tool that is only registered, or only among the decider's `tool` options, does not taint. At ingress the
+  turn adds `injection/mcp:<server>` to the existing batch for each untrusted origin on the shortlist (the question's
+  instructions with the tools' names and descriptions, capped at 1,200 characters, the shape used for a hub skill's body), once
+  per session for the same descriptions; asking taints, and the verdict is a logged `Decision` (data for C-021), not a
+  withhold. A hub skill's L0 entry is outside content too: when the index shown to the generator lists a skill with
+  `Trusted == false`, the turn is tainted. This is a visible change: with an untrusted server configured (the default trust),
+  most turns that offer its tools are tainted, so read-only network tools ask, the cloud egress gate is stricter, Vault applies
+  taint rules and learned skills are marked tainted; `Trust: Trusted` is the remedy for a server the user vouches for.
+- Limits: a server that puts volatile text (a version, a date) in a description, or reorders arrays, is held at every start;
+  a schema string that only looks like a marker (an `enum` value or `pattern` such as `<system`) is held as flagged, which
+  `/mcp allow` resolves;
+  replacing a server under the same name means accepting each changed tool (`--all` helps); a running chat does not see pins
+  another process wrote until it restarts.
+- Tests: `tests/Corvid.Mcp.Tests` (`McpPinningTests`: a first listing pins and registers all; a changed description, schema or
+  annotation holds only that tool; reordered schema keys do not; a new tool is held and a removed one disappears with its pin
+  kept; an added zero-width character holds; accept registers the held definition and the next start offers it; an unreadable
+  pin file offers nothing; the file store's round trip, atomic write, refusal of a bad format, version, key or hash, and merge
+  of two writers; the canonical form. `McpDescriptionScanTests`: Beacon's own poisoned strings match and its benign one, with a
+  few more, does not; a marker in a schema description or title matches; zero-width characters and line breaks do not split a
+  marker; a flagged tool on a trusted server is held on first listing and not pinned, accept refuses it, allow registers it
+  with untrusted risk, `OutsideDescription` and tainted results, the next start keeps it, and a change flags it again; a marker
+  in a schema `default`, `enum`, `const`, `examples`, `$comment` or property name matches, an ordinary schema with those keys
+  does not, and a trusted server's tool poisoned only in its schema's `default` and `enum` is held and not pinned.
+  `McpPinningTests` also: a first listing that pins nothing (a flagged decoy) records the server, so the next listing's new
+  tool is held, not trusted; held tools count toward `MaxTools`, so a changed tool and a new one under a full limit leave the
+  new one out and accepting the changed one stays at the limit; the file store keeps an empty server entry).
+  `tests/Corvid.Kernel.Tests` (`DescriptionTaintTests`: a turn offering an outside description is tainted in its result and
+  in the generator request's context, one without is not; `injection/mcp:<server>` is asked once per session in the ingress
+  batch; an L0 index with a hub skill taints and one with only trusted skills does not; `EventJsonTests` pins the two
+  discriminators). `tests/Corvid.Host.Tests` (`McpHostTests`: an untrusted tool offered in a real turn taints it without a call
+  while a trusted one does not; a changed tool is held, recorded in the `mcp-pins` session, shown by `/mcp` and `/mcp diff`,
+  and offered after `/mcp accept` with `McpToolAccepted`; the line diff). The recorded ACP exchanges carry `/mcp`'s new usage.
+
+Not built yet: `corvid mcp diff|accept|allow` (a CLI accept would list in a fresh process and need a hash argument to be sure it
+accepts what was reviewed); withholding a tool on a confident `injection` verdict over its description (it logs and taints,
+like a hub skill body, until C-021's floors are fitted on description rows), and asking `injection` about trusted servers'
+descriptions at all (only untrusted origins are asked, since asking taints the turn and a trusted server's tools do not; a
+semantically poisoned description from a trusted server that the regex misses is caught by nothing yet); re-checking pins on an in-process reconnect or
+`notifications/tools/list_changed` (pins are checked once per start); pruning pins of removed tools, a `/mcp forget <server>`
+to re-trust a replaced server, and keying pins by server identity (command, arguments, URL) as well as name; review from the
+gateway or ACP with a rendered diff, and a doctor check for held tools without starting servers; scanning results, resources,
+prompts and output schemas with the same patterns; signed or registry-published definitions instead of trust on first use; and
+the privacy egress gate over MCP arguments (C-018).
 
 ## ACP and OpenAI-compatible HTTP (C-019)
 
@@ -1860,7 +2006,9 @@ Plan §12 (ACP; OpenAI-compatible HTTP), §17 row 1.1, R11 (agentclientprotocol.
   cancelled request, an unknown or unoffered option, a client error, the deadline and a prompt outside a running prompt all
   deny; nothing is approved on the user's behalf.
 - Cancellation: `session/cancel` (and `$/cancel_request` on the prompt) cancels the turn and its open permission request; the
-  prompt still answers, with `cancelled`.
+  prompt still answers, with `cancelled`. The kernel turn is cancelled first, so a permission request that ends as cancelled
+  resumes a turn that already sees the cancel and makes no further model call. A prompt that received a cancel answers
+  `cancelled` even if its turn reached its end first (ACP requires it); a cancel between prompts does not touch the next one.
 
 ### Forking at a log position
 
@@ -1977,13 +2125,20 @@ Unix socket and the real runtime over fake models: no network and no real tokens
   answers stay, as the chat saw them. (An owner answer sent `silent` or to `home_channel`, or a turn the owner ran on the
   chat's session from another surface, is still in that history as text.) Sessions are per chat, so nothing from the
   owner's DM reaches a group. `cron_create` cannot be a guest tool: a job's run is a turn of its own with the whole
-  toolset that reports to the chat. The owner's own turns are unchanged and keep
+  toolset that reports to the chat. Nor does a guest's turn reach the owner's memory write path: it is not asked
+  `remember` at egress, which would stage the guest's message (tainted, so always staged) in the owner's review queue,
+  a proposal worded by someone else and waiting to be approved; and a tool that declares `[SideEffect(Memory)]`
+  (`memory_add`, `memory_approve`, `memory_reject`) is left out of a guest's catalogue even when `GuestTools` names it,
+  and which `CorvidGateway.Create` refuses anyway (below). Two other residuals stay as they are: an approval asked during a guest's turn is
+  posted in that chat, where only the owner can answer it, and an owner answer sent `silent` or to `home_channel`
+  stays in the chat's history as text (above). The owner's own turns are unchanged and keep
   the whole toolset, including the turn right after a guest's in the same chat: as before, the owner's message clears
   taint (C-011), and a guest's earlier text stays in the transcript as a fetched page would, with the injection and
   approval checks that apply to any outside content. The validator refuses a guest tool that is not a tool name or names
   an MCP server that is not configured, and `CorvidGateway.Create` refuses one that is in neither the runtime's registry
   nor an MCP server's namespace (an MCP server's tools are listed only once it runs), so a typo is not silently a tool
-  nobody gets.
+  nobody gets, or whose risk metadata declares `SideEffects.Memory`: by the flag the turn loop filters on, not by name,
+  so a memory-writing tool added later is refused at start rather than silently left out of a guest's catalogue.
 - Pairing (`PairingStore`, `gateway.db`, its own SQLite file with WAL and full sync). A code is 8 characters from an
   unambiguous alphabet, shown `ABCD-EFGH`. It is bound to the adapter and sender, expires after an hour, and is repeated to
   that sender at most every 10 minutes. At most 10 codes wait per adapter; senders after that are ignored. Codes are
@@ -2080,8 +2235,10 @@ Unix socket and the real runtime over fake models: no network and no real tokens
   the files, an MCP-style tool kept from a guest who has other tools, an allowlisted tool working for a guest and the only
   one offered, unknown guest tools refused at start, the shared command registry, a side effect approved in the chat, a persona and
   slot override for one chat only, a job's result reaching its chat (tainted when its run ended tainted), the hosted
-  service, and validation. `tests/Corvid.Kernel.Tests` (`EgressTurnTests`) checks that a guest's turn sees no core
-  block and no recalled fact.
+  service, and validation (memory write tools refused as guest tools). `tests/Corvid.Kernel.Tests` (`EgressTurnTests`)
+  checks that a guest's turn sees no core block and no recalled fact, and `TurnLoopTests` that it is not asked
+  `remember`, stages nothing and cannot call a memory write tool its scope names, while the owner's next turn still
+  stages its message.
 
 Not built yet: Signal, email (IMAP/SMTP) and webhook adapters (§12); Discord's realtime Gateway and Slack's WebSocket
 through Vault (both wait on Vault's WebSocket first-frame substitution, `vault.md` §9); DMs on Discord from people not yet
@@ -2091,6 +2248,596 @@ sends (refused or allowed per token today); pairing from a chat; a cap on the le
 stay in the log); taint that follows content rather than turns (by C-011's rule the owner's next message clears it,
 though a guest's earlier text in a group chat stays in the projection, as a fetched page does); and a run against the real
 platforms with real tokens.
+
+## Skill learning signals (C-026)
+
+Plan §5.3 (`skill_opportunity`, `task_succeeded`), §5.5 (outcomes), §5.6 (the degraded tier) and §11 (learning loop, step
+1). C-017's loop asked one question, `skill_opportunity`, after three tool calls. Three ideas from Asymptote-Labs/agent-beacon
+(MIT, Go), reimplemented here, sharpen it: task success is a precondition with its own threshold, not a vote (Beacon's fix
+for its issue #649, where an average of rubric scores let a failed task through); a failed call recovered by another
+approach is the strongest learning signal; and the drafter sees a turn's head and tail, not an arbitrary prefix (Beacon's
+evaluator projection: 80 events split 40/40, 1,200 characters each, with an omitted-count marker). No project, package or
+checker rule changed.
+
+- Precondition as catalogue data. `task_succeeded` (egress, Noul, act `confirm_task_success`, below the floor
+  `task_unconfirmed`, floor 0.8 in floors `2026-10-21.1`, stricter than `skill_opportunity`'s 0.75) asks "Did this turn
+  accomplish what the user asked, with no tool failure left unresolved?" and requires `tool_failures_recovered`, a
+  deterministic condition, so a turn that ends on an unrecovered failure is never a success whatever a model says.
+  `CatalogueQuestion.Grants` (init) names a condition that holds for the rest of the checkpoint when the question acts;
+  `task_succeeded` grants `task_succeeded`, which `skill_opportunity` now requires with `procedure_evidence` (three tool
+  calls or a recovery; `tool_steps_at_least_3` is gone). `DecisionFabric.DecideAsync` evaluates granting questions first,
+  adds each granted condition whose verdict acted, then evaluates the rest; a caller-supplied condition some question
+  grants (`QuestionCatalogue.Granted`) is stripped, so no caller can assert success. The decider still gets one request per
+  checkpoint and the events are still one batch in key order. `DecisionPolicy` did not change: a `skill_opportunity` yes of
+  0.99 after an unconfirmed task logs `nothing` with the reason `missing condition task_succeeded`, so its `Decision` event
+  never claims a distillation that did not happen (combining verdicts in the kernel would have, corrupting C-021's data).
+  The catalogue refuses a question requiring what it grants, two granters of one condition, and a requirer that shares no
+  checkpoint with its granter. A floors file written before C-026 fails validation with `no floor for 'task_succeeded'`
+  (the host loads only the embedded floors; C-021's `--out` files must be refitted or edited).
+- Degraded tier. `task_succeeded` answers by the generator's yes/no, so the loop still runs without Kev; it is one more
+  background-priority generator call on an eligible turn. Conservatism is in two layers: the deterministic condition
+  above, and `SkillOpportunity.SuccessCalibrated` (true only when `task_succeeded`'s answer was calibrated), stored in
+  `skills.db`. `SkillLearner` stages a draft whose success was not calibrated whatever `skill_write_safe` says, as it does
+  for a tainted turn ("task success was not confirmed by a calibrated decider, so the draft waits for review"). Without
+  Kev every draft was staged already; this also covers mixed tiers, where egress fell back to the degraded tier and the
+  pre-execute gate had Kev.
+- Recovery pattern (`Corvid.Kernel/Turns/ToolRecovery.cs`, pure). `ToolRecovery.Scan` pairs `ToolCallIssued` with
+  `ToolResult` by call id and returns calls, counted failures, unrecovered failures and `RecoveryStep`s. A counted failure
+  is an error result whose kernel `error` is not `not run` (approval denied or never run), `cancelled` or `invalid
+  arguments` (C-011's schema repair, which includes a call to a tool not offered); those strings are now
+  `ToolErrorKinds`, used by `TurnRunner`'s call sites, and an error without the kernel's shape (a tool's or an MCP
+  server's) counts. A call responds to a failure when it was issued after the failure's result in a later round:
+  `ToolCallIssued.Round` (C-026, omitted when null) is the turn's step, one per generator response with calls, because
+  calls that need approval run one at a time and a later call of the failure's own response is issued after its result
+  (events without a round fall back to the order alone). A failure is resolved, so not unrecovered, by a responding
+  success of the same name, or of the same family unless the failed call changes something and the success only reads:
+  `ToolCallIssued.ReadOnly` (C-026, omitted when null; the descriptor's `Risk.ReadOnly`, null for a call naming no offered
+  tool) is unknown-as-change for the failure and unknown-as-read for the success, so `read_file` after a failed
+  `write_file` leaves it unrecovered and `tool_failures_recovered` withheld. A recovery is a counted failure followed by a
+  responding successful call of the same family that differs from it: another name, or the same name with arguments that
+  are not `JsonElement.DeepEquals`; it is the hint, looser than resolution (that read is still listed as what followed).
+  The identical call succeeding resolves the failure but is a retry, not a recovery. Family: an MCP `server__tool` name maps to its server; otherwise the name's `_` tokens, a
+  trailing `s` trimmed, minus a verb stoplist (`read`, `write`, `list`, `search`, `get`, `set`, `add`, `remove`, `create`,
+  `delete`, `update`, `run`, `fetch`, `patch`, `approve`, `reject`, `pending`); names share a family when equal or when
+  they share a token (`read_file`, `list_files`, `search_files`, `patch_file` are `file`; `memory_*` and `search_memory`
+  are `memory`; `web_fetch` is `web`). The heuristic can over- or under-match; the pattern only lets the question be asked
+  and adds a hint, so the answer and the `task_succeeded` floor still decide.
+- Egress (`TurnRunner.FinishAsync`). The base eligibility is unchanged (learning bound, answered, no pinned skill, no
+  guest). The turn is read from the log (`SessionProjection.ReadRange`, paged) from its user message to its answer, not
+  from the snapshot, because compaction during the turn can fold early calls. The checkpoint asks when the turn had three
+  tool calls or a recovery, and then asks both questions in its one request, with JSON instructions that
+  `DecisionFabric.Asked` persists, so C-021's export carries them: `task_succeeded` gets `tool_calls`, `failed_calls` and
+  `unrecovered_failures`; `skill_opportunity` gets `tool_calls` and, when present, `recovery`
+  (`read_file failed, then search_files succeeded`). Conditions: `procedure_evidence` always, `tool_failures_recovered`
+  when nothing is unrecovered. Acting queues `SkillOpportunity` with the `task_succeeded` decision id and its
+  calibration.
+- `skills.db` schema 2 (additive, MemoryDatabase's `if (version < 2)` pattern): `opportunities` gains `success_decision`
+  and `success_calibrated` (default 0, so rows queued earlier are staged). `Enqueue` names its columns; `FindOpportunity`
+  is new; versions 0, 1 and 2 open.
+- Outcomes. Approving or rejecting a staged draft still records `approved`/`rejected` on its `skill_write_safe` decision,
+  and now also `skill_approved`/`skill_rejected` on the opportunity's `skill_opportunity` and `task_succeeded` decisions,
+  in the source session. They are indirect evidence (a user may reject a badly written draft of a successful task), so
+  the strings are distinct: `OutcomeClassifier.Default` labels them positive and negative, and `--positive`/`--negative`
+  can drop them. `FloorFitter` and the exports iterate the catalogue and the `Decision` events, so `task_succeeded` is
+  fitted (once it has 20 calibrated decisions with outcomes) and exported with no other change.
+- Drafting window. `SkillLearnerOptions.ResultChars` (400, results only) became `EventChars` (1,200), `HeadEvents` (40)
+  and `TailEvents` (40), validated positive. `ProcessAsync` pages the turn from the log (the 4,096-event cap is gone),
+  once for the scan and once into `DraftPrompt`, which renders user, call, result or error and assistant events, keeps
+  the first `HeadEvents` and a rolling queue of the last `TailEvents`, and between them writes
+  `[… N events omitted from the middle of this turn …]`. Every event's text, the user's and the assistant's messages
+  included (uncut before), is cut to `EventChars` with the `… [k more]` suffix. When the turn recovered, the prompt says
+  "The turn recovered: X failed, then Y succeeded; write the skill around the approach that worked." The prompt is at
+  most about 80 × 1,200 characters plus the frame; it has no total token budget yet.
+
+Tests: `tests/Corvid.Fabric.Tests` (`GrantTests`): the catalogue row and its floor, grant validation, the #649 regression
+(P(yes) 0.99 below an unconfirmed task logs `nothing`), success with both above their floors, an unrecovered failure
+blocking both, a caller's `task_succeeded` ignored whether or not the granter is asked, granters first whatever their key
+order (with events still in key order), and the degraded tier answering both. `tests/Corvid.Kernel.Tests`
+(`ToolRecoveryTests`): recovery across a family and by different arguments, a repeated call resolving without recovering,
+denials, cancellations and rejected arguments not counted, unrecovered counts, the parallel round, a second call of one
+response run after approval (one round, so no recovery), events without rounds or read-only flags, a read after a failed
+write left unrecovered, changes and reads that resolve, families and MCP servers. The three turn goldens changed in their
+floors version (they bind no learning, so egress gained no question) and their calls' `round` and `read_only`. `tests/Corvid.Skills.Tests`: a two-call recovery turn asked and queued with its features persisted, a
+three-call turn whose success is answered no logging `nothing`, a turn ending on unrecovered failures held back, the
+head-and-tail window with its marker and cap, the recovery line, option validation, an uncalibrated success staged on a
+calibrated `skill_write_safe` yes, review outcomes on all three decisions, and a version-1 `skills.db` migrating.
+`tests/Corvid.Evals.Tests`: the classifier labels the review outcomes.
+
+Not built yet: granted conditions on `Decision` events (C-021's floor replay cannot model that raising `task_succeeded`'s
+floor changes `skill_opportunity`'s verdicts; it flags `conditions unverified`); tool families from declared toolsets or
+descriptor metadata; schema repairs and MCP `isError` content as recovery evidence; replay-test or scanner failures, and
+reverts of auto-applied drafts, as negative outcomes; a total token budget for the drafting prompt and a summary of the
+omitted middle; the recovery pattern as a `stuck`/`done` feature, in the curator or in the skill shortlist; a quality
+score beside the precondition; a fitted `task_succeeded` floor; and back-filling opportunities queued before schema 2.
+
+## Trace export and Hermes memory import (C-027)
+
+Plan §18 row C-027 and D-9. The export adapts the telemetry schema of Beacon (Asymptote-Labs/agent-beacon, MIT): field
+names, event identity and the redaction patterns were read from its `docs/telemetry-schema/{event-schema,normalization,fields}.mdx`
+and `pkg/asymptoteobserve` (`event.go`, `identity.go`, `dedupe.go`, `content.go`, `metadata_only.go`, `privacy.go`) and its
+Hermes session mapper, and reimplemented; no Beacon code is used. The Hermes formats were read from Hermes Agent's source
+(NousResearch/hermes-agent at 1ab79836, `tools/memory_tool_store.py`, `tools/memory_tool.py`, `hermes_state_common.py`).
+
+- `corvid traces export [--session <id> | --all] [--retention full|metadata] [--include-local-memory] [--out <file>]`
+  (`Corvid.Cli/TracesCommand`). It refuses when the event log does not exist (opening `SqliteEventLog` would create one),
+  reads each session in pages of 4096 up to a head captured first, and writes one line per event: raw UTF-8 bytes to
+  standard output (never through Spectre), or to `--out`, created `CreateNew` with mode 0600, so an existing file is never
+  overwritten. An unknown session is an error. `session.working_directory` is the configured workspace, because Corvid
+  records no per-session directory: older sessions are labelled with today's workspace.
+- `BeaconExporter` (`Corvid.Kernel/Traces`, BCL only: `System.Text.Json.Nodes`, SHA-1, SHA-256, `[GeneratedRegex]`) is a
+  pure function over `StoredEvent`s, which is what lets the golden test use fixed times (`SqliteEventLog` stamps the clock).
+  Each line is built as a `JsonObject` in the field order of Beacon's `Event` struct: `timestamp` (`recorded_at` in UTC with
+  a fixed nine-digit fraction, so timestamps compare as strings; it is the time the event was appended), `sequence` (the
+  event's log position, stable per session), `vendor` `beacon`, `product` `endpoint-agent`, `schema_version` `1.0`,
+  `event{id,kind:agent_runtime,action,category,fidelity:observed}`, `severity` (`high` for `tool.failed`), `endpoint{os}`,
+  `harness{name:corvid,version,collection_method:poll}` (what Beacon's own session-file readers use), `origin` `local`,
+  `error`, `session{id,working_directory}`, then `tool`, `file`, `command`, `mcp`, `approval`, `prompt`, `content`,
+  `gen_ai`, a fixed per-action `message` and `field_truncated`. `vendor` and `product` are the schema's identifiers, which
+  Beacon's `Event.Validate` requires, not a claim that Beacon wrote the line; `harness.name` names the producer.
+- Mapping, one pass with two lookups (call id to `ToolCallIssued`, approval id to call id), as Beacon's Hermes mapper does:
+  `UserMessage` to `prompt.submitted` (`prompt.text`); `AssistantMessage` to `agent.message` (`gen_ai.output.messages` as
+  one assistant message with one text part); `ToolCallIssued` to `tool.invoked` (`tool{name,command,path}`,
+  `gen_ai.operation.name` `execute_tool`, `gen_ai.tool{call{arguments,id},name}`); `ToolResult` by its call: `shell` to
+  `command.executed` (`command{command,exit_code,output}`, stdout then stderr; a nonzero exit sets `error.type`
+  `command_failed`), `read_file`, `list_files` and `search_files` to `file.read`, `write_file` and `patch_file` to
+  `file.modified` (`file.operation` `create` when `write_file` created the file, else `modify`), a `server__tool` name to
+  `mcp.tool_invoked` (`mcp{server,tool}`), anything else to `tool.completed`, and `IsError` to `tool.failed` (`error.type`
+  `tool_error`), each with `gen_ai.tool.call.result`. Tool paths are resolved against the working directory.
+  `ApprovalRequested` becomes `approval.requested` (`approval{required,reason}`, no decision, as Beacon writes it) and
+  `ApprovalResolved` `approval.allowed` or `approval.denied` (`approval.decision`), both with the call's `tool` and, for a
+  shell call, `command.command`, which Beacon's approval rules match on. Every other kind is skipped and no
+  `session.started` or `session.ended` is synthesized.
+- `event.id` (`BeaconEventId`) is Beacon's `EventIDForLine`: a version 5 UUID under Beacon's fixed namespace. A tool,
+  command, file or MCP event with a call id is named from session, lowercased action, Beacon's `dedupeTarget` (its
+  `canonicalTarget` quirks included: `command:<command.command>|<tool.command>`, `tool:<name>|<path>|<message>`,
+  `tool.completed:<message>`, `mcp:<server>|<tool>`, `file:<path>`) and call id, so it equals what Beacon derives for the
+  same action; other events are named from their own line without `event.id`, `endpoint`, `harness.version` and
+  `session.working_directory` (`BeaconEventId.Identity`), so a prompt, message or approval keeps its id across Corvid runs,
+  rebuilds (the version carries the commit), hosts and workspaces, though it is not equal to a digest of Beacon's byte
+  layout; a tool event whose path is resolved against the workspace names a different file from another workspace, and
+  rightly a different id. The id is computed once, on the full-retention line after redaction and the
+  per-string limit, with memory content withheld, so it is the same in both retentions, with or without
+  `--include-local-memory`, and under `--session` or `--all`. SHA-1 is what RFC 4122 version 5 specifies.
+- Content (`BeaconContent`). Each retained string (prompt and assistant text, tool arguments and result, command output and
+  line, approval reason) is redacted, hashed (SHA-256 of the redacted text before truncation) and cut to Beacon's 4096-byte
+  limit on a character boundary with Beacon's `...[truncated]` marker. One `content{retention,included,redacted,truncated,hash,bytes}`
+  marker per event describes its primary string (the prompt, the assistant text, the arguments of an invocation, the
+  command output, otherwise the result, or the approval reason); `bytes` is the original UTF-8 length, and `redacted` and
+  `truncated` are set when any string of the event was. The hash differs from Beacon's `RetainedContent`, which hashes the
+  original: a hash of the original would let anyone holding the export confirm a guess at a redacted secret offline.
+  A line over 64 KiB (reachable only through escaping) drops the tool result, then the arguments, command output, prompt
+  text, assistant text and approval reason, setting `field_truncated` and `content.truncated`; Beacon only flags such a
+  line.
+- `--retention metadata` follows Beacon's `StripToMetadata`: the message, `prompt.text`, `command.output`, `approval.reason`,
+  `gen_ai` input and output and tool call arguments and result go, emptied objects are dropped, and the marker becomes
+  `{retention:metadata,included:false,redacted:true}` with its hash and size. Ids, names, paths, the command line, exit
+  codes and decisions stay. A hash of short text such as a prompt still lets someone confirm a guess.
+- Local-only memory. The arguments and results of every `memory_*` tool and of the shared `search_memory` are written in
+  metadata form even in a full export, unless `--include-local-memory` is given: memory holds local-only facts (§10.4), and
+  the tools' results do not mark which items are, so the rule is by tool name and conservative. A tool that returns memory
+  text under another name is not covered.
+- `SecretRedactor` replaces with `[REDACTED]`, keeping a credential's public type prefix as Beacon does: private-key
+  blocks, `Bearer` credentials, `key=value`, `key: value` and quoted JSON or shell assignments whose label names an API
+  key, access key, secret, token, password, passwd, private key or client secret (an Authorization scheme or JSON literal
+  is left), AWS access key ids, GitHub `gh[pousr]_` and `github_pat_` tokens, Slack `xox?-` tokens, `sk-` keys and
+  JWT-shaped strings. It is a screen, not a proof; Corvid keeps real secrets behind Vault placeholders, but tool output can
+  hold one.
+- `/memory import hermes [<hermes home>] [--dry-run]` (`CoreCommands`), next to `/skills import hermes`, so it works from
+  chat, ACP and the gateway (the owner's alone). `HermesMemory` (`Corvid.Memory`) reads `$HERMES_HOME/memories/MEMORY.md`
+  (the agent's notes) and `USER.md` (the user profile), an explicit argument winning, as Hermes' `get_hermes_home` finds
+  the home: `$HERMES_HOME` trimmed, with `$VAR` and `${VAR}` (and `%VAR%` on Windows) and a leading `~` expanded as
+  `expandvars` and `expanduser` do, else `~/.hermes` (`%LOCALAPPDATA%\hermes` on Windows) with `$HERMES_DATA_DIR_SUFFIX`
+  appended. A `HERMES_HOME` still relative after expansion is reported and nothing is imported, rather than falling back
+  to the default profile. The files are read as Hermes' `MemoryStore` reads them: strict UTF-8 (a file with an invalid byte is refused whole, as Hermes refuses to
+  read it), a leading BOM stripped (`utf-8-sig`), CRLF read as LF (Python's universal newlines), entries split on the
+  whole `"\n§\n"` delimiter so a bare `§` survives, each stripped, blanks dropped and repeats dropped keeping the first. A
+  missing file has no entries; an entry shaped like Hermes' `[BLOCKED: …]` placeholder is skipped and counted, though
+  Hermes puts that placeholder only in its system-prompt snapshot, so the files hold the raw entries. Each entry is
+  screened by Corvid's `SkillScanner` (not Hermes' `scan_for_threats` rules), and a flagged entry is refused. The rest
+  go to `MemoryWriter.StageImportAsync`, which runs `WriteAsync`'s first two steps (extractor entities, neighbour
+  retrieval; factored into one helper) and stages a local-only fact proposal with reason `import:hermes MEMORY.md` or
+  `import:hermes USER.md`, without asking the gate. It never writes and never overwrites. An entry identical (case and
+  spacing aside) to a pending proposal or a current fact is skipped, so a second import stages nothing new; one the
+  extractor refuses as too long is reported, never cut. The report counts per file what was staged, skipped as a
+  duplicate, refused and flagged. Review is `/memory pending`, `approve` and `reject` as for any staged write; an approved
+  import keeps its entities and is embedded as usual.
+- Tests. `tests/Corvid.Kernel.Tests` (`BeaconExportTests`): a fixture session of hand-built stored events (a prompt, a
+  shell call with an approval and a failing exit code, `write_file`, `read_file`, an MCP `weather__lookup`, `memory_search`,
+  a tool error, a denied approval, a skipped `GoalSet` and a 5 KB fetch result with embedded credentials) compared line by
+  line with `Fixtures/beacon-export.full.jsonl` and `beacon-export.metadata.jsonl` (`CORVID_RECORD_GOLDENS=1` rewrites
+  them); every line passes a C# copy of `Event.Validate` plus the timestamp and UUID formats; ids are equal across
+  retentions, with local memory included and across harness version, OS and (for events naming no path) workspace; a
+  call id matches a UUID computed independently with Python's `uuid5`;
+  memory content is withheld and present with the flag; redaction precedes truncation; a cut is flagged even when the
+  marker restores the UTF-16 length; the event cap; and the redactor's
+  patterns. `tests/Corvid.Cli.Tests` (`TracesCommandTests`): `--session` on stdout, `--all` with ids equal to a
+  single-session export, metadata retention, `--out` owner-only and never overwritten, an unknown session, a missing log
+  (not created) and bad arguments. `tests/Corvid.Memory.Tests` (`HermesMemoryTests`): the parser (a bare `§`, blanks,
+  duplicates, `[BLOCKED:`, BOM, CRLF, invalid UTF-8, a missing file, directory resolution with `HERMES_HOME` expansion,
+  the suffix and an unusable value) and `StageImportAsync` (staged
+  local-only with its reason and no decision, applied only on approval, pending and known duplicates skipped, an extractor
+  refusal staging nothing). `tests/Corvid.Host.Tests` (`MemoryImportCommandTests`): the command against a temporary
+  Hermes home, with a dry run, a scanner refusal, re-import idempotency before and after an approval, a missing home and
+  bad usage.
+
+Not built yet: Hermes session import (D-9 "sessions later"; the format is verified: `~/.hermes/state.db`, schema version
+31, `sessions` with id, source, model, cwd, title, parent session, `started_at` and `ended_at` as REAL seconds and token
+and cost columns, `messages` with role, content, `tool_call_id`, `tool_calls` JSON, `tool_name`, `timestamp`, `active`
+and `compacted`; it waits on a way to append events with past times, a read-only snapshot of a live WAL database, and a
+mapping of Hermes tools and of active and compacted messages); token usage and the model in exports (Corvid persists no
+usage, only OpenTelemetry spans; a `token.usage` event with `gen_ai.usage.input_tokens` as uncached input needs usage
+recorded per turn); the skipped event kinds (decisions, compaction, model switches, memory and skill changes, goals,
+todos, per-path file events from checkpoints, rewinds, deliveries) and session start, end and handoff events; a
+per-session working directory; importing Hermes memory into the core blocks (`USER.md` to `user`, `MEMORY.md` to
+`agent`), which waits for block editing (C-013) because an over-budget block edit cannot be approved; `SOUL.md` to the
+persona block, Hermes profiles and memory provider plugins; a `corvid memory` verb; `traces` tail, follow, date ranges
+and pushing to a Beacon endpoint or SIEM; host, user and repository enrichment and the `redacted` retention level; and a
+per-item local-only filter for memory tool results.
+
+## Lessons and project scope (C-025)
+
+A third kind of learned memory between facts (declarative, §9.1's semantic tier) and skills (procedures, §11): a lesson is
+something a future session in the same project should do differently or know. The shape and quality bar adapt Beacon's
+`beacon.learning.v1` (Asymptote-Labs/agent-beacon, MIT: its `beacon-memory-distill` skill and lesson-quality reference);
+the code is Corvid's own, and only short validator patterns resemble Beacon's notes. No project and no package was added;
+the checker's allowlist is unchanged. The pure and SQLite parts are in `Corvid.Memory`, the parts that need the event log,
+the projection or git in `Corvid.Kernel`, the catalogue row in `Corvid.Fabric`, and the wiring in `Corvid.Host`.
+
+- Project identity (`ProjectIds`, `ProjectResolver`): a project id is the 64-character lowercase hex SHA-256 of a
+  lowercased key. The key is the `origin` remote, normalized: trimmed, scheme (`https`, `http`, `ssh`, `git`, `git+ssh`)
+  and userinfo dropped (a credential in the URL never changes or enters the key), the scp form `git@host:org/repo` made
+  `host/org/repo`, an ssh port dropped, a trailing `/` and `.git` stripped, so the https and ssh remotes of one repository
+  share an id. A relative local origin (no scheme, not scp form, not rooted: `../upstream.git`) is resolved against the
+  main checkout first, so unrelated repositories with the same relative origin do not share an id. Without an origin it is
+  the main checkout's path; without git, outside a repository, or in a repository git
+  refuses (dubious ownership: global configuration is off, so `safe.directory` never applies), the workspace path (full,
+  `/` separators, no trailing separator). The resolver runs the git CLI in a new discovery mode of C-014's `GitRunner`:
+  the same cleared environment and `-c` overrides (no hooks, fsmonitor, pager or credential helper), but no `GIT_DIR` or
+  `GIT_WORK_TREE`, and `GIT_CEILING_DIRECTORIES=$HOME` when the workspace is below it, so a dotfiles repository at `$HOME`
+  does not capture every plain directory; a workspace that is `$HOME` itself is keyed by its path. It runs
+  `rev-parse --path-format=absolute --git-common-dir` in the workspace (a linked worktree resolves to its main checkout)
+  and `config --get remote.origin.url` against that directory. Git is the checkpoints' `Corvid:Checkpoints:GitPath`. The
+  host resolves the project once at start, since a runtime has one workspace; `/status` shows its first 12 characters and
+  source (`remote`, `checkout` or `path`). Changing origin's URL, or adding one to a path-keyed project, changes the id, so
+  earlier lessons stop being recalled.
+- Sessions record their project: `ProjectBound(project_id, source)` (wire name `project_bound`) is appended in the same
+  batch as the turn's `UserMessage`, before it, when `TurnServices.Project` is set and differs from the projection's
+  `SessionSnapshot.ProjectId` (null when absent; `SnapshotJson` does not write it, so golden fixtures are unchanged).
+- Lessons (`Lessons.cs`): kind (`workflow`, `correction`, `debugging_pattern`, `gotcha`, `convention`), title,
+  applicability, body, 2–4 tags, evidence (session, cited event positions, a one-line summary, and SHA-256 over the cited
+  events' persisted `EventJson`, one per line), project, state (`candidate`, `approved`, `rejected`, `superseded`),
+  `superseded_by`, author (`agent` or `user`), review reason, the `memory_op` decision and the decider's proposed option,
+  local-only, and the session that first filed it. The id is `lesson:` and the SHA-256 of project, kind, title and body
+  (whitespace collapsed, lowercased); evidence is left out, so filing the same lesson again inserts nothing and merges new
+  evidence (unique per lesson, session and content hash), and a rejected or superseded lesson is never proposed again.
+- Schema version 3 of the memory database (`LessonsMigration`, after C-015's `LocalOnlyMigration`; versions 0 to 3 are
+  accepted): `lessons` (kind, state and author checks; an explicit `INTEGER PRIMARY KEY` for FTS), `lessons_fts` (trigram
+  over title, applicability, body and tags, kept by an insert trigger as for facts), `lesson_evidence` (append-only) and
+  `lesson_opportunities` (the drafting queue). Triggers file every lesson as a candidate, refuse deletes and any change to
+  content columns, allow only candidate → approved or rejected and approved → superseded (with `superseded_by` set exactly
+  then, and never to itself), and let the local-only flag be set but never cleared.
+- Quality bar (`LessonValidator`, `GeneratedRegex` with `NonBacktracking`, every violation returned): a known kind; a
+  single-line title under 80 characters that does not open with a narrative word (the, this, we, I, agent, user, ...) or a
+  past-tense word in `-ed` (verbs in `-eed` and a short list such as embed and shred are imperatives); an applicability that
+  starts with `when`, `before` or `after`; a body of 3–10 non-empty lines citing an evidence position (`event 14`,
+  `events 14-19`) that the evidence holds; 2–4 distinct tags of `[a-z0-9-]{1,32}`; at least one evidence item. Over every
+  field, evidence summaries included, it refuses summaries (`in this session`, `the agent fixed`, `summary:`), one-off or
+  machine-specific content (`/home/<name>`, `/Users/<name>`, `C:\Users`, IPv4 addresses, ISO dates, today, yesterday and
+  weekday names, UUIDs, PR or issue numbers), secret-looking strings (AWS `AKIA` keys, `ghp_`/`gho_`/`github_pat_`,
+  `sk-`/`sk-ant-`, Slack `xox?-`, PEM private-key headers, JWTs, `password|secret|token|api_key` followed by `:` or `=` and
+  a value that is not an environment reference (`$X`, `${X}`, `%X%`), long hex runs, and long base64 runs that mix digits
+  and both cases, are not paths, and either hold `+`, `/` or `=` or switch between upper case, lower case and digits at 45%
+  or more of their characters, as random text does and a PascalCase identifier with a digit does not) and instructions
+  aimed at the agent. The long-hex rule refuses a commit hash too, which is one-off anyway. The rules are heuristics: they refuse a
+  draft, never a turn.
+- Gated write (`LessonWriter`): validate, file as a candidate, then ask the existing `memory_op` gate at the pre-execute
+  checkpoint in the source session, with lesson-shaped JSON instructions (the candidate, and up to five approved lessons of
+  the same project from `SearchApproved` as neighbours). An acted `add` approves; `update` approves and supersedes the
+  nearest neighbour; `noop` leaves it a candidate with `duplicate of <id> (decider)` (`no neighbour to be a duplicate of`
+  when there is none), as `MemoryWriter` persists nothing on `noop`: rejecting is final and the content-hash id would make
+  every re-draft a silent duplicate, so only review rejects, and review records the outcome; `invalidate`, an answer
+  below the floor, the degraded tier (which never answers a gate) and a tainted source (§10.3, without asking) leave it a
+  candidate with the reason. So without Kev every lesson waits for review. Review (`Approve`, optionally superseding an
+  approved lesson of the same project, and `Reject` with a reason) records the decision's outcome as `approved`,
+  `corrected` (the reviewer's add or update differs from the decider's proposal) or `rejected`, as `MemoryWriter` does, so
+  lesson outcomes reach C-021's calibration export with no change there. `MemoryWritten` with the lesson id goes to the
+  source session: `staged`, `add` or `update`. The append-retry loop moved from `MemoryWriter` into `Internal.cs`
+  (`EventAppend`) for both writers; no `MemoryOperations` constant was added.
+- Trigger: a new egress routing question, `lesson_opportunity` (Noul: "Did this turn show something a future session in
+  this project should do differently or know: a correction, a gotcha, a debugging pattern, a convention or a required
+  order?"), action `queue_lesson_draft`, below the floor nothing, floor 0.75 (floors version `2026-10-21.1`; the goldens'
+  recorded version changed with it), degraded rule `GeneratorYesNo`, condition `lesson_evidence` (a tool call, and so a
+  failed result or a denied approval). It is not `skill_opportunity` (three tool steps; a correction often comes from a short
+  turn) and not `remember` (which writes the user's message as a fact). The kernel asks it only for an answered turn with a
+  tool call, in a session with a project, from no guest, with no pinned skill, interactive, with `TurnServices.LessonLearning`
+  bound; it rides in the same egress batch as `remember` and `skill_opportunity`, so with Kev it adds no request, and in
+  the degraded tier it is one generator yes/no on qualifying turns. Acting queues `LessonOpportunity` (session, project,
+  user message and answer sequences, decision, request, taint, and whether any prompt of the turn held local-only memory);
+  `TurnResult.LessonQueued` says so. A non-empty local-only core block rendered into a local model's prompt counts, and
+  C-015's migration made every block local-only, so in practice most drafted lessons are local-only: conservative, and the
+  user opts a block in to share it.
+- Drafting (`Corvid.Kernel/Lessons/LessonLearner.cs`, in the shape of C-017's `SkillLearner`): `Queue` writes the
+  opportunity to `lesson_opportunities` and wakes `RunAsync`, which the runtime runs in the background. For each, a turn that
+  `/undo` or `/rollback` hid is skipped; the background generator, inside `ModelRequestContext(session, tainted, local-only)`,
+  is shown the turn's events numbered (`[event 14] Tool error (shell): ...`, cut to 400 characters) and asked for one JSON
+  object (`kind`, `title`, `applicability`, `body`, `tags`, `positions`, `summary`) or `{"none": true}`, read through a
+  source-generated context. Cited positions must lie inside the turn. The result goes through `LessonWriter`; an opportunity
+  ends `filed`, `approved`, `duplicate`, `declined` (no lesson, unreadable JSON, positions outside the turn, or the quality
+  bar) or `failed`. Qwen3.5-0.8B on the background slot will often decline or fail the bar; lessons worth keeping need a
+  stronger background generator, and the bar is the point.
+- Recall (`HybridRetriever`): `RetrievalRequest.ProjectId` adds a third BM25 list, the project's approved lessons, interleaved
+  by rank with episodes and facts; candidates, rejected and superseded lessons and other projects' are excluded in SQL.
+  Lessons are not embedded. `MemoryItemKind.Lesson`; `RetrievedItem.Lesson`; `RetrievedItem.LocalOnly` is true for a
+  local-only lesson too, so C-015's exclusion from cloud prompts applies unchanged. A lesson renders as
+  `Lesson (<kind>): <title> — <applicability>` and its body. The retriever takes an optional `LessonStore` (none: no
+  lessons), so MCP's and the guest tools' retrievers are unchanged. `TurnRunner` passes the session's project on the full
+  recall path only; `needs_recall` below its floor still recalls the top three facts.
+- Host and commands: `Corvid:Memory:Lessons:Enabled` (default true, needs memory). `BuildMemory` creates the `LessonStore`
+  and `LessonWriter` (no extractor needed) and the `LessonLearner` on the background generator; `MemoryServices` gained
+  `Lessons` and `LessonLearner`. `CorvidRuntime.Project` is resolved at start; interactive sessions get the project and the
+  learner, unattended job turns the project only. `/memory lessons [pending]` lists the project's candidates (id is the first
+  12 hex characters; any unique prefix is accepted), `approve <id> [supersedes <old>]`, `reject <id> [reason]` and
+  `supersede <old> <new>`, all scoped to the current project; bare `/memory pending` adds `N lesson candidate(s): /memory
+  lessons pending`.
+- Tests: `tests/Corvid.Memory.Tests` (`ProjectIdsTests`: every form of one remote, userinfo stripped, paths, relative
+  local remotes; `LessonValidatorTests`: an accept and a refuse case per rule, secrets, environment references and long
+  identifiers that are not, home paths, summaries, evidence summaries; `LessonStoreTests`: idempotent filing and merged
+  evidence, re-filing a rejected lesson, allowed and refused transitions, triggers, project-scoped search, the queue, a
+  version 2 store migrated to 3; `LessonWriterTests`: degraded always a candidate, a calibrated add approves, update
+  supersedes, noop stays a candidate that review can still approve, below the floor and invalidate stay candidates, a
+  tainted source skips the gate, outcomes on review; `LessonRecallTests`: only this project's approved lessons, never
+  superseded or rejected ones, no project means no lessons, local-only marked). `tests/Corvid.Kernel.Tests`
+  (`ProjectResolverTests` with real git: remote, two repositories with one relative origin kept apart, a linked worktree
+  resolving to the main checkout, no git, the `$HOME` ceiling, a repository's fsmonitor never run; `LessonTurnTests`:
+  asked and queued only when its guards hold, bound once and again on change, lessons reaching the generator through
+  recall and not another project's, a local-only block in a local prompt queuing a local-only opportunity, a local-only
+  lesson reaching a local generator and never a cloud one; `LessonLearnerTests`: filing with the evidence hash, positions
+  outside the turn, none, unreadable and bad drafts declined, undone turns skipped, duplicates, taint; `EventJsonTests` and `SessionProjectionTests` for `ProjectBound`). `tests/Corvid.Fabric.Tests` for the
+  catalogue row, condition and floor; `tests/Corvid.Host.Tests` (`CommandTests`) for `/memory lessons` and `/status`.
+
+Not built yet: vectors for lessons (embedding them, the vector list, and §4.3's re-embed job); approving with edits and
+user-authored lessons (`/memory lessons add`); lessons in `corvid mcp serve` and the shared and guest memory tools, whose
+retrievers carry no project, and a project per ACP session from the client's working directory (ACP and HTTP sessions use
+the runtime's workspace project); a projects registry (display names, listing other projects' lessons,
+cross-project or global lessons); remotes other than origin, `insteadOf` rewriting, submodules as their own projects and
+re-resolving the project when the workspace changes mid-run; sleep-time jobs for lessons (dedupe and merge, staleness,
+re-verifying evidence hashes against the log, promoting a recurring workflow lesson into a skill draft); drafting on the
+escalated or cloud generator; marking a lesson local-only from `/memory` and a `corvid memory lessons` verb; importing or
+exporting Beacon memories; and one credential detector shared with the egress gate.
+
+## Detection rules (C-023)
+
+Plan §10.2 (approval on structure), §10.3 (taint) and §16 (observability). Declarative detection rules over the typed
+session events, evaluated inline at pre_execute and post-hoc by `corvid scan`. The format follows Beacon's threat-rules
+spec v1.1 (Asymptote-Labs/agent-beacon, MIT): one of `match` or `correlation`, `order: sequence|any`, at most one finding
+per session, no event filling two steps, rules that carry their own fixtures and a maturity ladder. Conditions are a small
+typed predicate tree instead of CEL, and fields are Corvid's own event fields. Beacon was read for the format and a few
+short regexes only; no code was copied.
+
+- Project. `Corvid.Rules` (core, `IsAotCompatible`) references Abstractions only and no package, so the checker's core
+  rule accepts it as is. `Corvid.Approvals` references it, and Host, Kernel and the CLI reach it through Approvals. Rules
+  cannot use Approvals' `ShellAnalyzer` without a cycle, which is one reason "the same command" is approximated by command
+  class (below).
+- Format. One JSON file per rule, `<id>.rule.json` (YAML would need a package), read through a source-generated context
+  with `UnmappedMemberHandling.Disallow`, so a misspelt key fails the load. Fields: `id` (`^[a-z0-9][a-z0-9-]*$`, unique in
+  the pack, and the file's name), `version` (≥ 1), `title`, `description` (optional), `severity`
+  (`info|low|medium|high|critical`), `status` (`experimental|stable|deprecated`), `posture` (`detect|enforce`), `enforce`
+  (optional, `ask` only: `deny` is a load error that names the follow-up), `reason`, `category` (Beacon's directory name),
+  exactly one of `match` or `correlation`, and `tests`. A `match` or a correlation step is
+  `{ "event": "<wire name>", "where": <predicate> }`; the event is a `SessionEvent` discriminator (`tool_call_issued`,
+  `tool_result`, `approval_resolved`, ...), and a step may not select `detection_matched`, so a detection never feeds
+  another.
+- Predicates. `all`, `any`, `not`, and leaves `{ "field": "<path>", "<op>": <value> }` with exactly one of `equals`
+  (string, number, boolean or null), `in`, `regex`, `gt`, `gte`, `lt`, `lte` (numbers) or `exists`. Paths are dotted
+  snake_case wire names relative to the event (`tool_name`, `arguments.command`, `result`, `approved`). Evaluation runs
+  over the event's persisted JSON (`JsonElement`), so it is trim and AOT safe. A missing path is false and never throws;
+  an optional field left out when null (`call_id` on a job's approval) is missing, not null, so `exists` tests it. A path
+  through an array matches when any element does. `equals` or `regex` on an object tests every string under it, up to
+  64 KiB in all; a longer string is cut at 64 KiB, except a `derived.` field (a command line), where `regex` over more than
+  64 KiB is a rule error: padding would otherwise push a command past every pattern, and the shell parser's own 64 KiB
+  limit would be the only thing still asking.
+- Validation. The field catalogue is read from the rules' source-generated serializer metadata:
+  `PolymorphismOptions.DerivedTypes` for each discriminator, `JsonTypeInfo.Properties` for names and types, recursing
+  into nested records and array elements. An unknown event, a typo (`tool_nme`), a path on the wrong event, a numeric
+  operator on a string, a string compared with a number, or `regex` on a number fails the load with the path and what the
+  event has instead. Paths into `JsonElement` fields (`ToolCallIssued.arguments`, `ToolResult.result`, `Decision.state`,
+  the `ModelSwitched` profiles) and dictionaries are validated up to that field and open beyond it. A test cross-checks
+  the catalogue by reflection against every `SessionEvent` type, as `EventJsonTests` does for wire names, and another
+  that the rules serialize every event exactly as `EventJson` (the options are duplicated in `Corvid.Rules`, so drift
+  would otherwise be silent).
+- Regexes. `RegexOptions.NonBacktracking | CultureInvariant`, a 1 s match timeout (it bounds wall-clock time on a loaded machine: NonBacktracking is linear in the capped input), compiled and run once at load. A pattern
+  NonBacktracking refuses (lookaround, backreference) fails the load. A timeout during evaluation, or a `derived.` field
+  over 64 KiB, is a rule error, never a match or a no-match: scan reports it (exit 1); inline, an enforce rule that errors forces the prompt (fail closed) and a
+  detect rule records nothing. An over-long command anywhere in the inline window errors too, so while one is among the
+  last 512 events every call that fills a step of a correlation on `derived.command` asks (an extra prompt, bounded by the
+  window).
+- Derived fields, under `derived.`, are computed from the session's own earlier events and never read from the event:
+  `derived.command` on `tool_call_issued` is the command line of a call to a shell tool (`ApprovalOptions.ShellTools`,
+  `{shell: command}`); `tool_result` adds the call's `derived.tool_name` and `derived.command`; `approval_resolved` adds
+  `derived.call_id` (from its `ApprovalRequested`, C-011), that call's `derived.tool_name` and `derived.command`, and
+  `derived.action` (the request's action document). A job script's approval has no call, so its `derived.command` is the
+  action document's `text`. This makes "a denial of a command in class X" one step, with no cross-step binding.
+- Correlation. Scope `session` only; `window` is `120s`, `5m`, `2h`, `1d` or ISO-8601 (`PT10M`), at most 7 days, over
+  `StoredEvent.RecordedAt`; `order` is `sequence` (default) or `any`; 2 to 8 steps. Candidates are filtered per step first,
+  all of them (a cap kept the oldest and silently missed a late match in a long session); the searches below are binary
+  over each step's ascending list, and events are taken to be in time order, as the log appends them. A sequence anchors on each candidate of the first step and takes the earliest later candidate of
+  each next step, which is never worse for the steps after it or the window. Any order takes each event as the earliest,
+  gives it a step it satisfies, and assigns distinct later events within the window to the other steps by bipartite
+  matching (with n steps, n candidates per step suffice). A rule yields at most one finding per session; a single-event
+  rule's finding lists up to 64 matched sequences.
+- Tests. Each test has a `name`, a `verdict` (`match` or `no_match`) and `events` in the log's persisted form (payload
+  version 1, `type` discriminator anywhere in the object), each optionally with `at` (seconds from the test's start;
+  default one per event) and `session` (default `s1`), so cross-session and window cases can be written. Fixtures are read
+  into `SessionEvent` with unknown fields refused, so a malformed fixture fails the load. Maturity: experimental needs a
+  test, stable a `match` and a `no_match`, deprecated none. Duplicate ids fail the pack. `Corvid.Rules.Tests` runs every
+  shipped rule's tests in one Theory.
+- Built-in pack. Embedded resources `Pack/<category>/<id>.rule.json` (logical name `Corvid.Rules.Pack.<id>.rule.json`, as
+  Fabric embeds `floors.json`), loaded once by `RulePack.BuiltIn()`. Twelve rules, all stable:
+  `credential-access/credential-file-read` (shell or `read_file` on SSH private keys, `.aws/credentials`, `.netrc`,
+  `.kube/config`, `.docker/config.json`, `gh/hosts.yml`, `.gnupg/`, `.env`; medium, detect);
+  `context-exfiltration/secret-read-then-egress` (any order, 10 min: a credential read and curl, wget, nc, scp, rsync,
+  ssh, `/dev/tcp` or `web_fetch`; high, enforce); `env-dump-piped-to-network` (critical, enforce);
+  `secret-file-to-network` (a credential file as a curl or wget body, piped or redirected into curl or netcat, or read
+  by a `$(...)` or backquote substitution on a curl, wget, netcat, socat or ssh command line; critical, enforce); `base64-into-url` (base64 output substituted into a request URL or piped to curl or wget; high,
+  enforce); `approval-abuse/approval-denied-then-reissued` (sequence, 30 min: the user denied a command in a dangerous
+  class, then a call in the same class; high, enforce); `approval-denied-then-executed` (the same denial, then a
+  successful `tool_result` in the class; critical, detect, found by scan); `risky-command/curl-pipe-to-shell`,
+  `base64-decode-piped-to-shell` and `fork-bomb` (high, detect); `prompt-injection/injection-in-tool-result`
+  (instruction-override or covert-action phrases in a result; medium, detect); and
+  `sensitive-edit/agent-or-ci-surface-modified` (writes, patches, redirects, `tee`, `cp`, `mv` or `sed -i` to CI
+  workflows, git hooks, `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, login dotfiles or `authorized_keys`; medium, detect).
+  Each enforce rule has negative fixtures for the common benign forms (`curl -d @payload.json`, `env | grep PATH`,
+  `.env.example`, `$(date)` in a URL). Short regexes are adapted from Beacon's rules and from `Corvid.Skills`'
+  `SkillScanner`; each adapted rule says so in its description.
+- Inline, at pre_execute. `ApprovalOptions.Detections` holds a `DetectionEngine`; null leaves `ApprovalPipeline` exactly
+  as before. `AssessAsync` runs, in order: (1) parse and resolve; (2) the hardline list, whose denial returns before any
+  rule runs, so no rule can relax or pre-empt it; (3) detection rules; (4) the rest unchanged: forced reasons, the
+  read-only auto-run, remembered rules, `risk` through the fabric, the mode mapping, the prompt. For (3) the pending call is
+  built from the action before it is resolved to a `ShellAction` (a job's bare `ShellAction` becomes a synthetic shell
+  `ToolCallIssued`), the session's last 512 events (`DetectionHistory`) are read from the pipeline's `IEventLog`, and the
+  `ToolCallIssued` with the context's call id is dropped, since `TurnRunner` appends it before it asks. Only matches the
+  pending call takes part in count: single-event rules on it, and correlations where it fills a step (in a sequence, the
+  last) and every other step is in the history within the window. An enforce match adds an `ApprovalReasons.Detection`
+  (`detection`) reason, `<rule id>: <reason>`, to the forced reasons, which already stop the read-only auto-run, the
+  remembered-allow auto-run and an `Auto` from risk and the mode, and limit the offered scopes to `once`; a remembered
+  denial still denies, and with nobody to ask (`Interactive = false`: scheduled scripts, a gateway guest with approvals
+  failing) the ask becomes `NoApprover`, a denial. A detect match only records. Enforcement only ever adds a prompt: v1
+  has no rule-made denial and no rule-made allow. `Detection` is not a hardline code, so `ApprovalAssessment.Hardline` is
+  unchanged.
+- `DetectionMatched` (`detection_matched`): a new event at payload version 1, following C-016 and C-020 (optional fields
+  `JsonIgnore` `WhenWritingNull`): `RuleId`, `RuleVersion`, `Severity`, `Posture` (effective), `Reason`, `Sequences`
+  (the logged events that matched; the pending call is not one), `CallId` (the pending call) and `Enforced` (`ask` when
+  it forced a prompt). It is appended in `AssessAsync`, as the fabric appends `risk`'s `Decision` there, at most once per
+  rule per session (the tail's `detection_matched` events and an in-process set are checked); enforcement still applies to
+  every call that completes a match. `SessionProjection` leaves it out of the transcript, so prompts and golden replay
+  are unaffected. As with C-016's and C-020's events, a binary from before C-023 cannot read a session that holds one.
+- Telemetry. `ApprovalAssessment.Detections` carries the findings; `TurnRunner.AuthorizeAsync` tags the call's
+  `execute_tool` span with the rule ids (`corvid.detection.rules`), on the denial path too.
+- Configuration. `Corvid:Detections:Enabled` (default true) and `Corvid:Detections:Enforce` (default true; false records
+  every match as detect). `CorvidRuntimeFactory` loads the built-in pack once and passes the engine with
+  `BuiltinTools.ShellToolMapping`.
+- `corvid scan [--session <id>] [--fail-on <severity>] [--json]` reads the event log without starting the host (as
+  `gateway status` does) and refuses when `events.db` does not exist rather than letting `SqliteEventLog` create it. It
+  walks `ListSessions` (or one session), pages each through a captured head 4,096 events at a time into `Scan`, and prints
+  findings by session: severity, rule id and version, effective posture, title, reason, matched sequences, and whether a
+  `DetectionMatched` was already recorded inline. `--json` writes one document (`rules`, `sessions`, `findings`,
+  `errors`). Exit codes: 0, 4 (`ExitCodes.Findings`) when a finding is at or above `--fail-on`, 1 on a rule error, a
+  missing log or session, or a read error, and 2 on bad arguments.
+- Network reads. `TurnRunner` sends a call through pre_execute when it needs approval (`Ask`: side-effecting, or a network
+  read in a tainted turn) and, since the review of the first C-023 cut, when it is an untainted network read the rules
+  have something to say about: `ApprovalPipeline.Detects` runs the same inline evaluation, with the same response's
+  earlier calls appended as if logged, and answers true when the call completes any match or an enforce rule cannot be
+  evaluated on it. It records nothing; the pipeline then asks or records as above. So `read_file .env` then `web_fetch`
+  asks in an untainted session, in one response or two, and an unrelated `web_fetch` still runs unasked and in parallel.
+- Known limits. Read-only calls that are not network reads (`read_file`, `list_files`, `search_files`) still skip
+  pre_execute and take part inline only as earlier steps: a `read_file` of a credential after an egress completes
+  `secret-read-then-egress` without a prompt and is found by scan. "The same
+  command" is the same dangerous class: a denied `rm -rf build` followed by `rm -rf dist` asks again (a false positive,
+  only an extra prompt), and a command outside the class's regex escapes. Each inline evaluation reads up to 512 events
+  synchronously on the approval path, beside the appends already made there; a correlation whose first step is older than
+  that is found only by scan.
+
+Not built yet: `enforce: deny` (it needs its own `ApprovalResolution`, so a rule's denial is never reported as a remembered
+rule's or the hardline list's); cross-step binding (`same: [path]` or `$step.field`) and structural command equivalence
+through the shell analyzer; a detect-only pass over read-only calls in `TurnRunner`; a large-single-call-cost rule (no
+event carries per-call usage); user rule directories, per-rule enable and severity overrides, `corvid rules
+list|lint|test` and `scan --rules`; YAML rules, taxonomy fields and a `spec` version with skip-if-newer; SARIF, `--since`
+and incremental scans; alerts or records from scan findings; and Beacon categories that need events Corvid does not emit
+(MCP tool-list poisoning, system-prompt and skill-index text, browser session stores, `skill_changed` and
+`memory_written` content).
+
+## Project memory over MCP (C-028)
+
+Corvid's memory for another harness (Claude Code, Cursor and the like) through C-018's `corvid mcp serve`, read-only, with
+C-025's lessons scoped to a project. The tool shape (`search_memory`, `get_memory`, `get_memory_context`, a `limit` that
+defaults to 5 for the context tool, and a `project` argument) follows Beacon's `internal/mcpserver`
+(Asymptote-Labs/agent-beacon, MIT); the code is Corvid's own. Beacon's `kind` is a lesson kind; Corvid's is an item kind and
+accepts a lesson kind as a lesson filter. No project, package, checker rule or memory schema version was added.
+
+- Switch: `Corvid:Mcp:Serve:ProjectMemory`, default false. It gates everything new: the two new tools, lessons in
+  `search_memory`, the `project` argument and the git call that resolves the workspace's project. Off, the tool list is
+  unchanged (`search_memory`, `skill_list`, `skill_read`), `search_memory`'s schema gains the optional `kind`, `limit` and
+  `project` arguments, `lesson` and `project` are refused, there is no result limit, and each result only gains an `id`.
+  Its description now names lessons, so a client that pins definitions (C-022) holds `search_memory` as changed once.
+  Lessons also need `Corvid:Memory:Lessons:Enabled`.
+- Tools (`SharedMemoryTools` in `Corvid.Tools.Builtin`, configured by `SharedMemoryOptions`; `ServedTools()` drops the two
+  new tools when the switch is off):
+  - `search_memory(query, max_tokens = 400, kind?, limit?, project?)`: hybrid retrieval (FTS and the fact graph; serve
+    loads no embedder) within `max_tokens` (50 to 4,000). `kind` is `fact`, `lesson`, `conversation` (only with
+    `Corvid:Mcp:Serve:Conversations`) or one of C-025's lesson kinds; anything else is an argument error that lists the
+    accepted values. `limit` is 1 to 20, default 10. Each result is `id` (the retriever's item id: `fact:…`, `lesson:…` or an
+    episode id), `kind`, `text` (cut at 200 tokens, the retriever's per-item cap) and `recorded`; a lesson adds
+    `lesson_kind`, `title` and `tags`. The result adds `project`, the scope's source: `argument` (whenever the caller passed one, matched or not), `workspace` or
+    `none`.
+  - `get_memory(id, project?)`: dispatches on the id's prefix. It returns a current, not local-only fact; an approved, not
+    local-only lesson whose project is the call's scope, with its kind, title, applicability, tags, approval date and full
+    body cut at 1,000 tokens (evidence, session ids and positions are left out); or an episode when conversations are
+    shared. Every other case (local-only, candidate, rejected, superseded, invalidated, another project's lesson, unknown)
+    is the same `No memory with id '<id>'.` error, so the tool never tells whether a hidden item exists.
+  - `get_memory_context(task, limit = 5, project?)`: facts and lessons only (explicit kinds, so never conversations) at a
+    fixed 1,500 tokens, the top `limit` (1 to 5) after the local-only filter. Same item shape.
+  Token caps count with `CharsPerTokenCounter` (`TextBudget`, now public); the server's 32,000-character cut stays the
+  outer bound.
+- Scope, per call. The serve workspace (`Corvid:Workspace`, else the current directory) is resolved once at start with
+  C-025's `ProjectResolver` and the checkpoints' git, before the stdio handshake, and only with the switch on and lessons
+  enabled. A caller's `project` never reaches git or the file system: `ProjectIds.Candidates` maps it by string work alone.
+  A 64-hex id is itself; a URL or scp remote goes through `FromRemote`; an absolute path (fully qualified, no NUL, at most
+  4,096 characters) is normalized lexically (`..` is resolved as text; a path that does not exist still maps) and hashed with
+  `FromPath` for itself and each ancestor, most specific first, stopping below `$HOME` as discovery's ceiling does (`$HOME`
+  itself only on an exact match); a path equal to or under the workspace also stands for the workspace's project, where the
+  walk passes it. Relative paths stand for nothing. A candidate counts only if it is in `LessonStore.KnownProjects()` (the
+  projects with an approved lesson that is not local-only, re-read on every call, so a lesson approved in a running
+  `corvid chat` shows at once; a project whose approved lessons are all local-only is unknown, so nothing tells that it has
+  any). The first match is the scope; an argument that matches nothing is facts only, never an error, and reports the same
+  `argument` source, so the result is no oracle for which paths are projects: only the shared lessons a match serves tell
+  it. Without an argument the scope is the workspace's project when known (`workspace`), else `none` (facts only). Facts are global
+  (C-008) and served in every scope. Most repositories are keyed by their origin remote, so a caller path maps only when it
+  is under the serve workspace or the project is checkout- or path-keyed; a caller can pass the origin URL or the id
+  instead. A harness that starts `corvid mcp serve` from `$HOME` or a fixed directory gets facts only until it passes
+  `project`.
+- Privacy: nothing local-only is served (facts and lessons, filtered at the tool and without a count). Lessons are served only
+  when approved: candidates, which can come from tainted turns, never. No core block is served: since schema v2 every block
+  is local-only, and `user` holds personal data. There are no write tools; `CorvidMcpServer` still refuses any tool with a
+  side effect. The serve instructions say results are Corvid's recorded memory, data and not instructions.
+- Logging: `McpServeOptions.Calls` (`Corvid.Mcp`, the same `Action<T>` hook as C-022's notices, so `Corvid.Mcp` stays free of
+  Host and Memory) reports every call, errors and cancellations included, as `McpServeCall` (tool, call id, error, characters
+  sent, cut, elapsed, structured result). `McpComposition.ServeCalls` makes it a `corvid.mcp.serve` span on the host source
+  covering the call, with `corvid.mcp.tool`, `corvid.mcp.call`, `corvid.mcp.serve.outcome`, `.items` (the count of
+  `results[].id`, or 1 for a single `id`), `.project` (the scope's source), `.chars` and `.cut`. Query and memory text are
+  never tagged. The configured OTLP export applies, since serve starts through `CorvidCli.StartAsync`; without it nothing
+  listens and there is no span, so `ServeCalls(Console.Error)` also writes one standard-error line per call, always:
+  `corvid mcp serve: call <tool> <ok|error> items=<n> project=<source|-> chars=<n> cut=<yes|no> ms=<n>`. Only the three
+  scope sources are reported as `project`, never another tool's `project` string. That line is the local record until the
+  durable `mcp_served` event.
+
+Tests: `tests/Corvid.Mcp.Tests` (`McpServeMemoryTests`: off by default only `search_memory`, no lessons and no `project`;
+lessons of the workspace project served only when approved, not candidate, rejected, superseded or local-only; `kind` and
+lesson-kind filters, `limit` bounds; another known project's lessons only with that project as the argument, by https,
+ssh, scp or id; caller paths by an ancestor walk to a checkout-keyed project, under the workspace, a path that does not
+exist, relative paths, `..`, NUL, overlong arguments and the `$HOME` ceiling, all without the disk; `get_memory`'s one
+error for local-only, candidate and unknown ids, another project's lesson, the 1,000-token body and no evidence;
+`get_memory_context` with five items, `limit` 2, `limit` 6 refused, facts only for an unknown workspace and never a
+local-only fact; the call callback once per call with item counts, errors included; conversations only with their switch;
+`McpServeTests`: `search_memory`'s result shape with the switch off, and `corvid mcp serve` over stdio with
+`CORVID__Mcp__Serve__ProjectMemory=true` listing the three memory tools and the skill tools and answering
+`get_memory_context` with a path-keyed workspace's lesson). `tests/Corvid.Memory.Tests` (`KnownProjects`) and
+`tests/Corvid.Host.Tests` (`McpHostTests`: the composition with the switch off and on, the span's tags and that it holds
+no text).
+
+Review follow-up (PR #41): `KnownProjects` counts only approved lessons that are not local-only, and an unmatched `project`
+argument reports `argument` like a matched one, so neither the field nor a local-only-only project is an oracle
+(`McpServeMemoryTests.AProjectWithOnlyLocalOnlyLessonsLooksLikeAnUnknownOne`: every tool answers such a project exactly as
+an unknown one; `LessonStoreTests`). Served calls leave a standard-error line without any trace listener
+(`McpHostTests.EveryServedCallIsAStandardErrorLineWithoutAnyListener`, which also checks that no text and no foreign
+`project` string reach it).
+
+Not built yet: a durable `mcp_served` event with the returned item ids (it needs a new event type, cross-process appends from
+the serve process and C-027's export to name the new tools); a projects registry, so a caller path inside a remote-keyed
+repository maps without git; linked-worktree caller paths other than through the serve workspace; core blocks over MCP
+(`agent` and `persona` behind a flag, honouring local-only; `user` never); cross-project lessons and a listing of known
+projects; vectors for lessons and an embedder in the serve process; fact history and lesson evidence in `get_memory`; MCP
+resources, prompts and change notifications for memory; write tools of any kind; serve's HTTP transport (still deferred
+from C-018); and per-caller rate limits or quotas.
 
 ## Running the check
 

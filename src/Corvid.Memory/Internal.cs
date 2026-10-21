@@ -1,4 +1,5 @@
 using System.Text;
+using Corvid.Abstractions.Events;
 using Corvid.Abstractions.Tokens;
 using Microsoft.Data.Sqlite;
 
@@ -63,7 +64,8 @@ internal static class FtsQuery
     }
 }
 
-internal static class TextBudget
+/// <summary>Cutting text to a token budget: recall's per-item cap, and the MCP memory tools' caps (C-028).</summary>
+public static class TextBudget
 {
     private const string Ellipsis = "…";
 
@@ -94,5 +96,30 @@ internal static class TextBudget
         if (length > 0 && char.IsHighSurrogate(text[length - 1]))
             length--;
         return text[..length];
+    }
+}
+
+internal static class EventAppend
+{
+    private const int MaxAttempts = 8;
+
+    /// <summary>
+    /// Appends one event at the session's head. <c>MemoryWritten</c> does not depend on the head, so a concurrent writer only
+    /// means retrying at the new head (as the fabric does). It is not cancellable: the memory row it records is already written.
+    /// </summary>
+    public static void Append(IEventLog log, string sessionId, SessionEvent payload)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            var head = log.GetHead(sessionId);
+            try
+            {
+                log.Append(sessionId, head, [EventData.Create(payload)]);
+                return;
+            }
+            catch (EventLogConflictException) when (attempt < MaxAttempts)
+            {
+            }
+        }
     }
 }

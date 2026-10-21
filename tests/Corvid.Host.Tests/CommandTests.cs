@@ -273,6 +273,48 @@ public sealed class CoreCommandTests
     }
 
     [Fact]
+    public async Task MemoryLessonsReviewsThisProjectsCandidates()
+    {
+        var (host, runtime, session, commands) = await StartAsync();
+        await using (host)
+        await using (runtime)
+        {
+            // The test workspace is no repository, so its path is the project.
+            var project = runtime.Project!;
+            Assert.Equal(Corvid.Memory.ProjectSources.Path, project.Source);
+            Assert.Contains((await Run(runtime, session, commands, "/status")).Lines,
+                line => line == $"project: {project.Id[..12]} (path)");
+            Assert.Contains("No lesson is waiting", (await Run(runtime, session, commands, "/memory lessons")).Lines[0], StringComparison.Ordinal);
+
+            Corvid.Memory.LessonContent Content(string kind) => new(kind, "Pass a limit to list_notes", "when listing notes",
+                "Call list_notes with a limit.\nWithout one it fails (event 3).\nConfirm notes come back.", ["notes", "tools"],
+                [new Corvid.Memory.LessonEvidence(session.Id, [3], "list_notes failed without a limit", new string('a', 64))]);
+            var lessons = runtime.Memory!.Lessons!;
+            var first = await lessons.FileAsync(new Corvid.Memory.LessonDraft(project.Id, Content("gotcha")), session.Id, false, TestContext.Current.CancellationToken);
+            var second = await lessons.FileAsync(new Corvid.Memory.LessonDraft(project.Id, Content("convention")), session.Id, false, TestContext.Current.CancellationToken);
+            // Without Kev the gate never passes, so both wait for review.
+            Assert.Equal(Corvid.Memory.LessonFileStatus.Staged, first.Status);
+            Assert.Contains("2 lesson candidate(s): /memory lessons pending", (await Run(runtime, session, commands, "/memory pending")).Lines[0],
+                StringComparison.Ordinal);
+
+            var pending = await Run(runtime, session, commands, "/memory lessons pending");
+            Assert.Equal(2, pending.Table!.Rows.Length);
+            var id = first.Lesson!.LessonId[7..19];
+            Assert.Contains(pending.Table.Rows, row => row[0] == id && row[1] == "gotcha");
+
+            Assert.Equal(OutputTone.Success, (await Run(runtime, session, commands, $"/memory lessons approve {id}")).Tone);
+            Assert.Equal(Corvid.Memory.LessonStates.Approved, lessons.Store.Get(first.Lesson.LessonId)!.State);
+            var rejected = await Run(runtime, session, commands, $"/memory lessons reject {second.Lesson!.LessonId} too narrow");
+            Assert.Equal(OutputTone.Success, rejected.Tone);
+            Assert.Equal("too narrow", lessons.Store.Get(second.Lesson.LessonId)!.ReviewReason);
+            Assert.Equal(OutputTone.Error, (await Run(runtime, session, commands, $"/memory lessons approve {id}")).Tone);
+            Assert.Equal(OutputTone.Error, (await Run(runtime, session, commands, "/memory lessons approve ffffffffffff")).Tone);
+            Assert.Equal(OutputTone.Error, (await Run(runtime, session, commands, "/memory lessons bogus")).Tone);
+            Assert.Contains("1 approved lesson(s)", (await Run(runtime, session, commands, "/memory lessons")).Lines[0], StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public async Task SkillsListImportShowHistoryAndRevert()
     {
         var (host, runtime, session, commands) = await StartAsync();

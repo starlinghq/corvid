@@ -51,10 +51,13 @@ public sealed class OutcomeClassifier
             throw new ArgumentException("An outcome cannot be both positive and negative.");
     }
 
-    /// <summary>The outcomes Corvid writes today (C-004a tests, C-008's review path, the golden set) and their user_ forms.</summary>
+    /// <summary>
+    /// The outcomes Corvid writes today (C-004a tests, C-008's review path, the golden set) and their user_ forms, plus C-026's
+    /// skill review on the egress decisions that queued a draft (indirect evidence; drop it with --positive/--negative).
+    /// </summary>
     public static OutcomeClassifier Default { get; } = new(
-        ["accepted", "approved", "succeeded", "task_succeeded", "tool_succeeded", "user_accepted", "user_approved"],
-        ["corrected", "denied", "failed", "rejected", "retried", "task_failed", "tool_failed", "user_corrected", "user_denied",
+        ["accepted", "approved", "skill_approved", "succeeded", "task_succeeded", "tool_succeeded", "user_accepted", "user_approved"],
+        ["corrected", "denied", "failed", "rejected", "retried", "skill_rejected", "task_failed", "tool_failed", "user_corrected", "user_denied",
          "user_rejected", "user_retried"]);
 
     public ImmutableSortedSet<string> Positive { get; }

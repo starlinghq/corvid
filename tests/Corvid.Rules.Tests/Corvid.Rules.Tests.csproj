@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <Using Include="Xunit" />
+    <ProjectReference Include="../../src/Corvid.Rules/Corvid.Rules.csproj" />
+    <!-- The kernel's EventJson, so a test proves the rules' event form is the persisted one. -->
+    <ProjectReference Include="../../src/Corvid.Kernel/Corvid.Kernel.csproj" />
+    <!-- One sample of every event type, shared with the kernel's round-trip tests. -->
+    <Compile Include="../Corvid.Kernel.Tests/Infrastructure.cs" Link="KernelSamples.cs" />
+  </ItemGroup>
+</Project>

@@ -1,5 +1,9 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
+using System.Globalization;
+using Corvid.Abstractions.Events;
 using Corvid.Host.Configuration;
+using Corvid.Host.Telemetry;
 using Corvid.Mcp;
 using Corvid.Memory;
 using Corvid.Models.Remote;
@@ -105,9 +109,11 @@ public static class McpComposition
 
     /// <summary>
     /// Starts the configured servers in the background and returns at once (null when none is configured). Tools register
-    /// as each server lists them; built-in and DI tools were registered first, so they keep their names.
+    /// as each server lists them; built-in and DI tools were registered first, so they keep their names. Definitions are
+    /// checked against the pins in <see cref="CorvidPaths.McpPins"/> (C-022), so <c>corvid mcp list</c> pins too; held and
+    /// accepted definitions go to <paramref name="eventLog"/>'s <see cref="McpSessions.Pins"/> session when one is given.
     /// </summary>
-    public static McpClients? Start(CorvidOptions options, IEnumerable<string> deniedPaths, ToolRegistry tools)
+    public static McpClients? Start(CorvidOptions options, IEnumerable<string> deniedPaths, ToolRegistry tools, IEventLog? eventLog = null)
     {
         var (servers, _) = Definitions(options, deniedPaths);
         if (servers.IsEmpty)
@@ -132,9 +138,90 @@ public static class McpComposition
             Vault = vault?.Client,
             Placeholders = vault?.Placeholders,
         });
-        var clients = new McpClients(servers, transports, tools);
+        var clients = new McpClients(servers, transports, tools, new JsonFileMcpPinStore(CorvidPaths.McpPins(options)), Notices(eventLog));
         clients.Start();
         return clients;
+    }
+
+    private const int MaxAppendAttempts = 32;
+
+    /// <summary>
+    /// What a held, accepted or allowed definition leaves behind (C-022): a short <c>corvid.mcp.pin</c> span, and, with an
+    /// event log, <see cref="McpToolHeld"/> or <see cref="McpToolAccepted"/> in the <see cref="McpSessions.Pins"/> session.
+    /// </summary>
+    internal static Action<McpDefinitionNotice> Notices(IEventLog? log) => notice =>
+    {
+        using (var activity = HostTelemetry.Source.StartActivity("corvid.mcp.pin", ActivityKind.Internal))
+        {
+            activity?.SetTag("corvid.mcp.server", notice.Server);
+            activity?.SetTag("corvid.mcp.tool", notice.Tool);
+            activity?.SetTag("corvid.mcp.pin.status", notice.Kind);
+            activity?.SetTag("corvid.mcp.pin.hash", notice.Hash);
+        }
+        if (log is null)
+            return;
+        SessionEvent payload = notice.Kind is McpPinKinds.Accepted or McpPinKinds.Allowed
+            ? new McpToolAccepted(notice.Server, notice.Tool, notice.Hash, notice.Kind == McpPinKinds.Allowed)
+            : new McpToolHeld(notice.Server, notice.Tool, notice.Kind, notice.Hash, notice.PinnedHash, notice.Detail);
+        var events = new[] { EventData.Create(payload) };
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                log.Append(McpSessions.Pins, log.GetHead(McpSessions.Pins), events);
+                return;
+            }
+            catch (EventLogConflictException) when (attempt < MaxAppendAttempts)
+            {
+                // Another server's notice, or another process, appended first; try at the new head.
+            }
+        }
+    };
+
+    /// <summary>
+    /// What a served call leaves behind (C-028): one line on <paramref name="log"/> (serve's standard error; standard output is
+    /// the protocol) whether or not any trace listener is attached, and a <c>corvid.mcp.serve</c> span when one is (the
+    /// configured OTLP export). Both carry the tool, the outcome, how many items it returned, the scope's source, and the
+    /// result's size and cut. Never the arguments or any memory text.
+    /// </summary>
+    public static Action<McpServeCall> ServeCalls(TextWriter? log = null) => call =>
+    {
+        var (items, project) = Summarize(call.Result);
+        var outcome = call.IsError ? "error" : "ok";
+        log?.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"corvid mcp serve: call {call.Tool} {outcome} items={items} project={project ?? "-"} chars={call.Chars} cut={(call.Cut ? "yes" : "no")} ms={(long)call.Elapsed.TotalMilliseconds}"));
+        using var activity = HostTelemetry.Source.StartActivity("corvid.mcp.serve", ActivityKind.Server);
+        if (activity is null)
+            return;
+        // The span covers the call: it is reported when the call ends.
+        activity.SetStartTime(DateTime.UtcNow - call.Elapsed);
+        activity.SetTag("corvid.mcp.tool", call.Tool);
+        activity.SetTag("corvid.mcp.call", call.CallId);
+        activity.SetTag("corvid.mcp.serve.outcome", outcome);
+        activity.SetTag("corvid.mcp.serve.items", items);
+        if (project is not null)
+            activity.SetTag("corvid.mcp.serve.project", project);
+        activity.SetTag("corvid.mcp.serve.chars", call.Chars);
+        activity.SetTag("corvid.mcp.serve.cut", call.Cut);
+        if (call.IsError)
+            activity.SetStatus(ActivityStatusCode.Error);
+    };
+
+    /// <summary>
+    /// The number of memory items in a served result (its <c>results[].id</c>, or a single <c>id</c>) and its scope source, when
+    /// it is one of <see cref="SharedMemoryTools"/>'s.
+    /// </summary>
+    internal static (int Items, string? Project) Summarize(System.Text.Json.JsonElement? result)
+    {
+        if (result is not { ValueKind: System.Text.Json.JsonValueKind.Object } json)
+            return (0, null);
+        // Only the three scope sources: any other tool's "project" string could be text.
+        var project = json.TryGetProperty("project", out var scope) && scope.ValueKind == System.Text.Json.JsonValueKind.String
+            && scope.GetString() is SharedMemoryTools.FromArgument or SharedMemoryTools.FromWorkspace or SharedMemoryTools.FromNone
+            ? scope.GetString() : null;
+        if (json.TryGetProperty("results", out var results) && results.ValueKind == System.Text.Json.JsonValueKind.Array)
+            return (results.EnumerateArray().Count(item => item.ValueKind == System.Text.Json.JsonValueKind.Object && item.TryGetProperty("id", out _)), project);
+        return (json.TryGetProperty("id", out _) ? 1 : 0, project);
     }
 
     /// <summary>
@@ -153,8 +240,28 @@ public static class McpComposition
             if (File.Exists(path))
             {
                 var database = new MemoryDatabase(path);
-                var retriever = new HybridRetriever(new EpisodicIndex(database), new FactGraph(database));
-                tools.AddRange(new SharedMemoryTools(retriever, options.Mcp.Serve.Conversations).CreateTools());
+                var serve = options.Mcp.Serve;
+                var episodes = new EpisodicIndex(database);
+                var facts = new FactGraph(database);
+                // C-028: lessons and the workspace's project only with project memory on, so a default serve never runs git.
+                var lessons = serve.ProjectMemory && options.Memory.Lessons.Enabled ? new LessonStore(database) : null;
+                var workspace = CorvidPaths.Workspace(options);
+                ProjectIdentity? project = lessons is null ? null
+                    : await Kernel.Sessions.ProjectResolver.ResolveAsync(workspace, CorvidPaths.ExpandHome(options.Checkpoints.GitPath),
+                        CorvidPaths.Home).ConfigureAwait(false);
+                var retriever = new HybridRetriever(episodes, facts, lessons: lessons);
+                var memory = new SharedMemoryTools(retriever, new SharedMemoryOptions
+                {
+                    Facts = facts,
+                    Episodes = episodes,
+                    IncludeConversations = serve.Conversations,
+                    ProjectMemory = serve.ProjectMemory,
+                    Lessons = lessons,
+                    Workspace = workspace,
+                    WorkspaceProject = project,
+                    Home = CorvidPaths.Home,
+                });
+                tools.AddRange(memory.ServedTools());
             }
             else
             {
