@@ -35,6 +35,8 @@ public static class ApprovalReasons
     public const string TaintedEgress = "tainted_network_egress";
     public const string TaintedRecipient = "tainted_new_recipient";
     public const string Signal = "signals_processes";
+    /// <summary>An enforced detection rule matched (C-023): asks whatever risk, the mode or remembered approvals say.</summary>
+    public const string Detection = "detection";
 }
 
 /// <summary>

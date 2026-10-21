@@ -808,6 +808,10 @@ public sealed class TurnRunner
                 Result(call.CallId, Error("not run", ["the turn was cancelled while the approval was pending"], null, null), isError: true);
                 throw;
             }
+            // The call's execute_tool span is current here (ExecuteAsync started it); tagged before a denial returns too.
+            if (!result.Assessment.Detections.IsEmpty
+                && Activity.Current is { } span && span.DisplayName.StartsWith(KernelTelemetry.ExecuteToolPrefix, StringComparison.Ordinal))
+                span.SetTag(KernelTelemetry.DetectionRules, result.Assessment.Detections.Select(finding => finding.Rule.Id).ToArray());
             return result.Allowed ? (null, result) : ($"{WireName(result.Resolution)}: {result.Assessment.Summary}", null);
         }
 
