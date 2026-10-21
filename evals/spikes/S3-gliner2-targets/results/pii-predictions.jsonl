@@ -1,0 +1,150 @@
+{"threshold":0.3,"id":1,"spans":[{"label":"person","text":"Sarah Chen","start":13,"end":23,"confidence":1},{"label":"email","text":"sarah.chen@example.com","start":27,"end":49,"confidence":0.99999857}]}
+{"threshold":0.3,"id":2,"spans":[{"label":"person","text":"you","start":37,"end":40,"confidence":0.60579526},{"label":"person","text":"me","start":5,"end":7,"confidence":0.4545443},{"label":"phone number","text":"\u002B1 415 555 0142","start":16,"end":31,"confidence":0.99999845}]}
+{"threshold":0.3,"id":3,"spans":[{"label":"address","text":"221B Baker Street","start":20,"end":37,"confidence":0.8882912}]}
+{"threshold":0.3,"id":4,"spans":[{"label":"account number","text":"004512339871","start":30,"end":42,"confidence":0.99980944}]}
+{"threshold":0.3,"id":5,"spans":[{"label":"credential","text":"staging database password","start":4,"end":29,"confidence":0.94124544}]}
+{"threshold":0.3,"id":6,"spans":[{"label":"account number","text":"sk-live-4f9a2b7c8d1e3f5a6b7c","start":16,"end":44,"confidence":0.51940817},{"label":"credential","text":"API key","start":8,"end":15,"confidence":0.99963415}]}
+{"threshold":0.3,"id":7,"spans":[{"label":"person","text":"Dr. Priya Raman","start":18,"end":33,"confidence":0.99996936},{"label":"phone number","text":"9","start":46,"end":47,"confidence":0.52887565}]}
+{"threshold":0.3,"id":8,"spans":[{"label":"person","text":"John Smith","start":0,"end":10,"confidence":1},{"label":"person","text":"Maria Garcia","start":15,"end":27,"confidence":1}]}
+{"threshold":0.3,"id":9,"spans":[{"label":"email","text":"billing@acme-corp.example","start":23,"end":48,"confidence":0.99992573},{"label":"email","text":"tom.baker@example.org","start":56,"end":77,"confidence":0.99981505}]}
+{"threshold":0.3,"id":10,"spans":[{"label":"person","text":"her","start":31,"end":34,"confidence":0.44784078},{"label":"phone number","text":"07700 900123","start":14,"end":26,"confidence":0.9994037},{"label":"phone number","text":"020 7946 0958","start":50,"end":63,"confidence":0.99891365}]}
+{"threshold":0.3,"id":11,"spans":[{"label":"person","text":"We","start":0,"end":2,"confidence":0.43323526},{"label":"address","text":"1600 Pennsylvania Avenue NW","start":12,"end":39,"confidence":0.73157245}]}
+{"threshold":0.3,"id":12,"spans":[{"label":"person","text":"IBAN","start":24,"end":28,"confidence":0.8684283},{"label":"address","text":"GB82 WEST 1234 5698 7654 32","start":29,"end":56,"confidence":0.860904}]}
+{"threshold":0.3,"id":13,"spans":[{"label":"phone number","text":"4111 1111 1111 1111","start":49,"end":68,"confidence":0.991096},{"label":"account number","text":"4242","start":16,"end":20,"confidence":0.9845829},{"label":"account number","text":"4111 1111 1111 1111","start":49,"end":68,"confidence":0.7268085}]}
+{"threshold":0.3,"id":14,"spans":[{"label":"person","text":"admin","start":10,"end":15,"confidence":0.83198726},{"label":"account number","text":"Tr0ub4dor\u00263","start":30,"end":41,"confidence":0.32605276},{"label":"credential","text":"password","start":21,"end":29,"confidence":0.9396759}]}
+{"threshold":0.3,"id":15,"spans":[{"label":"credential","text":"CI","start":65,"end":67,"confidence":0.9594587}]}
+{"threshold":0.3,"id":16,"spans":[{"label":"person","text":"Ahmed Al-Farsi","start":17,"end":31,"confidence":0.99999607},{"label":"phone number","text":"(212) 555-0199","start":39,"end":53,"confidence":0.9962852}]}
+{"threshold":0.3,"id":17,"spans":[{"label":"person","text":"Kenji Watanabe","start":0,"end":14,"confidence":0.9999995},{"label":"address","text":"3-5-1 Marunouchi, Chiyoda-ku, Tokyo","start":32,"end":67,"confidence":0.9830755}]}
+{"threshold":0.3,"id":18,"spans":[{"label":"person","text":"Elena Petrova","start":17,"end":30,"confidence":0.99999785}]}
+{"threshold":0.3,"id":19,"spans":[{"label":"person","text":"wJalrXUtnFEMI","start":29,"end":42,"confidence":0.5696284},{"label":"person","text":"K7MDENG","start":43,"end":50,"confidence":0.47442564},{"label":"account number","text":"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY","start":29,"end":69,"confidence":0.47322577},{"label":"credential","text":"AWS secret access key","start":4,"end":25,"confidence":0.95819604}]}
+{"threshold":0.3,"id":20,"spans":[{"label":"account number","text":"12-3456-7890123-00","start":38,"end":56,"confidence":0.9999981}]}
+{"threshold":0.3,"id":21,"spans":[{"label":"person","text":"Jamie","start":5,"end":10,"confidence":0.9999999},{"label":"phone number","text":"555-867-5309","start":14,"end":26,"confidence":1}]}
+{"threshold":0.3,"id":22,"spans":[{"label":"address","text":"742 Evergreen Terrace","start":16,"end":37,"confidence":0.878917}]}
+{"threshold":0.3,"id":23,"spans":[{"label":"email","text":"support@starling.example","start":8,"end":32,"confidence":0.9999962}]}
+{"threshold":0.3,"id":24,"spans":[]}
+{"threshold":0.3,"id":25,"spans":[]}
+{"threshold":0.3,"id":26,"spans":[]}
+{"threshold":0.3,"id":27,"spans":[]}
+{"threshold":0.3,"id":28,"spans":[]}
+{"threshold":0.3,"id":29,"spans":[{"label":"person","text":"Peter Novak","start":37,"end":48,"confidence":0.99999964}]}
+{"threshold":0.3,"id":30,"spans":[{"label":"person","text":"Luc\u00EDa Fern\u00E1ndez","start":0,"end":15,"confidence":0.9999999},{"label":"email","text":"lucia.fernandez@correo.example","start":17,"end":47,"confidence":0.9999864}]}
+{"threshold":0.3,"id":31,"spans":[{"label":"account number","text":"078-05-1120","start":29,"end":40,"confidence":0.9909321},{"label":"account number","text":"social security number","start":3,"end":25,"confidence":0.4658139}]}
+{"threshold":0.3,"id":32,"spans":[{"label":"address","text":"cabin","start":25,"end":30,"confidence":0.43781784},{"label":"account number","text":"pinecone-lake-2024","start":34,"end":52,"confidence":0.76857406},{"label":"credential","text":"wifi password","start":4,"end":17,"confidence":0.9980642}]}
+{"threshold":0.3,"id":33,"spans":[{"label":"person","text":"Olusegun Adeyemi","start":21,"end":37,"confidence":0.9999964},{"label":"address","text":"14 Admiralty Way, Lekki, Lagos","start":39,"end":69,"confidence":0.95542145}]}
+{"threshold":0.3,"id":34,"spans":[{"label":"phone number","text":"\u002B44 20 7946 0321","start":19,"end":35,"confidence":1}]}
+{"threshold":0.3,"id":35,"spans":[{"label":"person","text":"Anna","start":0,"end":4,"confidence":0.9999447},{"label":"email","text":"anna.k@example.net","start":17,"end":35,"confidence":0.99980277},{"label":"account number","text":"021000021","start":62,"end":71,"confidence":0.9999583}]}
+{"threshold":0.3,"id":36,"spans":[{"label":"credential","text":"passphrase","start":20,"end":30,"confidence":0.8996743},{"label":"credential","text":"SSH private key","start":4,"end":19,"confidence":0.86571884}]}
+{"threshold":0.3,"id":37,"spans":[{"label":"person","text":"Wei Zhang","start":4,"end":13,"confidence":0.9999999}]}
+{"threshold":0.3,"id":38,"spans":[]}
+{"threshold":0.3,"id":39,"spans":[{"label":"account number","text":"xoxb-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx","start":23,"end":79,"confidence":0.98679346}]}
+{"threshold":0.3,"id":40,"spans":[{"label":"person","text":"Fatima Zahra","start":18,"end":30,"confidence":0.9999999},{"label":"phone number","text":"0612 345 678","start":66,"end":78,"confidence":1},{"label":"account number","text":"5500-2231-8842","start":44,"end":58,"confidence":1}]}
+{"threshold":0.3,"id":41,"spans":[{"label":"credential","text":"keys","start":50,"end":54,"confidence":0.9998723}]}
+{"threshold":0.3,"id":42,"spans":[{"label":"person","text":"platform team","start":47,"end":60,"confidence":0.93525034}]}
+{"threshold":0.3,"id":43,"spans":[{"label":"account number","text":"main","start":59,"end":63,"confidence":0.6932532}]}
+{"threshold":0.3,"id":44,"spans":[]}
+{"threshold":0.3,"id":45,"spans":[{"label":"person","text":"Grandma","start":0,"end":7,"confidence":0.9999678},{"label":"phone number","text":"218-555-0110","start":62,"end":74,"confidence":0.99999714},{"label":"address","text":"58 Elm Road, Duluth, MN 55802","start":17,"end":46,"confidence":0.99733955}]}
+{"threshold":0.3,"id":46,"spans":[{"label":"person","text":"Daniel Okafor","start":46,"end":59,"confidence":0.9999999},{"label":"email","text":"noreply@github.example","start":9,"end":31,"confidence":0.99999106}]}
+{"threshold":0.3,"id":47,"spans":[{"label":"email","text":"S3cretPass@db.internal","start":49,"end":71,"confidence":0.9270401},{"label":"account number","text":"5432/prod","start":72,"end":81,"confidence":0.95551},{"label":"credential","text":"postgres","start":4,"end":12,"confidence":0.4335129},{"label":"credential","text":"postgres","start":34,"end":42,"confidence":0.35930857}]}
+{"threshold":0.3,"id":48,"spans":[{"label":"person","text":"Rosa Lindqvist","start":63,"end":77,"confidence":0.99999976},{"label":"account number","text":"AX-99812-77","start":14,"end":25,"confidence":0.99990463}]}
+{"threshold":0.3,"id":49,"spans":[{"label":"email","text":"@devops","start":5,"end":12,"confidence":0.99903154}]}
+{"threshold":0.3,"id":50,"spans":[{"label":"email","text":"m.oconnor@uni.example.ie","start":13,"end":37,"confidence":0.9999933},{"label":"phone number","text":"087 123 4567","start":63,"end":75,"confidence":0.99999976}]}
+{"threshold":0.4,"id":1,"spans":[{"label":"person","text":"Sarah Chen","start":13,"end":23,"confidence":1},{"label":"email","text":"sarah.chen@example.com","start":27,"end":49,"confidence":0.99999857}]}
+{"threshold":0.4,"id":2,"spans":[{"label":"person","text":"you","start":37,"end":40,"confidence":0.60579526},{"label":"person","text":"me","start":5,"end":7,"confidence":0.4545443},{"label":"phone number","text":"\u002B1 415 555 0142","start":16,"end":31,"confidence":0.99999845}]}
+{"threshold":0.4,"id":3,"spans":[{"label":"address","text":"221B Baker Street","start":20,"end":37,"confidence":0.8882912}]}
+{"threshold":0.4,"id":4,"spans":[{"label":"account number","text":"004512339871","start":30,"end":42,"confidence":0.99980944}]}
+{"threshold":0.4,"id":5,"spans":[{"label":"credential","text":"staging database password","start":4,"end":29,"confidence":0.94124544}]}
+{"threshold":0.4,"id":6,"spans":[{"label":"account number","text":"sk-live-4f9a2b7c8d1e3f5a6b7c","start":16,"end":44,"confidence":0.51940817},{"label":"credential","text":"API key","start":8,"end":15,"confidence":0.99963415}]}
+{"threshold":0.4,"id":7,"spans":[{"label":"person","text":"Dr. Priya Raman","start":18,"end":33,"confidence":0.99996936},{"label":"phone number","text":"9","start":46,"end":47,"confidence":0.52887565}]}
+{"threshold":0.4,"id":8,"spans":[{"label":"person","text":"John Smith","start":0,"end":10,"confidence":1},{"label":"person","text":"Maria Garcia","start":15,"end":27,"confidence":1}]}
+{"threshold":0.4,"id":9,"spans":[{"label":"email","text":"billing@acme-corp.example","start":23,"end":48,"confidence":0.99992573},{"label":"email","text":"tom.baker@example.org","start":56,"end":77,"confidence":0.99981505}]}
+{"threshold":0.4,"id":10,"spans":[{"label":"person","text":"her","start":31,"end":34,"confidence":0.44784078},{"label":"phone number","text":"07700 900123","start":14,"end":26,"confidence":0.9994037},{"label":"phone number","text":"020 7946 0958","start":50,"end":63,"confidence":0.99891365}]}
+{"threshold":0.4,"id":11,"spans":[{"label":"person","text":"We","start":0,"end":2,"confidence":0.43323526},{"label":"address","text":"1600 Pennsylvania Avenue NW","start":12,"end":39,"confidence":0.73157245}]}
+{"threshold":0.4,"id":12,"spans":[{"label":"person","text":"IBAN","start":24,"end":28,"confidence":0.8684283},{"label":"address","text":"GB82 WEST 1234 5698 7654 32","start":29,"end":56,"confidence":0.860904}]}
+{"threshold":0.4,"id":13,"spans":[{"label":"phone number","text":"4111 1111 1111 1111","start":49,"end":68,"confidence":0.991096},{"label":"account number","text":"4242","start":16,"end":20,"confidence":0.9845829},{"label":"account number","text":"4111 1111 1111 1111","start":49,"end":68,"confidence":0.7268085}]}
+{"threshold":0.4,"id":14,"spans":[{"label":"person","text":"admin","start":10,"end":15,"confidence":0.83198726},{"label":"credential","text":"password","start":21,"end":29,"confidence":0.9396759}]}
+{"threshold":0.4,"id":15,"spans":[{"label":"credential","text":"CI","start":65,"end":67,"confidence":0.9594587}]}
+{"threshold":0.4,"id":16,"spans":[{"label":"person","text":"Ahmed Al-Farsi","start":17,"end":31,"confidence":0.99999607},{"label":"phone number","text":"(212) 555-0199","start":39,"end":53,"confidence":0.9962852}]}
+{"threshold":0.4,"id":17,"spans":[{"label":"person","text":"Kenji Watanabe","start":0,"end":14,"confidence":0.9999995},{"label":"address","text":"3-5-1 Marunouchi, Chiyoda-ku, Tokyo","start":32,"end":67,"confidence":0.9830755}]}
+{"threshold":0.4,"id":18,"spans":[{"label":"person","text":"Elena Petrova","start":17,"end":30,"confidence":0.99999785}]}
+{"threshold":0.4,"id":19,"spans":[{"label":"person","text":"wJalrXUtnFEMI","start":29,"end":42,"confidence":0.5696284},{"label":"person","text":"K7MDENG","start":43,"end":50,"confidence":0.47442564},{"label":"account number","text":"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY","start":29,"end":69,"confidence":0.47322577},{"label":"credential","text":"AWS secret access key","start":4,"end":25,"confidence":0.95819604}]}
+{"threshold":0.4,"id":20,"spans":[{"label":"account number","text":"12-3456-7890123-00","start":38,"end":56,"confidence":0.9999981}]}
+{"threshold":0.4,"id":21,"spans":[{"label":"person","text":"Jamie","start":5,"end":10,"confidence":0.9999999},{"label":"phone number","text":"555-867-5309","start":14,"end":26,"confidence":1}]}
+{"threshold":0.4,"id":22,"spans":[{"label":"address","text":"742 Evergreen Terrace","start":16,"end":37,"confidence":0.878917}]}
+{"threshold":0.4,"id":23,"spans":[{"label":"email","text":"support@starling.example","start":8,"end":32,"confidence":0.9999962}]}
+{"threshold":0.4,"id":24,"spans":[]}
+{"threshold":0.4,"id":25,"spans":[]}
+{"threshold":0.4,"id":26,"spans":[]}
+{"threshold":0.4,"id":27,"spans":[]}
+{"threshold":0.4,"id":28,"spans":[]}
+{"threshold":0.4,"id":29,"spans":[{"label":"person","text":"Peter Novak","start":37,"end":48,"confidence":0.99999964}]}
+{"threshold":0.4,"id":30,"spans":[{"label":"person","text":"Luc\u00EDa Fern\u00E1ndez","start":0,"end":15,"confidence":0.9999999},{"label":"email","text":"lucia.fernandez@correo.example","start":17,"end":47,"confidence":0.9999864}]}
+{"threshold":0.4,"id":31,"spans":[{"label":"account number","text":"078-05-1120","start":29,"end":40,"confidence":0.9909321},{"label":"account number","text":"social security number","start":3,"end":25,"confidence":0.4658139}]}
+{"threshold":0.4,"id":32,"spans":[{"label":"address","text":"cabin","start":25,"end":30,"confidence":0.43781784},{"label":"account number","text":"pinecone-lake-2024","start":34,"end":52,"confidence":0.76857406},{"label":"credential","text":"wifi password","start":4,"end":17,"confidence":0.9980642}]}
+{"threshold":0.4,"id":33,"spans":[{"label":"person","text":"Olusegun Adeyemi","start":21,"end":37,"confidence":0.9999964},{"label":"address","text":"14 Admiralty Way, Lekki, Lagos","start":39,"end":69,"confidence":0.95542145}]}
+{"threshold":0.4,"id":34,"spans":[{"label":"phone number","text":"\u002B44 20 7946 0321","start":19,"end":35,"confidence":1}]}
+{"threshold":0.4,"id":35,"spans":[{"label":"person","text":"Anna","start":0,"end":4,"confidence":0.9999447},{"label":"email","text":"anna.k@example.net","start":17,"end":35,"confidence":0.99980277},{"label":"account number","text":"021000021","start":62,"end":71,"confidence":0.9999583}]}
+{"threshold":0.4,"id":36,"spans":[{"label":"credential","text":"passphrase","start":20,"end":30,"confidence":0.8996743},{"label":"credential","text":"SSH private key","start":4,"end":19,"confidence":0.86571884}]}
+{"threshold":0.4,"id":37,"spans":[{"label":"person","text":"Wei Zhang","start":4,"end":13,"confidence":0.9999999}]}
+{"threshold":0.4,"id":38,"spans":[]}
+{"threshold":0.4,"id":39,"spans":[{"label":"account number","text":"xoxb-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx","start":23,"end":79,"confidence":0.98679346}]}
+{"threshold":0.4,"id":40,"spans":[{"label":"person","text":"Fatima Zahra","start":18,"end":30,"confidence":0.9999999},{"label":"phone number","text":"0612 345 678","start":66,"end":78,"confidence":1},{"label":"account number","text":"5500-2231-8842","start":44,"end":58,"confidence":1}]}
+{"threshold":0.4,"id":41,"spans":[{"label":"credential","text":"keys","start":50,"end":54,"confidence":0.9998723}]}
+{"threshold":0.4,"id":42,"spans":[{"label":"person","text":"platform team","start":47,"end":60,"confidence":0.93525034}]}
+{"threshold":0.4,"id":43,"spans":[{"label":"account number","text":"main","start":59,"end":63,"confidence":0.6932532}]}
+{"threshold":0.4,"id":44,"spans":[]}
+{"threshold":0.4,"id":45,"spans":[{"label":"person","text":"Grandma","start":0,"end":7,"confidence":0.9999678},{"label":"phone number","text":"218-555-0110","start":62,"end":74,"confidence":0.99999714},{"label":"address","text":"58 Elm Road, Duluth, MN 55802","start":17,"end":46,"confidence":0.99733955}]}
+{"threshold":0.4,"id":46,"spans":[{"label":"person","text":"Daniel Okafor","start":46,"end":59,"confidence":0.9999999},{"label":"email","text":"noreply@github.example","start":9,"end":31,"confidence":0.99999106}]}
+{"threshold":0.4,"id":47,"spans":[{"label":"email","text":"S3cretPass@db.internal","start":49,"end":71,"confidence":0.9270401},{"label":"account number","text":"5432/prod","start":72,"end":81,"confidence":0.95551},{"label":"credential","text":"postgres","start":4,"end":12,"confidence":0.4335129}]}
+{"threshold":0.4,"id":48,"spans":[{"label":"person","text":"Rosa Lindqvist","start":63,"end":77,"confidence":0.99999976},{"label":"account number","text":"AX-99812-77","start":14,"end":25,"confidence":0.99990463}]}
+{"threshold":0.4,"id":49,"spans":[{"label":"email","text":"@devops","start":5,"end":12,"confidence":0.99903154}]}
+{"threshold":0.4,"id":50,"spans":[{"label":"email","text":"m.oconnor@uni.example.ie","start":13,"end":37,"confidence":0.9999933},{"label":"phone number","text":"087 123 4567","start":63,"end":75,"confidence":0.99999976}]}
+{"threshold":0.5,"id":1,"spans":[{"label":"person","text":"Sarah Chen","start":13,"end":23,"confidence":1},{"label":"email","text":"sarah.chen@example.com","start":27,"end":49,"confidence":0.99999857}]}
+{"threshold":0.5,"id":2,"spans":[{"label":"person","text":"you","start":37,"end":40,"confidence":0.60579526},{"label":"phone number","text":"\u002B1 415 555 0142","start":16,"end":31,"confidence":0.99999845}]}
+{"threshold":0.5,"id":3,"spans":[{"label":"address","text":"221B Baker Street","start":20,"end":37,"confidence":0.8882912}]}
+{"threshold":0.5,"id":4,"spans":[{"label":"account number","text":"004512339871","start":30,"end":42,"confidence":0.99980944}]}
+{"threshold":0.5,"id":5,"spans":[{"label":"credential","text":"staging database password","start":4,"end":29,"confidence":0.94124544}]}
+{"threshold":0.5,"id":6,"spans":[{"label":"account number","text":"sk-live-4f9a2b7c8d1e3f5a6b7c","start":16,"end":44,"confidence":0.51940817},{"label":"credential","text":"API key","start":8,"end":15,"confidence":0.99963415}]}
+{"threshold":0.5,"id":7,"spans":[{"label":"person","text":"Dr. Priya Raman","start":18,"end":33,"confidence":0.99996936},{"label":"phone number","text":"9","start":46,"end":47,"confidence":0.52887565}]}
+{"threshold":0.5,"id":8,"spans":[{"label":"person","text":"John Smith","start":0,"end":10,"confidence":1},{"label":"person","text":"Maria Garcia","start":15,"end":27,"confidence":1}]}
+{"threshold":0.5,"id":9,"spans":[{"label":"email","text":"billing@acme-corp.example","start":23,"end":48,"confidence":0.99992573},{"label":"email","text":"tom.baker@example.org","start":56,"end":77,"confidence":0.99981505}]}
+{"threshold":0.5,"id":10,"spans":[{"label":"phone number","text":"07700 900123","start":14,"end":26,"confidence":0.9994037},{"label":"phone number","text":"020 7946 0958","start":50,"end":63,"confidence":0.99891365}]}
+{"threshold":0.5,"id":11,"spans":[{"label":"address","text":"1600 Pennsylvania Avenue NW","start":12,"end":39,"confidence":0.73157245}]}
+{"threshold":0.5,"id":12,"spans":[{"label":"person","text":"IBAN","start":24,"end":28,"confidence":0.8684283},{"label":"address","text":"GB82 WEST 1234 5698 7654 32","start":29,"end":56,"confidence":0.860904}]}
+{"threshold":0.5,"id":13,"spans":[{"label":"phone number","text":"4111 1111 1111 1111","start":49,"end":68,"confidence":0.991096},{"label":"account number","text":"4242","start":16,"end":20,"confidence":0.9845829},{"label":"account number","text":"4111 1111 1111 1111","start":49,"end":68,"confidence":0.7268085}]}
+{"threshold":0.5,"id":14,"spans":[{"label":"person","text":"admin","start":10,"end":15,"confidence":0.83198726},{"label":"credential","text":"password","start":21,"end":29,"confidence":0.9396759}]}
+{"threshold":0.5,"id":15,"spans":[{"label":"credential","text":"CI","start":65,"end":67,"confidence":0.9594587}]}
+{"threshold":0.5,"id":16,"spans":[{"label":"person","text":"Ahmed Al-Farsi","start":17,"end":31,"confidence":0.99999607},{"label":"phone number","text":"(212) 555-0199","start":39,"end":53,"confidence":0.9962852}]}
+{"threshold":0.5,"id":17,"spans":[{"label":"person","text":"Kenji Watanabe","start":0,"end":14,"confidence":0.9999995},{"label":"address","text":"3-5-1 Marunouchi, Chiyoda-ku, Tokyo","start":32,"end":67,"confidence":0.9830755}]}
+{"threshold":0.5,"id":18,"spans":[{"label":"person","text":"Elena Petrova","start":17,"end":30,"confidence":0.99999785}]}
+{"threshold":0.5,"id":19,"spans":[{"label":"person","text":"wJalrXUtnFEMI","start":29,"end":42,"confidence":0.5696284},{"label":"credential","text":"AWS secret access key","start":4,"end":25,"confidence":0.95819604}]}
+{"threshold":0.5,"id":20,"spans":[{"label":"account number","text":"12-3456-7890123-00","start":38,"end":56,"confidence":0.9999981}]}
+{"threshold":0.5,"id":21,"spans":[{"label":"person","text":"Jamie","start":5,"end":10,"confidence":0.9999999},{"label":"phone number","text":"555-867-5309","start":14,"end":26,"confidence":1}]}
+{"threshold":0.5,"id":22,"spans":[{"label":"address","text":"742 Evergreen Terrace","start":16,"end":37,"confidence":0.878917}]}
+{"threshold":0.5,"id":23,"spans":[{"label":"email","text":"support@starling.example","start":8,"end":32,"confidence":0.9999962}]}
+{"threshold":0.5,"id":24,"spans":[]}
+{"threshold":0.5,"id":25,"spans":[]}
+{"threshold":0.5,"id":26,"spans":[]}
+{"threshold":0.5,"id":27,"spans":[]}
+{"threshold":0.5,"id":28,"spans":[]}
+{"threshold":0.5,"id":29,"spans":[{"label":"person","text":"Peter Novak","start":37,"end":48,"confidence":0.99999964}]}
+{"threshold":0.5,"id":30,"spans":[{"label":"person","text":"Luc\u00EDa Fern\u00E1ndez","start":0,"end":15,"confidence":0.9999999},{"label":"email","text":"lucia.fernandez@correo.example","start":17,"end":47,"confidence":0.9999864}]}
+{"threshold":0.5,"id":31,"spans":[{"label":"account number","text":"078-05-1120","start":29,"end":40,"confidence":0.9909321}]}
+{"threshold":0.5,"id":32,"spans":[{"label":"account number","text":"pinecone-lake-2024","start":34,"end":52,"confidence":0.76857406},{"label":"credential","text":"wifi password","start":4,"end":17,"confidence":0.9980642}]}
+{"threshold":0.5,"id":33,"spans":[{"label":"person","text":"Olusegun Adeyemi","start":21,"end":37,"confidence":0.9999964},{"label":"address","text":"14 Admiralty Way, Lekki, Lagos","start":39,"end":69,"confidence":0.95542145}]}
+{"threshold":0.5,"id":34,"spans":[{"label":"phone number","text":"\u002B44 20 7946 0321","start":19,"end":35,"confidence":1}]}
+{"threshold":0.5,"id":35,"spans":[{"label":"person","text":"Anna","start":0,"end":4,"confidence":0.9999447},{"label":"email","text":"anna.k@example.net","start":17,"end":35,"confidence":0.99980277},{"label":"account number","text":"021000021","start":62,"end":71,"confidence":0.9999583}]}
+{"threshold":0.5,"id":36,"spans":[{"label":"credential","text":"passphrase","start":20,"end":30,"confidence":0.8996743},{"label":"credential","text":"SSH private key","start":4,"end":19,"confidence":0.86571884}]}
+{"threshold":0.5,"id":37,"spans":[{"label":"person","text":"Wei Zhang","start":4,"end":13,"confidence":0.9999999}]}
+{"threshold":0.5,"id":38,"spans":[]}
+{"threshold":0.5,"id":39,"spans":[{"label":"account number","text":"xoxb-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx","start":23,"end":79,"confidence":0.98679346}]}
+{"threshold":0.5,"id":40,"spans":[{"label":"person","text":"Fatima Zahra","start":18,"end":30,"confidence":0.9999999},{"label":"phone number","text":"0612 345 678","start":66,"end":78,"confidence":1},{"label":"account number","text":"5500-2231-8842","start":44,"end":58,"confidence":1}]}
+{"threshold":0.5,"id":41,"spans":[{"label":"credential","text":"keys","start":50,"end":54,"confidence":0.9998723}]}
+{"threshold":0.5,"id":42,"spans":[{"label":"person","text":"platform team","start":47,"end":60,"confidence":0.93525034}]}
+{"threshold":0.5,"id":43,"spans":[{"label":"account number","text":"main","start":59,"end":63,"confidence":0.6932532}]}
+{"threshold":0.5,"id":44,"spans":[]}
+{"threshold":0.5,"id":45,"spans":[{"label":"person","text":"Grandma","start":0,"end":7,"confidence":0.9999678},{"label":"phone number","text":"218-555-0110","start":62,"end":74,"confidence":0.99999714},{"label":"address","text":"58 Elm Road, Duluth, MN 55802","start":17,"end":46,"confidence":0.99733955}]}
+{"threshold":0.5,"id":46,"spans":[{"label":"person","text":"Daniel Okafor","start":46,"end":59,"confidence":0.9999999},{"label":"email","text":"noreply@github.example","start":9,"end":31,"confidence":0.99999106}]}
+{"threshold":0.5,"id":47,"spans":[{"label":"email","text":"S3cretPass@db.internal","start":49,"end":71,"confidence":0.9270401},{"label":"account number","text":"5432/prod","start":72,"end":81,"confidence":0.95551}]}
+{"threshold":0.5,"id":48,"spans":[{"label":"person","text":"Rosa Lindqvist","start":63,"end":77,"confidence":0.99999976},{"label":"account number","text":"AX-99812-77","start":14,"end":25,"confidence":0.99990463}]}
+{"threshold":0.5,"id":49,"spans":[{"label":"email","text":"@devops","start":5,"end":12,"confidence":0.99903154}]}
+{"threshold":0.5,"id":50,"spans":[{"label":"email","text":"m.oconnor@uni.example.ie","start":13,"end":37,"confidence":0.9999933},{"label":"phone number","text":"087 123 4567","start":63,"end":75,"confidence":0.99999976}]}
