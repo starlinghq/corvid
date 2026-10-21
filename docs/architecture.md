@@ -1991,7 +1991,7 @@ Unix socket and the real runtime over fake models: no network and no real tokens
   `remember` at egress, which would stage the guest's message (tainted, so always staged) in the owner's review queue,
   a proposal worded by someone else and waiting to be approved; and a tool that declares `[SideEffect(Memory)]`
   (`memory_add`, `memory_approve`, `memory_reject`) is left out of a guest's catalogue even when `GuestTools` names it,
-  which the validator refuses anyway. Two other residuals stay as they are: an approval asked during a guest's turn is
+  and which `CorvidGateway.Create` refuses anyway (below). Two other residuals stay as they are: an approval asked during a guest's turn is
   posted in that chat, where only the owner can answer it, and an owner answer sent `silent` or to `home_channel`
   stays in the chat's history as text (above). The owner's own turns are unchanged and keep
   the whole toolset, including the turn right after a guest's in the same chat: as before, the owner's message clears
@@ -1999,7 +1999,8 @@ Unix socket and the real runtime over fake models: no network and no real tokens
   approval checks that apply to any outside content. The validator refuses a guest tool that is not a tool name or names
   an MCP server that is not configured, and `CorvidGateway.Create` refuses one that is in neither the runtime's registry
   nor an MCP server's namespace (an MCP server's tools are listed only once it runs), so a typo is not silently a tool
-  nobody gets.
+  nobody gets, or whose risk metadata declares `SideEffects.Memory`: by the flag the turn loop filters on, not by name,
+  so a memory-writing tool added later is refused at start rather than silently left out of a guest's catalogue.
 - Pairing (`PairingStore`, `gateway.db`, its own SQLite file with WAL and full sync). A code is 8 characters from an
   unambiguous alphabet, shown `ABCD-EFGH`. It is bound to the adapter and sender, expires after an hour, and is repeated to
   that sender at most every 10 minutes. At most 10 codes wait per adapter; senders after that are ignored. Codes are

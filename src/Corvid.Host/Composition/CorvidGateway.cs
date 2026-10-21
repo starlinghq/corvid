@@ -8,6 +8,7 @@ using Corvid.Gateway.Telegram;
 using Corvid.Host.Commands;
 using Corvid.Host.Configuration;
 using Corvid.Models;
+using Corvid.Tools;
 using Corvid.Vault.Client;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
@@ -40,20 +41,33 @@ public static class CorvidGateway
     }
 
     /// <summary>
-    /// Guest tools (C-020) no adapter could ever offer: not in the runtime's registry and not an MCP server's (whose tools are
-    /// listed in the background; the validator has already checked that the server is configured). Reported when the
-    /// gateway starts, so a typo is not silently a tool nobody gets.
+    /// Guest tools (C-020) the gateway refuses to start with, by what the runtime's registry says of them: a name that is
+    /// not in it and is not an MCP server's (whose tools are listed in the background; the validator has already checked
+    /// that the server is configured), so a typo is not silently a tool nobody gets; and a tool whose risk metadata
+    /// declares <see cref="SideEffects.Memory"/>, which a guest's turn never offers (the owner's memory and its review queue
+    /// are not a guest's to write), so naming one is refused rather than silently dropped.
     /// </summary>
-    public static IReadOnlyList<string> UnknownGuestTools(CorvidOptions options, IEnumerable<string> registered)
+    public static IReadOnlyList<string> GuestToolProblems(CorvidOptions options, IEnumerable<ToolDescriptor> registered)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(registered);
-        var known = registered.ToHashSet(StringComparer.Ordinal);
+        var known = new Dictionary<string, ToolDescriptor>(StringComparer.Ordinal);
+        foreach (var descriptor in registered)
+            known.TryAdd(descriptor.Name, descriptor);
         var problems = new List<string>();
         foreach (var (name, settings) in options.Gateway.Adapters.Where(pair => pair.Value is { Enabled: true }).OrderBy(pair => pair.Key, StringComparer.Ordinal))
-            foreach (var tool in settings.GuestTools.Where(tool => !known.Contains(tool) && McpServerOf(tool) is null))
-                problems.Add($"Corvid:Gateway:Adapters:{name}:GuestTools: no tool is named '{tool}'; the tools are " +
-                    $"{string.Join(", ", known.Order(StringComparer.Ordinal))}.");
+            foreach (var tool in settings.GuestTools)
+            {
+                if (known.TryGetValue(tool, out var descriptor))
+                {
+                    if (descriptor.Risk.SideEffects.HasFlag(SideEffects.Memory))
+                        problems.Add($"Corvid:Gateway:Adapters:{name}:GuestTools: '{tool}' cannot be a guest tool: it writes memory, and a " +
+                            "guest does not write the owner's memory or answer its review queue.");
+                }
+                else if (McpServerOf(tool) is null)
+                    problems.Add($"Corvid:Gateway:Adapters:{name}:GuestTools: no tool is named '{tool}'; the tools are " +
+                        $"{string.Join(", ", known.Keys.Order(StringComparer.Ordinal))}.");
+            }
         return problems;
     }
 
@@ -83,15 +97,16 @@ public static class CorvidGateway
         };
     }
 
-    /// <exception cref="InvalidOperationException">No adapter is enabled, or one is enabled that Corvid does not have.</exception>
+    /// <exception cref="InvalidOperationException">No adapter is enabled, one is enabled that Corvid does not have, or a guest tool is
+    /// refused (<see cref="GuestToolProblems"/>).</exception>
     public static GatewayHost Create(CorvidRuntime runtime, SlashCommandRegistry commands, CorvidOptions options,
         IEnumerable<GatewayAdapterRegistration>? supplied = null, Action<string>? notice = null)
     {
         ArgumentNullException.ThrowIfNull(runtime);
         ArgumentNullException.ThrowIfNull(commands);
         ArgumentNullException.ThrowIfNull(options);
-        if (UnknownGuestTools(options, runtime.Tools.List().Select(tool => tool.Name)) is { Count: > 0 } unknown)
-            throw new InvalidOperationException(string.Join(Environment.NewLine, unknown));
+        if (GuestToolProblems(options, runtime.Tools.List()) is { Count: > 0 } problems)
+            throw new InvalidOperationException(string.Join(Environment.NewLine, problems));
         var extra = (supplied ?? []).ToDictionary(registration => registration.Name, StringComparer.OrdinalIgnoreCase);
         var registrations = new List<GatewayAdapterRegistration>();
         GatewayVault? vault = null;
