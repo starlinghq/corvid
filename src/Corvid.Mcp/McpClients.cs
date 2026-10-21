@@ -30,7 +30,7 @@ public sealed record McpAcceptResult(bool Accepted, string Message, string? Name
 /// taken), and a call that names a tool the server no longer has fails with the server's error.
 /// <para>
 /// C-022: each listed definition is checked against its pin before it is registered. A server's first listing pins every
-/// tool (trust on first use); after that a new tool or a changed definition is held until the user accepts it, and a tool
+/// tool (trust on first use) and records the server even if it pins nothing; after that a new tool or a changed definition is held until the user accepts it, and a tool
 /// whose text matches a poisoning pattern is held even on the first listing until the user allows it.
 /// </para>
 /// </summary>
@@ -122,9 +122,12 @@ public sealed class McpClients : IAsyncDisposable
         var allowed = definition.Tools.IsEmpty ? null : definition.Tools.ToHashSet(StringComparer.Ordinal);
         var seen = new HashSet<string>(StringComparer.Ordinal);
         IReadOnlyDictionary<string, McpToolPin> pins;
+        bool firstUse;
         try
         {
             pins = _pins.Pins(definition.Name);
+            // A server is trusted on first use once: its entry is written with the first listing even when nothing is pinned.
+            firstUse = !_pins.Listed(definition.Name);
         }
         catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException)
         {
@@ -132,7 +135,6 @@ public sealed class McpClients : IAsyncDisposable
             server.SetTools([], [$"no tools offered: the pinned definitions cannot be read ({exception.Message})"]);
             return;
         }
-        var firstUse = pins.Count == 0;
         var pinNow = new Dictionary<string, McpToolPin>(StringComparer.Ordinal);
         var now = _time.GetUtcNow();
         foreach (var tool in tools)
@@ -144,7 +146,8 @@ public sealed class McpClients : IAsyncDisposable
                 issues.Add($"'{tool.Name}': listed twice");
                 continue;
             }
-            if (registered.Count >= definition.MaxTools)
+            // Held tools count: each has a slot, so accepting them never takes a server over its limit.
+            if (registered.Count + held.Count >= definition.MaxTools)
             {
                 issues.Add($"'{tool.Name}': over the limit of {definition.MaxTools} tools");
                 continue;
@@ -199,7 +202,7 @@ public sealed class McpClients : IAsyncDisposable
         }
         if (allowed is not null)
             issues.AddRange(allowed.Where(name => !seen.Contains(name)).Order(StringComparer.Ordinal).Select(name => $"'{name}': not offered by the server"));
-        if (pinNow.Count > 0)
+        if (firstUse || pinNow.Count > 0)
         {
             try
             {
@@ -207,7 +210,7 @@ public sealed class McpClients : IAsyncDisposable
             }
             catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException)
             {
-                // The tools were listed for the first time and stay offered in this process; the next start pins them again.
+                // The tools were listed for the first time and stay offered in this process; the next start is a first use again.
                 issues.Add($"the tools' definitions could not be pinned ({exception.Message})");
             }
         }
@@ -236,6 +239,8 @@ public sealed class McpClients : IAsyncDisposable
         if (!flagged && allowFlagged)
             return new McpAcceptResult(false, $"{server}/{tool} is not flagged; /mcp accept {server} {tool} pins it.");
 
+        if (connection.Status.Tools.Length >= connection.Definition.MaxTools)
+            return new McpAcceptResult(false, $"{server} already offers {connection.Definition.MaxTools} tools, its limit (MaxTools), so {server}/{tool} is not taken.");
         var (descriptor, problem) = McpToolMapping.Describe(connection.Definition, held.Listed, untrusted: flagged);
         if (descriptor is null)
             return new McpAcceptResult(false, problem!);

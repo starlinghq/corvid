@@ -20,7 +20,14 @@ public interface IMcpPinStore
     /// <summary>The server's pins by tool name; empty when the server was never pinned. Throws <see cref="InvalidDataException"/> for an unreadable store.</summary>
     IReadOnlyDictionary<string, McpToolPin> Pins(string server);
 
-    /// <summary>Adds or replaces the given tools' pins; the server's other pins are kept.</summary>
+    /// <summary>
+    /// Whether the server has an entry, pins or not: a first listing records the server even when it pins nothing (every tool
+    /// flagged, every name taken), so the next listing is checked against the pins instead of being trusted on first use again.
+    /// Throws <see cref="InvalidDataException"/> for an unreadable store.
+    /// </summary>
+    bool Listed(string server);
+
+    /// <summary>Adds or replaces the given tools' pins, and records the server even when <paramref name="pins"/> is empty; the server's other pins are kept.</summary>
     void Set(string server, IReadOnlyDictionary<string, McpToolPin> pins);
 }
 
@@ -34,6 +41,13 @@ public sealed class InMemoryMcpPinStore : IMcpPinStore
         ArgumentException.ThrowIfNullOrEmpty(server);
         lock (_gate)
             return _pins.GetValueOrDefault(server) ?? ImmutableDictionary<string, McpToolPin>.Empty;
+    }
+
+    public bool Listed(string server)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(server);
+        lock (_gate)
+            return _pins.ContainsKey(server);
     }
 
     public void Set(string server, IReadOnlyDictionary<string, McpToolPin> pins)
@@ -71,6 +85,13 @@ public sealed class JsonFileMcpPinStore : IMcpPinStore
         ArgumentException.ThrowIfNullOrEmpty(server);
         lock (_gate)
             return Read().GetValueOrDefault(server) ?? (IReadOnlyDictionary<string, McpToolPin>)ImmutableDictionary<string, McpToolPin>.Empty;
+    }
+
+    public bool Listed(string server)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(server);
+        lock (_gate)
+            return Read().ContainsKey(server);
     }
 
     public void Set(string server, IReadOnlyDictionary<string, McpToolPin> pins)
