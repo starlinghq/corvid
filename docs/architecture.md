@@ -2235,6 +2235,130 @@ reverts of auto-applied drafts, as negative outcomes; a total token budget for t
 omitted middle; the recovery pattern as a `stuck`/`done` feature, in the curator or in the skill shortlist; a quality
 score beside the precondition; a fitted `task_succeeded` floor; and back-filling opportunities queued before schema 2.
 
+## Trace export and Hermes memory import (C-027)
+
+Plan §18 row C-027 and D-9. The export adapts the telemetry schema of Beacon (Asymptote-Labs/agent-beacon, MIT): field
+names, event identity and the redaction patterns were read from its `docs/telemetry-schema/{event-schema,normalization,fields}.mdx`
+and `pkg/asymptoteobserve` (`event.go`, `identity.go`, `dedupe.go`, `content.go`, `metadata_only.go`, `privacy.go`) and its
+Hermes session mapper, and reimplemented; no Beacon code is used. The Hermes formats were read from Hermes Agent's source
+(NousResearch/hermes-agent at 1ab79836, `tools/memory_tool_store.py`, `tools/memory_tool.py`, `hermes_state_common.py`).
+
+- `corvid traces export [--session <id> | --all] [--retention full|metadata] [--include-local-memory] [--out <file>]`
+  (`Corvid.Cli/TracesCommand`). It refuses when the event log does not exist (opening `SqliteEventLog` would create one),
+  reads each session in pages of 4096 up to a head captured first, and writes one line per event: raw UTF-8 bytes to
+  standard output (never through Spectre), or to `--out`, created `CreateNew` with mode 0600, so an existing file is never
+  overwritten. An unknown session is an error. `session.working_directory` is the configured workspace, because Corvid
+  records no per-session directory: older sessions are labelled with today's workspace.
+- `BeaconExporter` (`Corvid.Kernel/Traces`, BCL only: `System.Text.Json.Nodes`, SHA-1, SHA-256, `[GeneratedRegex]`) is a
+  pure function over `StoredEvent`s, which is what lets the golden test use fixed times (`SqliteEventLog` stamps the clock).
+  Each line is built as a `JsonObject` in the field order of Beacon's `Event` struct: `timestamp` (`recorded_at` in UTC with
+  a fixed nine-digit fraction, so timestamps compare as strings; it is the time the event was appended), `sequence` (the
+  event's log position, stable per session), `vendor` `beacon`, `product` `endpoint-agent`, `schema_version` `1.0`,
+  `event{id,kind:agent_runtime,action,category,fidelity:observed}`, `severity` (`high` for `tool.failed`), `endpoint{os}`,
+  `harness{name:corvid,version,collection_method:poll}` (what Beacon's own session-file readers use), `origin` `local`,
+  `error`, `session{id,working_directory}`, then `tool`, `file`, `command`, `mcp`, `approval`, `prompt`, `content`,
+  `gen_ai`, a fixed per-action `message` and `field_truncated`. `vendor` and `product` are the schema's identifiers, which
+  Beacon's `Event.Validate` requires, not a claim that Beacon wrote the line; `harness.name` names the producer.
+- Mapping, one pass with two lookups (call id to `ToolCallIssued`, approval id to call id), as Beacon's Hermes mapper does:
+  `UserMessage` to `prompt.submitted` (`prompt.text`); `AssistantMessage` to `agent.message` (`gen_ai.output.messages` as
+  one assistant message with one text part); `ToolCallIssued` to `tool.invoked` (`tool{name,command,path}`,
+  `gen_ai.operation.name` `execute_tool`, `gen_ai.tool{call{arguments,id},name}`); `ToolResult` by its call: `shell` to
+  `command.executed` (`command{command,exit_code,output}`, stdout then stderr; a nonzero exit sets `error.type`
+  `command_failed`), `read_file`, `list_files` and `search_files` to `file.read`, `write_file` and `patch_file` to
+  `file.modified` (`file.operation` `create` when `write_file` created the file, else `modify`), a `server__tool` name to
+  `mcp.tool_invoked` (`mcp{server,tool}`), anything else to `tool.completed`, and `IsError` to `tool.failed` (`error.type`
+  `tool_error`), each with `gen_ai.tool.call.result`. Tool paths are resolved against the working directory.
+  `ApprovalRequested` becomes `approval.requested` (`approval{required,reason}`, no decision, as Beacon writes it) and
+  `ApprovalResolved` `approval.allowed` or `approval.denied` (`approval.decision`), both with the call's `tool` and, for a
+  shell call, `command.command`, which Beacon's approval rules match on. Every other kind is skipped and no
+  `session.started` or `session.ended` is synthesized.
+- `event.id` (`BeaconEventId`) is Beacon's `EventIDForLine`: a version 5 UUID under Beacon's fixed namespace. A tool,
+  command, file or MCP event with a call id is named from session, lowercased action, Beacon's `dedupeTarget` (its
+  `canonicalTarget` quirks included: `command:<command.command>|<tool.command>`, `tool:<name>|<path>|<message>`,
+  `tool.completed:<message>`, `mcp:<server>|<tool>`, `file:<path>`) and call id, so it equals what Beacon derives for the
+  same action; other events are named from their own line without `event.id`, `endpoint`, `harness.version` and
+  `session.working_directory` (`BeaconEventId.Identity`), so a prompt, message or approval keeps its id across Corvid runs,
+  rebuilds (the version carries the commit), hosts and workspaces, though it is not equal to a digest of Beacon's byte
+  layout; a tool event whose path is resolved against the workspace names a different file from another workspace, and
+  rightly a different id. The id is computed once, on the full-retention line after redaction and the
+  per-string limit, with memory content withheld, so it is the same in both retentions, with or without
+  `--include-local-memory`, and under `--session` or `--all`. SHA-1 is what RFC 4122 version 5 specifies.
+- Content (`BeaconContent`). Each retained string (prompt and assistant text, tool arguments and result, command output and
+  line, approval reason) is redacted, hashed (SHA-256 of the redacted text before truncation) and cut to Beacon's 4096-byte
+  limit on a character boundary with Beacon's `...[truncated]` marker. One `content{retention,included,redacted,truncated,hash,bytes}`
+  marker per event describes its primary string (the prompt, the assistant text, the arguments of an invocation, the
+  command output, otherwise the result, or the approval reason); `bytes` is the original UTF-8 length, and `redacted` and
+  `truncated` are set when any string of the event was. The hash differs from Beacon's `RetainedContent`, which hashes the
+  original: a hash of the original would let anyone holding the export confirm a guess at a redacted secret offline.
+  A line over 64 KiB (reachable only through escaping) drops the tool result, then the arguments, command output, prompt
+  text, assistant text and approval reason, setting `field_truncated` and `content.truncated`; Beacon only flags such a
+  line.
+- `--retention metadata` follows Beacon's `StripToMetadata`: the message, `prompt.text`, `command.output`, `approval.reason`,
+  `gen_ai` input and output and tool call arguments and result go, emptied objects are dropped, and the marker becomes
+  `{retention:metadata,included:false,redacted:true}` with its hash and size. Ids, names, paths, the command line, exit
+  codes and decisions stay. A hash of short text such as a prompt still lets someone confirm a guess.
+- Local-only memory. The arguments and results of every `memory_*` tool and of the shared `search_memory` are written in
+  metadata form even in a full export, unless `--include-local-memory` is given: memory holds local-only facts (§10.4), and
+  the tools' results do not mark which items are, so the rule is by tool name and conservative. A tool that returns memory
+  text under another name is not covered.
+- `SecretRedactor` replaces with `[REDACTED]`, keeping a credential's public type prefix as Beacon does: private-key
+  blocks, `Bearer` credentials, `key=value`, `key: value` and quoted JSON or shell assignments whose label names an API
+  key, access key, secret, token, password, passwd, private key or client secret (an Authorization scheme or JSON literal
+  is left), AWS access key ids, GitHub `gh[pousr]_` and `github_pat_` tokens, Slack `xox?-` tokens, `sk-` keys and
+  JWT-shaped strings. It is a screen, not a proof; Corvid keeps real secrets behind Vault placeholders, but tool output can
+  hold one.
+- `/memory import hermes [<hermes home>] [--dry-run]` (`CoreCommands`), next to `/skills import hermes`, so it works from
+  chat, ACP and the gateway (the owner's alone). `HermesMemory` (`Corvid.Memory`) reads `$HERMES_HOME/memories/MEMORY.md`
+  (the agent's notes) and `USER.md` (the user profile), an explicit argument winning, as Hermes' `get_hermes_home` finds
+  the home: `$HERMES_HOME` trimmed, with `$VAR` and `${VAR}` (and `%VAR%` on Windows) and a leading `~` expanded as
+  `expandvars` and `expanduser` do, else `~/.hermes` (`%LOCALAPPDATA%\hermes` on Windows) with `$HERMES_DATA_DIR_SUFFIX`
+  appended. A `HERMES_HOME` still relative after expansion is reported and nothing is imported, rather than falling back
+  to the default profile. The files are read as Hermes' `MemoryStore` reads them: strict UTF-8 (a file with an invalid byte is refused whole, as Hermes refuses to
+  read it), a leading BOM stripped (`utf-8-sig`), CRLF read as LF (Python's universal newlines), entries split on the
+  whole `"\n§\n"` delimiter so a bare `§` survives, each stripped, blanks dropped and repeats dropped keeping the first. A
+  missing file has no entries; an entry shaped like Hermes' `[BLOCKED: …]` placeholder is skipped and counted, though
+  Hermes puts that placeholder only in its system-prompt snapshot, so the files hold the raw entries. Each entry is
+  screened by Corvid's `SkillScanner` (not Hermes' `scan_for_threats` rules), and a flagged entry is refused. The rest
+  go to `MemoryWriter.StageImportAsync`, which runs `WriteAsync`'s first two steps (extractor entities, neighbour
+  retrieval; factored into one helper) and stages a local-only fact proposal with reason `import:hermes MEMORY.md` or
+  `import:hermes USER.md`, without asking the gate. It never writes and never overwrites. An entry identical (case and
+  spacing aside) to a pending proposal or a current fact is skipped, so a second import stages nothing new; one the
+  extractor refuses as too long is reported, never cut. The report counts per file what was staged, skipped as a
+  duplicate, refused and flagged. Review is `/memory pending`, `approve` and `reject` as for any staged write; an approved
+  import keeps its entities and is embedded as usual.
+- Tests. `tests/Corvid.Kernel.Tests` (`BeaconExportTests`): a fixture session of hand-built stored events (a prompt, a
+  shell call with an approval and a failing exit code, `write_file`, `read_file`, an MCP `weather__lookup`, `memory_search`,
+  a tool error, a denied approval, a skipped `GoalSet` and a 5 KB fetch result with embedded credentials) compared line by
+  line with `Fixtures/beacon-export.full.jsonl` and `beacon-export.metadata.jsonl` (`CORVID_RECORD_GOLDENS=1` rewrites
+  them); every line passes a C# copy of `Event.Validate` plus the timestamp and UUID formats; ids are equal across
+  retentions, with local memory included and across harness version, OS and (for events naming no path) workspace; a
+  call id matches a UUID computed independently with Python's `uuid5`;
+  memory content is withheld and present with the flag; redaction precedes truncation; a cut is flagged even when the
+  marker restores the UTF-16 length; the event cap; and the redactor's
+  patterns. `tests/Corvid.Cli.Tests` (`TracesCommandTests`): `--session` on stdout, `--all` with ids equal to a
+  single-session export, metadata retention, `--out` owner-only and never overwritten, an unknown session, a missing log
+  (not created) and bad arguments. `tests/Corvid.Memory.Tests` (`HermesMemoryTests`): the parser (a bare `§`, blanks,
+  duplicates, `[BLOCKED:`, BOM, CRLF, invalid UTF-8, a missing file, directory resolution with `HERMES_HOME` expansion,
+  the suffix and an unusable value) and `StageImportAsync` (staged
+  local-only with its reason and no decision, applied only on approval, pending and known duplicates skipped, an extractor
+  refusal staging nothing). `tests/Corvid.Host.Tests` (`MemoryImportCommandTests`): the command against a temporary
+  Hermes home, with a dry run, a scanner refusal, re-import idempotency before and after an approval, a missing home and
+  bad usage.
+
+Not built yet: Hermes session import (D-9 "sessions later"; the format is verified: `~/.hermes/state.db`, schema version
+31, `sessions` with id, source, model, cwd, title, parent session, `started_at` and `ended_at` as REAL seconds and token
+and cost columns, `messages` with role, content, `tool_call_id`, `tool_calls` JSON, `tool_name`, `timestamp`, `active`
+and `compacted`; it waits on a way to append events with past times, a read-only snapshot of a live WAL database, and a
+mapping of Hermes tools and of active and compacted messages); token usage and the model in exports (Corvid persists no
+usage, only OpenTelemetry spans; a `token.usage` event with `gen_ai.usage.input_tokens` as uncached input needs usage
+recorded per turn); the skipped event kinds (decisions, compaction, model switches, memory and skill changes, goals,
+todos, per-path file events from checkpoints, rewinds, deliveries) and session start, end and handoff events; a
+per-session working directory; importing Hermes memory into the core blocks (`USER.md` to `user`, `MEMORY.md` to
+`agent`), which waits for block editing (C-013) because an over-budget block edit cannot be approved; `SOUL.md` to the
+persona block, Hermes profiles and memory provider plugins; a `corvid memory` verb; `traces` tail, follow, date ranges
+and pushing to a Beacon endpoint or SIEM; host, user and repository enrichment and the `redacted` retention level; and a
+per-item local-only filter for memory tool results.
+
 ## Running the check
 
 ```sh
