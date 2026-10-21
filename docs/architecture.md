@@ -1891,7 +1891,8 @@ this process.
   turn and the request fails with 403 `approval_required`, naming the tool and `corvid chat --session <id>` to continue where
   it can be approved; under `Deny` the model answers without the call, as in an unattended job. `Corvid:Serve:Tools=false`
   offers the model no tools at all. Hardline denials, the sandbox and privacy egress apply as everywhere.
-- A client that disconnects cancels its turn; one request at a time per session.
+- A client that disconnects cancels its turn; one request at a time per session. `SessionGates` keeps a session's gate only
+  while a request holds or waits for it (a count under one lock), so the endpoint holds no state for idle sessions.
 
 ### Dependency rules for the front ends
 

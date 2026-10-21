@@ -1,0 +1,35 @@
+namespace Corvid.Tests;
+
+/// <summary>
+/// A fresh temporary directory short enough to hold a Unix socket. A socket path is limited to 108 bytes (104 on macOS),
+/// and a TMPDIR under a deep worktree can use most of that, so the first of TMPDIR, <c>$XDG_RUNTIME_DIR</c> and
+/// <c>/tmp</c> that leaves room is used.
+/// </summary>
+internal static class ShortTemp
+{
+    // Room for the longest name a test puts under the directory ("cv-xxxxxxxxxxxx/run/vault.sock") within 104 bytes.
+    private const int MaxBase = 70;
+
+    /// <summary>Creates and returns <c>&lt;base&gt;/&lt;prefix&gt;&lt;random&gt;</c>; the caller removes it.</summary>
+    public static string Create(string prefix)
+    {
+        var directory = Name(prefix);
+        Directory.CreateDirectory(directory);
+        return directory;
+    }
+
+    /// <summary>A short path that does not exist, for a socket nobody listens on.</summary>
+    public static string Name(string prefix) => Path.Combine(Base(), prefix + Guid.NewGuid().ToString("N")[..12]);
+
+    private static string Base()
+    {
+        string?[] candidates = [Path.GetTempPath(), Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR"), "/tmp"];
+        foreach (var candidate in candidates)
+        {
+            if (candidate is { Length: > 0 } && Path.IsPathRooted(candidate) && Directory.Exists(candidate)
+                && Path.TrimEndingDirectorySeparator(Path.GetFullPath(candidate)) is { Length: <= MaxBase } full)
+                return full;
+        }
+        return Path.GetTempPath();
+    }
+}

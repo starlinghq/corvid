@@ -15,5 +15,6 @@
     <!-- So corvid (the CLI) is built next to the tests: `corvid mcp serve` is the stdio server of the end-to-end tests. -->
     <ProjectReference Include="../../src/Corvid.Cli/Corvid.Cli.csproj" />
     <Compile Include="../Corvid.Models.Remote.Tests/Infrastructure.cs" Link="FakeVault.cs" />
+    <Compile Include="../Shared/ShortTemp.cs" Link="ShortTemp.cs" />
   </ItemGroup>
 </Project>

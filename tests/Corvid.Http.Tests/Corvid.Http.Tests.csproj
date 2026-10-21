@@ -9,5 +9,7 @@
     <ProjectReference Include="../../src/Corvid.Http/Corvid.Http.csproj" />
     <!-- The host tests' fake slots, so every suite drives the host the same way. -->
     <Compile Include="../Corvid.Host.Tests/Fakes.cs" Link="Fakes.cs" />
+    <!-- A temporary directory short enough for the stand-in Vault's socket. -->
+    <Compile Include="../Shared/ShortTemp.cs" Link="ShortTemp.cs" />
   </ItemGroup>
 </Project>

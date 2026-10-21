@@ -8,5 +8,7 @@
     <Using Include="Xunit" />
     <ProjectReference Include="../../src/Corvid.Models.Anthropic/Corvid.Models.Anthropic.csproj" />
     <ProjectReference Include="../../src/Corvid.Models.OpenAICompat/Corvid.Models.OpenAICompat.csproj" />
+    <!-- A temporary directory short enough for the stand-in Vault's socket. -->
+    <Compile Include="../Shared/ShortTemp.cs" Link="ShortTemp.cs" />
   </ItemGroup>
 </Project>
