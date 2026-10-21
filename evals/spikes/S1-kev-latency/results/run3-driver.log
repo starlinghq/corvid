@@ -1,0 +1,13 @@
+== 12:18:37 0.8b cuda run3 --cells ingress-600-q4 --calls 100 --warmup 10
+start after 60s, load 4.69
+exit 0
+== 12:20:22 0.8b cuda run3 --cells ingress-600-q8 --calls 100 --warmup 10
+start after 60s, load 4.63
+exit 0
+== 12:22:08 0.8b cuda run3 --cells ingress-300-q4 --calls 100 --warmup 10
+start after 15s, load 4.04
+exit 0
+== 12:22:44 0.8b cuda run3 --cells pre-execute-600-risk --calls 100 --warmup 10
+start after 0s, load 4.60
+exit 0
+== done 12:23:21

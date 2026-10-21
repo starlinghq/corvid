@@ -39,3 +39,10 @@ start after 60s, load 47.57
 exit 0
 == 09:49:11 0.8b cpu quiet --cells ingress-600-q4 --calls 50 --warmup 5
 start after 60s, load 57.05
+exit 0
+== 10:09:19 0.8b cpu quiet --cells ingress-600-q8 --calls 50 --warmup 5
+start after 60s, load 21.40
+exit 0
+== 10:25:38 0.8b cpu quiet --cells pre-execute-600-risk --calls 50 --warmup 5
+start after 60s, load 10.29
+exit 0
