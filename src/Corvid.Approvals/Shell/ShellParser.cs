@@ -295,7 +295,7 @@ public static class ShellParser
                 kind = RedirectKind.OutputAndError;
             }
 
-            redirect = new ShellRedirect(descriptor, kind, target);
+            redirect = new ShellRedirect(descriptor, kind, target, input);
             return true;
         }
 
