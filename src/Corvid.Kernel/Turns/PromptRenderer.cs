@@ -50,8 +50,13 @@ public static class PromptRenderer
     /// After compaction could not make the prompt fit (§8: keep the range uncompacted and clear more results): every result
     /// the budget stubbed, and every other one not protected, is shortened to the dropped form, which still cites its event.
     /// </param>
+    /// <param name="spokenOnlyBefore">
+    /// A guest's turn (C-020): before this sequence only what was said in the chat is rendered, the user and assistant
+    /// messages. Tool calls and their results, compaction summaries (which restate tool output) and the standing goal and
+    /// todos are the user's own work and are left out, so a guest never reads a file an earlier turn of the user's read.
+    /// </param>
     public static RenderedPrompt Render(SessionSnapshot snapshot, string systemPrompt, ITokenCounter counter, int budget,
-        IReadOnlySet<string>? protectedCalls = null, int fixedTokens = 0, bool clearMore = false)
+        IReadOnlySet<string>? protectedCalls = null, int fixedTokens = 0, bool clearMore = false, long? spokenOnlyBefore = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(systemPrompt);
@@ -61,7 +66,7 @@ public static class PromptRenderer
         var views = new Dictionary<string, ResultView>(decided, StringComparer.Ordinal);
         var results = ResultsOldestFirst(snapshot);
 
-        var messages = Build(snapshot, systemPrompt, views);
+        var messages = Build(snapshot, systemPrompt, views, spokenOnlyBefore);
         var tokens = Count(messages, counter) + fixedTokens;
         // Lever 1 under budget pressure: stub the oldest full results first, sparing the protected ones, then those too,
         // except the newest result, which the generator needs to continue.
@@ -75,7 +80,7 @@ public static class PromptRenderer
                     || pass && results.Count > 0 && results[^1].CallId == callId)
                     continue;
                 views[callId] = ResultView.Stub;
-                messages = Build(snapshot, systemPrompt, views);
+                messages = Build(snapshot, systemPrompt, views, spokenOnlyBefore);
                 tokens = Count(messages, counter) + fixedTokens;
             }
         }
@@ -84,7 +89,7 @@ public static class PromptRenderer
             foreach (var (callId, _) in results)
                 if (views.GetValueOrDefault(callId) == ResultView.Stub || !views.ContainsKey(callId) && protectedCalls?.Contains(callId) != true)
                     views[callId] = ResultView.Dropped;
-            messages = Build(snapshot, systemPrompt, views);
+            messages = Build(snapshot, systemPrompt, views, spokenOnlyBefore);
             tokens = Count(messages, counter) + fixedTokens;
         }
         return new RenderedPrompt(messages, tokens, budget, views.ToImmutableDictionary(StringComparer.Ordinal), tokens > budget);
@@ -140,13 +145,16 @@ public static class PromptRenderer
         return total;
     }
 
-    private static List<ChatMessage> Build(SessionSnapshot snapshot, string systemPrompt, IReadOnlyDictionary<string, ResultView> views)
+    private static List<ChatMessage> Build(SessionSnapshot snapshot, string systemPrompt, IReadOnlyDictionary<string, ResultView> views,
+        long? spokenOnlyBefore)
     {
         var messages = new List<ChatMessage> { new(ChatRole.System, systemPrompt) };
         var toolNames = new Dictionary<string, string>(StringComparer.Ordinal);
         var lastSummary = snapshot.Transcript.LastOrDefault(entry => entry.Content is Compacted);
         foreach (var entry in snapshot.Transcript)
         {
+            if (spokenOnlyBefore is { } cutoff && entry.FromSequence < cutoff && entry.Content is not (UserMessage or AssistantMessage))
+                continue;
             switch (entry.Content)
             {
                 case UserMessage user:
@@ -172,7 +180,7 @@ public static class PromptRenderer
                     break;
                 case Compacted compacted:
                     messages.Add(new ChatMessage(ChatRole.User, Summary(compacted)));
-                    if (ReferenceEquals(entry, lastSummary) && Standing(snapshot) is { } standing)
+                    if (ReferenceEquals(entry, lastSummary) && spokenOnlyBefore is null && Standing(snapshot) is { } standing)
                         messages.Add(new ChatMessage(ChatRole.User, standing));
                     break;
             }

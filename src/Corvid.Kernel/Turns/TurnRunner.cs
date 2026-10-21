@@ -391,7 +391,9 @@ public sealed class TurnRunner
             var noteTokens = frozen && notes.Length > 0 ? counter.CountTokens(notes) : 0;
             var system = SystemPrompt(profile, frozen ? "" : notes);
             var rendered = await FitAsync((snapshot, clearMore) =>
-                PromptRenderer.Render(snapshot, system, counter, budget, _lastRound, toolTokens + noteTokens, clearMore), profile, counter,
+                PromptRenderer.Render(snapshot, system, counter, budget, _lastRound, toolTokens + noteTokens, clearMore,
+                    // A guest (C-020) sees what was said in the chat before its turn, never the user's tool results there.
+                    envelope.Guest is null ? null : _turnStart), profile, counter,
                 budget, cancellationToken).ConfigureAwait(false);
             if (rendered.OverBudget)
                 throw new ContextOverBudgetException($"{rendered.Tokens} tokens against a budget of {rendered.Budget}");

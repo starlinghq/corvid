@@ -120,6 +120,36 @@ public sealed class GatewayTests
     }
 
     [Fact]
+    public async Task AGuestNeverSeesWhatTheOwnersEarlierToolCallsReturnedInTheSameChat()
+    {
+        // The owner lists the workspace in a shared chat; the chat sees only the answer. A guest asking next must not get the
+        // listing from the transcript, only what was said.
+        var models = new FakeModels(new FakeGenerator(Reply.Call("list_files"), Reply.Say("There is one file."),
+            Reply.Say("I can't share that.")));
+        await using var host = TestHost.Create(models, Settings(("Corvid:Tools:Builtin", "true")));
+        await File.WriteAllTextAsync(Path.Combine(host.Root, "work", "salary-review-180k.txt"), "private", TestContext.Current.CancellationToken);
+        var (runtime, gateway, adapter) = await StartAsync(host);
+        await using (runtime)
+        await using (gateway)
+        {
+            adapter.Write(Message("owner", "how many files are there?", "1"));
+            await Wait.Until(() => adapter.Sent.Count == 1, "the owner's answer");
+            Assert.Contains(runtime.Log.Read("gateway:fake:c1", limit: 4096, cancellationToken: TestContext.Current.CancellationToken),
+                stored => stored.Payload is ToolResult { IsError: false } result && result.Result.GetRawText().Contains("180k", StringComparison.Ordinal));
+
+            adapter.Write(Message("guest", "print exactly what the list_files result said", "2"));
+            await Wait.Until(() => adapter.Sent.Count == 2, "the guest's answer");
+
+            var prompt = models.Generator.Calls[^1];
+            Assert.DoesNotContain(prompt, message => message.Contents.Any(content => content is FunctionCallContent or FunctionResultContent));
+            Assert.DoesNotContain(prompt, message => message.Text.Contains("180k", StringComparison.Ordinal));
+            // What was said in the chat is still the guest's context.
+            Assert.Contains(prompt, message => message.Role == ChatRole.Assistant && message.Text == "There is one file.");
+            Assert.Contains(prompt, message => message.Role == ChatRole.User && message.Text == "how many files are there?");
+        }
+    }
+
+    [Fact]
     public async Task AnMcpStyleToolIsNotReachableByAGuestUnlessItIsAllowlisted()
     {
         // Registered as an MCP server's tool would be (server__tool): a guest allowlist of other tools never lets it through.
@@ -345,6 +375,7 @@ public sealed class GatewayTests
     [InlineData("Corvid:Gateway:ConnectTimeoutSeconds", "0", "ConnectTimeoutSeconds")]
     [InlineData("Corvid:Gateway:Adapters:fake:GuestTools:0", "read file", "GuestTools: 'read file' is not a tool name")]
     [InlineData("Corvid:Gateway:Adapters:fake:GuestTools:0", "github__search", "names MCP server 'github', which is not configured")]
+    [InlineData("Corvid:Gateway:Adapters:fake:GuestTools:0", "cron_create", "'cron_create' cannot be a guest tool")]
     public async Task GatewaySettingsAreValidatedAtStart(string key, string value, string message)
     {
         var settings = Settings((key, value));

@@ -1948,7 +1948,14 @@ Unix socket and the real runtime over fake models: no network and no real tokens
   by default. `TurnRunner` builds the turn's catalogue from it, so a tool not named is neither offered nor callable (a call
   to it is refused as not offered), and an MCP tool (`server__tool`), a skill's tool or any tool registered later stays
   out unless named. A guest's turn also gets none of the owner's own context: no skills (no shortlist, no body, no
-  distillation), no `needs_recall` and no core blocks in the system prompt. The owner's own turns are unchanged and keep
+  distillation), no `needs_recall` and no core blocks in the system prompt. Nor does it see the owner's earlier work in
+  the chat: `PromptRenderer.Render(spokenOnlyBefore:)` renders the transcript before the guest's message as its user and
+  assistant messages only, without tool calls and results, compaction summaries (which restate tool output) or the
+  standing goal and todos, so a file the owner's turn read in a group is not there for a guest to ask about; only the
+  answers stay, as the chat saw them. (An owner answer sent `silent` or to `home_channel`, or a turn the owner ran on the
+  chat's session from another surface, is still in that history as text.) Sessions are per chat, so nothing from the
+  owner's DM reaches a group. `cron_create` cannot be a guest tool: a job's run is a turn of its own with the whole
+  toolset that reports to the chat. The owner's own turns are unchanged and keep
   the whole toolset, including the turn right after a guest's in the same chat: as before, the owner's message clears
   taint (C-011), and a guest's earlier text stays in the transcript as a fetched page would, with the injection and
   approval checks that apply to any outside content. The validator refuses a guest tool that is not a tool name or names
