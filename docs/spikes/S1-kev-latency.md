@@ -116,7 +116,7 @@ The harness (`evals/spikes/S1-kev-latency/`) measures Corvid's own path, not a r
 
 The project is not in `Corvid.slnx`, so `dotnet build Corvid.slnx` and CI never restore it, and the CUDA natives never
 meet Corvid's CPU-only packages. It sits under `evals/`, which the dependency-boundary check does not scan (it reads
-`src/`, `vault/` and `sandbox/` only), so no exclusion was needed. Its two extra package versions (`Microsoft.ML.OnnxRuntime`,
+`src/`, `vault/` and `sandbox/` only), so no exclusion was needed. Its three extra package versions (`Microsoft.ML.OnnxRuntime`,
 `Microsoft.ML.OnnxRuntime.Gpu.Linux`, and `Starlings.Models.Qwen35` for the linked counter) are declared in the spike's
 own project file, not in `Directory.Packages.props`. `-p:UseCuda=true` swaps the native package as Starling's Kev
 fidelity tool does.

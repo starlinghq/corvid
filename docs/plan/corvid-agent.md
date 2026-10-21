@@ -292,7 +292,7 @@ Kev's temperature is fitted on its own training distribution. Ours is different,
 - The decision log records the outcome of every acted-on answer. User corrections, denials, retries and tool failures count as negative outcomes.
 - `corvid evals calibrate` fits a per-question floor that holds a target precision (default 0.9 for gating questions, 0.8 for routing ones). It reports reliability diagrams, escalation rate and the agreement between Kev-0.8B and Kev-4B.
 - Floors are versioned configuration. Replays against the log (§3.2) show what a new floor would have changed before it ships.
-- **Two-tier decider.** When Kev-0.8B is below the floor on a gating question (`risk`, `skill_write_safe`, `memory_op`), the same state goes to Kev-4B before falling back to the user or the generator. Spike S1 decides whether Kev-4B is fast enough on the 3090 to be the default for those questions.
+- **Two-tier decider.** When Kev-0.8B is below the floor on a gating question (`risk`, `skill_write_safe`, `memory_op`), the same state goes to Kev-4B before falling back to the user or the generator. Spike S1 measured Kev-4B at 0.7–1.3 s per checkpoint on the 3090 (about 15 s on CPU): fine as this second tier, too slow to be the default for those questions ([S1](../spikes/S1-kev-latency.md)).
 
 ### 5.6 Degraded tier: no Kev
 
