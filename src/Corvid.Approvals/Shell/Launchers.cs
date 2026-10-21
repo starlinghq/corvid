@@ -5,16 +5,20 @@ namespace Corvid.Approvals.Shell;
 
 internal static class LauncherTables
 {
-    // strace stops at its first operand (getopt "+").
+    // strace stops at its first operand (getopt "+"). The long options follow strace.c's longopts exactly: a required
+    // argument takes the next word (--verbose=SET, --verbose SET), an optional one only an attached "=VALUE", so a bare
+    // --quiet never consumes the command.
     public static readonly OptionTable Strace = new("AcCdDfFhikNnqrtTvVwxyYzZ", "abeEIoOpPsSuUX",
-        ["follow-forks", "output-separately", "summary-only", "summary", "summary-wall-clock", "instruction-pointer",
-         "stack-traces", "syscall-number", "no-abbrev", "verbose", "version", "help", "debug", "seccomp-bpf", "kill-on-exit",
-         "always-show-pid", "successful-only", "failed-only", "syscall-times", "absolute-timestamps", "relative-timestamps",
-         "timestamps", "quiet", "silent", "decode-fds", "decode-pids", "daemonize", "tips"],
-        ["abbrev", "attach", "trace", "trace-path", "output", "env", "signal", "status", "user", "raw", "read", "write", "inject",
-         "fault", "string-limit", "summary-sort-by", "summary-columns", "columns", "detach-on", "const-print-style", "argv0",
-         "interruptible", "overhead", "decode-fds", "decode-pids", "quiet", "silent", "timestamps", "syscall-times",
-         "absolute-timestamps", "daemonize", "tips"]);
+        ["output-append-mode", "summary-only", "summary", "debug", "follow-forks", "output-separately", "help",
+         "instruction-pointer", "kill-on-exit", "syscall-number", "arg-names", "no-abbrev", "version", "summary-wall-clock",
+         "pidns-translation", "successful-only", "failed-only", "failing-only", "seccomp-bpf", "always-show-pid"],
+        ["columns", "detach-on", "env", "interruptible", "stack-trace-frame-limit", "syscall-limit", "output",
+         "summary-syscall-overhead", "attach", "trace-path", "string-limit", "summary-sort-by", "user", "summary-columns",
+         "const-print-style", "argv0", "color", "trace", "trace-fds", "abbrev", "verbose", "raw", "signals", "status", "read",
+         "write", "fault", "inject", "kvm", "decode-pids"],
+        ["daemonize", "daemonised", "daemonized", "stack-trace", "stack-traces", "relative-timestamps", "absolute-timestamps",
+         "timestamps", "syscall-times", "strings-in-hex", "tips", "namespace", "quiet", "silent", "silence", "decode-fds",
+         "secontext"]);
 
     // ltrace stops at its first operand.
     public static readonly OptionTable Ltrace = new("bcCfhiLrStTV", "aADeFlnopsuwx",
@@ -186,7 +190,8 @@ internal sealed partial class ShellAnalyzer
                 switch (name)
                 {
                     case "o" or "output":
-                        if (value is { Dynamic: false, Text: ['|' or '!', ..] })
+                        // strace pipes "|cmd" and "!cmd" to a shell; ltrace opens the name as a file.
+                        if (verb == "strace" && value is { Dynamic: false, Text: ['|' or '!', ..] })
                             pipe = value.Text[1..];
                         else
                         {
@@ -649,7 +654,9 @@ internal sealed partial class ShellAnalyzer
                     facts.Path(value, TargetAccess.Write);
             facts.AddRedirects(extras.Redirects);
             // script runs the command with $SHELL, or /bin/sh when it is not set.
-            if (scope.Variables.TryGetValue("SHELL", out var shell) && (shell is null || !Shells.Contains(Path.GetFileName(shell))))
+            // An inherited $SHELL is not known here (it may be zsh or fish), so only one set in this script to a shell
+            // the subset parser reads as it runs counts as known.
+            if (!scope.Variables.TryGetValue("SHELL", out var shell) || shell is null || !Shells.Contains(Path.GetFileName(shell)))
                 facts.Unresolved($"script runs the command with $SHELL ({shell ?? "unknown"}), which may read it differently from bash");
         });
         if (command.Dynamic)

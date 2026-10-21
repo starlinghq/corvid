@@ -165,4 +165,33 @@ public sealed class LauncherTests
         Assert.Contains(Fixtures.Analyze("parallel 'rm {=s/a/b/=}' ::: a").Commands, c => c.Verb == "parallel" && !c.Unresolved.IsEmpty);
         Assert.DoesNotContain(Fixtures.Analyze("parallel 'rm {=s/a/b/=}' ::: a").Commands, c => c.Verb == "rm");
     }
+
+    // strace's long options are read as strace.c declares them: --verbose takes the next word, and an option with an
+    // optional value (--quiet, --timestamps, --decode-fds) takes only "=VALUE", so the command is the word strace runs.
+    [Theory]
+    [InlineData("strace --verbose echo rm -rf build")]
+    [InlineData("strace --quiet rm -rf -- echo build")]
+    [InlineData("strace --timestamps rm -rf -- echo build")]
+    [InlineData("strace --decode-fds rm -rf -- echo build")]
+    public void Strace_long_options_take_values_as_strace_reads_them(string command)
+    {
+        var rm = Only(command, "rm");
+        Assert.Contains("strace", rm.Via);
+        Assert.Contains(rm.Targets, t => t.Access == TargetAccess.Delete);
+    }
+
+    [Fact]
+    public void Ltrace_output_is_a_file_even_when_it_starts_with_a_pipe()
+    {
+        var ltrace = Only("ltrace -o '|ls' ls", "ltrace");
+        Assert.Contains(ltrace.Targets, t => t.Value == Fixtures.Workspace + "/|ls" && t.Access == TargetAccess.Write);
+    }
+
+    [Fact]
+    public void Script_c_asks_when_SHELL_is_inherited()
+    {
+        // script runs the command with $SHELL, which may be zsh or fish; only a shell set here is known.
+        Assert.NotEmpty(Only("script -qc ls /dev/null", "script").Unresolved);
+        Assert.Empty(Only("SHELL=/bin/bash script -qc ls /dev/null", "script").Unresolved);
+    }
 }
