@@ -1,0 +1,41 @@
+== 08:59:52 0.8b cuda quiet --cells ingress-600-q4 --calls 50 --warmup 10
+start after 1200s, load 60.67
+exit 0
+== 09:20:14 0.8b cuda quiet --cells ingress-600-q8 --calls 50 --warmup 10
+start after 60s, load 27.73
+exit 0
+== 09:22:35 0.8b cuda quiet --cells ingress-300-q4 --calls 50 --warmup 10
+start after 60s, load 68.65
+exit 0
+== 09:24:16 0.8b cuda quiet --cells pre-execute-600-risk --calls 50 --warmup 10
+start after 60s, load 77.45
+exit 0
+== 09:26:15 0.8b cuda quiet --cells ingress-300-q8 --calls 50 --warmup 10
+start after 60s, load 41.45
+exit 0
+== 09:27:38 0.8b cuda quiet --cells ingress-1500-q4 --calls 50 --warmup 10
+start after 60s, load 25.12
+exit 0
+== 09:29:32 0.8b cuda quiet --cells ingress-1500-q8 --calls 50 --warmup 10
+start after 60s, load 18.80
+exit 0
+== 09:33:37 0.8b cuda quiet --cells rows-600-risk-500 --calls 50 --warmup 10
+start after 60s, load 32.04
+exit 0
+== 09:35:56 0.8b cuda quiet --cells rows-600-risk-750 --calls 50 --warmup 10
+start after 60s, load 50.22
+exit 0
+== 09:39:12 0.8b cuda quiet --cells rows-600-risk-1000 --calls 50 --warmup 10
+start after 60s, load 78.41
+exit 0
+== 09:41:53 4b cuda quiet --cells ingress-600-q4 --calls 50 --warmup 5
+start after 60s, load 47.15
+exit 0
+== 09:44:32 4b cuda quiet --cells ingress-600-q8 --calls 50 --warmup 5
+start after 60s, load 27.28
+exit 0
+== 09:46:57 4b cuda quiet --cells pre-execute-600-risk --calls 50 --warmup 5
+start after 60s, load 47.57
+exit 0
+== 09:49:11 0.8b cpu quiet --cells ingress-600-q4 --calls 50 --warmup 5
+start after 60s, load 57.05

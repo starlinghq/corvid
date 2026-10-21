@@ -1,0 +1,5 @@
+[08:47:06] Qwen3.5 token counter: /home/mark/.cache/starlings/models/Qwen/Qwen3.5-0.8B/2fc06364715b967f1860aea9cf38778875588b17/transformers-5.18.0/tokenizer.json
+[08:47:06] bundle: /home/mark/.cache/starlings/models/jaredpalmer/kev-0.8b/9a45d25eb2ab761841196625383fa1dff0e56c1e/model.onnx (opened in 20 ms)
+[08:47:09] loaded kev-0.8b/onnx-fp32-cpu in 3.18 s; serialized native calls: False
+[08:50:20] kev-0.8b cpu ingress-300-q4: state 297 tok, rows 17-83, p50 2650.3 p90 8469 p99 12921.9 mean 3558.7 ms (n=50, load 31.30->33.88)
+[08:58:34] kev-0.8b cpu ingress-300-q8: state 297 tok, rows 17-113, p50 6485.3 p90 17739.2 p99 39590.4 mean 9044.5 ms (n=50, load 33.88->29.25)
