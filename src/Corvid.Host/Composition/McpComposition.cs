@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Globalization;
 using Corvid.Abstractions.Events;
 using Corvid.Host.Configuration;
 using Corvid.Host.Telemetry;
@@ -178,11 +179,17 @@ public static class McpComposition
     };
 
     /// <summary>
-    /// What a served call leaves behind (C-028): a <c>corvid.mcp.serve</c> span with the tool, the outcome, how many items it
-    /// returned, the scope's source, and the result's size and cut. Never the arguments or any memory text.
+    /// What a served call leaves behind (C-028): one line on <paramref name="log"/> (serve's standard error; standard output is
+    /// the protocol) whether or not any trace listener is attached, and a <c>corvid.mcp.serve</c> span when one is (the
+    /// configured OTLP export). Both carry the tool, the outcome, how many items it returned, the scope's source, and the
+    /// result's size and cut. Never the arguments or any memory text.
     /// </summary>
-    public static Action<McpServeCall> ServeCalls() => call =>
+    public static Action<McpServeCall> ServeCalls(TextWriter? log = null) => call =>
     {
+        var (items, project) = Summarize(call.Result);
+        var outcome = call.IsError ? "error" : "ok";
+        log?.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"corvid mcp serve: call {call.Tool} {outcome} items={items} project={project ?? "-"} chars={call.Chars} cut={(call.Cut ? "yes" : "no")} ms={(long)call.Elapsed.TotalMilliseconds}"));
         using var activity = HostTelemetry.Source.StartActivity("corvid.mcp.serve", ActivityKind.Server);
         if (activity is null)
             return;
@@ -190,8 +197,7 @@ public static class McpComposition
         activity.SetStartTime(DateTime.UtcNow - call.Elapsed);
         activity.SetTag("corvid.mcp.tool", call.Tool);
         activity.SetTag("corvid.mcp.call", call.CallId);
-        activity.SetTag("corvid.mcp.serve.outcome", call.IsError ? "error" : "ok");
-        var (items, project) = Summarize(call.Result);
+        activity.SetTag("corvid.mcp.serve.outcome", outcome);
         activity.SetTag("corvid.mcp.serve.items", items);
         if (project is not null)
             activity.SetTag("corvid.mcp.serve.project", project);
@@ -201,12 +207,18 @@ public static class McpComposition
             activity.SetStatus(ActivityStatusCode.Error);
     };
 
-    /// <summary>The number of memory items in a served result (its <c>results[].id</c>, or a single <c>id</c>) and its scope.</summary>
+    /// <summary>
+    /// The number of memory items in a served result (its <c>results[].id</c>, or a single <c>id</c>) and its scope source, when
+    /// it is one of <see cref="SharedMemoryTools"/>'s.
+    /// </summary>
     internal static (int Items, string? Project) Summarize(System.Text.Json.JsonElement? result)
     {
         if (result is not { ValueKind: System.Text.Json.JsonValueKind.Object } json)
             return (0, null);
-        var project = json.TryGetProperty("project", out var scope) && scope.ValueKind == System.Text.Json.JsonValueKind.String ? scope.GetString() : null;
+        // Only the three scope sources: any other tool's "project" string could be text.
+        var project = json.TryGetProperty("project", out var scope) && scope.ValueKind == System.Text.Json.JsonValueKind.String
+            && scope.GetString() is SharedMemoryTools.FromArgument or SharedMemoryTools.FromWorkspace or SharedMemoryTools.FromNone
+            ? scope.GetString() : null;
         if (json.TryGetProperty("results", out var results) && results.ValueKind == System.Text.Json.JsonValueKind.Array)
             return (results.EnumerateArray().Count(item => item.ValueKind == System.Text.Json.JsonValueKind.Object && item.TryGetProperty("id", out _)), project);
         return (json.TryGetProperty("id", out _) ? 1 : 0, project);

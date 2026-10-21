@@ -49,11 +49,11 @@ public sealed partial class SharedMemoryTools
     /// <summary>The tools that exist only with <see cref="SharedMemoryOptions.ProjectMemory"/>.</summary>
     public static ImmutableArray<string> ProjectMemoryTools { get; } = ["get_memory", "get_memory_context"];
 
-    /// <summary>The scope's source when the caller named the project.</summary>
+    /// <summary>The caller passed a project, whether or not it maps onto a known one: the field never tells which.</summary>
     public const string FromArgument = "argument";
     /// <summary>The scope's source when the server's workspace is a known project.</summary>
     public const string FromWorkspace = "workspace";
-    /// <summary>No known project: facts only.</summary>
+    /// <summary>No argument and no known workspace project: facts only.</summary>
     public const string FromNone = "none";
 
     internal const int MaxSearchLimit = 20;
@@ -219,8 +219,9 @@ public sealed partial class SharedMemoryTools
 
     /// <summary>
     /// The call's project: the caller's argument mapped onto known projects, else the workspace's project when known, else
-    /// none (facts only). An argument that maps onto nothing is not an error, so the tool is no oracle for which paths are
-    /// projects. Known projects are re-read on every call.
+    /// none (facts only). An argument that maps onto nothing is not an error and reports the same source,
+    /// <see cref="FromArgument"/>, as one that matches, so the result is no oracle for which paths are projects: only the
+    /// shared lessons a match serves tell it. Known projects are re-read on every call.
     /// </summary>
     private Scope ResolveScope(string? project)
     {
@@ -236,7 +237,7 @@ public sealed partial class SharedMemoryTools
         if (!string.IsNullOrWhiteSpace(project))
         {
             var match = ProjectIds.Candidates(project, _options.Home, _options.Workspace, _options.WorkspaceProject?.Id).FirstOrDefault(known.Contains);
-            return match is null ? new Scope(null, FromNone) : new Scope(match, FromArgument);
+            return new Scope(match, FromArgument);
         }
         return _options.WorkspaceProject is { } workspace && known.Contains(workspace.Id)
             ? new Scope(workspace.Id, FromWorkspace)

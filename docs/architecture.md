@@ -2767,7 +2767,8 @@ accepts a lesson kind as a lesson filter. No project, package, checker rule or m
     `Corvid:Mcp:Serve:Conversations`) or one of C-025's lesson kinds; anything else is an argument error that lists the
     accepted values. `limit` is 1 to 20, default 10. Each result is `id` (the retriever's item id: `fact:…`, `lesson:…` or an
     episode id), `kind`, `text` (cut at 200 tokens, the retriever's per-item cap) and `recorded`; a lesson adds
-    `lesson_kind`, `title` and `tags`. The result adds `project`: `argument`, `workspace` or `none`.
+    `lesson_kind`, `title` and `tags`. The result adds `project`, the scope's source: `argument` (whenever the caller passed one, matched or not), `workspace` or
+    `none`.
   - `get_memory(id, project?)`: dispatches on the id's prefix. It returns a current, not local-only fact; an approved, not
     local-only lesson whose project is the call's scope, with its kind, title, applicability, tags, approval date and full
     body cut at 1,000 tokens (evidence, session ids and positions are left out); or an episode when conversations are
@@ -2785,9 +2786,11 @@ accepts a lesson kind as a lesson filter. No project, package, checker rule or m
   `FromPath` for itself and each ancestor, most specific first, stopping below `$HOME` as discovery's ceiling does (`$HOME`
   itself only on an exact match); a path equal to or under the workspace also stands for the workspace's project, where the
   walk passes it. Relative paths stand for nothing. A candidate counts only if it is in `LessonStore.KnownProjects()` (the
-  projects with an approved lesson, re-read on every call, so a lesson approved in a running `corvid chat` shows at once).
-  The first match is the scope (`argument`); without an argument the workspace's project when known (`workspace`); else
-  `none`, which is facts only and never an error, so the tool is no oracle for which paths are projects. Facts are global
+  projects with an approved lesson that is not local-only, re-read on every call, so a lesson approved in a running
+  `corvid chat` shows at once; a project whose approved lessons are all local-only is unknown, so nothing tells that it has
+  any). The first match is the scope; an argument that matches nothing is facts only, never an error, and reports the same
+  `argument` source, so the result is no oracle for which paths are projects: only the shared lessons a match serves tell
+  it. Without an argument the scope is the workspace's project when known (`workspace`), else `none` (facts only). Facts are global
   (C-008) and served in every scope. Most repositories are keyed by their origin remote, so a caller path maps only when it
   is under the serve workspace or the project is checkout- or path-keyed; a caller can pass the origin URL or the id
   instead. A harness that starts `corvid mcp serve` from `$HOME` or a fixed directory gets facts only until it passes
@@ -2801,7 +2804,11 @@ accepts a lesson kind as a lesson filter. No project, package, checker rule or m
   sent, cut, elapsed, structured result). `McpComposition.ServeCalls` makes it a `corvid.mcp.serve` span on the host source
   covering the call, with `corvid.mcp.tool`, `corvid.mcp.call`, `corvid.mcp.serve.outcome`, `.items` (the count of
   `results[].id`, or 1 for a single `id`), `.project` (the scope's source), `.chars` and `.cut`. Query and memory text are
-  never tagged. The configured OTLP export applies, since serve starts through `CorvidCli.StartAsync`.
+  never tagged. The configured OTLP export applies, since serve starts through `CorvidCli.StartAsync`; without it nothing
+  listens and there is no span, so `ServeCalls(Console.Error)` also writes one standard-error line per call, always:
+  `corvid mcp serve: call <tool> <ok|error> items=<n> project=<source|-> chars=<n> cut=<yes|no> ms=<n>`. Only the three
+  scope sources are reported as `project`, never another tool's `project` string. That line is the local record until the
+  durable `mcp_served` event.
 
 Tests: `tests/Corvid.Mcp.Tests` (`McpServeMemoryTests`: off by default only `search_memory`, no lessons and no `project`;
 lessons of the workspace project served only when approved, not candidate, rejected, superseded or local-only; `kind` and
@@ -2816,6 +2823,13 @@ local-only fact; the call callback once per call with item counts, errors includ
 `get_memory_context` with a path-keyed workspace's lesson). `tests/Corvid.Memory.Tests` (`KnownProjects`) and
 `tests/Corvid.Host.Tests` (`McpHostTests`: the composition with the switch off and on, the span's tags and that it holds
 no text).
+
+Review follow-up (PR #41): `KnownProjects` counts only approved lessons that are not local-only, and an unmatched `project`
+argument reports `argument` like a matched one, so neither the field nor a local-only-only project is an oracle
+(`McpServeMemoryTests.AProjectWithOnlyLocalOnlyLessonsLooksLikeAnUnknownOne`: every tool answers such a project exactly as
+an unknown one; `LessonStoreTests`). Served calls leave a standard-error line without any trace listener
+(`McpHostTests.EveryServedCallIsAStandardErrorLineWithoutAnyListener`, which also checks that no text and no foreign
+`project` string reach it).
 
 Not built yet: a durable `mcp_served` event with the returned item ids (it needs a new event type, cross-process appends from
 the serve process and C-027's export to name the new tools); a projects registry, so a caller path inside a remote-keyed

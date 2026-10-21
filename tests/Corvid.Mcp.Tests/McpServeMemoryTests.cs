@@ -162,15 +162,44 @@ public sealed class McpServeMemoryTests : IDisposable
             Assert.Equal("argument", result.GetProperty("project").GetString());
             Assert.Equal([gadget.LessonId], Ids(result));
         }
-        // An unknown project is not an error: facts only, so the tool is no oracle for which projects exist.
+        // An unknown project is not an error: facts only, with the same source as a match, so the tool is no oracle for which
+        // projects exist.
         var unknown = await CallAsync(client, "search_memory", new() { ["query"] = "gadgets ninja", ["project"] = "https://github.com/example/nothing" });
-        Assert.Equal("none", unknown.GetProperty("project").GetString());
+        Assert.Equal("argument", unknown.GetProperty("project").GetString());
         Assert.Empty(Ids(unknown));
 
         // get_memory honours the same scope: another project's lesson is not there.
         Assert.StartsWith($"No memory with id '{gadget.LessonId}'.", await ErrorAsync(client, "get_memory", new() { ["id"] = gadget.LessonId }));
         var fetched = await CallAsync(client, "get_memory", new() { ["id"] = gadget.LessonId, ["project"] = Gadgets });
         Assert.Equal("Build the gadgets with ninja.", fetched.GetProperty("body").GetString());
+    }
+
+    [Fact]
+    public async Task AProjectWithOnlyLocalOnlyLessonsLooksLikeAnUnknownOne()
+    {
+        // Review of C-028: a project whose approved lessons are all local-only must answer exactly as one never seen, in every
+        // tool, so a caller cannot learn that local-only memory exists for it.
+        var secret = ProjectIds.FromRemote("https://github.com/acme/secret-merger");
+        var hidden = Approve(_lessons, secret, LessonKinds.Gotcha, "Merger codename", "The merger is codenamed Falcon.", localOnly: true);
+        _facts.Add(new FactInput("Sam prefers rebase over merge"));
+        await using var client = await ConnectAsync(Tools());
+
+        async Task<string> AnswerAsync(string project)
+        {
+            var search = await CallAsync(client, "search_memory", new() { ["query"] = "zzz", ["project"] = project });
+            var merger = await CallAsync(client, "search_memory", new() { ["query"] = "merger codenamed", ["project"] = project });
+            var context = await CallAsync(client, "get_memory_context", new() { ["task"] = "merger rebase", ["project"] = project });
+            var error = await ErrorAsync(client, "get_memory", new() { ["id"] = hidden.LessonId, ["project"] = project });
+            return string.Join("|", search.GetProperty("project").GetString(), string.Join(",", Ids(search)),
+                merger.GetProperty("project").GetString(), string.Join(",", Ids(merger)),
+                context.GetProperty("project").GetString(), string.Join(",", Ids(context)), error);
+        }
+
+        var secretAnswer = await AnswerAsync("https://github.com/acme/secret-merger");
+        Assert.Equal(await AnswerAsync("https://github.com/acme/other"), secretAnswer);
+        Assert.Equal(secretAnswer, await AnswerAsync(secret));
+        Assert.DoesNotContain("Falcon", secretAnswer, StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, _lessons.KnownProjects());
     }
 
     [Fact]
@@ -221,10 +250,10 @@ public sealed class McpServeMemoryTests : IDisposable
 
         Assert.Equal("argument:" + checkout.LessonId, await SearchAsync(Path.Combine(repo, "src", "does-not-exist")));
         Assert.Equal("argument:" + widgets.LessonId, await SearchAsync(Path.Combine(Workspace, "lib")));
-        Assert.Equal("none:", await SearchAsync("repo/src"));
-        Assert.Equal("none:", await SearchAsync(Path.Combine(Home, "elsewhere", "..", "notes")));
+        Assert.Equal("argument:", await SearchAsync("repo/src"));
+        Assert.Equal("argument:", await SearchAsync(Path.Combine(Home, "elsewhere", "..", "notes")));
         // A parent of $HOME is a known project, but a path below $HOME never walks up to it.
-        Assert.Equal("none:", await SearchAsync(Path.Combine(Home, "notes")));
+        Assert.Equal("argument:", await SearchAsync(Path.Combine(Home, "notes")));
         Assert.Equal("argument:" + above.LessonId, await SearchAsync(Path.GetDirectoryName(Home)!));
     }
 

@@ -280,6 +280,31 @@ public sealed class McpHostTests
     }
 
     [Fact]
+    public void EveryServedCallIsAStandardErrorLineWithoutAnyListener()
+    {
+        // Review of C-028: with no OTLP export there is no listener and no span, yet each call still leaves a local record.
+        var log = new StringWriter();
+        var result = System.Text.Json.JsonDocument.Parse("""
+            {"query":"secret words","results":[{"id":"fact:1","text":"hidden text"},{"id":"lesson:2","text":"more"}],"project":"argument"}
+            """).RootElement.Clone();
+        var calls = McpComposition.ServeCalls(log);
+        calls(new McpServeCall("search_memory", "mcp-1", false, 120, true, TimeSpan.FromMilliseconds(5), result));
+        calls(new McpServeCall("get_memory", "mcp-2", true, 40, false, TimeSpan.Zero, null));
+        var skill = System.Text.Json.JsonDocument.Parse("""{"project":"secret plans","id":"skill"}""").RootElement.Clone();
+        calls(new McpServeCall("skill_view", "mcp-3", false, 30, false, TimeSpan.Zero, skill));
+
+        var lines = log.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(
+        [
+            "corvid mcp serve: call search_memory ok items=2 project=argument chars=120 cut=yes ms=5",
+            "corvid mcp serve: call get_memory error items=0 project=- chars=40 cut=no ms=0",
+            "corvid mcp serve: call skill_view ok items=1 project=- chars=30 cut=no ms=0",
+        ], lines);
+        Assert.DoesNotContain("secret", log.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("hidden", log.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TheLineDiffKeepsCommonLinesAndMarksTheRest()
     {
         Assert.Equal(["  {", "-   \"a\": 1", "+   \"a\": 2", "+   \"b\": 3", "  }"],

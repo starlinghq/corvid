@@ -34,7 +34,7 @@ public sealed class LessonStoreTests
     }
 
     [Fact]
-    public void Known_projects_are_those_with_an_approved_lesson()
+    public void Known_projects_are_those_with_an_approved_shared_lesson()
     {
         using var store = new TempStore();
         var lessons = new LessonStore(store.Database, store.Time);
@@ -43,6 +43,11 @@ public sealed class LessonStoreTests
         lessons.File(Candidate(Content(), OtherProject));
         Assert.Empty(lessons.KnownProjects());
         Assert.True(lessons.Approve(candidate.LessonId, "ok"));
+        Assert.Equal([Project], lessons.KnownProjects());
+        // A project whose approved lessons are all local-only is not known (review of C-028): knowing it would tell an MCP
+        // caller that local-only memory exists for it.
+        var local = lessons.File(Candidate(Content(), OtherProject, localOnly: true)).Lesson;
+        Assert.True(lessons.Approve(local.LessonId, "ok"));
         Assert.Equal([Project], lessons.KnownProjects());
     }
 

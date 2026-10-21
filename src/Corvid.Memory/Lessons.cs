@@ -225,14 +225,15 @@ public sealed class LessonStore
     }
 
     /// <summary>
-    /// The projects with at least one approved lesson (C-028): what an MCP caller's project argument may map onto. Cheap (the
-    /// <c>lessons_project</c> index), and read on every call so a lesson approved in a running session counts at once.
+    /// The projects with at least one approved lesson that is not local-only (C-028): what an MCP caller's project argument
+    /// may map onto. A project whose approved lessons are all local-only is not known, so nothing served tells that it exists.
+    /// Cheap (the <c>lessons_project</c> index), and read on every call so a lesson approved in a running session counts at once.
     /// </summary>
     public IReadOnlySet<string> KnownProjects()
     {
         using var connection = _database.Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT DISTINCT project_id FROM lessons WHERE state = 'approved';";
+        command.CommandText = "SELECT DISTINCT project_id FROM lessons WHERE state = 'approved' AND local_only = 0;";
         using var reader = command.ExecuteReader();
         var projects = new HashSet<string>(StringComparer.Ordinal);
         while (reader.Read())
