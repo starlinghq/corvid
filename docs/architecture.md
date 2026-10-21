@@ -2758,6 +2758,7 @@ accepts a lesson kind as a lesson filter. No project, package, checker rule or m
   `search_memory`, the `project` argument and the git call that resolves the workspace's project. Off, the tool list is
   unchanged (`search_memory`, `skill_list`, `skill_read`), `search_memory`'s schema gains the optional `kind`, `limit` and
   `project` arguments, `lesson` and `project` are refused, there is no result limit, and each result only gains an `id`.
+  Its description now names lessons, so a client that pins definitions (C-022) holds `search_memory` as changed once.
   Lessons also need `Corvid:Memory:Lessons:Enabled`.
 - Tools (`SharedMemoryTools` in `Corvid.Tools.Builtin`, configured by `SharedMemoryOptions`; `ServedTools()` drops the two
   new tools when the switch is off):
