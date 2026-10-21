@@ -15,6 +15,8 @@
     <ProjectReference Include="../../src/Corvid.Vault.Client/Corvid.Vault.Client.csproj" />
     <!-- Built first, run as a separate process by the S6 test. -->
     <ProjectReference Include="../Corvid.Vault.TestClient/Corvid.Vault.TestClient.csproj" ReferenceOutputAssembly="false" />
+    <!-- A temporary directory short enough for the Vault's socket. -->
+    <Compile Include="../Shared/ShortTemp.cs" Link="ShortTemp.cs" />
   </ItemGroup>
 
 </Project>

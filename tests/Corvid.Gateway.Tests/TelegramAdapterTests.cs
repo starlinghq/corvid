@@ -144,7 +144,7 @@ public sealed class TelegramAdapterTests
     [Fact]
     public async Task WithoutVaultNothingIsSent()
     {
-        var gateway = GatewayVault.Create(Path.Combine(Path.GetTempPath(), "no-vault-" + Guid.NewGuid().ToString("N"), "vault.sock"));
+        var gateway = GatewayVault.Create(Path.Combine(Corvid.Tests.ShortTemp.Name("no-vault-"), "vault.sock"));
         await using var adapter = TelegramAdapter.Create(Options, gateway);
 
         await Assert.ThrowsAnyAsync<Exception>(() => adapter.ConnectAsync(new MemoryContext(), TestContext.Current.CancellationToken));
