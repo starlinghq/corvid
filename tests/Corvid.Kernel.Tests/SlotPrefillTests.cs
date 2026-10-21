@@ -146,4 +146,45 @@ public sealed class SlotPrefillTests : IDisposable
         Assert.Equal(["nots", "notes", "found"], seen);
         Assert.Equal("notes", Assert.Single(result.Disagreements).Extracted);
     }
+
+    [Fact]
+    public async Task A_probe_runs_under_a_call_id_of_its_own_and_leaves_nothing_under_the_real_calls()
+    {
+        // The probe is discarded: anything keyed by call id (events, approvals, checkpoints, spans) must not take it for the
+        // call the model made.
+        var seen = new List<(string Path, string? CallId)>();
+        var tool = TestTool.Create("lookup", "Look up a record.",
+            new ToolRisk(SideEffects.None, Network: false, Destructive: false, Probe: true),
+            $$$"""{"type":"object","properties":{"path":{"type":"string","description":"{{{RecordLabel}}}"}},"required":["path"]}""",
+            (arguments, _) =>
+            {
+                var path = arguments["path"]?.ToString() ?? "";
+                lock (seen)
+                    seen.Add((path, ToolCallContext.From(arguments)?.CallId));
+                return path == "notes" ? ValueTask.FromResult<object?>("ok")
+                    : throw new ToolArgumentException($"Argument 'path' is '{path}', which does not exist.", "path");
+            },
+            new ToolParameter("path", RecordLabel, true, false));
+        var generator = new FakeGenerator(
+            Reply.Call("lookup", """{"path":"nots"}"""),
+            Reply.Call("lookup", """{"path":"notes"}"""),
+            Reply.Say("Found it."));
+        using var harness = LookupHarness(generator, tool);
+
+        var result = await harness.RunAsync("look up my notes");
+
+        Assert.Equal(TurnStatus.Answered, result.Status);
+        Assert.Equal(["nots", "notes", "notes"], seen.Select(item => item.Path));
+        var issued = harness.Payloads().OfType<ToolCallIssued>().Select(call => call.CallId).ToArray();
+        Assert.Equal(2, issued.Length);
+        Assert.Equal(issued[0], seen[0].CallId);
+        Assert.Equal(issued[1], seen[2].CallId);
+        var probe = seen[1].CallId;
+        Assert.NotNull(probe);
+        Assert.DoesNotContain(probe, issued);
+        Assert.DoesNotContain(probe, harness.Payloads().OfType<ToolResult>().Select(item => item.CallId));
+        // Each real call has exactly its own issue and result, and the failed one carries the hint.
+        Assert.Equal(issued, harness.Payloads().OfType<ToolResult>().Select(item => item.CallId));
+        Assert.Equal("notes", Assert.Single(result.Disagreements).Extracted);
+    }
 }

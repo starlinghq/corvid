@@ -1,0 +1,50 @@
+{"id":1,"text":"Please email Sarah Chen at sarah.chen@example.com about the Q3 budget.","entities":[{"label":"person","text":"Sarah Chen"},{"label":"email","text":"sarah.chen@example.com"}]}
+{"id":2,"text":"Call me back on +1 415 555 0142 when you land.","entities":[{"label":"phone number","text":"+1 415 555 0142"}]}
+{"id":3,"text":"Ship the package to 221B Baker Street, London NW1 6XE.","entities":[{"label":"address","text":"221B Baker Street, London NW1 6XE"}]}
+{"id":4,"text":"My checking account number is 004512339871 at First Example Bank.","entities":[{"label":"account number","text":"004512339871"}]}
+{"id":5,"text":"The staging database password is hunter2-Staging!","entities":[{"label":"credential","text":"hunter2-Staging!"}]}
+{"id":6,"text":"Use the API key sk-live-4f9a2b7c8d1e3f5a6b7c for the payment service.","entities":[{"label":"credential","text":"sk-live-4f9a2b7c8d1e3f5a6b7c"}]}
+{"id":7,"text":"Remind me to call Dr. Priya Raman tomorrow at 9.","entities":[{"label":"person","text":"Priya Raman"}]}
+{"id":8,"text":"John Smith and Maria Garcia will join the call.","entities":[{"label":"person","text":"John Smith"},{"label":"person","text":"Maria Garcia"}]}
+{"id":9,"text":"Forward the invoice to billing@acme-corp.example and cc tom.baker@example.org.","entities":[{"label":"email","text":"billing@acme-corp.example"},{"label":"email","text":"tom.baker@example.org"}]}
+{"id":10,"text":"Her mobile is 07700 900123 and her office line is 020 7946 0958.","entities":[{"label":"phone number","text":"07700 900123"},{"label":"phone number","text":"020 7946 0958"}]}
+{"id":11,"text":"We moved to 1600 Pennsylvania Avenue NW, Washington, DC 20500 last spring.","entities":[{"label":"address","text":"1600 Pennsylvania Avenue NW, Washington, DC 20500"}]}
+{"id":12,"text":"Transfer the deposit to IBAN GB82 WEST 1234 5698 7654 32 before Friday.","entities":[{"label":"account number","text":"GB82 WEST 1234 5698 7654 32"}]}
+{"id":13,"text":"The card ending 4242 is fine, the full number is 4111 1111 1111 1111.","entities":[{"label":"account number","text":"4111 1111 1111 1111"}]}
+{"id":14,"text":"Log in as admin with password Tr0ub4dor&3 and change it afterwards.","entities":[{"label":"credential","text":"Tr0ub4dor&3"}]}
+{"id":15,"text":"Set GITHUB_TOKEN=ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8 in the CI settings.","entities":[{"label":"credential","text":"ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"}]}
+{"id":16,"text":"Book a table for Ahmed Al-Farsi, phone (212) 555-0199.","entities":[{"label":"person","text":"Ahmed Al-Farsi"},{"label":"phone number","text":"(212) 555-0199"}]}
+{"id":17,"text":"Kenji Watanabe's new address is 3-5-1 Marunouchi, Chiyoda-ku, Tokyo.","entities":[{"label":"person","text":"Kenji Watanabe"},{"label":"address","text":"3-5-1 Marunouchi, Chiyoda-ku, Tokyo"}]}
+{"id":18,"text":"Draft a reply to Elena Petrova thanking her for the review.","entities":[{"label":"person","text":"Elena Petrova"}]}
+{"id":19,"text":"Our AWS secret access key is wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY.","entities":[{"label":"credential","text":"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}]}
+{"id":20,"text":"Pay the electricity bill from account 12-3456-7890123-00.","entities":[{"label":"account number","text":"12-3456-7890123-00"}]}
+{"id":21,"text":"Text Jamie on 555-867-5309 if the build fails.","entities":[{"label":"person","text":"Jamie"},{"label":"phone number","text":"555-867-5309"}]}
+{"id":22,"text":"The venue is at 742 Evergreen Terrace, Springfield.","entities":[{"label":"address","text":"742 Evergreen Terrace, Springfield"}]}
+{"id":23,"text":"Contact support@starling.example for help with installation.","entities":[{"label":"email","text":"support@starling.example"}]}
+{"id":24,"text":"Summarise the meeting notes from Tuesday and list the action items.","entities":[]}
+{"id":25,"text":"What is the capital of Australia?","entities":[]}
+{"id":26,"text":"Refactor the parser so that heredocs are handled before redirections.","entities":[]}
+{"id":27,"text":"The build failed on step 3 with exit code 137 after 42 minutes.","entities":[]}
+{"id":28,"text":"Convert 250 grams of flour to cups and double the recipe.","entities":[]}
+{"id":29,"text":"Schedule the dentist appointment for Peter Novak on 3 November.","entities":[{"label":"person","text":"Peter Novak"}]}
+{"id":30,"text":"Lucía Fernández (lucia.fernandez@correo.example) asked for the slides.","entities":[{"label":"person","text":"Lucía Fernández"},{"label":"email","text":"lucia.fernandez@correo.example"}]}
+{"id":31,"text":"My social security number is 078-05-1120, please keep it private.","entities":[{"label":"account number","text":"078-05-1120"}]}
+{"id":32,"text":"The wifi password at the cabin is pinecone-lake-2024.","entities":[{"label":"credential","text":"pinecone-lake-2024"}]}
+{"id":33,"text":"Send the contract to Olusegun Adeyemi, 14 Admiralty Way, Lekki, Lagos.","entities":[{"label":"person","text":"Olusegun Adeyemi"},{"label":"address","text":"14 Admiralty Way, Lekki, Lagos"}]}
+{"id":34,"text":"Ring the clinic on +44 20 7946 0321 to confirm.","entities":[{"label":"phone number","text":"+44 20 7946 0321"}]}
+{"id":35,"text":"Anna's PayPal is anna.k@example.net and her routing number is 021000021.","entities":[{"label":"person","text":"Anna"},{"label":"email","text":"anna.k@example.net"},{"label":"account number","text":"021000021"}]}
+{"id":36,"text":"The SSH private key passphrase is correct-horse-battery-staple.","entities":[{"label":"credential","text":"correct-horse-battery-staple"}]}
+{"id":37,"text":"Ask Wei Zhang whether the PR can merge today.","entities":[{"label":"person","text":"Wei Zhang"}]}
+{"id":38,"text":"Deliveries go to Flat 4, 18 Rue de Rivoli, 75004 Paris.","entities":[{"label":"address","text":"Flat 4, 18 Rue de Rivoli, 75004 Paris"}]}
+{"id":39,"text":"The Slack bot token is xoxb-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx.","entities":[{"label":"credential","text":"xoxb-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx"}]}
+{"id":40,"text":"Customer 88213 is Fatima Zahra, account no. 5500-2231-8842, phone 0612 345 678.","entities":[{"label":"person","text":"Fatima Zahra"},{"label":"account number","text":"5500-2231-8842"},{"label":"phone number","text":"0612 345 678"}]}
+{"id":41,"text":"Write a limerick about a corvid that steals shiny keys.","entities":[]}
+{"id":42,"text":"Move the standup to 10:30 and invite the whole platform team.","entities":[]}
+{"id":43,"text":"git commit -m 'fix flaky approval test' && git push origin main","entities":[]}
+{"id":44,"text":"The quarterly revenue grew 12% to 4.2 million dollars.","entities":[]}
+{"id":45,"text":"Grandma lives at 58 Elm Road, Duluth, MN 55802; her number is 218-555-0110.","entities":[{"label":"address","text":"58 Elm Road, Duluth, MN 55802"},{"label":"phone number","text":"218-555-0110"}]}
+{"id":46,"text":"Reply to noreply@github.example? No, reply to Daniel Okafor instead.","entities":[{"label":"email","text":"noreply@github.example"},{"label":"person","text":"Daniel Okafor"}]}
+{"id":47,"text":"The postgres connection string is postgres://app:S3cretPass@db.internal:5432/prod.","entities":[{"label":"credential","text":"S3cretPass"}]}
+{"id":48,"text":"Policy number AX-99812-77 covers the car; the claim handler is Rosa Lindqvist.","entities":[{"label":"account number","text":"AX-99812-77"},{"label":"person","text":"Rosa Lindqvist"}]}
+{"id":49,"text":"Ping @devops in the channel if the deploy hangs.","entities":[]}
+{"id":50,"text":"Her email is m.oconnor@uni.example.ie and she prefers calls on 087 123 4567.","entities":[{"label":"email","text":"m.oconnor@uni.example.ie"},{"label":"phone number","text":"087 123 4567"}]}

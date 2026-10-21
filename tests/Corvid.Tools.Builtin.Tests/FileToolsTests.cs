@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using static Corvid.Tools.Builtin.Tests.Fixtures;
 
@@ -57,6 +58,35 @@ public sealed class FileToolsTests : IDisposable
 
         var error = await Assert.ThrowsAsync<ToolArgumentException>(() => Invoke(_tools, "read_file", """{"path":"image.bin"}"""));
         Assert.Contains("binary", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public async Task A_file_that_may_not_be_read_is_reported_as_permission_denied_not_as_binary()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux() || OperatingSystem.IsMacOS(), "File modes are POSIX.");
+        Assert.SkipWhen(Environment.IsPrivilegedProcess, "Root reads a file whatever its mode.");
+        _tree.Write("work/a.txt", "dentist on Friday\n");
+        _tree.Write("work/locked.txt", "dentist on Friday\n");
+        var locked = _tree.Path("work", "locked.txt");
+        File.SetUnixFileMode(locked, UnixFileMode.None);
+        try
+        {
+            var error = await Assert.ThrowsAsync<ToolArgumentException>(() => Invoke(_tools, "read_file", """{"path":"locked.txt"}"""));
+            Assert.Contains("'locked.txt' cannot be read: permission denied", error.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("binary", error.Message, StringComparison.Ordinal);
+            var patch = await Assert.ThrowsAsync<ToolArgumentException>(() =>
+                Invoke(_tools, "patch_file", """{"path":"locked.txt","old_text":"Friday","new_text":"Monday"}"""));
+            Assert.Contains("permission denied", patch.Message, StringComparison.Ordinal);
+
+            // A search skips it, as before, and finds the rest.
+            var found = await Invoke(_tools, "search_files", """{"pattern":"dentist"}""");
+            Assert.Equal(["a.txt:1: dentist on Friday"], found.GetProperty("matches").EnumerateArray().Select(e => e.GetString()));
+        }
+        finally
+        {
+            File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
     }
 
     [Theory]
@@ -178,5 +208,117 @@ public sealed class FileToolsTests : IDisposable
     {
         Assert.Throws<ArgumentException>(() => new Workspace("relative/dir"));
         Assert.Throws<DirectoryNotFoundException>(() => new Workspace(_tree.Path("missing")));
+    }
+
+    [Fact]
+    public async Task A_fifo_is_refused_promptly_by_every_tool_that_opens_it_and_skipped_by_a_search()
+    {
+        // Reading a FIFO nobody writes to blocks for ever; it used to hold the turn until it was cancelled.
+        Assert.SkipUnless(OperatingSystem.IsLinux(), "File kinds are told with Linux's statx.");
+        _tree.Write("work/a.txt", "dentist on Friday\n");
+        var fifo = _tree.Path("work", "pipe");
+        MakeFifo(fifo);
+        File.CreateSymbolicLink(_tree.Path("work", "pipe-link"), fifo);
+
+        foreach (var (tool, json) in new[]
+        {
+            ("read_file", """{"path":"pipe"}"""),
+            ("read_file", """{"path":"pipe-link"}"""),
+            ("patch_file", """{"path":"pipe","old_text":"a","new_text":"b"}"""),
+            ("write_file", """{"path":"pipe","content":"x"}"""),
+            ("search_files", """{"pattern":"dentist","path":"pipe"}"""),
+        })
+        {
+            var error = await Assert.ThrowsAsync<ToolArgumentException>(() => Promptly(fifo, () => Invoke(_tools, tool, json)));
+            Assert.Contains("named pipe (FIFO), not a regular file", error.Message, StringComparison.Ordinal);
+        }
+
+        var found = await Promptly(fifo, () => Invoke(_tools, "search_files", """{"pattern":"dentist"}"""));
+        Assert.Equal(["a.txt:1: dentist on Friday"], found.GetProperty("matches").EnumerateArray().Select(e => e.GetString()));
+        var listed = await Promptly(fifo, () => Invoke(_tools, "list_files", "{}"));
+        Assert.Contains("pipe (a named pipe (FIFO))", listed.GetProperty("entries").EnumerateArray().Select(e => e.GetString()));
+        // write_file did not replace the pipe with a regular file.
+        Assert.Equal("a named pipe (FIFO)", FileKinds.Special(fifo));
+    }
+
+    [Fact]
+    public async Task A_socket_in_the_workspace_is_refused_as_not_a_regular_file()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), "File kinds are told with Linux's statx.");
+        // Short, because a Unix socket path is limited to 108 bytes.
+        var root = Corvid.Tests.ShortTemp.Create("cvf-");
+        try
+        {
+            var socketPath = Path.Combine(root, "s.sock");
+            using var listener = Corvid.Tests.ShortTemp.Listen(root, socketPath);
+            var tools = new FileTools(new Workspace(root));
+
+            var error = await Assert.ThrowsAsync<ToolArgumentException>(() =>
+                Promptly(socketPath, () => Invoke(tools, "read_file", """{"path":"s.sock"}""")));
+            Assert.Contains("a socket, not a regular file", error.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task The_read_checks_the_kind_of_what_it_opened_not_only_the_path()
+    {
+        // The path check before opening leaves a window in which the path can be swapped for a FIFO; the read itself must
+        // refuse one without blocking, and must not read a device as if it were a file.
+        Assert.SkipUnless(OperatingSystem.IsLinux(), "File kinds are told with Linux's statx.");
+        var fifo = _tree.Path("work", "pipe");
+        MakeFifo(fifo);
+
+        var error = await Assert.ThrowsAsync<SpecialFileException>(() => Promptly(fifo, () =>
+        {
+            FileKinds.ReadRegular(fifo);
+            return Task.FromResult(default(JsonElement));
+        }));
+        Assert.Equal("a named pipe (FIFO)", error.Kind);
+        Assert.Equal("a character device", Assert.Throws<SpecialFileException>(() => FileKinds.ReadRegular("/dev/null")).Kind);
+        Assert.Equal("a directory", Assert.Throws<SpecialFileException>(() => FileKinds.ReadRegular(_workspace)).Kind);
+
+        _tree.Write("work/a.txt", "dentist on Friday\n");
+        Assert.Equal("dentist on Friday\n"u8.ToArray(), FileKinds.ReadRegular(_tree.Path("work", "a.txt")));
+        _tree.Write("work/empty.txt", "");
+        Assert.Empty(FileKinds.ReadRegular(_tree.Path("work", "empty.txt")));
+        // A final link is not followed: the path given is already resolved, so a link there was made since.
+        File.CreateSymbolicLink(_tree.Path("work", "a-link"), _tree.Path("work", "a.txt"));
+        Assert.Throws<IOException>(() => FileKinds.ReadRegular(_tree.Path("work", "a-link")));
+    }
+
+    private static void MakeFifo(string path)
+    {
+        using var process = Process.Start(new ProcessStartInfo("mkfifo", [path]) { UseShellExecute = false })
+            ?? throw new InvalidOperationException("mkfifo did not start.");
+        process.WaitForExit();
+        Assert.Equal(0, process.ExitCode);
+    }
+
+    /// <summary>
+    /// Runs a file tool off the test thread and fails if it has not finished within seconds, so a tool that blocks opening a
+    /// FIFO fails the test instead of hanging the run. The stuck open is then released: opening the FIFO for reading and
+    /// writing never blocks and counts as a writer, so the blocked reader gets end of file.
+    /// </summary>
+    private static async Task<JsonElement> Promptly(string special, Func<Task<JsonElement>> call)
+    {
+        var running = Task.Run(call);
+        try
+        {
+            return await running.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        }
+        catch (TimeoutException)
+        {
+            if (FileKinds.Special(special) == "a named pipe (FIFO)")
+            {
+                using (new FileStream(special, FileMode.Open, FileAccess.ReadWrite))
+                {
+                }
+            }
+            throw;
+        }
     }
 }

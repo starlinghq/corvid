@@ -391,8 +391,13 @@ internal static class Verbs
             case "crontab":
                 facts.Effects |= args.Any(a => !a.Dynamic && a.Text == "-l") ? ActionEffects.Read : ActionEffects.Schedule | ActionEffects.Write;
                 return;
+            // at and batch are unwrapped by the analyzer (Launchers.cs); these are for a path it cannot see.
             case "at" or "batch" or "atrm":
                 facts.Effects |= args.Any(a => !a.Dynamic && a.Text == "-l") ? ActionEffects.Read : ActionEffects.Schedule;
+                return;
+            // atq only lists the queue.
+            case "atq":
+                facts.Effects |= ActionEffects.Read;
                 return;
         }
 

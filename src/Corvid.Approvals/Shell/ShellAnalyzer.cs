@@ -21,6 +21,11 @@ internal enum StdinKind
     Unknown,
     /// <summary>A here-string or here-document whose content is static.</summary>
     Literal,
+    /// <summary>
+    /// A pipe from an <c>echo</c> of static words. Only <c>at</c> and <c>batch</c> read it as a script (their jobs always
+    /// ask); everything else treats it as <see cref="Unknown"/>.
+    /// </summary>
+    Piped,
 }
 
 internal sealed record Stdin(StdinKind Kind, string? Text = null)
@@ -141,7 +146,9 @@ internal sealed partial class ShellAnalyzer
             var persistent = item.Pipeline.Commands.Length == 1 && !item.Background;
             for (var i = 0; i < item.Pipeline.Commands.Length; i++)
             {
-                var change = Command(item.Pipeline.Commands[i], itemScope, i == 0 ? Stdin.Inherited : Stdin.Unknown, nesting);
+                var stdin = i == 0 ? Stdin.Inherited : Echoed(item.Pipeline.Commands[i - 1], itemScope) is { } echoed
+                    ? new Stdin(StdinKind.Piped, echoed) : Stdin.Unknown;
+                var change = Command(item.Pipeline.Commands[i], itemScope, stdin, nesting);
                 if (!persistent || change is null)
                     continue;
                 if (change.Cwds is { } cwds)
@@ -161,6 +168,37 @@ internal sealed partial class ShellAnalyzer
                     opaque ??= $"follows an assignment to {loader}, which can change what runs";
             }
         }
+    }
+
+    /// <summary>
+    /// What <c>echo</c> of static words writes to a pipe, or null when it is not exactly known: an option other than
+    /// <c>-n</c>, a backslash (<c>xpg_echo</c> would interpret it), an unquoted glob character, any expansion, a
+    /// redirection or assignment, or a scope where <c>echo</c> may not be the builtin.
+    /// </summary>
+    private static string? Echoed(ShellCommand command, Scope scope)
+    {
+        if (scope.Opaque is not null || command.Assignments.Length > 0 || command.Redirects.Length > 0
+            || command.Words.Length == 0 || command.Words[0].Literal != "echo")
+            return null;
+        var words = new List<string>();
+        foreach (var word in command.Words.Skip(1))
+        {
+            if (word.Literal is not { } literal || literal.Contains('\\')
+                || word.Parts.Any(part => part is LiteralPart { Quoted: false } unquoted && unquoted.Text.AsSpan().IndexOfAny("*?[") >= 0))
+                return null;
+            words.Add(literal);
+        }
+
+        var newline = true;
+        if (words.Count > 0 && words[0] == "-n")
+        {
+            newline = false;
+            words.RemoveAt(0);
+        }
+
+        if (words.Count > 0 && words[0].Length > 1 && words[0][0] == '-')
+            return null;
+        return string.Join(' ', words) + (newline ? "\n" : "");
     }
 
     // Variables that choose the program, load code into it, or run code on its behalf. A command that sets one is opaque.
@@ -191,17 +229,24 @@ internal sealed partial class ShellAnalyzer
         var redirects = ImmutableArray.CreateBuilder<(Field, bool)>();
         foreach (var redirect in command.Redirects)
         {
+            // Redirections apply left to right, and only one of descriptor 0 replaces the input: "3<<< ls" leaves it alone,
+            // while "<> file", "0<&3", "0>&3" or "<&-" make it something Corvid does not see.
+            var replacesStdin = redirect.Changes == 0;
             if (redirect.NamesFile)
             {
                 foreach (var target in Expand(redirect.Target, scope, substitutions))
                     redirects.Add((target, redirect.Writes));
-                if (redirect.Kind == RedirectKind.Input)
+                if (replacesStdin)
                     stdin = Stdin.Unknown;
             }
             else if (redirect.Kind is RedirectKind.HereString or RedirectKind.HereDocument)
             {
-                stdin = Joined(redirect.Target, scope, substitutions) is { } text ? new Stdin(StdinKind.Literal, text) : Stdin.Unknown;
+                var text = Joined(redirect.Target, scope, substitutions);
+                if (replacesStdin)
+                    stdin = text is not null ? new Stdin(StdinKind.Literal, text) : Stdin.Unknown;
             }
+            else if (replacesStdin)
+                stdin = Stdin.Unknown;
         }
 
         // Substitutions run first, each in a subshell of this one.
@@ -431,6 +476,12 @@ internal sealed partial class ShellAnalyzer
                 return ScriptCommand(args, scope, extras, nesting, text);
             case "parallel":
                 return ParallelCommand(args, scope, extras, nesting, text);
+            case "runuser":
+                return Runuser(args, scope, extras, nesting, text);
+            case "at" or "batch":
+                return At(verb, args, scope, extras, nesting, text);
+            case "gdb":
+                return Gdb(args, scope, extras, nesting, text);
         }
 
         if (Shells.Contains(verb))

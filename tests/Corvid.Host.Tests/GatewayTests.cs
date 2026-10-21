@@ -214,6 +214,28 @@ public sealed class GatewayTests
         Assert.Contains("GuestTools: no tool is named 'list_flies'", exception.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("memory_add")]
+    [InlineData("memory_approve")]
+    [InlineData("memory_reject")]
+    [InlineData("journal_remember")]
+    public async Task AGuestToolThatWritesMemoryStopsTheGatewayFromStarting(string tool)
+    {
+        // Refused by its risk metadata, not its name: journal_remember is a tool of this test's, declared SideEffects.Memory
+        // as [SideEffect(Memory)] would declare it, which a guest's turn would otherwise leave out without a word.
+        var journal = new TestTool(new Corvid.Tools.ToolDescriptor("journal_remember", "Remember a fact in the owner's journal.",
+            """{"type":"object","properties":{}}""", new Corvid.Tools.ToolRisk(Corvid.Tools.SideEffects.Memory, Network: false, Destructive: false), []),
+            _ => "remembered");
+        await using var host = TestHost.Create(settings: Settings(("Corvid:Gateway:Adapters:fake:GuestTools:0", tool), ("Corvid:Tools:Builtin", "true")),
+            services: services => services.AddSingleton<Corvid.Tools.IToolProvider>(new ToolList(journal)));
+        await using var runtime = await host.StartAsync();
+
+        var exception = Assert.Throws<InvalidOperationException>(() => CorvidGateway.Create(runtime,
+            host.Services.GetRequiredService<SlashCommandRegistry>(), host.Services.GetRequiredService<IOptions<CorvidOptions>>().Value,
+            [new GatewayAdapterRegistration("fake", () => new FakeAdapter())]));
+        Assert.Contains($"GuestTools: '{tool}' cannot be a guest tool: it writes memory", exception.Message, StringComparison.Ordinal);
+    }
+
     private sealed class ToolList(params Corvid.Tools.ToolFunction[] tools) : Corvid.Tools.IToolProvider
     {
         public IReadOnlyList<Corvid.Tools.ToolFunction> CreateTools() => tools;

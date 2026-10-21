@@ -758,8 +758,20 @@ a shell tool is assessed as the command line it runs (see [Built-in tools and sc
   extraction as if it ran alone. Unwrapping never lowers risk. Tracers add their own targets: `strace` and
   `ltrace` (`-o` writes a file, or pipes to a shell command that is analysed; `-p` attaches to PIDs; `-u` elevates;
   `strace -E` sets the environment; fault injection is unresolved), `valgrind` (`--log-file` and the profilers' output
-  files, with `%p` as a pattern; it reads option files Corvid cannot see, so it executes) and `perf stat`, `record`
-  (`perf.data`) and `trace`. Launchers that change namespaces, mounts or the user mark the launcher and everything
+  files, with `%p` as a pattern; it also reads `./.valgrindrc`, `~/.valgrindrc` and `$VALGRIND_OPTS`, which can
+  redirect `--log-file` or set `--trace-children`, so it always asks) and `perf stat`, `record` (`perf.data`) and
+  `trace`. `gdb` (`getopt_long_only`: one- or two-dash long names, exact only) always asks, since a debugger runs
+  whatever it is told and reads `.gdbinit`; `--args PROGRAM ARGS` and a bare `PROGRAM` are analysed as the command it
+  would run (in its `-cd` directory), `-p`/`--pid` and a numeric second operand are process targets, core and symbol
+  files are reads, `-x`/`-ix` scripts are reads plus unresolved, and `-ex`/`-iex` commands are unresolved and kept for
+  the hardline backstop. `runuser` (permuted util-linux options) elevates: `-u USER [--] COMMAND` is unwrapped like
+  `sudo`, `-c`/`--session-command` strings go through the subset parser (with `-l` or `-` the working directory is
+  unknown; a shell other than `sh`/`bash`/`dash`, or the user's login shell, is unresolved), and `-u` with `-c`, `-l`,
+  `-s` or `-f` refuses as util-linux does. `at` and `batch` defer the job to atd, so they always ask (`Schedule`); the
+  time spec is consumed, a job from a static here-string, here-document or a pipe from `echo` of static words (no
+  option other than `-n`, no backslash, glob or expansion) is parsed as a `/bin/sh` script in the current directory,
+  `-f FILE` is a read target and unresolved, input Corvid cannot see refuses, `at -l` is `atq` (read-only) and
+  `at -r`/`-d` is `atrm`. Only `at` and `batch` read a piped `echo`; a shell reading one still asks. Launchers that change namespaces, mounts or the user mark the launcher and everything
   it runs unresolved, so they always ask: `nsenter`, `unshare`, `firejail` (a short list of options), `bwrap`
   (writable binds are write targets, read-only binds recursive reads; the working directory is unknown) and
   `systemd-run` (elevated for the system manager; a service runs in `/` or the home directory with the manager's
@@ -820,8 +832,8 @@ Not built yet: GLiNER2 extraction of free-form targets (SQL, `curl` data, `kill`
 spike S3; calibrated `risk` (C-004b); reversibility now comes from checkpoint state (C-014 sets `ApprovalContext.Reversible`);
 restoring session rules on resume (they are not in the log); removing rules (C-013's `/approvals` lists them, and the
 host keeps always-rules in `Corvid:Approvals:RulesFile`, by default `$XDG_CONFIG_HOME/corvid/approvals.json`); control flow, subshells and other syntax
-outside the subset, which ask rather than run; unwrapping launchers not yet read (`runuser`, `at`, `gdb`, `perf`
-subcommands other than `stat`, `record` and `trace`, moreutils `parallel`, which is read as GNU's), which remain programs that
+outside the subset, which ask rather than run; unwrapping launchers not yet read (`perf` subcommands other than `stat`, `record` and `trace`, `lldb`, moreutils
+`parallel`, which is read as GNU's), which remain programs that
 run code Corvid cannot see; symlinks and `/proc/<pid>/cwd` paths, which are resolved lexically and left to the sandbox.
 
 ## Session actor and turn loop (C-011)
@@ -871,7 +883,9 @@ described below (see [Host and CLI](#host-and-cli-c-013)).
   it must fit the schema and, for a tool that declares `[Probe]` (`list_files` and `read_file`), survive a probe run of
   the tool (its result discarded), so `list_files` is never steered to a directory that does not exist. The probe is
   opt-in, never inferred from `ReadOnly`: an MCP tool is read-only on its server's or the user's word, and a probe runs
-  unlogged and unasked with the user's words. Other tools get the schema check only. An invalid call is logged as
+  unlogged and unasked with the user's words. It runs under a call id of its own (`probe-` and a GUID), never the failed
+  call's, so nothing keyed by call id (events, approvals, checkpoints, telemetry, a tool's own records) can take the
+  discarded trial for the real call. Other tools get the schema check only. An invalid call is logged as
   `ToolCallIssued` and an error `ToolResult` in one append (details, the expected schema and any hints: the repair
   message), so a concurrent switch never reads the call without its result. A `ToolArgumentException` from the
   tool's own binding counts the same. A second failed response escalates the generator through C-006
@@ -1197,7 +1211,16 @@ references Builtin except tests and the host (C-013). Everything runs on the deg
   credential-store and safety-configuration paths) and credential names (the sandbox's `.env` rule, examples included,
   and private keys). Listings and searches leave out credential names and denied paths, never descend into `.git`,
   `node_modules` or a link (searches skip linked files too), and stop at limits (`FileToolOptions`); files with a NUL in
-  their first 8 KiB are binary and not read.
+  their first 8 KiB are binary and not read, and a file the user may not read (EACCES) is a "permission denied" tool
+  error for `read_file` and `patch_file` (not reported as binary) and skipped by a search. Only regular files are opened: .NET reports a FIFO, a socket or a device as a
+  file, and reading a FIFO nobody writes to blocks the turn for ever (a device may never end). `FileKinds.Special` asks
+  Linux's `statx` (one layout on every architecture), links followed as `Workspace.Resolve` already did, so `read_file`,
+  `patch_file`, `write_file` (which would otherwise replace the pipe) and a `search_files` naming one refuse it with a
+  tool error, a search walking past one skips it, and a listing shows its kind instead of a size. Elsewhere the kind is
+  not told and these files are treated as before. The path check gives the error its wording; the read itself
+  (`FileKinds.ReadRegular`) opens with `O_NONBLOCK | O_NOFOLLOW` and checks the kind of the opened descriptor, so a
+  path swapped for a FIFO (or a final link) after the check is refused, not read. `write_file` replaces by rename, so a
+  swap there cannot block it.
 - Shell (`ShellTool`, `shell`, `[SideEffect(Process | Filesystem)]`, `[Destructive]`): a command line run by `/bin/bash -c`
   (bash, because the pipeline parses the bash subset, D-5) through `SandboxedShell`, which builds one `SandboxPolicy`: the
   workspace, no network, the default environment (names that change what bash runs, such as `BASH_ENV`, `SHELLOPTS` or
@@ -1985,13 +2008,20 @@ Unix socket and the real runtime over fake models: no network and no real tokens
   answers stay, as the chat saw them. (An owner answer sent `silent` or to `home_channel`, or a turn the owner ran on the
   chat's session from another surface, is still in that history as text.) Sessions are per chat, so nothing from the
   owner's DM reaches a group. `cron_create` cannot be a guest tool: a job's run is a turn of its own with the whole
-  toolset that reports to the chat. The owner's own turns are unchanged and keep
+  toolset that reports to the chat. Nor does a guest's turn reach the owner's memory write path: it is not asked
+  `remember` at egress, which would stage the guest's message (tainted, so always staged) in the owner's review queue,
+  a proposal worded by someone else and waiting to be approved; and a tool that declares `[SideEffect(Memory)]`
+  (`memory_add`, `memory_approve`, `memory_reject`) is left out of a guest's catalogue even when `GuestTools` names it,
+  and which `CorvidGateway.Create` refuses anyway (below). Two other residuals stay as they are: an approval asked during a guest's turn is
+  posted in that chat, where only the owner can answer it, and an owner answer sent `silent` or to `home_channel`
+  stays in the chat's history as text (above). The owner's own turns are unchanged and keep
   the whole toolset, including the turn right after a guest's in the same chat: as before, the owner's message clears
   taint (C-011), and a guest's earlier text stays in the transcript as a fetched page would, with the injection and
   approval checks that apply to any outside content. The validator refuses a guest tool that is not a tool name or names
   an MCP server that is not configured, and `CorvidGateway.Create` refuses one that is in neither the runtime's registry
   nor an MCP server's namespace (an MCP server's tools are listed only once it runs), so a typo is not silently a tool
-  nobody gets.
+  nobody gets, or whose risk metadata declares `SideEffects.Memory`: by the flag the turn loop filters on, not by name,
+  so a memory-writing tool added later is refused at start rather than silently left out of a guest's catalogue.
 - Pairing (`PairingStore`, `gateway.db`, its own SQLite file with WAL and full sync). A code is 8 characters from an
   unambiguous alphabet, shown `ABCD-EFGH`. It is bound to the adapter and sender, expires after an hour, and is repeated to
   that sender at most every 10 minutes. At most 10 codes wait per adapter; senders after that are ignored. Codes are
@@ -2088,8 +2118,10 @@ Unix socket and the real runtime over fake models: no network and no real tokens
   the files, an MCP-style tool kept from a guest who has other tools, an allowlisted tool working for a guest and the only
   one offered, unknown guest tools refused at start, the shared command registry, a side effect approved in the chat, a persona and
   slot override for one chat only, a job's result reaching its chat (tainted when its run ended tainted), the hosted
-  service, and validation. `tests/Corvid.Kernel.Tests` (`EgressTurnTests`) checks that a guest's turn sees no core
-  block and no recalled fact.
+  service, and validation (memory write tools refused as guest tools). `tests/Corvid.Kernel.Tests` (`EgressTurnTests`)
+  checks that a guest's turn sees no core block and no recalled fact, and `TurnLoopTests` that it is not asked
+  `remember`, stages nothing and cannot call a memory write tool its scope names, while the owner's next turn still
+  stages its message.
 
 Not built yet: Signal, email (IMAP/SMTP) and webhook adapters (§12); Discord's realtime Gateway and Slack's WebSocket
 through Vault (both wait on Vault's WebSocket first-frame substitution, `vault.md` §9); DMs on Discord from people not yet
