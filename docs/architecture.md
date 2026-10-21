@@ -1866,10 +1866,15 @@ project, package or checker rule), with events and spans in the host through a c
   its own pins. Every read goes to the file, and every write re-reads it, merges by server and tool, and replaces it through
   `<path>.tmp` and a move, so `corvid mcp list` and a running chat do not drop each other's pins. A file of another format or
   version, an unknown key or a pin without a SHA-256 hash is refused with `InvalidDataException`; then nothing from any server
-  is offered (`/mcp` says why), since a broken store must not turn into trust on first use.
-- Holding (`McpClients.Register`, after the allowlist, duplicate, limit and schema checks): a server with no pins pins every
-  tool it lists (trust on first use) and registers it; after that a tool without a pin is held as `new`, one whose hash differs
-  from its pin as `changed`, and a match registers as before. A removed tool is not registered and its pin stays. Held tools
+  is offered (`/mcp` says why), since a broken store must not turn into trust on first use. `IMcpPinStore.Listed` says whether
+  a server has an entry at all: a first listing writes one even when it pins nothing (an empty object in the file), so trust on
+  first use is spent once per server.
+- Holding (`McpClients.Register`, after the allowlist, duplicate, limit and schema checks): a server never listed before
+  (`Listed` false) pins every tool it lists (trust on first use) and registers it, and is recorded even when every tool was
+  flagged, taken or outside the allowlist, so a decoy first listing cannot keep the next one on trust on first use; after that
+  a tool without a pin is held as `new`, one whose hash differs from its pin as `changed`, and a match registers as before.
+  Held tools count toward `MaxTools` as registered ones do, so accepting them never takes a server over its limit; `Accept`
+  also refuses when the server already offers `MaxTools` tools. A removed tool is not registered and its pin stays. Held tools
   are never added to the registry; they are kept, with the exact `Tool` the server listed, on the connection
   (`McpServerStatus.Held`) and reported among its issues, e.g. `'send': held, its definition changed since it was pinned (/mcp
   diff fake send; /mcp accept fake send)`, so `/mcp` and `corvid mcp list` show them without new plumbing.
@@ -1879,8 +1884,10 @@ project, package or checker rule), with events and spans in the host through a c
   (`<important`, `<system`, `<secret`, `<instruction`, `<admin`), concealment (`do not tell|mention|inform|reveal|report|
   disclose|notify|let`), `ignore (the|all|any) previous|prior|above|earlier|foregoing`, `before using|calling|invoking|running
   this|the tool`, and `read` followed within 60 characters by `.ssh`, `.env`, `.aws`, an `id_rsa`-style key, `credentials`,
-  `/etc/passwd`, `mcp.json` or `secret(s)`. It runs over the description, the title and every `description` and `title` in the
-  input schema (all of which reach the prompt), after format and control characters are dropped and whitespace runs collapsed,
+  `/etc/passwd`, `mcp.json` or `secret(s)`. It runs over the description, the title, and every string value and property name
+  anywhere in the input schema (`description` and `title`, but also `default`, `enum`, `const`, `examples`, `$comment`,
+  `pattern` and the properties' names), since the generator is given the whole schema, after format and control characters
+  are dropped and whitespace runs collapsed,
   so a hidden character or a line break cannot split a marker; only the regex alternatives are taken from Beacon. It runs for
   trusted and untrusted servers alike and before pinning, so a match is held as `flagged`, with the matched text in the issue,
   even on a first listing (and is not pinned). The fabric's `injection` question is asked about untrusted descriptions too
@@ -1916,6 +1923,8 @@ project, package or checker rule), with events and spans in the host through a c
   most turns that offer its tools are tainted, so read-only network tools ask, the cloud egress gate is stricter, Vault applies
   taint rules and learned skills are marked tainted; `Trust: Trusted` is the remedy for a server the user vouches for.
 - Limits: a server that puts volatile text (a version, a date) in a description, or reorders arrays, is held at every start;
+  a schema string that only looks like a marker (an `enum` value or `pattern` such as `<system`) is held as flagged, which
+  `/mcp allow` resolves;
   replacing a server under the same name means accepting each changed tool (`--all` helps); a running chat does not see pins
   another process wrote until it restarts.
 - Tests: `tests/Corvid.Mcp.Tests` (`McpPinningTests`: a first listing pins and registers all; a changed description, schema or
@@ -1925,7 +1934,12 @@ project, package or checker rule), with events and spans in the host through a c
   of two writers; the canonical form. `McpDescriptionScanTests`: Beacon's own poisoned strings match and its benign one, with a
   few more, does not; a marker in a schema description or title matches; zero-width characters and line breaks do not split a
   marker; a flagged tool on a trusted server is held on first listing and not pinned, accept refuses it, allow registers it
-  with untrusted risk, `OutsideDescription` and tainted results, the next start keeps it, and a change flags it again).
+  with untrusted risk, `OutsideDescription` and tainted results, the next start keeps it, and a change flags it again; a marker
+  in a schema `default`, `enum`, `const`, `examples`, `$comment` or property name matches, an ordinary schema with those keys
+  does not, and a trusted server's tool poisoned only in its schema's `default` and `enum` is held and not pinned.
+  `McpPinningTests` also: a first listing that pins nothing (a flagged decoy) records the server, so the next listing's new
+  tool is held, not trusted; held tools count toward `MaxTools`, so a changed tool and a new one under a full limit leave the
+  new one out and accepting the changed one stays at the limit; the file store keeps an empty server entry).
   `tests/Corvid.Kernel.Tests` (`DescriptionTaintTests`: a turn offering an outside description is tainted in its result and
   in the generator request's context, one without is not; `injection/mcp:<server>` is asked once per session in the ingress
   batch; an L0 index with a hub skill taints and one with only trusted skills does not; `EventJsonTests` pins the two
@@ -1935,7 +1949,9 @@ project, package or checker rule), with events and spans in the host through a c
 
 Not built yet: `corvid mcp diff|accept|allow` (a CLI accept would list in a fresh process and need a hash argument to be sure it
 accepts what was reviewed); withholding a tool on a confident `injection` verdict over its description (it logs and taints,
-like a hub skill body, until C-021's floors are fitted on description rows); re-checking pins on an in-process reconnect or
+like a hub skill body, until C-021's floors are fitted on description rows), and asking `injection` about trusted servers'
+descriptions at all (only untrusted origins are asked, since asking taints the turn and a trusted server's tools do not; a
+semantically poisoned description from a trusted server that the regex misses is caught by nothing yet); re-checking pins on an in-process reconnect or
 `notifications/tools/list_changed` (pins are checked once per start); pruning pins of removed tools, a `/mcp forget <server>`
 to re-trust a replaced server, and keying pins by server identity (command, arguments, URL) as well as name; review from the
 gateway or ACP with a rendered diff, and a doctor check for held tools without starting servers; scanning results, resources,

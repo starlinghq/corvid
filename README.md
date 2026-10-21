@@ -49,7 +49,7 @@ configuration. Servers are untrusted by default: every tool asks before it runs 
 session, and `"Trust": "Trusted"` honours a server's read-only hints. `corvid mcp list` starts each server and shows its tools, `/mcp` shows
 them in chat, and `corvid mcp serve` offers Corvid's memory search and skills, read-only, to another agent over stdio
 ([details](docs/architecture.md#mcp-client-and-server-c-018)). A server's tool definitions are pinned on its first listing;
-a tool that is new or changed later, or whose description reads like injected instructions, is held until you review it with
+a tool that is new or changed later, or whose description or schema reads like injected instructions, is held until you review it with
 `/mcp diff` and take it with `/mcp accept` (or `/mcp allow` for a flagged one, which then always asks)
 ([details](docs/architecture.md#mcp-tool-pinning-and-poisoned-descriptions-c-022)).
 
