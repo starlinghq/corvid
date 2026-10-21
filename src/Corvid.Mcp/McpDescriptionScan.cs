@@ -11,9 +11,11 @@ namespace Corvid.Mcp;
 /// instructions to the agent instead of describing the tool. The markers are the tool-poisoning class's own: an instruction
 /// tag (<c>&lt;IMPORTANT&gt;</c>), concealment from the user, "ignore previous instructions", "before using this tool", and
 /// a directive to read a credential path. The pattern is the one of Beacon's <c>mcp-poisoned-tool-description</c> rule
-/// (Asymptote-Labs/agent-beacon, MIT). It runs over every text that reaches the prompt (the description, the title and each
-/// description in the input schema) after format and control characters are removed and whitespace runs are collapsed, so
-/// a zero-width character or a line break cannot split a marker.
+/// (Asymptote-Labs/agent-beacon, MIT). It runs over every text that reaches the prompt: the description, the title, and every
+/// string value and property name anywhere in the input schema (the generator sees the whole schema, so a marker in a
+/// <c>default</c>, an <c>enum</c>, <c>examples</c>, a <c>$comment</c> or a property's name counts as much as one in a
+/// <c>description</c>), after format and control characters are removed and whitespace runs are collapsed, so a zero-width
+/// character or a line break cannot split a marker.
 /// </summary>
 public static partial class McpDescriptionScan
 {
@@ -51,28 +53,32 @@ public static partial class McpDescriptionScan
         if (tool.Title is { } title)
             yield return title;
         if (tool.InputSchema.ValueKind == JsonValueKind.Object)
-            foreach (var text in SchemaDescriptions(tool.InputSchema))
+            foreach (var text in SchemaTexts(tool.InputSchema))
                 yield return text;
     }
 
-    /// <summary>Every <c>description</c> and <c>title</c> string anywhere in the schema: properties, nested objects, items.</summary>
-    private static IEnumerable<string> SchemaDescriptions(JsonElement element)
+    /// <summary>
+    /// Every string value and every property name anywhere in the schema, whatever its key: descriptions and titles, but also
+    /// <c>default</c>, <c>enum</c>, <c>const</c>, <c>examples</c>, <c>$comment</c>, <c>pattern</c> and the names of properties.
+    /// </summary>
+    private static IEnumerable<string> SchemaTexts(JsonElement element)
     {
         switch (element.ValueKind)
         {
+            case JsonValueKind.String:
+                yield return element.GetString()!;
+                break;
             case JsonValueKind.Object:
                 foreach (var property in element.EnumerateObject())
                 {
-                    if (property.Name is "description" or "title" && property.Value.ValueKind == JsonValueKind.String)
-                        yield return property.Value.GetString()!;
-                    else
-                        foreach (var text in SchemaDescriptions(property.Value))
-                            yield return text;
+                    yield return property.Name;
+                    foreach (var text in SchemaTexts(property.Value))
+                        yield return text;
                 }
                 break;
             case JsonValueKind.Array:
                 foreach (var item in element.EnumerateArray())
-                    foreach (var text in SchemaDescriptions(item))
+                    foreach (var text in SchemaTexts(item))
                         yield return text;
                 break;
         }
