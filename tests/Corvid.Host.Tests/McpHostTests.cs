@@ -218,6 +218,68 @@ public sealed class McpHostTests
     }
 
     [Fact]
+    public async Task ServeOffersProjectMemoryOnlyWhenConfigured()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "corvid-serve-" + Guid.NewGuid().ToString("N")[..12]);
+        try
+        {
+            var options = new CorvidOptions { DataDirectory = Path.Combine(root, "data"), Workspace = root };
+            options.Mcp.Serve.Skills = false;
+            Directory.CreateDirectory(options.DataDirectory);
+            new Memory.FactGraph(new Memory.MemoryDatabase(CorvidPaths.MemoryDatabase(options))).Add(new Memory.FactInput("Sam likes tea"));
+
+            var (tools, _) = await McpComposition.ServeToolsAsync(options, Token);
+            Assert.Equal(["search_memory"], tools.Select(tool => tool.Name));
+
+            options.Mcp.Serve.ProjectMemory = true;
+            (tools, _) = await McpComposition.ServeToolsAsync(options, Token);
+            Assert.Equal(["get_memory", "get_memory_context", "search_memory"], tools.Select(tool => tool.Name).Order(StringComparer.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void EveryServedCallIsASpanWithCountsButNoText()
+    {
+        var callId = "mcp-" + Guid.NewGuid().ToString("N");
+        var spans = new System.Collections.Concurrent.ConcurrentQueue<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == Telemetry.HostTelemetry.SourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activity =>
+            {
+                if ((string?)activity.GetTagItem("corvid.mcp.call") == callId)
+                    spans.Enqueue(activity);
+            },
+        };
+        ActivitySource.AddActivityListener(listener);
+        var result = System.Text.Json.JsonDocument.Parse("""
+            {"query":"secret words","results":[{"id":"fact:1","text":"hidden text"},{"id":"lesson:2","text":"more"}],"project":"workspace"}
+            """).RootElement.Clone();
+        McpComposition.ServeCalls()(new McpServeCall("search_memory", callId, false, 120, false, TimeSpan.FromMilliseconds(5), result));
+        McpComposition.ServeCalls()(new McpServeCall("get_memory", callId, true, 40, false, TimeSpan.Zero, null));
+
+        Assert.Equal(2, spans.Count);
+        var ok = spans.First();
+        Assert.Equal("corvid.mcp.serve", ok.DisplayName);
+        Assert.Equal("search_memory", ok.GetTagItem("corvid.mcp.tool"));
+        Assert.Equal("ok", ok.GetTagItem("corvid.mcp.serve.outcome"));
+        Assert.Equal(2, ok.GetTagItem("corvid.mcp.serve.items"));
+        Assert.Equal("workspace", ok.GetTagItem("corvid.mcp.serve.project"));
+        Assert.Equal(120, ok.GetTagItem("corvid.mcp.serve.chars"));
+        Assert.DoesNotContain(ok.TagObjects, tag => tag.Value is string text && (text.Contains("secret", StringComparison.Ordinal) || text.Contains("hidden", StringComparison.Ordinal)));
+        var failed = spans.Last();
+        Assert.Equal("error", failed.GetTagItem("corvid.mcp.serve.outcome"));
+        Assert.Equal(0, failed.GetTagItem("corvid.mcp.serve.items"));
+        Assert.Equal(ActivityStatusCode.Error, failed.Status);
+    }
+
+    [Fact]
     public void TheLineDiffKeepsCommonLinesAndMarksTheRest()
     {
         Assert.Equal(["  {", "-   \"a\": 1", "+   \"a\": 2", "+   \"b\": 3", "  }"],

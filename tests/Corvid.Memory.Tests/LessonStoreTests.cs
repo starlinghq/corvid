@@ -34,6 +34,19 @@ public sealed class LessonStoreTests
     }
 
     [Fact]
+    public void Known_projects_are_those_with_an_approved_lesson()
+    {
+        using var store = new TempStore();
+        var lessons = new LessonStore(store.Database, store.Time);
+        Assert.Empty(lessons.KnownProjects());
+        var candidate = lessons.File(Candidate(Content(), Project)).Lesson;
+        lessons.File(Candidate(Content(), OtherProject));
+        Assert.Empty(lessons.KnownProjects());
+        Assert.True(lessons.Approve(candidate.LessonId, "ok"));
+        Assert.Equal([Project], lessons.KnownProjects());
+    }
+
+    [Fact]
     public void The_same_lesson_in_another_project_is_another_lesson()
     {
         using var store = new TempStore();

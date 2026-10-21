@@ -52,6 +52,60 @@ public static class ProjectIds
     /// <summary>The id of a directory: its full path with <c>/</c> separators and no trailing separator.</summary>
     public static string FromPath(string path) => Hash(NormalizePath(path));
 
+    /// <summary>The longest project argument <see cref="Candidates"/> considers.</summary>
+    public const int MaxArgumentLength = 4_096;
+
+    /// <summary>
+    /// The project ids a caller's project argument may stand for (C-028), most specific first, by string work alone: no git
+    /// and no file system. A 64-hex id is itself; a URL or scp-form remote is <see cref="FromRemote(string)"/>; an absolute
+    /// path, normalized lexically (so <c>..</c> never reaches the disk and a path that does not exist still maps), is the
+    /// path's id and each ancestor's, stopping below <paramref name="home"/> as discovery's <c>GIT_CEILING_DIRECTORIES</c>
+    /// does (the home directory itself only on an exact match). A path equal to or under <paramref name="workspace"/> also
+    /// stands for <paramref name="workspaceProject"/>, placed where the walk passes the workspace. Anything else (relative,
+    /// with a NUL, longer than <see cref="MaxArgumentLength"/>) stands for nothing.
+    /// </summary>
+    public static IReadOnlyList<string> Candidates(string project, string? home, string? workspace = null, string? workspaceProject = null)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        var text = project.Trim();
+        if (text.Length == 0 || text.Length > MaxArgumentLength || text.Contains('\0', StringComparison.Ordinal))
+            return [];
+        if (IsValid(text.ToLowerInvariant()))
+            return [text.ToLowerInvariant()];
+        if (text.Contains("://", StringComparison.Ordinal) || (!System.IO.Path.IsPathRooted(text) && !IsRelativePath(text)))
+            return [FromRemote(text)];
+        if (!System.IO.Path.IsPathFullyQualified(text))
+            return [];
+        var full = Lexical(text);
+        var homeRoot = home is { Length: > 0 } && System.IO.Path.IsPathFullyQualified(home) ? Lexical(home) : null;
+        var workspaceRoot = workspaceProject is not null && workspace is { Length: > 0 } && System.IO.Path.IsPathFullyQualified(workspace)
+            ? Lexical(workspace) : null;
+        var ceiling = homeRoot is not null && full.StartsWith(homeRoot.TrimEnd('/') + "/", StringComparison.Ordinal) ? homeRoot : null;
+        var ids = new List<string>();
+        var workspaceAdded = false;
+        for (var current = full; current is not null; current = System.IO.Path.GetDirectoryName(current))
+        {
+            if (current == ceiling)
+                break;
+            ids.Add(FromPath(current));
+            if (current == workspaceRoot)
+            {
+                ids.Add(workspaceProject!);
+                workspaceAdded = true;
+            }
+            if (current == homeRoot)
+                break;
+        }
+        if (!workspaceAdded && workspaceRoot is not null
+            && (full == workspaceRoot || full.StartsWith(workspaceRoot.TrimEnd('/') + "/", StringComparison.Ordinal)))
+            ids.Add(workspaceProject!);
+        return [.. ids.Distinct(StringComparer.Ordinal)];
+    }
+
+    /// <summary>A full path without a trailing separator. On Unix <c>GetFullPath</c> is lexical: it never touches the disk.</summary>
+    private static string Lexical(string path) =>
+        System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(path)).Replace('\\', '/');
+
     internal static string NormalizeRemote(string url)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(url);

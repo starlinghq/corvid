@@ -140,6 +140,12 @@ public sealed class McpServeSettings
     /// <summary>Let <c>search_memory</c> also return earlier conversations, which hold tool results and outside content.</summary>
     public bool Conversations { get; set; }
 
+    /// <summary>
+    /// C-028, off by default: <c>get_memory</c>, <c>get_memory_context</c>, approved non-local-only lessons of a known project
+    /// in <c>search_memory</c>, and the <c>project</c> argument. Needs <see cref="Memory"/>; lessons need Memory:Lessons.
+    /// </summary>
+    public bool ProjectMemory { get; set; }
+
     /// <summary><c>skill_list</c> and <c>skill_read</c>.</summary>
     public bool Skills { get; set; } = true;
 }
