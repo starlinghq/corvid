@@ -11,44 +11,61 @@ checkpoints to ingress + egress and drop `step` questions to two.
 
 ## Result
 
-**Pass for a 4-question ingress, fail for 8 questions.** Kev-0.8B on the 3090, whole fabric call, in the quietest run
-(run 3, load average 4–12):
+**Pass for a 4-question ingress; `TurnRunner`'s largest ingress (6 questions) is on the line at 600 tokens and passes
+at 300; 8 questions fail.** Kev-0.8B on the 3090, whole fabric call, on the two quietest runs (run 3, load 4–12, and
+run 4, the review rerun at load 3–6):
 
-| Kev-0.8B, RTX 3090 | p50 | p90 | p99 | Runs 1 and 2 p50 (loaded machine) |
-| --- | --- | --- | --- | --- |
-| Ingress, 600 tokens, 4 questions | **260 ms** | 434 ms | 614 ms | 284, 258 ms |
-| Ingress, 600 tokens, 8 questions | **361 ms** | 437 ms | 753 ms | 412, 1,088 ms |
-| Ingress, 300 tokens, 4 questions | **159 ms** | 166 ms | 171 ms | 226, 438 ms |
-| `pre-execute`, one `risk` question (260-token row) | **249 ms** | 510 ms | 628 ms | 253, 706 ms |
+| Kev-0.8B, RTX 3090 | Run 4 p50 (p90) | Run 3 p50 (p90) | Runs 1 and 2 p50 (loaded machine) |
+| --- | --- | --- | --- |
+| Ingress, 600 tokens, 4 questions | **245, 220 ms** (262, 231) | **260 ms** (434) | 284, 258 ms |
+| Ingress, 600 tokens, 6 questions (`TurnRunner`'s maximum) | **302, 301 ms** (313, 314) | not run | not run |
+| Ingress, 600 tokens, 8 questions (stress bound) | **340 ms** (384) | **361 ms** (437) | 412, 1,088 ms |
+| Ingress, 300 tokens, 4 questions | not run | **159 ms** (166) | 226, 438 ms |
+| Ingress, 300 tokens, 6 questions | **212 ms** (228) | not run | not run |
+| `pre-execute`, one `risk` question (260-token row) | not run | **249 ms** (510) | 253, 706 ms |
 
-- A 4-question ingress (`intent`, `difficulty`, `clarify`, `needs_recall`: what `TurnRunner` asks with no tool or skill
-  shortlist) meets the 300 ms line in all three runs: p50 258–284 ms at 600 tokens, 159 ms at 300. An 8-question
-  ingress does not: 361 ms at best, 412 ms and 1,088 ms on the loaded machine. `TurnRunner` asks 3 to 6 questions today;
-  with a tool and a skill shortlist (6 questions, the two longest rows) a 600-token ingress sits between the two cells,
-  so it is about at the line. At 300 tokens, 8 questions came in at 280 ms (run 2, load 36–41) and 326 ms (run 1).
-- p90 and p99 are well above 300 ms in every 600-token cell, even in run 3: one ingress in ten takes 430 ms or more.
-- On the CPU, Kev-0.8B is over 1 s for every checkpoint, also on the quieter machine (`pre-execute` p50 3.0 s at load
-  5–6), so the plan's CPU branch applies to CPU-only installs. Kev-4B on the CPU takes about 15 s per checkpoint.
+- `TurnRunner` asks 3 to 6 questions at ingress: `intent`, `difficulty`, `clarify`, then `needs_recall` when there is a
+  retriever and the turn is not a guest's, `tool` when there is a tool shortlist and `skill` when there is a skill
+  shortlist. The 8-question cell adds `injection` and `delegate`, which `TurnRunner` does not ask at ingress, so it is
+  a stress bound, not a real checkpoint; the 6-question cell (added in the review rerun) is the realistic worst case.
+- A 4-question ingress (no tool or skill shortlist) meets the 300 ms line at 600 tokens in every run: p50 220–284 ms,
+  55–80 ms under the line on the quiet machine. At 300 tokens it passed on the quieter runs (159 and 226 ms) but not
+  under load 71–83 in run 2 (438 ms).
+- A 6-question ingress (both shortlists: the two longest rows, 100–113 tokens) came in at **301.6 and 300.9 ms** in two
+  separate processes at 600 tokens: on the line, formally a miss by 1–2 ms, and any machine load pushes it over. At
+  300 tokens it is 212 ms. So the pass holds for every ingress `TurnRunner` asks only if the state stays nearer 300
+  than 600 tokens when both shortlists are present, or if the shortlists move to their own request.
+- An 8-question ingress fails: 340–361 ms on the quiet machine, 412 ms and 1,088 ms on the loaded one.
+- Tail latency depends on load. On the quiet rerun the 600-token p90 is within 15–45 ms of the p50 (231–384 ms); in
+  run 3, with load rising to 11 during the cells, p90 was 434–510 ms. Under load one ingress in ten takes 430 ms or
+  more.
+- On the CPU, Kev-0.8B is over 1 s for every checkpoint (the quickest p50 is 2.6 s, a 300-token 4-question ingress),
+  also on the quieter machine (`pre-execute` p50 3.0 s at load 5–6), so the plan's CPU branch applies to CPU-only installs. Kev-4B on the CPU takes about 15 s per checkpoint.
 - Kev-4B on the 3090 takes 0.7–1.3 s for a 600-token checkpoint: usable as the second tier for gates below their floor
   (§5.5, rare by construction), not as the default decider.
 - The workstation was shared with other jobs for most of the spike (load average up to 99 on 12 hardware threads; see
-  [Contamination](#contamination)). Run 3 repeated the four decisive cells once the load had dropped to 4–5; its
-  numbers agree with run 1 within 10–50 ms, which is what the verdict rests on.
+  [Contamination](#contamination)). Run 3 repeated the four decisive cells once the load had dropped (the driver
+  launched each process at load 4.0–4.7; the cells' own records read 4.0–8.6 at their start and up to 11.8 at their
+  end); its p50s are 4–67 ms below run 1's. Run 4, the review rerun at load 3.3–6.3, added the 6-question cell and
+  repeated the 600-token cells; the verdict rests on runs 3 and 4.
 
 ### Decision it triggers
 
 1. **Place Kev-0.8B on the 3090** when one is present, keep the ingress state at 600 tokens or less, and keep a
    checkpoint at four or five questions per request (split the `tool` and `skill` shortlists into their own request or
    trim their descriptions when both are present). That needs a CUDA path in `KevDecider.Create`, which C-004b
-   deferred (it throws for any non-CPU provider; this spike bypassed it, see [Method](#method)). Proposed as C-022.
+   deferred (it throws for any non-CPU provider; this spike bypassed it, see [Method](#method)). Six questions at
+   600 tokens are at 301 ms, so with both shortlists present either ask `tool` and `skill` in their own request or
+   keep that state nearer 300 tokens. Proposed as C-022.
 2. **On CPU-only hosts, reduce checkpoints** to ingress + egress and drop `step` questions to two, as the plan's
    fallback says: no CPU cell came in under 1 s. Proposed as C-023, not implemented.
 3. **Kev-4B stays the gate escalation tier**, on the GPU only; on the CPU (about 15 s) it is not interactive.
 4. **A `pre-execute` checkpoint costs about 250 ms** on the GPU, almost as much as a 4-question ingress, because the
    state pass dominates and Kev does not reuse a state across requests. A per-tool-call `pre-execute` adds a quarter
    of a second to every side-effecting tool call.
-5. **The CUDA profile is not GPU-bound.** Mean GPU utilisation while the model was loaded was 31% (0.8B) and 37% (4B),
-   and latency moved with the CPU load. Starling's Kev README explains why: the CUDA profiles run the builder's CPU
+5. **The CUDA profile is not GPU-bound.** Mean GPU utilisation while the model was loaded was 31% (0.8B) and 37% (4B)
+   in run 1, and 51% for 0.8B on the quiet rerun (run 4, including load and teardown samples), and latency moved with
+   the CPU load. Starling's Kev README explains why: the CUDA profiles run the builder's CPU
    export on the CUDA provider, ONNX Runtime keeps the `GroupQueryAttention` nodes on the CPU provider, and the state
    cache passes through host memory for every row. The builder's own CUDA graph (`-e cuda -p fp32`) is faster but did
    not load unpatched with ONNX Runtime GenAI 0.17.1. A GPU-resident graph and state reuse across checkpoints are the
@@ -64,7 +81,7 @@ checkpoints to ingress + egress and drop `step` questions to two.
 | Packages | `Starlings.Models.Kev` 0.3.0 and `Starlings.Models.Qwen35` 0.3.0 from nuget.org; `Microsoft.ML.OnnxRuntime` 1.30.0 (CPU build) or `Microsoft.ML.OnnxRuntime.Gpu.Linux` 1.30.0 (CUDA build) |
 | Profiles | `kev-0.8b/onnx-fp32-cpu`, `kev-0.8b/onnx-fp32-cuda`, `kev-4b/onnx-fp32-cpu`, `kev-4b/onnx-fp32-cuda`; the cached bundles under `~/.cache/starlings/models/jaredpalmer/` opened offline with size verification (as `StarlingModelStore.OpenKev` does); calibrated temperature; CUDA calls serialized (the profile default) |
 | Threads | ONNX Runtime defaults (Starling sets no intra-op count on an unconstrained host, so ONNX Runtime uses one thread per physical core, 6) |
-| Environment | `MALLOC_MMAP_THRESHOLD_=65536` (Starling's Kev README), `CUDA_DEVICE_ORDER=PCI_BUS_ID`, `CUDA_VISIBLE_DEVICES=<3090 UUID>` for CUDA and empty for CPU; every model process under `flock` on the shared GPU lock, one at a time |
+| Environment | `MALLOC_MMAP_THRESHOLD_=65536` (Starling's Kev README), `CUDA_DEVICE_ORDER=PCI_BUS_ID`, `CUDA_VISIBLE_DEVICES=<3090 UUID>` for CUDA and empty for CPU; every model process under `flock` on the lock `GPU_LOCK` names, one at a time (see [Contamination](#contamination) on which lock that was) |
 | Corvid | `main` at `5a9e534` |
 
 Commands (from the repository root; `run.sh` sets the environment above and takes the lock):
@@ -75,6 +92,7 @@ evals/spikes/S1-kev-latency/run.sh 0.8b cuda --calls 100 --warmup 10      # run 
 evals/spikes/S1-kev-latency/run.sh 4b cuda --calls 50 --warmup 5
 evals/spikes/S1-kev-latency/run.sh 0.8b cpu --calls 50 --warmup 5
 evals/spikes/S1-kev-latency/run.sh 0.8b cuda --cells ingress-600-q4 --calls 100 --warmup 10   # runs 2 and 3: one process per cell
+GPU_LOCK=<shared lock> evals/spikes/S1-kev-latency/run.sh 0.8b cuda --cells ingress-600-q6 --calls 100 --warmup 10   # run 4
 python3 -I evals/spikes/S1-kev-latency/table.py <results>.jsonl           # the tables below
 ```
 
@@ -89,8 +107,10 @@ The harness (`evals/spikes/S1-kev-latency/`) measures Corvid's own path, not a r
   Actual sizes by Corvid's counter: **297, 560 and 1,496 tokens**; Kev's own state, with its markers, is 307, 601 and
   1,559 tokens. No state was over the hard stop.
 - **Questions.** The §5.3 catalogue through `QuestionCatalogue.ToQuestion`, in `TurnRunner`'s ingress order: 4 =
-  `intent`, `difficulty`, `clarify`, `needs_recall`; 8 = those plus `tool` (8 tools + `none`, `name: description`),
-  `skill` (4 skills + `none`), `injection`, `delegate`. Kev rows: 17–83 tokens for 4 questions, 17–113 for 8.
+  `intent`, `difficulty`, `clarify`, `needs_recall`; 6 = those plus `tool` (8 tools + `none`, `name: description`) and
+  `skill` (4 skills + `none`), `TurnRunner`'s maximum; 8 = those plus `injection` and `delegate`, which `TurnRunner`
+  does not ask at ingress (a stress bound). Kev rows: 17–83 tokens for 4 questions, 17–113 for 6 and 8. The 6-question
+  cell was added in the review rerun (run 4).
   `pre-execute` is one `risk` question whose instructions are a `RiskDocument`-shaped JSON (question plus the analysed
   action for `rm -rf build/ dist/ && git push --force origin main`), as `ApprovalPipeline` sends it; `ActionDocuments`
   is internal to `Corvid.Approvals`, so the spike writes the same snake_case shape itself. Its row is 260 tokens.
@@ -111,6 +131,9 @@ The harness (`evals/spikes/S1-kev-latency/`) measures Corvid's own path, not a r
   several times, so they would not change the decision. Three variants of the input rotate. Reported: nearest-rank p50, p90, p99,
   mean and min of the whole fabric call, plus the Kev-only p50 (the decider call). The fabric's own overhead (policy and
   SQLite append) is 5–15 ms; Kev's tokenization is 1–3 ms; the rest is the graph runs. Load time is per process.
+  Runs 1–3 recorded only the summary statistics, so their percentiles cannot be recomputed from the JSONL; from run 4
+  on, each cell record also carries every timed call (`fabric_samples_ms`), and recomputing nearest-rank p50, p90 and
+  p99 from those samples gives the recorded values exactly.
 
 ### Spike placement
 
@@ -145,9 +168,30 @@ timestamp, uuid, name, memory.used [MiB], utilization.gpu [%]
 All times in milliseconds for one whole checkpoint (`DecisionFabric.DecideAsync`). "Load" is the 1-minute load
 average before and after the cell.
 
+### GPU (RTX 3090), run 4: review rerun, load 3–6
+
+Run by the PR review on a quiet machine, one process per cell under the shared GPU lock, `--calls 100 --warmup 10`,
+with every timed call recorded. The 600-token 4- and 6-question cells were run twice, in separate processes.
+`nvidia-smi` sampled the 3090 throughout (`nvidia-smi-0.8b-run4.csv`, 99 samples, only that UUID).
+
+| Model | Device | Cell | State (Corvid / Kev tokens) | Rows (Kev tokens) | n | p50 | p90 | p99 | mean | min | Kev only p50 | Load before → after |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| kev-0.8b | cuda | ingress-600-q4 | 560 / 601 | 17–83 | 100 | 245 | 262 | 278 | 241 | 213 | 244 | 3.27 → 5.98 |
+| kev-0.8b | cuda | ingress-600-q6 | 560 / 601 | 17–113 | 100 | 302 | 313 | 335 | 303 | 292 | 301 | 5.98 → 6.23 |
+| kev-0.8b | cuda | ingress-600-q8 | 560 / 601 | 17–113 | 100 | 340 | 384 | 397 | 346 | 330 | 339 | 6.23 → 6.27 |
+| kev-0.8b | cuda | ingress-300-q6 | 297 / 307 | 17–113 | 100 | 212 | 228 | 236 | 216 | 208 | 212 | 6.27 → 6.01 |
+| kev-0.8b | cuda | ingress-600-q6 | 560 / 601 | 17–113 | 100 | 301 | 314 | 321 | 303 | 293 | 300 | 4.45 → 5.36 |
+| kev-0.8b | cuda | ingress-600-q4 | 560 / 601 | 17–83 | 100 | 220 | 231 | 240 | 221 | 214 | 219 | 5.01 → 5.43 |
+
+The minimum of the 6-question cell (292 ms) is only 8 ms under the line: its distribution sits on 300 ms.
+
 ### GPU (RTX 3090), run 3: the decisive cells, load 4–12
 
-Run after the other jobs had mostly finished; each cell started once the load average was below 5.
+Run after the other jobs had mostly finished. The driver launched each process once the load average was below 5
+(4.0–4.7 at launch); the cells' own records, taken after the model had loaded, read 4.0–8.6 at the start and up to
+11.8 at the end. `nvidia-smi-0.8b-run3.csv` covers only the last cell (`pre-execute`), and its first sample (60%
+utilisation at 282 MiB, before Kev had loaded) shows another process briefly on the 3090; for the three ingress cells
+the device evidence is the process header (`kev-0.8b/onnx-fp32-cuda`, `CUDA_VISIBLE_DEVICES` = the 3090's UUID).
 
 | Model | Device | Cell | State (Corvid / Kev tokens) | Rows (Kev tokens) | n | p50 | p90 | p99 | mean | min | Kev only p50 | Load before → after |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -234,10 +278,13 @@ Kev-0.8B: the first two rows are run 3 (load 5 at the start; the first cell's lo
   quarter of a second on the GPU even when the ingress state is unchanged.
 - **Rows.** On 0.8B CUDA (run 1) the row sweep adds about 0.45 ms per row token above the base row: 253 ms at 260
   tokens, 352 at 456, 468 at 750, 570 at 962. Rows up to 1,000 tokens fit KevDecider's row budget; none was declined.
-- **8 questions.** The `tool` and `skill` rows (shortlists with descriptions, 100–113 tokens) are the long ones; going
-  from 4 to 8 questions added about 100 ms (run 3: 260 → 361 ms; run 1: 284 → 412 ms).
+- **6 and 8 questions.** The `tool` and `skill` rows (shortlists with descriptions, 100–113 tokens) are the long ones:
+  adding them (4 → 6 questions) costs 57–81 ms at 600 tokens (run 4), and the two short `injection` and `delegate` rows
+  (6 → 8) another 38 ms. Going from 4 to 8 added about 100 ms in every run (run 4: 220–245 → 340 ms; run 3: 260 → 361
+  ms; run 1: 284 → 412 ms).
 - **Kev-4B on GPU** is 2.4–2.9× Kev-0.8B for the same cell in run 1 (691 against 284 ms at 600 × 4).
-- **CPU.** The best Kev-0.8B CPU checkpoint is `pre-execute` at 3.0 s (run 3, load 5–6); a 300-token ingress is 2.6 s.
+- **CPU.** The quickest Kev-0.8B CPU checkpoint is a 300-token, 4-question ingress at 2.6 s (runs 1 and 2, loaded);
+  on the quieter machine (run 3, load 5–6) `pre-execute` was 3.0 s.
   Starling's admission measured about 0.37 s per question on short states; a 300–600-token state pass is what makes
   every CPU checkpoint here several seconds.
 
@@ -250,9 +297,14 @@ apparently without the lock, so the one-model-at-a-time rule was not holding on 
 runs attention and the state-cache copies on the CPU (above), the GPU cells are load-sensitive too: the same 0.8B
 600 × 8 cell has p50 361 ms at load 5, 412 ms at load 18–21 and 1,088 ms at load 38–81.
 
-Run 3 (load 4–12) is the cleanest measurement this spike has, and the verdict rests on it; runs 1 and 2 show how far
-latency moves on a busy workstation, which is also the condition Corvid will run in next to a generator. The 4-question
-margin is 40 ms at p50; p90 is over the line in every 600-token cell.
+Runs 3 (load 4–12) and 4 (load 3–6) are the cleanest measurements this spike has, and the verdict rests on them; runs
+1 and 2 show how far latency moves on a busy workstation, which is also the condition Corvid will run in next to a
+generator. The 4-question margin is 40–80 ms at p50 (run 3: 40; run 4: 55 and 80); the 6-question cell has none. On
+the quiet machine p90 stays under the line for 4 questions (231–262 ms); with load rising during run 3 it was 434 ms.
+
+`run.sh` takes the lock named by `GPU_LOCK` and defaults to a private `/tmp/corvid-s1-gpu.lock`. The logs do not say
+which lock runs 1–3 used; if it was the default, the spike did not hold the shared GPU lock, which would also explain
+another model job on the 3090 at the same time. Run 4 passed the shared lock explicitly.
 
 ## Files
 

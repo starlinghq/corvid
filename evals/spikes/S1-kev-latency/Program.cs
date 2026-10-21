@@ -86,6 +86,7 @@ var cells = new List<Cell>();
 foreach (var size in new[] { 300, 600, 1500 })
 {
     cells.Add(new Cell($"ingress-{size}-q4", size, Checkpoint.Ingress, () => Ingress(4)));
+    cells.Add(new Cell($"ingress-{size}-q6", size, Checkpoint.Ingress, () => Ingress(6)));
     cells.Add(new Cell($"ingress-{size}-q8", size, Checkpoint.Ingress, () => Ingress(8)));
 }
 cells.Add(new Cell("pre-execute-600-risk", 600, Checkpoint.PreExecute, () => [Risk(0)]));
@@ -157,6 +158,8 @@ foreach (var cell in selected)
         ["kev_decider_ms"] = Stats.Of(kevMs),
         ["kev_encode_ms"] = Stats.Of(encodeMs),
         ["kev_run_ms"] = Stats.Of(runMs),
+        // Every timed call in order, so the percentiles can be recomputed from the record.
+        ["fabric_samples_ms"] = fabricMs.Select(ms => Math.Round(ms, 1)).ToArray(),
         ["wall_s"] = Math.Round(cellWatch.Elapsed.TotalSeconds, 1),
         // Other jobs share this workstation; the 1-minute load average before and after the cell says how busy it was.
         ["loadavg_before"] = loadBefore,
@@ -175,17 +178,24 @@ return 0;
 
 List<KeyValuePair<string, DecisionQuestion>> Ingress(int count)
 {
-    // TurnRunner's ingress order (intent, difficulty, clarify, needs_recall, tool, skill), plus injection and delegate for 8.
+    // TurnRunner's ingress order (intent, difficulty, clarify, needs_recall, tool, skill): 4 is a turn with no tool or skill
+    // shortlist, 6 is TurnRunner's maximum (both shortlists). 8 adds injection and delegate, which TurnRunner does not ask
+    // at ingress: a stress bound, not a real ingress.
+    if (count is not (4 or 6 or 8))
+        throw new ArgumentOutOfRangeException(nameof(count));
     var list = new List<KeyValuePair<string, DecisionQuestion>>
     {
         Ask("intent"), Ask("difficulty"), Ask("clarify"), Ask("needs_recall"),
     };
-    if (count == 8)
+    if (count >= 6)
     {
         list.Add(KeyValuePair.Create("tool", catalogue["tool"].ToQuestion(
             [.. Tools.Select(t => new QuestionOption(t.Name, t.Description)), new QuestionOption("none", "no tool is needed")])));
         list.Add(KeyValuePair.Create("skill", catalogue["skill"].ToQuestion(
             [.. Skills.Select(s => new QuestionOption(s.Name, s.Description)), new QuestionOption("none", "no saved skill applies")])));
+    }
+    if (count == 8)
+    {
         list.Add(Ask("injection"));
         list.Add(Ask("delegate"));
     }

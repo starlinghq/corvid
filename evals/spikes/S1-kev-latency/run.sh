@@ -4,6 +4,7 @@
 #   run.sh <0.8b|4b> <cpu|cuda> [extra args, e.g. --calls 20 --cells ingress-600]
 # Environment (defaults are the workstation's): DOTNET, OUT (build and result directory), GPU_UUID (the RTX 3090),
 # CUDNN_LIB (cuDNN 9 from a pip wheel; the CUDA 13 runtime comes from /opt/cuda via ldconfig), GPU_LOCK, BUILD_LOCK.
+# The lock defaults are private to this script: on a shared machine, set GPU_LOCK and BUILD_LOCK to the shared locks.
 set -euo pipefail
 here="$(dirname "$(readlink -f "$0")")"
 dotnet="${DOTNET:-$HOME/.dotnet/dotnet}"
