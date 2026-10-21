@@ -26,5 +26,7 @@
     <ProjectReference Include="../Corvid.Vault.Client/Corvid.Vault.Client.csproj" />
     <InternalsVisibleTo Include="Corvid.Host.Tests" />
     <InternalsVisibleTo Include="Corvid.Cli.Tests" />
+    <InternalsVisibleTo Include="Corvid.Acp.Tests" />
+    <InternalsVisibleTo Include="Corvid.Http.Tests" />
   </ItemGroup>
 </Project>

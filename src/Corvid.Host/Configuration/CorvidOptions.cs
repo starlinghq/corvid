@@ -47,6 +47,9 @@ public sealed class CorvidOptions
     public SkillsSettings Skills { get; set; } = new();
 
     public McpSettings Mcp { get; set; } = new();
+
+    /// <summary><c>corvid serve</c>, the OpenAI-compatible HTTP endpoint (C-019).</summary>
+    public ServeSettings Serve { get; set; } = new();
 }
 
 /// <summary>MCP (C-018, plan §12): servers whose tools Corvid offers, and what <c>corvid mcp serve</c> shares.</summary>
@@ -122,6 +125,44 @@ public sealed class McpServeSettings
 
     /// <summary><c>skill_list</c> and <c>skill_read</c>.</summary>
     public bool Skills { get; set; } = true;
+}
+
+/// <summary>What a request does when a tool call needs the user, who cannot be asked over HTTP.</summary>
+public enum ServeApprovals
+{
+    /// <summary>The request fails with an <c>approval_required</c> error naming the tool; nothing that needed approval ran.</summary>
+    Fail,
+    /// <summary>The call is denied and the model answers without it, as in an unattended job.</summary>
+    Deny,
+}
+
+/// <summary>
+/// The OpenAI-compatible endpoint (plan §12): <c>/v1/chat/completions</c> and <c>/v1/models</c>, bound to loopback by
+/// default. A bearer token is a Vault secret named here, never a value in Corvid's configuration (plan §10.5).
+/// </summary>
+public sealed class ServeSettings
+{
+    /// <summary>Where to listen: an <c>http</c> URL. Anything other than a loopback address needs <see cref="TokenSecret"/>.</summary>
+    public string Url { get; set; } = "http://127.0.0.1:8411";
+
+    /// <summary>The Vault secret callers must present as <c>Authorization: Bearer</c>. Without it only loopback callers are served.</summary>
+    public string? TokenSecret { get; set; }
+
+    public ServeApprovals Approvals { get; set; } = ServeApprovals.Fail;
+
+    /// <summary>Offer Corvid's tools to the model in served sessions. Off, every served turn is a plain conversation.</summary>
+    public bool Tools { get; set; } = true;
+
+    /// <summary>The largest request body accepted.</summary>
+    public int MaxRequestBytes { get; set; } = 1024 * 1024;
+
+    /// <summary>Whether <see cref="Url"/> names a loopback host (<c>127.0.0.0/8</c>, <c>::1</c> or <c>localhost</c>).</summary>
+    public static bool IsLoopback(Uri url)
+    {
+        ArgumentNullException.ThrowIfNull(url);
+        return url.IsLoopback || url.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+            || System.Net.IPAddress.TryParse(url.Host.Trim('[', ']'), out var address) && System.Net.IPAddress.IsLoopback(address);
+    }
 }
 
 public sealed class CheckpointSettings

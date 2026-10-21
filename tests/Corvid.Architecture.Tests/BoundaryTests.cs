@@ -165,6 +165,29 @@ public sealed class BoundaryTests
     [InlineData("Corvid.Kernel", "ModelContextProtocol.Core", "package", false)]
     [InlineData("Corvid.Tools", "ModelContextProtocol", "package", false)]
     [InlineData("Corvid.Host", "ModelContextProtocol.Core", "package", false)]
+    // C-019: the front ends sit on the composition root, and only the CLI references them. They take no package of their own.
+    [InlineData("Corvid.Acp", "Corvid.Host", "project", true)]
+    [InlineData("Corvid.Http", "Corvid.Host", "project", true)]
+    [InlineData("Corvid.Acp", "Corvid.Models.Starling", "project", true)]
+    [InlineData("Corvid.Http", "Microsoft.Extensions.Hosting", "package", true)]
+    [InlineData("Corvid.Http", "Microsoft.Data.Sqlite", "package", true)]
+    [InlineData("Corvid.Cli", "Corvid.Acp", "project", true)]
+    [InlineData("Corvid.Cli", "Corvid.Http", "project", true)]
+    [InlineData("Corvid.Acp", "Spectre.Console", "package", false)]
+    [InlineData("Corvid.Http", "OpenAI", "package", false)]
+    [InlineData("Corvid.Http", "Microsoft.AspNetCore.Mvc.Testing", "package", false)]
+    [InlineData("Corvid.Acp", "PreviouslyUnknown.AcpLibrary", "package", false)]
+    [InlineData("Corvid.Acp", "Corvid.Cli", "project", false)]
+    [InlineData("Corvid.Acp", "Corvid.Http", "project", false)]
+    [InlineData("Corvid.Host", "Corvid.Acp", "project", false)]
+    [InlineData("Corvid.Kernel", "Corvid.Http", "project", false)]
+    [InlineData("Corvid.Kernel", "Corvid.Acp", "project", false)]
+    [InlineData("Corvid.Models.Starling", "Corvid.Http", "project", false)]
+    // The two kinds of surface: an SDK surface (C-018) sits under the host, a front end on it; neither references the other's way.
+    [InlineData("Corvid.Mcp", "Corvid.Acp", "project", false)]
+    [InlineData("Corvid.Mcp", "Corvid.Http", "project", false)]
+    [InlineData("Corvid.Acp", "Corvid.Mcp", "project", true)]
+    [InlineData("Corvid.Http", "Corvid.Mcp", "project", true)]
     public void EnforcesLayerRules(string project, string dependency, string type, bool allowed)
     {
         using var assets = Assets(("net10.0", dependency, type));
@@ -240,6 +263,33 @@ public sealed class BoundaryTests
         Assert.Contains(core, error => error.Contains("Corvid.Models.Starling/1.0.0", StringComparison.Ordinal));
         Assert.Contains(core, error => error.Contains("Starlings.Models.Qwen35", StringComparison.Ordinal));
         Assert.Contains(core, error => error.Contains("Microsoft.ML.OnnxRuntimeGenAI", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    // ASP.NET Core is the HTTP surface's own; the CLI inherits it from that surface; nothing else may resolve it.
+    [InlineData("Corvid.Http", "Microsoft.AspNetCore.App", null, true)]
+    [InlineData("Corvid.Cli", "Microsoft.AspNetCore.App", "Corvid.Http/1.0.0", true)]
+    [InlineData("Corvid.Http", "Microsoft.NETCore.App", null, true)]
+    [InlineData("Corvid.Kernel", "Microsoft.NETCore.App", null, true)]
+    [InlineData("Corvid.Kernel", "Microsoft.AspNetCore.App", null, false)]
+    [InlineData("Corvid.Acp", "Microsoft.AspNetCore.App", null, false)]
+    [InlineData("Corvid.Host", "Microsoft.AspNetCore.App", null, false)]
+    [InlineData("Corvid.Host", "Microsoft.AspNetCore.App", "Some.Package/1.0.0", false)]
+    [InlineData("Corvid.Models.OpenAICompat", "Microsoft.AspNetCore.App", null, false)]
+    [InlineData("Corvid.Http", "Microsoft.WindowsDesktop.App", null, false)]
+    public void SharedFrameworksNeedAnExplicitRule(string project, string framework, string? through, bool allowed)
+    {
+        // A framework reference is not a package: the assets list a project's own, and those its dependencies bring.
+        using var assets = JsonDocument.Parse(through is null
+            ? $$"""{ "project": { "frameworks": { "net10.0": { "frameworkReferences": { "{{framework}}": { "privateAssets": "none" } } } } }, "targets": { "net10.0": {} } }"""
+            : $$"""{ "targets": { "net10.0": { "{{through}}": { "type": "project", "frameworkReferences": [ "{{framework}}" ] } } } }""");
+        var errors = BoundaryCheck.CheckFrameworkReferences(project, assets.RootElement);
+        Assert.Equal(allowed, errors.Count == 0);
+        if (!allowed)
+            Assert.Contains(framework, Assert.Single(errors));
+        // CheckAssets runs the same rule (the inherited cases' synthetic graphs lack the project identities it also reads).
+        if (through is null)
+            Assert.Equal(allowed, BoundaryCheck.CheckAssets(project, assets.RootElement).Count == 0);
     }
 
     [Fact]

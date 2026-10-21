@@ -30,6 +30,15 @@ public sealed record CliContext(IAnsiConsole Console, IChatInput Input)
 
     /// <summary>Applied after Corvid's own registrations: tests replace the model providers here.</summary>
     public Action<IServiceCollection>? ConfigureServices { get; init; }
+
+    /// <summary>The process's byte streams, for <c>corvid acp</c>; null means standard input, output and error.</summary>
+    public CliStreams? Streams { get; init; }
+}
+
+/// <summary>Raw standard streams: the ACP transport is bytes on stdin and stdout, with logs on stderr.</summary>
+public sealed record CliStreams(Stream Input, Stream Output, TextWriter Error)
+{
+    public static CliStreams Standard() => new(Console.OpenStandardInput(), Console.OpenStandardOutput(), Console.Error);
 }
 
 public static class ExitCodes
@@ -42,7 +51,7 @@ public static class ExitCodes
 }
 
 /// <summary>
-/// <c>corvid</c> (plan §17 row 1.2): <c>chat</c>, <c>model</c>, <c>doctor</c>, <c>mcp</c> and <c>evals</c>, with typed configuration
+/// <c>corvid</c> (plan §17 row 1.2): <c>chat</c>, <c>model</c>, <c>doctor</c>, <c>mcp</c>, <c>evals</c>, <c>acp</c> and <c>serve</c>, with typed configuration
 /// validated before anything runs.
 /// </summary>
 public static class CorvidCli
@@ -60,6 +69,9 @@ public static class CorvidCli
           mcp serve                  Corvid as an MCP server on stdin/stdout: memory search and skills, read-only
           evals <command> ...        calibration tooling (corvid-evals): calibrate, report, replay, export-decisions,
                                      export-trajectories; --log defaults to this user's event log
+          acp                        an Agent Client Protocol agent on stdin/stdout, for Zed, JetBrains and VS Code
+          serve                      the OpenAI-compatible endpoint (/v1/chat/completions, /v1/models) on Corvid:Serve:Url,
+                                     loopback only unless Corvid:Serve:TokenSecret names a Vault secret
 
         options:
           --config <file>            the configuration file (default $XDG_CONFIG_HOME/corvid/corvid.json, or $CORVID_CONFIG)
@@ -107,6 +119,8 @@ public static class CorvidCli
                 "doctor" => await DoctorCommand.RunAsync(host, parsed, context, cancellationToken).ConfigureAwait(false),
                 "evals" => await EvalsCommand.RunAsync(host, parsed, context, cancellationToken).ConfigureAwait(false),
                 "mcp" => await McpCommand.RunAsync(host, parsed, context, cancellationToken).ConfigureAwait(false),
+                "acp" => await AcpCommand.RunAsync(host, context, cancellationToken).ConfigureAwait(false),
+                "serve" => await ServeCommand.RunAsync(host, context, cancellationToken).ConfigureAwait(false),
                 _ => UnknownCommand(console, parsed.Command),
             };
         }

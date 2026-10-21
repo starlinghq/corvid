@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>corvid serve: the OpenAI-compatible HTTP endpoint (plan §12), /v1/chat/completions and /v1/models on ASP.NET Core minimal APIs.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The shared ASP.NET Core framework, not a NuGet package. The checker allows it in this surface only (and in the CLI,
+         which inherits it from here); every other production project fails on it. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <!-- A surface (the checker's SurfaceProjects): it may reference the composition root, and only the CLI references it. -->
+    <ProjectReference Include="../Corvid.Host/Corvid.Host.csproj" />
+    <InternalsVisibleTo Include="Corvid.Http.Tests" />
+  </ItemGroup>
+</Project>

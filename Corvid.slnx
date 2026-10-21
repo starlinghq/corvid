@@ -1,10 +1,12 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Corvid.Abstractions/Corvid.Abstractions.csproj" />
+    <Project Path="src/Corvid.Acp/Corvid.Acp.csproj" />
     <Project Path="src/Corvid.Approvals/Corvid.Approvals.csproj" />
     <Project Path="src/Corvid.Cli/Corvid.Cli.csproj" />
     <Project Path="src/Corvid.Fabric/Corvid.Fabric.csproj" />
     <Project Path="src/Corvid.Host/Corvid.Host.csproj" />
+    <Project Path="src/Corvid.Http/Corvid.Http.csproj" />
     <Project Path="src/Corvid.Kernel/Corvid.Kernel.csproj" />
     <Project Path="src/Corvid.Mcp/Corvid.Mcp.csproj" />
     <Project Path="src/Corvid.Memory/Corvid.Memory.csproj" />
@@ -31,6 +33,8 @@
     <Project Path="evals/Corvid.Evals.Calibrate/Corvid.Evals.Calibrate.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Corvid.Acp.Tests/Corvid.Acp.Tests.csproj" />
+    <Project Path="tests/Corvid.Http.Tests/Corvid.Http.Tests.csproj" />
     <Project Path="tests/Corvid.Approvals.Tests/Corvid.Approvals.Tests.csproj" />
     <Project Path="tests/Corvid.Kernel.Tests/Corvid.Kernel.Tests.csproj" />
     <Project Path="tests/Corvid.Mcp.Tests/Corvid.Mcp.Tests.csproj" />

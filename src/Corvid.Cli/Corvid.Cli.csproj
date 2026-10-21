@@ -19,6 +19,9 @@
   <ItemGroup>
     <PackageReference Include="Spectre.Console" />
     <ProjectReference Include="../Corvid.Host/Corvid.Host.csproj" />
+    <!-- The surfaces (C-019): only the CLI references them. -->
+    <ProjectReference Include="../Corvid.Acp/Corvid.Acp.csproj" />
+    <ProjectReference Include="../Corvid.Http/Corvid.Http.csproj" />
     <InternalsVisibleTo Include="Corvid.Cli.Tests" />
   </ItemGroup>
 </Project>

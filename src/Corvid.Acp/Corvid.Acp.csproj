@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>The Agent Client Protocol surface (plan §12, agentclientprotocol.com): JSON-RPC over stdio so Corvid runs inside Zed, JetBrains and VS Code.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- A surface (the checker's SurfaceProjects): it may reference the composition root, and only the CLI references it.
+         No package of its own: the protocol is System.Text.Json source generation over the shared framework. -->
+    <ProjectReference Include="../Corvid.Host/Corvid.Host.csproj" />
+    <InternalsVisibleTo Include="Corvid.Acp.Tests" />
+  </ItemGroup>
+</Project>

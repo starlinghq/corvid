@@ -75,7 +75,11 @@ public sealed record ApprovalPrompt(
     ActionAnalysis Analysis,
     ImmutableArray<ApprovalReason> Reasons,
     ImmutableArray<ApprovalScope> Offered,
-    DateTimeOffset Deadline);
+    DateTimeOffset Deadline)
+{
+    /// <summary>The tool call waiting on the prompt (<see cref="ApprovalContext.CallId"/>), so a surface can show the two together.</summary>
+    public string? CallId { get; init; }
+}
 
 /// <param name="Scope">Session or always stores a structural rule (allow or deny) for each side-effecting command.</param>
 public sealed record ApprovalAnswer(bool Approved, ApprovalScope Scope = ApprovalScope.Once)
@@ -261,7 +265,10 @@ public sealed class ApprovalPipeline
         Append(context.SessionId, new ApprovalRequested(approvalId,
             ActionDocuments.Json(assessment.Analysis, context.Tainted, context.Reversible), assessment.Summary, context.CallId), cancellationToken);
 
-        var prompt = new ApprovalPrompt(approvalId, context.SessionId, assessment.Analysis, assessment.Reasons, assessment.Offered, deadline);
+        var prompt = new ApprovalPrompt(approvalId, context.SessionId, assessment.Analysis, assessment.Reasons, assessment.Offered, deadline)
+        {
+            CallId = context.CallId,
+        };
         ApprovalAnswer answer;
         using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
         {

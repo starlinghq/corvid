@@ -94,6 +94,22 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue, IEnumerable
             && !Directory.Exists(CorvidPaths.ExpandHome(workspace)))
             errors.Add($"Corvid:Workspace: '{workspace}' is not an existing directory.");
 
+        // corvid serve (C-019): never tools for unauthenticated remote callers, so a non-loopback address needs a token.
+        var serve = options.Serve;
+        if (!Uri.TryCreate(serve.Url, UriKind.Absolute, out var listen) || listen.Scheme != "http" || listen.AbsolutePath != "/"
+            || listen.UserInfo.Length > 0)
+            errors.Add($"Corvid:Serve:Url must be an http URL with no path, such as http://127.0.0.1:8411, not '{serve.Url}' " +
+                "(for TLS, put a reverse proxy in front).");
+        else if (!listen.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) && listen.HostNameType is not (UriHostNameType.IPv4 or UriHostNameType.IPv6))
+            errors.Add($"Corvid:Serve:Url must name an IP address or localhost, not '{listen.Host}'.");
+        else if (!ServeSettings.IsLoopback(listen) && string.IsNullOrWhiteSpace(serve.TokenSecret))
+            errors.Add($"Corvid:Serve:Url {serve.Url} is not a loopback address: set Corvid:Serve:TokenSecret to a Vault secret, " +
+                "so remote callers must present it.");
+        if (!Enum.IsDefined(serve.Approvals))
+            errors.Add("Corvid:Serve:Approvals must be Fail or Deny.");
+        if (serve.MaxRequestBytes is < 1024 or > 64 * 1024 * 1024)
+            errors.Add("Corvid:Serve:MaxRequestBytes must be between 1024 and 67108864.");
+
         return errors.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(errors);
     }
 

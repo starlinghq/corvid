@@ -42,6 +42,7 @@ public sealed class CorvidRuntime : IAsyncDisposable
 {
     private readonly ConcurrentDictionary<string, CorvidSession> _sessions = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<Delivery>> _waiting = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, SessionSettings> _settings = new(StringComparer.Ordinal);
     private readonly ModelComposer _composer;
     private readonly ApprovalRouter _prompters;
     private readonly EmbedderSwapJob? _swap;
@@ -155,13 +156,36 @@ public sealed class CorvidRuntime : IAsyncDisposable
     internal ITokenCounter? Counter { get; }
 
     /// <summary>A new session, or an earlier one by id: its transcript is in the log, so the next turn sees it.</summary>
-    public CorvidSession OpenSession(string? sessionId = null, string surface = "cli")
+    /// <param name="settings">How the session's turns run; applied when this process first opens the session.</param>
+    public CorvidSession OpenSession(string? sessionId = null, string surface = "cli", SessionSettings? settings = null)
     {
         var id = sessionId ?? NewSessionId(surface);
+        if (settings is not null)
+            _settings.TryAdd(id, settings);
         Sessions.GetOrCreate(id);
+        _settings.TryRemove(id, out _);
         var session = _sessions[id];
         session.Surface = surface;
         return session;
+    }
+
+    /// <summary>
+    /// Forks a session at a log position (plan §3.2): a new session holding a copy of the source's events through
+    /// <paramref name="throughSequence"/> (its head when null). When the source is open in this process the copy is taken
+    /// between its turns, so it never splits a turn.
+    /// </summary>
+    /// <exception cref="SessionForkException">The source has no such position, or the position leaves a call or prompt open.</exception>
+    public async Task<CorvidSession> ForkSessionAsync(string sourceId, long? throughSequence = null, string surface = "cli",
+        SessionSettings? settings = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceId);
+        var id = NewSessionId(surface);
+        if (TryGetSession(sourceId, out var source))
+            await source.Actor.RunExclusiveAsync<long>(token => Task.FromResult(SessionFork.Fork(Log, sourceId, id, throughSequence, token)),
+                cancellationToken).ConfigureAwait(false);
+        else
+            SessionFork.Fork(Log, sourceId, id, throughSequence, cancellationToken);
+        return OpenSession(id, surface, settings);
     }
 
     public bool TryGetSession(string sessionId, out CorvidSession session) => _sessions.TryGetValue(sessionId, out session!);
@@ -238,14 +262,15 @@ public sealed class CorvidRuntime : IAsyncDisposable
     private SessionActor CreateActor(string sessionId)
     {
         var slots = NewSlots(sessionId);
-        var runner = new TurnRunner(sessionId, Services(slots, interactive: true));
+        var settings = _settings.TryGetValue(sessionId, out var chosen) ? chosen : SessionSettings.Default;
+        var runner = new TurnRunner(sessionId, Services(slots, settings.Interactive, settings.Tools ? Tools : new ToolRegistry()));
         var actor = new SessionActor(runner, slots, new Sink(this), new SessionActorOptions { EmbedderSwap = _swap });
         _sessions[sessionId] = new CorvidSession(this, sessionId, slots, runner, actor);
         return actor;
     }
 
     /// <summary>One session's turn services over the shared ones. Scheduled runs are not interactive: nobody can be asked.</summary>
-    private TurnServices Services(SessionModelSlots slots, bool interactive)
+    private TurnServices Services(SessionModelSlots slots, bool interactive, ToolRegistry? tools = null)
     {
         var turn = Options.Turn;
         return new TurnServices
@@ -253,7 +278,7 @@ public sealed class CorvidRuntime : IAsyncDisposable
             Log = Log,
             Slots = slots,
             Fabric = Fabric,
-            Tools = Tools,
+            Tools = tools ?? Tools,
             Approvals = Approvals,
             Memory = Memory?.Writer,
             Retriever = Memory?.Retriever,
@@ -350,6 +375,14 @@ public sealed class CorvidRuntime : IAsyncDisposable
     }
 }
 
+/// <summary>How a session's turns run, chosen by the surface that opens it.</summary>
+/// <param name="Interactive">False when nobody can answer an approval (an HTTP client): an ask is denied without a prompt.</param>
+/// <param name="Tools">False to offer the model no tools at all.</param>
+public sealed record SessionSettings(bool Interactive = true, bool Tools = true)
+{
+    public static SessionSettings Default { get; } = new();
+}
+
 /// <summary>One conversation: its slots, its turn runner and its actor. Surfaces talk to it through this handle.</summary>
 public sealed class CorvidSession
 {
@@ -427,6 +460,27 @@ public sealed class CorvidSession
         catch (ArgumentException)
         {
             return true;
+        }
+    }
+
+    /// <summary>
+    /// Starts an empty session with a conversation held elsewhere (an HTTP client that sends its whole history): the user's
+    /// and the assistant's messages in order, appended as they were, before the session's first turn.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The session already has events.</exception>
+    public void SeedHistory(IReadOnlyList<(bool FromUser, string Text)> messages)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+        if (messages.Count == 0)
+            return;
+        var events = messages.Select(message => EventData.Create(message.FromUser ? new UserMessage(message.Text) : new AssistantMessage(message.Text))).ToList();
+        try
+        {
+            _runtime.Log.Append(Id, 0, events);
+        }
+        catch (EventLogConflictException)
+        {
+            throw new InvalidOperationException($"Session '{Id}' already has a history.");
         }
     }
 

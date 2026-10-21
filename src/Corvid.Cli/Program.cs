@@ -7,9 +7,12 @@ using Spectre.Console;
 // Decided from the parsed command, since options may come before it. Nothing has been written yet, so the replacement
 // process starts with a clean terminal.
 bool loadsModels;
+var acp = false;
 try
 {
-    loadsModels = CliArguments.Parse(args) is { Command: "chat", Help: false, Version: false };
+    var parsed = CliArguments.Parse(args);
+    loadsModels = parsed is { Command: "chat" or "acp" or "serve", Help: false, Version: false };
+    acp = parsed is { Command: "acp", Help: false, Version: false };
 }
 catch (ArgumentException)
 {
@@ -26,5 +29,7 @@ Console.CancelKeyPress += (_, e) =>
     // the other commands) Ctrl-C ends the process as usual.
     e.Cancel = interrupts.Raise();
 };
-var context = new CliContext(AnsiConsole.Console, new ConsoleChatInput()) { Interrupts = interrupts };
+// Under ACP standard output carries protocol messages only, so anything the command line prints goes to standard error.
+var console = acp ? AnsiConsole.Create(new AnsiConsoleSettings { Out = new AnsiConsoleOutput(Console.Error) }) : AnsiConsole.Console;
+var context = new CliContext(console, new ConsoleChatInput()) { Interrupts = interrupts };
 return await CorvidCli.RunAsync(args, context);
