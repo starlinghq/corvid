@@ -33,7 +33,7 @@ internal static class BeaconContent
         var redacted = SecretRedactor.Redact(text);
         var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(redacted)));
         var stored = Truncate(redacted, StringLimit);
-        return new RetainedText(stored, !string.Equals(redacted, text, StringComparison.Ordinal), stored.Length != redacted.Length, hash,
+        return new RetainedText(stored, !string.Equals(redacted, text, StringComparison.Ordinal), !string.Equals(stored, redacted, StringComparison.Ordinal), hash,
             Encoding.UTF8.GetByteCount(text));
     }
 

@@ -9,8 +9,8 @@ namespace Corvid.Kernel.Traces;
 /// that a Corvid export names a tool, command, file or MCP event the way Beacon names the same action: an RFC 4122 version 5
 /// UUID under Beacon's fixed namespace. An event with a tool call id and a target (<see cref="Target"/>) is named from
 /// session, action, target and call id alone ("call"); any other event from its own serialized line without
-/// <c>event.id</c> ("content"), which is stable across Corvid runs but not equal to what Beacon would compute from its own
-/// byte layout of the same event.
+/// <c>event.id</c> and the exporter's own fields (<see cref="Identity"/>) ("content"), which is stable across Corvid runs,
+/// builds and workspaces but not equal to what Beacon would compute from its own byte layout of the same event.
 /// </summary>
 internal static class BeaconEventId
 {
@@ -30,6 +30,22 @@ internal static class BeaconEventId
         if (callId.Length > 0 && target.Length > 0)
             return Uuid("call", string.Join('\0', Nested(@event, "session", "id"), action.Trim().ToLowerInvariant(), target, callId));
         return Uuid("content", line);
+    }
+
+    /// <summary>
+    /// The copy of <paramref name="event"/> a content id is computed over: without <c>endpoint</c>, <c>harness.version</c> and
+    /// <c>session.working_directory</c>, which describe the exporting build and host rather than the event, so that a rebuild
+    /// (the version carries the commit) or a different workspace does not rename every prompt, message and approval.
+    /// </summary>
+    public static JsonObject Identity(JsonObject @event)
+    {
+        var copy = @event.DeepClone().AsObject();
+        copy.Remove("endpoint");
+        if (copy["harness"] is JsonObject harness)
+            harness.Remove("version");
+        if (copy["session"] is JsonObject session)
+            session.Remove("working_directory");
+        return copy;
     }
 
     /// <summary>Beacon's <c>dedupeTarget</c>: what one action acted on, or empty for actions it has no target for.</summary>

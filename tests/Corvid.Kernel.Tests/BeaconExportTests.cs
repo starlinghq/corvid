@@ -228,6 +228,43 @@ public sealed partial class BeaconExportTests
         Assert.Equal("short", BeaconContent.Truncate("short", 4096));
     }
 
+    [Fact]
+    public void A_cut_is_flagged_even_when_the_marker_restores_the_length()
+    {
+        // 4095 UTF-16 chars, 4097 UTF-8 bytes: the cut text plus the 14-char marker is 4095 chars again.
+        var text = new string('a', 4081) + new string('b', 13) + "\u4e2d";
+        var retained = BeaconContent.Retain(text);
+        Assert.Equal(text.Length, retained.Stored.Length);
+        Assert.EndsWith("...[truncated]", retained.Stored);
+        Assert.True(retained.Truncated);
+
+        var line = JsonNode.Parse(BeaconExporter.Export(
+            [new StoredEvent(Session, 1, Guid.Empty, DateTimeOffset.UnixEpoch, new UserMessage(text))], Options).Single())!.AsObject();
+        Assert.True(line["field_truncated"]!.GetValue<bool>());
+        Assert.True(line["content"]!["truncated"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void Content_ids_do_not_depend_on_the_build_workspace_or_host()
+    {
+        var lines = BeaconExporter.Export(Fixture(), Options).ToList();
+        var rebuilt = BeaconExporter.Export(Fixture(), Options with { HarnessVersion = "1.0.0+0123456789abcdef", Os = "darwin" });
+        Assert.Equal(lines.Select(Id), rebuilt.Select(Id));
+        Assert.Equal(lines.Select(Id), BeaconExporter.Export(Fixture(), Options with { HarnessVersion = "" }).Select(Id));
+
+        // Another workspace: every event that names no workspace path keeps its id. A tool event resolves a relative path
+        // against the workspace, so it acts on a different file and is rightly a different event.
+        var moved = BeaconExporter.Export(Fixture(), Options with { WorkingDirectory = "/elsewhere" }).ToList();
+        var pathless = Enumerable.Range(0, lines.Count).Where(i => !lines[i].Contains("/work/project/", StringComparison.Ordinal)).ToList();
+        Assert.Contains(pathless, i => Action(lines[i]) == "prompt.submitted");
+        Assert.Contains(pathless, i => Action(lines[i]) == "agent.message");
+        Assert.Contains(pathless, i => Action(lines[i]).StartsWith("approval.", StringComparison.Ordinal));
+        Assert.Equal(pathless.Select(i => Id(lines[i])), pathless.Select(i => Id(moved[i])));
+
+        static string Id(string line) => JsonNode.Parse(line)!["event"]!["id"]!.GetValue<string>();
+        static string Action(string line) => JsonNode.Parse(line)!["event"]!["action"]!.GetValue<string>();
+    }
+
     // ---- Beacon's Event.Validate (pkg/asymptoteobserve/event.go), plus the timestamp and id formats ----
 
     internal static string? Validate(JsonObject e)

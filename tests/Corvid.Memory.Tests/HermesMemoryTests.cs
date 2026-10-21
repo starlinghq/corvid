@@ -52,11 +52,42 @@ public sealed class HermesMemoryTests
     [Fact]
     public void The_directory_is_the_explicit_home_then_hermes_home_then_the_default()
     {
-        Assert.Equal(Path.Combine("/x/h", "memories"), HermesMemory.Directory("/home/u", "/x/h", _ => "/env/h"));
-        Assert.Equal(Path.Combine("/env/h", "memories"), HermesMemory.Directory("/home/u", null, _ => "/env/h"));
-        Assert.Equal(Path.Combine("/home/u", ".hermes", "memories"), HermesMemory.Directory("/home/u", null, _ => null));
-        // A relative HERMES_HOME is ignored, as for the skills directory.
-        Assert.Equal(Path.Combine("/home/u", ".hermes", "memories"), HermesMemory.Directory("/home/u", null, _ => "rel"));
+        Assert.Equal(Path.Combine("/x/h", "memories"), HermesMemory.Directory("/home/u", "/x/h", _ => "/env/h").Directory);
+        Assert.Equal(Path.Combine("/env/h", "memories"), HermesMemory.Directory("/home/u", null, _ => "/env/h").Directory);
+        Assert.Equal(Path.Combine("/env/h", "memories"), HermesMemory.Directory("/home/u", null, _ => "  /env/h \n").Directory);
+        Assert.Equal(Path.Combine("/home/u", ".hermes", "memories"), HermesMemory.Directory("/home/u", null, _ => null).Directory);
+        Assert.Equal(Path.Combine("/home/u", ".hermes", "memories"), HermesMemory.Directory("/home/u", null, name => name == "HERMES_HOME" ? "   " : null).Directory);
+    }
+
+    [Fact]
+    public void Hermes_home_is_expanded_as_hermes_expands_it_and_an_unusable_one_is_a_problem_not_the_default()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        string? Env(string name) => name switch
+        {
+            "HERMES_HOME" => null,
+            "WORK" => "/data/work",
+            _ => null,
+        };
+        HermesMemoryLocation With(string value) => HermesMemory.Directory("/home/u", null, name => name == "HERMES_HOME" ? value : Env(name));
+
+        Assert.Equal(Path.Combine("/home/u", ".hermes-work", "memories"), With("~/.hermes-work").Directory);
+        Assert.Equal(Path.Combine("/home/u", "memories"), With("~").Directory);
+        Assert.Equal(Path.Combine("/data/work", "hermes", "memories"), With("$WORK/hermes").Directory);
+        Assert.Equal(Path.Combine("/data/work", "hermes", "memories"), With("${WORK}/hermes").Directory);
+
+        // Relative after expansion (an undefined variable stays as written, as in expandvars): a problem, never ~/.hermes.
+        foreach (var value in new[] { "rel", "$UNSET/hermes", "%WORK%/hermes" })
+        {
+            var location = With(value);
+            Assert.Null(location.Directory);
+            Assert.Contains("not an absolute path", location.Problem, StringComparison.Ordinal);
+        }
+
+        // HERMES_DATA_DIR_SUFFIX is appended to the default home, literally.
+        Assert.Equal(Path.Combine("/home/u", ".hermes-dev", "memories"),
+            HermesMemory.Directory("/home/u", null, name => name == "HERMES_DATA_DIR_SUFFIX" ? "-dev" : null).Directory);
     }
 
     private static MemoryWriter Writer(TempStore store, IExtractor? extractor = null) =>

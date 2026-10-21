@@ -51,8 +51,9 @@ public sealed record BeaconExportOptions(string WorkingDirectory, string Harness
 /// </para>
 /// <para>
 /// <c>event.id</c> is computed once, on the full-retention line after redaction and the per-string limit, with memory content
-/// withheld, so an event has the same id in either retention, with or without <see cref="BeaconExportOptions.IncludeLocalMemory"/>,
-/// and whether it was exported alone or with the whole log.
+/// withheld, and without <c>endpoint</c>, <c>harness.version</c> and <c>session.working_directory</c> (<see cref="BeaconEventId.Identity"/>),
+/// so an event has the same id in either retention, with or without <see cref="BeaconExportOptions.IncludeLocalMemory"/>,
+/// whether it was exported alone or with the whole log, and from any Corvid build, workspace or host.
 /// </para>
 /// </remarks>
 public static class BeaconExporter
@@ -107,7 +108,8 @@ public static class BeaconExporter
         if (draft.Memory)
             BeaconContent.Withhold(withheld, message: false);
         var canonical = draft.Memory ? withheld : full;
-        var id = BeaconEventId.For(canonical, Serialize(canonical));
+        var identity = BeaconEventId.Identity(canonical);
+        var id = BeaconEventId.For(identity, Serialize(identity));
 
         JsonObject output;
         if (options.Retention == BeaconRetention.Metadata)

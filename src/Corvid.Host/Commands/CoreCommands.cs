@@ -305,7 +305,9 @@ public static class CoreCommands
     {
         var dryRun = arguments.Contains("--dry-run");
         var home = arguments.FirstOrDefault(argument => argument != "--dry-run");
-        var directory = HermesMemory.Directory(CorvidPaths.Home, home is null ? null : CorvidPaths.ExpandHome(home));
+        var location = HermesMemory.Directory(CorvidPaths.Home, home is null ? null : CorvidPaths.ExpandHome(home));
+        if (location.Directory is not { } directory)
+            return CommandOutput.Warning(location.Problem + " Usage: /memory import hermes <hermes home>.");
         if (!Directory.Exists(directory))
             return CommandOutput.Warning($"There is no Hermes memories directory at {directory}.");
 
@@ -357,7 +359,7 @@ public static class CoreCommands
                 offered.ToString(CultureInfo.InvariantCulture), duplicates.ToString(CultureInfo.InvariantCulture),
                 refused.ToString(CultureInfo.InvariantCulture), flagged.ToString(CultureInfo.InvariantCulture)]);
             if (file.Blocked > 0)
-                lines.Add($"skipped {file.Blocked} entry(ies) of {file.File} that Hermes had already blocked.");
+                lines.Add($"skipped {file.Blocked} entry(ies) of {file.File} shaped like Hermes' [BLOCKED: …] placeholder.");
         }
         lines.Insert(0, dryRun
             ? $"Dry run: {staged} entry(ies) would be offered for review; entries already pending or known are found on import."

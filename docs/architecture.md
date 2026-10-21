@@ -2173,8 +2173,11 @@ Hermes session mapper, and reimplemented; no Beacon code is used. The Hermes for
   command, file or MCP event with a call id is named from session, lowercased action, Beacon's `dedupeTarget` (its
   `canonicalTarget` quirks included: `command:<command.command>|<tool.command>`, `tool:<name>|<path>|<message>`,
   `tool.completed:<message>`, `mcp:<server>|<tool>`, `file:<path>`) and call id, so it equals what Beacon derives for the
-  same action; other events are named from their own line without `event.id`, which is stable across Corvid runs but not
-  equal to a digest of Beacon's byte layout. The id is computed once, on the full-retention line after redaction and the
+  same action; other events are named from their own line without `event.id`, `endpoint`, `harness.version` and
+  `session.working_directory` (`BeaconEventId.Identity`), so a prompt, message or approval keeps its id across Corvid runs,
+  rebuilds (the version carries the commit), hosts and workspaces, though it is not equal to a digest of Beacon's byte
+  layout; a tool event whose path is resolved against the workspace names a different file from another workspace, and
+  rightly a different id. The id is computed once, on the full-retention line after redaction and the
   per-string limit, with memory content withheld, so it is the same in both retentions, with or without
   `--include-local-memory`, and under `--session` or `--all`. SHA-1 is what RFC 4122 version 5 specifies.
 - Content (`BeaconContent`). Each retained string (prompt and assistant text, tool arguments and result, command output and
@@ -2203,12 +2206,16 @@ Hermes session mapper, and reimplemented; no Beacon code is used. The Hermes for
   hold one.
 - `/memory import hermes [<hermes home>] [--dry-run]` (`CoreCommands`), next to `/skills import hermes`, so it works from
   chat, ACP and the gateway (the owner's alone). `HermesMemory` (`Corvid.Memory`) reads `$HERMES_HOME/memories/MEMORY.md`
-  (the agent's notes) and `USER.md` (the user profile), `$HERMES_HOME` defaulting to `~/.hermes` and an explicit argument
-  winning, as Hermes' `MemoryStore` does: strict UTF-8 (a file with an invalid byte is refused whole, as Hermes refuses to
+  (the agent's notes) and `USER.md` (the user profile), an explicit argument winning, as Hermes' `get_hermes_home` finds
+  the home: `$HERMES_HOME` trimmed, with `$VAR` and `${VAR}` (and `%VAR%` on Windows) and a leading `~` expanded as
+  `expandvars` and `expanduser` do, else `~/.hermes` (`%LOCALAPPDATA%\hermes` on Windows) with `$HERMES_DATA_DIR_SUFFIX`
+  appended. A `HERMES_HOME` still relative after expansion is reported and nothing is imported, rather than falling back
+  to the default profile. The files are read as Hermes' `MemoryStore` reads them: strict UTF-8 (a file with an invalid byte is refused whole, as Hermes refuses to
   read it), a leading BOM stripped (`utf-8-sig`), CRLF read as LF (Python's universal newlines), entries split on the
   whole `"\n§\n"` delimiter so a bare `§` survives, each stripped, blanks dropped and repeats dropped keeping the first. A
-  missing file has no entries; entries Hermes already replaced with `[BLOCKED: …]` are skipped and counted. Each entry is
-  screened by `SkillScanner`, as Hermes scans memory for threat patterns at load, and a flagged entry is refused. The rest
+  missing file has no entries; an entry shaped like Hermes' `[BLOCKED: …]` placeholder is skipped and counted, though
+  Hermes puts that placeholder only in its system-prompt snapshot, so the files hold the raw entries. Each entry is
+  screened by Corvid's `SkillScanner` (not Hermes' `scan_for_threats` rules), and a flagged entry is refused. The rest
   go to `MemoryWriter.StageImportAsync`, which runs `WriteAsync`'s first two steps (extractor entities, neighbour
   retrieval; factored into one helper) and stages a local-only fact proposal with reason `import:hermes MEMORY.md` or
   `import:hermes USER.md`, without asking the gate. It never writes and never overwrites. An entry identical (case and
@@ -2221,12 +2228,15 @@ Hermes session mapper, and reimplemented; no Beacon code is used. The Hermes for
   a tool error, a denied approval, a skipped `GoalSet` and a 5 KB fetch result with embedded credentials) compared line by
   line with `Fixtures/beacon-export.full.jsonl` and `beacon-export.metadata.jsonl` (`CORVID_RECORD_GOLDENS=1` rewrites
   them); every line passes a C# copy of `Event.Validate` plus the timestamp and UUID formats; ids are equal across
-  retentions and with local memory included; a call id matches a UUID computed independently with Python's `uuid5`;
-  memory content is withheld and present with the flag; redaction precedes truncation; the event cap; and the redactor's
+  retentions, with local memory included and across harness version, OS and (for events naming no path) workspace; a
+  call id matches a UUID computed independently with Python's `uuid5`;
+  memory content is withheld and present with the flag; redaction precedes truncation; a cut is flagged even when the
+  marker restores the UTF-16 length; the event cap; and the redactor's
   patterns. `tests/Corvid.Cli.Tests` (`TracesCommandTests`): `--session` on stdout, `--all` with ids equal to a
   single-session export, metadata retention, `--out` owner-only and never overwritten, an unknown session, a missing log
   (not created) and bad arguments. `tests/Corvid.Memory.Tests` (`HermesMemoryTests`): the parser (a bare `§`, blanks,
-  duplicates, `[BLOCKED:`, BOM, CRLF, invalid UTF-8, a missing file, directory resolution) and `StageImportAsync` (staged
+  duplicates, `[BLOCKED:`, BOM, CRLF, invalid UTF-8, a missing file, directory resolution with `HERMES_HOME` expansion,
+  the suffix and an unusable value) and `StageImportAsync` (staged
   local-only with its reason and no decision, applied only on approval, pending and known duplicates skipped, an extractor
   refusal staging nothing). `tests/Corvid.Host.Tests` (`MemoryImportCommandTests`): the command against a temporary
   Hermes home, with a dry run, a scanner refusal, re-import idempotency before and after an approval, a missing home and
