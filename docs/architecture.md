@@ -2171,10 +2171,17 @@ checker rule changed.
   is an error result whose kernel `error` is not `not run` (approval denied or never run), `cancelled` or `invalid
   arguments` (C-011's schema repair, which includes a call to a tool not offered); those strings are now
   `ToolErrorKinds`, used by `TurnRunner`'s call sites, and an error without the kernel's shape (a tool's or an MCP
-  server's) counts. A recovery is a counted failure followed by a successful call of the same family, issued after the
-  failure's result (not in its parallel round), that differs from it: another name, or the same name with arguments that
-  are not `JsonElement.DeepEquals`. The identical call succeeding resolves the failure (it is not unrecovered) but is a
-  retry, not a recovery. Family: an MCP `server__tool` name maps to its server; otherwise the name's `_` tokens, a
+  server's) counts. A call responds to a failure when it was issued after the failure's result in a later round:
+  `ToolCallIssued.Round` (C-026, omitted when null) is the turn's step, one per generator response with calls, because
+  calls that need approval run one at a time and a later call of the failure's own response is issued after its result
+  (events without a round fall back to the order alone). A failure is resolved, so not unrecovered, by a responding
+  success of the same name, or of the same family unless the failed call changes something and the success only reads:
+  `ToolCallIssued.ReadOnly` (C-026, omitted when null; the descriptor's `Risk.ReadOnly`, null for a call naming no offered
+  tool) is unknown-as-change for the failure and unknown-as-read for the success, so `read_file` after a failed
+  `write_file` leaves it unrecovered and `tool_failures_recovered` withheld. A recovery is a counted failure followed by a
+  responding successful call of the same family that differs from it: another name, or the same name with arguments that
+  are not `JsonElement.DeepEquals`; it is the hint, looser than resolution (that read is still listed as what followed).
+  The identical call succeeding resolves the failure but is a retry, not a recovery. Family: an MCP `server__tool` name maps to its server; otherwise the name's `_` tokens, a
   trailing `s` trimmed, minus a verb stoplist (`read`, `write`, `list`, `search`, `get`, `set`, `add`, `remove`, `create`,
   `delete`, `update`, `run`, `fetch`, `patch`, `approve`, `reject`, `pending`); names share a family when equal or when
   they share a token (`read_file`, `list_files`, `search_files`, `patch_file` are `file`; `memory_*` and `search_memory`
@@ -2212,9 +2219,10 @@ Tests: `tests/Corvid.Fabric.Tests` (`GrantTests`): the catalogue row and its flo
 blocking both, a caller's `task_succeeded` ignored whether or not the granter is asked, granters first whatever their key
 order (with events still in key order), and the degraded tier answering both. `tests/Corvid.Kernel.Tests`
 (`ToolRecoveryTests`): recovery across a family and by different arguments, a repeated call resolving without recovering,
-denials, cancellations and rejected arguments not counted, unrecovered counts, the parallel round, families and MCP
-servers. The three turn goldens changed only in their floors version (they bind no learning, so egress gained no
-question). `tests/Corvid.Skills.Tests`: a two-call recovery turn asked and queued with its features persisted, a
+denials, cancellations and rejected arguments not counted, unrecovered counts, the parallel round, a second call of one
+response run after approval (one round, so no recovery), events without rounds or read-only flags, a read after a failed
+write left unrecovered, changes and reads that resolve, families and MCP servers. The three turn goldens changed in their
+floors version (they bind no learning, so egress gained no question) and their calls' `round` and `read_only`. `tests/Corvid.Skills.Tests`: a two-call recovery turn asked and queued with its features persisted, a
 three-call turn whose success is answered no logging `nothing`, a turn ending on unrecovered failures held back, the
 head-and-tail window with its marker and cap, the recovery line, option validation, an uncalibrated success staged on a
 calibrated `skill_write_safe` yes, review outcomes on all three decisions, and a version-1 `skills.db` migrating.

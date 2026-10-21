@@ -583,7 +583,7 @@ public sealed class TurnRunner
                             spans.Where(item => errors.Any(error => error.Contains($"'{item.Parameter}'", StringComparison.Ordinal))),
                             cancellationToken).ConfigureAwait(false);
                     // The call and its error result go in as one append: a concurrent switch never sees the call alone.
-                    IssueRejected(callId, call.Name, arguments,
+                    IssueRejected(callId, call.Name, arguments, tool?.Descriptor.Risk.ReadOnly,
                         Error(ToolErrorKinds.InvalidArguments, [.. errors, .. Describe(hints)], tool?.Function.JsonSchema, Extracted(hints)));
                     continue;
                 }
@@ -665,14 +665,14 @@ public sealed class TurnRunner
             if (!call.Ask)
             {
                 running = _services.Slots.TrackToolCall(call.CallId);
-                Issue(call.CallId, call.Tool.Function.Name, call.Arguments, running);
+                Issue(call, running);
             }
             else
             {
                 // Parked, not running, while the approval is open: a /model switch neither waits for it nor calls it
                 // orphaned. A denial's result is logged while still parked; an approval moves it to tracked in one step.
                 using var parked = _services.Slots.ParkToolCall(call.CallId);
-                Issue(call.CallId, call.Tool.Function.Name, call.Arguments, parked);
+                Issue(call, parked);
                 (var denial, approval) = await AuthorizeAsync(call, cancellationToken).ConfigureAwait(false);
                 if (denial is not null)
                 {
@@ -966,15 +966,17 @@ public sealed class TurnRunner
                 : type.ValueKind == JsonValueKind.Array && type.EnumerateArray().Any(item => item.ValueKind == JsonValueKind.String && item.GetString() == "string");
         }
 
+        // The round is the step: one per generator response with calls. Calls that need approval run one at a time, so a
+        // later call of the same response is issued after an earlier one's result; the round keeps it in its response (C-026).
         /// <param name="lease">Released if the append fails, so a failed call never stays tracked or parked.</param>
-        private void Issue(string callId, string tool, JsonElement arguments, IDisposable? lease = null)
+        private void Issue(ValidCall call, IDisposable? lease = null)
         {
             try
             {
                 lock (_gate)
                 {
-                    runner.Append(new ToolCallIssued(callId, tool, arguments));
-                    _open.Add(callId);
+                    runner.Append(new ToolCallIssued(call.CallId, call.Tool.Function.Name, call.Arguments, _steps, call.Tool.Descriptor.Risk.ReadOnly));
+                    _open.Add(call.CallId);
                 }
             }
             catch
@@ -984,14 +986,14 @@ public sealed class TurnRunner
             }
         }
 
-        private void IssueRejected(string callId, string tool, JsonElement arguments, JsonElement error)
+        private void IssueRejected(string callId, string tool, JsonElement arguments, bool? readOnly, JsonElement error)
         {
             // A call that never ran still gets its span, so a trace shows the repair the next response is asked for.
             using var activity = StartToolActivity(callId, tool, approval: false);
             activity?.SetTag(KernelTelemetry.ToolOutcome, "invalid_arguments");
             activity?.SetStatus(ActivityStatusCode.Error);
             lock (_gate)
-                runner.Append(new ToolCallIssued(callId, tool, arguments), new ToolResult(callId, error, IsError: true));
+                runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, readOnly), new ToolResult(callId, error, IsError: true));
         }
 
         // Read-only calls finish concurrently, so the shared turn state they touch is updated under the lock.

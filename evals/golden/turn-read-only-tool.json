@@ -200,7 +200,9 @@
       "tool_name": "list_notes",
       "arguments": {
         "limit": 5
-      }
+      },
+      "round": 1,
+      "read_only": true
     },
     {
       "type": "tool_result",
@@ -371,7 +373,9 @@
               "tool_name": "list_notes",
               "arguments": {
                 "limit": 5
-              }
+              },
+              "round": 1,
+              "read_only": true
             }
           },
           {

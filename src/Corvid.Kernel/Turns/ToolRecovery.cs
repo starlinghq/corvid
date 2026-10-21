@@ -26,8 +26,15 @@ public sealed record RecoveryStep(string FailedTool, long FailedSequence, string
 /// <summary>What <see cref="ToolRecovery.Scan"/> found in a turn's events.</summary>
 /// <param name="Calls">Tool calls issued.</param>
 /// <param name="Failures">Counted failures: error results other than a denial, a cancellation or rejected arguments.</param>
-/// <param name="Unrecovered">Counted failures with no later successful call of the same family, identical or not.</param>
-/// <param name="Recoveries">Counted failures recovered by a different call of the same family, in order.</param>
+/// <param name="Unrecovered">
+/// Counted failures that no later successful call resolves: one of the same name, or of the same family unless the failed
+/// call changes something and the later one only reads (<see cref="ToolCallIssued.ReadOnly"/>; unknown counts as a change
+/// for the failure and as a read for the success).
+/// </param>
+/// <param name="Recoveries">
+/// Counted failures followed by a different successful call of the same family, in order: the hint for a question or the
+/// drafter, looser than <paramref name="Unrecovered"/> (a read after a failed write is listed but resolves nothing).
+/// </param>
 public sealed record ToolRecoveryScan(int Calls, int Failures, int Unrecovered, ImmutableArray<RecoveryStep> Recoveries)
 {
     /// <summary>The recoveries as one line for a question or a prompt, or null when there are none.</summary>
@@ -72,14 +79,13 @@ public static class ToolRecovery
         foreach (var failure in outcomes.Where(outcome => outcome.Counted))
         {
             failures++;
-            // Later means issued after the failure was known: a call in the same parallel round is no response to it.
-            var later = outcomes.Where(outcome => outcome.Succeeded && outcome.CallSequence > failure.ResultSequence
+            var later = outcomes.Where(outcome => outcome.Succeeded && Responds(outcome.Call, outcome.CallSequence, failure.Call, failure.ResultSequence)
                 && SameFamily(outcome.Call.ToolName, failure.Call.ToolName)).ToArray();
-            if (later.Length == 0)
-            {
+            // A read after a failed change looks at the problem; it does not fix it, so it leaves the failure unrecovered.
+            if (!Array.Exists(later, outcome => Resolves(outcome.Call, failure.Call)))
                 unrecovered++;
+            if (later.Length == 0)
                 continue;
-            }
             // The same call again is a retry, not another approach.
             var different = Array.FindIndex(later, outcome => outcome.Call.ToolName != failure.Call.ToolName
                 || !JsonElement.DeepEquals(outcome.Call.Arguments, failure.Call.Arguments));
@@ -88,6 +94,15 @@ public static class ToolRecovery
         }
         return new ToolRecoveryScan(calls, failures, unrecovered, recoveries.ToImmutable());
     }
+
+    // Later means issued in a later response than the failure's, after its result was known. Calls that need approval run
+    // one at a time, so a call of the failure's own response can be issued after its result: the recorded round tells them
+    // apart. Events written before C-026 have no round, and only the order is left.
+    private static bool Responds(ToolCallIssued call, long callSequence, ToolCallIssued failed, long failedResultSequence) =>
+        callSequence > failedResultSequence && (call.Round is not { } round || failed.Round is not { } failedRound || round > failedRound);
+
+    private static bool Resolves(ToolCallIssued call, ToolCallIssued failed) =>
+        call.ToolName == failed.ToolName || failed.ReadOnly == true || call.ReadOnly == false;
 
     /// <summary>
     /// A tool's family: an MCP <c>server__tool</c> name maps to its server; otherwise the name's <c>_</c>-separated tokens,

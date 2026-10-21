@@ -200,7 +200,9 @@
       "tool_name": "add_note",
       "arguments": {
         "text": 42
-      }
+      },
+      "round": 1,
+      "read_only": false
     },
     {
       "type": "tool_result",
@@ -251,7 +253,9 @@
       "tool_name": "add_note",
       "arguments": {
         "text": "buy milk"
-      }
+      },
+      "round": 2,
+      "read_only": false
     },
     {
       "type": "decision",
@@ -514,7 +518,9 @@
               "tool_name": "add_note",
               "arguments": {
                 "text": 42
-              }
+              },
+              "round": 1,
+              "read_only": false
             }
           },
           {
@@ -573,7 +579,9 @@
               "tool_name": "add_note",
               "arguments": {
                 "text": "buy milk"
-              }
+              },
+              "round": 2,
+              "read_only": false
             }
           },
           {

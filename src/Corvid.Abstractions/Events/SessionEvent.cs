@@ -30,7 +30,13 @@ public abstract record SessionEvent;
 // Text is the initial message surface. Provider-specific message objects are never stored here.
 public sealed record UserMessage(string Text) : SessionEvent;
 public sealed record AssistantMessage(string Text) : SessionEvent;
-public sealed record ToolCallIssued(string CallId, string ToolName, JsonElement Arguments) : SessionEvent;
+// Round (the turn's generator response that made the call, from 1) and ReadOnly (the tool's risk descriptor said read-only)
+// were added by C-026, so the recovery scan can tell a later round from a call run one at a time after approval, and a
+// read from a change, from the log alone. Both are omitted when null, so events written before them keep their persisted
+// form; ReadOnly is null when the call named no offered tool.
+public sealed record ToolCallIssued(string CallId, string ToolName, JsonElement Arguments,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Round = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? ReadOnly = null) : SessionEvent;
 public sealed record ToolResult(string CallId, JsonElement Result, bool IsError = false) : SessionEvent;
 // CatalogueVersion (the floors configuration in force) and Decider (which tier answered) were added by C-004a; State (the
 // TurnState the decider saw) and Question (instructions and options as asked) by C-021, so a decision can be exported as

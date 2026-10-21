@@ -6,11 +6,16 @@ namespace Corvid.Kernel.Tests;
 
 public sealed class ToolRecoveryTests
 {
-    /// <summary>A turn built call by call; each result follows its call.</summary>
-    private sealed class Turn
+    /// <summary>A turn built call by call; each call is its own round and its result follows it.</summary>
+    private sealed class Turn(bool rounds = true)
     {
+        // The read-only tools among those used here, as their descriptors would record it.
+        private static readonly HashSet<string> Reads =
+            ["read_file", "list_files", "search_files", "search_memory", "web_fetch", "github__get_issue", "github__search_issues"];
+
         private readonly List<StoredEvent> _events = [];
         private int _calls;
+        private int _round;
 
         public IReadOnlyList<StoredEvent> Events => _events;
 
@@ -22,13 +27,26 @@ public sealed class ToolRecoveryTests
         /// <summary>An error result without the kernel's shape, as a tool or MCP server may return.</summary>
         public Turn FailsPlainly(string tool) => Call(tool, "{}", JsonSerializer.SerializeToElement("HTTP 500"), true);
 
-        /// <summary>Two calls issued in one round, then both results.</summary>
+        /// <summary>Two calls issued in one round, then both results: read-only calls run in parallel.</summary>
         public Turn Parallel(string failing, string succeeding)
         {
             var (first, second) = ($"c{++_calls}", $"c{++_calls}");
-            Add(new ToolCallIssued(first, failing, Json("{}")));
-            Add(new ToolCallIssued(second, succeeding, Json("{}")));
-            Add(new ToolResult(first, JsonSerializer.SerializeToElement(new Dictionary<string, string> { ["error"] = ToolErrorKinds.ToolFailed }), true));
+            _round++;
+            Add(Issued(first, failing, "{}"));
+            Add(Issued(second, succeeding, "{}"));
+            Add(new ToolResult(first, Failure, true));
+            Add(new ToolResult(second, Json("\"ok\"")));
+            return this;
+        }
+
+        /// <summary>Two calls of one round run one at a time, as calls that need approval are: each is issued when it starts.</summary>
+        public Turn Sequential(string failing, string failingArguments, string succeeding, string succeedingArguments)
+        {
+            var (first, second) = ($"c{++_calls}", $"c{++_calls}");
+            _round++;
+            Add(Issued(first, failing, failingArguments));
+            Add(new ToolResult(first, Failure, true));
+            Add(Issued(second, succeeding, succeedingArguments));
             Add(new ToolResult(second, Json("\"ok\"")));
             return this;
         }
@@ -36,10 +54,19 @@ public sealed class ToolRecoveryTests
         private Turn Call(string tool, string arguments, JsonElement result, bool error)
         {
             var id = $"c{++_calls}";
-            Add(new ToolCallIssued(id, tool, Json(arguments)));
+            _round++;
+            Add(Issued(id, tool, arguments));
             Add(new ToolResult(id, result, error));
             return this;
         }
+
+        // Without rounds, as events written before C-026 are: no round and no read-only flag.
+        private ToolCallIssued Issued(string id, string tool, string arguments) => rounds
+            ? new ToolCallIssued(id, tool, Json(arguments), _round, Reads.Contains(tool))
+            : new ToolCallIssued(id, tool, Json(arguments));
+
+        private static JsonElement Failure =>
+            JsonSerializer.SerializeToElement(new Dictionary<string, string> { ["error"] = ToolErrorKinds.ToolFailed });
 
         private void Add(SessionEvent payload) =>
             _events.Add(new StoredEvent("s", _events.Count + 1, Guid.NewGuid(), DateTimeOffset.UnixEpoch, payload));
@@ -93,13 +120,13 @@ public sealed class ToolRecoveryTests
     [Fact]
     public void A_failure_with_no_later_success_in_its_family_is_unrecovered()
     {
-        // web_fetch's success is another family; memory_search recovers memory_add; the last cron failure has nothing after it.
-        var turn = new Turn().Fails("read_file").Ok("web_fetch").FailsPlainly("memory_add").Ok("search_memory").Fails("cron_create");
+        // web_fetch's success is another family; memory_set resolves memory_add; the last cron failure has nothing after it.
+        var turn = new Turn().Fails("read_file").Ok("web_fetch").FailsPlainly("memory_add").Ok("memory_set").Fails("cron_create");
 
         var scan = ToolRecovery.Scan(turn.Events);
 
         Assert.Equal((5, 3, 2), (scan.Calls, scan.Failures, scan.Unrecovered));
-        Assert.Equal(["memory_add failed, then search_memory succeeded"], scan.Recoveries.Select(step => step.ToString()));
+        Assert.Equal(["memory_add failed, then memory_set succeeded"], scan.Recoveries.Select(step => step.ToString()));
     }
 
     [Fact]
@@ -109,6 +136,55 @@ public sealed class ToolRecoveryTests
 
         Assert.Equal(1, scan.Unrecovered);
         Assert.Empty(scan.Recoveries);
+    }
+
+    [Fact]
+    public void A_later_call_of_the_same_response_run_after_approval_does_not_respond_to_the_failure()
+    {
+        // Review of C-026: write_file calls need approval and run one at a time, so the second is issued after the first's
+        // result. Only the recorded round shows it came from the same response; file a was never written.
+        var scan = ToolRecovery.Scan(new Turn().Sequential("write_file", """{"path":"a"}""", "write_file", """{"path":"b"}""").Events);
+
+        Assert.Equal((2, 1, 1), (scan.Calls, scan.Failures, scan.Unrecovered));
+        Assert.Empty(scan.Recoveries);
+    }
+
+    [Fact]
+    public void Events_without_rounds_fall_back_to_the_order_of_the_log()
+    {
+        var scan = ToolRecovery.Scan(new Turn(rounds: false).Parallel("write_file", "write_file").Events);
+        Assert.Equal(1, scan.Unrecovered);
+
+        // Without a read-only flag only the same name resolves a failure, but the hint still names the family's success.
+        scan = ToolRecovery.Scan(new Turn(rounds: false).Fails("read_file", """{"path":"a"}""").Ok("read_file", """{"path":"b"}""").Events);
+        Assert.Equal(0, scan.Unrecovered);
+        scan = ToolRecovery.Scan(new Turn(rounds: false).Fails("read_file").Ok("search_files").Events);
+        Assert.Equal(1, scan.Unrecovered);
+        Assert.Single(scan.Recoveries);
+    }
+
+    [Fact]
+    public void A_read_after_a_failed_change_leaves_it_unrecovered()
+    {
+        // Review of C-026: the write failed, the agent looked at the file and gave up. The read is listed as what followed,
+        // but tool_failures_recovered must not hold.
+        var scan = ToolRecovery.Scan(new Turn().Fails("write_file", """{"path":"a"}""").Ok("read_file", """{"path":"a"}""").Events);
+
+        Assert.Equal((2, 1, 1), (scan.Calls, scan.Failures, scan.Unrecovered));
+        Assert.Equal("write_file failed, then read_file succeeded", scan.Describe());
+    }
+
+    [Theory]
+    [InlineData("write_file", "patch_file")]
+    [InlineData("write_file", "write_file")]
+    [InlineData("read_file", "write_file")]
+    [InlineData("read_file", "list_files")]
+    public void A_later_change_or_a_read_after_a_failed_read_resolves_the_failure(string failed, string succeeded)
+    {
+        var scan = ToolRecovery.Scan(new Turn().Fails(failed, """{"path":"a"}""").Ok(succeeded, """{"path":"b"}""").Events);
+
+        Assert.Equal(0, scan.Unrecovered);
+        Assert.Single(scan.Recoveries);
     }
 
     [Theory]
