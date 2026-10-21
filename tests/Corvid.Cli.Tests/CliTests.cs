@@ -311,6 +311,31 @@ public sealed class EvalsTests
     }
 }
 
+public sealed class McpCommandTests
+{
+    [Fact]
+    public async Task ListSaysWhenNothingIsConfiguredAndReportsAServerThatFails()
+    {
+        using var run = new CliRun();
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["mcp"]));
+        Assert.Contains("No MCP servers are configured", run.Output, StringComparison.Ordinal);
+
+        var exit = await run.RunAsync(["mcp", "list", "--set", "Mcp:Servers:broken:Command=/nonexistent/mcp-server",
+            "--set", "Mcp:Servers:broken:Sandboxed=false", "--set", $"Mcp:Servers:broken:Workspace={Path.Combine(run.Root, "broken")}"]);
+        Assert.Equal(ExitCodes.Failure, exit);
+        Assert.Contains("broken", run.Output, StringComparison.Ordinal);
+        Assert.Contains("failed", run.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AnUnknownSubcommandIsAUsageError()
+    {
+        using var run = new CliRun();
+        Assert.Equal(ExitCodes.Usage, await run.RunAsync(["mcp", "frobnicate"]));
+        Assert.Contains("usage: corvid mcp", run.Output, StringComparison.Ordinal);
+    }
+}
+
 public sealed class RendererTests
 {
     [Fact]

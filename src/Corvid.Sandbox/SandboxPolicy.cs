@@ -33,6 +33,20 @@ public sealed record SandboxPolicy
 
     public static SandboxPolicy ForWorkspace(string workspace) => new() { Workspace = workspace };
 
+    /// <summary>The launcher's rule: a name that looks like it carries a secret, which never passes to a command (§10.5).</summary>
+    public static bool IsSecretLikeName(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return EnvironmentNames.IsSecretLike(name);
+    }
+
+    /// <summary>A portable environment variable name: a letter or '_', then letters, digits or '_'.</summary>
+    public static bool IsValidName(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return EnvironmentNames.IsValid(name);
+    }
+
     /// <summary>Checks what can be checked without the file system. The launcher checks the rest and refuses.</summary>
     public void Validate()
     {

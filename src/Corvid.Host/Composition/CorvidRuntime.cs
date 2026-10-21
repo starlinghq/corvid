@@ -14,6 +14,7 @@ using Corvid.Kernel.Events;
 using Corvid.Kernel.Jobs;
 using Corvid.Kernel.Sessions;
 using Corvid.Kernel.Turns;
+using Corvid.Mcp;
 using Corvid.Memory;
 using Corvid.Models;
 using Corvid.Models.Privacy;
@@ -56,8 +57,9 @@ public sealed class CorvidRuntime : IAsyncDisposable
     internal CorvidRuntime(CorvidOptions options, ModelCatalogue catalogue, ModelComposer composer, DeviceSchedulers devices,
         ModelMetrics metrics, TurnFeed feed, SqliteEventLog log, ModelSlotRegistry registry, DecisionFabric fabric,
         ApprovalPipeline approvals, ApprovalRouter prompters, ToolRegistry tools, MemoryServices? memory, ITokenCounter? counter,
-        BuiltinServices builtin, CheckpointService? checkpoints = null, SkillServices? skills = null)
+        BuiltinServices builtin, CheckpointService? checkpoints = null, SkillServices? skills = null, McpClients? mcp = null)
     {
+        Mcp = mcp;
         Checkpoints = checkpoints;
         Skills = skills ?? new SkillServices(null, null, null, null, "off");
         Options = options;
@@ -87,6 +89,9 @@ public sealed class CorvidRuntime : IAsyncDisposable
         if (Skills.Learner is { } learner)
             _learning = Task.Run(() => learner.RunAsync(_lifetime.Token));
     }
+
+    /// <summary>The configured MCP servers (C-018), starting or started in the background; null when none is configured.</summary>
+    public McpClients? Mcp { get; }
 
     /// <summary>Skills (C-017): the store, the learning loop and the curator, or why they are off.</summary>
     public SkillServices Skills { get; }
@@ -186,6 +191,9 @@ public sealed class CorvidRuntime : IAsyncDisposable
             await _learning.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         _schedulerLock?.Dispose();
         await Sessions.DisposeAsync().ConfigureAwait(false);
+        // After the sessions, so no turn is still calling a server; this stops every server process.
+        if (Mcp is not null)
+            await Mcp.DisposeAsync().ConfigureAwait(false);
         await MaintenanceIdleAsync().ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         if (_swap is not null)
             await _swap.DisposeAsync().ConfigureAwait(false);

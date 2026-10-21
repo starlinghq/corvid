@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <!-- The tasks extension's server side is wired through the SDK's DI builder; only the tests host a server that way. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <Using Include="Xunit" />
+    <ProjectReference Include="../../src/Corvid.Mcp/Corvid.Mcp.csproj" />
+    <ProjectReference Include="../../src/Corvid.Tools.Builtin/Corvid.Tools.Builtin.csproj" />
+    <!-- So corvid-sandbox is built next to the tests, where the stdio transport looks for it by default. -->
+    <ProjectReference Include="../../sandbox/Corvid.Sandbox.Launcher/Corvid.Sandbox.Launcher.csproj" />
+    <!-- So corvid (the CLI) is built next to the tests: `corvid mcp serve` is the stdio server of the end-to-end tests. -->
+    <ProjectReference Include="../../src/Corvid.Cli/Corvid.Cli.csproj" />
+    <Compile Include="../Corvid.Models.Remote.Tests/Infrastructure.cs" Link="FakeVault.cs" />
+  </ItemGroup>
+</Project>

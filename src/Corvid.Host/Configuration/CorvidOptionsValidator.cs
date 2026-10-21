@@ -85,6 +85,10 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue, IEnumerable
             if (path is { Length: > 0 } && !Path.IsPathFullyQualified(CorvidPaths.ExpandHome(path)))
                 errors.Add($"Corvid:{key} must be an absolute path (or start with ~/), not '{path}'.");
 
+        // C-018: every configured MCP server, checked as it would start (names, transports, URLs, Vault secrets, no secret
+        // values in a server's environment, absolute paths, timeouts and limits).
+        errors.AddRange(Composition.McpComposition.Definitions(options).Problems);
+
         // The file tools and the shell are confined to it, so it must be there before anything runs.
         if (options.Workspace is { Length: > 0 } workspace && Path.IsPathFullyQualified(CorvidPaths.ExpandHome(workspace))
             && !Directory.Exists(CorvidPaths.ExpandHome(workspace)))

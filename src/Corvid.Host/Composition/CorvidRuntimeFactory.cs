@@ -171,8 +171,12 @@ public sealed class CorvidRuntimeFactory(
                 ? new CheckpointService(new ShadowStore(CheckpointOptionsFor(settings, environment, skillsGuard.ReadOnly)))
                 : null;
 
+            // C-018: configured MCP servers start in the background and add their tools as they list them; last, so built-in
+            // and DI tools keep their names. A sandboxed server is denied what the shell is denied.
+            var mcp = McpComposition.Start(settings, McpDeniedPaths(vault, environment), toolRegistry);
+
             return new CorvidRuntime(settings, catalogue, composer, devices, metrics, feed, log, registry, fabric, approvals, prompters,
-                toolRegistry, memory, counter, builtin, checkpoints, skills) { UnavailableModels = [.. unavailable] };
+                toolRegistry, memory, counter, builtin, checkpoints, skills, mcp) { UnavailableModels = [.. unavailable] };
         }
         catch
         {
@@ -211,6 +215,21 @@ public sealed class CorvidRuntimeFactory(
         };
         return new ApprovalEnvironment(environment.Workspace, environment.Home, protectedPaths, environment.Variables);
     }
+
+    /// <summary>
+    /// What a sandboxed MCP server (C-018) is denied besides the launcher's own denials: Vault's configured locations and
+    /// Corvid's state (data directory, rules file, configuration file, launcher), as for the shell.
+    /// </summary>
+    internal static IEnumerable<string> McpDeniedPaths(CorvidOptions settings, string configFile)
+    {
+        var vault = VaultLocationsFor(settings);
+        var environment = vault.Protect(ApprovalEnvironment.FromProcess(CorvidPaths.Workspace(settings)));
+        var rulesFile = settings.Approvals.RulesFile is { Length: > 0 } file ? CorvidPaths.ExpandHome(file) : JsonFileApprovalRuleStore.DefaultPath(environment);
+        return McpDeniedPaths(vault, ProtectCorvidState(environment, settings, rulesFile, configFile));
+    }
+
+    private static IEnumerable<string> McpDeniedPaths(VaultLocations vault, ApprovalEnvironment environment) =>
+        vault.Paths.Concat(environment.Protected.SafetyConfiguration).Distinct(StringComparer.Ordinal);
 
     private static ApprovalEnvironment Protect(ApprovalEnvironment environment, string path)
     {

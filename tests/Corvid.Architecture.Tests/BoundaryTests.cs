@@ -140,6 +140,31 @@ public sealed class BoundaryTests
     [InlineData("Corvid.Fabric", "OpenTelemetry.Api", "package", false)]
     [InlineData("Corvid.Kernel", "Spectre.Console", "package", false)]
     [InlineData("Corvid.Models.Starling", "Spectre.Console", "package", true)]
+    // C-018: the MCP SDK only in the Corvid.Mcp surface, which references core projects; only the host composes it.
+    [InlineData("Corvid.Mcp", "ModelContextProtocol.Core", "package", true)]
+    [InlineData("Corvid.Mcp", "ModelContextProtocol.Extensions.Tasks", "package", true)]
+    [InlineData("Corvid.Mcp", "Microsoft.Extensions.Hosting.Abstractions", "package", true)]
+    [InlineData("Corvid.Mcp", "Microsoft.Extensions.AI.Abstractions", "package", true)]
+    [InlineData("Corvid.Mcp", "ModelContextProtocol.AspNetCore", "package", false)]
+    [InlineData("Corvid.Mcp", "Microsoft.Extensions.Hosting", "package", false)]
+    [InlineData("Corvid.Mcp", "Anthropic", "package", false)]
+    [InlineData("Corvid.Mcp", "Starlings.Models.Kev", "package", false)]
+    [InlineData("Corvid.Mcp", "PreviouslyUnknown.Package", "package", false)]
+    [InlineData("Corvid.Mcp", "Corvid.Tools", "project", true)]
+    [InlineData("Corvid.Mcp", "Corvid.Sandbox", "project", true)]
+    [InlineData("Corvid.Mcp", "Corvid.Vault.Client", "project", true)]
+    [InlineData("Corvid.Mcp", "Corvid.Models.Starling", "project", false)]
+    [InlineData("Corvid.Mcp", "Corvid.Host", "project", false)]
+    [InlineData("Corvid.Mcp", "Corvid.Vault", "project", false)]
+    [InlineData("Corvid.Mcp", "Corvid.Sandbox.Launcher", "project", false)]
+    [InlineData("Corvid.Host", "Corvid.Mcp", "project", true)]
+    [InlineData("Corvid.Cli", "Corvid.Mcp", "project", true)]
+    [InlineData("Corvid.Kernel", "Corvid.Mcp", "project", false)]
+    [InlineData("Corvid.Tools", "Corvid.Mcp", "project", false)]
+    [InlineData("Corvid.Models.Starling", "Corvid.Mcp", "project", false)]
+    [InlineData("Corvid.Kernel", "ModelContextProtocol.Core", "package", false)]
+    [InlineData("Corvid.Tools", "ModelContextProtocol", "package", false)]
+    [InlineData("Corvid.Host", "ModelContextProtocol.Core", "package", false)]
     public void EnforcesLayerRules(string project, string dependency, string type, bool allowed)
     {
         using var assets = Assets(("net10.0", dependency, type));
@@ -215,6 +240,28 @@ public sealed class BoundaryTests
         Assert.Contains(core, error => error.Contains("Corvid.Models.Starling/1.0.0", StringComparison.Ordinal));
         Assert.Contains(core, error => error.Contains("Starlings.Models.Qwen35", StringComparison.Ordinal));
         Assert.Contains(core, error => error.Contains("Microsoft.ML.OnnxRuntimeGenAI", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void TheCompositionRootResolvesWhatASurfaceBrings()
+    {
+        // The MCP SDK reaches the host only through Corvid.Mcp; the same graph in a core project fails on both.
+        using var assets = JsonDocument.Parse("""
+            {
+              "targets": { "net10.0": {
+                "Corvid.Mcp/1.0.0": { "type": "project", "dependencies": { "ModelContextProtocol.Core": "2.2.0" } },
+                "ModelContextProtocol.Core/2.2.0": { "type": "package", "dependencies": { "Microsoft.Extensions.Logging.Abstractions": "10.0.10" } },
+                "Microsoft.Extensions.Logging.Abstractions/10.0.10": { "type": "package" }
+              } },
+              "libraries": {
+                "Corvid.Mcp/1.0.0": { "msbuildProject": "../Corvid.Mcp/Corvid.Mcp.csproj" }
+              }
+            }
+            """);
+        Assert.Empty(BoundaryCheck.CheckAssets("Corvid.Host", assets.RootElement));
+        var core = BoundaryCheck.CheckAssets("Corvid.Kernel", assets.RootElement);
+        Assert.Contains(core, error => error.Contains("Corvid.Mcp/1.0.0", StringComparison.Ordinal));
+        Assert.Contains(core, error => error.Contains("ModelContextProtocol.Core", StringComparison.Ordinal));
     }
 
     [Fact]

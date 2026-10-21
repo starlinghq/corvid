@@ -45,6 +45,12 @@ public static class CorvidPaths
     /// <summary>The skill loop's queue, staged drafts, usage and eval results.</summary>
     public static string SkillsDatabase(CorvidOptions options) => Path.Combine(DataDirectory(options), "skills.db");
 
+    /// <summary>
+    /// The directory a stdio MCP server (C-018) may write, one per server: <c>$XDG_STATE_HOME/corvid-mcp/&lt;name&gt;</c>.
+    /// Outside the data directory, which the sandbox hides (the launcher refuses a workspace inside a denied path).
+    /// </summary>
+    public static string McpWorkspace(string server) => Path.Combine(Xdg("XDG_STATE_HOME", Path.Combine(".local", "state")), "corvid-mcp", server);
+
     /// <summary>A leading <c>~/</c> means the home directory; anything else is returned as given.</summary>
     public static string ExpandHome(string path)
     {

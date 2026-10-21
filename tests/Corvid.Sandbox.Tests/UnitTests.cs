@@ -36,6 +36,34 @@ public sealed class PolicyTests
     }
 
     [Fact]
+    public void A_prepared_launch_carries_only_the_policy_and_launcher_environment()
+    {
+        // C-018: a long-lived process (an MCP server) started by its caller, with the same command line and a cleared environment.
+        var launcher = Path.Combine(Path.GetTempPath(), "corvid-sandbox-" + Guid.NewGuid().ToString("N"));
+        File.WriteAllText(launcher, "");
+        try
+        {
+            var sandbox = new BubblewrapSandbox(new SandboxOptions
+            {
+                LauncherPath = launcher,
+                Environment = new Dictionary<string, string> { ["PATH"] = "/usr/bin", ["HOME"] = "/home/u", ["GITHUB_TOKEN"] = "x", ["NOTES_DIR"] = "/n" },
+            });
+            var launch = sandbox.Prepare(SandboxPolicy.ForWorkspace("/w") with { Environment = ["PATH", "NOTES_DIR"] }, new SandboxCommand("notes-mcp", "--stdio"));
+            Assert.Equal(launcher, launch.Launcher);
+            Assert.Equal(["--workspace", "/w", "--env", "PATH", "--env", "NOTES_DIR", "--", "notes-mcp", "--stdio"], launch.Arguments);
+            Assert.Equal(new Dictionary<string, string> { ["PATH"] = "/usr/bin", ["HOME"] = "/home/u", ["NOTES_DIR"] = "/n" }, launch.Environment);
+            Assert.Throws<ArgumentException>(() => sandbox.Prepare(SandboxPolicy.ForWorkspace("/w"), new SandboxCommand("x") { StandardInput = "in" }));
+            Assert.Throws<ArgumentException>(() => sandbox.Prepare(SandboxPolicy.ForWorkspace("/w") with { Environment = ["GITHUB_TOKEN"] }, new SandboxCommand("x")));
+        }
+        finally
+        {
+            File.Delete(launcher);
+        }
+        Assert.Throws<SandboxRefusedException>(() => new BubblewrapSandbox(new SandboxOptions { LauncherPath = launcher })
+            .Prepare(SandboxPolicy.ForWorkspace("/w"), new SandboxCommand("x")));
+    }
+
+    [Fact]
     public void Defaults_are_offline_with_a_minimal_environment_and_all_layers()
     {
         SandboxPolicy policy = SandboxPolicy.ForWorkspace("/w");
