@@ -93,14 +93,14 @@ public static class PiiEval
     }
 
     // Every character of the value lies inside some kept span (redaction would replace all of it).
-    private static bool Covered(string text, string value, List<ExtractedSpan> spans)
+    internal static bool Covered(string text, string value, List<ExtractedSpan> spans)
     {
         var at = text.IndexOf(value, StringComparison.Ordinal);
         return Enumerable.Range(at, value.Length).All(i => char.IsWhiteSpace(text[i]) || spans.Any(s => s.Start <= i && i < s.End));
     }
 
-    private static bool Related(string span, string value) =>
+    internal static bool Related(string span, string value) =>
         span.Length > 0 && (span.Contains(value, StringComparison.Ordinal) || value.Contains(span, StringComparison.Ordinal));
 
-    private static string Ratio(int part, int whole) => whole == 0 ? "–" : string.Create(CultureInfo.InvariantCulture, $"{part / (double)whole:0.000} ({part}/{whole})");
+    internal static string Ratio(int part, int whole) => whole == 0 ? "–" : string.Create(CultureInfo.InvariantCulture, $"{part / (double)whole:0.000} ({part}/{whole})");
 }
