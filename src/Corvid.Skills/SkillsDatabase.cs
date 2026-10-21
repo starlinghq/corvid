@@ -16,8 +16,11 @@ public enum OpportunityState
 
 /// <summary>A turn <c>skill_opportunity</c> queued for distillation, and how far it got.</summary>
 /// <param name="Tainted">The source turn held outside content: its draft always waits for review.</param>
+/// <param name="SuccessDecisionId">The <c>task_succeeded</c> decision (C-026); null for rows queued before schema version 2.</param>
+/// <param name="SuccessCalibrated">A calibrated decider confirmed the task's success; otherwise the draft always waits for review.</param>
 public sealed record OpportunityRow(string Id, string SessionId, long FromSequence, long ThroughSequence, string DecisionId,
-    string Request, OpportunityState State, string? Detail, DateTimeOffset Created, bool Tainted = false);
+    string Request, OpportunityState State, string? Detail, DateTimeOffset Created, bool Tainted = false, string? SuccessDecisionId = null,
+    bool SuccessCalibrated = false);
 
 public enum PendingSkillStatus
 {
@@ -45,7 +48,7 @@ public sealed record EvalRecord(string Skill, string Revision, int Passed, int T
 /// </summary>
 public sealed class SkillsDatabase
 {
-    private const int SchemaVersion = 1;
+    private const int SchemaVersion = 2;
 
     private readonly string _connectionString;
 
@@ -73,11 +76,16 @@ public sealed class SkillsDatabase
         command.Transaction = transaction;
         command.CommandText = "PRAGMA user_version;";
         var version = Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
-        if (version is not (0 or SchemaVersion))
+        if (version is not (0 or 1 or SchemaVersion))
             throw new InvalidDataException($"Unsupported skills database schema version {version}.");
         if (version == 0)
         {
             command.CommandText = Schema;
+            command.ExecuteNonQuery();
+        }
+        if (version < 2)
+        {
+            command.CommandText = SuccessMigration;
             command.ExecuteNonQuery();
         }
         transaction.Commit();
@@ -87,7 +95,8 @@ public sealed class SkillsDatabase
 
     internal TimeProvider Time { get; }
 
-    private const string Schema = """
+    // Version 1; later versions migrate from it.
+    internal const string Schema = """
         CREATE TABLE opportunities (
             id TEXT PRIMARY KEY,
             session TEXT NOT NULL,
@@ -129,6 +138,14 @@ public sealed class SkillsDatabase
             at INTEGER NOT NULL
         );
         PRAGMA user_version = 1;
+        """;
+
+    // Version 2 (C-026): an opportunity records the task_succeeded decision that granted it, and whether a calibrated decider
+    // answered. Rows queued earlier read as uncalibrated, so their drafts wait for review.
+    internal const string SuccessMigration = """
+        ALTER TABLE opportunities ADD COLUMN success_decision TEXT;
+        ALTER TABLE opportunities ADD COLUMN success_calibrated INTEGER NOT NULL DEFAULT 0 CHECK (success_calibrated IN (0, 1));
+        PRAGMA user_version = 2;
         """;
 
     private SqliteConnection Open()
@@ -179,20 +196,32 @@ public sealed class SkillsDatabase
 
     // ---- opportunities ----
 
-    public OpportunityRow Enqueue(string sessionId, long from, long through, string decisionId, string request, bool tainted = false)
+    public OpportunityRow Enqueue(string sessionId, long from, long through, string decisionId, string request, bool tainted = false,
+        string? successDecisionId = null, bool successCalibrated = false)
     {
         var id = Guid.NewGuid().ToString("N")[..12];
         var now = Now;
-        Execute("INSERT INTO opportunities VALUES ($id, $session, $from, $through, $decision, $request, 'queued', NULL, $now, $now, $tainted)",
+        Execute("""
+            INSERT INTO opportunities (id, session, from_sequence, through_sequence, decision_id, request, state, detail, created, updated,
+                tainted, success_decision, success_calibrated)
+            VALUES ($id, $session, $from, $through, $decision, $request, 'queued', NULL, $now, $now, $tainted, $success, $calibrated)
+            """,
             ("$id", id), ("$session", sessionId), ("$from", from), ("$through", through), ("$decision", decisionId), ("$request", request), ("$now", now),
-            ("$tainted", tainted ? 1 : 0));
-        return new OpportunityRow(id, sessionId, from, through, decisionId, request, OpportunityState.Queued, null, At(now), tainted);
+            ("$tainted", tainted ? 1 : 0), ("$success", successDecisionId), ("$calibrated", successCalibrated ? 1 : 0));
+        return new OpportunityRow(id, sessionId, from, through, decisionId, request, OpportunityState.Queued, null, At(now), tainted,
+            successDecisionId, successCalibrated);
     }
 
+    private const string OpportunityColumns =
+        "id, session, from_sequence, through_sequence, decision_id, request, state, detail, created, tainted, success_decision, success_calibrated";
+
     public IReadOnlyList<OpportunityRow> Opportunities(OpportunityState? state = null, int limit = 50) =>
-        Query("SELECT id, session, from_sequence, through_sequence, decision_id, request, state, detail, created, tainted FROM opportunities " +
+        Query($"SELECT {OpportunityColumns} FROM opportunities " +
               (state is null ? "" : "WHERE state = $state ") + "ORDER BY created LIMIT $limit", ReadOpportunity,
             ("$state", state is { } value ? StateName(value) : null), ("$limit", limit));
+
+    public OpportunityRow? FindOpportunity(string id) =>
+        Query($"SELECT {OpportunityColumns} FROM opportunities WHERE id = $id", ReadOpportunity, ("$id", id)).FirstOrDefault();
 
     public void SetState(string id, OpportunityState state, string? detail = null) =>
         Execute("UPDATE opportunities SET state = $state, detail = $detail, updated = $now WHERE id = $id",
@@ -200,7 +229,8 @@ public sealed class SkillsDatabase
 
     private static OpportunityRow ReadOpportunity(SqliteDataReader reader) => new(reader.GetString(0), reader.GetString(1), reader.GetInt64(2),
         reader.GetInt64(3), reader.GetString(4), reader.GetString(5), ParseState(reader.GetString(6)),
-        reader.IsDBNull(7) ? null : reader.GetString(7), At(reader.GetInt64(8)), reader.GetInt64(9) != 0);
+        reader.IsDBNull(7) ? null : reader.GetString(7), At(reader.GetInt64(8)), reader.GetInt64(9) != 0,
+        reader.IsDBNull(10) ? null : reader.GetString(10), reader.GetInt64(11) != 0);
 
     private static string StateName(OpportunityState state) => state switch
     {

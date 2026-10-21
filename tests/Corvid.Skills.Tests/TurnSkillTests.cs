@@ -145,7 +145,7 @@ public sealed class TurnSkillTests
     {
         var generator = new FakeGenerator(Reply.Call("list_notes"), Reply.Call("list_notes"), Reply.Call("list_notes"), Reply.Say("Three lists."))
         {
-            YesNo = FakeGenerator.YesTo("reusable"),
+            YesNo = FakeGenerator.YesTo("reusable", "accomplish"),
         };
         using var harness = new TurnHarness(generator);
         var learning = new RecordingLearning();
@@ -161,6 +161,8 @@ public sealed class TurnSkillTests
         Assert.IsType<UserMessage>(events.Single(item => item.Sequence == queued.FromSequence).Payload);
         Assert.IsType<AssistantMessage>(events.Single(item => item.Sequence == queued.ThroughSequence).Payload);
         Assert.False(queued.Tainted);
+        Assert.Equal(Assert.Single(harness.Decisions("task_succeeded")).DecisionId, queued.SuccessDecisionId);
+        Assert.False(decision.Question!.Instructions.TryGetProperty("recovery", out _));
     }
 
     [Fact]
@@ -174,7 +176,7 @@ public sealed class TurnSkillTests
             });
         var generator = new FakeGenerator(Reply.Call("read_hub_file"), Reply.Call("read_hub_file"), Reply.Call("read_hub_file"), Reply.Say("Read."))
         {
-            YesNo = FakeGenerator.YesTo("reusable"),
+            YesNo = FakeGenerator.YesTo("reusable", "accomplish"),
         };
         using var harness = new TurnHarness(generator, tools: tools => tools.Add(tool));
         var learning = new RecordingLearning();
@@ -188,7 +190,7 @@ public sealed class TurnSkillTests
     [Fact]
     public async Task ShortTurnsAreNotAskedAboutSkillOpportunities()
     {
-        var generator = new FakeGenerator(Reply.Call("list_notes"), Reply.Say("One list.")) { YesNo = FakeGenerator.YesTo("reusable") };
+        var generator = new FakeGenerator(Reply.Call("list_notes"), Reply.Say("One list.")) { YesNo = FakeGenerator.YesTo("reusable", "accomplish") };
         using var harness = new TurnHarness(generator);
         var learning = new RecordingLearning();
 
@@ -196,7 +198,85 @@ public sealed class TurnSkillTests
 
         Assert.False(result.SkillQueued);
         Assert.Empty(harness.Decisions("skill_opportunity"));
+        Assert.Empty(harness.Decisions("task_succeeded"));
         Assert.Empty(learning.Queued);
+    }
+
+    /// <summary>A note tool that always throws: its result is a counted <c>tool failed</c> error in the note family.</summary>
+    private static TestTool ReadNote() => TestTool.Create("read_note", "Read one note by its title.", new ToolRisk(SideEffects.None, false, false),
+        """{"type":"object","properties":{}}""", (_, _) => throw new InvalidOperationException("no note with that title"));
+
+    [Fact]
+    public async Task ATwoCallTurnThatRecoveredIsAskedAndQueued()
+    {
+        var generator = new FakeGenerator(Reply.Call("read_note"), Reply.Call("list_notes"), Reply.Say("Found it in the list."))
+        {
+            YesNo = FakeGenerator.YesTo("reusable", "accomplish"),
+        };
+        using var harness = new TurnHarness(generator, tools: tools => tools.Add(ReadNote()));
+        var learning = new RecordingLearning();
+
+        var result = await harness.RunAsync(Runner(harness, null, learning), "find my shopping note");
+
+        Assert.Equal(2, result.ToolCalls);
+        Assert.True(result.SkillQueued);
+        var opportunity = Assert.Single(harness.Decisions("skill_opportunity"));
+        var success = Assert.Single(harness.Decisions("task_succeeded"));
+        Assert.Equal("queue_skill_distillation", opportunity.Action);
+        Assert.Equal("confirm_task_success", success.Action);
+        // The pattern reaches the decider as a feature of the question, and is persisted with it for calibration (C-021).
+        Assert.Equal("read_note failed, then list_notes succeeded", opportunity.Question!.Instructions.GetProperty("recovery").GetString());
+        Assert.Equal(2, opportunity.Question.Instructions.GetProperty("tool_calls").GetInt32());
+        Assert.Equal(1, success.Question!.Instructions.GetProperty("failed_calls").GetInt32());
+        Assert.Equal(0, success.Question.Instructions.GetProperty("unrecovered_failures").GetInt32());
+        var queued = Assert.Single(learning.Queued);
+        Assert.Equal(opportunity.DecisionId, queued.DecisionId);
+        Assert.Equal(success.DecisionId, queued.SuccessDecisionId);
+        // The degraded tier's yes is no calibrated confirmation, so the learner will stage the draft.
+        Assert.False(queued.SuccessCalibrated);
+    }
+
+    [Fact]
+    public async Task ATurnTheGeneratorDoesNotCallSuccessfulIsNotQueued()
+    {
+        var generator = new FakeGenerator(Reply.Call("list_notes"), Reply.Call("list_notes"), Reply.Call("list_notes"), Reply.Say("Three lists."))
+        {
+            YesNo = FakeGenerator.YesTo("reusable"),
+        };
+        using var harness = new TurnHarness(generator);
+        var learning = new RecordingLearning();
+
+        var result = await harness.RunAsync(Runner(harness, null, learning), "list my notes three times");
+
+        Assert.False(result.SkillQueued);
+        Assert.Empty(learning.Queued);
+        Assert.Equal("task_unconfirmed", Assert.Single(harness.Decisions("task_succeeded")).Action);
+        // The yes to skill_opportunity is logged, and held back by the missing condition.
+        var opportunity = Assert.Single(harness.Decisions("skill_opportunity"));
+        Assert.Equal("nothing", opportunity.Action);
+        Assert.Equal(1.0, opportunity.Probabilities["yes"]);
+    }
+
+    [Fact]
+    public async Task ATurnEndingOnAnUnrecoveredFailureIsHeldBack()
+    {
+        // Three identical failed calls: a retry is no recovery and nothing succeeded, so the generator's yes cannot confirm success.
+        var generator = new FakeGenerator(Reply.Call("read_note"), Reply.Call("read_note"), Reply.Call("read_note"), Reply.Say("I could not read it."))
+        {
+            YesNo = FakeGenerator.YesTo("reusable", "accomplish"),
+        };
+        using var harness = new TurnHarness(generator, tools: tools => tools.Add(ReadNote()));
+        var learning = new RecordingLearning();
+
+        var result = await harness.RunAsync(Runner(harness, null, learning), "read my shopping note");
+
+        Assert.False(result.SkillQueued);
+        Assert.Empty(learning.Queued);
+        var success = Assert.Single(harness.Decisions("task_succeeded"));
+        Assert.Equal(1.0, success.Probabilities["yes"]);
+        Assert.Equal("task_unconfirmed", success.Action);
+        Assert.Equal(3, success.Question!.Instructions.GetProperty("unrecovered_failures").GetInt32());
+        Assert.Equal("nothing", Assert.Single(harness.Decisions("skill_opportunity")).Action);
     }
 
     [Fact]

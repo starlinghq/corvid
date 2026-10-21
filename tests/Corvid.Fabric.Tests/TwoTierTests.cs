@@ -192,7 +192,7 @@ public sealed class TwoTierTests
         var old = """
             {"version":"old.1","degraded_choice_margin":0.05,"floors":{"intent":0.5,"difficulty":3.5,"needs_recall":0.6,"clarify":0.7,
              "tool":0.45,"skill":0.5,"done":0.8,"stuck":0.7,"clear_results":0.6,"injection":0.5,"risk":0.9,"remember":0.7,
-             "memory_op":0.6,"skill_opportunity":0.75,"skill_write_safe":0.85,"wake":0.5,"deliver":0.6,"delegate":0.7}}
+             "memory_op":0.6,"skill_opportunity":0.75,"task_succeeded":0.8,"skill_write_safe":0.85,"wake":0.5,"deliver":0.6,"delegate":0.7}}
             """;
         Assert.False(FloorConfiguration.Parse(old).DegradedTurnBlocking);
         var on = FloorConfiguration.Default with { Version = "on.1", DegradedTurnBlocking = true };

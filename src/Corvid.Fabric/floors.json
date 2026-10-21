@@ -1,5 +1,5 @@
 {
-  "version": "2026-10-19.1",
+  "version": "2026-10-21.1",
   "degraded_choice_margin": 0.05,
   "degraded_turn_blocking": false,
   "floors": {
@@ -17,6 +17,7 @@
     "remember": 0.7,
     "memory_op": 0.6,
     "skill_opportunity": 0.75,
+    "task_succeeded": 0.8,
     "skill_write_safe": 0.85,
     "wake": 0.5,
     "deliver": 0.6,

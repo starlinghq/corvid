@@ -30,8 +30,14 @@ public sealed record SkillLearnerOptions
     /// <summary>The generator's description in the decider's state, as the turn loop writes it.</summary>
     public string Generator { get; init; } = "unknown";
 
-    /// <summary>Characters of each recorded tool result the drafting prompt shows.</summary>
-    public int ResultChars { get; init; } = 400;
+    /// <summary>Characters of each event's text the drafting prompt shows: a message, a call's arguments or a result.</summary>
+    public int EventChars { get; init; } = 1_200;
+
+    /// <summary>Events from the start of the source turn the drafting prompt shows.</summary>
+    public int HeadEvents { get; init; } = 40;
+
+    /// <summary>Events from the end of the source turn the drafting prompt shows; the middle is marked as omitted.</summary>
+    public int TailEvents { get; init; } = 40;
 
     public int MaxOutputTokens { get; init; } = 1_024;
 }
@@ -42,8 +48,9 @@ public sealed record SkillLearnerOptions
 /// events with the generator; the draft must be well formed, pass the scanner and pass its replay test
 /// (<see cref="SkillReplayer"/>); then <c>skill_write_safe</c> gates it at the pre-execute checkpoint. Only a calibrated
 /// answer above the floor, on a skill the agent wrote (the <c>agent_authored</c> condition), applies it; otherwise the
-/// draft is staged for <c>/skills pending</c>. The degraded decider never answers a gate, so without Kev every draft is
-/// staged, and a draft never touches a skill the user or a hub wrote, approved or not.
+/// draft is staged for <c>/skills pending</c>, as it is when the source turn was tainted or its <c>task_succeeded</c> answer
+/// was not calibrated (C-026). The degraded decider never answers a gate, so without Kev every draft is staged, and a draft
+/// never touches a skill the user or a hub wrote, approved or not.
 /// </summary>
 public sealed class SkillLearner : ISkillLearning
 {
@@ -82,6 +89,9 @@ public sealed class SkillLearner : ISkillLearning
         _drafter = drafter;
         _curator = curator;
         _options = options ?? new SkillLearnerOptions();
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.EventChars, nameof(options));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.HeadEvents, nameof(options));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.TailEvents, nameof(options));
     }
 
     /// <summary>Raised after each opportunity is processed, for a surface to mention.</summary>
@@ -91,7 +101,7 @@ public sealed class SkillLearner : ISkillLearning
     {
         ArgumentNullException.ThrowIfNull(opportunity);
         _database.Enqueue(opportunity.SessionId, opportunity.FromSequence, opportunity.ThroughSequence, opportunity.DecisionId, opportunity.Request,
-            opportunity.Tainted);
+            opportunity.Tainted, opportunity.SuccessDecisionId, opportunity.SuccessCalibrated);
         _signal.Release();
     }
 
@@ -144,9 +154,12 @@ public sealed class SkillLearner : ISkillLearning
     {
         LearningResult Fail(string detail, string? skill = null) => new(opportunity.Id, LearningStatus.Failed, skill, detail);
 
-        var turn = _log.Read(opportunity.SessionId, opportunity.FromSequence - 1, opportunity.ThroughSequence, 4_096, cancellationToken);
-        if (turn.Count == 0)
+        // The turn is read page by page, twice: once for the recovery scan, once into the drafting window.
+        IEnumerable<StoredEvent> Turn() =>
+            SessionProjection.ReadRange(_log, opportunity.SessionId, opportunity.FromSequence - 1, opportunity.ThroughSequence, cancellationToken);
+        if (_log.Read(opportunity.SessionId, opportunity.FromSequence - 1, opportunity.ThroughSequence, 1, cancellationToken).Count == 0)
             return Fail("the source turn is not in the log");
+        var scan = ToolRecovery.Scan(Turn());
         // /undo or /rollback (C-014) after the turn was queued: the user took it back, so it is no procedure to learn from.
         var session = SessionProjection.Load(_log, opportunity.SessionId, cancellationToken: cancellationToken);
         if (!session.IsVisible(opportunity.FromSequence) || !session.IsVisible(opportunity.ThroughSequence))
@@ -158,7 +171,7 @@ public sealed class SkillLearner : ISkillLearning
 
         // 2. Draft (System Two work).
         var response = await _drafter.GetResponseAsync(
-            [new ChatMessage(ChatRole.System, SystemPrompt), new ChatMessage(ChatRole.User, DraftPrompt(turn))],
+            [new ChatMessage(ChatRole.System, SystemPrompt), new ChatMessage(ChatRole.User, DraftPrompt(Turn(), scan))],
             new ChatOptions { MaxOutputTokens = _options.MaxOutputTokens }, cancellationToken).ConfigureAwait(false);
         SkillDocument draft;
         try
@@ -185,14 +198,17 @@ public sealed class SkillLearner : ISkillLearning
         var verdict = await AskWriteSafeAsync(opportunity.SessionId, opportunity.Request, draft, existing is null ? "create" : "update", replay,
             cancellationToken).ConfigureAwait(false);
         // A turn that held outside content (§10.3) would pass it into a trusted, agent-authored skill: whatever the gate says,
-        // the user reviews such a draft.
-        if (verdict.Verdict.Acted && !opportunity.Tainted)
+        // the user reviews such a draft. So does one whose task success no calibrated decider confirmed (C-026): the degraded
+        // tier's yes, or an egress checkpoint that fell back to it, is no evidence the procedure worked.
+        if (verdict.Verdict.Acted && !opportunity.Tainted && opportunity.SuccessCalibrated)
         {
             var revision = await _store.WriteAgentSkillAsync(draft, opportunity.SessionId, cancellationToken: cancellationToken).ConfigureAwait(false);
             await RunEvalsAsync(draft.Name, cancellationToken).ConfigureAwait(false);
             return new LearningResult(opportunity.Id, LearningStatus.Applied, draft.Name, $"applied as {revision?[..12] ?? "unchanged"}; replay {replay.Describe()}");
         }
-        var reason = opportunity.Tainted ? "the source turn held outside content, so the draft waits for review" : verdict.Verdict.Reason;
+        var reason = opportunity.Tainted ? "the source turn held outside content, so the draft waits for review"
+            : !verdict.Verdict.Acted ? verdict.Verdict.Reason
+            : "task success was not confirmed by a calibrated decider, so the draft waits for review";
         var pending = _database.Stage(draft.Name, draft.Text, opportunity.SessionId, verdict.DecisionId, reason, replay.Describe(), opportunity.Id);
         return new LearningResult(opportunity.Id, LearningStatus.Staged, draft.Name, $"staged as {pending.Id} ({reason})", pending);
     }
@@ -240,6 +256,7 @@ public sealed class SkillLearner : ISkillLearning
         if (!_database.Resolve(pendingId, PendingSkillStatus.Approved))
             throw new InvalidOperationException($"'{pendingId}' was resolved meanwhile.");
         _fabric.RecordOutcome(pending.SessionId, pending.DecisionId, "approved", cancellationToken);
+        RecordReview(pending, SkillApproved, cancellationToken);
         if (pending.OpportunityId is { } opportunity)
             _database.SetState(opportunity, OpportunityState.Applied, "approved by the user");
         await RunEvalsAsync(draft.Name, cancellationToken).ConfigureAwait(false);
@@ -253,8 +270,26 @@ public sealed class SkillLearner : ISkillLearning
         if (!_database.Resolve(pendingId, PendingSkillStatus.Rejected))
             throw new InvalidOperationException($"'{pendingId}' was resolved meanwhile.");
         _fabric.RecordOutcome(pending.SessionId, pending.DecisionId, "rejected", cancellationToken);
+        RecordReview(pending, SkillRejected, cancellationToken);
         if (pending.OpportunityId is { } opportunity)
             _database.SetState(opportunity, OpportunityState.Failed, "rejected by the user");
+    }
+
+    /// <summary>The outcome a review records on the egress decisions that queued the draft (C-026).</summary>
+    public const string SkillApproved = "skill_approved";
+
+    /// <inheritdoc cref="SkillApproved"/>
+    public const string SkillRejected = "skill_rejected";
+
+    // The review is indirect evidence for the turn's skill_opportunity and task_succeeded decisions: distinct outcome strings
+    // let calibration (C-021) count or drop it apart from the direct approved/rejected on skill_write_safe.
+    private void RecordReview(PendingSkill pending, string outcome, CancellationToken cancellationToken)
+    {
+        if (pending.OpportunityId is null || _database.FindOpportunity(pending.OpportunityId) is not { } source)
+            return;
+        _fabric.RecordOutcome(pending.SessionId, source.DecisionId, outcome, cancellationToken);
+        if (source.SuccessDecisionId is { } success)
+            _fabric.RecordOutcome(pending.SessionId, success, outcome, cancellationToken);
     }
 
     private async Task RunEvalsAsync(string skill, CancellationToken cancellationToken)
@@ -273,7 +308,13 @@ public sealed class SkillLearner : ISkillLearning
 
     // ---- drafting ----
 
-    internal string DraftPrompt(IReadOnlyList<StoredEvent> turn)
+    /// <summary>
+    /// The drafting prompt: the source turn as a head-and-tail window (C-026, after Beacon's evaluator projection). The first
+    /// <see cref="SkillLearnerOptions.HeadEvents"/> and last <see cref="SkillLearnerOptions.TailEvents"/> events are shown, with
+    /// a marker counting the events omitted between them, and each event's text is cut to
+    /// <see cref="SkillLearnerOptions.EventChars"/>, so a long turn keeps both how it started and how it ended.
+    /// </summary>
+    internal string DraftPrompt(IEnumerable<StoredEvent> turn, ToolRecoveryScan? scan = null)
     {
         var text = new StringBuilder();
         text.AppendLine("The assistant just completed the task below. Write a skill that would let it do tasks like this again.");
@@ -283,32 +324,60 @@ public sealed class SkillLearner : ISkillLearning
         text.AppendLine("description: One sentence saying when to use this skill.");
         text.AppendLine("---");
         text.AppendLine("Then numbered steps in Markdown, naming each tool to call, in the order used. Do not include secrets, personal data or one-off values.");
+        if (scan?.Recoveries.FirstOrDefault() is { } recovery)
+            text.Append("The turn recovered: ").Append(recovery.FailedTool).Append(" failed, then ").Append(recovery.RecoveredTool)
+                .AppendLine(" succeeded; write the skill around the approach that worked.");
         text.AppendLine();
+
         var names = new Dictionary<string, string>(StringComparer.Ordinal);
+        var head = new List<string>(_options.HeadEvents);
+        var tail = new Queue<string>(_options.TailEvents);
+        var omitted = 0;
         foreach (var item in turn)
         {
-            switch (item.Payload)
+            if (Render(item.Payload) is not { } line)
+                continue;
+            if (head.Count < _options.HeadEvents)
             {
-                case UserMessage user:
-                    text.Append("User: ").AppendLine(user.Text);
-                    break;
-                case ToolCallIssued call:
-                    names[call.CallId] = call.ToolName;
-                    text.Append("Tool call: ").Append(call.ToolName).Append(' ').AppendLine(Cut(call.Arguments.GetRawText()));
-                    break;
-                case ToolResult result:
-                    text.Append(result.IsError ? "Tool error (" : "Tool result (").Append(names.GetValueOrDefault(result.CallId, "tool")).Append("): ")
-                        .AppendLine(Cut(result.Result.ValueKind == JsonValueKind.String ? result.Result.GetString()! : result.Result.GetRawText()));
-                    break;
-                case AssistantMessage assistant:
-                    text.Append("Assistant: ").AppendLine(assistant.Text);
-                    break;
+                head.Add(line);
+                continue;
             }
+            if (tail.Count == _options.TailEvents)
+            {
+                tail.Dequeue();
+                omitted++;
+            }
+            tail.Enqueue(line);
         }
+        foreach (var line in head)
+            text.AppendLine(line);
+        if (omitted > 0)
+            text.AppendLine(string.Create(CultureInfo.InvariantCulture, $"[… {omitted} events omitted from the middle of this turn …]"));
+        foreach (var line in tail)
+            text.AppendLine(line);
         return text.ToString();
 
-        string Cut(string value) => value.Length > _options.ResultChars
-            ? value[.._options.ResultChars] + string.Create(CultureInfo.InvariantCulture, $"… [{value.Length - _options.ResultChars} more]")
+        string? Render(SessionEvent payload)
+        {
+            switch (payload)
+            {
+                case UserMessage user:
+                    return "User: " + Cut(user.Text);
+                case ToolCallIssued call:
+                    names[call.CallId] = call.ToolName;
+                    return $"Tool call: {call.ToolName} {Cut(call.Arguments.GetRawText())}";
+                case ToolResult result:
+                    var value = result.Result.ValueKind == JsonValueKind.String ? result.Result.GetString()! : result.Result.GetRawText();
+                    return $"{(result.IsError ? "Tool error" : "Tool result")} ({names.GetValueOrDefault(result.CallId, "tool")}): {Cut(value)}";
+                case AssistantMessage assistant:
+                    return "Assistant: " + Cut(assistant.Text);
+                default:
+                    return null;
+            }
+        }
+
+        string Cut(string value) => value.Length > _options.EventChars
+            ? value[.._options.EventChars] + string.Create(CultureInfo.InvariantCulture, $"… [{value.Length - _options.EventChars} more]")
             : value;
     }
 
