@@ -2145,7 +2145,9 @@ the projection or git in `Corvid.Kernel`, the catalogue row in `Corvid.Fabric`, 
   lowercased key. The key is the `origin` remote, normalized: trimmed, scheme (`https`, `http`, `ssh`, `git`, `git+ssh`)
   and userinfo dropped (a credential in the URL never changes or enters the key), the scp form `git@host:org/repo` made
   `host/org/repo`, an ssh port dropped, a trailing `/` and `.git` stripped, so the https and ssh remotes of one repository
-  share an id. Without an origin it is the main checkout's path; without git, outside a repository, or in a repository git
+  share an id. A relative local origin (no scheme, not scp form, not rooted: `../upstream.git`) is resolved against the
+  main checkout first, so unrelated repositories with the same relative origin do not share an id. Without an origin it is
+  the main checkout's path; without git, outside a repository, or in a repository git
   refuses (dubious ownership: global configuration is off, so `safe.directory` never applies), the workspace path (full,
   `/` separators, no trailing separator). The resolver runs the git CLI in a new discovery mode of C-014's `GitRunner`:
   the same cleared environment and `-c` overrides (no hooks, fsmonitor, pager or credential helper), but no `GIT_DIR` or
@@ -2181,13 +2183,17 @@ the projection or git in `Corvid.Kernel`, the catalogue row in `Corvid.Fabric`, 
   machine-specific content (`/home/<name>`, `/Users/<name>`, `C:\Users`, IPv4 addresses, ISO dates, today, yesterday and
   weekday names, UUIDs, PR or issue numbers), secret-looking strings (AWS `AKIA` keys, `ghp_`/`gho_`/`github_pat_`,
   `sk-`/`sk-ant-`, Slack `xox?-`, PEM private-key headers, JWTs, `password|secret|token|api_key` followed by `:` or `=` and
-  a value, long hex runs, and long base64 runs that mix digits and both cases and are not paths) and instructions aimed at
-  the agent. The long-hex rule refuses a commit hash too, which is one-off anyway. The rules are heuristics: they refuse a
+  a value that is not an environment reference (`$X`, `${X}`, `%X%`), long hex runs, and long base64 runs that mix digits
+  and both cases, are not paths, and either hold `+`, `/` or `=` or switch between upper case, lower case and digits at 45%
+  or more of their characters, as random text does and a PascalCase identifier with a digit does not) and instructions
+  aimed at the agent. The long-hex rule refuses a commit hash too, which is one-off anyway. The rules are heuristics: they refuse a
   draft, never a turn.
 - Gated write (`LessonWriter`): validate, file as a candidate, then ask the existing `memory_op` gate at the pre-execute
   checkpoint in the source session, with lesson-shaped JSON instructions (the candidate, and up to five approved lessons of
   the same project from `SearchApproved` as neighbours). An acted `add` approves; `update` approves and supersedes the
-  nearest neighbour; `noop` rejects the candidate with `duplicate of <id> (decider)` and no outcome; `invalidate`, an answer
+  nearest neighbour; `noop` leaves it a candidate with `duplicate of <id> (decider)` (`no neighbour to be a duplicate of`
+  when there is none), as `MemoryWriter` persists nothing on `noop`: rejecting is final and the content-hash id would make
+  every re-draft a silent duplicate, so only review rejects, and review records the outcome; `invalidate`, an answer
   below the floor, the degraded tier (which never answers a gate) and a tainted source (§10.3, without asking) leave it a
   candidate with the reason. So without Kev every lesson waits for review. Review (`Approve`, optionally superseding an
   approved lesson of the same project, and `Reject` with a reason) records the decision's outcome as `approved`,
@@ -2231,18 +2237,20 @@ the projection or git in `Corvid.Kernel`, the catalogue row in `Corvid.Fabric`, 
   12 hex characters; any unique prefix is accepted), `approve <id> [supersedes <old>]`, `reject <id> [reason]` and
   `supersede <old> <new>`, all scoped to the current project; bare `/memory pending` adds `N lesson candidate(s): /memory
   lessons pending`.
-- Tests: `tests/Corvid.Memory.Tests` (`ProjectIdsTests`: every form of one remote, userinfo stripped, paths;
-  `LessonValidatorTests`: an accept and a refuse case per rule, secrets, home paths, summaries, evidence summaries;
-  `LessonStoreTests`: idempotent filing and merged evidence, re-filing a rejected lesson, allowed and refused transitions,
-  triggers, project-scoped search, the queue, a version 2 store migrated to 3; `LessonWriterTests`: degraded always a
-  candidate, a calibrated add approves, update supersedes, noop rejects as a duplicate, below the floor and invalidate stay
-  candidates, a tainted source skips the gate, outcomes on review; `LessonRecallTests`: only this project's approved
-  lessons, never superseded or rejected ones, no project means no lessons, local-only marked). `tests/Corvid.Kernel.Tests`
-  (`ProjectResolverTests` with real git: remote, a linked worktree resolving to the main checkout, no git, the `$HOME`
-  ceiling, a repository's fsmonitor never run; `LessonTurnTests`: asked and queued only when its guards hold, bound once and
-  again on change, lessons reaching the generator through recall and not another project's; `LessonLearnerTests`: filing
-  with the evidence hash, positions outside the turn, none, unreadable and bad drafts declined, undone turns skipped,
-  duplicates, taint; `EventJsonTests` and `SessionProjectionTests` for `ProjectBound`). `tests/Corvid.Fabric.Tests` for the
+- Tests: `tests/Corvid.Memory.Tests` (`ProjectIdsTests`: every form of one remote, userinfo stripped, paths, relative
+  local remotes; `LessonValidatorTests`: an accept and a refuse case per rule, secrets, environment references and long
+  identifiers that are not, home paths, summaries, evidence summaries; `LessonStoreTests`: idempotent filing and merged
+  evidence, re-filing a rejected lesson, allowed and refused transitions, triggers, project-scoped search, the queue, a
+  version 2 store migrated to 3; `LessonWriterTests`: degraded always a candidate, a calibrated add approves, update
+  supersedes, noop stays a candidate that review can still approve, below the floor and invalidate stay candidates, a
+  tainted source skips the gate, outcomes on review; `LessonRecallTests`: only this project's approved lessons, never
+  superseded or rejected ones, no project means no lessons, local-only marked). `tests/Corvid.Kernel.Tests`
+  (`ProjectResolverTests` with real git: remote, two repositories with one relative origin kept apart, a linked worktree
+  resolving to the main checkout, no git, the `$HOME` ceiling, a repository's fsmonitor never run; `LessonTurnTests`:
+  asked and queued only when its guards hold, bound once and again on change, lessons reaching the generator through
+  recall and not another project's, a local-only block in a local prompt queuing a local-only opportunity, a local-only
+  lesson reaching a local generator and never a cloud one; `LessonLearnerTests`: filing with the evidence hash, positions
+  outside the turn, none, unreadable and bad drafts declined, undone turns skipped, duplicates, taint; `EventJsonTests` and `SessionProjectionTests` for `ProjectBound`). `tests/Corvid.Fabric.Tests` for the
   catalogue row, condition and floor; `tests/Corvid.Host.Tests` (`CommandTests`) for `/memory lessons` and `/status`.
 
 Not built yet: vectors for lessons (embedding them, the vector list, and §4.3's re-embed job); approving with edits and
