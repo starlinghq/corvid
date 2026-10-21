@@ -26,12 +26,21 @@ namespace Corvid.Abstractions.Events;
 [JsonDerivedType(typeof(DeliveryQueued), "delivery_queued")]
 [JsonDerivedType(typeof(DeliveryResolved), "delivery_resolved")]
 [JsonDerivedType(typeof(DetectionMatched), "detection_matched")]
+[JsonDerivedType(typeof(ProjectBound), "project_bound")]
+[JsonDerivedType(typeof(McpToolHeld), "mcp_tool_held")]
+[JsonDerivedType(typeof(McpToolAccepted), "mcp_tool_accepted")]
 public abstract record SessionEvent;
 
 // Text is the initial message surface. Provider-specific message objects are never stored here.
 public sealed record UserMessage(string Text) : SessionEvent;
 public sealed record AssistantMessage(string Text) : SessionEvent;
-public sealed record ToolCallIssued(string CallId, string ToolName, JsonElement Arguments) : SessionEvent;
+// Round (the turn's generator response that made the call, from 1) and ReadOnly (the tool's risk descriptor said read-only)
+// were added by C-026, so the recovery scan can tell a later round from a call run one at a time after approval, and a
+// read from a change, from the log alone. Both are omitted when null, so events written before them keep their persisted
+// form; ReadOnly is null when the call named no offered tool.
+public sealed record ToolCallIssued(string CallId, string ToolName, JsonElement Arguments,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Round = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? ReadOnly = null) : SessionEvent;
 public sealed record ToolResult(string CallId, JsonElement Result, bool IsError = false) : SessionEvent;
 // CatalogueVersion (the floors configuration in force) and Decider (which tier answered) were added by C-004a; State (the
 // TurnState the decider saw) and Question (instructions and options as asked) by C-021, so a decision can be exported as
@@ -119,6 +128,23 @@ public sealed record DeliveryResolved(string DeliveryId, string Status,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PlatformMessageId = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Detail = null) : SessionEvent;
 
+// MCP tool pinning (C-022): kept in their own session (McpSessions.Pins), so no chat's transcript carries them. Held: a tool
+// of a configured server was not offered because its definition is new since the server was first pinned, changed from its
+// pin (Hash against PinnedHash), or its description matched a poisoning pattern (Reason "flagged", Detail the matched text).
+// Accepted: the user pinned the definition the process held (/mcp accept), or allowed a flagged one (/mcp allow, Flagged), so
+// it is registered; an allowed flagged tool is treated as an untrusted server's, whatever the server's trust.
+public sealed record McpToolHeld(string Server, string Tool, string Reason, string Hash,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PinnedHash = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Detail = null) : SessionEvent;
+
+public sealed record McpToolAccepted(string Server, string Tool, string Hash, bool Flagged = false) : SessionEvent;
+
+public static class McpSessions
+{
+    /// <summary>The event-log session that records held and accepted MCP tool definitions (C-022).</summary>
+    public const string Pins = "mcp-pins";
+}
+
 public static class DeliveryStatus
 {
     public const string Delivered = "delivered";
@@ -134,3 +160,7 @@ public sealed record DetectionMatched(string RuleId, int RuleVersion, string Sev
     ImmutableArray<long> Sequences,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? CallId = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Enforced = null) : SessionEvent;
+// C-025: the project a session works in, so its lessons are recalled and filed under it. ProjectId is the 64-character hex
+// hash of the normalized origin remote, main checkout path or workspace path; Source says which ("remote", "checkout",
+// "path"). Appended before a turn's user message when the session has no project yet or a different one.
+public sealed record ProjectBound(string ProjectId, string Source) : SessionEvent;

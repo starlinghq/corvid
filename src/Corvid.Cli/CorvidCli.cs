@@ -53,7 +53,7 @@ public static class ExitCodes
 }
 
 /// <summary>
-/// <c>corvid</c> (plan §17 row 1.2): <c>chat</c>, <c>model</c>, <c>doctor</c>, <c>mcp</c>, <c>evals</c>, <c>acp</c>, <c>serve</c>, <c>gateway</c> and <c>scan</c>, with typed configuration
+/// <c>corvid</c> (plan §17 row 1.2): <c>chat</c>, <c>model</c>, <c>doctor</c>, <c>mcp</c>, <c>evals</c>, <c>acp</c>, <c>serve</c>, <c>gateway</c>, <c>traces</c> and <c>scan</c>, with typed configuration
 /// validated before anything runs.
 /// </summary>
 public static class CorvidCli
@@ -76,6 +76,8 @@ public static class CorvidCli
           gateway pair revoke <adapter> <user>   remove a pairing
           evals <command> ...        calibration tooling (corvid-evals): calibrate, report, replay, export-decisions,
                                      export-trajectories; --log defaults to this user's event log
+          traces export              the event log as Beacon-schema JSONL on stdout     [--session <id> | --all]
+                                     [--retention full|metadata] [--include-local-memory] [--out <file>]
           acp                        an Agent Client Protocol agent on stdin/stdout, for Zed, JetBrains and VS Code
           serve                      the OpenAI-compatible endpoint (/v1/chat/completions, /v1/models) on Corvid:Serve:Url,
                                      loopback only unless Corvid:Serve:TokenSecret names a Vault secret
@@ -135,6 +137,7 @@ public static class CorvidCli
                 "serve" => await ServeCommand.RunAsync(host, context, cancellationToken).ConfigureAwait(false),
                 "gateway" => await GatewayCommand.RunAsync(host, parsed, context, cancellationToken).ConfigureAwait(false),
                 "scan" => ScanCommand.Run(host, parsed, context, cancellationToken),
+                "traces" => await TracesCommand.RunAsync(host, parsed, context, cancellationToken).ConfigureAwait(false),
                 _ => UnknownCommand(console, parsed.Command),
             };
         }

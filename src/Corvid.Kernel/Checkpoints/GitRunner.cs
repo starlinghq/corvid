@@ -15,6 +15,8 @@ internal sealed record GitResult(int ExitCode, byte[] Output, string Error)
 /// Runs the git CLI against the shadow store with a cleared environment and configuration of Corvid's choosing, so nothing
 /// of the user's git setup runs or applies: no system or global configuration, no hooks, no fsmonitor command, no
 /// credential helpers or pager, and the store's own directory as <c>GIT_DIR</c>, never the workspace's <c>.git</c>.
+/// <see cref="ForDiscovery"/> is the one exception (C-025): it runs in the user's workspace to find its repository, read-only,
+/// with the same environment and configuration but no <c>GIT_DIR</c>.
 /// </summary>
 internal sealed class GitRunner
 {
@@ -33,6 +35,8 @@ internal sealed class GitRunner
     private readonly string _workTree;
     private readonly string _home;
     private readonly TimeSpan _timeout;
+    private readonly bool _discovery;
+    private readonly string? _ceiling;
 
     public GitRunner(string git, string gitDirectory, string workTree, string home, TimeSpan timeout)
     {
@@ -42,6 +46,28 @@ internal sealed class GitRunner
         _home = home;
         _timeout = timeout;
     }
+
+    private GitRunner(string git, string workingDirectory, string? ceiling, TimeSpan timeout)
+    {
+        _git = git;
+        _gitDirectory = "";
+        _workTree = workingDirectory;
+        // Nothing is read from it: global configuration is /dev/null and system configuration is off.
+        _home = "/nonexistent";
+        _timeout = timeout;
+        _discovery = true;
+        _ceiling = ceiling;
+    }
+
+    /// <summary>
+    /// Discovery mode (C-025): git runs in <paramref name="workingDirectory"/> and finds its repository the usual way, with
+    /// no <c>GIT_DIR</c> or <c>GIT_WORK_TREE</c>, so the caller can ask which repository a workspace belongs to. The cleared
+    /// environment and the safe configuration still apply, so no hook, fsmonitor command, pager or credential helper runs,
+    /// and with global configuration off a repository git considers of dubious ownership is refused. Discovery stops below
+    /// <paramref name="ceiling"/> (<c>GIT_CEILING_DIRECTORIES</c>) when one is given.
+    /// </summary>
+    public static GitRunner ForDiscovery(string git, string workingDirectory, string? ceiling, TimeSpan timeout) =>
+        new(git, workingDirectory, ceiling, timeout);
 
     /// <summary>
     /// The git executable: <paramref name="configured"/> when it is a path, else the first <c>git</c> on <c>PATH</c>.
@@ -91,8 +117,15 @@ internal sealed class GitRunner
         start.Environment["XDG_CONFIG_HOME"] = _home;
         start.Environment["LANG"] = "C";
         start.Environment["LC_ALL"] = "C";
-        start.Environment["GIT_DIR"] = _gitDirectory;
-        start.Environment["GIT_WORK_TREE"] = _workTree;
+        if (!_discovery)
+        {
+            start.Environment["GIT_DIR"] = _gitDirectory;
+            start.Environment["GIT_WORK_TREE"] = _workTree;
+        }
+        else if (_ceiling is not null)
+        {
+            start.Environment["GIT_CEILING_DIRECTORIES"] = _ceiling;
+        }
         start.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
         start.Environment["GIT_CONFIG_GLOBAL"] = "/dev/null";
         start.Environment["GIT_TERMINAL_PROMPT"] = "0";

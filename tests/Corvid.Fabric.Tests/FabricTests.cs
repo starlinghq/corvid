@@ -37,7 +37,7 @@ public sealed class FabricTests
         Assert.Equal(["clarify", "difficulty", "intent", "tool"], decisions.Select(d => d.QuestionId));
         Assert.All(decisions, d =>
         {
-            Assert.Equal("2026-10-19.1", d.CatalogueVersion);
+            Assert.Equal("2026-10-21.1", d.CatalogueVersion);
             Assert.Equal("degraded", d.Decider);
             var verdict = result[d.QuestionId];
             Assert.Equal(verdict.DecisionId, d.DecisionId);

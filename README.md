@@ -2,7 +2,7 @@
 
 A local-first .NET 10 agent in the spirit of Hermes Agent, built on Starling's in-process models. Kev, GLiNER2 and the embedding models make the agent's many small decisions (System One); a swappable generator, local or cloud, does the writing (System Two).
 
-Vault M1, the agent's initial project layout and dependency checks, the session event log (C-002), the tool generator and registry (C-005), the golden-trajectory replay harness (C-009), calibration tooling with decision export (C-021), the session actor and turn loop (C-011), the built-in tools with the durable scheduler (C-012), the host and `corvid` CLI with OpenTelemetry spans (C-013), the Kev decider with its Kev-4B second tier (C-004b), checkpoints with `/undo` and `/rollback` (C-014), compaction with map-reduce summaries and goal re-injection (C-016), skills with the git-versioned store, the learning loop and replay tests (C-017), and cloud and local-server model slots behind the privacy egress gate, keyed only through Vault (C-015), and the MCP client and `corvid mcp serve` (C-018), the ACP endpoint for editors and the OpenAI-compatible HTTP endpoint (C-019), and the messaging gateway with pairing, the delivery ledger and Telegram, Discord and Slack adapters (C-020), and detection rules over the session event log, inline at approval time and post-hoc with `corvid scan` (C-023) are built. Without Kev downloaded, the decisions run on the degraded tier and `corvid chat` says so. The design is in [`docs/plan/corvid-agent.md`](docs/plan/corvid-agent.md); secrets live in a separate process, Corvid Vault ([`docs/plan/vault.md`](docs/plan/vault.md)).
+Vault M1, the agent's initial project layout and dependency checks, the session event log (C-002), the tool generator and registry (C-005), the golden-trajectory replay harness (C-009), calibration tooling with decision export (C-021), the session actor and turn loop (C-011), the built-in tools with the durable scheduler (C-012), the host and `corvid` CLI with OpenTelemetry spans (C-013), the Kev decider with its Kev-4B second tier (C-004b), checkpoints with `/undo` and `/rollback` (C-014), compaction with map-reduce summaries and goal re-injection (C-016), skills with the git-versioned store, the learning loop and replay tests (C-017) and its sharper learning signals: a task-success precondition, the recovery-pattern trigger and a head-and-tail drafting window (C-026), and cloud and local-server model slots behind the privacy egress gate, keyed only through Vault (C-015), and the MCP client and `corvid mcp serve` (C-018), the ACP endpoint for editors and the OpenAI-compatible HTTP endpoint (C-019), and the messaging gateway with pairing, the delivery ledger and Telegram, Discord and Slack adapters (C-020), MCP tool-definition pinning with poisoned-description detection (C-022), trace export in Beacon's JSONL schema with Hermes memory import (C-027), per-project lessons, a reviewed memory tier between facts and skills (C-025), and detection rules over the session event log, inline at approval time and post-hoc with `corvid scan` (C-023), are built. Without Kev downloaded, the decisions run on the degraded tier and `corvid chat` says so. The design is in [`docs/plan/corvid-agent.md`](docs/plan/corvid-agent.md); secrets live in a separate process, Corvid Vault ([`docs/plan/vault.md`](docs/plan/vault.md)).
 
 ## Run
 
@@ -45,10 +45,13 @@ See [`docs/architecture.md`](docs/architecture.md#cloud-slots-and-privacy-egress
 
 MCP servers go under `Corvid:Mcp:Servers`. Their tools join the built-in ones as `server__tool`. A stdio server runs under
 `corvid-sandbox` with a private workspace and no network unless you allow it. An HTTP server's token is a Vault secret, never
-configuration. Servers are untrusted by default: every tool asks before it runs and every result taints the session, and
-`"Trust": "Trusted"` honours a server's read-only hints. `corvid mcp list` starts each server and shows its tools, `/mcp` shows
+configuration. Servers are untrusted by default: every tool asks before it runs and its description and every result taint the
+session, and `"Trust": "Trusted"` honours a server's read-only hints. `corvid mcp list` starts each server and shows its tools, `/mcp` shows
 them in chat, and `corvid mcp serve` offers Corvid's memory search and skills, read-only, to another agent over stdio
-([details](docs/architecture.md#mcp-client-and-server-c-018)).
+([details](docs/architecture.md#mcp-client-and-server-c-018)). A server's tool definitions are pinned on its first listing;
+a tool that is new or changed later, or whose description or schema reads like injected instructions, is held until you review it with
+`/mcp diff` and take it with `/mcp accept` (or `/mcp allow` for a flagged one, which then always asks)
+([details](docs/architecture.md#mcp-tool-pinning-and-poisoned-descriptions-c-022)).
 
 ```json
 {
@@ -106,6 +109,14 @@ In `vault.json`, bind each token to its API host (`api.telegram.org`, `discord.c
 tainted session, such as a chat with a guest, are refused under the default `"tainted": "ask"`. Set `"tainted": "auto"` on a
 token only if guests should get answers.
 
+`corvid traces export --session <id>` (or `--all`) writes sessions from the event log as JSON lines in the telemetry schema of
+[Beacon](https://github.com/Asymptote-Labs/agent-beacon) (MIT), so Beacon's detections and SIEM forwarding read Corvid like any
+agent they collect. Secrets are redacted and long strings cut at 4 KiB; `--retention metadata` keeps names, paths, commands and
+decisions but no content; memory tool content is withheld unless `--include-local-memory` is given; `--out <file>` writes an
+owner-only file and never overwrites one. `/memory import hermes [<hermes home>] [--dry-run]` stages each entry of Hermes'
+`MEMORY.md` and `USER.md` as a local-only memory for review in `/memory pending`; nothing is written until you approve it. See
+[`docs/architecture.md`](docs/architecture.md#trace-export-and-hermes-memory-import-c-027).
+
 Detection rules (C-023) watch the session event log. A built-in pack of twelve rules runs before every approval, and
 before a network read that would otherwise run unasked (a `web_fetch` after a `read_file .env`): a match of an enforce
 rule (a credential read followed by network egress, the environment or a credential file sent out, base64 in
@@ -141,10 +152,10 @@ dotnet test --solution Corvid.slnx
 | `src/Corvid.Models.OpenAICompat` | OpenAI-compatible endpoints through the OpenAI SDK: local servers, OpenAI, OpenRouter and Gemini's compatible endpoint (C-015) |
 | `src/Corvid.Fabric` | decision fabric: question catalogue, versioned floors, TurnState, policy and the degraded decider (C-004a); the embedding tool shortlist (C-011); the two-tier escalation of gates to Kev-4B (C-004b) |
 | `src/Corvid.Models.Starling` | in-process Starling adapters (0.3.0, CPU): Qwen3.5-0.8B generator, GLiNER2 extractor, EmbeddingGemma 2 and e5 embedders (C-010), the Kev-0.8B and Kev-4B decider (C-004b), and offline-first acquisition |
-| `src/Corvid.Memory` | memory store on SQLite: core blocks, episodic FTS5, vector index, bi-temporal fact graph, hybrid retrieval and the `memory_op`-gated write path (C-008) |
+| `src/Corvid.Memory` | memory store on SQLite: core blocks, episodic FTS5, vector index, bi-temporal fact graph, hybrid retrieval and the `memory_op`-gated write path (C-008); per-project lessons with their quality bar and gated writer (C-025) |
 | `src/Corvid.Host` | the composition root (C-013): typed configuration validated at start, slots composed from configuration (Starling by default), the runtime with C-012's built-in tools and scheduler wired in, the slash-command registry shared by surfaces, `corvid doctor`'s checks, and OpenTelemetry export |
-| `src/Corvid.Cli` | `corvid` (C-013): `chat` (Spectre.Console, scrollback-first, streaming, live tool panel, inline approvals), `model`, `doctor`, `evals`; `mcp list` and `mcp serve` (C-018); `acp` and `serve` (C-019); `gateway` (C-020); `scan` (C-023) |
-| `src/Corvid.Mcp` | MCP (C-018), the only project on the ModelContextProtocol SDK: configured servers as Corvid tools (stdio under `corvid-sandbox`, streamable HTTP with tokens only through Vault, per-server trust, timeouts, lazy restarts, the tasks extension) and Corvid as a read-only MCP server for memory search and skills |
+| `src/Corvid.Cli` | `corvid` (C-013): `chat` (Spectre.Console, scrollback-first, streaming, live tool panel, inline approvals), `model`, `doctor`, `evals`; `mcp list` and `mcp serve` (C-018); `acp` and `serve` (C-019); `gateway` (C-020); `traces export` (C-027); `scan` (C-023) |
+| `src/Corvid.Mcp` | MCP (C-018), the only project on the ModelContextProtocol SDK: configured servers as Corvid tools (stdio under `corvid-sandbox`, streamable HTTP with tokens only through Vault, per-server trust, timeouts, lazy restarts, the tasks extension) and Corvid as a read-only MCP server for memory search and skills; tool-definition pins with held tools and the poisoned-description scan (C-022) |
 | `src/Corvid.Acp` | the Agent Client Protocol surface (C-019): JSON-RPC over stdio, sessions with load, resume, fork and list, streamed tool calls with diffs, approvals as permission requests, cancellation |
 | `src/Corvid.Http` | the OpenAI-compatible endpoint (C-019): `/v1/chat/completions` and `/v1/models` on ASP.NET Core minimal APIs, conversations mapped onto sessions, loopback or a Vault-checked bearer token |
 | `src/Corvid.Rules` | detection rules (C-023): the JSON rule format, its loader and field-path validator, the predicate evaluator and correlation matcher, and the embedded built-in pack |

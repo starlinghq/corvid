@@ -32,7 +32,14 @@ public sealed record MemoryServices(
     EpisodicIndex Episodes,
     MemoryVectors Vectors,
     HybridRetriever Retriever,
-    MemoryWriter? Writer);
+    MemoryWriter? Writer)
+{
+    /// <summary>The lessons tier's gated writer and store (C-025); null when <c>Corvid:Memory:Lessons:Enabled</c> is off.</summary>
+    public LessonWriter? Lessons { get; init; }
+
+    /// <summary>Drafts lessons from queued turns in the background (C-025); null without lessons or a background generator.</summary>
+    public Kernel.Lessons.LessonLearner? LessonLearner { get; init; }
+}
 
 /// <summary>
 /// One running agent: the event log, the slots, the fabric, approvals, memory, tools and the session host, composed from
@@ -58,6 +65,7 @@ public sealed class CorvidRuntime : IAsyncDisposable
     private FileStream? _schedulerLock;
     private Task? _scheduler;
     private Task? _learning;
+    private Task? _lessonLearning;
 
     internal CorvidRuntime(CorvidOptions options, ModelCatalogue catalogue, ModelComposer composer, DeviceSchedulers devices,
         ModelMetrics metrics, TurnFeed feed, SqliteEventLog log, ModelSlotRegistry registry, DecisionFabric fabric,
@@ -93,7 +101,15 @@ public sealed class CorvidRuntime : IAsyncDisposable
         // The learning loop (plan §11): queued opportunities are drafted and replay-tested in the background.
         if (Skills.Learner is { } learner)
             _learning = Task.Run(() => learner.RunAsync(_lifetime.Token));
+        // C-025: lesson drafts, the same way.
+        if (memory?.LessonLearner is { } lessons)
+            _lessonLearning = Task.Run(() => lessons.RunAsync(_lifetime.Token));
     }
+
+    /// <summary>
+    /// The workspace's project (C-025), resolved once at start: a runtime has one workspace. Null when lessons are off.
+    /// </summary>
+    public ProjectIdentity? Project { get; init; }
 
     /// <summary>The configured MCP servers (C-018), starting or started in the background; null when none is configured.</summary>
     public McpClients? Mcp { get; }
@@ -217,6 +233,8 @@ public sealed class CorvidRuntime : IAsyncDisposable
             await _scheduler.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         if (_learning is not null)
             await _learning.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        if (_lessonLearning is not null)
+            await _lessonLearning.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         _schedulerLock?.Dispose();
         await Sessions.DisposeAsync().ConfigureAwait(false);
         // After the sessions, so no turn is still calling a server; this stops every server process.
@@ -305,6 +323,9 @@ public sealed class CorvidRuntime : IAsyncDisposable
             Skills = Skills.Store,
             // Unattended job turns are not distilled into skills: nobody saw them.
             SkillLearning = interactive ? Skills.Learner : null,
+            // C-025: the project scopes recall and lessons; unattended turns draft none, as for skills.
+            Project = Memory?.Lessons is null ? null : Project,
+            LessonLearning = interactive ? Memory?.LessonLearner : null,
             SkillShortlist = _skillShortlist,
             Options = new TurnOptions
             {

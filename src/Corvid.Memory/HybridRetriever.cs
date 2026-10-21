@@ -8,6 +8,8 @@ public enum MemoryItemKind
 {
     Episode,
     Fact,
+    /// <summary>An approved lesson of the request's project (C-025).</summary>
+    Lesson,
 }
 
 /// <summary>Which ranked lists an item came from.</summary>
@@ -25,17 +27,20 @@ public enum RetrievalSources
 /// <param name="Entities">The turn's entities; graph expansion starts from those already in memory.</param>
 /// <param name="Kinds">Which items to return; null returns episodes and facts.</param>
 /// <param name="SessionId">Limits episodes to one session; facts are global.</param>
+/// <param name="ProjectId">The session's project (C-025): its approved lessons join the results. Without it, no lessons.</param>
 public sealed record RetrievalRequest(
     string Query,
     int TokenBudget,
     ImmutableArray<EntityRef> Entities = default,
     ImmutableArray<MemoryItemKind>? Kinds = null,
-    string? SessionId = null);
+    string? SessionId = null,
+    string? ProjectId = null);
 
 /// <param name="Score">The fused score after the recency boost; items are ordered by it.</param>
 /// <param name="Hops">Graph distance from a turn entity, when the graph found it.</param>
 /// <param name="Fact">The fact, for fact items.</param>
 /// <param name="Episode">The episode, for episode items.</param>
+/// <param name="Lesson">The lesson, for lesson items (C-025).</param>
 public sealed record RetrievedItem(
     string ItemId,
     MemoryItemKind Kind,
@@ -46,10 +51,11 @@ public sealed record RetrievedItem(
     DateTimeOffset RecordedAt,
     int? Hops,
     Fact? Fact,
-    Episode? Episode)
+    Episode? Episode,
+    Lesson? Lesson = null)
 {
-    /// <summary>A local-only fact: never put in a prompt for a model whose privacy class is cloud (plan §10.4).</summary>
-    public bool LocalOnly => Fact?.LocalOnly == true;
+    /// <summary>A local-only fact or lesson: never put in a prompt for a model whose privacy class is cloud (plan §10.4).</summary>
+    public bool LocalOnly => Fact?.LocalOnly == true || Lesson?.LocalOnly == true;
 }
 
 /// <param name="Embedder">The embedder whose index was searched, or null when retrieval used FTS and the graph only.</param>
@@ -85,26 +91,30 @@ public sealed record RetrievalOptions(
 /// <summary>
 /// Hybrid retrieval (plan §9.3): BM25 over FTS5 and vector search, merged by reciprocal rank fusion with a third list from
 /// one-hop graph expansion around the turn's entities, then boosted for recency and capped by a token budget. Facts are
-/// current ones only. Kev reranking is not built.
+/// current ones only. Approved lessons of the request's project (C-025) join the BM25 list when a lesson store is given;
+/// they are not embedded, so they rank by BM25 alone. Kev reranking is not built.
 /// </summary>
 public sealed class HybridRetriever
 {
     private readonly EpisodicIndex _episodes;
     private readonly FactGraph _facts;
+    private readonly LessonStore? _lessons;
     private readonly MemoryVectors? _vectors;
     private readonly ITokenCounter _counter;
     private readonly RetrievalOptions _options;
     private readonly TimeProvider _time;
 
     /// <param name="vectors">Null for FTS and graph retrieval only.</param>
+    /// <param name="lessons">Null for no lessons.</param>
     public HybridRetriever(EpisodicIndex episodes, FactGraph facts, MemoryVectors? vectors = null, ITokenCounter? counter = null,
-        RetrievalOptions? options = null, TimeProvider? time = null)
+        RetrievalOptions? options = null, TimeProvider? time = null, LessonStore? lessons = null)
     {
         ArgumentNullException.ThrowIfNull(episodes);
         ArgumentNullException.ThrowIfNull(facts);
         _episodes = episodes;
         _facts = facts;
         _vectors = vectors;
+        _lessons = lessons;
         _counter = counter ?? CharsPerTokenCounter.Instance;
         _options = (options ?? RetrievalOptions.Default).Validate();
         _time = time ?? TimeProvider.System;
@@ -117,6 +127,9 @@ public sealed class HybridRetriever
         ArgumentOutOfRangeException.ThrowIfNegative(request.TokenBudget);
         var kinds = request.Kinds ?? [MemoryItemKind.Episode, MemoryItemKind.Fact];
         bool wantEpisodes = kinds.Contains(MemoryItemKind.Episode), wantFacts = kinds.Contains(MemoryItemKind.Fact);
+        // Lessons need a project: a request without one (another surface, a guest, MCP) never sees any.
+        var wantLessons = _lessons is not null && request.ProjectId is not null
+            && (request.Kinds is null || kinds.Contains(MemoryItemKind.Lesson));
         var n = _options.Candidates;
 
         var candidates = new Dictionary<string, Candidate>(StringComparer.Ordinal);
@@ -126,8 +139,14 @@ public sealed class HybridRetriever
         var bm25 = new List<string>();
         var episodeHits = wantEpisodes ? _episodes.Search(request.Query, n, request.SessionId) : [];
         var factHits = wantFacts ? _facts.Search(request.Query, n) : [];
-        for (var i = 0; i < Math.Max(episodeHits.Count, factHits.Count); i++)
+        var lessonHits = wantLessons ? _lessons!.SearchApproved(request.ProjectId!, request.Query, n) : [];
+        for (var i = 0; i < Math.Max(Math.Max(episodeHits.Count, factHits.Count), lessonHits.Count); i++)
         {
+            if (i < lessonHits.Count)
+            {
+                Of(lessonHits[i].Lesson.LessonId).Lesson = lessonHits[i].Lesson;
+                bm25.Add(lessonHits[i].Lesson.LessonId);
+            }
             if (i < factHits.Count)
             {
                 Of(factHits[i].Fact.FactId).Fact = factHits[i].Fact;
@@ -208,8 +227,9 @@ public sealed class HybridRetriever
                 continue;
             }
             used += tokens;
-            items.Add(new RetrievedItem(candidate.ItemId, candidate.Fact is null ? MemoryItemKind.Episode : MemoryItemKind.Fact, text,
-                tokens, score, candidate.Sources, candidate.RecordedAt, candidate.Hops, candidate.Fact, candidate.Episode));
+            var kind = candidate.Lesson is not null ? MemoryItemKind.Lesson : candidate.Fact is null ? MemoryItemKind.Episode : MemoryItemKind.Fact;
+            items.Add(new RetrievedItem(candidate.ItemId, kind, text, tokens, score, candidate.Sources, candidate.RecordedAt, candidate.Hops,
+                candidate.Fact, candidate.Episode, candidate.Lesson));
         }
         return new RetrievalResult(items.ToImmutable(), used, dropped, embedder);
     }
@@ -235,10 +255,11 @@ public sealed class HybridRetriever
         public string ItemId { get; } = itemId;
         public Fact? Fact { get; set; }
         public Episode? Episode { get; set; }
+        public Lesson? Lesson { get; set; }
         public double Fused { get; set; }
         public RetrievalSources Sources { get; set; }
         public int? Hops { get; set; }
-        public string Text => Fact?.Text ?? Episode!.Text;
-        public DateTimeOffset RecordedAt => Fact?.RecordedAt ?? Episode!.RecordedAt;
+        public string Text => Lesson?.Text ?? Fact?.Text ?? Episode!.Text;
+        public DateTimeOffset RecordedAt => Lesson is { } lesson ? lesson.ResolvedAt ?? lesson.CreatedAt : Fact?.RecordedAt ?? Episode!.RecordedAt;
     }
 }

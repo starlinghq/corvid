@@ -54,7 +54,8 @@ public enum DegradedRule
 /// <param name="Options">Fixed options, or empty when the caller supplies them (the <c>tool</c> and <c>skill</c> shortlists).</param>
 /// <param name="Act">The action when the answer clears its floor. For a choice it is a prefix: the recorded action is <c>act:option</c>.</param>
 /// <param name="BelowFloor">The conservative action when it does not, or when there is no usable answer.</param>
-/// <param name="Requires">Caller-supplied conditions (<see cref="FabricConditions"/>) that must also hold before acting.</param>
+/// <param name="Requires">Conditions (<see cref="FabricConditions"/>) that must also hold before acting: supplied by the caller, or
+/// granted by another question acting at the same checkpoint (<see cref="CatalogueQuestion.Grants"/>).</param>
 public sealed record CatalogueQuestion(
     string Id,
     ImmutableArray<Checkpoint> Checkpoints,
@@ -77,6 +78,13 @@ public sealed record CatalogueQuestion(
     /// </summary>
     public bool BlocksTurn { get; init; }
 
+    /// <summary>
+    /// A condition (<see cref="FabricConditions"/>) that holds for the rest of the checkpoint when this question acts: the
+    /// fabric evaluates granting questions first, so a question that requires the condition acts only after its granter
+    /// did (C-026: <c>task_succeeded</c> before <c>skill_opportunity</c>). Callers cannot supply a granted condition.
+    /// </summary>
+    public string? Grants { get; init; }
+
     /// <summary>The question to send, with the catalogue's options or the caller's shortlist.</summary>
     public DecisionQuestion ToQuestion(IEnumerable<QuestionOption>? options = null, DecisionContent? instructions = null)
     {
@@ -97,14 +105,26 @@ public static class FabricConditions
 {
     /// <summary>Policy allows escalating the generator (privacy and profile ladder, plan §6).</summary>
     public const string EscalationAllowed = "escalation_allowed";
-    /// <summary>The turn ran at least three tool steps (<c>skill_opportunity</c>).</summary>
-    public const string ToolStepsAtLeastThree = "tool_steps_at_least_3";
+    /// <summary>
+    /// The turn is evidence of a procedure (<c>skill_opportunity</c>, C-026): at least three tool calls, or a failed call
+    /// recovered by a different call of the same tool family.
+    /// </summary>
+    public const string ProcedureEvidence = "procedure_evidence";
+    /// <summary>No counted tool failure in the turn is left without a later success in its family (<c>task_succeeded</c>).</summary>
+    public const string ToolFailuresRecovered = "tool_failures_recovered";
+    /// <summary>Granted by <c>task_succeeded</c> acting at the same checkpoint; a caller never supplies it.</summary>
+    public const string TaskSucceeded = "task_succeeded";
     /// <summary>The skill being changed was written by the agent, not installed from a hub or edited by the user.</summary>
     public const string AgentAuthored = "agent_authored";
     /// <summary>The generator supports subagent delegation.</summary>
     public const string GeneratorSupportsDelegation = "generator_supports_delegation";
     /// <summary>A permissive approval mode, where risk levels 0–1 may run without asking.</summary>
     public const string PermissiveMode = "permissive_mode";
+    /// <summary>
+    /// The turn holds something a lesson could come from (<c>lesson_opportunity</c>, C-025): at least one tool call, a failed
+    /// tool result or a denied approval.
+    /// </summary>
+    public const string LessonEvidence = "lesson_evidence";
 }
 
 /// <summary>Action names recorded in <c>Decision</c> events. They are persisted: renaming one changes the log's meaning.</summary>
@@ -148,10 +168,36 @@ public sealed class QuestionCatalogue
             // Plan §5.6: a gate has no calibrated confidence in the degraded tier, so it always takes its conservative default.
             if (question.Role == QuestionRole.Gate && question.Degraded != DegradedRule.ConservativeDefault)
                 throw new ArgumentException($"Gate '{question.Id}' must use the conservative default when degraded.");
-            if (!builder.TryAdd(question.Id, question with { Options = question.Options.IsDefault ? [] : question.Options, Requires = question.Requires.IsDefault ? [] : question.Requires }))
+            ImmutableArray<string> requires = question.Requires.IsDefault ? [] : question.Requires;
+            if (question.Grants is { } granted && requires.Contains(granted, StringComparer.Ordinal))
+                throw new ArgumentException($"'{question.Id}' cannot require the condition it grants.");
+            if (!builder.TryAdd(question.Id, question with { Options = question.Options.IsDefault ? [] : question.Options, Requires = requires }))
                 throw new ArgumentException($"Duplicate question id '{question.Id}'.");
         }
         _questions = builder.ToImmutable();
+        ValidateGrants(_questions.Values);
+        Granted = _questions.Values.Select(question => question.Grants).OfType<string>().ToImmutableHashSet(StringComparer.Ordinal);
+    }
+
+    /// <summary>The conditions some question grants (<see cref="CatalogueQuestion.Grants"/>); a caller cannot supply them.</summary>
+    public ImmutableHashSet<string> Granted { get; }
+
+    // A granted condition has one granter, and every question that requires it is asked at one of the granter's checkpoints:
+    // the grant lasts only for its checkpoint, so a question asked elsewhere could never act.
+    private static void ValidateGrants(IEnumerable<CatalogueQuestion> questions)
+    {
+        var all = questions.ToArray();
+        foreach (var group in all.Where(question => question.Grants is not null).GroupBy(question => question.Grants!, StringComparer.Ordinal))
+        {
+            var granters = group.OrderBy(question => question.Id, StringComparer.Ordinal).ToArray();
+            if (granters.Length > 1)
+                throw new ArgumentException($"Condition '{group.Key}' is granted by more than one question: "
+                    + string.Join(", ", granters.Select(question => question.Id)) + ".");
+            var granter = granters[0];
+            foreach (var requirer in all.Where(question => question.Requires.Contains(group.Key, StringComparer.Ordinal)))
+                if (!requirer.Checkpoints.Any(granter.Checkpoints.Contains))
+                    throw new ArgumentException($"'{requirer.Id}' requires '{group.Key}' but shares no checkpoint with '{granter.Id}', which grants it.");
+        }
     }
 
     /// <summary>
@@ -235,7 +281,19 @@ public sealed class QuestionCatalogue
             gate, FloorMeasure.Confidence, "apply", "stage_for_review", DegradedRule.ConservativeDefault);
         yield return Q("skill_opportunity", egress, noul, "Was this a reusable multi-step procedure?", [],
             routing, FloorMeasure.YesProbability, "queue_skill_distillation", "nothing", DegradedRule.GeneratorYesNo,
-            FabricConditions.ToolStepsAtLeastThree);
+            FabricConditions.ProcedureEvidence, FabricConditions.TaskSucceeded);
+        // C-026: a precondition with its own floor, not a vote averaged into skill_opportunity (Beacon #649). It avoids the
+        // word "reusable" so a test's yes/no generator can tell the two apart.
+        yield return Q("task_succeeded", egress, noul, "Did this turn accomplish what the user asked, with no tool failure left unresolved?", [],
+            routing, FloorMeasure.YesProbability, "confirm_task_success", "task_unconfirmed", DegradedRule.GeneratorYesNo,
+            FabricConditions.ToolFailuresRecovered) with { Grants = FabricConditions.TaskSucceeded };
+        // C-025: a correction, the most valuable kind of lesson, often comes from a short turn, so this does not wait for
+        // procedure evidence as skill_opportunity does; its condition keeps the degraded tier's generator calls to turns with evidence.
+        yield return Q("lesson_opportunity", egress, noul,
+            "Did this turn show something a future session in this project should do differently or know: a correction, a gotcha, "
+            + "a debugging pattern, a convention or a required order?", [],
+            routing, FloorMeasure.YesProbability, "queue_lesson_draft", "nothing", DegradedRule.GeneratorYesNo,
+            FabricConditions.LessonEvidence);
         yield return Q("skill_write_safe", preExecute, noul, "Can this skill change go live without review?", [],
             gate, FloorMeasure.YesProbability, "apply_skill_change", "stage_for_review", DegradedRule.ConservativeDefault,
             FabricConditions.AgentAuthored);

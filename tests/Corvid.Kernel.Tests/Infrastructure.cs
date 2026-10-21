@@ -81,6 +81,11 @@ internal static class Samples
         new DeliveryResolved("d-2", DeliveryStatus.Failed, Detail: "chat not found"),
         new DetectionMatched("secret-read-then-egress", 1, "high", "enforce", "credential read then egress", [3, 7], "call-9", "ask"),
         new DetectionMatched("fork-bomb", 2, "high", "detect", "fork bomb", [4]),
+        new ProjectBound("0f0e0d0c0b0a09080706050403020100f0e0d0c0b0a090807060504030201000", "remote"),
+        new McpToolHeld("notes", "add", "changed", "ab12", PinnedHash: "cd34"),
+        new McpToolHeld("notes", "save", "flagged", "ef56", Detail: "<IMPORTANT"),
+        new McpToolAccepted("notes", "add", "ab12"),
+        new McpToolAccepted("notes", "save", "ef56", Flagged: true),
     ];
 
     public static EventData[] Data(params SessionEvent[] events) => events.Select(EventData.Create).ToArray();
