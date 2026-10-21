@@ -43,7 +43,7 @@ public sealed class SessionActor : IAsyncDisposable
     private readonly CancellationTokenSource _lifetime = new();
     private readonly Task _loop;
 
-    // Loop state: touched only by the loop.
+    // Loop state: touched only by the loop, except that CancelTurn reads _turnCancellation (Volatile) from any thread.
     private readonly Queue<Envelope> _pending = new();
     private readonly Queue<Exclusive> _exclusive = new();
     private CancellationTokenSource? _turnCancellation;
@@ -81,8 +81,37 @@ public sealed class SessionActor : IAsyncDisposable
         }
     }
 
-    /// <summary>Cancels the running turn, if any. Queued messages still run.</summary>
-    public void CancelTurn() => _commands.Writer.TryWrite(new CancelRunning());
+    /// <summary>
+    /// Cancels one turn; queued messages still run. The target is fixed when this is called:
+    /// <list type="bullet">
+    /// <item>A turn is running: that turn. Its token is cancelled before this returns, not when the loop next reads its
+    /// channel: a surface that cancels and then unblocks the turn (ACP answers the open permission request as cancelled)
+    /// must find it cancelled, or the turn goes on to its next model call and ends normally. If that turn finishes and the
+    /// next one starts before the loop reads the command, the next one is not touched.</item>
+    /// <item>No turn is running: the turn running when the loop reads the command, if any. That is a message submitted
+    /// before this call whose turn the loop had not started yet (or a turn the loop started meanwhile). A message submitted
+    /// after this returns is never cancelled, and with nothing queued (or only exclusive work running) the cancel does
+    /// nothing.</item>
+    /// </list>
+    /// </summary>
+    public void CancelTurn()
+    {
+        var target = Volatile.Read(ref _turnCancellation);
+        try
+        {
+            // The token is cancelled before CancelAsync returns; its callbacks run on the thread pool, not the caller's thread.
+            _ = target?.CancelAsync();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The turn finished meanwhile.
+        }
+        CancelSignalled?.Invoke();
+        _commands.Writer.TryWrite(new CancelRunning(target));
+    }
+
+    /// <summary>Test seam: runs in <see cref="CancelTurn"/> between cancelling the running turn and posting the command.</summary>
+    internal Action? CancelSignalled { get; set; }
 
     /// <summary>
     /// A <c>/model</c> switch (plan §4.2). It runs beside a turn: it waits for running tool calls, not for calls parked at an
@@ -148,16 +177,17 @@ public sealed class SessionActor : IAsyncDisposable
                     case SubmitMessage submit:
                         _pending.Enqueue(submit.Envelope);
                         break;
-                    case CancelRunning:
-                        _turnCancellation?.Cancel();
+                    case CancelRunning cancel:
+                        // Only the turn the caller saw: a target that already finished must not cancel the turn after it.
+                        if (cancel.Target is null || ReferenceEquals(cancel.Target, _turnCancellation))
+                            _turnCancellation?.Cancel();
                         break;
                     case SwitchModel switching:
                         _ = SwitchAsync(switching);
                         break;
                     case TurnFinished finished:
                         _turn = null;
-                        _turnCancellation?.Dispose();
-                        _turnCancellation = null;
+                        Interlocked.Exchange(ref _turnCancellation, null)?.Dispose();
                         if (!finished.Exclusive)
                             _capacity.Release();
                         break;
@@ -172,8 +202,9 @@ public sealed class SessionActor : IAsyncDisposable
                     _turn = RunExclusiveAsync(work);
                 if (_turn is null && _pending.TryDequeue(out var next))
                 {
-                    _turnCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-                    _turn = RunTurnAsync(next, _turnCancellation.Token);
+                    var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+                    Volatile.Write(ref _turnCancellation, cancellation);
+                    _turn = RunTurnAsync(next, cancellation.Token);
                 }
                 if (_turn is null && _pending.Count == 0)
                 {
@@ -275,7 +306,8 @@ public sealed class SessionActor : IAsyncDisposable
 
     private sealed record SubmitMessage(Envelope Envelope) : SessionCommand;
 
-    private sealed record CancelRunning : SessionCommand;
+    /// <param name="Target">The running turn's source when <see cref="CancelTurn"/> was called; null when none was running.</param>
+    private sealed record CancelRunning(CancellationTokenSource? Target) : SessionCommand;
 
     private sealed record SwitchModel(string Slot, ModelBinding Target, bool Pin, CancellationToken Cancellation) : SessionCommand
     {

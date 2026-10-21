@@ -108,8 +108,13 @@ internal sealed class AcpSessionState(CorvidSession session)
         Volatile.Write(ref _running, 0);
     }
 
+    /// <summary>
+    /// The kernel's turn first, then the open permission requests: a request answered as cancelled lets the turn go on, and
+    /// it must find itself cancelled rather than make its next model call.
+    /// </summary>
     public void Cancel()
     {
+        Session.Cancel();
         try
         {
             Volatile.Read(ref _turn).Cancel();
@@ -117,7 +122,6 @@ internal sealed class AcpSessionState(CorvidSession session)
         catch (ObjectDisposedException)
         {
         }
-        Session.Cancel();
     }
 }
 
@@ -317,6 +321,8 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
         var text = PromptText(request.Prompt);
         if (!state.TryBegin())
             throw new AcpException(AcpErrors.InvalidRequest, "A prompt is already running in this session; cancel it or wait for its answer.");
+        // Cancelled by session/cancel (or $/cancel_request) for this prompt only: TryBegin made a fresh one.
+        var cancelled = state.TurnCancelled;
         try
         {
             if (SlashCommandRegistry.IsCommand(text))
@@ -324,7 +330,7 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
                 var output = await _commands.ExecuteAsync(text, new SlashCommandContext(runtime, state.Session, _commands), cancellationToken)
                     .ConfigureAwait(false);
                 _context.Update(state.Session.Id, new AgentMessageChunk(new TextContent(output.ToPlainText())));
-                return new PromptResponse(StopReasons.EndTurn);
+                return new PromptResponse(cancelled.IsCancellationRequested ? StopReasons.Cancelled : StopReasons.EndTurn);
             }
 
             var reporter = new TurnReporter(_context, state.Session, _context.Tools!, runtime.Log.GetHead(state.Session.Id));
@@ -341,6 +347,10 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
             // Streamed text is already in the editor; anything else (a fixed message, an answer not streamed) is sent now.
             if (result.Text is { } answer && !string.Equals(answer.Trim(), reporter.Streamed.Trim(), StringComparison.Ordinal))
                 _context.Update(state.Session.Id, new AgentMessageChunk(new TextContent(answer)));
+            // ACP: once the client has sent session/cancel, the prompt MUST answer "cancelled", even when the turn reached
+            // its end before the kernel saw the cancel.
+            if (cancelled.IsCancellationRequested)
+                return new PromptResponse(StopReasons.Cancelled);
             return new PromptResponse(result.Status switch
             {
                 TurnStatus.Cancelled => StopReasons.Cancelled,
