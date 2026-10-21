@@ -234,6 +234,33 @@ public sealed class FileToolsTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task The_read_checks_the_kind_of_what_it_opened_not_only_the_path()
+    {
+        // The path check before opening leaves a window in which the path can be swapped for a FIFO; the read itself must
+        // refuse one without blocking, and must not read a device as if it were a file.
+        Assert.SkipUnless(OperatingSystem.IsLinux(), "File kinds are told with Linux's statx.");
+        var fifo = _tree.Path("work", "pipe");
+        MakeFifo(fifo);
+
+        var error = await Assert.ThrowsAsync<SpecialFileException>(() => Promptly(fifo, () =>
+        {
+            FileKinds.ReadRegular(fifo);
+            return Task.FromResult(default(JsonElement));
+        }));
+        Assert.Equal("a named pipe (FIFO)", error.Kind);
+        Assert.Equal("a character device", Assert.Throws<SpecialFileException>(() => FileKinds.ReadRegular("/dev/null")).Kind);
+        Assert.Equal("a directory", Assert.Throws<SpecialFileException>(() => FileKinds.ReadRegular(_workspace)).Kind);
+
+        _tree.Write("work/a.txt", "dentist on Friday\n");
+        Assert.Equal("dentist on Friday\n"u8.ToArray(), FileKinds.ReadRegular(_tree.Path("work", "a.txt")));
+        _tree.Write("work/empty.txt", "");
+        Assert.Empty(FileKinds.ReadRegular(_tree.Path("work", "empty.txt")));
+        // A final link is not followed: the path given is already resolved, so a link there was made since.
+        File.CreateSymbolicLink(_tree.Path("work", "a-link"), _tree.Path("work", "a.txt"));
+        Assert.Throws<IOException>(() => FileKinds.ReadRegular(_tree.Path("work", "a-link")));
+    }
+
     private static void MakeFifo(string path)
     {
         using var process = Process.Start(new ProcessStartInfo("mkfifo", [path]) { UseShellExecute = false })

@@ -1198,7 +1198,10 @@ references Builtin except tests and the host (C-013). Everything runs on the deg
   Linux's `statx` (one layout on every architecture), links followed as `Workspace.Resolve` already did, so `read_file`,
   `patch_file`, `write_file` (which would otherwise replace the pipe) and a `search_files` naming one refuse it with a
   tool error, a search walking past one skips it, and a listing shows its kind instead of a size. Elsewhere the kind is
-  not told and these files are treated as before. The check and the open are separate calls, as with links.
+  not told and these files are treated as before. The path check gives the error its wording; the read itself
+  (`FileKinds.ReadRegular`) opens with `O_NONBLOCK | O_NOFOLLOW` and checks the kind of the opened descriptor, so a
+  path swapped for a FIFO (or a final link) after the check is refused, not read. `write_file` replaces by rename, so a
+  swap there cannot block it.
 - Shell (`ShellTool`, `shell`, `[SideEffect(Process | Filesystem)]`, `[Destructive]`): a command line run by `/bin/bash -c`
   (bash, because the pipeline parses the bash subset, D-5) through `SandboxedShell`, which builds one `SandboxPolicy`: the
   workspace, no network, the default environment (names that change what bash runs, such as `BASH_ENV`, `SHELLOPTS` or

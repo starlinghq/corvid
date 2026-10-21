@@ -151,7 +151,16 @@ public sealed partial class FileTools(Workspace workspace, FileToolOptions? opti
                 break;
             }
 
-            var text = TryReadText(file.FullName);
+            string? text;
+            try
+            {
+                text = TryReadText(file.FullName);
+            }
+            catch (SpecialFileException)
+            {
+                // Made a FIFO (or the like) since the check above: skipped all the same.
+                continue;
+            }
             if (text is null)
                 continue;
             var number = 0;
@@ -251,26 +260,40 @@ public sealed partial class FileTools(Workspace workspace, FileToolOptions? opti
     private static void RefuseSpecial(string resolved, string path)
     {
         if (FileKinds.Special(resolved) is { } kind)
-            throw new ToolArgumentException($"Argument 'path' is '{path}', which is {kind}, not a regular file; the file tools read and write only regular files.", nameof(path));
+            throw NotRegular(path, kind);
     }
+
+    private static ToolArgumentException NotRegular(string path, string kind) =>
+        new($"Argument 'path' is '{path}', which is {kind}, not a regular file; the file tools read and write only regular files.", nameof(path));
 
     private string ReadText(string file, string path)
     {
         var length = new FileInfo(file).Length;
         if (length > _options.MaxFileBytes)
             throw new ToolArgumentException($"'{path}' is {Size(length)}, over the {Size(_options.MaxFileBytes)} limit.", nameof(path));
-        return TryReadText(file) ?? throw new ToolArgumentException($"'{path}' is a binary file ({Size(length)}), not text.", nameof(path));
+        try
+        {
+            return TryReadText(file) ?? throw new ToolArgumentException($"'{path}' is a binary file ({Size(length)}), not text.", nameof(path));
+        }
+        catch (SpecialFileException exception)
+        {
+            // Swapped for a FIFO (or the like) after Existing checked it: the opened descriptor is what counts.
+            throw NotRegular(path, exception.Kind);
+        }
     }
 
-    /// <summary>The file as UTF-8, or null when it looks binary (a NUL byte in its first 8 KiB).</summary>
+    /// <summary>
+    /// The file as UTF-8, or null when it looks binary (a NUL byte in its first 8 KiB) or cannot be read. Throws
+    /// <see cref="SpecialFileException"/> when what was opened is not a regular file.
+    /// </summary>
     private static string? TryReadText(string file)
     {
         byte[] bytes;
         try
         {
-            bytes = File.ReadAllBytes(file);
+            bytes = FileKinds.ReadRegular(file);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException && exception is not SpecialFileException)
         {
             return null;
         }
