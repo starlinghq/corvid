@@ -39,6 +39,25 @@ public sealed class SessionGatesTests
     }
 
     [Fact]
+    public async Task ARequestArrivingWhileAWaiterRunsStillWaits()
+    {
+        var gates = new SessionGates();
+        var first = await gates.EnterAsync("http-a", Token);
+        var second = gates.EnterAsync("http-a", Token);
+        first.Dispose();
+        var running = await second.WaitAsync(TimeSpan.FromSeconds(5), Token);
+
+        // The gate the second request holds must still be the session's gate, not one dropped when the first let go.
+        var third = gates.EnterAsync("http-a", Token);
+        await Task.Delay(50, Token);
+        Assert.False(third.IsCompleted);
+        running.Dispose();
+        (await third.WaitAsync(TimeSpan.FromSeconds(5), Token)).Dispose();
+
+        Assert.Equal(0, gates.Count);
+    }
+
+    [Fact]
     public async Task ManyConcurrentRequestsNeverOverlapAndLeaveNothingBehind()
     {
         var gates = new SessionGates();
