@@ -1,7 +1,10 @@
 using Corvid.Abstractions.Events;
 using Corvid.Abstractions.Sessions;
+using Corvid.Fabric;
 using Corvid.Kernel.Turns;
 using Corvid.Memory;
+using Corvid.Models;
+using Corvid.Tools;
 
 namespace Corvid.Kernel.Tests;
 
@@ -46,6 +49,79 @@ public sealed class LessonTurnTests
         Assert.IsType<AssistantMessage>(events.Single(e => e.Sequence == queued.ThroughSequence).Payload);
         Assert.Equal((TurnHarness.Session, Project.Id, decision.DecisionId, "list my notes", false, false),
             (queued.SessionId, queued.ProjectId, queued.DecisionId, queued.Request, queued.Tainted, queued.LocalOnly));
+    }
+
+    [Fact]
+    public async Task A_turn_whose_local_prompt_held_a_local_only_block_queues_a_local_only_opportunity()
+    {
+        using var memory = new MemoryStore();
+        memory.Blocks.Set("user", "Lives in Leeds.");
+        Assert.True(memory.Blocks.Get("user").LocalOnly);
+        var lessons = new RecordingLessons();
+        var generator = new FakeGenerator(Reply.Call("list_notes", """{"limit":5}"""), Reply.Say("No notes."))
+        {
+            YesNo = FakeGenerator.YesTo(Question, "fully handled"),
+        };
+        using var harness = new TurnHarness(generator) { Project = Project, LessonLearning = lessons, CoreBlocks = memory.Blocks.Snapshot() };
+        await harness.RunAsync("list my notes");
+
+        Assert.Contains("Lives in Leeds.", generator.Calls[0].AllText, StringComparison.Ordinal);
+        // LessonLearnerTests carries the flag on to lessons.local_only.
+        Assert.True(Assert.Single(lessons.Queued).LocalOnly);
+    }
+
+    [Fact]
+    public async Task A_local_only_lesson_reaches_a_local_generator_but_never_a_cloud_one()
+    {
+        using var memory = new MemoryStore();
+        var store = new LessonStore(memory.Database);
+        var content = new LessonContent(LessonKinds.Convention, "Keep each note under one line", "when adding notes to the list",
+            "Write one line per note.\nThe list view truncates longer notes (event 3).\nConfirm with list_notes.", ["notes", "format"],
+            [new LessonEvidence("s-old", [3], "the list cut a long note", new string('a', 64))]);
+        var lesson = store.File(new Lesson(Lesson.IdFor(Project.Id, content.Kind, content.Title, content.Body), Project.Id, content.Kind,
+            content.Title, content.Applicability, content.Body, content.Tags, LessonStates.Candidate, null, LessonAuthors.Agent, null, null,
+            true, default, null, content.Evidence, "s-old")).Lesson;
+        store.Approve(lesson.LessonId, "ok");
+        // A shareable lesson alongside it, so the cloud turn is known to have recalled lessons at all.
+        var shared = new LessonContent(LessonKinds.Workflow, "List the notes after adding notes", "after adding notes to the list",
+            "Run list_notes.\nAdding can drop a note silently (event 5).\nConfirm the new note is listed.", ["notes", "check"],
+            [new LessonEvidence("s-old", [5], "an added note was missing", new string('b', 64))]);
+        store.Approve(store.File(new Lesson(Lesson.IdFor(Project.Id, shared.Kind, shared.Title, shared.Body), Project.Id, shared.Kind,
+            shared.Title, shared.Applicability, shared.Body, shared.Tags, LessonStates.Candidate, null, LessonAuthors.Agent, null, null,
+            false, default, null, shared.Evidence, "s-old")).Lesson.LessonId, "ok");
+
+        var local = new FakeGenerator(Reply.Say("Done.")) { YesNo = FakeGenerator.YesTo("remembered") };
+        using (var harness = new TurnHarness(local)
+        {
+            Project = Project,
+            Retriever = new HybridRetriever(memory.Episodes, memory.Facts, lessons: store),
+        })
+        {
+            await harness.RunAsync("adding notes to the list");
+            Assert.Contains("Lesson (convention): Keep each note under one line", local.Calls[0].AllText, StringComparison.Ordinal);
+        }
+
+        var cloud = new FakeGenerator(Reply.Say("Done.")) { YesNo = FakeGenerator.YesTo("remembered") };
+        using var log = new TurnHarness(new FakeGenerator());
+        var embedder = new KeywordEmbedder(TurnHarness.Keywords);
+        var registry = new ModelSlotRegistry()
+            .Bind(ModelSlots.Generator, new ModelBinding(new ModelProfile("gen-cloud", 200_000, 100_000, ToolCallSupport.Native,
+                StructuredOutputSupport.None, PromptCachingStyle.Breakpoints, ModelCost.Free, PrivacyClass.Cloud, "remote"), cloud))
+            .Bind(ModelSlots.TextEmbedder, new ModelBinding(TurnHarness.Profile("keywords", ToolCallSupport.None, 512), embedder));
+        var services = new TurnServices
+        {
+            Log = log.Log,
+            Slots = new SessionModelSlots(registry, log.Log, TurnHarness.Session),
+            Fabric = new DecisionFabric(DecisionPolicy.Default, new DegradedDecider(embedder, cloud), log.Log),
+            Tools = new ToolRegistry(),
+            Retriever = new HybridRetriever(memory.Episodes, memory.Facts, lessons: store),
+            Project = Project,
+        };
+        await new TurnRunner(TurnHarness.Session, services).RunAsync(
+            new Envelope(TurnHarness.Session, "cli", "adding notes to the list", EnvelopeOrigin.User), TestContext.Current.CancellationToken);
+        var call = Assert.Single(cloud.Calls);
+        Assert.Contains("Lesson (workflow): List the notes after adding notes", call.AllText, StringComparison.Ordinal);
+        Assert.DoesNotContain("Keep each note under one line", call.AllText, StringComparison.Ordinal);
     }
 
     [Fact]

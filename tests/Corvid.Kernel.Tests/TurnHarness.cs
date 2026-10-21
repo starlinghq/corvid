@@ -376,6 +376,8 @@ internal sealed class TurnHarness : IDisposable
 
     public Corvid.Memory.HybridRetriever? Retriever { get; init; }
 
+    public Corvid.Memory.CoreSnapshot? CoreBlocks { get; init; }
+
     public TurnServices Services() => new()
     {
         Log = Log,
@@ -388,6 +390,7 @@ internal sealed class TurnHarness : IDisposable
         Project = Project,
         LessonLearning = LessonLearning,
         Retriever = Retriever,
+        CoreBlocks = CoreBlocks,
         Options = Options,
     };
 
