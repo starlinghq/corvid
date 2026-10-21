@@ -48,10 +48,12 @@ public static class ExitCodes
     public const int Usage = 2;
     /// <summary>A configured model is not in the model cache; the message says how to fetch it.</summary>
     public const int ModelsMissing = 3;
+    /// <summary><c>corvid scan</c> found a match at or above <c>--fail-on</c> (C-023).</summary>
+    public const int Findings = 4;
 }
 
 /// <summary>
-/// <c>corvid</c> (plan §17 row 1.2): <c>chat</c>, <c>model</c>, <c>doctor</c>, <c>mcp</c>, <c>evals</c>, <c>acp</c>, <c>serve</c> and <c>gateway</c>, with typed configuration
+/// <c>corvid</c> (plan §17 row 1.2): <c>chat</c>, <c>model</c>, <c>doctor</c>, <c>mcp</c>, <c>evals</c>, <c>acp</c>, <c>serve</c>, <c>gateway</c> and <c>scan</c>, with typed configuration
 /// validated before anything runs.
 /// </summary>
 public static class CorvidCli
@@ -77,6 +79,8 @@ public static class CorvidCli
           acp                        an Agent Client Protocol agent on stdin/stdout, for Zed, JetBrains and VS Code
           serve                      the OpenAI-compatible endpoint (/v1/chat/completions, /v1/models) on Corvid:Serve:Url,
                                      loopback only unless Corvid:Serve:TokenSecret names a Vault secret
+          scan                       the detection rules over the event log      [--session <id>] [--fail-on <severity>] [--json]
+                                     exit 4 when a finding is at or above --fail-on (info, low, medium, high, critical)
 
         options:
           --config <file>            the configuration file (default $XDG_CONFIG_HOME/corvid/corvid.json, or $CORVID_CONFIG)
@@ -130,6 +134,7 @@ public static class CorvidCli
                 "acp" => await AcpCommand.RunAsync(host, context, cancellationToken).ConfigureAwait(false),
                 "serve" => await ServeCommand.RunAsync(host, context, cancellationToken).ConfigureAwait(false),
                 "gateway" => await GatewayCommand.RunAsync(host, parsed, context, cancellationToken).ConfigureAwait(false),
+                "scan" => ScanCommand.Run(host, parsed, context, cancellationToken),
                 _ => UnknownCommand(console, parsed.Command),
             };
         }
