@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Net.Sockets;
 using System.Text.Json;
 using static Corvid.Tools.Builtin.Tests.Fixtures;
 
@@ -178,5 +180,91 @@ public sealed class FileToolsTests : IDisposable
     {
         Assert.Throws<ArgumentException>(() => new Workspace("relative/dir"));
         Assert.Throws<DirectoryNotFoundException>(() => new Workspace(_tree.Path("missing")));
+    }
+
+    [Fact]
+    public async Task A_fifo_is_refused_promptly_by_every_tool_that_opens_it_and_skipped_by_a_search()
+    {
+        // Reading a FIFO nobody writes to blocks for ever; it used to hold the turn until it was cancelled.
+        Assert.SkipUnless(OperatingSystem.IsLinux(), "File kinds are told with Linux's statx.");
+        _tree.Write("work/a.txt", "dentist on Friday\n");
+        var fifo = _tree.Path("work", "pipe");
+        MakeFifo(fifo);
+        File.CreateSymbolicLink(_tree.Path("work", "pipe-link"), fifo);
+
+        foreach (var (tool, json) in new[]
+        {
+            ("read_file", """{"path":"pipe"}"""),
+            ("read_file", """{"path":"pipe-link"}"""),
+            ("patch_file", """{"path":"pipe","old_text":"a","new_text":"b"}"""),
+            ("write_file", """{"path":"pipe","content":"x"}"""),
+            ("search_files", """{"pattern":"dentist","path":"pipe"}"""),
+        })
+        {
+            var error = await Assert.ThrowsAsync<ToolArgumentException>(() => Promptly(fifo, () => Invoke(_tools, tool, json)));
+            Assert.Contains("named pipe (FIFO), not a regular file", error.Message, StringComparison.Ordinal);
+        }
+
+        var found = await Promptly(fifo, () => Invoke(_tools, "search_files", """{"pattern":"dentist"}"""));
+        Assert.Equal(["a.txt:1: dentist on Friday"], found.GetProperty("matches").EnumerateArray().Select(e => e.GetString()));
+        var listed = await Promptly(fifo, () => Invoke(_tools, "list_files", "{}"));
+        Assert.Contains("pipe (a named pipe (FIFO))", listed.GetProperty("entries").EnumerateArray().Select(e => e.GetString()));
+        // write_file did not replace the pipe with a regular file.
+        Assert.Equal("a named pipe (FIFO)", FileKinds.Special(fifo));
+    }
+
+    [Fact]
+    public async Task A_socket_in_the_workspace_is_refused_as_not_a_regular_file()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux(), "File kinds are told with Linux's statx.");
+        // Short, because a Unix socket path is limited to 108 bytes.
+        var root = Corvid.Tests.ShortTemp.Create("cvf-");
+        try
+        {
+            var socketPath = Path.Combine(root, "s.sock");
+            using var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+            listener.Bind(new UnixDomainSocketEndPoint(socketPath));
+            var tools = new FileTools(new Workspace(root));
+
+            var error = await Assert.ThrowsAsync<ToolArgumentException>(() =>
+                Promptly(socketPath, () => Invoke(tools, "read_file", """{"path":"s.sock"}""")));
+            Assert.Contains("a socket, not a regular file", error.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static void MakeFifo(string path)
+    {
+        using var process = Process.Start(new ProcessStartInfo("mkfifo", [path]) { UseShellExecute = false })
+            ?? throw new InvalidOperationException("mkfifo did not start.");
+        process.WaitForExit();
+        Assert.Equal(0, process.ExitCode);
+    }
+
+    /// <summary>
+    /// Runs a file tool off the test thread and fails if it has not finished within seconds, so a tool that blocks opening a
+    /// FIFO fails the test instead of hanging the run. The stuck open is then released: opening the FIFO for reading and
+    /// writing never blocks and counts as a writer, so the blocked reader gets end of file.
+    /// </summary>
+    private static async Task<JsonElement> Promptly(string special, Func<Task<JsonElement>> call)
+    {
+        var running = Task.Run(call);
+        try
+        {
+            return await running.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        }
+        catch (TimeoutException)
+        {
+            if (FileKinds.Special(special) == "a named pipe (FIFO)")
+            {
+                using (new FileStream(special, FileMode.Open, FileAccess.ReadWrite))
+                {
+                }
+            }
+            throw;
+        }
     }
 }

@@ -1191,7 +1191,12 @@ references Builtin except tests and the host (C-013). Everything runs on the deg
   credential-store and safety-configuration paths) and credential names (the sandbox's `.env` rule, examples included,
   and private keys). Listings and searches leave out credential names and denied paths, never descend into `.git`,
   `node_modules` or a link (searches skip linked files too), and stop at limits (`FileToolOptions`); files with a NUL in
-  their first 8 KiB are binary and not read.
+  their first 8 KiB are binary and not read. Only regular files are opened: .NET reports a FIFO, a socket or a device as a
+  file, and reading a FIFO nobody writes to blocks the turn for ever (a device may never end). `FileKinds.Special` asks
+  Linux's `statx` (one layout on every architecture), links followed as `Workspace.Resolve` already did, so `read_file`,
+  `patch_file`, `write_file` (which would otherwise replace the pipe) and a `search_files` naming one refuse it with a
+  tool error, a search walking past one skips it, and a listing shows its kind instead of a size. Elsewhere the kind is
+  not told and these files are treated as before. The check and the open are separate calls, as with links.
 - Shell (`ShellTool`, `shell`, `[SideEffect(Process | Filesystem)]`, `[Destructive]`): a command line run by `/bin/bash -c`
   (bash, because the pipeline parses the bash subset, D-5) through `SandboxedShell`, which builds one `SandboxPolicy`: the
   workspace, no network, the default environment (names that change what bash runs, such as `BASH_ENV`, `SHELLOPTS` or

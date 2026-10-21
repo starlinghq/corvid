@@ -102,7 +102,9 @@ public sealed partial class FileTools(Workspace workspace, FileToolOptions? opti
             }
 
             var relative = Workspace.Relative(entry.FullName);
-            entries.Add((JsonNode?)JsonValue.Create(entry is DirectoryInfo ? relative + "/" : $"{relative} ({Size(((FileInfo)entry).Length)})"));
+            entries.Add((JsonNode?)JsonValue.Create(entry is DirectoryInfo ? relative + "/"
+                : FileKinds.Special(entry.FullName) is { } kind ? $"{relative} ({kind})"
+                : $"{relative} ({Size(((FileInfo)entry).Length)})"));
         }
 
         return new JsonObject { ["path"] = Workspace.Relative(directory), ["entries"] = entries, ["truncated"] = truncated };
@@ -130,6 +132,8 @@ public sealed partial class FileTools(Workspace workspace, FileToolOptions? opti
         }
 
         var root = Workspace.Resolve(path);
+        if (File.Exists(root))
+            RefuseSpecial(root, path);
         IEnumerable<FileSystemInfo> files = File.Exists(root) ? [new FileInfo(root)]
             : Directory.Exists(root) ? Walk(root, recursive: true)
             : throw new ToolArgumentException($"Argument 'path' is '{path}', which does not exist.", nameof(path));
@@ -138,7 +142,8 @@ public sealed partial class FileTools(Workspace workspace, FileToolOptions? opti
         var truncated = false;
         foreach (var file in files.OfType<FileInfo>())
         {
-            if (file.Length > _options.MaxFileBytes || file.LinkTarget is not null)
+            // A FIFO, socket or device found while walking is skipped: opening one can block the turn for ever.
+            if (file.Length > _options.MaxFileBytes || file.LinkTarget is not null || FileKinds.Special(file.FullName) is not null)
                 continue;
             if (++opened > _options.MaxSearchFiles || matches.Count >= _options.MaxSearchResults)
             {
@@ -182,6 +187,7 @@ public sealed partial class FileTools(Workspace workspace, FileToolOptions? opti
         var file = Workspace.Resolve(path);
         if (Directory.Exists(file))
             throw new ToolArgumentException($"Argument 'path' is '{path}', which is a directory.", nameof(path));
+        RefuseSpecial(file, path);
         var bytes = Utf8.GetBytes(content);
         if (bytes.Length > _options.MaxWriteBytes)
             throw new ToolArgumentException($"The content is {Size(bytes.Length)}, over the {Size(_options.MaxWriteBytes)} limit.", nameof(content));
@@ -228,10 +234,24 @@ public sealed partial class FileTools(Workspace workspace, FileToolOptions? opti
     {
         var resolved = Workspace.Resolve(path);
         if (directory ? Directory.Exists(resolved) : File.Exists(resolved))
+        {
+            if (!directory)
+                RefuseSpecial(resolved, path);
             return resolved;
+        }
         if (directory ? File.Exists(resolved) : Directory.Exists(resolved))
             throw new ToolArgumentException($"Argument 'path' is '{path}', which is a {(directory ? "file" : "directory")}.", nameof(path));
         throw new ToolArgumentException($"Argument 'path' is '{path}', which does not exist.", nameof(path));
+    }
+
+    /// <summary>
+    /// Refuses a FIFO, socket or device (links followed, as <see cref="Workspace.Resolve"/> already did): reading a FIFO with
+    /// no writer blocks the turn for ever, a device may never end, and replacing one is not what a file edit means.
+    /// </summary>
+    private static void RefuseSpecial(string resolved, string path)
+    {
+        if (FileKinds.Special(resolved) is { } kind)
+            throw new ToolArgumentException($"Argument 'path' is '{path}', which is {kind}, not a regular file; the file tools read and write only regular files.", nameof(path));
     }
 
     private string ReadText(string file, string path)
