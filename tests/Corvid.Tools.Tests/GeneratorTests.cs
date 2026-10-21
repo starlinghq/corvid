@@ -65,6 +65,24 @@ public sealed class GeneratorTests
     }
 
     [Fact]
+    public void Probe_is_carried_into_the_risk_only_when_declared()
+    {
+        (_, ImmutableArray<Diagnostic> diagnostics, GeneratorDriverRunResult result) = Run("""
+            using Corvid.Tools;
+            public sealed partial class T
+            {
+                [Tool(Description = "d"), Probe] public string A() => "";
+                [Tool(Description = "d")] public string B() => "";
+            }
+            """);
+        string code = Assert.Single(Assert.Single(result.Results).GeneratedSources).SourceText.ToString();
+
+        Assert.Empty(diagnostics);
+        Assert.Equal(1, code.Split(", false, false, true), ").Length - 1);
+        Assert.Equal(1, code.Split(", false, false), ").Length - 1);
+    }
+
+    [Fact]
     public void Static_class_gets_a_static_factory()
     {
         (Compilation output, ImmutableArray<Diagnostic> diagnostics, _) = Run("""
@@ -98,6 +116,8 @@ public sealed class GeneratorTests
     [InlineData("CVTOOL006", """public sealed partial class T { [Tool] public string A() => ""; }""")]
     [InlineData("CVTOOL007", """public sealed partial class T { [Tool(Description = "d"), Destructive] public string A() => ""; }""")]
     [InlineData("CVTOOL008", """public sealed partial class T { [Tool(Description = "d")] public string A<X>() => ""; }""")]
+    [InlineData("CVTOOL009", """public sealed partial class T { [Tool(Description = "d"), Probe, SideEffect(SideEffects.Filesystem)] public string A() => ""; }""")]
+    [InlineData("CVTOOL009", """public sealed partial class T { [Tool(Description = "d"), Probe, Network] public string A() => ""; }""")]
     public void Invalid_tools_are_reported_and_not_generated(string id, string source)
     {
         (_, ImmutableArray<Diagnostic> diagnostics, GeneratorDriverRunResult result) = Run("using Corvid.Tools;\n" + source);

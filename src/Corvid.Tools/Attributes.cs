@@ -55,3 +55,12 @@ public sealed class NetworkAttribute : Attribute;
 /// <summary>The tool's side effects can lose data or are hard to reverse. Requires a <see cref="SideEffectAttribute"/>.</summary>
 [AttributeUsage(AttributeTargets.Method, Inherited = false)]
 public sealed class DestructiveAttribute : Attribute;
+
+/// <summary>
+/// The tool may be run with a substitute argument and its result thrown away, to learn whether its own binding accepts a
+/// value (slot pre-fill, plan §7 step 4). Only for a tool that is read-only, local and leaves no trace: no usage records, no
+/// model or slot, no outside content, nothing another process sees. Requires no <see cref="SideEffectAttribute"/> and no
+/// <see cref="NetworkAttribute"/>.
+/// </summary>
+[AttributeUsage(AttributeTargets.Method, Inherited = false)]
+public sealed class ProbeAttribute : Attribute;

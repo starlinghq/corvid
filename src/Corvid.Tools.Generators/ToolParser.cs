@@ -55,6 +55,7 @@ internal static class ToolParser
         int sideEffects = 0;
         bool network = false;
         bool destructive = false;
+        bool probe = false;
         ITypeSymbol? sideEffectsType = null;
         foreach (AttributeData data in method.GetAttributes())
         {
@@ -70,12 +71,20 @@ internal static class ToolParser
                 case "Corvid.Tools.DestructiveAttribute":
                     destructive = true;
                     break;
+                case "Corvid.Tools.ProbeAttribute":
+                    probe = true;
+                    break;
             }
         }
 
         if (destructive && sideEffects == 0)
         {
             Report(Diagnostics.DestructiveWithoutSideEffect, toolName);
+        }
+
+        if (probe && (sideEffects != 0 || network))
+        {
+            Report(Diagnostics.ProbeWithEffects, toolName);
         }
 
         string target = method.IsStatic ? $"global::{type.ToDisplayString()}" : "_target";
@@ -181,7 +190,7 @@ internal static class ToolParser
             : $"new global::Corvid.Tools.ToolParameter[] {{ {string.Join(", ", parameters)} }}";
         string descriptor =
             $"new global::Corvid.Tools.ToolDescriptor({Literal(toolName)}, {Literal(description ?? "")}, {Literal(schemaText.ToString())}, " +
-            $"new global::Corvid.Tools.ToolRisk({SideEffectsExpression(sideEffects, sideEffectsType)}, {Bool(network)}, {Bool(destructive)}), {parameterArray})";
+            $"new global::Corvid.Tools.ToolRisk({SideEffectsExpression(sideEffects, sideEffectsType)}, {Bool(network)}, {Bool(destructive)}{(probe ? ", true" : "")}), {parameterArray})";
 
         return new ToolModel(
             type.ToDisplayString(),

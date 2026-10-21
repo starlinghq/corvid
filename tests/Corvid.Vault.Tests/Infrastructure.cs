@@ -20,7 +20,8 @@ internal sealed class TestVault : IDisposable
 
     public TestVault(Action<PolicyDocument>? configure = null)
     {
-        Root = Path.Combine(Path.GetTempPath(), "cv-" + RandomNumberGenerator.GetHexString(8, lowercase: true));
+        // Short, because the socket path under it is limited to 108 bytes.
+        Root = Corvid.Tests.ShortTemp.Create("cv-");
         Options = new VaultOptions
         {
             DataDirectory = Path.Combine(Root, "data"),

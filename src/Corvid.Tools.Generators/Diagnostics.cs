@@ -47,10 +47,15 @@ internal static class Diagnostics
         "Tool method '{0}' must not be generic",
         Category, DiagnosticSeverity.Error, isEnabledByDefault: true);
 
+    public static readonly DiagnosticDescriptor ProbeWithEffects = new(
+        "CVTOOL009", "Probed tool is not read-only and local",
+        "Tool '{0}' is [Probe] but declares a [SideEffect] or [Network]; only a read-only local tool may be tried with a substitute argument",
+        Category, DiagnosticSeverity.Error, isEnabledByDefault: true);
+
     private static readonly DiagnosticDescriptor[] All =
     [
         ContainingTypeNotPartial, InvalidName, DuplicateName, UnsupportedParameter,
-        UnsupportedReturn, MissingDescription, DestructiveWithoutSideEffect, GenericMethod,
+        UnsupportedReturn, MissingDescription, DestructiveWithoutSideEffect, GenericMethod, ProbeWithEffects,
     ];
 
     public static DiagnosticDescriptor ById(string id) => All.First(d => d.Id == id);

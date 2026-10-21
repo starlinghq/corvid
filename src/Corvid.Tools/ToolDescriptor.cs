@@ -3,7 +3,11 @@ using System.Text.Json;
 namespace Corvid.Tools;
 
 /// <summary>Risk metadata declared on a tool with <see cref="SideEffectAttribute"/>, <see cref="NetworkAttribute"/> and <see cref="DestructiveAttribute"/>.</summary>
-public sealed record ToolRisk(SideEffects SideEffects, bool Network, bool Destructive)
+/// <param name="Probe">
+/// Declared with <see cref="ProbeAttribute"/>: the tool may be tried with a substitute argument and the result discarded.
+/// Never inferred from <see cref="ReadOnly"/>, which can be a claim (an MCP server's annotation, a user's configuration).
+/// </param>
+public sealed record ToolRisk(SideEffects SideEffects, bool Network, bool Destructive, bool Probe = false)
 {
     /// <summary>Changes nothing outside the process. Network reads still count as read-only; taint applies separately.</summary>
     public bool ReadOnly => SideEffects == SideEffects.None;
