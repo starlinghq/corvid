@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Net.Sockets;
 using System.Text.Json;
 using static Corvid.Tools.Builtin.Tests.Fixtures;
 
@@ -222,8 +221,7 @@ public sealed class FileToolsTests : IDisposable
         try
         {
             var socketPath = Path.Combine(root, "s.sock");
-            using var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-            listener.Bind(new UnixDomainSocketEndPoint(socketPath));
+            using var listener = Corvid.Tests.ShortTemp.Listen(root, socketPath);
             var tools = new FileTools(new Workspace(root));
 
             var error = await Assert.ThrowsAsync<ToolArgumentException>(() =>
