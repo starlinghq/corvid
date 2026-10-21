@@ -28,6 +28,9 @@ internal sealed class FakeGenerator(params Func<IReadOnlyList<ChatMessage>, Chat
 
     public List<IReadOnlyList<ChatMessage>> Calls { get; } = [];
 
+    /// <summary>The tools offered with each turn call, in the order of <see cref="Calls"/>.</summary>
+    public List<IReadOnlyList<string>> OfferedTools { get; } = [];
+
     public int StreamedCalls;
 
     public Func<string, string> YesNo { get; set; } = _ => "no";
@@ -42,7 +45,10 @@ internal sealed class FakeGenerator(params Func<IReadOnlyList<ChatMessage>, Chat
             return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, YesNo(list[^1].Text))));
         cancellationToken.ThrowIfCancellationRequested();
         lock (Calls)
+        {
             Calls.Add(list);
+            OfferedTools.Add([.. options?.Tools?.Select(tool => tool.Name) ?? []]);
+        }
         var step = Interlocked.Increment(ref _next) - 1;
         var response = step < script.Length ? script[step](list) : Reply.Text("Done.");
         response.Usage = new UsageDetails { InputTokenCount = 42, OutputTokenCount = 7 };

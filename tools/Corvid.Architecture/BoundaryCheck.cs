@@ -114,6 +114,24 @@ public static class BoundaryCheck
         "OpenTelemetry.Extensions.Hosting"
     };
 
+    // Front ends (C-019): the ACP agent and the OpenAI-compatible endpoint. Unlike the SDK surfaces below (which sit under
+    // the host), they sit on the composition root like the CLI: each may reference Corvid.Host (and so resolves what it
+    // resolves), only the CLI may reference a front end, and a front end never references the CLI. They bring no package of
+    // their own; the HTTP front end's ASP.NET Core is a shared-framework reference, checked by FrameworkReferences below.
+    private static readonly HashSet<string> FrontEndProjects = new(StringComparer.Ordinal)
+    {
+        "Corvid.Acp",
+        "Corvid.Http"
+    };
+
+    // Shared frameworks other than Microsoft.NETCore.App, and the projects that may resolve each (their own reference or one
+    // inherited from a referenced project or package). ASP.NET Core is the HTTP front end's server; the CLI inherits it by
+    // referencing that front end. Anything else, anywhere, fails: a framework is as much a dependency as a package.
+    private static readonly Dictionary<string, HashSet<string>> FrameworkReferences = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Microsoft.AspNetCore.App"] = new(StringComparer.Ordinal) { "Corvid.Http", "Corvid.Cli" },
+    };
+
     // The terminal UI, in the CLI only; the host stays free of it so the gateway (C-020) can share the command registry.
     private static readonly HashSet<string> CliPackages = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -190,8 +208,12 @@ public static class BoundaryCheck
         var vault = project == "Corvid.Vault";
         var adapter = project.StartsWith("Corvid.Models.", StringComparison.Ordinal);
         var buildTool = BuildToolProjects.Contains(project);
-        var composition = CompositionProjects.Contains(project);
         var surface = SurfacePackages.TryGetValue(project, out var surfacePackages);
+        var frontEnd = FrontEndProjects.Contains(project);
+        // A front end's graph is the host's, so its packages are judged as the composition root's are.
+        var composition = CompositionProjects.Contains(project) || frontEnd;
+
+        errors.UnionWith(CheckFrameworkReferences(project, assets));
 
         foreach (var target in assets.GetProperty("targets").EnumerateObject())
         {
@@ -233,13 +255,15 @@ public static class BoundaryCheck
                     // Only the composition root composes a surface; a surface references core projects only.
                     "project" when SurfacePackages.ContainsKey(name) => composition,
                     "project" when surface => name != "Corvid.Vault" && !name.StartsWith("Corvid.Models.", StringComparison.Ordinal)
-                        && !CompositionProjects.Contains(name) && !BuildToolProjects.Contains(name) && !LauncherProjects.Contains(name),
+                        && !CompositionProjects.Contains(name) && !FrontEndProjects.Contains(name) && !BuildToolProjects.Contains(name) && !LauncherProjects.Contains(name),
                     // A build tool in another project's graph means its assembly would ship; reference it as an analyzer.
                     "project" when buildTool || BuildToolProjects.Contains(name) => false,
                     // Executables are started by path; a reference would load one into another process.
                     "project" when LauncherProjects.Contains(name) => false,
-                    // Nothing composes the composition root but the CLI; nothing references the CLI.
-                    "project" when CompositionProjects.Contains(name) => project == "Corvid.Cli" && name == "Corvid.Host",
+                    // Nothing composes the composition root but the CLI and the front ends; nothing references the CLI.
+                    "project" when CompositionProjects.Contains(name) => name == "Corvid.Host" && (project == "Corvid.Cli" || frontEnd),
+                    // Only the CLI starts a front end.
+                    "project" when FrontEndProjects.Contains(name) => project == "Corvid.Cli",
                     "project" => !independent && (vault
                         ? name == "Corvid.Vault.Contracts"
                         : name != "Corvid.Vault" && (adapter || composition || !name.StartsWith("Corvid.Models.", StringComparison.Ordinal))),
@@ -252,7 +276,8 @@ public static class BoundaryCheck
                         : type == "project" && BuildToolProjects.Contains(name) ? "Reference build tooling as an analyzer: OutputItemType=\"Analyzer\" ReferenceOutputAssembly=\"false\"."
                         : launcher ? "The corvid-sandbox launcher must have no dependencies; Vault and Corvid start it by path."
                         : type == "project" && LauncherProjects.Contains(name) ? "Start the corvid-sandbox launcher by path; do not reference it."
-                        : type == "project" && CompositionProjects.Contains(name) ? "Only the CLI may reference the composition root, and nothing may reference the CLI."
+                        : type == "project" && CompositionProjects.Contains(name) ? "Only the CLI and the front ends (Corvid.Acp, Corvid.Http) may reference the composition root, and nothing may reference the CLI."
+                        : type == "project" && FrontEndProjects.Contains(name) ? "Only the CLI may reference a front end (Corvid.Acp, Corvid.Http)."
                         : type == "project" && SurfacePackages.ContainsKey(name) ? "Only the composition root may reference a surface project."
                         : surface ? "A surface project may use core packages and its own reviewed SDK packages (SurfacePackages), and reference core projects only."
                         : composition ? "The composition root and the CLI may use core packages, their reviewed hosting, telemetry and UI packages, and what adapters bring; add a package to CompositionPackages after review."
@@ -262,6 +287,40 @@ public static class BoundaryCheck
             }
         }
 
+        return errors.ToArray();
+    }
+
+    /// <summary>
+    /// Shared-framework references (ASP.NET Core and the like) are not packages, so the package rules never see them. The
+    /// restored assets list a project's own (<c>project.frameworks.*.frameworkReferences</c>) and those each referenced
+    /// project or package brings (<c>frameworkReferences</c> on its target entry); both are checked against
+    /// <see cref="FrameworkReferences"/>.
+    /// </summary>
+    public static IReadOnlyList<string> CheckFrameworkReferences(string project, JsonElement assets)
+    {
+        var errors = new SortedSet<string>(StringComparer.Ordinal);
+        void Check(string framework, string from)
+        {
+            if (framework.Equals("Microsoft.NETCore.App", StringComparison.OrdinalIgnoreCase))
+                return;
+            if (!FrameworkReferences.TryGetValue(framework, out var allowed) || !allowed.Contains(project))
+                errors.Add($"{project}: forbidden framework reference {framework} ({from}). " +
+                    (FrameworkReferences.TryGetValue(framework, out var owners)
+                        ? $"Only {string.Join(" and ", owners.Order(StringComparer.Ordinal))} may use it."
+                        : "Shared frameworks other than Microsoft.NETCore.App need an explicit, reviewed entry in FrameworkReferences."));
+        }
+
+        if (assets.TryGetProperty("project", out var own) && own.TryGetProperty("frameworks", out var frameworks))
+            foreach (var target in frameworks.EnumerateObject())
+                if (target.Value.TryGetProperty("frameworkReferences", out var references))
+                    foreach (var reference in references.EnumerateObject())
+                        Check(reference.Name, "its own");
+        if (assets.TryGetProperty("targets", out var targets))
+            foreach (var target in targets.EnumerateObject())
+                foreach (var dependency in target.Value.EnumerateObject())
+                    if (dependency.Value.TryGetProperty("frameworkReferences", out var inherited) && inherited.ValueKind == JsonValueKind.Array)
+                        foreach (var reference in inherited.EnumerateArray())
+                            Check(reference.GetString() ?? "", $"through {dependency.Name} in {target.Name}");
         return errors.ToArray();
     }
 

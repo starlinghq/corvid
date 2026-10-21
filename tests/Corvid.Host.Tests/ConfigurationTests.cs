@@ -26,6 +26,30 @@ public sealed class ConfigurationTests
     [Fact]
     public void ValidConfigurationPasses() => Assert.True(Validate(_ => { }).Succeeded);
 
+    [Theory]
+    // corvid serve (C-019): loopback by default; any other address only with a Vault token secret.
+    [InlineData("http://127.0.0.1:8411", null, true)]
+    [InlineData("http://localhost:9000", null, true)]
+    [InlineData("http://[::1]:8411", null, true)]
+    [InlineData("http://0.0.0.0:8411", null, false)]
+    [InlineData("http://192.168.1.5:8411", null, false)]
+    [InlineData("http://0.0.0.0:8411", "serve.token", true)]
+    [InlineData("http://corvid.example:8411", "serve.token", false)]
+    [InlineData("https://127.0.0.1:8411", null, false)]
+    [InlineData("http://127.0.0.1:8411/v1", null, false)]
+    [InlineData("not a url", null, false)]
+    public void TheServedAddressIsLoopbackUnlessATokenIsConfigured(string url, string? secret, bool valid)
+    {
+        var result = Validate(options =>
+        {
+            options.Serve.Url = url;
+            options.Serve.TokenSecret = secret;
+        });
+        Assert.Equal(valid, result.Succeeded);
+        if (!valid)
+            Assert.Contains(result.Failures!, failure => failure.Contains("Corvid:Serve:Url", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void TheDefaultsNameStarlingModels()
     {

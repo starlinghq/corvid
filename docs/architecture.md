@@ -1,4 +1,4 @@
-# Agent foundation (C-001, C-002, C-004a, C-004b, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-012, C-013, C-014, C-015, C-016, C-017, C-018, C-021)
+# Agent foundation (C-001, C-002, C-004a, C-004b, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-012, C-013, C-014, C-015, C-016, C-017, C-018, C-019, C-021)
 
 The solution contains `Corvid.Abstractions`, `Corvid.Kernel`, and
 `Corvid.Models`, alongside the working Vault projects. Kernel and Models each
@@ -317,6 +317,11 @@ C-011's device scheduler to these bindings.
   primitives). It may not reference an adapter, the host, Vault, the launcher, a build tool or another surface. Only the
   composition root may reference a surface, and it then resolves what the surface brings, as it does for adapters; a core
   project that reached a surface or its SDK fails. Nothing was added to `CorePackages`.
+- Front ends (C-019; `FrontEndProjects` in the checker): `Corvid.Acp` and `Corvid.Http` sit on the composition root like the
+  CLI. Each may reference `Corvid.Host` (and resolve what it resolves), only the CLI may reference a front end, and neither takes
+  a package. Shared frameworks are checked too (`FrameworkReferences`): `Microsoft.AspNetCore.App` is allowed only in
+  `Corvid.Http` and in the CLI, which inherits it; any other project, and any shared framework other than
+  `Microsoft.NETCore.App`, fails. See [ACP and OpenAI-compatible HTTP](#acp-and-openai-compatible-http-c-019).
 - `corvid evals` starts C-021's `corvid-evals` by path (found through `$CORVID_EVALS`, next to `corvid`, or on `PATH`), the
   way Corvid starts `corvid-sandbox`, so no production project references eval code.
 
@@ -1782,6 +1787,123 @@ trusted read-only tool's are not); tainting a turn for an untrusted server's too
 capped but untainted, like a hub skill's L0 description; stdio servers where the sandbox does not run; server mode over HTTP
 (C-019's endpoint); and SDK 2.3.0.
 
+## ACP and OpenAI-compatible HTTP (C-019)
+
+Plan §12 (ACP; OpenAI-compatible HTTP), §17 row 1.1, R11 (agentclientprotocol.com). Two front ends on the composition root,
+`src/Corvid.Acp` (`corvid acp`) and `src/Corvid.Http` (`corvid serve`). Both open ordinary Corvid sessions through
+`CorvidRuntime`, so turns, tools, approvals, taint, the sandbox, checkpoints and privacy egress are the ones `corvid chat` uses.
+
+### ACP over stdio (`corvid acp`)
+
+- No maintained .NET ACP library: the protocol's organisation publishes SDKs for other languages, and the NuGet packages
+  (`AgentClientProtocol`, `LibAcp`, `AcpSdk` and others) are young community ports, one of them on StreamJsonRpc. A front end
+  takes no package of its own, so `Corvid.Acp` implements JSON-RPC 2.0 directly: newline-delimited messages (16 MB cap),
+  System.Text.Json source generation (`AcpJson`), requests handled concurrently (a prompt runs for minutes while its cancel
+  arrives), every outgoing message through one ordered writer, agent-to-client requests (`session/request_permission`) with
+  their own ids, and `$/cancel_request`. Message shapes follow schema version 1 (`schema.json`); `session/list`,
+  `session/resume`, `session/fork` and `session/close` come from `schema.unstable.json` and are advertised under
+  `sessionCapabilities`.
+- Standard output carries protocol messages only: under `acp` the CLI's own console writes to standard error. The runtime
+  starts in the background so `initialize` answers at once; a session request waits for it, and missing models fail that
+  request with the `corvid model download` remedy instead of ending the process.
+- `initialize`: protocol version 1, `loadSession`, text and resource links only (no image, audio or embedded context), no MCP
+  transports, no authentication methods (the agent runs as the user who started it).
+- Sessions: `session/new` (surface `acp`, ids `acp-…`); `session/load` (replays the projected transcript, compactions
+  expanded and rewound turns left out, as user and agent message chunks and tool calls with their results); `session/resume`
+  (no replay); `session/fork` (`CorvidRuntime.ForkSessionAsync`, below; a position comes in `_meta.corvid.throughSequence`,
+  the head otherwise); `session/list` (the user's `acp-` and `cli-` conversations, newest first, titled by their first
+  message, paged by an offset cursor; scheduled runs and HTTP sessions are left out); `session/close`. Each opened session is
+  sent the slash commands as `available_commands_update` (all but `/exit`), and a prompt that starts with `/` runs the shared
+  registry.
+- The workspace is fixed when the runtime starts (approvals, the sandbox, checkpoints and the hardline list protect it), so a
+  session whose `cwd` is another directory is refused with the remedy, never redirected. A client's MCP servers are logged to
+  standard error and not connected: the servers Corvid connects are the ones in its own `Corvid:Mcp:Servers` (C-018), whose
+  tools sessions here are offered under the same approvals and taint as in `corvid chat`.
+- A prompt is one turn (`TurnReporter`, an `ITurnObserver` on the runtime's feed): streamed text as `agent_message_chunk`;
+  each call as `tool_call` (kind from the tool's risk metadata: execute, search, fetch, delete, edit, read or other; a title
+  with its command, path or URL; locations only for paths the file tools may open) and `tool_call_update` with its input,
+  result and, for a call that changed files, a `diff` per path from its write-ledger checkpoints (C-014). Notifications go
+  out on one ordered chain, drained before the prompt's response; answer text that was not streamed is sent last. Stop
+  reasons: `end_turn`, `cancelled`, `max_turn_requests` (step budget). One prompt at a time per session.
+- Approvals (`PermissionPrompter`, attached with `AttachPrompter`): a C-007b prompt becomes `session/request_permission`
+  naming the call (`ApprovalPrompt.CallId`, added for this), with the pipeline's reasons, its deadline and, for `write_file`
+  and `patch_file`, the proposed diff (the current text read only through the file tools' `Workspace` rules, so a refused
+  path is never read). The options are the scopes the pipeline offers (allow once, for this session, always) and deny. A
+  cancelled request, an unknown or unoffered option, a client error, the deadline and a prompt outside a running prompt all
+  deny; nothing is approved on the user's behalf.
+- Cancellation: `session/cancel` (and `$/cancel_request` on the prompt) cancels the turn and its open permission request; the
+  prompt still answers, with `cancelled`.
+
+### Forking at a log position
+
+`SessionFork` (Kernel, no package) copies a source session's events through a sequence into a new, empty session, in order
+and at the same sequences, so positions inside payloads (a compaction's range, a rewind's position) keep their meaning; event
+ids are new. A position that leaves a tool call or an approval open is refused, as is a target that has events; the source
+never changes. `CorvidRuntime.ForkSessionAsync` takes the copy between turns (`RunExclusiveAsync`) when the source is open in
+this process.
+
+### OpenAI-compatible HTTP (`corvid serve`)
+
+- ASP.NET Core minimal APIs on a slim builder (no configuration files, no `ASPNETCORE_URLS`, no console logging, no server
+  header), Kestrel on `Corvid:Serve:Url` (default `http://127.0.0.1:8411`), JSON through a source-generated context.
+- `GET /v1/models` lists `corvid`. `POST /v1/chat/completions` runs one turn per request and answers as a `chat.completion`
+  or, with `stream: true`, as server-sent `chat.completion.chunk` events ending in `data: [DONE]`; a failure after the headers
+  travels as an error event. `finish_reason` is `stop`, or `length` when the step budget ran out.
+- Conversations onto sessions: a client that resends the whole history keeps one session. After each answer the endpoint
+  remembers a SHA-256 digest of the user and assistant messages through that answer (in memory, 4,096 conversations); a
+  request whose history matches continues that session with only its last message. Otherwise a new `http-` session is seeded
+  with the client's history (`CorvidSession.SeedHistory`) and the last message is sent. `X-Corvid-Session` names the session
+  in every response and may name one in a request, but only a session this endpoint started (an `http-` id in the log): a
+  terminal or editor session has a user who answers its approvals. A client's system or developer messages reach the model as
+  quoted instructions in the user's message, never as Corvid's system prompt. The history a client sends is the
+  authenticated user's own conversation, so it is not tainted.
+- Refused with OpenAI-shaped errors: client-defined `tools`, `functions`, `tool_choice` and `tool` messages (Corvid runs its
+  own tools under its own approvals), `n` > 1, non-text content parts, a model other than `corvid`, and bodies that are not
+  `application/json`.
+- Who may call; tools are never exposed to an unauthenticated remote caller. Without `Corvid:Serve:TokenSecret` the
+  validator accepts only a loopback address and the endpoint serves only loopback peers. A loopback endpoint also refuses a
+  `Host` that is not a loopback name (421, against DNS rebinding), and the JSON-only rule means a web page cannot post to it
+  without a CORS preflight, which is never answered. With a token secret every request needs `Authorization: Bearer`, and any
+  IP address (or `localhost`) may be configured; TLS is a reverse proxy's job.
+- The token is a Vault secret; Corvid never holds its value (§10.5). Vault has no compare operation, so `VaultTokenVerifier`
+  sends the presented token to Vault's scrub service: it is the secret exactly when the whole token comes back as the one
+  marker `[secret:<name>]`. Tokens under 24 bytes (the scrubber also matches a secret's first 12) or holding `[` or `]` are
+  refused before Vault is asked; an encoding the scrubber recognises (hex, base64) is accepted, which is the same knowledge.
+  Accepted tokens are remembered for five minutes by digest, and more than 20 failures a minute stop reaching Vault, so a
+  flood cannot spend Vault's per-user scrub budget (it does refuse new clients for that minute). `corvid serve` checks that
+  Vault holds the secret before it listens; a request while Vault is down gets 503.
+- Approvals cannot be answered over HTTP, so served sessions are not interactive (`SessionSettings(Interactive: false)`):
+  an ask is denied without a prompt. Under `Corvid:Serve:Approvals=Fail` (the default) the first denied call cancels the
+  turn and the request fails with 403 `approval_required`, naming the tool and `corvid chat --session <id>` to continue where
+  it can be approved; under `Deny` the model answers without the call, as in an unattended job. `Corvid:Serve:Tools=false`
+  offers the model no tools at all. Hardline denials, the sandbox and privacy egress apply as everywhere.
+- A client that disconnects cancels its turn; one request at a time per session.
+
+### Dependency rules for the front ends
+
+`FrontEndProjects` in the checker: `Corvid.Acp` and `Corvid.Http` may reference `Corvid.Host` (their packages are judged as
+the composition root's, including what C-018's `Corvid.Mcp` brings through it), only `Corvid.Cli` may reference a front end,
+and a front end never references the CLI. They differ from C-018's SDK surfaces (`SurfacePackages`), which sit under the host
+and may not reference it; an SDK surface may not reference a front end either. Neither takes a
+NuGet package. ASP.NET Core is a shared-framework reference, which the package rules never see, so the checker now also reads
+framework references (a project's own and those its references bring) against `FrameworkReferences`:
+`Microsoft.AspNetCore.App` only in `Corvid.Http` and in the CLI, which inherits it; any other shared framework anywhere fails.
+The core rule is unchanged.
+
+Verified with recorded ACP exchanges (`tests/Corvid.Acp.Tests/Exchanges/*.jsonl`, with placeholders for ids and paths)
+driving the server over in-memory streams on the host's fake models, plus scenario tests (permission with diffs, an edit of
+an existing file, cancellation, load and resume, fork, list, a refused workspace, malformed requests, missing models); HTTP
+tests against Kestrel on a loopback port (streaming and not, session mapping, refusals, approvals under Fail and Deny, tools
+off); and the token verifier against a stand-in Vault scrubber.
+
+Deferred: ACP `authenticate`, `logout`, `session/set_mode`, `session/set_config_option` and `session/delete`; image, audio
+and embedded-context prompt blocks (resource links reach the model as Markdown links and are not fetched); the client's MCP
+servers (only Corvid's configured ones are connected); MCP server mode over HTTP (C-018 left it for this endpoint; it stays
+stdio only); the client's file-system and terminal capabilities (Corvid's own tools and sandbox are used); `plan` updates
+from todos; a workspace per session; HTTP approvals surfaced to another channel (C-020); client-defined tools;
+`/v1/completions`, `/v1/embeddings` and usage numbers; conversation mapping that survives a restart (a known history then
+seeds a new session); HTTPS in Corvid; a Vault compare operation in place of the scrub check.
+
 ## Running the check
 
 ```sh
@@ -1803,4 +1925,5 @@ standard `obj/` path; custom intermediate paths are not supported. This is an
 architecture regression check for NuGet/project references, not a security
 sandbox or an IL analyzer for manually supplied binaries.
 
-`corvid chat` (C-013) runs the loop and the built-in tools outside tests.
+`corvid chat` (C-013) runs the loop and the built-in tools outside tests; `corvid acp` and `corvid serve` (C-019) run the
+same sessions for an editor and for HTTP clients.

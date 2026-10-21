@@ -1,0 +1,508 @@
+using System.Collections.Concurrent;
+using System.Globalization;
+using System.Reflection;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
+using Corvid.Abstractions.Events;
+using Corvid.Host.Commands;
+using Corvid.Host.Composition;
+using Corvid.Kernel.Events;
+using Corvid.Kernel.Sessions;
+using Corvid.Kernel.Turns;
+using Corvid.Tools.Builtin;
+
+namespace Corvid.Acp;
+
+/// <param name="StartRuntime">Starts the agent; called once, in the background, so <c>initialize</c> answers at once.</param>
+/// <param name="Log">Standard error: the only place besides protocol messages anything may be written.</param>
+public sealed record AcpServerOptions(Func<CancellationToken, Task<CorvidRuntime>> StartRuntime, SlashCommandRegistry Commands,
+    Stream Input, Stream Output, TextWriter Log);
+
+/// <summary>
+/// <c>corvid acp</c> (plan §12, R11): Corvid as an Agent Client Protocol agent over stdio, for Zed, JetBrains and VS Code.
+/// Sessions are Corvid sessions in the event log: new, load (replaying the conversation), resume, fork at a log position,
+/// list and close. A prompt is one turn, streamed as <c>session/update</c> notifications with tool calls and file diffs;
+/// approvals become <c>session/request_permission</c>; <c>session/cancel</c> cancels the turn.
+/// </summary>
+public static class AcpServer
+{
+    /// <summary>The ACP version spoken (schema <c>ProtocolVersion</c>).</summary>
+    public const int ProtocolVersion = 1;
+
+    /// <summary>Serves one client until it closes its end; returns 0, or 1 when the agent could not start.</summary>
+    public static async Task<int> RunAsync(AcpServerOptions options, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        var connection = new JsonRpcConnection(options.Input, options.Output);
+        await using (connection.ConfigureAwait(false))
+        {
+            var context = new AcpConnectionContext(connection, options.Log);
+            var agent = new AcpAgent(context, options.Commands, options.StartRuntime, cancellationToken);
+            try
+            {
+                await connection.RunAsync(agent, cancellationToken).ConfigureAwait(false);
+            }
+            catch (InvalidDataException exception)
+            {
+                context.Log($"corvid acp: {exception.Message}");
+            }
+            finally
+            {
+                await agent.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+        return 0;
+    }
+}
+
+/// <summary>What the agent's parts share: the connection, the runtime once it is up, and standard error.</summary>
+internal sealed class AcpConnectionContext(JsonRpcConnection connection, TextWriter log)
+{
+    public JsonRpcConnection Connection { get; } = connection;
+
+    public CorvidRuntime Runtime { get; set; } = null!;
+
+    public ToolPresentation? Tools { get; set; }
+
+    public void Update(string sessionId, SessionUpdate update) =>
+        Connection.Notify(AcpMethods.SessionUpdate, new SessionNotification(sessionId, update), AcpJson.Default.SessionNotification);
+
+    public void Log(string text)
+    {
+        lock (log)
+        {
+            log.WriteLine(text);
+            log.Flush();
+        }
+    }
+}
+
+/// <summary>A session this connection has opened: its prompter, and the turn running in it.</summary>
+internal sealed class AcpSessionState(CorvidSession session)
+{
+    private CancellationTokenSource _turn = new();
+    private int _running;
+
+    public CorvidSession Session { get; } = session;
+
+    public IDisposable? Prompter { get; set; }
+
+    public TurnReporter? Reporter { get; set; }
+
+    /// <summary>Cancelled by <c>session/cancel</c>: open permission requests end with it.</summary>
+    public CancellationToken TurnCancelled => Volatile.Read(ref _turn).Token;
+
+    public bool TryBegin()
+    {
+        if (Interlocked.CompareExchange(ref _running, 1, 0) != 0)
+            return false;
+        var previous = Interlocked.Exchange(ref _turn, new CancellationTokenSource());
+        previous.Dispose();
+        return true;
+    }
+
+    public void End()
+    {
+        Reporter = null;
+        Volatile.Write(ref _running, 0);
+    }
+
+    public void Cancel()
+    {
+        try
+        {
+            Volatile.Read(ref _turn).Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        Session.Cancel();
+    }
+}
+
+internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
+{
+    private const string Surface = "acp";
+    private const int ListPage = 50;
+
+    private readonly AcpConnectionContext _context;
+    private readonly SlashCommandRegistry _commands;
+    private readonly Task<CorvidRuntime> _runtime;
+    private readonly ConcurrentDictionary<string, AcpSessionState> _sessions = new(StringComparer.Ordinal);
+
+    public AcpAgent(AcpConnectionContext context, SlashCommandRegistry commands, Func<CancellationToken, Task<CorvidRuntime>> start,
+        CancellationToken cancellationToken)
+    {
+        _context = context;
+        _commands = commands;
+        _runtime = StartAsync(start, cancellationToken);
+    }
+
+    public async Task<JsonRpcResult> HandleRequestAsync(string method, JsonElement parameters, CancellationToken cancellationToken) =>
+        method switch
+        {
+            AcpMethods.Initialize => Result(Initialize(Read(parameters, AcpJson.Default.InitializeRequest)), AcpJson.Default.InitializeResponse),
+            AcpMethods.SessionNew => await NewAsync(Read(parameters, AcpJson.Default.SessionRequest)).ConfigureAwait(false),
+            AcpMethods.SessionLoad => await LoadAsync(Read(parameters, AcpJson.Default.SessionRequest), replay: true).ConfigureAwait(false),
+            AcpMethods.SessionResume => await LoadAsync(Read(parameters, AcpJson.Default.SessionRequest), replay: false).ConfigureAwait(false),
+            AcpMethods.SessionFork => await ForkAsync(Read(parameters, AcpJson.Default.SessionRequest), cancellationToken).ConfigureAwait(false),
+            AcpMethods.SessionList => Result(await ListAsync(Read(parameters, AcpJson.Default.ListSessionsRequest)).ConfigureAwait(false),
+                AcpJson.Default.ListSessionsResponse),
+            AcpMethods.SessionClose => Result(Close(Read(parameters, AcpJson.Default.SessionIdRequest)), AcpJson.Default.EmptyResponse),
+            AcpMethods.SessionPrompt => Result(await PromptAsync(Read(parameters, AcpJson.Default.PromptRequest), cancellationToken).ConfigureAwait(false),
+                AcpJson.Default.PromptResponse),
+            _ => throw new AcpException(AcpErrors.MethodNotFound, $"Corvid does not implement '{method}'."),
+        };
+
+    public void HandleNotification(string method, JsonElement parameters)
+    {
+        if (method == AcpMethods.SessionCancel && Read(parameters, AcpJson.Default.SessionIdRequest) is { } cancel
+            && _sessions.TryGetValue(cancel.SessionId, out var state))
+            state.Cancel();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        foreach (var state in _sessions.Values)
+        {
+            state.Cancel();
+            state.Prompter?.Dispose();
+        }
+        CorvidRuntime runtime;
+        try
+        {
+            runtime = await _runtime.ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return;
+        }
+        await runtime.MaintenanceIdleAsync().ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        await runtime.DisposeAsync().ConfigureAwait(false);
+    }
+
+    private async Task<CorvidRuntime> StartAsync(Func<CancellationToken, Task<CorvidRuntime>> start, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var runtime = await Task.Run(() => start(cancellationToken), cancellationToken).ConfigureAwait(false);
+            _context.Runtime = runtime;
+            _context.Tools = new ToolPresentation(runtime);
+            foreach (var notice in runtime.DeciderNotices)
+                _context.Log("corvid acp: " + notice);
+            return runtime;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            _context.Log("corvid acp: Corvid could not start: " + exception.Message);
+            throw;
+        }
+    }
+
+    private async Task<CorvidRuntime> RuntimeAsync()
+    {
+        try
+        {
+            return await _runtime.ConfigureAwait(false);
+        }
+        catch (ModelsUnavailableException exception)
+        {
+            throw new AcpException(AcpErrors.InternalError, "Corvid cannot start: " + string.Join(" ", exception.Missing.Select(item =>
+                item.Detail + (item.Acquire is { } remedy ? $" Run `{remedy}`." : ""))));
+        }
+        catch (Exception exception) when (exception is not (AcpException or OutOfMemoryException))
+        {
+            throw new AcpException(AcpErrors.InternalError, "Corvid cannot start: " + exception.Message);
+        }
+    }
+
+    private static InitializeResponse Initialize(InitializeRequest request) =>
+        // Version negotiation: the agent answers with the version it speaks; a client that cannot use it disconnects.
+        new(AcpServer.ProtocolVersion,
+            new AgentCapabilities(
+                LoadSession: true,
+                // Text and resource links only: images and audio need the vision slot, and embedded resources a size policy.
+                new PromptCapabilities(Image: false, Audio: false, EmbeddedContext: false),
+                // Corvid connects only its own configured MCP servers (C-018); a client's are not (and said so on standard error).
+                new McpCapabilities(Http: false, Sse: false),
+                new SessionCapabilities { List = new Supported(), Resume = new Supported(), Fork = new Supported(), Close = new Supported() }),
+            new Implementation("corvid", Version()) { Title = "Corvid" },
+            []);
+
+    private async Task<JsonRpcResult> NewAsync(SessionRequest request)
+    {
+        var runtime = await RuntimeAsync().ConfigureAwait(false);
+        CheckWorkspace(runtime, request);
+        NoteMcpServers(request);
+        var state = Open(runtime, runtime.OpenSession(surface: Surface));
+        return Result(new NewSessionResponse(state.Session.Id), AcpJson.Default.NewSessionResponse, () => SendCommands(state.Session.Id));
+    }
+
+    private async Task<JsonRpcResult> LoadAsync(SessionRequest request, bool replay)
+    {
+        var runtime = await RuntimeAsync().ConfigureAwait(false);
+        CheckWorkspace(runtime, request);
+        var id = Required(request.SessionId);
+        if (runtime.Log.GetHead(id) == 0)
+            throw new AcpException(AcpErrors.ResourceNotFound, $"There is no session '{id}' in Corvid's log.");
+        var state = _sessions.TryGetValue(id, out var open) ? open : Open(runtime, runtime.OpenSession(id, Surface));
+        // session/load replays the whole conversation before answering; session/resume must not.
+        if (replay)
+            Replay(runtime, id);
+        return Result(new EmptyResponse(), AcpJson.Default.EmptyResponse, () => SendCommands(state.Session.Id));
+    }
+
+    private async Task<JsonRpcResult> ForkAsync(SessionRequest request, CancellationToken cancellationToken)
+    {
+        var runtime = await RuntimeAsync().ConfigureAwait(false);
+        CheckWorkspace(runtime, request);
+        var source = Required(request.SessionId);
+        if (runtime.Log.GetHead(source) == 0)
+            throw new AcpException(AcpErrors.ResourceNotFound, $"There is no session '{source}' in Corvid's log.");
+        long? through = null;
+        if (request.Meta is { ValueKind: JsonValueKind.Object } meta && meta.TryGetProperty("corvid", out var corvid))
+            through = Read(corvid, AcpJson.Default.CorvidMeta)?.ThroughSequence;
+        CorvidSession fork;
+        try
+        {
+            fork = await runtime.ForkSessionAsync(source, through, Surface, cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+        catch (SessionForkException exception)
+        {
+            throw new AcpException(AcpErrors.InvalidParams, exception.Message);
+        }
+        var state = Open(runtime, fork);
+        return Result(new NewSessionResponse(fork.Id), AcpJson.Default.NewSessionResponse, () => SendCommands(state.Session.Id));
+    }
+
+    private async Task<ListSessionsResponse> ListAsync(ListSessionsRequest request)
+    {
+        var runtime = await RuntimeAsync().ConfigureAwait(false);
+        var workspace = runtime.Builtin.Environment.Workspace;
+        if (request.Cwd is { Length: > 0 } cwd && !SameDirectory(cwd, workspace))
+            return new ListSessionsResponse([]);
+        var offset = request.Cursor is { } cursor ? int.TryParse(cursor, NumberStyles.None, CultureInfo.InvariantCulture, out var value) && value >= 0
+            ? value : throw new AcpException(AcpErrors.InvalidParams, "The cursor is not one this agent gave.") : 0;
+        // Conversations the user had (in the editor or the terminal), not scheduled runs or HTTP clients' sessions.
+        var sessions = runtime.Log.ListSessions()
+            .Where(id => id.StartsWith(Surface + "-", StringComparison.Ordinal) || id.StartsWith("cli-", StringComparison.Ordinal))
+            .Select(id => Describe(runtime, id, workspace))
+            .OfType<(SessionInfo Info, DateTimeOffset Updated)>()
+            .OrderByDescending(item => item.Updated)
+            .Select(item => item.Info)
+            .ToList();
+        var page = sessions.Skip(offset).Take(ListPage).ToArray();
+        return new ListSessionsResponse(page)
+        {
+            NextCursor = offset + page.Length < sessions.Count ? (offset + page.Length).ToString(CultureInfo.InvariantCulture) : null,
+        };
+    }
+
+    private EmptyResponse Close(SessionIdRequest request)
+    {
+        if (_sessions.TryRemove(request.SessionId, out var state))
+        {
+            state.Cancel();
+            state.Prompter?.Dispose();
+        }
+        return new EmptyResponse();
+    }
+
+    private async Task<PromptResponse> PromptAsync(PromptRequest request, CancellationToken cancellationToken)
+    {
+        var runtime = await RuntimeAsync().ConfigureAwait(false);
+        if (!_sessions.TryGetValue(request.SessionId, out var state))
+            throw new AcpException(AcpErrors.ResourceNotFound, $"Session '{request.SessionId}' is not open; create, load or resume it first.");
+        var text = PromptText(request.Prompt);
+        if (!state.TryBegin())
+            throw new AcpException(AcpErrors.InvalidRequest, "A prompt is already running in this session; cancel it or wait for its answer.");
+        try
+        {
+            if (SlashCommandRegistry.IsCommand(text))
+            {
+                var output = await _commands.ExecuteAsync(text, new SlashCommandContext(runtime, state.Session, _commands), cancellationToken)
+                    .ConfigureAwait(false);
+                _context.Update(state.Session.Id, new AgentMessageChunk(new TextContent(output.ToPlainText())));
+                return new PromptResponse(StopReasons.EndTurn);
+            }
+
+            var reporter = new TurnReporter(_context, state.Session, _context.Tools!, runtime.Log.GetHead(state.Session.Id));
+            state.Reporter = reporter;
+            Delivery delivery;
+            using (runtime.Feed.Subscribe(state.Session.Id, reporter))
+            // $/cancel_request on the prompt cancels the turn as session/cancel does; the answer still arrives.
+            using (cancellationToken.Register(state.Cancel))
+                delivery = await state.Session.SendAsync(text, _context.Connection.Closed).ConfigureAwait(false);
+            await reporter.DrainAsync().ConfigureAwait(false);
+            if (delivery.Error is { } error)
+                throw new AcpException(AcpErrors.InternalError, "The turn failed: " + error.Message);
+            var result = delivery.Result!;
+            // Streamed text is already in the editor; anything else (a fixed message, an answer not streamed) is sent now.
+            if (result.Text is { } answer && !string.Equals(answer.Trim(), reporter.Streamed.Trim(), StringComparison.Ordinal))
+                _context.Update(state.Session.Id, new AgentMessageChunk(new TextContent(answer)));
+            return new PromptResponse(result.Status switch
+            {
+                TurnStatus.Cancelled => StopReasons.Cancelled,
+                TurnStatus.StepBudgetExhausted => StopReasons.MaxTurnRequests,
+                _ => StopReasons.EndTurn,
+            });
+        }
+        finally
+        {
+            state.End();
+        }
+    }
+
+    private AcpSessionState Open(CorvidRuntime runtime, CorvidSession session)
+    {
+        var state = _sessions.GetOrAdd(session.Id, _ => new AcpSessionState(session));
+        state.Prompter ??= runtime.AttachPrompter(session.Id, new PermissionPrompter(_context, state));
+        return state;
+    }
+
+    private void SendCommands(string sessionId) =>
+        _context.Update(sessionId, new AvailableCommandsUpdate([.. _commands.Commands
+            // Leaving is the editor's business.
+            .Where(command => command.Name is not ("exit" or "quit"))
+            .Select(command => new AvailableCommand(command.Name, command.Summary)
+            {
+                Input = command.Usage.Contains(' ', StringComparison.Ordinal) ? new AvailableCommandInput(command.Usage) : null,
+            })]));
+
+    /// <summary>The conversation as it stands (compactions expanded, undone turns left out), as the client would have seen it.</summary>
+    private void Replay(CorvidRuntime runtime, string sessionId)
+    {
+        var snapshot = SessionProjection.Load(runtime.Log, sessionId, expandCompactions: true);
+        var results = snapshot.Transcript.Select(entry => entry.Content).OfType<ToolResult>()
+            .GroupBy(result => result.CallId, StringComparer.Ordinal).ToDictionary(group => group.Key, group => group.Last(), StringComparer.Ordinal);
+        foreach (var entry in snapshot.Transcript)
+        {
+            switch (entry.Content)
+            {
+                case UserMessage user:
+                    _context.Update(sessionId, new UserMessageChunk(new TextContent(user.Text)));
+                    break;
+                case AssistantMessage assistant:
+                    _context.Update(sessionId, new AgentMessageChunk(new TextContent(assistant.Text)));
+                    break;
+                case ToolCallIssued call:
+                    var failed = results.TryGetValue(call.CallId, out var outcome) && outcome.IsError;
+                    _context.Update(sessionId, new ToolCall(call.CallId, ToolPresentation.Title(call.ToolName, call.Arguments),
+                        _context.Tools?.Kind(call.ToolName) ?? ToolKinds.Other, failed ? ToolStatuses.Failed : ToolStatuses.Completed)
+                    {
+                        RawInput = call.Arguments,
+                        Locations = _context.Tools?.Locations(call.Arguments),
+                    });
+                    break;
+                case ToolResult result:
+                    _context.Update(sessionId, new ToolCallUpdate(result.CallId)
+                    {
+                        Status = result.IsError ? ToolStatuses.Failed : ToolStatuses.Completed,
+                        RawOutput = result.Result,
+                        Content = [new ContentToolCallContent(new TextContent(ToolPresentation.ResultText(result.Result)))],
+                    });
+                    break;
+            }
+        }
+    }
+
+    private static (SessionInfo Info, DateTimeOffset Updated)? Describe(CorvidRuntime runtime, string id, string workspace)
+    {
+        var head = runtime.Log.GetHead(id);
+        if (head == 0)
+            return null;
+        var last = runtime.Log.Read(id, head - 1, head, 1);
+        var title = runtime.Log.Read(id, 0, head, 32).Select(item => item.Payload).OfType<UserMessage>().FirstOrDefault()?.Text;
+        var updated = last.Count > 0 ? last[0].RecordedAt : DateTimeOffset.MinValue;
+        return (new SessionInfo(id, workspace)
+        {
+            Title = title is null ? null : (title.ReplaceLineEndings(" ") is var line && line.Length > 80 ? line[..79] + "…" : line),
+            UpdatedAt = updated.ToString("O", CultureInfo.InvariantCulture),
+        }, updated);
+    }
+
+    /// <summary>
+    /// The runtime's workspace is fixed when it starts: approvals, the sandbox and checkpoints protect that directory. A session
+    /// for another directory would run tools somewhere the user did not mean, so it is refused rather than redirected.
+    /// </summary>
+    private static void CheckWorkspace(CorvidRuntime runtime, SessionRequest request)
+    {
+        if (!Path.IsPathFullyQualified(request.Cwd))
+            throw new AcpException(AcpErrors.InvalidParams, $"cwd must be an absolute path, not '{request.Cwd}'.");
+        var workspace = runtime.Builtin.Environment.Workspace;
+        if (!SameDirectory(request.Cwd, workspace))
+            throw new AcpException(AcpErrors.InvalidParams, $"Corvid's workspace is {workspace}, not {request.Cwd}. Start `corvid acp` in " +
+                $"{request.Cwd}, or with --set Workspace={request.Cwd}.");
+    }
+
+    // Corvid connects only the MCP servers in its own configuration (C-018), under its sandbox and trust settings; a client's
+    // servers would be commands and tokens chosen outside that, so they are not used, and the editor's log says so.
+    private void NoteMcpServers(SessionRequest request)
+    {
+        if (request.McpServers is { Length: > 0 } servers)
+            _context.Log($"corvid acp: {servers.Length} MCP server(s) from the client are not connected; Corvid uses only the servers in Corvid:Mcp:Servers.");
+    }
+
+    private static bool SameDirectory(string path, string workspace)
+    {
+        try
+        {
+            return Directory.Exists(path) && new Workspace(path).Root == new Workspace(workspace).Root;
+        }
+        catch (Exception exception) when (exception is IOException or ArgumentException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>The prompt as one message: text as written, resource links as Markdown links. Other blocks were not offered.</summary>
+    internal static string PromptText(JsonElement[] blocks)
+    {
+        var text = new StringBuilder();
+        foreach (var block in blocks)
+        {
+            var type = block.ValueKind == JsonValueKind.Object && block.TryGetProperty("type", out var kind) && kind.ValueKind == JsonValueKind.String
+                ? kind.GetString() : null;
+            var piece = type switch
+            {
+                "text" when String(block, "text") is { } value => value,
+                "resource_link" when String(block, "uri") is { } uri => $"[{String(block, "name") ?? uri}]({uri})",
+                _ => throw new AcpException(AcpErrors.InvalidParams,
+                    $"Corvid accepts text and resource links in a prompt, not '{type ?? "an unknown block"}'."),
+            };
+            if (text.Length > 0)
+                text.Append('\n');
+            text.Append(piece);
+        }
+        if (string.IsNullOrWhiteSpace(text.ToString()))
+            throw new AcpException(AcpErrors.InvalidParams, "The prompt is empty.");
+        return text.ToString();
+    }
+
+    private static string? String(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+
+    private static string Required(string? sessionId) =>
+        !string.IsNullOrWhiteSpace(sessionId) ? sessionId : throw new AcpException(AcpErrors.InvalidParams, "sessionId is required.");
+
+    private static T Read<T>(JsonElement parameters, JsonTypeInfo<T> type)
+    {
+        if (parameters.ValueKind != JsonValueKind.Object)
+            throw new AcpException(AcpErrors.InvalidParams, "params must be an object.");
+        try
+        {
+            return parameters.Deserialize(type) ?? throw new AcpException(AcpErrors.InvalidParams, "params must be an object.");
+        }
+        catch (JsonException exception)
+        {
+            throw new AcpException(AcpErrors.InvalidParams, "Invalid params: " + exception.Message);
+        }
+    }
+
+    private static JsonRpcResult Result<T>(T value, JsonTypeInfo<T> type, Action? after = null) =>
+        new(JsonSerializer.SerializeToElement(value, type), after);
+
+    private static string Version() =>
+        typeof(AcpServer).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0";
+}
