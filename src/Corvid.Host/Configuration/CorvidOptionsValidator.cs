@@ -153,6 +153,9 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue, IEnumerable
                 // guest's job would read for the guest what the guest's own turn may not.
                 else if (tool == "cron_create")
                     errors.Add($"{key}:GuestTools: 'cron_create' cannot be a guest tool: a scheduled job runs with every tool and reports to the chat.");
+                // The owner's memory and its review queue are not a guest's to write (the turn loop never offers them either).
+                else if (tool is "memory_add" or "memory_approve" or "memory_reject")
+                    errors.Add($"{key}:GuestTools: '{tool}' cannot be a guest tool: a guest does not write the owner's memory or answer its review queue.");
                 else if (Composition.CorvidGateway.McpServerOf(tool) is { } server && !servers.Contains(server))
                     errors.Add($"{key}:GuestTools: '{tool}' names MCP server '{server}', which is not configured under Corvid:Mcp:Servers.");
             }
