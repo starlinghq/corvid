@@ -10,7 +10,14 @@ that cost? Upstream ask U-2 (§19) depends on the answer.
 
 ## Result
 
-**Feasible on the version Starling already pins. Fail as written on latency.** The condition names no percentile, so it is read as holding at the tail as well as the median. The p90 adds 15.5–20.5%; the median alone would pass (+6–8.5%).
+**Feasible on the version Starling already pins. Latency is not a clean pass: the verdict depends on which statistic
+the condition means, and it names none.** The typical request is 6.0% (all 12 tools) and 8.5% (5-tool shortlist)
+slower, and aggregate time over the 100 cases is up 6.1% and 4.5%: both under 10%. The slowest tenth of requests
+is slowed more: the p90 of per-case guided/free ratios is +15.5% and +20.5% (+13.5% and +16.0% on cases where both
+runs wrote the same number of tokens), over 10%. The tail of the latency distribution itself does not move: p90
+total time is +1.7% and −3.2%. Read as "9 requests in 10 within 10%", S5 fails; read as the paired median, summed
+time or tail latency, it passes (the unpaired median on the shortlist, a noisier estimate, is +11.0%). This write-up
+does not pick one; the plan should say which statistic it meant.
 
 - **Feasible, no upgrade.** ONNX Runtime GenAI 0.17.1, the version Starling pins exactly, has a public
   `GeneratorParams.SetGuidance(type, data, enableFFTokens)`. llguidance is compiled into both linux-x64 natives, CPU
@@ -23,16 +30,22 @@ that cost? Upstream ask U-2 (§19) depends on the answer.
   model **refusing to call** a tool that is right there. On the 5-tool shortlist the unconstrained model answered in
   prose 15 times in 100. With the grammar (tool choice "required") it did so 0 times, and the right tool rose from 83
   to 95.
-- **Latency: passes at p50, fails at p90.** Time to first token is unchanged, so grammar compilation is not visible
-  even when the grammar changes every turn. Decode is 7–8% slower at the median, about 2 ms more per token. Total request time is +6% (all 12 tools) and +8.5% (5-tool shortlist) at the median of paired per-case
-  ratios, and +15.5% and +20.5% at p90. An A/A control of the same cases without the grammar puts run-to-run noise at
-  0% for the median and 3.2–3.7% for p90, so the tail cost is real.
+- **Latency: under 10% at the median, over 10% at the p90 of per-case ratios.** Time to first token is unchanged,
+  so grammar compilation is not visible even when the grammar changes every turn. Decode is 7–8% slower at the
+  median, about 2 ms more per token. Total request time is +6% (all 12 tools) and +8.5% (5-tool shortlist) at the
+  median of paired per-case ratios, and +15.5% and +20.5% at the p90 of those ratios. An A/A control of the same
+  cases without the grammar puts the noise in that statistic at 0% for the median and 3.2–3.7% for p90, so the
+  per-request spread is real. Part of the shortlist's spread is the grammar changing the answer, not a slower
+  step: six of its ten largest ratios (1.2–2.3) are prose no-calls that became longer calls. On cases with equal
+  token counts the p90 is still +13.5% and +16.0%. The distribution's own p90 total time is unchanged (+1.7% and
+  −3.2%).
 
 **Recommendation.** Keep U-2 and make it concrete: no GenAI upgrade, a guidance option on Starling's generation
 options, the two tokenizer files in the GenAI bundle, and a Qwen tool-grammar builder (see
 [the U-2 ask](#the-u-2-ask)). In Corvid, use the grammar where a call is known to be wanted (the fabric's `tool` pick
-and §7 step 6's "require that tool" re-prompt), not on every turn. Keep validation and repair (§7 steps 3–5). The
-latency condition needs the fast-forward follow-up below before the grammar can go on every turn.
+and §7 step 6's "require that tool" re-prompt), not on every turn. Keep validation and repair (§7 steps 3–5). If
+the plan means the latency condition per request, the fast-forward follow-up below is needed before the grammar
+can go on every turn.
 
 ## Phase 1: what the pinned version exposes
 
@@ -106,7 +119,7 @@ Branch: <https://github.com/starlinghq/starling/tree/spike/s5-llguidance> (pushe
   `</parameter>`. A `json_schema` guidance would make the model emit JSON, which the parser returns as text, so §7's
   "`{name: const, arguments: schema}` union" has to be written in the template's XML form.
 
-**Spike tool (commit `7f626ca`).** `ai-dotnet/tools/Starlings.Qwen35.GuidanceSpike` (not in `AI.slnx`, built with
+**Spike tool (commit `7f626ca`; `638506b` fixes the summary's labelled-argument column).** `ai-dotnet/tools/Starlings.Qwen35.GuidanceSpike` (not in `AI.slnx`, built with
 `-p:UseCuda=true`) holds the fixtures, the runner, `summarize.py` and the raw runs in `results/`.
 
 **Packaging gap found on the first run.** With the published `ortgenai-fp32x` directory, creating a guided generator
@@ -131,8 +144,10 @@ applied through Starling's `GenerateNextToken` path. The Lark grammar on "What's
 ## Measurement
 
 **Set.** No S2 golden set exists yet (the only Corvid spike branch is `spike/s1-kev-latency`), so S5 has its own: 12
-personal-assistant tools and 100 single-turn prompts, each labelled with the expected tool and, for 80 of them, the
-key arguments. The tools have deliberate near-duplicates (`search_notes`, `search_files` and `web_search`;
+personal-assistant tools and 100 single-turn prompts, each labelled with the expected tool and, for 73 of them, the
+key arguments. The tools are `create_reminder`, `list_reminders`, `delete_reminder`, `create_note`, `search_notes`,
+`read_file`, `write_file`, `search_files`, `web_search`, `send_message`, `get_weather` and `set_timer`; each is the
+expected tool for 6 to 12 prompts. The tools have deliberate near-duplicates (`search_notes`, `search_files` and `web_search`;
 `create_note` and `create_reminder`), an integer id, an enum channel and an enum unit. 48 prompts are written to tempt
 an invented name ("Text Bob", "Email Alice", "Google ...", "Cat the contents of ...", "Start a 25 minute pomodoro").
 The set is in the tool's `fixtures/` and was committed before any run.
@@ -149,23 +164,33 @@ The set is in the tool's `fixtures/` and was committed before any run.
 **Scoring.** An *invalid name* is a parsed call, or a well-formed `<function=X>` block, naming a tool that was not
 offered. *Malformed* is a block naming an offered tool that the parser cannot read. *Args valid* means required
 parameters are present, no undeclared parameters appear, and every value has its declared type and enum. *Args
-match* means every labelled argument is equal (strings compared ignoring case and surrounding whitespace).
-*Latency* is TTFT (call to first token), total, and decode tok/s ((tokens − 1) / (total − TTFT)). Guided against free
-is compared as a per-case ratio, because the two can produce different lengths.
+match* means every labelled argument is equal (strings compared ignoring case and surrounding whitespace); it is
+counted over correct calls on the 73 labelled cases.
+*Latency* is TTFT (call to first token), total, and decode tok/s ((tokens − 1) / (total − TTFT)). The clock starts
+before the generator is created, so `SetGuidance` and llguidance's grammar compile fall inside TTFT, as they would in
+production; building the grammar text (at most 1.7 ms) is outside it. Guided against free is compared as a per-case
+ratio, which cancels prompt-to-prompt differences; it does not cancel a difference in output length, so the ratio is
+also reported on cases where both runs wrote the same number of tokens, and the unpaired distributions are given too.
+
+**Fairness.** One process loads the model once from the scratch directory, so free and guided use the same files.
+Both are greedy with thinking off. The order within a case is fixed (free before guided); the A/A run repeats free in
+the guided slot and its paired median is 1.000, so position in the sequence adds nothing measurable. One free and one
+guided generation on a prompt outside the set warm up the process and are not recorded.
 
 **Environment.** RTX 3090 (pinned by UUID under the shared GPU lock), CUDA provider, `ortgenai-fp32x`,
 Microsoft.ML.OnnxRuntimeGenAI.Cuda 0.17.1, CUDA 13 and cuDNN 9 libraries. Two chunks of 50 cases (4 min 17 s and
 5 min 15 s), then a 100-case A/A run (8 min 52 s) in which each guided condition is replaced by a repeat of its free
-one.
+one. A review rerun of the first 25 cases (same build, same model directory) reproduced all 100 generated texts and
+outcomes exactly; its paired total ratios on those cases were within 0.025 of the original at p50 and 0.006 at p90.
 
 ### Outcomes
 
 | Condition | Correct tool | Wrong tool | Invalid name | Malformed | No call | Args valid | Labelled args match |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| free-all | 88 | 8 | **0** | 1 | 3 | 96/96 | 85/88 |
-| guided-all | 91 | 8 | **0** | 1 | 0 | 99/99 | 89/91 |
-| free-subset | 83 | 2 | **0** | 0 | 15 | 85/85 | 79/83 |
-| guided-subset | **95** | 5 | **0** | 0 | **0** | 100/100 | 92/95 |
+| free-all | 88 | 8 | **0** | 1 | 3 | 96/96 | 63/66 |
+| guided-all | 91 | 8 | **0** | 1 | 0 | 99/99 | 65/67 |
+| free-subset | 83 | 2 | **0** | 0 | 15 | 85/85 | 60/64 |
+| guided-subset | **95** | 5 | **0** | 0 | **0** | 100/100 | 67/70 |
 
 - The unconstrained model never invented a name and never wrote an undeclared parameter or an out-of-enum value. Its
   failures were prose instead of a call ("I can't send messages directly, but I can help you with that...",
@@ -193,21 +218,40 @@ Medians and p90s over 100 cases (ms; tok/s):
 
 Paired per-case ratios, guided / free (and the A/A control, free repeat / free):
 
-| Pair | TTFT p50 | TTFT p90 | Total p50 | Total p90 | Total p50, equal token count | Decode tok/s p50 |
+| Pair | TTFT p50 | TTFT p90 | Total p50 | Total p90 | Total p50 / p90, equal token count | Decode tok/s p50 |
 | --- | --- | --- | --- | --- | --- | --- |
-| guided-all / free-all | 0.983 | 1.069 | **1.060** | **1.155** | 1.053 (n = 59) | 0.930 |
-| guided-subset / free-subset | 0.976 | 1.069 | **1.085** | **1.205** | 1.080 (n = 35) | 0.916 |
-| A/A all | 1.003 | 1.097 | 1.000 | 1.032 | 1.000 (n = 100) | 1.002 |
-| A/A subset | 0.998 | 1.098 | 1.000 | 1.037 | 1.000 (n = 100) | 0.999 |
+| guided-all / free-all | 0.983 | 1.069 | **1.060** | **1.155** | 1.053 / 1.135 (n = 59) | 0.930 |
+| guided-subset / free-subset | 0.976 | 1.069 | **1.085** | **1.205** | 1.080 / 1.160 (n = 35) | 0.916 |
+| A/A all | 1.003 | 1.097 | 1.000 | 1.032 | 1.000 / 1.032 (n = 100) | 1.002 |
+| A/A subset | 0.998 | 1.098 | 1.000 | 1.037 | 1.000 / 1.037 (n = 100) | 0.999 |
+
+The same runs summarized without pairing, guided / free (A/A: repeat / free):
+
+| Pair | Ratio of total p50s | Ratio of total p90s | Ratio of summed total time |
+| --- | --- | --- | --- |
+| guided-all / free-all | 1.069 | 1.017 | 1.061 |
+| guided-subset / free-subset | 1.110 | 0.968 | 1.045 |
+| A/A all | 0.996 | 1.017 | 0.998 |
+| A/A subset | 1.006 | 1.048 | 0.990 |
 
 - **TTFT is unchanged** (ratios within A/A noise), including guided-subset, whose grammar changes every case. Compiling
   a 5-tool or 12-tool grammar does not show up in time to first token.
 - **The cost is per decoded token**: about 2.4 ms per token with 12 tools (25.9 → 28.3 ms) and 1.9 ms with 5 (19.3 →
   21.3 ms). llguidance is a CPU library inside the native, so the mask is most likely computed on the CPU (inferred, not profiled); if so, the relative cost grows as the GPU step gets faster. On a model or
   device that decodes faster than about 40 tok/s, expect more than 8%.
-- Against "no added latency over 10%", the median passes (+6.0% and +8.5%), and so does the median on cases where both
-  runs produced the same number of tokens (+5.3% and +8.0%). The p90 fails (+15.5% and +20.5%, against an A/A p90 of
-  +3.2% and +3.7%).
+- Against "no added latency over 10%", two readings are both defensible:
+  - **Per request** (the paired ratios): the median passes (+6.0% and +8.5%; +5.3% and +8.0% on equal-length
+    outputs), the p90 fails (+15.5% and +20.5%; +13.5% and +16.0% on equal-length outputs), against an A/A p90 of
+    +3.2% and +3.7%. On the shortlist, six of the ten largest ratios (cases 25, 4, 70, 60, 68 and 73, 1.21–2.26) are prose
+    no-calls of 23–49 tokens that the grammar turned into calls of 33–56 tokens: a longer, different answer, not
+    mask cost. The equal-length p90 excludes those and still exceeds 10%, on 59 and 35 cases. On equal-length
+    pairs the added decode time is 1.9 and 1.8 ms per token at the median and 4.5 and 3.8 ms at p90, so the
+    per-token cost varies by case.
+  - **Over the distribution**: median total time is +6.9% and +11.0% (unpaired medians, which mix different cases
+    and are noisier than the paired ratio), p90 total time is +1.7% and −3.2%, and summed time over the 100 cases
+    is +6.1% and +4.5%. The A/A ratio of p90s is +1.7% and +4.8%, so the p90 shift is within noise.
+  The condition does not say which it means, so S5 is recorded as failing the per-request p90 reading and passing
+  on summed time and on the p90 of the distribution.
 - Fast-forward tokens (`enableFFTokens: true`) would emit the grammar's forced runs, such as `<parameter=channel>\n`
   and `</function>\n</tool_call>`, without a model step each, which should recover part of the cost. That needs
   Starling's decode loop to accept several tokens per step. It was not measured.
@@ -237,7 +281,7 @@ on `spike/s5-llguidance` against `Microsoft.ML.OnnxRuntimeGenAI` 0.17.1:
 3. A tool-grammar builder in `Starlings.Models.Qwen35` (Required and Auto) for the template's format, with value-length
    bounds, and `ChatToolMode.RequireSpecific`/`RequireAny` in the Extensions.AI adapter mapped to it. `ResponseFormat`
    JSON Schema maps to `json_schema`.
-4. Fast-forward tokens supported in the decode loop, measured against the 10% budget at p90.
+4. Fast-forward tokens supported in the decode loop, measured against the 10% budget at the p90 of per-request ratios.
 
 ## Reproduce
 
