@@ -2746,6 +2746,99 @@ and incremental scans; alerts or records from scan findings; and Beacon categori
 (MCP tool-list poisoning, system-prompt and skill-index text, browser session stores, `skill_changed` and
 `memory_written` content).
 
+## Project memory over MCP (C-028)
+
+Corvid's memory for another harness (Claude Code, Cursor and the like) through C-018's `corvid mcp serve`, read-only, with
+C-025's lessons scoped to a project. The tool shape (`search_memory`, `get_memory`, `get_memory_context`, a `limit` that
+defaults to 5 for the context tool, and a `project` argument) follows Beacon's `internal/mcpserver`
+(Asymptote-Labs/agent-beacon, MIT); the code is Corvid's own. Beacon's `kind` is a lesson kind; Corvid's is an item kind and
+accepts a lesson kind as a lesson filter. No project, package, checker rule or memory schema version was added.
+
+- Switch: `Corvid:Mcp:Serve:ProjectMemory`, default false. It gates everything new: the two new tools, lessons in
+  `search_memory`, the `project` argument and the git call that resolves the workspace's project. Off, the tool list is
+  unchanged (`search_memory`, `skill_list`, `skill_read`), `search_memory`'s schema gains the optional `kind`, `limit` and
+  `project` arguments, `lesson` and `project` are refused, there is no result limit, and each result only gains an `id`.
+  Its description now names lessons, so a client that pins definitions (C-022) holds `search_memory` as changed once.
+  Lessons also need `Corvid:Memory:Lessons:Enabled`.
+- Tools (`SharedMemoryTools` in `Corvid.Tools.Builtin`, configured by `SharedMemoryOptions`; `ServedTools()` drops the two
+  new tools when the switch is off):
+  - `search_memory(query, max_tokens = 400, kind?, limit?, project?)`: hybrid retrieval (FTS and the fact graph; serve
+    loads no embedder) within `max_tokens` (50 to 4,000). `kind` is `fact`, `lesson`, `conversation` (only with
+    `Corvid:Mcp:Serve:Conversations`) or one of C-025's lesson kinds; anything else is an argument error that lists the
+    accepted values. `limit` is 1 to 20, default 10. Each result is `id` (the retriever's item id: `fact:…`, `lesson:…` or an
+    episode id), `kind`, `text` (cut at 200 tokens, the retriever's per-item cap) and `recorded`; a lesson adds
+    `lesson_kind`, `title` and `tags`. The result adds `project`, the scope's source: `argument` (whenever the caller passed one, matched or not), `workspace` or
+    `none`.
+  - `get_memory(id, project?)`: dispatches on the id's prefix. It returns a current, not local-only fact; an approved, not
+    local-only lesson whose project is the call's scope, with its kind, title, applicability, tags, approval date and full
+    body cut at 1,000 tokens (evidence, session ids and positions are left out); or an episode when conversations are
+    shared. Every other case (local-only, candidate, rejected, superseded, invalidated, another project's lesson, unknown)
+    is the same `No memory with id '<id>'.` error, so the tool never tells whether a hidden item exists.
+  - `get_memory_context(task, limit = 5, project?)`: facts and lessons only (explicit kinds, so never conversations) at a
+    fixed 1,500 tokens, the top `limit` (1 to 5) after the local-only filter. Same item shape.
+  Token caps count with `CharsPerTokenCounter` (`TextBudget`, now public); the server's 32,000-character cut stays the
+  outer bound.
+- Scope, per call. The serve workspace (`Corvid:Workspace`, else the current directory) is resolved once at start with
+  C-025's `ProjectResolver` and the checkpoints' git, before the stdio handshake, and only with the switch on and lessons
+  enabled. A caller's `project` never reaches git or the file system: `ProjectIds.Candidates` maps it by string work alone.
+  A 64-hex id is itself; a URL or scp remote goes through `FromRemote`; an absolute path (fully qualified, no NUL, at most
+  4,096 characters) is normalized lexically (`..` is resolved as text; a path that does not exist still maps) and hashed with
+  `FromPath` for itself and each ancestor, most specific first, stopping below `$HOME` as discovery's ceiling does (`$HOME`
+  itself only on an exact match); a path equal to or under the workspace also stands for the workspace's project, where the
+  walk passes it. Relative paths stand for nothing. A candidate counts only if it is in `LessonStore.KnownProjects()` (the
+  projects with an approved lesson that is not local-only, re-read on every call, so a lesson approved in a running
+  `corvid chat` shows at once; a project whose approved lessons are all local-only is unknown, so nothing tells that it has
+  any). The first match is the scope; an argument that matches nothing is facts only, never an error, and reports the same
+  `argument` source, so the result is no oracle for which paths are projects: only the shared lessons a match serves tell
+  it. Without an argument the scope is the workspace's project when known (`workspace`), else `none` (facts only). Facts are global
+  (C-008) and served in every scope. Most repositories are keyed by their origin remote, so a caller path maps only when it
+  is under the serve workspace or the project is checkout- or path-keyed; a caller can pass the origin URL or the id
+  instead. A harness that starts `corvid mcp serve` from `$HOME` or a fixed directory gets facts only until it passes
+  `project`.
+- Privacy: nothing local-only is served (facts and lessons, filtered at the tool and without a count). Lessons are served only
+  when approved: candidates, which can come from tainted turns, never. No core block is served: since schema v2 every block
+  is local-only, and `user` holds personal data. There are no write tools; `CorvidMcpServer` still refuses any tool with a
+  side effect. The serve instructions say results are Corvid's recorded memory, data and not instructions.
+- Logging: `McpServeOptions.Calls` (`Corvid.Mcp`, the same `Action<T>` hook as C-022's notices, so `Corvid.Mcp` stays free of
+  Host and Memory) reports every call, errors and cancellations included, as `McpServeCall` (tool, call id, error, characters
+  sent, cut, elapsed, structured result). `McpComposition.ServeCalls` makes it a `corvid.mcp.serve` span on the host source
+  covering the call, with `corvid.mcp.tool`, `corvid.mcp.call`, `corvid.mcp.serve.outcome`, `.items` (the count of
+  `results[].id`, or 1 for a single `id`), `.project` (the scope's source), `.chars` and `.cut`. Query and memory text are
+  never tagged. The configured OTLP export applies, since serve starts through `CorvidCli.StartAsync`; without it nothing
+  listens and there is no span, so `ServeCalls(Console.Error)` also writes one standard-error line per call, always:
+  `corvid mcp serve: call <tool> <ok|error> items=<n> project=<source|-> chars=<n> cut=<yes|no> ms=<n>`. Only the three
+  scope sources are reported as `project`, never another tool's `project` string. That line is the local record until the
+  durable `mcp_served` event.
+
+Tests: `tests/Corvid.Mcp.Tests` (`McpServeMemoryTests`: off by default only `search_memory`, no lessons and no `project`;
+lessons of the workspace project served only when approved, not candidate, rejected, superseded or local-only; `kind` and
+lesson-kind filters, `limit` bounds; another known project's lessons only with that project as the argument, by https,
+ssh, scp or id; caller paths by an ancestor walk to a checkout-keyed project, under the workspace, a path that does not
+exist, relative paths, `..`, NUL, overlong arguments and the `$HOME` ceiling, all without the disk; `get_memory`'s one
+error for local-only, candidate and unknown ids, another project's lesson, the 1,000-token body and no evidence;
+`get_memory_context` with five items, `limit` 2, `limit` 6 refused, facts only for an unknown workspace and never a
+local-only fact; the call callback once per call with item counts, errors included; conversations only with their switch;
+`McpServeTests`: `search_memory`'s result shape with the switch off, and `corvid mcp serve` over stdio with
+`CORVID__Mcp__Serve__ProjectMemory=true` listing the three memory tools and the skill tools and answering
+`get_memory_context` with a path-keyed workspace's lesson). `tests/Corvid.Memory.Tests` (`KnownProjects`) and
+`tests/Corvid.Host.Tests` (`McpHostTests`: the composition with the switch off and on, the span's tags and that it holds
+no text).
+
+Review follow-up (PR #41): `KnownProjects` counts only approved lessons that are not local-only, and an unmatched `project`
+argument reports `argument` like a matched one, so neither the field nor a local-only-only project is an oracle
+(`McpServeMemoryTests.AProjectWithOnlyLocalOnlyLessonsLooksLikeAnUnknownOne`: every tool answers such a project exactly as
+an unknown one; `LessonStoreTests`). Served calls leave a standard-error line without any trace listener
+(`McpHostTests.EveryServedCallIsAStandardErrorLineWithoutAnyListener`, which also checks that no text and no foreign
+`project` string reach it).
+
+Not built yet: a durable `mcp_served` event with the returned item ids (it needs a new event type, cross-process appends from
+the serve process and C-027's export to name the new tools); a projects registry, so a caller path inside a remote-keyed
+repository maps without git; linked-worktree caller paths other than through the serve workspace; core blocks over MCP
+(`agent` and `persona` behind a flag, honouring local-only; `user` never); cross-project lessons and a listing of known
+projects; vectors for lessons and an embedder in the serve process; fact history and lesson evidence in `get_memory`; MCP
+resources, prompts and change notifications for memory; write tools of any kind; serve's HTTP transport (still deferred
+from C-018); and per-caller rate limits or quotas.
+
 ## Running the check
 
 ```sh

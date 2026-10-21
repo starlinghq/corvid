@@ -64,7 +64,8 @@ internal static class FtsQuery
     }
 }
 
-internal static class TextBudget
+/// <summary>Cutting text to a token budget: recall's per-item cap, and the MCP memory tools' caps (C-028).</summary>
+public static class TextBudget
 {
     private const string Ellipsis = "…";
 

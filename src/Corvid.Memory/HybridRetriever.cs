@@ -127,7 +127,7 @@ public sealed class HybridRetriever
         ArgumentOutOfRangeException.ThrowIfNegative(request.TokenBudget);
         var kinds = request.Kinds ?? [MemoryItemKind.Episode, MemoryItemKind.Fact];
         bool wantEpisodes = kinds.Contains(MemoryItemKind.Episode), wantFacts = kinds.Contains(MemoryItemKind.Fact);
-        // Lessons need a project: a request without one (another surface, a guest, MCP) never sees any.
+        // Lessons need a project: a request without one (another surface, a guest, MCP without a known project) never sees any.
         var wantLessons = _lessons is not null && request.ProjectId is not null
             && (request.Kinds is null || kinds.Contains(MemoryItemKind.Lesson));
         var n = _options.Candidates;
