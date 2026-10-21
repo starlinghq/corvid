@@ -79,6 +79,7 @@ internal static class Samples
         new DeliveryQueued("d-2", "slack", "C1", "job done", "job", ThreadId: "1700000000.0001", Tainted: true),
         new DeliveryResolved("d-1", DeliveryStatus.Delivered, "8"),
         new DeliveryResolved("d-2", DeliveryStatus.Failed, Detail: "chat not found"),
+        new ProjectBound("0f0e0d0c0b0a09080706050403020100f0e0d0c0b0a090807060504030201000", "remote"),
     ];
 
     public static EventData[] Data(params SessionEvent[] events) => events.Select(EventData.Create).ToArray();

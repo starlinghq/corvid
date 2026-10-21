@@ -31,6 +31,7 @@ public sealed class EventJsonTests
         [typeof(SessionRewound)] = "session_rewound",
         [typeof(DeliveryQueued)] = "delivery_queued",
         [typeof(DeliveryResolved)] = "delivery_resolved",
+        [typeof(ProjectBound)] = "project_bound",
     };
 
     [Fact]
@@ -61,6 +62,14 @@ public sealed class EventJsonTests
         Assert.Equal(json, EventJson.Serialize(restored));
         using var document = JsonDocument.Parse(json);
         Assert.Equal(WireNames[value.GetType()], document.RootElement.GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public void Project_bound_has_its_documented_persisted_form()
+    {
+        var json = EventJson.Serialize(new ProjectBound("abc", "checkout"));
+        Assert.Equal("""{"type":"project_bound","project_id":"abc","source":"checkout"}""", json);
+        Assert.Equal(new ProjectBound("abc", "checkout"), EventJson.Deserialize(EventJson.Version, json));
     }
 
     [Fact]

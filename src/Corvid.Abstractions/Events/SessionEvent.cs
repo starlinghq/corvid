@@ -25,6 +25,7 @@ namespace Corvid.Abstractions.Events;
 [JsonDerivedType(typeof(SessionRewound), "session_rewound")]
 [JsonDerivedType(typeof(DeliveryQueued), "delivery_queued")]
 [JsonDerivedType(typeof(DeliveryResolved), "delivery_resolved")]
+[JsonDerivedType(typeof(ProjectBound), "project_bound")]
 public abstract record SessionEvent;
 
 // Text is the initial message surface. Provider-specific message objects are never stored here.
@@ -123,3 +124,8 @@ public static class DeliveryStatus
     public const string Delivered = "delivered";
     public const string Failed = "failed";
 }
+
+// C-025: the project a session works in, so its lessons are recalled and filed under it. ProjectId is the 64-character hex
+// hash of the normalized origin remote, main checkout path or workspace path; Source says which ("remote", "checkout",
+// "path"). Appended before a turn's user message when the session has no project yet or a different one.
+public sealed record ProjectBound(string ProjectId, string Source) : SessionEvent;
