@@ -408,6 +408,29 @@ internal sealed partial class ShellAnalyzer
             case "find":
                 Find(args, scope, extras, nesting, text);
                 return null;
+            // Launchers (Launchers.cs): tracers, namespaces and sandboxes, the service manager, shell strings.
+            case "strace":
+                return Strace(args, scope, extras, nesting, text);
+            case "ltrace":
+                return Ltrace(args, scope, extras, nesting, text);
+            case "valgrind":
+                return Valgrind(args, scope, extras, nesting, text);
+            case "perf":
+                return Perf(args, scope, extras, nesting, text);
+            case "nsenter":
+                return Nsenter(args, scope, extras, nesting, text);
+            case "unshare":
+                return Unshare(args, scope, extras, nesting, text);
+            case "firejail":
+                return Firejail(args, scope, extras, nesting, text);
+            case "bwrap":
+                return Bwrap(args, scope, extras, nesting, text);
+            case "systemd-run":
+                return SystemdRun(args, scope, extras, nesting, text);
+            case "script":
+                return ScriptCommand(args, scope, extras, nesting, text);
+            case "parallel":
+                return ParallelCommand(args, scope, extras, nesting, text);
         }
 
         if (Shells.Contains(verb))
