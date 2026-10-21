@@ -33,7 +33,8 @@ public sealed class EgressTurnTests : IDisposable
     private static ModelProfile Generator(PrivacyClass privacy, PromptCachingStyle caching) =>
         new("gen-" + privacy, 200_000, 100_000, ToolCallSupport.Native, StructuredOutputSupport.None, caching, ModelCost.Free, privacy, "remote");
 
-    private async Task<GeneratorCall> TurnAsync(PrivacyClass privacy, PromptCachingStyle caching, EnvelopeOrigin origin = EnvelopeOrigin.User)
+    private async Task<GeneratorCall> TurnAsync(PrivacyClass privacy, PromptCachingStyle caching, EnvelopeOrigin origin = EnvelopeOrigin.User,
+        GuestScope? guest = null)
     {
         var generator = new FakeGenerator(Reply.Say("Main Street.")) { YesNo = FakeGenerator.YesTo("remembered") };
         var embedder = new KeywordEmbedder(TurnHarness.Keywords);
@@ -49,7 +50,7 @@ public sealed class EgressTurnTests : IDisposable
             Retriever = new HybridRetriever(_memory.Episodes, _memory.Facts),
             CoreBlocks = _memory.Blocks.Snapshot(),
         };
-        await new TurnRunner(Session, services).RunAsync(new Envelope(Session, "cli", "where is my dentist", origin), Ct);
+        await new TurnRunner(Session, services).RunAsync(new Envelope(Session, "cli", "where is my dentist", origin) { Guest = guest }, Ct);
         return generator.Calls.Single();
     }
 
@@ -152,6 +153,19 @@ public sealed class EgressTurnTests : IDisposable
         var call = await TurnAsync(PrivacyClass.Cloud, PromptCachingStyle.Breakpoints, EnvelopeOrigin.External);
 
         Assert.True((bool)call.Options!.AdditionalProperties![ModelRequestKeys.Tainted]!);
+    }
+
+    [Fact]
+    public async Task A_guests_turn_sees_none_of_the_users_memory_neither_core_blocks_nor_recall()
+    {
+        Remember();
+
+        var call = await TurnAsync(PrivacyClass.Local, PromptCachingStyle.None, EnvelopeOrigin.External, GuestScope.None);
+
+        Assert.DoesNotContain("Leeds", call.AllText, StringComparison.Ordinal);
+        Assert.DoesNotContain("British spelling", call.AllText, StringComparison.Ordinal);
+        Assert.DoesNotContain("dentist is", call.AllText, StringComparison.Ordinal);
+        Assert.False(call.Options!.AdditionalProperties!.ContainsKey(ModelRequestKeys.LocalOnly));
     }
 
     [Fact]

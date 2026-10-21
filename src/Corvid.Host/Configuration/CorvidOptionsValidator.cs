@@ -89,7 +89,7 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue, IEnumerable
         // values in a server's environment, absolute paths, timeouts and limits).
         errors.AddRange(Composition.McpComposition.Definitions(options).Problems);
 
-        ValidateGateway(errors, options.Gateway);
+        ValidateGateway(errors, options.Gateway, options.Mcp.Servers.Keys);
 
         // The file tools and the shell are confined to it, so it must be there before anything runs.
         if (options.Workspace is { Length: > 0 } workspace && Path.IsPathFullyQualified(CorvidPaths.ExpandHome(workspace))
@@ -116,8 +116,9 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue, IEnumerable
     }
 
     // The gateway (C-020): token secrets are Vault names, never values, and chat overrides name real models and slots.
-    private void ValidateGateway(List<string> errors, GatewaySettings gateway)
+    private void ValidateGateway(List<string> errors, GatewaySettings gateway, IEnumerable<string> mcpServers)
     {
+        var servers = mcpServers.ToHashSet(StringComparer.Ordinal);
         if (gateway.ConnectTimeoutSeconds is < 1 or > 600)
             errors.Add("Corvid:Gateway:ConnectTimeoutSeconds must be between 1 and 600.");
         if (gateway.ApprovalTimeoutSeconds is < 1 or > 86_400)
@@ -141,6 +142,16 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue, IEnumerable
                 errors.Add($"{key}:PollSeconds must be between 1 and 300.");
             if (adapter.Owners.Concat(adapter.Guests).Concat(adapter.Channels).Any(string.IsNullOrWhiteSpace))
                 errors.Add($"{key}: user and channel ids cannot be empty.");
+            // Guest tools (C-020) are an allowlist by exact name. Whether a built-in or DI tool exists is known only once the
+            // runtime has its registry, so the gateway checks that when it starts (CorvidGateway.UnknownGuestTools); here, the
+            // shape, and that an MCP tool names a configured server (its tools are listed only once it runs).
+            foreach (var tool in adapter.GuestTools)
+            {
+                if (string.IsNullOrWhiteSpace(tool) || !tool.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-'))
+                    errors.Add($"{key}:GuestTools: '{tool}' is not a tool name (letters, digits, '_' and '-').");
+                else if (Composition.CorvidGateway.McpServerOf(tool) is { } server && !servers.Contains(server))
+                    errors.Add($"{key}:GuestTools: '{tool}' names MCP server '{server}', which is not configured under Corvid:Mcp:Servers.");
+            }
             foreach (var (chat, settings) in adapter.Chats)
             {
                 foreach (var (slot, model) in settings?.Slots ?? [])

@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using Corvid.Abstractions.Events;
+using Corvid.Abstractions.Sessions;
 using Corvid.Approvals;
 
 namespace Corvid.Gateway;
@@ -28,7 +29,8 @@ public sealed record AdapterStatus(string Name, AdapterState State, string? Deta
 /// Inbound: an unaddressed group message is dropped; an unpaired sender gets only the pairing flow (a code the owner approves
 /// on the machine), and nothing they write reaches a session or a model. A paired sender's message goes to the chat's own
 /// session (<see cref="GatewaySessions.For"/>): the owner's as the user's, anyone else's as outside content, which taints the
-/// session (§10.3). Slash commands from the shared registry, and <c>/approve</c> and <c>/deny</c> for an approval waiting
+/// session (§10.3) and whose turn is offered only the adapter's <see cref="AdapterOptions.GuestTools"/> (none by default) and
+/// none of the owner's skills or memory; the owner's own turns keep the whole toolset. Slash commands from the shared registry, and <c>/approve</c> and <c>/deny</c> for an approval waiting
 /// in that chat, are the owner's alone.
 /// </para>
 /// <para>
@@ -218,7 +220,10 @@ public sealed class GatewayHost : IAsyncDisposable
             return;
         }
 
-        var reply = await _agent.PostAsync(sessionId, text, role == SenderRole.Owner, cancellationToken).ConfigureAwait(false);
+        // Anyone but the owner gets the adapter's guest tools only (none by default): taint asks before network and sends, but
+        // would not stop a read-only file tool showing the owner's workspace to a guest.
+        var reply = await _agent.PostAsync(sessionId, text, role == SenderRole.Owner ? null : new GuestScope(adapter.GuestTools), cancellationToken)
+            .ConfigureAwait(false);
         Track(DeliverAsync(message, sessionId, adapter, reply));
     }
 

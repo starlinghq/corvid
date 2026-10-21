@@ -1941,6 +1941,20 @@ Unix socket and the real runtime over fake models: no network and no real tokens
   is posted as `EnvelopeOrigin.User`. A guest's is posted as `EnvelopeOrigin.External`, which taints the session (C-011)
   until the owner speaks. Messages are queued in order per adapter, and answers are awaited off the receive loop
   (`CorvidRuntime.PostAsync` returns once queued), so a long turn never holds up the next message.
+- Guest tools. Taint asks only before network reads and sends, so on its own it would let a guest's turn (a bot set to
+  `tainted: auto` so other people get answers) run `read_file`, `list_files` or `search_files` on the owner's workspace
+  and see the result. Anyone but the owner therefore posts with a `GuestScope` on the envelope (`Envelope.Guest`, posted by
+  `CorvidSession.PostAsGuestAsync`): an allowlist by exact tool name, `Corvid:Gateway:Adapters:<name>:GuestTools`, empty
+  by default. `TurnRunner` builds the turn's catalogue from it, so a tool not named is neither offered nor callable (a call
+  to it is refused as not offered), and an MCP tool (`server__tool`), a skill's tool or any tool registered later stays
+  out unless named. A guest's turn also gets none of the owner's own context: no skills (no shortlist, no body, no
+  distillation), no `needs_recall` and no core blocks in the system prompt. The owner's own turns are unchanged and keep
+  the whole toolset, including the turn right after a guest's in the same chat: as before, the owner's message clears
+  taint (C-011), and a guest's earlier text stays in the transcript as a fetched page would, with the injection and
+  approval checks that apply to any outside content. The validator refuses a guest tool that is not a tool name or names
+  an MCP server that is not configured, and `CorvidGateway.Create` refuses one that is in neither the runtime's registry
+  nor an MCP server's namespace (an MCP server's tools are listed only once it runs), so a typo is not silently a tool
+  nobody gets.
 - Pairing (`PairingStore`, `gateway.db`, its own SQLite file with WAL and full sync). A code is 8 characters from an
   unambiguous alphabet, shown `ABCD-EFGH`. It is bound to the adapter and sender, expires after an hour, and is repeated to
   that sender at most every 10 minutes. At most 10 codes wait per adapter; senders after that are ignored. Codes are
@@ -2017,7 +2031,7 @@ Unix socket and the real runtime over fake models: no network and no real tokens
   bot messages and subtypes do not. `chat.postMessage` takes `thread_ts`, and text is escaped (`&`, `<`, `>`) so model
   text cannot ping a channel or a person. Errors such as `channel_not_found` or `not_in_channel` are permanent.
 - Host and CLI. `Corvid:Gateway` (`Adapters` by name with `Enabled`, `Secret`, `AppSecret` for Slack, `Owners`, `Guests`,
-  `HomeChat`, `Chats`, `Channels` for Discord, `PollSeconds`; `ConnectTimeoutSeconds`; `ApprovalTimeoutSeconds`) is
+  `GuestTools`, `HomeChat`, `Chats`, `Channels` for Discord, `PollSeconds`; `ConnectTimeoutSeconds`; `ApprovalTimeoutSeconds`) is
   validated at start. Secrets must be Vault secret names, never tokens, and Slack needs both. `CorvidGateway.Create`
   composes the gateway over a running `CorvidRuntime`. Registrations in DI replace a built-in adapter of the same name,
   which is how tests and future adapters plug in. `AddCorvidGateway` adds `GatewayService`, the one hosted service: it
@@ -2025,7 +2039,7 @@ Unix socket and the real runtime over fake models: no network and no real tokens
   and runs until Ctrl-C. `status` lists the adapters, whether a gateway runs, waiting deliveries and pairings. `pair
   [list]`, `pair approve <code> --owner|--guest` and `pair revoke <adapter> <user>` manage pairing.
 - Tests: `tests/Corvid.Gateway.Tests` covers the host over a fake agent and fake adapters (pairing only for strangers,
-  unaddressed group messages, owner and guest taint, a chat's session opened again after a failed open, owner-only commands and approvals, an unanswered approval denied,
+  unaddressed group messages, owner and guest taint, a guest's tool scope from its adapter, a chat's session opened again after a failed open, owner-only commands and approvals, an unanswered approval denied,
   every `deliver` route, silent answers, redelivery after a crash-free restart exactly once, a delivery queued by
   another process, retries in order and permanent failures, a hanging connect and a hanging constructor isolated from
   the other adapter, reconnect after a receive failure, and one gateway per data directory), the ledger (only open
@@ -2033,9 +2047,12 @@ Unix socket and the real runtime over fake models: no network and no real tokens
   against a fake platform behind `FakeVault`. The adapter tests check the placeholder in the header or URL path, the
   toolset and taint flags, cursors, mentions, threads, refusal classification, Vault refusals, and no route without Vault.
   `tests/Corvid.Host.Tests` (`GatewayTests`) covers the real runtime over fake models: the chat's own session, a guest
-  tainting it until the owner speaks, the shared command registry, a side effect approved in the chat, a persona and
+  tainting it until the owner speaks, a guest offered no file tool while the owner's same request in the same chat lists
+  the files, an MCP-style tool kept from a guest who has other tools, an allowlisted tool working for a guest and the only
+  one offered, unknown guest tools refused at start, the shared command registry, a side effect approved in the chat, a persona and
   slot override for one chat only, a job's result reaching its chat (tainted when its run ended tainted), the hosted
-  service, and validation.
+  service, and validation. `tests/Corvid.Kernel.Tests` (`EgressTurnTests`) checks that a guest's turn sees no core
+  block and no recalled fact.
 
 Not built yet: Signal, email (IMAP/SMTP) and webhook adapters (§12); Discord's realtime Gateway and Slack's WebSocket
 through Vault (both wait on Vault's WebSocket first-frame substitution, `vault.md` §9); DMs on Discord from people not yet

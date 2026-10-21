@@ -254,7 +254,8 @@ public sealed class TurnRunner
 
             // Ingress: one request for every question this turn needs before the first generator call.
             var ingress = new List<KeyValuePair<string, DecisionQuestion>> { Ask("intent"), Ask("difficulty"), Ask("clarify") };
-            if (_services.Retriever is not null)
+            // A guest's turn (C-020) recalls none of the user's memory: what it retrieved would be read out to the guest.
+            if (_services.Retriever is not null && envelope.Guest is null)
                 ingress.Add(Ask("needs_recall"));
             if (!_shortlist.IsEmpty)
                 ingress.Add(ToolQuestion());
@@ -511,7 +512,7 @@ public sealed class TurnRunner
         private string SystemPrompt(ModelProfile profile, string note)
         {
             var prompt = _options.SystemPrompt;
-            if (_services.CoreBlocks is { } blocks && blocks.Render(includeLocalOnly: profile.Privacy != PrivacyClass.Cloud) is { Length: > 0 } core)
+            if (envelope.Guest is null && _services.CoreBlocks is { } blocks && blocks.Render(includeLocalOnly: profile.Privacy != PrivacyClass.Cloud) is { Length: > 0 } core)
                 prompt += "\n\n" + core;
             if (note.Length > 0)
                 prompt += "\n\n" + note;
@@ -521,7 +522,8 @@ public sealed class TurnRunner
         // Whether SystemPrompt and MemoryNote put local-only memory into this profile's prompt.
         private bool HoldsLocalOnly(ModelProfile profile) =>
             profile.Privacy != PrivacyClass.Cloud
-            && (_services.CoreBlocks?.Blocks.Any(block => !block.IsEmpty && block.LocalOnly) == true || _recalled.Any(item => item.LocalOnly));
+            && (envelope.Guest is null && _services.CoreBlocks?.Blocks.Any(block => !block.IsEmpty && block.LocalOnly) == true
+                || _recalled.Any(item => item.LocalOnly));
 
         // Fabric questions and memory writes reach the generator without the turn's options; the ambient context carries the
         // session and its taint to a cloud binding's gate and to Vault all the same.
@@ -1126,8 +1128,10 @@ public sealed class TurnRunner
 
         private async Task BuildShortlistAsync(CancellationToken cancellationToken)
         {
+            // A guest's turn (C-020) knows only the tools its scope names: they are never offered, and a call to any other is
+            // refused as not offered. By name, so a tool registered later (an MCP server's, a skill's) is out unless named.
             foreach (var function in _services.Tools.GetFunctions(_options.SecretNames))
-                if (function.GetService(typeof(ToolDescriptor)) is ToolDescriptor descriptor)
+                if (function.GetService(typeof(ToolDescriptor)) is ToolDescriptor descriptor && envelope.Guest?.Allows(function.Name) != false)
                     _catalogue[function.Name] = new Offered(function, descriptor);
             if (_catalogue.Count == 0 || !_services.Slots.TryCurrent(ModelSlots.TextEmbedder, out var binding)
                 || binding.Service is not IEmbeddingGenerator<string, Embedding<float>> embedder)
@@ -1153,7 +1157,8 @@ public sealed class TurnRunner
 
         private async Task BuildSkillShortlistAsync(CancellationToken cancellationToken)
         {
-            if (_services.Skills is not { } skills || _options.PinnedSkill is not null)
+            // The user's skills are theirs: a guest's turn is offered none (C-020).
+            if (_services.Skills is not { } skills || _options.PinnedSkill is not null || envelope.Guest is not null)
                 return;
             var available = skills.Available([.. _catalogue.Keys]);
             if (available.Count == 0)
@@ -1185,7 +1190,7 @@ public sealed class TurnRunner
         /// </summary>
         private async Task LoadSkillAsync(CheckpointResult verdicts, CancellationToken cancellationToken)
         {
-            if (_services.Skills is not { } skills)
+            if (_services.Skills is not { } skills || envelope.Guest is not null)
                 return;
             var picked = Acted(verdicts, "skill", out var pick) ? pick : null;
             var name = _options.PinnedSkill ?? (picked is not null && picked != None ? picked : null);
@@ -1260,7 +1265,7 @@ public sealed class TurnRunner
             // skill_opportunity acts only after three tool calls (its required condition), so a shorter turn is not asked:
             // in the degraded tier each ask is a generator call. A replay or eval turn is never distilled again.
             var opportunity = _services.SkillLearning is not null && status == TurnStatus.Answered && _toolCalls >= 3
-                && _options.PinnedSkill is null;
+                && _options.PinnedSkill is null && envelope.Guest is null;
             if (opportunity)
                 egress.Add(Ask("skill_opportunity"));
             if (egress.Count > 0)

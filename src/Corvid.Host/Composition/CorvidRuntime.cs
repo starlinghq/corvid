@@ -238,7 +238,7 @@ public sealed class CorvidRuntime : IAsyncDisposable
 
     internal async Task<Delivery> SendAsync(CorvidSession session, string text, EnvelopeOrigin origin, CancellationToken cancellationToken)
     {
-        var delivery = await PostAsync(session, text, origin, cancellationToken).ConfigureAwait(false);
+        var delivery = await PostAsync(session, text, origin, null, cancellationToken).ConfigureAwait(false);
         return await delivery.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -246,14 +246,15 @@ public sealed class CorvidRuntime : IAsyncDisposable
     /// Posts a message and returns once it is queued, with a task for its delivery, so a surface that receives faster than
     /// turns finish (the gateway) keeps each chat's order without waiting for answers.
     /// </summary>
-    internal async Task<Task<Delivery>> PostAsync(CorvidSession session, string text, EnvelopeOrigin origin, CancellationToken cancellationToken)
+    internal async Task<Task<Delivery>> PostAsync(CorvidSession session, string text, EnvelopeOrigin origin, GuestScope? guest,
+        CancellationToken cancellationToken)
     {
         var messageId = Guid.NewGuid().ToString("N");
         var waiter = new TaskCompletionSource<Delivery>(TaskCreationOptions.RunContinuationsAsynchronously);
         _waiting[messageId] = waiter;
         try
         {
-            await Sessions.PostAsync(new Envelope(session.Id, session.Surface, text, origin, messageId), cancellationToken).ConfigureAwait(false);
+            await Sessions.PostAsync(new Envelope(session.Id, session.Surface, text, origin, messageId) { Guest = guest }, cancellationToken).ConfigureAwait(false);
         }
         catch
         {
@@ -486,7 +487,17 @@ public sealed class CorvidSession
     /// marks it as someone else's (another gateway user's), which taints the session (plan §10.3).
     /// </summary>
     public Task<Task<Delivery>> PostAsync(string text, EnvelopeOrigin origin, CancellationToken cancellationToken = default) =>
-        _runtime.PostAsync(this, text, origin, cancellationToken);
+        _runtime.PostAsync(this, text, origin, null, cancellationToken);
+
+    /// <summary>
+    /// Queues a guest's message (C-020): outside content, whose turn is offered only the tools <paramref name="guest"/> names
+    /// and none of the user's skills or memory.
+    /// </summary>
+    public Task<Task<Delivery>> PostAsGuestAsync(string text, GuestScope guest, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(guest);
+        return _runtime.PostAsync(this, text, EnvelopeOrigin.External, guest, cancellationToken);
+    }
 
     /// <summary>Cancels the running turn (Ctrl-C, <c>/cancel</c>).</summary>
     public void Cancel() => Actor.CancelTurn();

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Corvid.Abstractions.Sessions;
 using Corvid.Approvals;
 
 namespace Corvid.Gateway;
@@ -19,6 +20,12 @@ public sealed record AdapterOptions(string Name)
 
     /// <summary>Platform user ids allowed to talk to the agent without pairing. Their messages are tainted (plan §10.3).</summary>
     public ImmutableHashSet<string> Guests { get; init; } = [];
+
+    /// <summary>
+    /// The tools a turn driven by anyone but the owner (a guest, a paired user) may use, by exact name; empty by default, so
+    /// guests get answers but no file, shell, web, memory, cron, MCP or skill tool, and none of the owner's skills or memory.
+    /// </summary>
+    public ImmutableHashSet<string> GuestTools { get; init; } = ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal);
 
     /// <summary>Where <c>deliver: home_channel</c> sends; without one, such answers are replies.</summary>
     public string? HomeChat { get; init; }
@@ -82,9 +89,10 @@ public interface IGatewayAgent
 
     /// <summary>
     /// Posts a message to the session. The outer task completes once it is queued (so callers keep a chat's order without
-    /// waiting for turns); the inner one with the answer. <paramref name="fromOwner"/> false makes it outside content.
+    /// waiting for turns); the inner one with the answer. <paramref name="guest"/> null is the owner's message, with the whole
+    /// toolset; otherwise it is outside content, and its turn is offered only the tools the scope names.
     /// </summary>
-    ValueTask<Task<AgentReply>> PostAsync(string sessionId, string text, bool fromOwner, CancellationToken cancellationToken);
+    ValueTask<Task<AgentReply>> PostAsync(string sessionId, string text, GuestScope? guest, CancellationToken cancellationToken);
 
     /// <summary>Whether a line is a slash command of the shared registry (a pasted path is not).</summary>
     bool IsCommand(string text);

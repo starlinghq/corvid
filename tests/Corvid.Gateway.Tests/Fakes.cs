@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using Corvid.Abstractions.Events;
+using Corvid.Abstractions.Sessions;
 using System.Threading.Channels;
 using Corvid.Approvals;
 using Corvid.Kernel.Events;
@@ -106,8 +107,13 @@ internal sealed class FakeAgent : IGatewayAgent
         return Task.CompletedTask;
     }
 
-    public ValueTask<Task<AgentReply>> PostAsync(string sessionId, string text, bool fromOwner, CancellationToken cancellationToken)
+    /// <summary>The guest scope each post carried, by its text; null for the owner's.</summary>
+    public ConcurrentDictionary<string, GuestScope?> Scopes { get; } = new(StringComparer.Ordinal);
+
+    public ValueTask<Task<AgentReply>> PostAsync(string sessionId, string text, GuestScope? guest, CancellationToken cancellationToken)
     {
+        var fromOwner = guest is null;
+        Scopes[text] = guest;
         Posts.Enqueue((sessionId, text, fromOwner));
         return ValueTask.FromResult(Task.FromResult(Answer(sessionId, text, fromOwner)));
     }
