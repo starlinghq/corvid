@@ -17,7 +17,7 @@
       "confidence": 0,
       "threshold": 0.7,
       "action": "proceed",
-      "catalogue_version": "2026-10-19.1",
+      "catalogue_version": "2026-10-21.1",
       "decider": "degraded",
       "state": {
         "user_message": "note: buy milk",
@@ -56,7 +56,7 @@
       "confidence": 1,
       "threshold": 3.5,
       "action": "stay_on_generator",
-      "catalogue_version": "2026-10-19.1",
+      "catalogue_version": "2026-10-21.1",
       "decider": "degraded",
       "state": {
         "user_message": "note: buy milk",
@@ -105,7 +105,7 @@
       "confidence": 0,
       "threshold": 0.05,
       "action": "generator_with_full_shortlist",
-      "catalogue_version": "2026-10-19.1",
+      "catalogue_version": "2026-10-21.1",
       "decider": "degraded",
       "state": {
         "user_message": "note: buy milk",
@@ -158,7 +158,7 @@
       "confidence": 0.9921543683808781,
       "threshold": 0.05,
       "action": "offer_tool:add_note",
-      "catalogue_version": "2026-10-19.1",
+      "catalogue_version": "2026-10-21.1",
       "decider": "degraded",
       "state": {
         "user_message": "note: buy milk",
@@ -261,7 +261,7 @@
       "confidence": 0,
       "threshold": 0.9,
       "action": "ask",
-      "catalogue_version": "2026-10-19.1",
+      "catalogue_version": "2026-10-21.1",
       "decider": "degraded",
       "state": {
         "user_message": "note: buy milk",
@@ -361,7 +361,7 @@
       "confidence": 1,
       "threshold": 0.8,
       "action": "continue",
-      "catalogue_version": "2026-10-19.1",
+      "catalogue_version": "2026-10-21.1",
       "decider": "degraded",
       "state": {
         "user_message": "note: buy milk",
@@ -400,7 +400,7 @@
       "confidence": 0,
       "threshold": 0.7,
       "action": "continue",
-      "catalogue_version": "2026-10-19.1",
+      "catalogue_version": "2026-10-21.1",
       "decider": "degraded",
       "state": {
         "user_message": "note: buy milk",
@@ -443,7 +443,7 @@
       "confidence": 0.9921543683808781,
       "threshold": 0.05,
       "action": "offer_tool:add_note",
-      "catalogue_version": "2026-10-19.1",
+      "catalogue_version": "2026-10-21.1",
       "decider": "degraded",
       "state": {
         "user_message": "note: buy milk",
@@ -610,7 +610,7 @@
               "confidence": 1,
               "threshold": 0.8,
               "action": "continue",
-              "catalogue_version": "2026-10-19.1",
+              "catalogue_version": "2026-10-21.1",
               "decider": "degraded",
               "state": {
                 "user_message": "note: buy milk",
@@ -652,7 +652,7 @@
               "confidence": 0,
               "threshold": 0.9,
               "action": "ask",
-              "catalogue_version": "2026-10-19.1",
+              "catalogue_version": "2026-10-21.1",
               "decider": "degraded",
               "state": {
                 "user_message": "note: buy milk",
@@ -729,7 +729,7 @@
               "confidence": 0,
               "threshold": 0.05,
               "action": "generator_with_full_shortlist",
-              "catalogue_version": "2026-10-19.1",
+              "catalogue_version": "2026-10-21.1",
               "decider": "degraded",
               "state": {
                 "user_message": "note: buy milk",
@@ -785,7 +785,7 @@
               "confidence": 0.9921543683808781,
               "threshold": 0.05,
               "action": "offer_tool:add_note",
-              "catalogue_version": "2026-10-19.1",
+              "catalogue_version": "2026-10-21.1",
               "decider": "degraded",
               "state": {
                 "user_message": "note: buy milk",
@@ -842,7 +842,7 @@
               "confidence": 0.9921543683808781,
               "threshold": 0.05,
               "action": "offer_tool:add_note",
-              "catalogue_version": "2026-10-19.1",
+              "catalogue_version": "2026-10-21.1",
               "decider": "degraded",
               "state": {
                 "user_message": "note: buy milk",
@@ -889,7 +889,7 @@
               "confidence": 0,
               "threshold": 0.7,
               "action": "proceed",
-              "catalogue_version": "2026-10-19.1",
+              "catalogue_version": "2026-10-21.1",
               "decider": "degraded",
               "state": {
                 "user_message": "note: buy milk",
@@ -925,7 +925,7 @@
               "confidence": 0,
               "threshold": 0.7,
               "action": "continue",
-              "catalogue_version": "2026-10-19.1",
+              "catalogue_version": "2026-10-21.1",
               "decider": "degraded",
               "state": {
                 "user_message": "note: buy milk",
@@ -972,7 +972,7 @@
               "confidence": 1,
               "threshold": 3.5,
               "action": "stay_on_generator",
-              "catalogue_version": "2026-10-19.1",
+              "catalogue_version": "2026-10-21.1",
               "decider": "degraded",
               "state": {
                 "user_message": "note: buy milk",

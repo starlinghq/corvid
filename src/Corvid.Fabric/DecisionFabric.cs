@@ -69,7 +69,10 @@ public sealed class DecisionFabric
     public string? EscalationDecider => _escalation?.Name;
 
     /// <param name="questions">By request key: a catalogue id, or an id with an instance suffix (<c>clear_results/call-7</c>).</param>
-    /// <param name="conditions">Facts some questions require before acting (<see cref="FabricConditions"/>).</param>
+    /// <param name="conditions">
+    /// Facts some questions require before acting (<see cref="FabricConditions"/>). A condition some catalogue question grants
+    /// (<see cref="CatalogueQuestion.Grants"/>) is ignored here: only its granter acting at this checkpoint makes it hold.
+    /// </param>
     public async Task<CheckpointResult> DecideAsync(string sessionId, Checkpoint checkpoint, TurnState state,
         IEnumerable<KeyValuePair<string, DecisionQuestion>> questions, IReadOnlySet<string>? conditions = null,
         CancellationToken cancellationToken = default)
@@ -109,12 +112,27 @@ public sealed class DecisionFabric
             deciders = deciders.SetItems(escalatedBy);
         }
 
+        // Granting questions are evaluated first (C-026): a granted condition holds for the rest of the checkpoint only when its
+        // granter acted, whatever the caller passed. Events are still written in key order.
+        var ordered = request.Questions.OrderBy(pair => pair.Key, StringComparer.Ordinal).ToArray();
+        var held = new HashSet<string>(conditions ?? ImmutableHashSet<string>.Empty, StringComparer.Ordinal);
+        held.ExceptWith(Policy.Catalogue.Granted);
+        var evaluated = new Dictionary<string, (DecisionAnswer? Answer, PolicyVerdict Verdict)>(StringComparer.Ordinal);
+        foreach (var grants in new[] { true, false })
+            foreach (var (key, question) in ordered.Where(pair => Policy.Catalogue.Resolve(pair.Key).Grants is not null == grants))
+            {
+                var answer = answers.TryGetValue(key, out var candidate) && Fits(candidate, question) ? candidate : null;
+                var verdict = Policy.Evaluate(key, answer, held);
+                evaluated[key] = (answer, verdict);
+                if (grants && verdict.Acted)
+                    held.Add(Policy.Catalogue.Resolve(key).Grants!);
+            }
+
         var verdicts = ImmutableDictionary.CreateBuilder<string, FabricVerdict>(StringComparer.Ordinal);
         var events = new List<EventData>();
-        foreach (var (key, question) in request.Questions.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        foreach (var (key, question) in ordered)
         {
-            var answer = answers.TryGetValue(key, out var candidate) && Fits(candidate, question) ? candidate : null;
-            var verdict = Policy.Evaluate(key, answer, conditions);
+            var (answer, verdict) = evaluated[key];
             var decisionId = Guid.NewGuid().ToString("N");
             var answeredBy = deciders.GetValueOrDefault(key, decider);
             verdicts[key] = new FabricVerdict(decisionId, answer, verdict, answeredBy);
