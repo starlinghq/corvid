@@ -14,7 +14,10 @@ public static class ProjectResolver
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
 
-    /// <param name="git">The git executable, or null when there is none (the workspace path is the key).</param>
+    /// <param name="git">
+    /// The git executable: a path, or a name looked up on <c>PATH</c> (the checkpoints' setting). Null, or one that is not
+    /// found, keys the workspace by its path.
+    /// </param>
     /// <param name="home">
     /// The user's home directory. A workspace below it does not discover a repository at it or above it
     /// (<c>GIT_CEILING_DIRECTORIES</c>), so a dotfiles repository at <c>$HOME</c> does not capture every workspace that is
@@ -25,6 +28,7 @@ public static class ProjectResolver
         ArgumentException.ThrowIfNullOrWhiteSpace(workspace);
         var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(workspace));
         var byPath = new ProjectIdentity(ProjectIds.FromPath(root), ProjectSources.Path);
+        git = git is null ? null : GitRunner.Resolve(git, Environment.GetEnvironmentVariable("PATH"));
         if (git is null || !Directory.Exists(root))
             return byPath;
         string? ceiling = null;

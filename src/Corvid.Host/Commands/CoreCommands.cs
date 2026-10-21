@@ -29,7 +29,9 @@ public static class CoreCommands
             .Add(new SlashCommand("status", "Slots with their device, queue depth and median latency; the session's state.", "", Status))
             .Add(new SlashCommand("goal", "Show, set or clear the standing goal.", "[text | clear]", Goal))
             .Add(new SlashCommand("approvals", "Pending approvals and the remembered approval rules.", "", Approvals))
-            .Add(new SlashCommand("memory", "Review staged memory writes.", "[pending] | approve <id> [operation] | reject <id>", MemoryAsync))
+            .Add(new SlashCommand("memory", "Review staged memory writes and this project's lessons.",
+                "[pending] | approve <id> [operation] | reject <id> | lessons [pending | approve <id> [supersedes <old>] | reject <id> [reason] | supersede <old> <new>]",
+                MemoryAsync))
             .Add(new SlashCommand("skills", "Saved skills: list, review drafts, history, import, evals.", SkillCommands.Usage, SkillCommands.RunAsync))
             .Add(new SlashCommand("tools", "The tools the model can be offered, with their risk.", "", Tools))
             .Add(new SlashCommand("mcp", "Configured MCP servers: state, trust and the tools each one added.", "", Mcp))
@@ -179,6 +181,7 @@ public static class CoreCommands
                 $"session {session.Id}: {snapshot.Head} events, {snapshot.PendingApprovals.Count} pending approval(s)" +
                 (session.Tainted ? ", tainted by outside content" : ""),
                 $"goal: {snapshot.Goal ?? "none"}",
+                $"project: {(runtime.Project is { } project ? $"{project.Id[..12]} ({project.Source})" : "none (lessons off)")}",
                 $"decider: {runtime.DeciderState}",
                 $"scheduler: {runtime.SchedulerState}",
                 $"skills: {(runtime.Skills.Store is { } skills ? $"{skills.Skills.Count} in {skills.Root}" : runtime.Skills.State)}" +
@@ -252,6 +255,9 @@ public static class CoreCommands
 
     private static async ValueTask<CommandOutput> MemoryAsync(SlashCommandContext context, SlashInvocation invocation, CancellationToken cancellationToken)
     {
+        // Lessons (C-025) need no extractor, so they are reviewed whether or not facts can be written.
+        if (invocation.Arguments is ["lessons", .. var lessonArguments])
+            return Lessons(context, [.. lessonArguments], cancellationToken);
         if (context.Runtime.Memory?.Writer is not { } writer)
             return CommandOutput.Warning(context.Runtime.Memory is null
                 ? "Memory is off (Corvid:Memory:Enabled)."
@@ -260,12 +266,15 @@ public static class CoreCommands
         {
             case [] or ["pending"]:
                 var pending = writer.ListPending();
+                var lessonCount = LessonCandidates(context.Runtime);
+                var lessonLine = lessonCount > 0 ? $"{lessonCount} lesson candidate(s): /memory lessons pending" : null;
                 if (pending.Count == 0)
-                    return CommandOutput.Text("Nothing is waiting for review.");
+                    return CommandOutput.Text(lessonLine is null ? "Nothing is waiting for review." : "No memory write is waiting for review. " + lessonLine + ".");
                 return new CommandOutput
                 {
                     Title = "Staged memory writes",
-                    Lines = ["Without a calibrated decider every write is staged here (plan §9.2). /memory approve <id> or /memory reject <id>."],
+                    Lines = ["Without a calibrated decider every write is staged here (plan §9.2). /memory approve <id> or /memory reject <id>.",
+                        .. lessonLine is null ? Array.Empty<string>() : [lessonLine]],
                     Table = CommandTable.Of(["id", "kind", "proposal", "why staged"], pending.Select(write => new[]
                     {
                         write.PendingId,
@@ -286,6 +295,86 @@ public static class CoreCommands
             default:
                 return CommandOutput.Error("Usage: /memory [pending] | approve <id> [operation] | reject <id>.");
         }
+    }
+
+    // ---- /memory lessons (C-025) ----
+
+    private const string LessonsUsage =
+        "Usage: /memory lessons [pending] | approve <id> [supersedes <old>] | reject <id> [reason] | supersede <old> <new>.";
+
+    private static int LessonCandidates(CorvidRuntime runtime) =>
+        runtime.Memory?.Lessons is { } lessons && runtime.Project is { } project ? lessons.Pending(project.Id).Count : 0;
+
+    private static CommandOutput Lessons(SlashCommandContext context, string[] arguments, CancellationToken cancellationToken)
+    {
+        if (context.Runtime.Memory?.Lessons is not { } lessons || context.Runtime.Project is not { } project)
+            return CommandOutput.Warning(context.Runtime.Memory is null
+                ? "Memory is off (Corvid:Memory:Enabled)."
+                : "Lessons are off (Corvid:Memory:Lessons:Enabled).");
+        try
+        {
+            switch (arguments)
+            {
+                case [] or ["pending"]:
+                    var pending = lessons.Pending(project.Id);
+                    var approved = lessons.Store.List(project.Id, LessonStates.Approved).Count;
+                    var summary = $"Project {project.Id[..12]} ({project.Source}): {approved} approved lesson(s).";
+                    if (pending.Count == 0)
+                        return CommandOutput.Text(summary + " No lesson is waiting for review.");
+                    return new CommandOutput
+                    {
+                        Title = "Lesson candidates",
+                        Lines = [summary, "Without a calibrated decider every lesson waits here. /memory lessons approve <id> or reject <id> [reason]."],
+                        Table = CommandTable.Of(["id", "kind", "lesson", "evidence", "why waiting"], pending.Select(lesson => new[]
+                        {
+                            ShortId(lesson.LessonId),
+                            lesson.Kind,
+                            $"{lesson.Title} — {lesson.Applicability}: {lesson.Body.ReplaceLineEndings(" / ")}",
+                            string.Join("; ", lesson.Evidence.Select(e => $"{e.SessionId} events {string.Join(',', e.Positions)}")),
+                            lesson.ReviewReason ?? "",
+                        })),
+                    };
+                case ["approve", var id]:
+                    return Approved(lessons.Approve(Find(lessons, project, id), cancellationToken: cancellationToken), null);
+                case ["approve", var id, "supersedes", var old]:
+                    var replaced = Find(lessons, project, old);
+                    return Approved(lessons.Approve(Find(lessons, project, id), replaced, cancellationToken), replaced);
+                case ["reject", var id, .. var reason]:
+                    var rejected = lessons.Reject(Find(lessons, project, id), reason.Length == 0 ? "rejected by the user" : string.Join(' ', reason),
+                        cancellationToken);
+                    return CommandOutput.Success($"Rejected {ShortId(rejected.LessonId)}: {rejected.Title}.");
+                case ["supersede", var old, var replacement]:
+                    var oldId = Find(lessons, project, old);
+                    var newId = Find(lessons, project, replacement);
+                    lessons.Supersede(oldId, newId, context.Session.Id);
+                    return CommandOutput.Success($"{ShortId(oldId)} is superseded by {ShortId(newId)}.");
+                default:
+                    return CommandOutput.Error(LessonsUsage);
+            }
+        }
+        catch (Exception exception) when (exception is KeyNotFoundException or InvalidOperationException)
+        {
+            return CommandOutput.Error(exception.Message);
+        }
+
+        static CommandOutput Approved(Lesson lesson, string? superseded) =>
+            CommandOutput.Success($"Approved {ShortId(lesson.LessonId)}: {lesson.Title}." + (superseded is null ? "" : $" It supersedes {ShortId(superseded)}."));
+    }
+
+    /// <summary>The first 12 hex characters after <c>lesson:</c>, which <see cref="Find"/> accepts back.</summary>
+    private static string ShortId(string lessonId) => lessonId.StartsWith("lesson:", StringComparison.Ordinal) ? lessonId[7..19] : lessonId;
+
+    /// <summary>A lesson of the current project by its full id or a unique prefix of its hash.</summary>
+    private static string Find(LessonWriter lessons, ProjectIdentity project, string id)
+    {
+        var prefix = id.StartsWith("lesson:", StringComparison.Ordinal) ? id : "lesson:" + id;
+        var matches = lessons.Store.List(project.Id).Where(lesson => lesson.LessonId.StartsWith(prefix, StringComparison.Ordinal)).ToList();
+        return matches.Count switch
+        {
+            1 => matches[0].LessonId,
+            0 => throw new KeyNotFoundException($"No lesson '{id}' in this project."),
+            _ => throw new InvalidOperationException($"'{id}' matches {matches.Count} lessons; give more of the id."),
+        };
     }
 
     // ---- /undo, /rollback (C-014) ----

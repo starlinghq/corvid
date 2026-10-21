@@ -175,8 +175,13 @@ public sealed class CorvidRuntimeFactory(
             // and DI tools keep their names. A sandboxed server is denied what the shell is denied.
             var mcp = McpComposition.Start(settings, McpDeniedPaths(vault, environment), toolRegistry);
 
+            // C-025: the workspace's project, once, with the checkpoints' git and the user's home as discovery's ceiling.
+            ProjectIdentity? project = memory?.Lessons is null ? null
+                : Kernel.Sessions.ProjectResolver.ResolveAsync(environment.Workspace,
+                    CorvidPaths.ExpandHome(settings.Checkpoints.GitPath), CorvidPaths.Home).GetAwaiter().GetResult();
+
             return new CorvidRuntime(settings, catalogue, composer, devices, metrics, feed, log, registry, fabric, approvals, prompters,
-                toolRegistry, memory, counter, builtin, checkpoints, skills, mcp) { UnavailableModels = [.. unavailable] };
+                toolRegistry, memory, counter, builtin, checkpoints, skills, mcp) { UnavailableModels = [.. unavailable], Project = project };
         }
         catch
         {
@@ -353,11 +358,21 @@ public sealed class CorvidRuntimeFactory(
         var blocks = new CoreBlockStore(database, counter);
         var episodes = new EpisodicIndex(database);
         var vectors = new MemoryVectors(database, new SqliteVectorIndex(database), composer.CreateMemoryEmbedders());
-        var retriever = new HybridRetriever(episodes, facts, vectors, counter);
+        // C-025: lessons need no extractor; they are gated on memory_op like facts and drafted on the background generator.
+        var lessonStore = settings.Memory.Lessons.Enabled ? new LessonStore(database) : null;
+        var retriever = new HybridRetriever(episodes, facts, vectors, counter, lessons: lessonStore);
         // The write path extracts entities first (plan §9.2), so it exists only with an extractor bound.
         var writer = registry.TryGet(ModelSlots.Extractor, out var extractor)
             ? new MemoryWriter(database, facts, blocks, retriever, extractor.Default.GetService<IExtractor>(), fabric, log, vectors)
             : null;
-        return new MemoryServices(database, blocks, episodes, vectors, retriever, writer);
+        var lessons = lessonStore is null ? null : new LessonWriter(lessonStore, fabric, log);
+        Kernel.Lessons.LessonLearner? learner = null;
+        if (lessons is not null)
+        {
+            var generator = composer.CreateBackgroundSlots().Get(ModelSlots.Generator).Default;
+            learner = new Kernel.Lessons.LessonLearner(lessons, log, (Microsoft.Extensions.AI.IChatClient)generator.Service,
+                new Kernel.Lessons.LessonLearnerOptions { Generator = generator.Profile.Id });
+        }
+        return new MemoryServices(database, blocks, episodes, vectors, retriever, writer) { Lessons = lessons, LessonLearner = learner };
     }
 }
