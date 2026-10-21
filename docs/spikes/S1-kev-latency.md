@@ -40,7 +40,9 @@ run 4, the review rerun at load 3–6):
 - A 6-question ingress (both shortlists: the two longest rows, 100–113 tokens) came in at **301.6 and 300.9 ms** in two
   separate processes at 600 tokens: on the line, formally a miss by 1–2 ms, and any machine load pushes it over. At
   300 tokens it is 212 ms. So the pass holds for every ingress `TurnRunner` asks only if the state stays nearer 300
-  than 600 tokens when both shortlists are present, or if the shortlists move to their own request.
+  than 600 tokens when both shortlists are present, or the shortlist rows get shorter. Moving the shortlists to a
+  request of their own does not help on the critical path: a second request pays the state pass again (a one-question
+  request is about 250 ms), so 4 + 2 questions in two requests is about 500 ms.
 - An 8-question ingress fails: 340–361 ms on the quiet machine, 412 ms and 1,088 ms on the loaded one.
 - Tail latency depends on load. On the quiet rerun the 600-token p90 is within 15–45 ms of the p50 (231–384 ms); in
   run 3, with load rising to 11 during the cells, p90 was 434–510 ms. Under load one ingress in ten takes 430 ms or
@@ -58,11 +60,11 @@ run 4, the review rerun at load 3–6):
 ### Decision it triggers
 
 1. **Place Kev-0.8B on the 3090** when one is present, keep the ingress state at 600 tokens or less, and keep a
-   checkpoint at four or five questions per request (split the `tool` and `skill` shortlists into their own request or
-   trim their descriptions when both are present). That needs a CUDA path in `KevDecider.Create`, which C-004b
-   deferred (it throws for any non-CPU provider; this spike bypassed it, see [Method](#method)). Six questions at
-   600 tokens are at 301 ms, so with both shortlists present either ask `tool` and `skill` in their own request or
-   keep that state nearer 300 tokens. Proposed as C-029.
+   checkpoint at four or five questions. That needs a CUDA path in `KevDecider.Create`, which C-004b deferred (it
+   throws for any non-CPU provider; this spike bypassed it, see [Method](#method)). Six questions at 600 tokens are at
+   301 ms, so with both shortlists present keep that state nearer 300 tokens (212 ms measured) or trim the shortlist
+   descriptions. Splitting `tool` and `skill` into a second request costs another state pass (about 250 ms) and only
+   helps if that request can run off the critical path. Proposed as C-029.
 2. **On CPU-only hosts, reduce checkpoints** to ingress + egress and drop `step` questions to two, as the plan's
    fallback says: no CPU cell came in under 1 s. Proposed as C-030, not implemented.
 3. **Kev-4B stays the gate escalation tier**, on the GPU only; on the CPU (about 15 s) it is not interactive.
