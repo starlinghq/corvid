@@ -2176,7 +2176,9 @@ short regexes only; no code was copied.
 - Regexes. `RegexOptions.NonBacktracking | CultureInvariant`, a 1 s match timeout (it bounds wall-clock time on a loaded machine: NonBacktracking is linear in the capped input), compiled and run once at load. A pattern
   NonBacktracking refuses (lookaround, backreference) fails the load. A timeout during evaluation, or a `derived.` field
   over 64 KiB, is a rule error, never a match or a no-match: scan reports it (exit 1); inline, an enforce rule that errors forces the prompt (fail closed) and a
-  detect rule records nothing.
+  detect rule records nothing. An over-long command anywhere in the inline window errors too, so while one is among the
+  last 512 events every call that fills a step of a correlation on `derived.command` asks (an extra prompt, bounded by the
+  window).
 - Derived fields, under `derived.`, are computed from the session's own earlier events and never read from the event:
   `derived.command` on `tool_call_issued` is the command line of a call to a shell tool (`ApprovalOptions.ShellTools`,
   `{shell: command}`); `tool_result` adds the call's `derived.tool_name` and `derived.command`; `approval_resolved` adds
