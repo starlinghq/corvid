@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Corvid.Abstractions.Events;
 using Corvid.Abstractions.Extraction;
 using Corvid.Models.Privacy;
@@ -367,6 +368,141 @@ public sealed class PrivacyEgressTests
         await client.GetResponseAsync([new(ChatRole.User, "Alice Smith")], Session("s1"), Ct);
 
         Assert.Equal("Alice Smith", Sent(provider.Calls[0]));
+    }
+
+    // Fictitious, in GitHub's classic token shape.
+    private const string GitHubToken = "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8";
+
+    private static readonly string PemBlock = "-----BEGIN RSA PRIVATE KEY-----\n" +
+        string.Join("\n", Enumerable.Range(0, 6).Select(i => $"MIIEowIBAAKCAQEA{i}bcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUV")) +
+        "\n-----END RSA PRIVATE KEY-----";
+
+    [Fact]
+    public async Task A_credential_value_is_redacted_under_a_send_policy_at_any_threshold_and_restored_in_the_response()
+    {
+        var provider = new ScriptedChatClient(_ => new ChatResponse(new ChatMessage(ChatRole.Assistant,
+        [
+            new TextContent("Cloning with <CREDENTIAL_1>."),
+            new FunctionCallContent("c2", "shell", new Dictionary<string, object?> { ["env"] = "GH_TOKEN=<CREDENTIAL_1>" }),
+        ])));
+        // The extractor finds nothing, and its threshold would drop anything it found: the detector does not depend on it.
+        var egress = Egress(new FakePiiExtractor(), EgressPolicy.Default with { Action = EgressAction.Send, Threshold = 0.99f });
+        var client = new PrivacyEgressChatClient(provider, Cloud, egress);
+
+        var response = await client.GetResponseAsync([new(ChatRole.User, $"Set GITHUB_TOKEN={GitHubToken} in CI.")], Session("s1"), Ct);
+
+        Assert.Equal("Set GITHUB_TOKEN=<CREDENTIAL_1> in CI.", Sent(provider.Calls[0]));
+        Assert.Equal($"Cloning with {GitHubToken}.", response.Text);
+        var call = response.Messages.SelectMany(message => message.Contents).OfType<FunctionCallContent>().Single();
+        Assert.Equal($"GH_TOKEN={GitHubToken}", call.Arguments!["env"]);
+
+        var decision = (await egress.PrepareAsync(Cloud, [new(ChatRole.User, $"token {GitHubToken}")], new ModelRequestContext("s2", false), Ct)).Decision;
+        Assert.Equal(EgressOutcome.Redacted, decision.Outcome);
+        Assert.Equal(EgressAction.Redact, decision.Action);
+        Assert.Contains("1 credential value", decision.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain(GitHubToken, decision.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_credential_value_under_a_refuse_policy_is_refused_and_the_reason_never_names_it()
+    {
+        var provider = new ScriptedChatClient(_ => throw new InvalidOperationException("must not be called"));
+        var client = new PrivacyEgressChatClient(provider, Cloud,
+            Egress(new FakePiiExtractor(), EgressPolicy.Default with { Action = EgressAction.Refuse, Labels = ["person"] }));
+
+        var refused = await Assert.ThrowsAsync<PrivacyEgressRefusedException>(() =>
+            client.GetResponseAsync([new(ChatRole.User, "The staging database password is hunter2-Staging!")], Session("s1"), Ct));
+
+        Assert.Contains("credential (1 credential value)", refused.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("hunter2", refused.Message, StringComparison.Ordinal);
+        Assert.Empty(provider.Calls);
+    }
+
+    [Fact]
+    public async Task A_gliner_credential_span_is_a_noun_and_does_not_raise_a_send_policy()
+    {
+        var provider = new ScriptedChatClient(_ => new ChatResponse(new ChatMessage(ChatRole.Assistant, "ok")));
+        var client = new PrivacyEgressChatClient(provider, Cloud,
+            Egress(new FakePiiExtractor(("credential", "API key")), EgressPolicy.Default with { Action = EgressAction.Send }));
+
+        await client.GetResponseAsync([new(ChatRole.User, "Where do I put the API key?")], Session("s1"), Ct);
+
+        Assert.Equal("Where do I put the API key?", Sent(provider.Calls[0]));
+    }
+
+    [Fact]
+    public async Task A_pem_block_across_a_chunk_boundary_is_redacted_whole()
+    {
+        var filler = string.Concat(Enumerable.Repeat("lorem ipsum dolor ", 12));
+        var text = filler + PemBlock + " " + filler;
+        var extractor = new FakePiiExtractor { MaxChars = 300 };
+        var provider = new ScriptedChatClient(_ => new ChatResponse(new ChatMessage(ChatRole.Assistant, "ok")));
+        var egress = new PrivacyEgress(extractor, new PrivacyEgressOptions { ChunkChars = 250, ChunkOverlap = 40 });
+        var client = new PrivacyEgressChatClient(provider, Cloud, egress);
+
+        await client.GetResponseAsync([new(ChatRole.User, text)], Session("s1"), Ct);
+
+        // No chunk the extractor saw held the whole block.
+        Assert.DoesNotContain(extractor.Requests, request => request.Contains(PemBlock, StringComparison.Ordinal));
+        Assert.Equal(filler + "<CREDENTIAL_1> " + filler, Sent(provider.Calls[0]));
+    }
+
+    [Fact]
+    public async Task A_labelled_value_in_a_json_tool_result_is_found_with_its_key_and_redacted()
+    {
+        var provider = new ScriptedChatClient(_ => new ChatResponse(new ChatMessage(ChatRole.Assistant, "ok")));
+        var client = new PrivacyEgressChatClient(provider, Cloud, Egress(new FakePiiExtractor(), EgressPolicy.Default with { Action = EgressAction.Send }));
+
+        await client.GetResponseAsync([new(ChatRole.Tool, [new FunctionResultContent("c1",
+            JsonDocument.Parse("""{"user": "svc", "password": "c0rrect-Pony-77", "note": "xé"}""").RootElement.Clone())])], Session("s1"), Ct);
+
+        var sent = Sent(provider.Calls[0]);
+        Assert.DoesNotContain("c0rrect-Pony-77", sent, StringComparison.Ordinal);
+        Assert.Contains("\\u003CCREDENTIAL_1\\u003E", sent, StringComparison.Ordinal);
+        Assert.Contains("\"user\":\"svc\"", sent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Without_an_extractor_a_request_with_a_credential_is_still_refused()
+    {
+        var provider = new ScriptedChatClient(_ => throw new InvalidOperationException("must not be called"));
+        var client = new PrivacyEgressChatClient(provider, Cloud, Egress(null, EgressPolicy.Default with { Action = EgressAction.Send }));
+
+        var refused = await Assert.ThrowsAsync<PrivacyEgressRefusedException>(() =>
+            client.GetResponseAsync([new(ChatRole.User, $"token {GitHubToken}")], Session("s1"), Ct));
+
+        Assert.Contains("no PII extractor", refused.Reason, StringComparison.Ordinal);
+        Assert.Empty(provider.Calls);
+    }
+
+    [Fact]
+    public async Task A_credential_detector_timeout_refuses_the_request()
+    {
+        var provider = new ScriptedChatClient(_ => throw new InvalidOperationException("must not be called"));
+        var egress = new PrivacyEgress(new FakePiiExtractor(), new PrivacyEgressOptions
+        {
+            PolicyFor = _ => EgressPolicy.Default with { Action = EgressAction.Send },
+            FindCredentials = text => throw new RegexMatchTimeoutException(text, "pattern", TimeSpan.FromSeconds(1)),
+        });
+        var client = new PrivacyEgressChatClient(provider, Cloud, egress);
+
+        var refused = await Assert.ThrowsAsync<PrivacyEgressRefusedException>(() =>
+            client.GetResponseAsync([new(ChatRole.User, "hello")], Session("s1"), Ct));
+
+        Assert.Contains("credential detector timed out", refused.Reason, StringComparison.Ordinal);
+        Assert.Empty(provider.Calls);
+    }
+
+    [Fact]
+    public async Task A_credential_with_content_the_extractor_cannot_read_is_refused_even_under_send()
+    {
+        var provider = new ScriptedChatClient(_ => throw new InvalidOperationException("must not be called"));
+        var client = new PrivacyEgressChatClient(provider, Cloud, Egress(new FakePiiExtractor(), EgressPolicy.Default with { Action = EgressAction.Send }));
+        List<ChatMessage> image = [new(ChatRole.User, [new TextContent($"token {GitHubToken}"), new DataContent(new byte[] { 1, 2, 3 }, "image/png")])];
+
+        var refused = await Assert.ThrowsAsync<PrivacyEgressRefusedException>(() => client.GetResponseAsync(image, Session("s1"), Ct));
+
+        Assert.Contains("1 credential value and DataContent", refused.Reason, StringComparison.Ordinal);
     }
 
     [Fact]

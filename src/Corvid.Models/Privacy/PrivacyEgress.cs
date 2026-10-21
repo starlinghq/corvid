@@ -4,8 +4,11 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Encodings.Web;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Corvid.Abstractions.Extraction;
+using Corvid.Secrets;
 using Microsoft.Extensions.AI;
 
 namespace Corvid.Models.Privacy;
@@ -36,6 +39,12 @@ public sealed record PrivacyEgressOptions
     /// <summary>Shorter spans are not treated as values to redact (a stray initial would rewrite every word containing it).</summary>
     public int MinValueLength { get; init; } = 2;
 
+    /// <summary>
+    /// Finds credential values (C-032): the shared detector under its egress rules. Tests replace it to reach the timeout path.
+    /// </summary>
+    internal Func<string, ImmutableArray<CredentialMatch>> FindCredentials { get; init; } =
+        text => CredentialDetector.Find(text, CredentialDetector.Egress);
+
     public static EgressPolicy? DefaultPolicyFor(ModelProfile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
@@ -58,13 +67,22 @@ public sealed record EgressDecision(EgressOutcome Outcome, EgressAction? Action,
     public bool Refused => Outcome == EgressOutcome.Refused;
 }
 
-public sealed record DetectedValue(string Label, string Value);
+/// <param name="Credential">
+/// Found by the credential detector (C-032), not by the extractor: a credential value, which no policy sends. GLiNER2's own
+/// <c>credential</c> spans are the noun ("API key") and leave this false.
+/// </param>
+public sealed record DetectedValue(string Label, string Value, bool Credential = false);
 
-/// <param name="Failure">Why the scan could not run (no extractor, or it failed); the gate then refuses.</param>
+/// <param name="Failure">Why the scan could not run (no extractor, it failed, or the credential detector timed out); the gate then refuses.</param>
 public sealed record EgressScan(ImmutableArray<DetectedValue> Values, string? Failure)
 {
     public ImmutableSortedDictionary<string, int> Labels =>
         Values.GroupBy(value => value.Label, StringComparer.Ordinal).ToImmutableSortedDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+
+    /// <summary>How many distinct credential values the credential detector found.</summary>
+    public int Credentials => Values.Count(value => value.Credential);
+
+    public bool HasCredentials => Values.Any(value => value.Credential);
 }
 
 /// <param name="Map">The session's placeholders, when the request was redacted: the response is restored through it.</param>
@@ -108,6 +126,11 @@ public sealed class PrivacyEgressRefusedException : Exception
 /// value to a stable per-session placeholder that the response maps back, or refuse so the work stays local. It fails
 /// closed: with no extractor, or when extraction fails, a gated request is refused, never sent unscanned.
 /// </summary>
+/// <remarks>
+/// Beside the extractor, the credential detector (C-032) finds credential values (token shapes, labelled assignments, URL
+/// passwords, prose values) with no threshold and whatever the policy's labels. A credential value is never sent: it raises
+/// send to redact, and refuse stays refuse. A detector timeout refuses the request.
+/// </remarks>
 /// <remarks>Thread-safe; one instance serves every session and binding of a process.</remarks>
 public sealed class PrivacyEgress
 {
@@ -149,16 +172,43 @@ public sealed class PrivacyEgress
         return map;
     }
 
-    /// <summary>Runs the extractor over every text, in chunks it accepts. Never throws for an extractor failure: it reports it.</summary>
-    public async Task<EgressScan> ScanAsync(IEnumerable<string> texts, EgressPolicy policy, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Runs the credential detector over every whole text, then the extractor over every text in chunks it accepts. Never
+    /// throws for an extractor failure or a detector timeout: it reports them.
+    /// </summary>
+    public Task<EgressScan> ScanAsync(IEnumerable<string> texts, EgressPolicy policy, CancellationToken cancellationToken = default) =>
+        ScanAsync(texts, [], policy, cancellationToken);
+
+    /// <param name="structured">
+    /// Tool-call arguments and JSON tool results as JSON text, for the credential detector only: the leaves in
+    /// <paramref name="texts"/> lose the key that labels a value (<c>{"password": "..."}</c>).
+    /// </param>
+    private async Task<EgressScan> ScanAsync(IEnumerable<string> texts, IEnumerable<string> structured, EgressPolicy policy,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(texts);
         ArgumentNullException.ThrowIfNull(policy);
         if (_extractor is null)
             return new([], "no PII extractor is bound (the extractor slot), so nothing can be checked before it leaves the machine");
         var labels = policy.AllLabels;
+        var distinct = texts.Where(text => !string.IsNullOrWhiteSpace(text)).Distinct(StringComparer.Ordinal).ToList();
         var values = new Dictionary<string, DetectedValue>(StringComparer.Ordinal);
-        foreach (var text in texts.Where(text => !string.IsNullOrWhiteSpace(text)).Distinct(StringComparer.Ordinal))
+
+        // Credential values first, over whole texts (a PEM block or a JWT on a chunk boundary is seen whole), so a GLiNER2
+        // label for the same string never replaces them, and with no threshold: a credential is never sent.
+        try
+        {
+            foreach (var text in distinct)
+                AddCredentials(text, json: false, values);
+            foreach (var text in structured.Distinct(StringComparer.Ordinal))
+                AddCredentials(text, json: true, values);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return new([.. values.Values], "the credential detector timed out, so the request could not be checked for credentials");
+        }
+
+        foreach (var text in distinct)
         {
             foreach (var chunk in Chunks(text))
             {
@@ -185,6 +235,39 @@ public sealed class PrivacyEgress
             }
         }
         return new([.. values.Values], null);
+    }
+
+    /// <summary>The label credential values are redacted under: <c>&lt;CREDENTIAL_1&gt;</c>.</summary>
+    public const string CredentialLabel = "credential";
+
+    // Shorter values would rewrite unrelated text everywhere in the session (RedactionMap replaces substrings).
+    internal const int MinCredentialLength = 4;
+
+    private void AddCredentials(string text, bool json, Dictionary<string, DetectedValue> values)
+    {
+        foreach (var match in Options.FindCredentials(text))
+        {
+            var value = match.ValueIn(text);
+            if (json && value.Contains('\\', StringComparison.Ordinal))
+                value = JsonUnescape(value);
+            value = value.Trim();
+            if (value.Length >= MinCredentialLength)
+                values[value] = new DetectedValue(CredentialLabel, value, Credential: true);
+        }
+    }
+
+    // A value found in JSON text, as the request's leaves hold it: escapes decoded, so the redaction finds it.
+    private static string JsonUnescape(string value)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse("\"" + value + "\"");
+            return document.RootElement.GetString() ?? value;
+        }
+        catch (JsonException)
+        {
+            return value;
+        }
     }
 
     /// <summary>
@@ -225,10 +308,15 @@ public sealed class PrivacyEgress
             return new(new(EgressOutcome.Refused, action, $"the request holds {opaque.GetType().Name}, which the PII extractor cannot read",
                 ImmutableSortedDictionary<string, int>.Empty), messages, null);
 
-        var scan = await ScanAsync(OutgoingTexts(messages), policy, cancellationToken).ConfigureAwait(false);
+        var scan = await ScanAsync(OutgoingTexts(messages), StructuredTexts(messages), policy, cancellationToken).ConfigureAwait(false);
         var decision = Decide(action, scan);
         if (decision.Outcome != EgressOutcome.Redacted)
             return new(decision, messages, null);
+        // A credential raised a plain send to redact, and redaction cannot reach what the extractor cannot read.
+        if (opaque is not null)
+            return new(new(EgressOutcome.Refused, decision.Action,
+                $"the request holds {Count(scan.Credentials, "credential value")} and {opaque.GetType().Name}, which the PII extractor cannot read",
+                decision.Labels), messages, null);
 
         var map = MapFor(context.SessionId);
         foreach (var value in scan.Values)
@@ -257,18 +345,30 @@ public sealed class PrivacyEgress
         return response;
     }
 
+    // The credential floor (C-032) applies here, after the scan, as the taint floor applies before it: a credential value
+    // raises a plain send to redact; redact and refuse stay as they are. Reasons name counts, never a value.
     private static EgressDecision Decide(EgressAction action, EgressScan scan)
     {
         var labels = scan.Labels;
         if (scan.Failure is { } failure)
             return new(EgressOutcome.Refused, action, failure, labels);
+        var floored = scan.HasCredentials && action == EgressAction.Send;
+        if (floored)
+            action = EgressAction.Redact;
+        var credentials = scan.HasCredentials ? $" ({Count(scan.Credentials, "credential value")})" : "";
         if (action == EgressAction.Refuse && !scan.Values.IsEmpty)
             return new(EgressOutcome.Refused, action,
-                $"it holds {string.Join(", ", labels.Keys)}, which this model's privacy policy keeps on the machine", labels);
+                $"it holds {string.Join(", ", labels.Keys)}{credentials}, which this model's privacy policy keeps on the machine", labels);
+        if (floored)
+            return new(EgressOutcome.Redacted, action,
+                $"redacted {string.Join(", ", labels.Keys)}{credentials}: a credential value is never sent, whatever the policy", labels);
         return action == EgressAction.Redact
-            ? new(EgressOutcome.Redacted, action, labels.IsEmpty ? "no PII found" : $"redacted {string.Join(", ", labels.Keys)}", labels)
+            ? new(EgressOutcome.Redacted, action, labels.IsEmpty ? "no PII found" : $"redacted {string.Join(", ", labels.Keys)}{credentials}", labels)
             : new(EgressOutcome.Sent, action, labels.IsEmpty ? "no PII found" : $"sent {string.Join(", ", labels.Keys)} as the policy allows", labels);
     }
+
+    private static string Count(int count, string noun) =>
+        string.Create(CultureInfo.InvariantCulture, $"{count} {noun}{(count == 1 ? "" : "s")}");
 
     private async Task<ImmutableArray<ExtractedSpan>> ExtractAsync(string chunk, ImmutableArray<string> labels, float threshold,
         CancellationToken cancellationToken)
@@ -368,6 +468,64 @@ public sealed class PrivacyEgress
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Tool-call arguments and object or array tool results as JSON text, so the credential detector sees a value with the key
+    /// that labels it. The extractor never sees these: it reads the leaves.
+    /// </summary>
+    internal static IEnumerable<string> StructuredTexts(IEnumerable<ChatMessage> messages)
+    {
+        foreach (var message in messages)
+        {
+            foreach (var content in message.Contents)
+            {
+                switch (content)
+                {
+                    case FunctionCallContent { Arguments.Count: > 0 } call:
+                        yield return Json(call.Arguments);
+                        break;
+                    case FunctionResultContent { Result: JsonElement { ValueKind: JsonValueKind.Object or JsonValueKind.Array } json }:
+                        yield return json.GetRawText();
+                        break;
+                }
+            }
+        }
+    }
+
+    private static readonly JsonWriterOptions WriterOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+
+    private static string Json(IDictionary<string, object?> arguments)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream, WriterOptions))
+        {
+            writer.WriteStartObject();
+            foreach (var (key, value) in arguments)
+            {
+                writer.WritePropertyName(key);
+                switch (value)
+                {
+                    case null:
+                        writer.WriteNullValue();
+                        break;
+                    case bool flag:
+                        writer.WriteBooleanValue(flag);
+                        break;
+                    case JsonElement json:
+                        json.WriteTo(writer);
+                        break;
+                    case IFormattable formattable:
+                        writer.WriteStringValue(formattable.ToString(null, CultureInfo.InvariantCulture));
+                        break;
+                    default:
+                        writer.WriteStringValue(value.ToString() ?? "");
+                        break;
+                }
+            }
+            writer.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(stream.ToArray());
     }
 
     private static IEnumerable<string> Leaves(object? value)
