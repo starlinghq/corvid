@@ -120,6 +120,11 @@ public static class FabricConditions
     public const string GeneratorSupportsDelegation = "generator_supports_delegation";
     /// <summary>A permissive approval mode, where risk levels 0–1 may run without asking.</summary>
     public const string PermissiveMode = "permissive_mode";
+    /// <summary>
+    /// The turn holds something a lesson could come from (<c>lesson_opportunity</c>, C-025): at least one tool call, a failed
+    /// tool result or a denied approval.
+    /// </summary>
+    public const string LessonEvidence = "lesson_evidence";
 }
 
 /// <summary>Action names recorded in <c>Decision</c> events. They are persisted: renaming one changes the log's meaning.</summary>
@@ -282,6 +287,13 @@ public sealed class QuestionCatalogue
         yield return Q("task_succeeded", egress, noul, "Did this turn accomplish what the user asked, with no tool failure left unresolved?", [],
             routing, FloorMeasure.YesProbability, "confirm_task_success", "task_unconfirmed", DegradedRule.GeneratorYesNo,
             FabricConditions.ToolFailuresRecovered) with { Grants = FabricConditions.TaskSucceeded };
+        // C-025: a correction, the most valuable kind of lesson, often comes from a short turn, so this does not wait for
+        // procedure evidence as skill_opportunity does; its condition keeps the degraded tier's generator calls to turns with evidence.
+        yield return Q("lesson_opportunity", egress, noul,
+            "Did this turn show something a future session in this project should do differently or know: a correction, a gotcha, "
+            + "a debugging pattern, a convention or a required order?", [],
+            routing, FloorMeasure.YesProbability, "queue_lesson_draft", "nothing", DegradedRule.GeneratorYesNo,
+            FabricConditions.LessonEvidence);
         yield return Q("skill_write_safe", preExecute, noul, "Can this skill change go live without review?", [],
             gate, FloorMeasure.YesProbability, "apply_skill_change", "stage_for_review", DegradedRule.ConservativeDefault,
             FabricConditions.AgentAuthored);

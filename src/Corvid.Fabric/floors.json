@@ -18,6 +18,7 @@
     "memory_op": 0.6,
     "skill_opportunity": 0.75,
     "task_succeeded": 0.8,
+    "lesson_opportunity": 0.75,
     "skill_write_safe": 0.85,
     "wake": 0.5,
     "deliver": 0.6,

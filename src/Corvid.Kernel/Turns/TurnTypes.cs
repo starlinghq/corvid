@@ -144,6 +144,15 @@ public sealed class TurnServices
     /// <summary>Where <c>skill_opportunity</c> queues a turn; without it the question is not asked.</summary>
     public ISkillLearning? SkillLearning { get; init; }
 
+    /// <summary>
+    /// The project the session works in (C-025): bound with <c>ProjectBound</c> before the turn's message, its approved
+    /// lessons join full recall, and <c>lesson_opportunity</c> files lessons under it. Null for none.
+    /// </summary>
+    public ProjectIdentity? Project { get; init; }
+
+    /// <summary>Where <c>lesson_opportunity</c> queues a turn (C-025); without it, or without a project, the question is not asked.</summary>
+    public ILessonLearning? LessonLearning { get; init; }
+
     /// <summary>The skill shortlist: a few candidates, since each becomes an option of <c>skill</c>.</summary>
     public ToolShortlist SkillShortlist { get; init; } = new(new ShortlistOptions(Size: 3));
 
@@ -196,4 +205,7 @@ public sealed record TurnResult(
 
     /// <summary>True when <c>skill_opportunity</c> queued this turn for distillation.</summary>
     public bool SkillQueued { get; init; }
+
+    /// <summary>True when <c>lesson_opportunity</c> queued this turn for a lesson draft (C-025).</summary>
+    public bool LessonQueued { get; init; }
 }

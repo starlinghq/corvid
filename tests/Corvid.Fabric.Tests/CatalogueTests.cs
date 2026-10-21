@@ -10,8 +10,8 @@ public sealed class CatalogueTests
         var catalogue = QuestionCatalogue.Default;
 
         Assert.Equal(
-            ["clarify", "clear_results", "delegate", "deliver", "difficulty", "done", "injection", "intent", "memory_op", "needs_recall",
-             "remember", "risk", "skill", "skill_opportunity", "skill_write_safe", "stuck", "task_succeeded", "tool", "wake"],
+            ["clarify", "clear_results", "delegate", "deliver", "difficulty", "done", "injection", "intent", "lesson_opportunity", "memory_op",
+             "needs_recall", "remember", "risk", "skill", "skill_opportunity", "skill_write_safe", "stuck", "task_succeeded", "tool", "wake"],
             catalogue.Ids.Order(StringComparer.Ordinal));
         Assert.Equal(["memory_op", "risk", "skill_write_safe"],
             catalogue.Questions.Where(q => q.Role == QuestionRole.Gate).Select(q => q.Id).Order(StringComparer.Ordinal));
@@ -26,6 +26,12 @@ public sealed class CatalogueTests
         Assert.Equal([FabricConditions.AgentAuthored], catalogue["skill_write_safe"].Requires);
         Assert.Equal("stage_for_review", catalogue["memory_op"].BelowFloor);
         Assert.Equal(FabricActions.Ask, catalogue["risk"].BelowFloor);
+        // C-025: an egress routing question the generator answers without Kev, bounded by its evidence condition.
+        var lesson = catalogue["lesson_opportunity"];
+        Assert.Equal((QuestionKind.Noul, QuestionRole.Routing, DegradedRule.GeneratorYesNo), (lesson.Kind, lesson.Role, lesson.Degraded));
+        Assert.Equal([Checkpoint.Egress], lesson.Checkpoints);
+        Assert.Equal(("queue_lesson_draft", "nothing"), (lesson.Act, lesson.BelowFloor));
+        Assert.Equal([FabricConditions.LessonEvidence], lesson.Requires);
     }
 
     [Fact]
@@ -64,6 +70,7 @@ public sealed class CatalogueTests
         Assert.Equal(0.45, floors.FloorOf("tool"));
         Assert.Equal(0.8, floors.FloorOf("done"));
         Assert.Equal(0.85, floors.FloorOf("skill_write_safe"));
+        Assert.Equal(0.75, floors.FloorOf("lesson_opportunity"));
     }
 
     [Fact]

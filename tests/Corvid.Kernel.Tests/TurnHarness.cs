@@ -370,6 +370,14 @@ internal sealed class TurnHarness : IDisposable
 
     public Corvid.Kernel.Checkpoints.CheckpointService? Checkpoints { get; init; }
 
+    public Corvid.Memory.ProjectIdentity? Project { get; init; }
+
+    public ILessonLearning? LessonLearning { get; init; }
+
+    public Corvid.Memory.HybridRetriever? Retriever { get; init; }
+
+    public Corvid.Memory.CoreSnapshot? CoreBlocks { get; init; }
+
     public TurnServices Services() => new()
     {
         Log = Log,
@@ -379,6 +387,10 @@ internal sealed class TurnHarness : IDisposable
         Approvals = Approvals,
         Memory = Memory,
         Checkpoints = Checkpoints,
+        Project = Project,
+        LessonLearning = LessonLearning,
+        Retriever = Retriever,
+        CoreBlocks = CoreBlocks,
         Options = Options,
     };
 

@@ -2473,6 +2473,137 @@ persona block, Hermes profiles and memory provider plugins; a `corvid memory` ve
 and pushing to a Beacon endpoint or SIEM; host, user and repository enrichment and the `redacted` retention level; and a
 per-item local-only filter for memory tool results.
 
+## Lessons and project scope (C-025)
+
+A third kind of learned memory between facts (declarative, §9.1's semantic tier) and skills (procedures, §11): a lesson is
+something a future session in the same project should do differently or know. The shape and quality bar adapt Beacon's
+`beacon.learning.v1` (Asymptote-Labs/agent-beacon, MIT: its `beacon-memory-distill` skill and lesson-quality reference);
+the code is Corvid's own, and only short validator patterns resemble Beacon's notes. No project and no package was added;
+the checker's allowlist is unchanged. The pure and SQLite parts are in `Corvid.Memory`, the parts that need the event log,
+the projection or git in `Corvid.Kernel`, the catalogue row in `Corvid.Fabric`, and the wiring in `Corvid.Host`.
+
+- Project identity (`ProjectIds`, `ProjectResolver`): a project id is the 64-character lowercase hex SHA-256 of a
+  lowercased key. The key is the `origin` remote, normalized: trimmed, scheme (`https`, `http`, `ssh`, `git`, `git+ssh`)
+  and userinfo dropped (a credential in the URL never changes or enters the key), the scp form `git@host:org/repo` made
+  `host/org/repo`, an ssh port dropped, a trailing `/` and `.git` stripped, so the https and ssh remotes of one repository
+  share an id. A relative local origin (no scheme, not scp form, not rooted: `../upstream.git`) is resolved against the
+  main checkout first, so unrelated repositories with the same relative origin do not share an id. Without an origin it is
+  the main checkout's path; without git, outside a repository, or in a repository git
+  refuses (dubious ownership: global configuration is off, so `safe.directory` never applies), the workspace path (full,
+  `/` separators, no trailing separator). The resolver runs the git CLI in a new discovery mode of C-014's `GitRunner`:
+  the same cleared environment and `-c` overrides (no hooks, fsmonitor, pager or credential helper), but no `GIT_DIR` or
+  `GIT_WORK_TREE`, and `GIT_CEILING_DIRECTORIES=$HOME` when the workspace is below it, so a dotfiles repository at `$HOME`
+  does not capture every plain directory; a workspace that is `$HOME` itself is keyed by its path. It runs
+  `rev-parse --path-format=absolute --git-common-dir` in the workspace (a linked worktree resolves to its main checkout)
+  and `config --get remote.origin.url` against that directory. Git is the checkpoints' `Corvid:Checkpoints:GitPath`. The
+  host resolves the project once at start, since a runtime has one workspace; `/status` shows its first 12 characters and
+  source (`remote`, `checkout` or `path`). Changing origin's URL, or adding one to a path-keyed project, changes the id, so
+  earlier lessons stop being recalled.
+- Sessions record their project: `ProjectBound(project_id, source)` (wire name `project_bound`) is appended in the same
+  batch as the turn's `UserMessage`, before it, when `TurnServices.Project` is set and differs from the projection's
+  `SessionSnapshot.ProjectId` (null when absent; `SnapshotJson` does not write it, so golden fixtures are unchanged).
+- Lessons (`Lessons.cs`): kind (`workflow`, `correction`, `debugging_pattern`, `gotcha`, `convention`), title,
+  applicability, body, 2–4 tags, evidence (session, cited event positions, a one-line summary, and SHA-256 over the cited
+  events' persisted `EventJson`, one per line), project, state (`candidate`, `approved`, `rejected`, `superseded`),
+  `superseded_by`, author (`agent` or `user`), review reason, the `memory_op` decision and the decider's proposed option,
+  local-only, and the session that first filed it. The id is `lesson:` and the SHA-256 of project, kind, title and body
+  (whitespace collapsed, lowercased); evidence is left out, so filing the same lesson again inserts nothing and merges new
+  evidence (unique per lesson, session and content hash), and a rejected or superseded lesson is never proposed again.
+- Schema version 3 of the memory database (`LessonsMigration`, after C-015's `LocalOnlyMigration`; versions 0 to 3 are
+  accepted): `lessons` (kind, state and author checks; an explicit `INTEGER PRIMARY KEY` for FTS), `lessons_fts` (trigram
+  over title, applicability, body and tags, kept by an insert trigger as for facts), `lesson_evidence` (append-only) and
+  `lesson_opportunities` (the drafting queue). Triggers file every lesson as a candidate, refuse deletes and any change to
+  content columns, allow only candidate → approved or rejected and approved → superseded (with `superseded_by` set exactly
+  then, and never to itself), and let the local-only flag be set but never cleared.
+- Quality bar (`LessonValidator`, `GeneratedRegex` with `NonBacktracking`, every violation returned): a known kind; a
+  single-line title under 80 characters that does not open with a narrative word (the, this, we, I, agent, user, ...) or a
+  past-tense word in `-ed` (verbs in `-eed` and a short list such as embed and shred are imperatives); an applicability that
+  starts with `when`, `before` or `after`; a body of 3–10 non-empty lines citing an evidence position (`event 14`,
+  `events 14-19`) that the evidence holds; 2–4 distinct tags of `[a-z0-9-]{1,32}`; at least one evidence item. Over every
+  field, evidence summaries included, it refuses summaries (`in this session`, `the agent fixed`, `summary:`), one-off or
+  machine-specific content (`/home/<name>`, `/Users/<name>`, `C:\Users`, IPv4 addresses, ISO dates, today, yesterday and
+  weekday names, UUIDs, PR or issue numbers), secret-looking strings (AWS `AKIA` keys, `ghp_`/`gho_`/`github_pat_`,
+  `sk-`/`sk-ant-`, Slack `xox?-`, PEM private-key headers, JWTs, `password|secret|token|api_key` followed by `:` or `=` and
+  a value that is not an environment reference (`$X`, `${X}`, `%X%`), long hex runs, and long base64 runs that mix digits
+  and both cases, are not paths, and either hold `+`, `/` or `=` or switch between upper case, lower case and digits at 45%
+  or more of their characters, as random text does and a PascalCase identifier with a digit does not) and instructions
+  aimed at the agent. The long-hex rule refuses a commit hash too, which is one-off anyway. The rules are heuristics: they refuse a
+  draft, never a turn.
+- Gated write (`LessonWriter`): validate, file as a candidate, then ask the existing `memory_op` gate at the pre-execute
+  checkpoint in the source session, with lesson-shaped JSON instructions (the candidate, and up to five approved lessons of
+  the same project from `SearchApproved` as neighbours). An acted `add` approves; `update` approves and supersedes the
+  nearest neighbour; `noop` leaves it a candidate with `duplicate of <id> (decider)` (`no neighbour to be a duplicate of`
+  when there is none), as `MemoryWriter` persists nothing on `noop`: rejecting is final and the content-hash id would make
+  every re-draft a silent duplicate, so only review rejects, and review records the outcome; `invalidate`, an answer
+  below the floor, the degraded tier (which never answers a gate) and a tainted source (§10.3, without asking) leave it a
+  candidate with the reason. So without Kev every lesson waits for review. Review (`Approve`, optionally superseding an
+  approved lesson of the same project, and `Reject` with a reason) records the decision's outcome as `approved`,
+  `corrected` (the reviewer's add or update differs from the decider's proposal) or `rejected`, as `MemoryWriter` does, so
+  lesson outcomes reach C-021's calibration export with no change there. `MemoryWritten` with the lesson id goes to the
+  source session: `staged`, `add` or `update`. The append-retry loop moved from `MemoryWriter` into `Internal.cs`
+  (`EventAppend`) for both writers; no `MemoryOperations` constant was added.
+- Trigger: a new egress routing question, `lesson_opportunity` (Noul: "Did this turn show something a future session in
+  this project should do differently or know: a correction, a gotcha, a debugging pattern, a convention or a required
+  order?"), action `queue_lesson_draft`, below the floor nothing, floor 0.75 (floors version `2026-10-21.1`; the goldens'
+  recorded version changed with it), degraded rule `GeneratorYesNo`, condition `lesson_evidence` (a tool call, and so a
+  failed result or a denied approval). It is not `skill_opportunity` (three tool steps; a correction often comes from a short
+  turn) and not `remember` (which writes the user's message as a fact). The kernel asks it only for an answered turn with a
+  tool call, in a session with a project, from no guest, with no pinned skill, interactive, with `TurnServices.LessonLearning`
+  bound; it rides in the same egress batch as `remember` and `skill_opportunity`, so with Kev it adds no request, and in
+  the degraded tier it is one generator yes/no on qualifying turns. Acting queues `LessonOpportunity` (session, project,
+  user message and answer sequences, decision, request, taint, and whether any prompt of the turn held local-only memory);
+  `TurnResult.LessonQueued` says so. A non-empty local-only core block rendered into a local model's prompt counts, and
+  C-015's migration made every block local-only, so in practice most drafted lessons are local-only: conservative, and the
+  user opts a block in to share it.
+- Drafting (`Corvid.Kernel/Lessons/LessonLearner.cs`, in the shape of C-017's `SkillLearner`): `Queue` writes the
+  opportunity to `lesson_opportunities` and wakes `RunAsync`, which the runtime runs in the background. For each, a turn that
+  `/undo` or `/rollback` hid is skipped; the background generator, inside `ModelRequestContext(session, tainted, local-only)`,
+  is shown the turn's events numbered (`[event 14] Tool error (shell): ...`, cut to 400 characters) and asked for one JSON
+  object (`kind`, `title`, `applicability`, `body`, `tags`, `positions`, `summary`) or `{"none": true}`, read through a
+  source-generated context. Cited positions must lie inside the turn. The result goes through `LessonWriter`; an opportunity
+  ends `filed`, `approved`, `duplicate`, `declined` (no lesson, unreadable JSON, positions outside the turn, or the quality
+  bar) or `failed`. Qwen3.5-0.8B on the background slot will often decline or fail the bar; lessons worth keeping need a
+  stronger background generator, and the bar is the point.
+- Recall (`HybridRetriever`): `RetrievalRequest.ProjectId` adds a third BM25 list, the project's approved lessons, interleaved
+  by rank with episodes and facts; candidates, rejected and superseded lessons and other projects' are excluded in SQL.
+  Lessons are not embedded. `MemoryItemKind.Lesson`; `RetrievedItem.Lesson`; `RetrievedItem.LocalOnly` is true for a
+  local-only lesson too, so C-015's exclusion from cloud prompts applies unchanged. A lesson renders as
+  `Lesson (<kind>): <title> — <applicability>` and its body. The retriever takes an optional `LessonStore` (none: no
+  lessons), so MCP's and the guest tools' retrievers are unchanged. `TurnRunner` passes the session's project on the full
+  recall path only; `needs_recall` below its floor still recalls the top three facts.
+- Host and commands: `Corvid:Memory:Lessons:Enabled` (default true, needs memory). `BuildMemory` creates the `LessonStore`
+  and `LessonWriter` (no extractor needed) and the `LessonLearner` on the background generator; `MemoryServices` gained
+  `Lessons` and `LessonLearner`. `CorvidRuntime.Project` is resolved at start; interactive sessions get the project and the
+  learner, unattended job turns the project only. `/memory lessons [pending]` lists the project's candidates (id is the first
+  12 hex characters; any unique prefix is accepted), `approve <id> [supersedes <old>]`, `reject <id> [reason]` and
+  `supersede <old> <new>`, all scoped to the current project; bare `/memory pending` adds `N lesson candidate(s): /memory
+  lessons pending`.
+- Tests: `tests/Corvid.Memory.Tests` (`ProjectIdsTests`: every form of one remote, userinfo stripped, paths, relative
+  local remotes; `LessonValidatorTests`: an accept and a refuse case per rule, secrets, environment references and long
+  identifiers that are not, home paths, summaries, evidence summaries; `LessonStoreTests`: idempotent filing and merged
+  evidence, re-filing a rejected lesson, allowed and refused transitions, triggers, project-scoped search, the queue, a
+  version 2 store migrated to 3; `LessonWriterTests`: degraded always a candidate, a calibrated add approves, update
+  supersedes, noop stays a candidate that review can still approve, below the floor and invalidate stay candidates, a
+  tainted source skips the gate, outcomes on review; `LessonRecallTests`: only this project's approved lessons, never
+  superseded or rejected ones, no project means no lessons, local-only marked). `tests/Corvid.Kernel.Tests`
+  (`ProjectResolverTests` with real git: remote, two repositories with one relative origin kept apart, a linked worktree
+  resolving to the main checkout, no git, the `$HOME` ceiling, a repository's fsmonitor never run; `LessonTurnTests`:
+  asked and queued only when its guards hold, bound once and again on change, lessons reaching the generator through
+  recall and not another project's, a local-only block in a local prompt queuing a local-only opportunity, a local-only
+  lesson reaching a local generator and never a cloud one; `LessonLearnerTests`: filing with the evidence hash, positions
+  outside the turn, none, unreadable and bad drafts declined, undone turns skipped, duplicates, taint; `EventJsonTests` and `SessionProjectionTests` for `ProjectBound`). `tests/Corvid.Fabric.Tests` for the
+  catalogue row, condition and floor; `tests/Corvid.Host.Tests` (`CommandTests`) for `/memory lessons` and `/status`.
+
+Not built yet: vectors for lessons (embedding them, the vector list, and §4.3's re-embed job); approving with edits and
+user-authored lessons (`/memory lessons add`); lessons in `corvid mcp serve` and the shared and guest memory tools, whose
+retrievers carry no project, and a project per ACP session from the client's working directory (ACP and HTTP sessions use
+the runtime's workspace project); a projects registry (display names, listing other projects' lessons,
+cross-project or global lessons); remotes other than origin, `insteadOf` rewriting, submodules as their own projects and
+re-resolving the project when the workspace changes mid-run; sleep-time jobs for lessons (dedupe and merge, staleness,
+re-verifying evidence hashes against the log, promoting a recurring workflow lesson into a skill draft); drafting on the
+escalated or cloud generator; marking a lesson local-only from `/memory` and a `corvid memory lessons` verb; importing or
+exporting Beacon memories; and one credential detector shared with the egress gate.
+
 ## Running the check
 
 ```sh

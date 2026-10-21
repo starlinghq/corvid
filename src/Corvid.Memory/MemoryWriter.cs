@@ -100,7 +100,6 @@ public sealed record MemoryWriterOptions(int Neighbours = 5, int NeighbourTokens
 /// </remarks>
 public sealed class MemoryWriter
 {
-    private const int MaxAppendAttempts = 8;
     private const string MemoryOp = "memory_op";
 
     /// <summary>The reason recorded on a write staged because the session held content from outside the user.</summary>
@@ -461,21 +460,5 @@ public sealed class MemoryWriter
         return new MemoryWriteResult(MemoryWriteStatus.Staged, proposal.Operation, pending.PendingId, pending, verdict, neighbours, entities);
     }
 
-    // MemoryWritten does not depend on the head, so a concurrent writer only means retrying at the new head (as the fabric
-    // does). It is not cancellable: the memory row it records is already written.
-    private void Append(string sessionId, SessionEvent payload)
-    {
-        for (var attempt = 1; ; attempt++)
-        {
-            var head = _log.GetHead(sessionId);
-            try
-            {
-                _log.Append(sessionId, head, [EventData.Create(payload)]);
-                return;
-            }
-            catch (EventLogConflictException) when (attempt < MaxAppendAttempts)
-            {
-            }
-        }
-    }
+    private void Append(string sessionId, SessionEvent payload) => EventAppend.Append(_log, sessionId, payload);
 }

@@ -345,6 +345,18 @@ public sealed class MemorySettings
 {
     /// <summary>The memory store (plan §9). It needs an extractor and a text embedder; without them it stays off.</summary>
     public bool Enabled { get; set; } = true;
+
+    /// <summary>The lessons tier (C-025); it needs memory on.</summary>
+    public LessonsSettings Lessons { get; set; } = new();
+}
+
+public sealed class LessonsSettings
+{
+    /// <summary>
+    /// Lessons per project (C-025): <c>lesson_opportunity</c> queues turns, a background job drafts lessons on the background
+    /// generator, and approved lessons of the workspace's project join recall. <c>/memory lessons</c> reviews them.
+    /// </summary>
+    public bool Enabled { get; set; } = true;
 }
 
 public sealed class ToolSettings

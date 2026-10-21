@@ -51,6 +51,8 @@ public sealed class TurnRunner
     private static readonly JsonWriterOptions WriterOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     private readonly TurnServices _services;
+    // The project this runner last bound or found bound (C-025), so a turn reads the projection for it only when it changes.
+    private string? _boundProject;
     private readonly TurnOptions _options;
     private readonly ContextCompactor _compactor;
     // C-022: the outside tool descriptions injection was asked about this session, by origin and the descriptions' text.
@@ -236,6 +238,9 @@ public sealed class TurnRunner
         private string _skillNote = "";
         private string? _skill;
         private bool _skillQueued;
+        private bool _lessonQueued;
+        // Whether any prompt of the turn held local-only memory (§10.4): a lesson drafted from the turn is local-only too.
+        private bool _heldLocalOnly;
         private string? _lastToolResult;
         private int _steps;
         private int _toolCalls;
@@ -249,7 +254,18 @@ public sealed class TurnRunner
         {
             // §10.3: only the user's own message clears taint; anyone else's text is outside content.
             runner.Tainted = envelope.Origin != EnvelopeOrigin.User;
-            _turnStart = runner.Append(new UserMessage(envelope.Text)).Sequence;
+            // C-025: the session records its project before the message, when it has none yet or another one.
+            if (_services.Project is { } project && runner._boundProject != project.Id)
+            {
+                _turnStart = runner.Snapshot().ProjectId == project.Id
+                    ? runner.Append(new UserMessage(envelope.Text)).Sequence
+                    : runner.Append(new ProjectBound(project.Id, project.Source), new UserMessage(envelope.Text))[^1].Sequence;
+                runner._boundProject = project.Id;
+            }
+            else
+            {
+                _turnStart = runner.Append(new UserMessage(envelope.Text)).Sequence;
+            }
 
             await ExtractEntitiesAsync(cancellationToken).ConfigureAwait(false);
             await BuildShortlistAsync(cancellationToken).ConfigureAwait(false);
@@ -413,7 +429,9 @@ public sealed class TurnRunner
             // The session and its taint travel with the request: a cloud binding's egress gate keeps placeholders stable per
             // session and is stricter for outside content, and the Vault handler tells Vault (plan §10.3, §10.4). A prompt
             // rendered with local-only memory says so, so a fallback to a cloud model refuses it rather than sending it.
-            var options = new ModelRequestContext(runner.SessionId, runner.Tainted, HoldsLocalOnly(profile))
+            var holdsLocalOnly = HoldsLocalOnly(profile);
+            _heldLocalOnly |= holdsLocalOnly;
+            var options = new ModelRequestContext(runner.SessionId, runner.Tainted, holdsLocalOnly)
                 .Apply(new ChatOptions { MaxOutputTokens = _options.MaxOutputTokens });
             if (!tools.IsEmpty)
             {
@@ -1346,9 +1364,10 @@ public sealed class TurnRunner
         private async Task RecallAsync(bool full, CancellationToken cancellationToken)
         {
             var entities = _entities.SelectMany(pair => pair.Value.Select(name => new EntityRef(pair.Key, name))).ToImmutableArray();
-            // needs_recall below its floor retrieves the top three core facts only (§5.3).
+            // needs_recall below its floor retrieves the top three core facts only (§5.3). Lessons of the session's project
+            // (C-025) join full recall only.
             var request = full
-                ? new RetrievalRequest(envelope.Text, _options.RecallTokens, entities)
+                ? new RetrievalRequest(envelope.Text, _options.RecallTokens, entities, ProjectId: _services.Project?.Id)
                 : new RetrievalRequest(envelope.Text, _options.RecallTokens, entities, [MemoryItemKind.Fact]);
             try
             {
@@ -1410,6 +1429,16 @@ public sealed class TurnRunner
                 if (scan!.Unrecovered == 0)
                     conditions.Add(FabricConditions.ToolFailuresRecovered);
             }
+            // lesson_opportunity (C-025) asks about an answered, interactive turn of the user's own in a project, with evidence
+            // to cite (its condition: a tool call, so a failed result or a denied approval too). A replay never teaches.
+            var lessonEvidence = _toolCalls >= 1;
+            var lesson = _services.LessonLearning is not null && _services.Project is not null && status == TurnStatus.Answered
+                && envelope.Guest is null && _options.PinnedSkill is null && _options.Interactive && lessonEvidence;
+            if (lesson)
+            {
+                egress.Add(Ask("lesson_opportunity"));
+                conditions.Add(FabricConditions.LessonEvidence);
+            }
             if (egress.Count > 0)
             {
                 var verdicts = await DecideAsync(Checkpoint.Egress, egress, cancellationToken, [.. conditions]).ConfigureAwait(false);
@@ -1428,6 +1457,12 @@ public sealed class TurnRunner
                         verdicts["skill_opportunity"].DecisionId, envelope.Text, runner.Tainted, success.DecisionId,
                         success.Answer?.Calibrated == true));
                     _skillQueued = true;
+                }
+                if (Acted(verdicts, "lesson_opportunity", out _))
+                {
+                    _services.LessonLearning!.Queue(new LessonOpportunity(runner.SessionId, _services.Project!.Id, _turnStart, answer,
+                        verdicts["lesson_opportunity"].DecisionId, envelope.Text, runner.Tainted, _heldLocalOnly));
+                    _lessonQueued = true;
                 }
             }
             await runner.DeEscalateAsync(cancellationToken).ConfigureAwait(false);
@@ -1495,6 +1530,7 @@ public sealed class TurnRunner
             {
                 Skill = _skill,
                 SkillQueued = _skillQueued,
+                LessonQueued = _lessonQueued,
             };
     }
 
