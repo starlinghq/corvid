@@ -32,7 +32,7 @@ public static class CoreCommands
             .Add(new SlashCommand("memory", "Review staged memory writes.", "[pending] | approve <id> [operation] | reject <id>", MemoryAsync))
             .Add(new SlashCommand("skills", "Saved skills: list, review drafts, history, import, evals.", SkillCommands.Usage, SkillCommands.RunAsync))
             .Add(new SlashCommand("tools", "The tools the model can be offered, with their risk.", "", Tools))
-            .Add(new SlashCommand("mcp", "Configured MCP servers: state, trust and the tools each one added.", "", Mcp))
+            .Add(new SlashCommand("mcp", "Configured MCP servers: state, trust and the tools each one added.", McpCommands.Usage, McpCommands.RunAsync))
             .Add(new SlashCommand("todos", "The session's todo list.", "", Todos))
             .Add(new SlashCommand("undo", "Revert the last turn's file changes and take it out of the conversation.", "", UndoAsync))
             .Add(new SlashCommand("rollback", "List checkpoints, or go back to before the Nth latest one (files and conversation).",
@@ -368,33 +368,6 @@ public static class CoreCommands
         {
             Title = "Tools",
             Table = CommandTable.Of(["tool", "risk", "description"], tools.Select(tool => new[] { tool.Name, Risk(tool.Risk), tool.Description })),
-        });
-    }
-
-    // ---- /mcp (C-018) ----
-
-    private static ValueTask<CommandOutput> Mcp(SlashCommandContext context, SlashInvocation invocation, CancellationToken cancellationToken)
-    {
-        if (context.Runtime.Mcp is not { } mcp)
-            return ValueTask.FromResult(CommandOutput.Text("No MCP servers are configured (Corvid:Mcp:Servers)."));
-        var status = mcp.Status();
-        var lines = status.SelectMany(server => server.Issues.Select(issue => $"{server.Name}: left out {issue}"))
-            .Append("Untrusted servers' tools ask before every call and their results taint the session; trusted servers' hints are honoured.")
-            .ToImmutableArray();
-        return ValueTask.FromResult(new CommandOutput
-        {
-            Title = "MCP servers",
-            Table = CommandTable.Of(["server", "transport", "trust", "state", "tools", "detail"], status.Select(server => new[]
-            {
-                server.Name,
-                server.Transport.ToString().ToLowerInvariant() + (server.Tasks ? ", tasks" : ""),
-                server.Trust.ToString().ToLowerInvariant(),
-                server.State.ToString().ToLowerInvariant(),
-                server.Tools.IsEmpty ? "-" : string.Join(", ", server.Tools),
-                server.Detail ?? "",
-            })),
-            Lines = lines,
-            Tone = status.Any(server => server.State == McpServerState.Failed) ? OutputTone.Warning : OutputTone.Normal,
         });
     }
 

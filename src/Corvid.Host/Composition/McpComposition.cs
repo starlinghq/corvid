@@ -1,5 +1,8 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
+using Corvid.Abstractions.Events;
 using Corvid.Host.Configuration;
+using Corvid.Host.Telemetry;
 using Corvid.Mcp;
 using Corvid.Memory;
 using Corvid.Models.Remote;
@@ -105,9 +108,11 @@ public static class McpComposition
 
     /// <summary>
     /// Starts the configured servers in the background and returns at once (null when none is configured). Tools register
-    /// as each server lists them; built-in and DI tools were registered first, so they keep their names.
+    /// as each server lists them; built-in and DI tools were registered first, so they keep their names. Definitions are
+    /// checked against the pins in <see cref="CorvidPaths.McpPins"/> (C-022), so <c>corvid mcp list</c> pins too; held and
+    /// accepted definitions go to <paramref name="eventLog"/>'s <see cref="McpSessions.Pins"/> session when one is given.
     /// </summary>
-    public static McpClients? Start(CorvidOptions options, IEnumerable<string> deniedPaths, ToolRegistry tools)
+    public static McpClients? Start(CorvidOptions options, IEnumerable<string> deniedPaths, ToolRegistry tools, IEventLog? eventLog = null)
     {
         var (servers, _) = Definitions(options, deniedPaths);
         if (servers.IsEmpty)
@@ -132,10 +137,45 @@ public static class McpComposition
             Vault = vault?.Client,
             Placeholders = vault?.Placeholders,
         });
-        var clients = new McpClients(servers, transports, tools);
+        var clients = new McpClients(servers, transports, tools, new JsonFileMcpPinStore(CorvidPaths.McpPins(options)), Notices(eventLog));
         clients.Start();
         return clients;
     }
+
+    private const int MaxAppendAttempts = 32;
+
+    /// <summary>
+    /// What a held, accepted or allowed definition leaves behind (C-022): a short <c>corvid.mcp.pin</c> span, and, with an
+    /// event log, <see cref="McpToolHeld"/> or <see cref="McpToolAccepted"/> in the <see cref="McpSessions.Pins"/> session.
+    /// </summary>
+    internal static Action<McpDefinitionNotice> Notices(IEventLog? log) => notice =>
+    {
+        using (var activity = HostTelemetry.Source.StartActivity("corvid.mcp.pin", ActivityKind.Internal))
+        {
+            activity?.SetTag("corvid.mcp.server", notice.Server);
+            activity?.SetTag("corvid.mcp.tool", notice.Tool);
+            activity?.SetTag("corvid.mcp.pin.status", notice.Kind);
+            activity?.SetTag("corvid.mcp.pin.hash", notice.Hash);
+        }
+        if (log is null)
+            return;
+        SessionEvent payload = notice.Kind is McpPinKinds.Accepted or McpPinKinds.Allowed
+            ? new McpToolAccepted(notice.Server, notice.Tool, notice.Hash, notice.Kind == McpPinKinds.Allowed)
+            : new McpToolHeld(notice.Server, notice.Tool, notice.Kind, notice.Hash, notice.PinnedHash, notice.Detail);
+        var events = new[] { EventData.Create(payload) };
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                log.Append(McpSessions.Pins, log.GetHead(McpSessions.Pins), events);
+                return;
+            }
+            catch (EventLogConflictException) when (attempt < MaxAppendAttempts)
+            {
+                // Another server's notice, or another process, appended first; try at the new head.
+            }
+        }
+    };
 
     /// <summary>
     /// The tools <c>corvid mcp serve</c> offers, opened without loading any model: memory search runs on FTS and the fact
