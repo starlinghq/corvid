@@ -1,0 +1,192 @@
+{
+  "id": "approval-denied-then-executed",
+  "version": 1,
+  "title": "A denied dangerous command ran anyway",
+  "description": "After the user denied a command in a dangerous class, a command in the same class ran and succeeded in the same session within 30 minutes. Found by corvid scan: a tool result is never a pending call. Adapted from Beacon's approval-denied-command-executed-anyway (MIT).",
+  "severity": "critical",
+  "status": "stable",
+  "posture": "detect",
+  "category": "approval-abuse",
+  "reason": "A command in a class the user denied ran in the same session",
+  "correlation": {
+    "scope": "session",
+    "window": "30m",
+    "steps": [
+      {
+        "id": "denied",
+        "event": "approval_resolved",
+        "where": {
+          "all": [
+            {
+              "field": "approved",
+              "equals": false
+            },
+            {
+              "field": "reason",
+              "regex": "^user: denied"
+            },
+            {
+              "field": "derived.command",
+              "regex": "(?i)(\\brm\\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\\b|\\bmkfs\\b|\\bdd\\s+if=|:\\(\\)\\s*\\{\\s*:\\|:|>\\s*/dev/sd|\\b(curl|wget)\\b.*\\|\\s*(ba)?sh\\b|\\bsudo\\s+-s\\b|\\bchmod\\s+-R\\s+777\\b|\\bgit\\s+push\\b.*\\s(--force|-f)\\b|\\bgit\\s+reset\\s+--hard\\b)"
+            }
+          ]
+        }
+      },
+      {
+        "id": "executed",
+        "event": "tool_result",
+        "where": {
+          "all": [
+            {
+              "field": "is_error",
+              "equals": false
+            },
+            {
+              "field": "derived.command",
+              "regex": "(?i)(\\brm\\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\\b|\\bmkfs\\b|\\bdd\\s+if=|:\\(\\)\\s*\\{\\s*:\\|:|>\\s*/dev/sd|\\b(curl|wget)\\b.*\\|\\s*(ba)?sh\\b|\\bsudo\\s+-s\\b|\\bchmod\\s+-R\\s+777\\b|\\bgit\\s+push\\b.*\\s(--force|-f)\\b|\\bgit\\s+reset\\s+--hard\\b)"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "tests": [
+    {
+      "name": "denied_then_ran",
+      "verdict": "match",
+      "events": [
+        {
+          "type": "tool_call_issued",
+          "call_id": "c1",
+          "tool_name": "shell",
+          "arguments": {
+            "command": "rm -rf build"
+          }
+        },
+        {
+          "type": "approval_requested",
+          "approval_id": "a1",
+          "action": "{\"kind\":\"shell\",\"text\":\"rm -rf build\"}",
+          "reason": "risk: ask",
+          "call_id": "c1"
+        },
+        {
+          "type": "approval_resolved",
+          "approval_id": "a1",
+          "approved": false,
+          "reason": "user: denied (once)"
+        },
+        {
+          "type": "tool_result",
+          "call_id": "c1",
+          "result": {
+            "error": "not run"
+          },
+          "is_error": true
+        },
+        {
+          "type": "tool_call_issued",
+          "call_id": "c2",
+          "tool_name": "shell",
+          "arguments": {
+            "command": "rm -rf build"
+          }
+        },
+        {
+          "type": "tool_result",
+          "call_id": "c2",
+          "result": {
+            "exit_code": 0
+          },
+          "is_error": false
+        }
+      ]
+    },
+    {
+      "name": "denied_then_failed",
+      "verdict": "no_match",
+      "events": [
+        {
+          "type": "tool_call_issued",
+          "call_id": "c1",
+          "tool_name": "shell",
+          "arguments": {
+            "command": "rm -rf build"
+          }
+        },
+        {
+          "type": "approval_requested",
+          "approval_id": "a1",
+          "action": "{\"kind\":\"shell\",\"text\":\"rm -rf build\"}",
+          "reason": "risk: ask",
+          "call_id": "c1"
+        },
+        {
+          "type": "approval_resolved",
+          "approval_id": "a1",
+          "approved": false,
+          "reason": "user: denied (once)"
+        },
+        {
+          "type": "tool_call_issued",
+          "call_id": "c2",
+          "tool_name": "shell",
+          "arguments": {
+            "command": "rm -rf build"
+          }
+        },
+        {
+          "type": "tool_result",
+          "call_id": "c2",
+          "result": {
+            "error": "not run"
+          },
+          "is_error": true
+        }
+      ]
+    },
+    {
+      "name": "denied_then_other_ran",
+      "verdict": "no_match",
+      "events": [
+        {
+          "type": "tool_call_issued",
+          "call_id": "c1",
+          "tool_name": "shell",
+          "arguments": {
+            "command": "rm -rf build"
+          }
+        },
+        {
+          "type": "approval_requested",
+          "approval_id": "a1",
+          "action": "{\"kind\":\"shell\",\"text\":\"rm -rf build\"}",
+          "reason": "risk: ask",
+          "call_id": "c1"
+        },
+        {
+          "type": "approval_resolved",
+          "approval_id": "a1",
+          "approved": false,
+          "reason": "user: denied (once)"
+        },
+        {
+          "type": "tool_call_issued",
+          "call_id": "c2",
+          "tool_name": "shell",
+          "arguments": {
+            "command": "ls"
+          }
+        },
+        {
+          "type": "tool_result",
+          "call_id": "c2",
+          "result": {
+            "exit_code": 0
+          },
+          "is_error": false
+        }
+      ]
+    }
+  ]
+}

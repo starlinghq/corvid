@@ -17,5 +17,7 @@
     <InternalsVisibleTo Include="Corvid.Kernel.Tests" />
     <!-- The replay harness reads and writes fixtures in the persisted event format, not a copy of it. -->
     <InternalsVisibleTo Include="Corvid.Evals" />
+    <!-- The detection rules evaluate the persisted form; their tests compare it with EventJson (C-023). -->
+    <InternalsVisibleTo Include="Corvid.Rules.Tests" />
   </ItemGroup>
 </Project>

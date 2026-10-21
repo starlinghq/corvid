@@ -9,6 +9,8 @@
     <!-- For the sandbox's built-in denials, so the hardline list protects the same paths the sandbox hides. -->
     <ProjectReference Include="../Corvid.Sandbox/Corvid.Sandbox.csproj" />
     <ProjectReference Include="../Corvid.Tools/Corvid.Tools.csproj" />
+    <!-- Detection rules (C-023), evaluated at pre_execute. -->
+    <ProjectReference Include="../Corvid.Rules/Corvid.Rules.csproj" />
     <InternalsVisibleTo Include="Corvid.Approvals.Tests" />
   </ItemGroup>
 </Project>

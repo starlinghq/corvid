@@ -25,6 +25,7 @@ namespace Corvid.Abstractions.Events;
 [JsonDerivedType(typeof(SessionRewound), "session_rewound")]
 [JsonDerivedType(typeof(DeliveryQueued), "delivery_queued")]
 [JsonDerivedType(typeof(DeliveryResolved), "delivery_resolved")]
+[JsonDerivedType(typeof(DetectionMatched), "detection_matched")]
 public abstract record SessionEvent;
 
 // Text is the initial message surface. Provider-specific message objects are never stored here.
@@ -123,3 +124,13 @@ public static class DeliveryStatus
     public const string Delivered = "delivered";
     public const string Failed = "failed";
 }
+
+// A detection rule matched (C-023): RuleId and RuleVersion name the rule, Severity and Posture are as the rule declares them
+// (Posture "detect" when enforcement is off), Reason is its explanation, and Sequences are the logged events that matched.
+// Inline at pre_execute, CallId is the pending tool call that completed the match (it is not yet a matched sequence) and
+// Enforced is "ask" when the rule forced an approval prompt. Both are omitted when null, as for post-hoc records. A rule
+// records at most one per session. Rules never select this event, so a detection never feeds another detection.
+public sealed record DetectionMatched(string RuleId, int RuleVersion, string Severity, string Posture, string Reason,
+    ImmutableArray<long> Sequences,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? CallId = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Enforced = null) : SessionEvent;

@@ -79,6 +79,8 @@ internal static class Samples
         new DeliveryQueued("d-2", "slack", "C1", "job done", "job", ThreadId: "1700000000.0001", Tainted: true),
         new DeliveryResolved("d-1", DeliveryStatus.Delivered, "8"),
         new DeliveryResolved("d-2", DeliveryStatus.Failed, Detail: "chat not found"),
+        new DetectionMatched("secret-read-then-egress", 1, "high", "enforce", "credential read then egress", [3, 7], "call-9", "ask"),
+        new DetectionMatched("fork-bomb", 2, "high", "detect", "fork bomb", [4]),
     ];
 
     public static EventData[] Data(params SessionEvent[] events) => events.Select(EventData.Create).ToArray();

@@ -1,0 +1,113 @@
+{
+  "id": "agent-or-ci-surface-modified",
+  "version": 1,
+  "title": "CI, git hooks, agent instructions or login files are changed",
+  "description": "A write_file or patch_file, or a shell redirect, tee, cp, mv or sed -i, targets CI workflows, git hooks, agent instruction files (AGENTS.md, CLAUDE.md, .cursorrules), login dotfiles or authorized_keys: places where a change runs later or steers another agent. Adapted from Beacon's sensitive-edit rules (MIT).",
+  "severity": "medium",
+  "status": "stable",
+  "posture": "detect",
+  "category": "sensitive-edit",
+  "reason": "A file that runs later or steers an agent is modified",
+  "match": {
+    "event": "tool_call_issued",
+    "where": {
+      "any": [
+        {
+          "all": [
+            {
+              "field": "tool_name",
+              "in": [
+                "write_file",
+                "patch_file"
+              ]
+            },
+            {
+              "field": "arguments.path",
+              "regex": "(?i)(^|/)(\\.github/workflows/|\\.gitlab-ci\\.yml|\\.git/hooks/|AGENTS\\.md|CLAUDE\\.md|\\.cursorrules|\\.bashrc|\\.bash_profile|\\.zshrc|\\.zprofile|(^|/)\\.profile|\\.ssh/authorized_keys)"
+            }
+          ]
+        },
+        {
+          "field": "derived.command",
+          "regex": "(?i)(>>?|\\btee\\b[^|\\n]*|\\b(cp|mv|install|sed\\s+-i)\\b[^|\\n]*)\\s*['\\\"]?[^\\s'\\\"]*(\\.github/workflows/|\\.gitlab-ci\\.yml|\\.git/hooks/|AGENTS\\.md|CLAUDE\\.md|\\.cursorrules|\\.bashrc|\\.bash_profile|\\.zshrc|\\.zprofile|(^|/)\\.profile|\\.ssh/authorized_keys)"
+        }
+      ]
+    }
+  },
+  "tests": [
+    {
+      "name": "workflow_write",
+      "verdict": "match",
+      "events": [
+        {
+          "type": "tool_call_issued",
+          "call_id": "c1",
+          "tool_name": "write_file",
+          "arguments": {
+            "path": ".github/workflows/ci.yml",
+            "content": "on: push"
+          }
+        }
+      ]
+    },
+    {
+      "name": "bashrc_append",
+      "verdict": "match",
+      "events": [
+        {
+          "type": "tool_call_issued",
+          "call_id": "c1",
+          "tool_name": "shell",
+          "arguments": {
+            "command": "echo 'alias ls=rm' >> ~/.bashrc"
+          }
+        }
+      ]
+    },
+    {
+      "name": "agents_patch",
+      "verdict": "match",
+      "events": [
+        {
+          "type": "tool_call_issued",
+          "call_id": "c1",
+          "tool_name": "patch_file",
+          "arguments": {
+            "path": "AGENTS.md",
+            "old_text": "a",
+            "new_text": "b"
+          }
+        }
+      ]
+    },
+    {
+      "name": "source_write",
+      "verdict": "no_match",
+      "events": [
+        {
+          "type": "tool_call_issued",
+          "call_id": "c1",
+          "tool_name": "write_file",
+          "arguments": {
+            "path": "src/app.cs",
+            "content": "x"
+          }
+        }
+      ]
+    },
+    {
+      "name": "read_bashrc",
+      "verdict": "no_match",
+      "events": [
+        {
+          "type": "tool_call_issued",
+          "call_id": "c1",
+          "tool_name": "shell",
+          "arguments": {
+            "command": "cat ~/.bashrc"
+          }
+        }
+      ]
+    }
+  ]
+}
