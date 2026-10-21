@@ -139,7 +139,7 @@ internal sealed class ChatHandler(CorvidRuntime runtime, ServeSettings settings)
     private const int RememberedConversations = 4096;
 
     private readonly ConversationMap _conversations = new(RememberedConversations);
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _turns = new(StringComparer.Ordinal);
+    private readonly SessionGates _turns = new();
     private readonly SessionSettings _sessionSettings = new(Interactive: false, Tools: settings.Tools);
 
     public async Task HandleAsync(HttpContext context)
@@ -186,18 +186,12 @@ internal sealed class ChatHandler(CorvidRuntime runtime, ServeSettings settings)
         context.Response.Headers[OpenAIEndpoint.SessionHeader] = session.Id;
 
         // One request at a time per session, so each request's feed carries only its own turn.
-        var gate = _turns.GetOrAdd(session.Id, _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(context.RequestAborted).ConfigureAwait(false);
-        try
+        using (await _turns.EnterAsync(session.Id, context.RequestAborted).ConfigureAwait(false))
         {
             if (request!.Stream == true)
                 await StreamAsync(context, session, conversation, text).ConfigureAwait(false);
             else
                 await AnswerAsync(context, session, conversation, text).ConfigureAwait(false);
-        }
-        finally
-        {
-            gate.Release();
         }
     }
 
