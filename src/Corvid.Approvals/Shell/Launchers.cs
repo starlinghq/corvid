@@ -76,6 +76,15 @@ internal static class LauncherTables
          "dry-run", "no-notice"],
         ["jobs", "halt", "timeout", "retries", "delay", "joblog", "results", "arg-file"]);
 
+    // util-linux runuser (su-common.c): getopt_long without "+", so options permute; that is why the -u form is written
+    // "runuser -u USER -- COMMAND".
+    public static readonly OptionTable Runuser = new("flmpPThV", "cgGsuw",
+        ["fast", "login", "preserve-environment", "pty", "no-pty", "help", "version"],
+        ["command", "session-command", "group", "supp-group", "shell", "user", "whitelist-environment"], Permute: true);
+
+    // at 3.2 (at.c): plain getopt "q:f:MmbvlrdhVct:o:u:", no long options; glibc permutes, so options may follow the time.
+    public static readonly OptionTable At = new("MmbvlrdhVc", "qftou", Permute: true);
+
     // Unit properties that only limit resources. Others can run more commands (ExecStartPre=), change the user, the root
     // directory or the mounts, so a -p outside this list is refused.
     public static readonly ImmutableHashSet<string> SystemdResourceProperties = ImmutableHashSet.Create(StringComparer.Ordinal,
@@ -274,8 +283,10 @@ internal sealed partial class ShellAnalyzer
 
         Launcher("valgrind", scope, text, facts =>
         {
-            // Valgrind also reads options from ~/.valgrindrc, ./.valgrindrc and $VALGRIND_OPTS, which Corvid does not see.
+            // Valgrind also reads options from ~/.valgrindrc, ./.valgrindrc and $VALGRIND_OPTS, which Corvid does not see
+            // and which can send its log anywhere (--log-file) or trace every child process: it always asks.
             facts.Effects |= ActionEffects.Execute;
+            facts.Unresolved("valgrind also reads options from ./.valgrindrc, ~/.valgrindrc and $VALGRIND_OPTS, which can redirect its output and trace child processes");
             foreach (var (name, value) in settings)
                 switch (name)
                 {
@@ -310,6 +321,271 @@ internal sealed partial class ShellAnalyzer
             return new Field(name[..variable], true, false, name);
         var pattern = name.Replace("%p", "*", StringComparison.Ordinal).Replace("%n", "*", StringComparison.Ordinal);
         return new Field(pattern, false, pattern != name, name);
+    }
+
+    private static Scope Forget(Scope scope, params string[] names) =>
+        scope with { Variables = names.Aggregate(scope.Variables, (variables, name) => variables.SetItem(name, null)) };
+
+    private static Scope ForgetAll(Scope scope) => scope with
+    {
+        Variables = scope.Variables.ToImmutableDictionary(pair => pair.Key, _ => (string?)null, StringComparer.Ordinal),
+    };
+
+    // runuser [options] -u USER [[--] COMMAND [ARGS]] runs COMMAND directly as USER; without -u it is su: runuser [options]
+    // [-] [USER] with -c (or --session-command) running a string with the user's shell. Either way it changes the user, so
+    // everything it runs is elevated and asks. util-linux refuses -u together with -c, --session-command, -l, -s or -f.
+    private StateChange? Runuser(List<Field> args, Scope scope, Extras extras, int nesting, string text)
+    {
+        var elevated = Elevate(scope, "runuser");
+        if (!Options.Parse(args, LauncherTables.Runuser, out var options, out var operand, out var problem))
+            return Refuse("runuser", elevated, extras, text, $"runuser: {problem}");
+        var operands = args.Skip(operand).ToList();
+        var login = Has(options, "l", "login");
+        // A bare "-" as the first operand (after getopt's permutation) means --login.
+        if (operands.Count > 0 && operands[0] is { Dynamic: false, Text: "-" })
+        {
+            login = true;
+            operands.RemoveAt(0);
+        }
+
+        if (Has(options, "h", "help", "V", "version"))
+        {
+            Launcher("runuser", elevated, text, facts => facts.Effects |= ActionEffects.Read, extras.Redirects);
+            return null;
+        }
+
+        var user = Option(options, "u", "user");
+        var command = Option(options, "c", "command", "session-command");
+        // Without --preserve-environment runuser sets HOME and SHELL (and USER, LOGNAME) for the target user; --login
+        // clears the environment and starts in the target user's home directory.
+        var preserve = Has(options, "m", "p", "preserve-environment") && !login;
+        if (user is not null)
+        {
+            if (command is not null || login || Has(options, "s", "shell", "f", "fast"))
+                return Refuse("runuser", elevated, extras, text,
+                    "runuser: --user cannot be combined with --command, --session-command, --login, --shell or --fast");
+            if (operands.Count == 0)
+                return Refuse("runuser", elevated, extras, text, "runuser -u without a command starts an interactive shell");
+            var inner = Elevate(scope, "runuser -u");
+            return Invocation(operands, preserve ? inner : Forget(inner, "HOME", "SHELL", "USER", "LOGNAME"), extras, nesting, text);
+        }
+
+        if (command is null)
+            return Refuse("runuser", elevated, extras, text, "runuser without -c starts an interactive shell");
+        if (operands.Count > 1)
+            return Refuse("runuser", elevated, extras, text, "runuser passes the arguments after the user to the shell");
+        if (command.Dynamic)
+            return Refuse("runuser", elevated, extras, text, "runuser -c: the script is computed at run time");
+        var shell = Option(options, "s", "shell");
+        Launcher("runuser", elevated, text, facts =>
+        {
+            facts.Effects |= ActionEffects.Execute;
+            if (shell is null || shell.Dynamic || !Shells.Contains(Path.GetFileName(shell.Text)))
+                facts.Unresolved($"runuser runs the command with {(shell is null ? "the target user's login shell" : $"the shell '{shell.Display}'")}, which may read it differently from bash");
+        }, extras.Redirects);
+        var child = ChildShell(Elevate(scope, "runuser -c"));
+        child = login ? ForgetAll(child) with { Cwds = [null] } : preserve ? child : Forget(child, "HOME", "SHELL", "USER", "LOGNAME");
+        NestedScript("runuser", command.Text, child, nesting, text);
+        return null;
+    }
+
+    // at [options] TIME... and batch [options]: read a job (commands for /bin/sh) from stdin or -f FILE and run it later
+    // under atd, in this working directory with the exported environment. Deferred execution always asks; a job given
+    // as a static string (here-string, here-document, or a pipe from echo) is analysed so the hardline list still sees it.
+    // -l lists jobs (atq), -r and -d remove them (atrm), -c prints them.
+    private StateChange? At(string verb, List<Field> args, Scope scope, Extras extras, int nesting, string text)
+    {
+        if (!Options.Parse(args, LauncherTables.At, out var options, out _, out var problem))
+            return Refuse(verb, scope, extras, text, $"{verb}: {problem}");
+        if (Has(options, "l", "c", "h"))
+        {
+            Launcher(Has(options, "l") ? "atq" : verb, scope, text, facts => facts.Effects |= ActionEffects.Read, extras.Redirects);
+            return null;
+        }
+
+        if (Has(options, "r", "d"))
+        {
+            Launcher("atrm", scope, text, facts => facts.Effects |= ActionEffects.Schedule, extras.Redirects);
+            return null;
+        }
+
+        var file = Option(options, "f");
+        var name = Has(options, "b") ? "batch" : verb;
+        Launcher(name, scope, text, facts =>
+        {
+            facts.Effects |= ActionEffects.Execute | ActionEffects.Schedule;
+            facts.Unresolved($"{name} runs the job later, from atd, when what it touches may have changed");
+            if (file is not null)
+            {
+                facts.Path(file, TargetAccess.Read);
+                facts.Unresolved($"{name} -f runs the commands in '{file.Display}', which Corvid does not read");
+            }
+        }, extras.Redirects);
+        if (file is not null)
+            return null;
+        if (extras.Stdin is { Kind: StdinKind.Literal or StdinKind.Piped, Text: { } job })
+            NestedScript(name, job, ChildShell(Via(scope, name)), nesting, text);
+        else
+            Refuse(name, scope, Extras.None, text, $"{name} reads the job from its input, which is not known");
+        return null;
+    }
+
+    // gdb parses with getopt_long_only and no short options: -ex, -batch, -p and --pid are all long options, spelled with
+    // one dash or two, their value attached with "=" or the next word. Only these exact names are accepted (getopt would
+    // also take an unambiguous prefix; Corvid refuses it).
+    private static readonly ImmutableHashSet<string> GdbFlags = ImmutableHashSet.Create(StringComparer.Ordinal,
+        "tui", "dbx", "readnow", "r", "readnever", "quiet", "q", "silent", "nh", "nx", "n", "batch-silent", "batch", "fullname",
+        "f", "epoch", "help", "h", "version", "configuration", "nw", "nowindows", "w", "windows", "statistics", "write", "args",
+        "return-child-result");
+
+    private static readonly ImmutableHashSet<string> GdbSettings = ImmutableHashSet.Create(StringComparer.Ordinal,
+        "annotate", "se", "symbols", "s", "exec", "e", "core", "c", "pid", "p", "command", "x", "eval-command", "ex",
+        "init-command", "ix", "init-eval-command", "iex", "early-init-command", "eix", "early-init-eval-command", "eiex",
+        "directory", "d", "data-directory", "D", "cd", "tty", "baud", "b", "l", "interpreter", "i");
+
+    private static readonly ImmutableHashSet<string> GdbScripts = ImmutableHashSet.Create(StringComparer.Ordinal,
+        "x", "command", "ix", "init-command", "eix", "early-init-command");
+
+    private static readonly ImmutableHashSet<string> GdbCommands = ImmutableHashSet.Create(StringComparer.Ordinal,
+        "ex", "eval-command", "iex", "init-eval-command", "eiex", "early-init-eval-command");
+
+    // gdb [options] [PROGRAM [CORE|PID]] or gdb [options] --args PROGRAM [ARGS]. A debugger runs what it is told: -ex and
+    // -x run gdb commands (shell, !, python), it reads ~/.gdbinit and ./.gdbinit unless told not to, and interactively it
+    // takes any command. It always asks; the program it would run is still analysed, -p attaches to processes, and the
+    // core and symbol files are read.
+    private StateChange? Gdb(List<Field> args, Scope scope, Extras extras, int nesting, string text)
+    {
+        var settings = new List<(string Name, Field Value)>();
+        var flags = new List<string>();
+        var operands = new List<Field>();
+        List<Field>? inferior = null;
+        for (var i = 0; i < args.Count; i++)
+        {
+            var arg = args[i];
+            if (arg.Dynamic)
+            {
+                if (arg.Text.StartsWith('-') || arg.Text.Length == 0)
+                    return Refuse("gdb", scope, extras, text, $"gdb: option '{arg.Display}' is computed at run time");
+                operands.Add(arg);
+                continue;
+            }
+
+            if (arg.Text == "--")
+            {
+                operands.AddRange(args.Skip(i + 1));
+                break;
+            }
+
+            if (arg.Text.Length < 2 || arg.Text[0] != '-')
+            {
+                operands.Add(arg);
+                continue;
+            }
+
+            var option = arg.Text[(arg.Text.StartsWith("--", StringComparison.Ordinal) ? 2 : 1)..];
+            var equals = option.IndexOf('=', StringComparison.Ordinal);
+            var name = equals < 0 ? option : option[..equals];
+            if (GdbFlags.Contains(name) && equals < 0)
+            {
+                if (name == "args")
+                {
+                    // gdb stops reading options at --args; a program before it would have been permuted past options.
+                    if (operands.Count > 0)
+                        return Refuse("gdb", scope, extras, text, "gdb: a program before --args is not analysed");
+                    inferior = args.Skip(i + 1).ToList();
+                    break;
+                }
+
+                flags.Add(name);
+                continue;
+            }
+
+            if (!GdbSettings.Contains(name))
+                return Refuse("gdb", scope, extras, text, $"gdb: unknown option '{arg.Text}'");
+            if (equals >= 0)
+                settings.Add((name, Field.Literal(option[(equals + 1)..])));
+            else if (i + 1 < args.Count)
+                settings.Add((name, args[++i]));
+            else
+                return Refuse("gdb", scope, extras, text, $"gdb: option '{arg.Text}' needs a value");
+        }
+
+        if (inferior is { Count: 0 })
+            return Refuse("gdb", scope, extras, text, "gdb --args without a program");
+        if (inferior is null && operands.Count > 2)
+            return Refuse("gdb", scope, extras, text, "gdb takes a program and a core file or process ID");
+
+        var program = inferior is null ? operands.FirstOrDefault() : inferior[0];
+        var write = flags.Contains("write");
+        static bool IsPid(Field field) => !field.Dynamic && field.Text.Length > 0 && field.Text.All(char.IsAsciiDigit);
+        Launcher("gdb", scope, text, facts =>
+        {
+            facts.Effects |= ActionEffects.Execute | ActionEffects.Read;
+            facts.Unresolved(flags.Contains("batch") || flags.Contains("batch-silent")
+                ? "gdb reads ~/.gdbinit, ./.gdbinit and auto-loaded scripts, which can run any command"
+                : "gdb is an interactive debugger, which can run any command");
+            foreach (var (name, value) in settings)
+            {
+                if (GdbCommands.Contains(name))
+                {
+                    facts.Unresolved($"gdb runs the command '{value.Display}', and gdb commands can run shell commands and Python");
+                    if (!value.Dynamic)
+                        facts.OpaqueScript(value.Text);
+                    continue;
+                }
+
+                if (GdbScripts.Contains(name))
+                {
+                    facts.Path(value, TargetAccess.Read);
+                    facts.Unresolved($"gdb runs the commands in '{value.Display}', which Corvid does not read");
+                    continue;
+                }
+
+                switch (name)
+                {
+                    case "p" or "pid":
+                        Pids(facts, value);
+                        break;
+                    // gdb attaches when the "core" is a process ID.
+                    case "c" or "core" when IsPid(value):
+                        facts.Process(value);
+                        break;
+                    case "c" or "core":
+                        facts.Path(value, write ? TargetAccess.Write : TargetAccess.Read);
+                        break;
+                    case "s" or "symbols" or "e" or "exec" or "se" or "d" or "directory":
+                        facts.Path(value, TargetAccess.Read);
+                        break;
+                    case "D" or "data-directory":
+                        facts.Path(value, TargetAccess.Read);
+                        facts.Unresolved($"gdb loads its Python and command scripts from '{value.Display}'");
+                        break;
+                    case "tty":
+                        facts.Path(value, TargetAccess.Write);
+                        break;
+                }
+            }
+
+            if (program is not null)
+                facts.Path(program, write ? TargetAccess.Write : TargetAccess.Read);
+            if (inferior is null && operands.Count == 2)
+            {
+                if (IsPid(operands[1]))
+                    facts.Process(operands[1]);
+                else
+                    facts.Path(operands[1], write ? TargetAccess.Write : TargetAccess.Read);
+            }
+        }, program is null ? extras.Redirects : default);
+
+        if (program is null)
+            return null;
+        // The program gdb would run (with its arguments after --args), in gdb's -cd directory when one is given. gdb also
+        // looks for PROGRAM in its working directory before PATH, which the always-ask above covers.
+        var innerScope = Via(scope, "gdb");
+        if (settings.LastOrDefault(setting => setting.Name == "cd").Value is { } directory)
+            innerScope = innerScope with { Cwds = directory.Dynamic ? [null] : NewFacts("gdb", scope).Directories(directory) };
+        Invocation(inferior ?? [program], innerScope, extras, nesting, text);
+        return null;
     }
 
     // perf stat|record|trace [options] [COMMAND [ARGS]]. Other subcommands keep the description of a program that runs code.
