@@ -56,12 +56,19 @@ public sealed class ShellRedirect
 {
     private ShellWord? _target;
 
-    internal ShellRedirect(int? descriptor, RedirectKind kind, ShellWord? target)
+    internal ShellRedirect(int? descriptor, RedirectKind kind, ShellWord? target, bool input = false)
     {
         Descriptor = descriptor;
         Kind = kind;
         _target = target;
+        Input = input || kind is RedirectKind.Input or RedirectKind.ReadWrite or RedirectKind.HereString or RedirectKind.HereDocument;
     }
+
+    /// <summary>Written with <c>&lt;</c> (<c>&lt;</c>, <c>&lt;&gt;</c>, <c>&lt;&amp;</c>, <c>&lt;&lt;</c>, <c>&lt;&lt;&lt;</c>), so it defaults to descriptor 0.</summary>
+    public bool Input { get; }
+
+    /// <summary>The descriptor this redirection changes: the explicit one, or 0 for input forms and 1 for output forms.</summary>
+    public int Changes => Descriptor ?? (Input ? 0 : 1);
 
     /// <summary>The explicit descriptor (<c>2&gt;</c>), or null for the default.</summary>
     public int? Descriptor { get; }

@@ -758,8 +758,20 @@ a shell tool is assessed as the command line it runs (see [Built-in tools and sc
   extraction as if it ran alone. Unwrapping never lowers risk. Tracers add their own targets: `strace` and
   `ltrace` (`-o` writes a file, or pipes to a shell command that is analysed; `-p` attaches to PIDs; `-u` elevates;
   `strace -E` sets the environment; fault injection is unresolved), `valgrind` (`--log-file` and the profilers' output
-  files, with `%p` as a pattern; it reads option files Corvid cannot see, so it executes) and `perf stat`, `record`
-  (`perf.data`) and `trace`. Launchers that change namespaces, mounts or the user mark the launcher and everything
+  files, with `%p` as a pattern; it also reads `./.valgrindrc`, `~/.valgrindrc` and `$VALGRIND_OPTS`, which can
+  redirect `--log-file` or set `--trace-children`, so it always asks) and `perf stat`, `record` (`perf.data`) and
+  `trace`. `gdb` (`getopt_long_only`: one- or two-dash long names, exact only) always asks, since a debugger runs
+  whatever it is told and reads `.gdbinit`; `--args PROGRAM ARGS` and a bare `PROGRAM` are analysed as the command it
+  would run (in its `-cd` directory), `-p`/`--pid` and a numeric second operand are process targets, core and symbol
+  files are reads, `-x`/`-ix` scripts are reads plus unresolved, and `-ex`/`-iex` commands are unresolved and kept for
+  the hardline backstop. `runuser` (permuted util-linux options) elevates: `-u USER [--] COMMAND` is unwrapped like
+  `sudo`, `-c`/`--session-command` strings go through the subset parser (with `-l` or `-` the working directory is
+  unknown; a shell other than `sh`/`bash`/`dash`, or the user's login shell, is unresolved), and `-u` with `-c`, `-l`,
+  `-s` or `-f` refuses as util-linux does. `at` and `batch` defer the job to atd, so they always ask (`Schedule`); the
+  time spec is consumed, a job from a static here-string, here-document or a pipe from `echo` of static words (no
+  option other than `-n`, no backslash, glob or expansion) is parsed as a `/bin/sh` script in the current directory,
+  `-f FILE` is a read target and unresolved, input Corvid cannot see refuses, `at -l` is `atq` (read-only) and
+  `at -r`/`-d` is `atrm`. Only `at` and `batch` read a piped `echo`; a shell reading one still asks. Launchers that change namespaces, mounts or the user mark the launcher and everything
   it runs unresolved, so they always ask: `nsenter`, `unshare`, `firejail` (a short list of options), `bwrap`
   (writable binds are write targets, read-only binds recursive reads; the working directory is unknown) and
   `systemd-run` (elevated for the system manager; a service runs in `/` or the home directory with the manager's
@@ -820,8 +832,8 @@ Not built yet: GLiNER2 extraction of free-form targets (SQL, `curl` data, `kill`
 spike S3; calibrated `risk` (C-004b); reversibility now comes from checkpoint state (C-014 sets `ApprovalContext.Reversible`);
 restoring session rules on resume (they are not in the log); removing rules (C-013's `/approvals` lists them, and the
 host keeps always-rules in `Corvid:Approvals:RulesFile`, by default `$XDG_CONFIG_HOME/corvid/approvals.json`); control flow, subshells and other syntax
-outside the subset, which ask rather than run; unwrapping launchers not yet read (`runuser`, `at`, `gdb`, `perf`
-subcommands other than `stat`, `record` and `trace`, moreutils `parallel`, which is read as GNU's), which remain programs that
+outside the subset, which ask rather than run; unwrapping launchers not yet read (`perf` subcommands other than `stat`, `record` and `trace`, `lldb`, moreutils
+`parallel`, which is read as GNU's), which remain programs that
 run code Corvid cannot see; symlinks and `/proc/<pid>/cwd` paths, which are resolved lexically and left to the sandbox.
 
 ## Session actor and turn loop (C-011)
