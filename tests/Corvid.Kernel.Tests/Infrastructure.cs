@@ -79,6 +79,10 @@ internal static class Samples
         new DeliveryQueued("d-2", "slack", "C1", "job done", "job", ThreadId: "1700000000.0001", Tainted: true),
         new DeliveryResolved("d-1", DeliveryStatus.Delivered, "8"),
         new DeliveryResolved("d-2", DeliveryStatus.Failed, Detail: "chat not found"),
+        new McpToolHeld("notes", "add", "changed", "ab12", PinnedHash: "cd34"),
+        new McpToolHeld("notes", "save", "flagged", "ef56", Detail: "<IMPORTANT"),
+        new McpToolAccepted("notes", "add", "ab12"),
+        new McpToolAccepted("notes", "save", "ef56", Flagged: true),
     ];
 
     public static EventData[] Data(params SessionEvent[] events) => events.Select(EventData.Create).ToArray();

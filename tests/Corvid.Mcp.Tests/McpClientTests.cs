@@ -68,7 +68,8 @@ public sealed class McpClientTests
         // A server claiming read-only would otherwise run unasked; untrusted, every tool asks and is treated as destructive.
         var tool = new Tool { Name = "read", Annotations = new ToolAnnotations { ReadOnlyHint = true, DestructiveHint = false, OpenWorldHint = false } };
         var untrusted = McpToolMapping.Risk(Server(), tool);
-        Assert.Equal(new ToolRisk(SideEffects.Remote, Network: false, Destructive: true), untrusted);
+        // Its description is outside content too (C-022): a turn that shows it to the generator is tainted.
+        Assert.Equal(new ToolRisk(SideEffects.Remote, Network: false, Destructive: true, OutsideDescription: true), untrusted);
 
         var trusted = McpToolMapping.Risk(Server(trust: McpTrust.Trusted), tool);
         Assert.Equal(new ToolRisk(SideEffects.None, Network: false, Destructive: false), trusted);
