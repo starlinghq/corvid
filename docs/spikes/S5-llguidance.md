@@ -10,7 +10,7 @@ that cost? Upstream ask U-2 (§19) depends on the answer.
 
 ## Result
 
-**Feasible on the version Starling already pins. Mixed against the pass condition.**
+**Feasible on the version Starling already pins. Fail as written on latency.** The condition names no percentile, so it is read as holding at the tail as well as the median. The p90 adds 15.5–20.5%; the median alone would pass (+6–8.5%).
 
 - **Feasible, no upgrade.** ONNX Runtime GenAI 0.17.1, the version Starling pins exactly, has a public
   `GeneratorParams.SetGuidance(type, data, enableFFTokens)`. llguidance is compiled into both linux-x64 natives, CPU
@@ -24,8 +24,7 @@ that cost? Upstream ask U-2 (§19) depends on the answer.
   prose 15 times in 100. With the grammar (tool choice "required") it did so 0 times, and the right tool rose from 83
   to 95.
 - **Latency: passes at p50, fails at p90.** Time to first token is unchanged, so grammar compilation is not visible
-  even when the grammar changes every turn. Decode is 7–8% slower at the median, about 2 ms more per token on the CPU
-  side. Total request time is +6% (all 12 tools) and +8.5% (5-tool shortlist) at the median of paired per-case
+  even when the grammar changes every turn. Decode is 7–8% slower at the median, about 2 ms more per token. Total request time is +6% (all 12 tools) and +8.5% (5-tool shortlist) at the median of paired per-case
   ratios, and +15.5% and +20.5% at p90. An A/A control of the same cases without the grammar puts run-to-run noise at
   0% for the median and 3.2–3.7% for p90, so the tail cost is real.
 
@@ -73,7 +72,7 @@ tokenizer json". No separate build flag is needed: the shipped packages were bui
 **How Starling drives generation.** `GenAIModel.CreateSequence` builds a `GeneratorParams` (search options only), and
 `GenAISequence.GenerateNextToken` calls GenAI's `Generator.GenerateNextToken()` and then reads `GetNextTokens()[0]`.
 Starling does not sample logits itself, so a mask set on `GeneratorParams` applies inside GenAI's own step. The
-Extensions.AI mapper (`Qwen35ChatRequestMapper`) still throws on `ResponseFormat` JSON, as §2 records; nothing above
+Extensions.AI mapper still throws on any `ResponseFormat` other than text (`Qwen35ChatRequestMapper.cs:111`, `NotSupportedException`), as §2 records; nothing above
 the GenAI adapter knows about guidance.
 
 ## The prototype (Starling branch `spike/s5-llguidance`)
@@ -204,7 +203,7 @@ Paired per-case ratios, guided / free (and the A/A control, free repeat / free):
 - **TTFT is unchanged** (ratios within A/A noise), including guided-subset, whose grammar changes every case. Compiling
   a 5-tool or 12-tool grammar does not show up in time to first token.
 - **The cost is per decoded token**: about 2.4 ms per token with 12 tools (25.9 → 28.3 ms) and 1.9 ms with 5 (19.3 →
-  21.3 ms). The mask is computed on the CPU, so the relative cost grows as the GPU step gets faster. On a model or
+  21.3 ms). llguidance is a CPU library inside the native, so the mask is most likely computed on the CPU (inferred, not profiled); if so, the relative cost grows as the GPU step gets faster. On a model or
   device that decodes faster than about 40 tok/s, expect more than 8%.
 - Against "no added latency over 10%", the median passes (+6.0% and +8.5%), and so does the median on cases where both
   runs produced the same number of tokens (+5.3% and +8.0%). The p90 fails (+15.5% and +20.5%, against an A/A p90 of
@@ -254,4 +253,5 @@ python3 -I summarize.py runs.jsonl
 ```
 
 The CUDA build needs the CUDA 13 runtime, cuBLAS and cuDNN 9 on `LD_LIBRARY_PATH`. Building with `-p:UseCuda=true`
-rewrites the CPU lock files of the referenced libraries; revert them before committing.
+rewrites the CPU lock files of the referenced libraries; revert them before committing. The spike tool has only
+`packages.cuda.lock.json`; a CPU build creates its own lock file.
