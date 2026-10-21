@@ -18,8 +18,8 @@ public sealed record HermesMemoryFile(string File, string Path, bool Exists, Imm
 
 /// <summary>
 /// Hermes Agent's built-in memory files (D-9, C-027): <c>$HERMES_HOME/memories/MEMORY.md</c> (the agent's notes) and
-/// <c>USER.md</c> (the user profile); the host finds the Hermes home (<c>Corvid.Host.Configuration.HermesHome</c>). Read as Hermes reads them
-/// (NousResearch/hermes-agent, <c>tools/memory_tool_store.py</c>, <c>MemoryStore._read_raw_checked</c> and
+/// <c>USER.md</c> (the user profile); the host finds the Hermes home (<c>HermesHome</c> in <c>Corvid.Host</c>, C-035).
+/// Read as Hermes reads them (NousResearch/hermes-agent, <c>tools/memory_tool_store.py</c>, <c>MemoryStore._read_raw_checked</c> and
 /// <c>_parse_entries</c>, checked at 1ab79836): strict UTF-8 with a leading BOM stripped, entries split on the whole
 /// <c>"\n§\n"</c> delimiter so a bare <c>§</c> inside an entry survives, each entry stripped, empty ones dropped, and
 /// repeats dropped keeping the first.
