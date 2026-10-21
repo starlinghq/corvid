@@ -172,8 +172,9 @@ public sealed class CorvidRuntimeFactory(
                 : null;
 
             // C-018: configured MCP servers start in the background and add their tools as they list them; last, so built-in
-            // and DI tools keep their names. A sandboxed server is denied what the shell is denied.
-            var mcp = McpComposition.Start(settings, McpDeniedPaths(vault, environment), toolRegistry);
+            // and DI tools keep their names. A sandboxed server is denied what the shell is denied. C-022: held and accepted
+            // definitions are recorded in the log's mcp-pins session.
+            var mcp = McpComposition.Start(settings, McpDeniedPaths(vault, environment), toolRegistry, log);
 
             return new CorvidRuntime(settings, catalogue, composer, devices, metrics, feed, log, registry, fabric, approvals, prompters,
                 toolRegistry, memory, counter, builtin, checkpoints, skills, mcp) { UnavailableModels = [.. unavailable] };

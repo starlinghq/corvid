@@ -25,6 +25,8 @@ namespace Corvid.Abstractions.Events;
 [JsonDerivedType(typeof(SessionRewound), "session_rewound")]
 [JsonDerivedType(typeof(DeliveryQueued), "delivery_queued")]
 [JsonDerivedType(typeof(DeliveryResolved), "delivery_resolved")]
+[JsonDerivedType(typeof(McpToolHeld), "mcp_tool_held")]
+[JsonDerivedType(typeof(McpToolAccepted), "mcp_tool_accepted")]
 public abstract record SessionEvent;
 
 // Text is the initial message surface. Provider-specific message objects are never stored here.
@@ -123,6 +125,23 @@ public sealed record DeliveryQueued(string DeliveryId, string Adapter, string Ch
 public sealed record DeliveryResolved(string DeliveryId, string Status,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PlatformMessageId = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Detail = null) : SessionEvent;
+
+// MCP tool pinning (C-022): kept in their own session (McpSessions.Pins), so no chat's transcript carries them. Held: a tool
+// of a configured server was not offered because its definition is new since the server was first pinned, changed from its
+// pin (Hash against PinnedHash), or its description matched a poisoning pattern (Reason "flagged", Detail the matched text).
+// Accepted: the user pinned the definition the process held (/mcp accept), or allowed a flagged one (/mcp allow, Flagged), so
+// it is registered; an allowed flagged tool is treated as an untrusted server's, whatever the server's trust.
+public sealed record McpToolHeld(string Server, string Tool, string Reason, string Hash,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PinnedHash = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Detail = null) : SessionEvent;
+
+public sealed record McpToolAccepted(string Server, string Tool, string Hash, bool Flagged = false) : SessionEvent;
+
+public static class McpSessions
+{
+    /// <summary>The event-log session that records held and accepted MCP tool definitions (C-022).</summary>
+    public const string Pins = "mcp-pins";
+}
 
 public static class DeliveryStatus
 {

@@ -40,7 +40,8 @@ internal static class McpCommand
             console.MarkupLine("No MCP servers are configured (Corvid:Mcp:Servers).");
             return ExitCodes.Success;
         }
-        // The same start the runtime does, into a registry of its own: the servers' tools, with what each was refused.
+        // The same start the runtime does, into a registry of its own: the servers' tools, with what each was refused. It reads
+        // and writes the same pins (C-022), with no event log: held tools are printed, not recorded.
         var registry = new ToolRegistry();
         var configFile = host.Services.GetService<CorvidConfigFile>()?.Path ?? CorvidPaths.UserConfigFile;
         await using var clients = McpComposition.Start(options, McpComposition.DeniedPaths(options, configFile), registry)!;
@@ -57,6 +58,9 @@ internal static class McpCommand
         foreach (var server in clients.Status())
             foreach (var issue in server.Issues)
                 console.MarkupLine($"[yellow]![/] {Markup.Escape(server.Name)}: left out {Markup.Escape(issue)}");
+        // C-022: a listing pins a server's tools the first time; after that, new, changed and flagged definitions are held.
+        if (clients.Status().Any(server => !server.Held.IsEmpty))
+            console.MarkupLine(Markup.Escape("Held tools are not offered until reviewed in `corvid chat`: /mcp diff <server> <tool>, then /mcp accept or /mcp allow."));
         return clients.Status().Any(server => server.State != McpServerState.Ready) ? ExitCodes.Failure : ExitCodes.Success;
     }
 
