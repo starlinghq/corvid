@@ -51,9 +51,9 @@ public static class ProjectResolver
             commonDirectory = Path.TrimEndingDirectorySeparator(commonDirectory);
             var remote = await runner.RunRawAsync(["--git-dir=" + commonDirectory, "config", "--get", "remote.origin.url"]).ConfigureAwait(false);
             var url = remote.Text.Trim();
-            if (remote.ExitCode == 0 && url.Length > 0)
-                return new ProjectIdentity(ProjectIds.FromRemote(url), ProjectSources.Remote);
             var checkout = Path.GetFileName(commonDirectory) == ".git" ? Path.GetDirectoryName(commonDirectory)! : commonDirectory;
+            if (remote.ExitCode == 0 && url.Length > 0)
+                return new ProjectIdentity(ProjectIds.FromRemote(url, checkout), ProjectSources.Remote);
             return new ProjectIdentity(ProjectIds.FromPath(checkout), ProjectSources.Checkout);
         }
         catch (CheckpointException)

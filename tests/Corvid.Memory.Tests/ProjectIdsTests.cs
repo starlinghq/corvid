@@ -49,4 +49,17 @@ public sealed class ProjectIdsTests
         Assert.NotEqual(ProjectIds.FromPath(root), ProjectIds.FromPath(root + "-other"));
         Assert.Equal(Path.GetFullPath(root).TrimEnd('/').ToLowerInvariant(), ProjectIds.NormalizePath(root));
     }
+
+    [Fact]
+    public void A_relative_local_remote_is_resolved_against_its_checkout()
+    {
+        var a = Path.Combine(Path.GetTempPath(), "a", "tool");
+        var b = Path.Combine(Path.GetTempPath(), "b", "other");
+        Assert.NotEqual(ProjectIds.FromRemote("../upstream.git", a), ProjectIds.FromRemote("../upstream.git", b));
+        Assert.Equal(ProjectIds.FromRemote(Path.Combine(Path.GetTempPath(), "a", "upstream.git")), ProjectIds.FromRemote("../upstream.git", a));
+        Assert.Equal(ProjectIds.FromRemote(Path.Combine(a, "x")), ProjectIds.FromRemote("./x", a));
+        // Network and absolute remotes are unchanged by the checkout.
+        foreach (var url in new[] { "git@github.com:example/widgets.git", "https://github.com/example/widgets", "/srv/git/widgets.git" })
+            Assert.Equal(ProjectIds.FromRemote(url), ProjectIds.FromRemote(url, a));
+    }
 }

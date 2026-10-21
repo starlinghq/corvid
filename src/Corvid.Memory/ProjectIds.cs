@@ -27,6 +27,28 @@ public static class ProjectIds
     /// </summary>
     public static string FromRemote(string url) => Hash(NormalizeRemote(url));
 
+    /// <summary>
+    /// The id of a remote read from the repository whose main checkout is <paramref name="checkout"/>. A relative local path
+    /// (no scheme, not scp form, not rooted: <c>../upstream.git</c>) is resolved against the checkout first, so unrelated
+    /// repositories with the same relative origin do not share an id or each other's lessons.
+    /// </summary>
+    public static string FromRemote(string url, string checkout)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkout);
+        return FromRemote(IsRelativePath(url) ? System.IO.Path.GetFullPath(url.Trim(), checkout) : url);
+    }
+
+    internal static bool IsRelativePath(string url)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(url);
+        var text = url.Trim();
+        if (text.Contains("://", StringComparison.Ordinal) || System.IO.Path.IsPathRooted(text))
+            return false;
+        var colon = text.IndexOf(':', StringComparison.Ordinal);
+        var slash = text.IndexOf('/', StringComparison.Ordinal);
+        return !(colon > 0 && (slash < 0 || colon < slash));
+    }
+
     /// <summary>The id of a directory: its full path with <c>/</c> separators and no trailing separator.</summary>
     public static string FromPath(string path) => Hash(NormalizePath(path));
 

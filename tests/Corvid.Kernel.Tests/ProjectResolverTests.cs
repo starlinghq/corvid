@@ -45,6 +45,19 @@ public sealed class ProjectResolverTests : IDisposable
     }
 
     [Fact]
+    public async Task Repositories_with_the_same_relative_origin_are_different_projects()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "a"));
+        Directory.CreateDirectory(Path.Combine(_root, "b"));
+        var tool = Repository(Path.Combine("a", "tool"), "../upstream.git");
+        var other = Repository(Path.Combine("b", "other"), "../upstream.git");
+        var first = await ProjectResolver.ResolveAsync(tool, Git(), null);
+        var second = await ProjectResolver.ResolveAsync(other, Git(), null);
+        Assert.Equal(new ProjectIdentity(ProjectIds.FromRemote(Path.Combine(_root, "a", "upstream.git")), ProjectSources.Remote), first);
+        Assert.NotEqual(first.Id, second.Id);
+    }
+
+    [Fact]
     public async Task A_linked_worktree_resolves_to_its_main_checkout()
     {
         var main = Repository("main");
