@@ -2,7 +2,7 @@
 
 Plan §18, backlog C-003. Run 2026-10-21.
 
-**Result: fail.** The best label set and threshold, chosen on the tune half, finds 24% of paths, 0% of PIDs and 13% of hosts exactly on the report half. The pass condition was a recall of at least 0.95 on each. Even when partly overlapping spans count, recall stays at 67%, 0% and 22%. No label set and threshold reaches 0.5 recall on any of the three kinds in either half.
+**Result: fail.** The best label set and threshold, chosen on the tune half, finds 24% of paths, 0% of PIDs and 13% of hosts exactly on the report half. The pass condition was a recall of at least 0.95 on each. Even when partly overlapping spans count, recall stays at 67%, 0% and 22%. No label set and threshold reaches 0.5 exact recall on any of the three kinds in either half. Under a more lenient token-containment scoring (added in review), paths reach 0.63 in the chosen configuration and 0.79 at best, but PIDs stay at or below 0.06 and hosts at or below 0.28, so the result is a fail under every scoring tried.
 
 **Decision:** GLiNER2 is not used to extract approval targets from shell commands. The structural analyzer (`Corvid.Approvals`) is the only source of approval targets. This PR records the result in §18 and in the C-003 row. It proposes, but does not make, the matching edits to §10.2 step 2, C-007b and C-015 (see [what the result means](#what-the-result-means)).
 
@@ -24,6 +24,7 @@ The pass condition applies to each label separately: a pooled 0.95 with PIDs at 
   dotnet build evals/spikes/S3-gliner2-targets
   dotnet evals/spikes/S3-gliner2-targets/bin/Debug/net10.0/S3.Gliner2Targets.dll corpus .    # no model
   MALLOC_MMAP_THRESHOLD_=65536 dotnet .../S3.Gliner2Targets.dll targets .                    # GLiNER2
+  dotnet .../S3.Gliner2Targets.dll rescore .                                                 # no model
   MALLOC_MMAP_THRESHOLD_=65536 dotnet .../S3.Gliner2Targets.dll pii .                        # GLiNER2
   ```
 
@@ -82,6 +83,7 @@ A GLiNER2 span on one of these counts neither as a hit nor as a false positive. 
 ## Scoring
 
 - **Exact (the gate):** a span of the label's kind equals the target as written, ignoring surrounding quotes and a trailing `;` or `,`. For a host, the bare host name the analyzer resolved also counts, so `example.com` matches in `https://example.com/x` and in `user@example.com:path`. For a PID, the value also counts.
+- **Token containment (added in review, not the gate):** the span, split on whitespace and `=`, has a token equal to the target as written or to its resolved value. Each token has its quotes, a trailing `;` or `,` and a trailing `/` removed, and `~`, `$HOME` or `${HOME}` maps to the home directory. For a host, the host name inside a URL or `user@host` token also counts. `-rf /` contains `/` and `rm -rf /etc` contains `/etc`, but a span `/etc/passwd` does not contain `/etc`. This scoring sits between exact and overlap. It is computed from the committed predictions by the `rescore` command, without the model, and written to `results/targets-contained.md`.
 - **Overlap (an upper bound, not the gate):** the span overlaps an occurrence of the target, or of its host name, in the command. `-rf /` overlaps `/`, for example.
 - **Precision:** the share of distinct spans per command that exactly match a scored target of the same kind.
 
@@ -115,7 +117,17 @@ Report half (held out). Each cell gives exact recall / overlap recall, then prec
 
 The tune half and both halves together show the same picture. The best exact recall in any cell is 0.43 for paths, 0.22 for hosts and 0.27 for URLs, and the best PID recall is 0. The full grid for all three splits is in `evals/spikes/S3-gliner2-targets/results/targets.md`. Every span from every run is in `results/targets-predictions.jsonl`.
 
-Because the result fails by such a wide margin on every row, the choice of configuration does not matter. Even the tune-half optimum with the best report-half path recall (descriptive @ 0.3) would miss 57% of paths and every PID.
+**Token containment** does not change the result. On the report half, with same-label spans:
+
+| Labels | Threshold | path | pid | host |
+| --- | --- | --- | --- | --- |
+| plan (chosen) | 0.5 | 0.625 | 0.000 | 0.188 |
+| plan | 0.3 | 0.708 | 0.000 | 0.281 |
+| descriptive | 0.3 | 0.792 | 0.059 | 0.281 |
+
+No cell in any split goes above 0.06 for PIDs or 0.28 for hosts. The full grid is in `results/targets-contained.md`. Path recall roughly triples under this scoring because most path misses are spans that also take in an option or the verb (see below). Even so, the best path figure, 0.79, is still far from 0.95.
+
+Because the result fails by such a wide margin on every row, the choice of configuration does not matter. On the tune half every configuration has a worst-case exact gate recall of 0, so the choice was in effect made by the precision tie-break. Even the tune-half optimum with the best report-half path recall (descriptive @ 0.3) would miss 57% of paths and every PID.
 
 ### How it fails
 
@@ -133,8 +145,8 @@ Because the result fails by such a wide margin on every row, the choice of confi
   | relative with a directory | 3 | 0.000 |
 
   The dangerous targets, such as `/`, `~`, `..`, `$HOME` and `/home/user/work/proj*`, are exactly the ones it misses. Heredocs and substitutions (`bash <<'EOF'⏎rm -rf /⏎EOF`) return no span at all.
-- **PIDs: zero, under every phrasing.** `kill -9 1234`, `kill 4242` and `taskset -p 0x3 9000` return no PID span. When the `process` label fires, it fires on the program name: `kill` 0.79, `ltrace` 0.95, `strace` 0.90. The descriptive `process id` label sometimes tags `-9 1234` as a host.
-- **Hosts.** `ssh deploy@prod-web-01`, `ping -c 4 8.8.8.8`, `nslookup corvid.example.org` and every `curl https://...` URL miss the host label entirely. The URL label fires on URLs, but with precision of 0.03–0.11, because it also tags paths and `user@host` strings.
+- **PIDs: zero, under every phrasing.** `kill -9 1234`, `kill 4242` and `taskset -p 0x3 9000` return no PID span. When the `process` label fires, it fires on the program name: `kill` 0.79, `ltrace` 0.95, `strace` 0.90. The descriptive `process id` label sometimes tags `-9 1234` as a host. Counting a span under any label, token containment finds 0.74 of report-half PIDs at descriptive @ 0.3, against 0.06 under the PID label. The model often puts a span over the PID, but under the wrong kind and usually with the option attached, which is no use as a target.
+- **Hosts.** `ssh deploy@prod-web-01`, `ping -c 4 8.8.8.8`, `nslookup corvid.example.org` and every `curl https://...` URL miss the host label entirely. The URL label fires on URLs, but with precision of 0.03–0.11, because it also tags paths and `user@host` strings. Taking the host name out of a span under any label (a URL, for example) raises host containment to at most 0.63 on the report half.
 
 ## PII (privacy egress, C-015)
 
@@ -168,7 +180,7 @@ These are 50 texts, too few for a confident rate. The credential and address gap
 1. **The analyzer stays authoritative for approval targets, and GLiNER2 is not added to them.** Recall this low would hide targets from the risk question and from structural rules. The spans that do appear need re-segmentation the parser already does exactly. No phrasing or threshold comes near the bar.
 2. **Where GLiNER2 might still serve shell targets: nowhere in the approval decision.** The analyzer already refuses to auto-approve what it cannot read: unresolved commands, opaque `python -c` text and dynamic targets all ask. GLiNER2 spans could at most be shown beside such a prompt as unverified hints, under the same rule as slot pre-fill (§7: a hint, never a veto, never a gate input). That display has not been measured and is not built. Free-form arguments to tools that are not shells (C-005 `ToolAction`) keep their parameter-name rule.
 3. **Proposed plan changes** (left for a plan revision, not made in this PR):
-   - §10.2 step 2 drops "GLiNER2 handles free-form arguments", and the label list there is retired.
+   - §10.2 step 2 stops using GLiNER2 for paths, PIDs (`kill` targets) and hosts, which are what this spike measured. Its other free-form arguments, SQL strings and `curl` data, were not measured: the `database table` and `credential` labels were sent but not scored, and the corpus has command lines, not payloads. Whether to drop those too, or measure them, is left to the plan revision.
    - C-007b's "Deferred: GLiNER2 target extraction (S3)" is closed as not to be built.
    - C-007b stays unblocked: it never depended on GLiNER2 for its targets.
 4. **PII egress (C-015) keeps GLiNER2, with two gaps to close outside this spike.**
@@ -181,4 +193,6 @@ These are 50 texts, too few for a confident rate. The credential and address gap
 
 - One model (gliner2-base-v1, CPU) and one adapter path. The PII results show the same model and adapter working on prose, so the target result describes the model on shell text rather than a broken setup.
 - The commands were given to GLiNER2 bare, as the plan describes. Wrapping each command in prose ("The agent wants to run: ...") was not tried. Given span boundaries like `-rf /` and zero PIDs, it is unlikely to reach 0.95.
+- In review, the `corpus` command regenerated the fixtures byte for byte, and a rerun of `targets` reproduced `targets-predictions.jsonl` byte for byte. Only the timing line changed.
+- The corpus keeps only commands the analyzer parses exactly, because its labels come from the analyzer. So GLiNER2 was measured only where the analyzer already has the answer. It was never measured on the 82 dropped commands that are not duplicates (unresolved, dynamic, opaque, outside the subset or not as written), where the analyzer has no exact answer. That gap does not affect the approval decision, because the analyzer asks on all of those (point 2 above). But this spike does not show how GLiNER2 does on them.
 - The PID and host counts per half (34 and 32 on the report half) are small, but a recall of 0.00 is not a sampling artefact.
