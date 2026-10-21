@@ -27,7 +27,13 @@ run 4, the review rerun at load 3–6):
 - `TurnRunner` asks 3 to 6 questions at ingress: `intent`, `difficulty`, `clarify`, then `needs_recall` when there is a
   retriever and the turn is not a guest's, `tool` when there is a tool shortlist and `skill` when there is a skill
   shortlist. The 8-question cell adds `injection` and `delegate`, which `TurnRunner` does not ask at ingress, so it is
-  a stress bound, not a real checkpoint; the 6-question cell (added in the review rerun) is the realistic worst case.
+  a stress bound, not a real checkpoint; the 6-question cell (added in the review rerun) is the realistic worst case
+  for the `TurnRunner` measured here (`main` at `5a9e534`). Since MCP description pinning (backlog C-022, #38),
+  `TurnRunner` on `main` also adds one `injection/<server>` question per MCP server whose tool descriptions are new to
+  the session, with up to 1,200 characters of descriptions (a long row). The first turn that shortlists a server's
+  tools can therefore ask 7 or more questions with a row of a few hundred tokens; this spike did not measure that case.
+  An estimate from the row sweep (about 0.45 ms per row token): 6 questions at 301 ms plus a 300-token row is roughly
+  430 ms at 600 tokens, over the line; such a turn is rare (once per new description set per session).
 - A 4-question ingress (no tool or skill shortlist) meets the 300 ms line at 600 tokens in every run: p50 220–284 ms,
   55–80 ms under the line on the quiet machine. At 300 tokens it passed on the quieter runs (159 and 226 ms) but not
   under load 71–83 in run 2 (438 ms).
@@ -56,9 +62,9 @@ run 4, the review rerun at load 3–6):
    trim their descriptions when both are present). That needs a CUDA path in `KevDecider.Create`, which C-004b
    deferred (it throws for any non-CPU provider; this spike bypassed it, see [Method](#method)). Six questions at
    600 tokens are at 301 ms, so with both shortlists present either ask `tool` and `skill` in their own request or
-   keep that state nearer 300 tokens. Proposed as C-022.
+   keep that state nearer 300 tokens. Proposed as C-029.
 2. **On CPU-only hosts, reduce checkpoints** to ingress + egress and drop `step` questions to two, as the plan's
-   fallback says: no CPU cell came in under 1 s. Proposed as C-023, not implemented.
+   fallback says: no CPU cell came in under 1 s. Proposed as C-030, not implemented.
 3. **Kev-4B stays the gate escalation tier**, on the GPU only; on the CPU (about 15 s) it is not interactive.
 4. **A `pre-execute` checkpoint costs about 250 ms** on the GPU, almost as much as a 4-question ingress, because the
    state pass dominates and Kev does not reuse a state across requests. A per-tool-call `pre-execute` adds a quarter
@@ -69,7 +75,7 @@ run 4, the review rerun at load 3–6):
    export on the CUDA provider, ONNX Runtime keeps the `GroupQueryAttention` nodes on the CPU provider, and the state
    cache passes through host memory for every row. The builder's own CUDA graph (`-e cuda -p fp32`) is faster but did
    not load unpatched with ONNX Runtime GenAI 0.17.1. A GPU-resident graph and state reuse across checkpoints are the
-   levers for 8-question checkpoints and `pre-execute`; that is Starling work, proposed as C-024.
+   levers for 8-question checkpoints and `pre-execute`; that is Starling work, proposed as C-031.
 
 ## Setup
 
