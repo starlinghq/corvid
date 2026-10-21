@@ -376,6 +376,8 @@ public sealed class GatewayTests
     [InlineData("Corvid:Gateway:Adapters:fake:GuestTools:0", "read file", "GuestTools: 'read file' is not a tool name")]
     [InlineData("Corvid:Gateway:Adapters:fake:GuestTools:0", "github__search", "names MCP server 'github', which is not configured")]
     [InlineData("Corvid:Gateway:Adapters:fake:GuestTools:0", "cron_create", "'cron_create' cannot be a guest tool")]
+    [InlineData("Corvid:Gateway:Adapters:fake:GuestTools:0", "memory_add", "'memory_add' cannot be a guest tool")]
+    [InlineData("Corvid:Gateway:Adapters:fake:GuestTools:0", "memory_approve", "'memory_approve' cannot be a guest tool")]
     public async Task GatewaySettingsAreValidatedAtStart(string key, string value, string message)
     {
         var settings = Settings((key, value));
