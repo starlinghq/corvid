@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Spike S3 (plan §18, C-003). Not in Corvid.slnx and not built or run by CI. Build and run it by path:
+      dotnet build evals/spikes/S3-gliner2-targets
+      dotnet evals/spikes/S3-gliner2-targets/bin/Debug/net10.0/S3.Gliner2Targets.dll corpus <repo root>
+    See docs/spikes/S3-gliner2-targets.md.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../src/Corvid.Approvals/Corvid.Approvals.csproj" />
+    <ProjectReference Include="../../../src/Corvid.Fabric/Corvid.Fabric.csproj" />
+    <ProjectReference Include="../../../src/Corvid.Kernel/Corvid.Kernel.csproj" />
+    <ProjectReference Include="../../../src/Corvid.Models.Starling/Corvid.Models.Starling.csproj" />
+  </ItemGroup>
+</Project>

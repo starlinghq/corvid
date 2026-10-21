@@ -1,0 +1,295 @@
+# Everyday commands for spike S3, one per line. Only the commands are written by hand: their targets come from the
+# structural analyzer (Corpus.Label). Heavy on hosts and PIDs, which the approval tests rarely contain.
+# Ordered by section, rarest target kinds first: the corpus takes kept commands in order until it has 300.
+# Processes and PIDs
+kill 30512
+kill -9 2207
+kill -KILL 18
+kill -s TERM 47110
+kill -s INT 9931 9932
+kill -2 1337
+kill -STOP 4120
+kill -CONT 4120
+kill -9 553 554 555 556
+kill -- -7300
+kill -TERM -- -812
+sudo kill 1999
+sudo kill -HUP 1024
+timeout 3 kill -0 88
+nohup kill -9 72001
+kill 4194303
+kill -9 300
+kill -s USR2 61234
+kill -QUIT 2525
+kill -9 10 11
+strace -p 7072
+strace -f -e trace=network -p 1888
+ltrace -p 9100
+taskset -p 0xf 6060
+taskset -p 2
+renice -n 5 -p 4410
+kill -1 905
+kill -WINCH 3030
+kill -ALRM 5512 5513
+kill -9 31
+kill 4242
+kill -9 31337
+kill -TERM 812
+kill -HUP 1
+kill -s KILL 99821
+kill -15 2048 2049 2050
+kill -9 -- -4500
+kill -0 777
+kill -l
+kill -SIGINT 65000
+timeout 10 kill 5150
+sudo kill -9 3141
+renice -n 10 -p 2718
+renice +5 1618
+taskset -p 0x3 9000
+taskset -cp 0-1 12345
+strace -p 4321
+strace -f -p 600
+ltrace -p 8080
+ionice -c 3 -p 1990
+chrt -p 7777
+nsenter -t 1234 -n ip addr
+gdb -p 2600
+lsof -p 1500
+cat /proc/2468/status
+pkill firefox
+killall -9 chrome
+pgrep -fl python
+ps -p 1001 -o pid,cmd
+prlimit --pid 4040
+kill 123456
+kill -9 7 8 9
+kill -USR1 24601
+kill -s HUP 4096
+sudo renice -n -5 -p 333
+# Network: hosts and URLs
+ssh deploy@prod-web-01
+ssh -p 2222 admin@10.0.0.12
+ssh pi@raspberrypi.local
+ssh user@192.168.1.50 uptime
+ssh -i ~/.ssh/work_ed25519 ci@build.internal.example.com
+ssh bastion.corp.example.net
+ssh -J jump@gateway.example.com app@10.20.0.5
+scp report.pdf mark@fileserver:/srv/share/
+scp -r dist/ deploy@web01.example.com:/var/www/app/
+scp admin@192.168.0.10:/etc/nginx/nginx.conf ./nginx.conf
+scp -P 2200 backup.tar.gz backup@nas.home.arpa:/volume1/backups/
+rsync -avz ./site/ deploy@static.example.org:/srv/site/
+rsync -av --delete build/ ci@10.1.2.3:/opt/app/
+rsync -a user@db-replica-2:/var/lib/postgresql/dumps/ ./dumps/
+sftp storage@files.example.net
+curl https://api.github.com/repos/starlinghq/corvid
+curl -s https://example.com/health
+curl -fsSL https://raw.githubusercontent.com/user/repo/main/install.sh -o install.sh
+curl -X POST https://hooks.slack.com/services/T000/B000/XXXX -d '{"text":"deploy done"}'
+curl -I http://localhost:8080/status
+curl http://192.168.1.1/admin
+curl -o model.onnx https://huggingface.co/fastino/gliner2-base-v1/resolve/main/model.onnx
+curl -u admin:secret https://jenkins.internal.example.com/api/json
+curl https://wttr.in/London
+wget https://ftp.gnu.org/gnu/bash/bash-5.2.tar.gz
+wget -O /tmp/key.asc https://download.docker.com/linux/ubuntu/gpg
+wget -q http://mirror.example.edu/archlinux/core/os/x86_64/core.db
+ping -c 4 8.8.8.8
+ping google.com
+ping -c 1 router.lan
+ping6 -c 3 ipv6.google.com
+dig example.com
+dig @1.1.1.1 starling.dev MX
+nslookup corvid.example.org
+host mail.example.com
+whois example.net
+traceroute 9.9.9.9
+mtr --report cloudflare.com
+nmap -sV 192.168.1.0/24
+nmap -p 22,80,443 scanme.nmap.org
+telnet towel.blinkenlights.nl
+nc -zv db.internal 5432
+nc example.com 80
+ncat -l 9000
+socat - TCP:localhost:6379
+ftp ftp.example.com
+lftp sftp://backup@storage.example.com
+http GET https://httpbin.org/get
+xh https://api.example.com/v1/users
+aria2c https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso
+curl https://api.openai.com/v1/models
+curl --resolve example.com:443:127.0.0.1 https://example.com/
+wget -r -np https://docs.example.org/manual/
+ssh git@github.com
+ssh -o StrictHostKeyChecking=no root@203.0.113.7
+ssh -L 5432:localhost:5432 tunnel@db-gateway.example.com
+scp ~/.vimrc dev@devbox:~/
+rsync -avP movies/ media@192.168.1.20:/mnt/media/movies/
+curl https://registry.npmjs.org/react
+curl -sS https://pypi.org/pypi/requests/json
+wget https://github.com/neovim/neovim/releases/download/stable/nvim-linux64.tar.gz
+ping -c 2 fd00::1
+dig +short txt _dmarc.example.com
+nc -u 10.0.0.53 53
+ssh backup@nas
+scp notes.txt laptop:Documents/
+curl -v https://localhost:5001/api/health
+curl https://[2001:db8::1]:8443/status
+wget ftp://ftp.example.org/pub/README
+# Mixed lines
+cd /tmp && tar xzf ~/Downloads/app.tgz
+cd ~/src && git status
+mkdir -p logs && touch logs/app.log
+cat access.log | grep 404 | sort | uniq -c > /tmp/404s.txt
+ls ~/Documents | wc -l
+curl -s https://example.com/data.json > data.json
+ssh web01 'tail -n 50 /var/log/nginx/error.log'
+scp web01:/var/log/nginx/error.log logs/ && less logs/error.log
+kill -9 4545 && rm -f /run/app.pid
+rsync -a ~/notes/ backup@nas:/backups/notes/ && echo ok
+ping -c 1 8.8.4.4 > /dev/null && echo online
+cp README.md /tmp/ && cat /tmp/README.md
+grep -c GET /var/log/nginx/access.log
+du -sh /var/lib/docker
+echo hello > ~/greeting.txt
+cat ~/.ssh/known_hosts
+cat ~/.gitconfig
+ls -la ~/.config/
+tar cf - src | gzip > src.tar.gz
+xz -d image.xz
+cp -v *.txt /tmp/texts/
+rm -v logs/*.log
+ls *.md
+cat docs/*.md > all-docs.md
+mv build/*.whl dist/
+git log -p -- src/Corvid.Approvals/Shell/ShellParser.cs
+code ~/projects/corvid
+open https://example.com
+xdg-open ~/Pictures/photo.png
+python3 tools/convert.py data/input.csv
+node scripts/build.js
+bash ./scripts/setup.sh
+sh install.sh
+./gradlew assemble
+cat /etc/os-release
+cat /etc/passwd
+cat ~/.aws/config
+touch /tmp/marker
+mv /tmp/marker /tmp/marker.old
+rm /tmp/marker.old
+mkdir /tmp/work && cd /tmp/work && touch a b c
+echo 3 > /proc/sys/vm/drop_caches
+tee -a ~/.bash_history < /dev/null
+ls -l /dev/disk/by-uuid
+cat /var/lib/pacman/local/ALPM_DB_VERSION
+cp ~/Downloads/font.ttf ~/.local/share/fonts/
+fc-cache -f ~/.local/share/fonts
+ffmpeg -i input.mov -c:v libx264 output.mp4
+convert logo.png -resize 50% logo-small.png
+pdftotext manual.pdf manual.txt
+sqlite3 ~/.local/share/app/app.db
+psql -h db.example.com -U app appdb
+mysql -h 10.0.5.5 -u root
+redis-cli -h cache.internal ping
+mongo mongodb://db1.example.com:27017/admin
+# Git
+git add src/main.rs
+git rm --cached secrets.env
+git mv old.txt new.txt
+git diff HEAD~3 -- src/lib.rs
+git checkout -- README.md
+git clone https://github.com/starlinghq/starling.git
+git clone git@github.com:torvalds/linux.git
+git clone https://gitlab.com/gitlab-org/gitlab-runner.git ~/src/runner
+git push origin main
+git pull upstream main
+git fetch --all
+git remote add mirror https://git.example.org/team/app.git
+# Files and directories
+ls -la ~/Downloads
+ls /var/log
+cat /etc/hosts
+cat notes/todo.md
+less /var/log/syslog
+head -n 50 src/Program.cs
+tail -f /var/log/nginx/access.log
+grep -rn "TODO" src/ tests/
+grep -i error /var/log/pacman.log
+wc -l docs/plan/corvid-agent.md
+du -sh ~/.cache
+df -h /home
+stat package.json
+file /usr/bin/python3
+mkdir -p build/output
+mkdir ~/projects/newapp
+touch src/index.ts
+cp config.example.yaml config.yaml
+cp -r assets/ dist/assets
+cp ~/.bashrc ~/.bashrc.bak
+mv draft.md docs/final.md
+mv /tmp/report.pdf ~/Documents/
+rm build/app.o
+rm -f /tmp/session.lock
+rm -rf node_modules
+rm -rf ~/.cache/pip
+rmdir empty-dir
+ln -s /opt/tools/bin/fd ~/.local/bin/fd
+chmod +x scripts/deploy.sh
+chmod 600 ~/.netrc
+chown mark:mark /srv/www/index.html
+tar czf backup.tar.gz ~/Documents
+tar xzf release-1.2.tar.gz -C /opt/app
+zip -r site.zip public/
+unzip archive.zip -d extracted/
+gzip -k logs/app.log
+find src -name '*.bak' -delete
+find /tmp -type f -name 'core.*'
+sort -u words.txt -o words.sorted
+diff old/config.json new/config.json
+cmp a.bin b.bin
+sed -i 's/localhost/0.0.0.0/' server.conf
+echo "done" > status.txt
+echo 'export EDITOR=vim' >> ~/.zshrc
+cat part1.txt part2.txt > combined.txt
+tee build.log < make.out
+dd if=disk.img of=/tmp/copy.img bs=4M
+truncate -s 0 /var/log/app.log
+shred -u secrets.txt
+du -ah /srv/data
+cat /proc/cpuinfo
+cat /sys/class/power_supply/BAT0/capacity
+vim ~/.config/nvim/init.lua
+nano /etc/fstab
+touch ~/notes/2026-10-21.md
+cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.orig
+mv ~/Pictures/IMG_2041.jpg ~/Pictures/holiday/
+rm ~/Downloads/installer.exe
+ls -lt /var/cache/pacman/pkg
+tail -n 100 ~/.local/state/app/log.txt
+cat ./README
+rm -r ./out
+cp ../shared/types.ts src/types.ts
+cat /home/user/work/project/docs/index.md
+mkdir /mnt/usb/backup
+rsync -av ~/Music/ /mnt/usb/backup/music/
+cp -a /var/www/html /var/www/html.old
+# Package managers and builds
+npm install express
+npm run build
+pip install requests
+cargo build --release
+dotnet build Corvid.slnx
+make -j8
+go test ./...
+docker run --rm -it ubuntu:24.04 bash
+docker ps
+docker logs web
+kubectl get pods -n prod
+systemctl restart nginx
+systemctl --user status pipewire
+journalctl -u sshd --since today
+crontab -l
+sudo pacman -Syu
+brew install ripgrep
+apt list --installed

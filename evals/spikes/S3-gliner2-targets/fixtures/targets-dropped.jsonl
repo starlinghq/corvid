@@ -1,0 +1,91 @@
+{"source":"BypassTests.Denied","command":"nsenter -t 1 -m rm -rf /","reason":"unresolved: nsenter runs the command in the namespaces of process 1"}
+{"source":"BypassTests.Denied","command":"unshare -r rm -rf /","reason":"unresolved: unshare runs the command in new namespaces"}
+{"source":"BypassTests.Denied","command":"firejail --quiet rm -rf ~","reason":"unresolved: firejail runs the command in a sandbox with its own mounts and profile"}
+{"source":"BypassTests.Denied","command":"bwrap --bind / / rm -rf /","reason":"unresolved: bwrap runs the command with its own mounts, where paths may name other files"}
+{"source":"BypassTests.Denied","command":"systemd-run --user rm -rf ~","reason":"unresolved: systemd-run runs the command as a service, with the manager\u0027s environment and working directory"}
+{"source":"BypassTests.Denied","command":"systemd-run --user rm -rf *","reason":"unresolved: systemd-run runs the command as a service, with the manager\u0027s environment and working directory"}
+{"source":"BypassTests.Denied","command":"systemd-run --user tee ~/.ssh/authorized_keys","reason":"unresolved: systemd-run runs the command as a service, with the manager\u0027s environment and working directory"}
+{"source":"BypassTests.Denied","command":"timeout 5 strace -f systemd-run --user sh -c \u0027rm -rf ~\u0027","reason":"unresolved: systemd-run runs the command as a service, with the manager\u0027s environment and working directory"}
+{"source":"BypassTests.Denied","command":"script -qc \u0027rm -rf ~\u0027 /dev/null","reason":"unresolved: script runs the command with $SHELL (unknown), which may read it differently from bash"}
+{"source":"BypassTests.Denied","command":"script -c \u0022sh -c \u0027rm -rf /\u0027\u0022","reason":"unresolved: script runs the command with $SHELL (unknown), which may read it differently from bash"}
+{"source":"BypassTests.Denied","command":"echo x | parallel rm -rf /","reason":"dynamic target: part of a target is only known at run time"}
+{"source":"BypassTests.Denied","command":"env PATH=/tmp/evil rm -rf /","reason":"unresolved: runs with PATH set, which can change what runs"}
+{"source":"BypassTests.Denied","command":"source ./env.sh; rm -rf ~","reason":"unresolved: follows \u0027source\u0027, which may have redefined commands"}
+{"source":"BypassTests.Denied","command":"LD_PRELOAD=./x.so rm -rf /","reason":"unresolved: runs with LD_PRELOAD set, which can change what runs"}
+{"source":"BypassTests.Denied","command":"tar czf /tmp/v.tgz -C ~/.local/share corvid-vault","reason":"not as written: the target \u0027/home/user/.local/share/corvid-vault\u0027 is not literally in the command"}
+{"source":"BypassTests.Denied","command":"D=corvid-vault; cat ~/.local/share/$D/store.bin","reason":"not as written: the target \u0027/home/user/.local/share/corvid-vault/store.bin\u0027 is not literally in the command"}
+{"source":"BypassTests.Denied","command":"python3 -c \u0027print(open(\u0022/home/user/.local/share/corvid-vault/store.bin\u0022).read())\u0027","reason":"opaque script: code the analyzer does not parse (python -c, awk, ...)"}
+{"source":"BypassTests.Denied","command":"python3 -c \u0027import os; print(os.listdir(os.path.expanduser(\u0022~/.local/share/\u0022) \u002B \u0022corvid-vault\u0022))\u0027","reason":"opaque script: code the analyzer does not parse (python -c, awk, ...)"}
+{"source":"BypassTests.Denied","command":"node -e \u0027require(\u0022fs\u0022).readdirSync(process.env.HOME \u002B \u0022/.config/corvid-vault\u0022)\u0027","reason":"opaque script: code the analyzer does not parse (python -c, awk, ...)"}
+{"source":"BypassTests.Denied","command":"zsh -c \u0027cat ~/.local/share/corvid-vault/store.bin\u0027","reason":"unresolved: zsh runs a script outside the parsed bash subset"}
+{"source":"BypassTests.Denied","command":"cat /run/user/1000/corvid-vault/vault.sock","reason":"duplicate"}
+{"source":"BypassTests.Denied","command":"if true; then cat ~/.local/share/corvid-vault/store.bin; fi","reason":"outside the parsed subset: \u0027if\u0027: control flow, groups and functions are outside the subset (at 2)"}
+{"source":"BypassTests.Denied","command":"bash -c \u0027for f in ~/.local/share/corvid-vault/*; do cat $f; done\u0027","reason":"unresolved: bash: inner script is outside the parsed subset: \u0027for\u0027: control flow, groups and functions are outside the subset"}
+{"source":"BypassTests.Denied","command":"if true; then mkfs.ext4 /dev/sda; fi","reason":"outside the parsed subset: \u0027if\u0027: control flow, groups and functions are outside the subset (at 2)"}
+{"source":"BypassTests.Asked","command":"rm -rf \u0022$TARGET\u0022","reason":"dynamic target: part of a target is only known at run time"}
+{"source":"BypassTests.Asked","command":"$(echo rm) -rf /","reason":"unresolved: the program \u0027$(\u2026)\u0027 is computed at run time"}
+{"source":"BypassTests.Asked","command":"\u0060echo rm\u0060 -rf /","reason":"unresolved: the program \u0027$(\u2026)\u0027 is computed at run time"}
+{"source":"BypassTests.Asked","command":"rm -rf $(echo /)","reason":"dynamic target: part of a target is only known at run time"}
+{"source":"BypassTests.Asked","command":"rm -rf \u0060pwd\u0060/..","reason":"dynamic target: part of a target is only known at run time"}
+{"source":"BypassTests.Asked","command":"echo / | xargs rm -rf","reason":"dynamic target: part of a target is only known at run time"}
+{"source":"BypassTests.Asked","command":"find / -maxdepth 0 | xargs -I{} rm -rf {}","reason":"dynamic target: part of a target is only known at run time"}
+{"source":"BypassTests.Asked","command":"bash -c \u0022$(echo rm -rf /)\u0022","reason":"unresolved: bash: option \u0027$(\u2026)\u0027 is computed at run time"}
+{"source":"BypassTests.Asked","command":"bash -c \u0022$(base64 -d \u003C\u003C\u003C cm0gLXJmIC8=)\u0022","reason":"unresolved: bash: option \u0027$(\u2026)\u0027 is computed at run time"}
+{"source":"BypassTests.Asked","command":"echo \u0027rm -rf /\u0027 | bash","reason":"unresolved: bash reads commands from its input"}
+{"source":"BypassTests.Asked","command":"curl -fsSL https://get.example.org/install.sh | sh","reason":"unresolved: sh reads commands from its input"}
+{"source":"BypassTests.Asked","command":"cat ~/.local/share/corvid-$X/store.bin","reason":"dynamic target: part of a target is only known at run time"}
+{"source":"BypassTests.Asked","command":"git log $OPTS","reason":"unresolved: git argument \u0027$OPTS\u0027 is computed at run time and may be an option that writes or runs a program"}
+{"source":"BypassTests.Asked","command":"rg \u0022$X\u0022 src","reason":"unresolved: rg argument \u0027$X\u0027 is computed at run time and may be an option that runs a program"}
+{"source":"BypassTests.Asked","command":"watch -n 1 \u0022$CMD\u0022","reason":"unresolved: watch: option \u0027$CMD\u0027 is computed at run time"}
+{"source":"BypassTests.Asked","command":"flock /tmp/lock -c \u0022$CMD\u0022","reason":"unresolved: flock -c: the command is computed at run time"}
+{"source":"BypassTests.Asked","command":"busybox --install /tmp/bin","reason":"unresolved: busybox: \u0027--install\u0027 is not an applet"}
+{"source":"BypassTests.Asked","command":"echo \u0027rm -rf /\u0027 | busybox sh","reason":"unresolved: sh reads commands from its input"}
+{"source":"BypassTests.Asked","command":"zsh -c \u0027rm -rf /\u0027","reason":"unresolved: zsh runs a script outside the parsed bash subset"}
+{"source":"BypassTests.Asked","command":"ksh script.sh","reason":"unresolved: ksh runs a script outside the parsed bash subset"}
+{"source":"BypassTests.Asked","command":"systemd-run --user cat ~/.ssh/id_rsa","reason":"unresolved: systemd-run runs the command as a service, with the manager\u0027s environment and working directory"}
+{"source":"BypassTests.Asked","command":"nsenter -t 1 -m ls","reason":"unresolved: nsenter runs the command in the namespaces of process 1"}
+{"source":"BypassTests.Asked","command":"unshare -n ls","reason":"unresolved: unshare runs the command in new namespaces"}
+{"source":"BypassTests.Asked","command":"firejail ls","reason":"unresolved: firejail runs the command in a sandbox with its own mounts and profile"}
+{"source":"BypassTests.Asked","command":"bwrap --ro-bind / / ls","reason":"unresolved: bwrap runs the command with its own mounts, where paths may name other files"}
+{"source":"BypassTests.Asked","command":"systemd-run --scope ls","reason":"unresolved: systemd-run runs the command as a transient scope of the service manager"}
+{"source":"BypassTests.Asked","command":"strace -e inject=read:error=EIO ls","reason":"unresolved: strace injects faults or return values, which changes what the traced program does"}
+{"source":"BypassTests.Asked","command":"strace --frobnicate ls","reason":"unresolved: strace: unknown option \u0027--frobnicate\u0027"}
+{"source":"BypassTests.Asked","command":"valgrind --db-command=x ls","reason":"unresolved: valgrind: unknown option \u0027--db-command=x\u0027"}
+{"source":"BypassTests.Asked","command":"systemd-run -p ExecStartPre=/tmp/x ls","reason":"unresolved: systemd-run: the unit property \u0027ExecStartPre=/tmp/x\u0027 may run other commands or change the user, root or mounts"}
+{"source":"BypassTests.Asked","command":"script -c \u0022$CMD\u0022","reason":"unresolved: script runs the command with $SHELL (unknown), which may read it differently from bash"}
+{"source":"BypassTests.Asked","command":"parallel \u0027rm {=s/a/b/=}\u0027 ::: a","reason":"unresolved: parallel: the replacement string \u0027{=s/a/b/=}\u0027 is not analysed"}
+{"source":"LauncherTests","command":"script -qc \u0027rm -rf build\u0027 /dev/null","reason":"unresolved: script runs the command with $SHELL (unknown), which may read it differently from bash"}
+{"source":"LauncherTests","command":"script /dev/null -qc \u0027rm -rf build\u0027","reason":"unresolved: script runs the command with $SHELL (unknown), which may read it differently from bash"}
+{"source":"LauncherTests","command":"script -q -e --command=\u0027rm -rf build\u0027 log.txt","reason":"unresolved: script runs the command with $SHELL (unknown), which may read it differently from bash"}
+{"source":"LauncherTests","command":"systemd-run --user --scope rm -rf build","reason":"unresolved: systemd-run runs the command as a transient scope of the service manager"}
+{"source":"LauncherTests","command":"nsenter -t 1 -m ls","reason":"duplicate"}
+{"source":"LauncherTests","command":"nsenter --target=1 --mount --uts ls","reason":"unresolved: nsenter runs the command in the namespaces of process 1"}
+{"source":"LauncherTests","command":"unshare -n ls","reason":"duplicate"}
+{"source":"LauncherTests","command":"unshare -rm --fork ls","reason":"unresolved: unshare runs the command in new namespaces"}
+{"source":"LauncherTests","command":"firejail --quiet ls","reason":"unresolved: firejail runs the command in a sandbox with its own mounts and profile"}
+{"source":"LauncherTests","command":"bwrap --ro-bind /usr /usr --unshare-net ls","reason":"unresolved: bwrap runs the command with its own mounts, where paths may name other files"}
+{"source":"LauncherTests","command":"systemd-run --user ls","reason":"unresolved: systemd-run runs the command as a service, with the manager\u0027s environment and working directory"}
+{"source":"LauncherTests","command":"systemd-run --scope ls","reason":"duplicate"}
+{"source":"LauncherTests","command":"strace -f nsenter -t 1 -n ls","reason":"unresolved: nsenter runs the command in the namespaces of process 1"}
+{"source":"LauncherTests","command":"strace --frobnicate ls","reason":"duplicate"}
+{"source":"LauncherTests","command":"strace -K ls","reason":"unresolved: strace: unknown option \u0027-K\u0027"}
+{"source":"LauncherTests","command":"ltrace --frobnicate ls","reason":"unresolved: ltrace: unknown option \u0027--frobnicate\u0027"}
+{"source":"LauncherTests","command":"valgrind --db-command=x ls","reason":"duplicate"}
+{"source":"LauncherTests","command":"valgrind --frobnicate ls","reason":"unresolved: valgrind: unknown option \u0027--frobnicate\u0027"}
+{"source":"LauncherTests","command":"perf stat --pre ./x ls","reason":"unresolved: perf stat: unknown option \u0027--pre\u0027"}
+{"source":"LauncherTests","command":"perf record --frobnicate ls","reason":"unresolved: perf record: unknown option \u0027--frobnicate\u0027"}
+{"source":"LauncherTests","command":"nsenter --frobnicate ls","reason":"unresolved: nsenter: unknown option \u0027--frobnicate\u0027"}
+{"source":"LauncherTests","command":"unshare -Q ls","reason":"unresolved: unshare: unknown option \u0027-Q\u0027"}
+{"source":"LauncherTests","command":"firejail --join=other ls","reason":"unresolved: firejail: unknown option \u0027--join=other\u0027"}
+{"source":"LauncherTests","command":"bwrap --frobnicate ls","reason":"unresolved: bwrap: unknown option \u0027--frobnicate\u0027"}
+{"source":"LauncherTests","command":"bwrap --args 3 ls","reason":"unresolved: bwrap --args reads more options from a file descriptor"}
+{"source":"LauncherTests","command":"systemd-run --frobnicate ls","reason":"unresolved: systemd-run: unknown option \u0027--frobnicate\u0027"}
+{"source":"LauncherTests","command":"systemd-run -p ExecStartPre=/tmp/x ls","reason":"duplicate"}
+{"source":"LauncherTests","command":"systemd-run -H host ls","reason":"unresolved: systemd-run --host runs the command on another machine"}
+{"source":"LauncherTests","command":"script --frobnicate -c ls","reason":"unresolved: script: unknown option \u0027--frobnicate\u0027"}
+{"source":"LauncherTests","command":"parallel --ssh host ls ::: a","reason":"unresolved: parallel: unknown option \u0027--ssh\u0027"}
+{"source":"LauncherTests","command":"parallel -q ls ::: a","reason":"unresolved: parallel: unknown option \u0027-q\u0027"}
+{"source":"LauncherTests","command":"parallel \u0027rm {=s/a/b/=}\u0027 ::: a","reason":"duplicate"}
+{"source":"LauncherTests","command":"parallel \u0027rm {=s/a/b/=}\u0027 ::: a","reason":"duplicate"}
+{"source":"everyday","command":"chrt -p 7777","reason":"unresolved: chrt: unknown option \u0027-p\u0027"}
+{"source":"everyday","command":"nsenter -t 1234 -n ip addr","reason":"unresolved: nsenter runs the command in the namespaces of process 1234"}
