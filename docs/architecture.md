@@ -842,9 +842,13 @@ described below (see [Host and CLI](#host-and-cli-c-013)).
   finished. The loop owns the queue of messages and the running turn; it starts each turn as a task and keeps reading, so
   a cancel or a `/model` switch is handled while a turn waits on a model or an approval prompt. Turns run one at a time in
   arrival order, and each finished turn (or the exception that ended it) goes to an `IDeliverySink`. Cancellation is one
-  token per turn, linked to the actor's lifetime, passed to every model, tool, approval and log call. `CancelTurn` cancels
-  the running turn's token before it returns (callbacks run on the thread pool) and also posts the cancel, for a message
-  whose turn the loop has not started yet: a caller that cancels and then unblocks the turn finds it already cancelled.
+  token per turn, linked to the actor's lifetime, passed to every model, tool, approval and log call. `CancelTurn` targets
+  one turn, fixed at the call. If a turn is running, its token is cancelled before `CancelTurn` returns (callbacks run on
+  the thread pool), so a caller that cancels and then unblocks the turn finds it already cancelled; the posted command
+  names that turn, and the loop ignores it if the turn has finished and the next one started meanwhile. If none is
+  running, the posted command cancels the turn running when the loop reads it: a message submitted before the call whose
+  turn had not started yet. A message submitted after the call is never cancelled, and with nothing queued the cancel does
+  nothing.
 - A turn (`TurnRunner`): append `UserMessage`; extract entities from the user message when an extractor is bound
   (labels person, organization, place, date, time, project, file, url); rank the tool shortlist; ask the ingress
   checkpoint as one `DecisionFabric.DecideAsync` (intent, difficulty, clarify, `needs_recall` when a retriever is bound,

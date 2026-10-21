@@ -204,23 +204,33 @@ public sealed class AcpTests
     [Fact]
     public async Task ACancelledPromptAnswersCancelledEvenWhenItsTurnFinishesFirst()
     {
-        // A generator that ignores cancellation and answers once released: the turn can complete normally after the
-        // cancel arrived, and the prompt must still answer "cancelled" (ACP: after session/cancel the agent MUST
-        // respond with the cancelled stop reason).
-        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var release = new ManualResetEventSlim();
-        var models = new FakeModels(new FakeGenerator(_ =>
-        {
-            entered.TrySetResult();
-            release.Wait(TimeSpan.FromSeconds(30));
-            return Reply.Text("Finished anyway.");
-        }));
+        // The kernel has finished the turn (answered, past its last cancellation check) when session/cancel arrives, and
+        // the prompt has not answered yet. ACP: after session/cancel the agent MUST respond with the cancelled stop reason.
+        var models = new FakeModels(new FakeGenerator(Reply.Say("Finished anyway.")));
         await using var client = AcpClient.Start(TestHost.Create(models));
         await client.RequestAsync("initialize", Initialize());
         var session = await client.NewSessionAsync();
+        // The turn's invoke_agent span stops once its result is final: holding the listener there holds the finished turn.
+        var finished = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        using var listener = new System.Diagnostics.ActivityListener
+        {
+            ShouldListenTo = source => source.Name == Corvid.Kernel.KernelTelemetry.SourceName,
+            Sample = (ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _) =>
+                System.Diagnostics.ActivitySamplingResult.AllData,
+            ActivityStopped = activity =>
+            {
+                if (activity.OperationName != Corvid.Kernel.KernelTelemetry.InvokeAgentSpan
+                    || activity.GetTagItem(Corvid.Kernel.KernelTelemetry.ConversationId) as string != session)
+                    return;
+                finished.TrySetResult(activity.GetTagItem("corvid.turn.status") as string);
+                release.Wait(TimeSpan.FromSeconds(30));
+            },
+        };
+        System.Diagnostics.ActivitySource.AddActivityListener(listener);
 
         var prompt = await client.BeginAsync("session/prompt", Prompt(session, "say something"));
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
+        var status = await finished.Task.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
         await client.NotifyAsync("session/cancel", new { sessionId = session });
         // Notifications are handled in order on the read loop: an answer to a later request means the cancel was seen.
         var second = await client.RequestAsync("session/prompt", Prompt(session, "and another"));
@@ -228,6 +238,7 @@ public sealed class AcpTests
         release.Set();
 
         var response = await client.ResponseAsync(prompt);
+        Assert.Equal("answered", status);
         Assert.Equal("cancelled", response["result"]!["stopReason"]!.GetValue<string>());
     }
 
