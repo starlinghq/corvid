@@ -2182,7 +2182,8 @@ the projection or git in `Corvid.Kernel`, the catalogue row in `Corvid.Fabric`, 
   weekday names, UUIDs, PR or issue numbers), secret-looking strings (AWS `AKIA` keys, `ghp_`/`gho_`/`github_pat_`,
   `sk-`/`sk-ant-`, Slack `xox?-`, PEM private-key headers, JWTs, `password|secret|token|api_key` followed by `:` or `=` and
   a value, long hex runs, and long base64 runs that mix digits and both cases and are not paths) and instructions aimed at
-  the agent. The rules are heuristics: they refuse a draft, never a turn.
+  the agent. The long-hex rule refuses a commit hash too, which is one-off anyway. The rules are heuristics: they refuse a
+  draft, never a turn.
 - Gated write (`LessonWriter`): validate, file as a candidate, then ask the existing `memory_op` gate at the pre-execute
   checkpoint in the source session, with lesson-shaped JSON instructions (the candidate, and up to five approved lessons of
   the same project from `SearchApproved` as neighbours). An acted `add` approves; `update` approves and supersedes the
@@ -2204,7 +2205,9 @@ the projection or git in `Corvid.Kernel`, the catalogue row in `Corvid.Fabric`, 
   bound; it rides in the same egress batch as `remember` and `skill_opportunity`, so with Kev it adds no request, and in
   the degraded tier it is one generator yes/no on qualifying turns. Acting queues `LessonOpportunity` (session, project,
   user message and answer sequences, decision, request, taint, and whether any prompt of the turn held local-only memory);
-  `TurnResult.LessonQueued` says so.
+  `TurnResult.LessonQueued` says so. A non-empty local-only core block rendered into a local model's prompt counts, and
+  C-015's migration made every block local-only, so in practice most drafted lessons are local-only: conservative, and the
+  user opts a block in to share it.
 - Drafting (`Corvid.Kernel/Lessons/LessonLearner.cs`, in the shape of C-017's `SkillLearner`): `Queue` writes the
   opportunity to `lesson_opportunities` and wakes `RunAsync`, which the runtime runs in the background. For each, a turn that
   `/undo` or `/rollback` hid is skipped; the background generator, inside `ModelRequestContext(session, tainted, local-only)`,
