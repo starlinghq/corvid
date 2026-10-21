@@ -269,7 +269,9 @@ public sealed class JobStore
             return null;
 
         // A schedule with no time left (a cron that never matches again) resumes with nothing to run.
-        var next = job.ParsedSchedule.First(now) is { } first && first < now ? now : job.ParsedSchedule.First(now);
+        var next = job.ParsedSchedule.First(now);
+        if (next < now)
+            next = now;
         using (var update = connection.CreateCommand())
         {
             update.Transaction = transaction;
