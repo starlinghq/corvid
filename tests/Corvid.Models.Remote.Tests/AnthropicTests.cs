@@ -173,7 +173,7 @@ public sealed class AnthropicTests : IAsyncDisposable
     [Fact]
     public async Task Without_vault_running_the_request_fails_as_unreachable_and_nothing_goes_direct()
     {
-        var gone = VaultAccess.Create(Path.Combine(Path.GetTempPath(), "no-vault-" + Guid.NewGuid().ToString("N"), "vault.sock"));
+        var gone = VaultAccess.Create(Path.Combine(Corvid.Tests.ShortTemp.Name("no-vault-"), "vault.sock"));
         var client = AnthropicBindings.CreateChatClient(_profile, new AnthropicModelOptions("claude-opus-5-5"), Key, gone, _network);
 
         var failure = await Assert.ThrowsAsync<HttpRequestException>(() => client.GetResponseAsync([new(ChatRole.User, "hi")], cancellationToken: Ct));

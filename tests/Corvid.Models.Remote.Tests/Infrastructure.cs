@@ -26,8 +26,8 @@ internal sealed class FakeVault : IAsyncDisposable
     public FakeVault(Func<ForwardRequest, ForwardResponse> forward)
     {
         Forward = forward;
-        _root = Path.Combine(Path.GetTempPath(), "cv-" + Guid.NewGuid().ToString("N")[..12]);
-        Directory.CreateDirectory(_root);
+        // Short, because a Unix socket path is limited to 108 bytes.
+        _root = Corvid.Tests.ShortTemp.Create("cv-");
         SocketPath = Path.Combine(_root, "vault.sock");
         _listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         _listener.Bind(new UnixDomainSocketEndPoint(SocketPath));

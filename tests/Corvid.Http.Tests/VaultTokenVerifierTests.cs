@@ -62,7 +62,7 @@ public sealed class VaultTokenVerifierTests
     [Fact]
     public async Task WithoutVaultTheTokenCannotBeTold()
     {
-        var root = Path.Combine(Path.GetTempPath(), "cvn-" + Guid.NewGuid().ToString("N")[..10]);
+        var root = Corvid.Tests.ShortTemp.Name("cvn-");
         var verifier = new VaultTokenVerifier(Name, Path.Combine(root, "v.sock"));
 
         Assert.Null(await verifier.VerifyAsync(Value, Token));

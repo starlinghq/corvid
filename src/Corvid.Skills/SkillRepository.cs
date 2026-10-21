@@ -117,8 +117,17 @@ public sealed partial class SkillRepository
         string[] scope = relative is null ? [] : ["--", relative.Length == 0 ? "." : relative];
         await _git.CheckedAsync(["add", "--all", .. scope], cancellationToken: cancellationToken).ConfigureAwait(false);
         var staged = await _git.RunAsync(["diff", "--cached", "--quiet", "--no-ext-diff"], null, cancellationToken: cancellationToken).ConfigureAwait(false);
-        if (staged.ExitCode == 0)
-            return null;
+        // --quiet implies --exit-code: 0 is nothing staged and 1 is something staged. Anything else is git failing (a broken
+        // index, a killed process), which must not be read as "changes" and committed.
+        switch (staged.ExitCode)
+        {
+            case 0:
+                return null;
+            case 1:
+                break;
+            default:
+                throw new GitException($"git diff failed (exit {staged.ExitCode}): {(staged.Error.Length > 0 ? staged.Error : staged.Output).Trim()}");
+        }
         await _git.CheckedAsync(["commit", "--quiet", "--no-verify", "--allow-empty-message", "-m", message], author, cancellationToken)
             .ConfigureAwait(false);
         return (await _git.CheckedAsync(["rev-parse", "HEAD"], cancellationToken: cancellationToken).ConfigureAwait(false)).Trim();
