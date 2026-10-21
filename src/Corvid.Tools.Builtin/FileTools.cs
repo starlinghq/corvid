@@ -132,9 +132,10 @@ public sealed partial class FileTools(Workspace workspace, FileToolOptions? opti
         }
 
         var root = Workspace.Resolve(path);
-        if (File.Exists(root))
+        var single = File.Exists(root);
+        if (single)
             RefuseSpecial(root, path);
-        IEnumerable<FileSystemInfo> files = File.Exists(root) ? [new FileInfo(root)]
+        IEnumerable<FileSystemInfo> files = single ? [new FileInfo(root)]
             : Directory.Exists(root) ? Walk(root, recursive: true)
             : throw new ToolArgumentException($"Argument 'path' is '{path}', which does not exist.", nameof(path));
         var matches = new JsonArray();
@@ -159,6 +160,11 @@ public sealed partial class FileTools(Workspace workspace, FileToolOptions? opti
             catch (SpecialFileException)
             {
                 // Made a FIFO (or the like) since the check above: skipped all the same.
+                continue;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // A file this user may not read is skipped, as one that cannot be read for any other reason.
                 continue;
             }
             if (text is null)
@@ -280,11 +286,16 @@ public sealed partial class FileTools(Workspace workspace, FileToolOptions? opti
             // Swapped for a FIFO (or the like) after Existing checked it: the opened descriptor is what counts.
             throw NotRegular(path, exception.Kind);
         }
+        catch (UnauthorizedAccessException)
+        {
+            throw new ToolArgumentException($"'{path}' cannot be read: permission denied.", nameof(path));
+        }
     }
 
     /// <summary>
-    /// The file as UTF-8, or null when it looks binary (a NUL byte in its first 8 KiB) or cannot be read. Throws
-    /// <see cref="SpecialFileException"/> when what was opened is not a regular file.
+    /// The file as UTF-8, or null when it looks binary (a NUL byte in its first 8 KiB) or cannot be read for a reason other
+    /// than permission. Throws <see cref="SpecialFileException"/> when what was opened is not a regular file, and
+    /// <see cref="UnauthorizedAccessException"/> when it may not be read (EACCES), so that is not reported as a binary file.
     /// </summary>
     private static string? TryReadText(string file)
     {
@@ -293,7 +304,7 @@ public sealed partial class FileTools(Workspace workspace, FileToolOptions? opti
         {
             bytes = FileKinds.ReadRegular(file);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException && exception is not SpecialFileException)
+        catch (IOException exception) when (exception is not SpecialFileException)
         {
             return null;
         }

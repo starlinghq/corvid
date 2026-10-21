@@ -60,6 +60,35 @@ public sealed class FileToolsTests : IDisposable
         Assert.Contains("binary", error.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public async Task A_file_that_may_not_be_read_is_reported_as_permission_denied_not_as_binary()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux() || OperatingSystem.IsMacOS(), "File modes are POSIX.");
+        Assert.SkipWhen(Environment.IsPrivilegedProcess, "Root reads a file whatever its mode.");
+        _tree.Write("work/a.txt", "dentist on Friday\n");
+        _tree.Write("work/locked.txt", "dentist on Friday\n");
+        var locked = _tree.Path("work", "locked.txt");
+        File.SetUnixFileMode(locked, UnixFileMode.None);
+        try
+        {
+            var error = await Assert.ThrowsAsync<ToolArgumentException>(() => Invoke(_tools, "read_file", """{"path":"locked.txt"}"""));
+            Assert.Contains("'locked.txt' cannot be read: permission denied", error.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("binary", error.Message, StringComparison.Ordinal);
+            var patch = await Assert.ThrowsAsync<ToolArgumentException>(() =>
+                Invoke(_tools, "patch_file", """{"path":"locked.txt","old_text":"Friday","new_text":"Monday"}"""));
+            Assert.Contains("permission denied", patch.Message, StringComparison.Ordinal);
+
+            // A search skips it, as before, and finds the rest.
+            var found = await Invoke(_tools, "search_files", """{"pattern":"dentist"}""");
+            Assert.Equal(["a.txt:1: dentist on Friday"], found.GetProperty("matches").EnumerateArray().Select(e => e.GetString()));
+        }
+        finally
+        {
+            File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
     [Theory]
     [InlineData("../outside.txt")]
     [InlineData("/etc/passwd")]

@@ -143,8 +143,9 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue, IEnumerable
             if (adapter.Owners.Concat(adapter.Guests).Concat(adapter.Channels).Any(string.IsNullOrWhiteSpace))
                 errors.Add($"{key}: user and channel ids cannot be empty.");
             // Guest tools (C-020) are an allowlist by exact name. Whether a built-in or DI tool exists is known only once the
-            // runtime has its registry, so the gateway checks that when it starts (CorvidGateway.UnknownGuestTools); here, the
-            // shape, and that an MCP tool names a configured server (its tools are listed only once it runs).
+            // runtime has its registry, so the gateway checks that when it starts (CorvidGateway.GuestToolProblems), and there
+            // too refuses a tool whose risk metadata declares SideEffects.Memory (the turn loop never offers one to a guest);
+            // here, the shape, and that an MCP tool names a configured server (its tools are listed only once it runs).
             foreach (var tool in adapter.GuestTools)
             {
                 if (string.IsNullOrWhiteSpace(tool) || !tool.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-'))
@@ -153,9 +154,6 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue, IEnumerable
                 // guest's job would read for the guest what the guest's own turn may not.
                 else if (tool == "cron_create")
                     errors.Add($"{key}:GuestTools: 'cron_create' cannot be a guest tool: a scheduled job runs with every tool and reports to the chat.");
-                // The owner's memory and its review queue are not a guest's to write (the turn loop never offers them either).
-                else if (tool is "memory_add" or "memory_approve" or "memory_reject")
-                    errors.Add($"{key}:GuestTools: '{tool}' cannot be a guest tool: a guest does not write the owner's memory or answer its review queue.");
                 else if (Composition.CorvidGateway.McpServerOf(tool) is { } server && !servers.Contains(server))
                     errors.Add($"{key}:GuestTools: '{tool}' names MCP server '{server}', which is not configured under Corvid:Mcp:Servers.");
             }
