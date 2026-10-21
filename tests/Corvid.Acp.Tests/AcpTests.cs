@@ -171,7 +171,8 @@ public sealed class AcpTests
     [Fact]
     public async Task SessionCancelEndsTheTurnAndItsPermissionRequest()
     {
-        var models = WithFileEmbedder(new FakeModels(new FakeGenerator(Reply.Call("write_file", """{"path":"notes.txt","content":"hello\n"}"""), Reply.Say("Wrote it."))));
+        var generator = new FakeGenerator(Reply.Call("write_file", """{"path":"notes.txt","content":"hello\n"}"""), Reply.Say("Wrote it."));
+        var models = WithFileEmbedder(new FakeModels(generator));
         await using var client = AcpClient.Start(TestHost.Create(models, FileTools));
         await client.RequestAsync("initialize", Initialize());
         var session = await client.NewSessionAsync();
@@ -196,6 +197,64 @@ public sealed class AcpTests
         var response = await client.ResponseAsync(prompt);
         Assert.Equal("cancelled", response["result"]!["stopReason"]!.GetValue<string>());
         Assert.False(File.Exists(Path.Combine(client.Workspace, "notes.txt")));
+        // The kernel saw the cancel before the permission request ended: no model call after it.
+        Assert.Single(generator.Calls);
+    }
+
+    [Fact]
+    public async Task ACancelledPromptAnswersCancelledEvenWhenItsTurnFinishesFirst()
+    {
+        // The kernel has finished the turn (answered, past its last cancellation check) when session/cancel arrives, and
+        // the prompt has not answered yet. ACP: after session/cancel the agent MUST respond with the cancelled stop reason.
+        var models = new FakeModels(new FakeGenerator(Reply.Say("Finished anyway.")));
+        await using var client = AcpClient.Start(TestHost.Create(models));
+        await client.RequestAsync("initialize", Initialize());
+        var session = await client.NewSessionAsync();
+        // The turn's invoke_agent span stops once its result is final: holding the listener there holds the finished turn.
+        var finished = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        using var listener = new System.Diagnostics.ActivityListener
+        {
+            ShouldListenTo = source => source.Name == Corvid.Kernel.KernelTelemetry.SourceName,
+            Sample = (ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _) =>
+                System.Diagnostics.ActivitySamplingResult.AllData,
+            ActivityStopped = activity =>
+            {
+                if (activity.OperationName != Corvid.Kernel.KernelTelemetry.InvokeAgentSpan
+                    || activity.GetTagItem(Corvid.Kernel.KernelTelemetry.ConversationId) as string != session)
+                    return;
+                finished.TrySetResult(activity.GetTagItem("corvid.turn.status") as string);
+                release.Wait(TimeSpan.FromSeconds(30));
+            },
+        };
+        System.Diagnostics.ActivitySource.AddActivityListener(listener);
+
+        var prompt = await client.BeginAsync("session/prompt", Prompt(session, "say something"));
+        var status = await finished.Task.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
+        await client.NotifyAsync("session/cancel", new { sessionId = session });
+        // Notifications are handled in order on the read loop: an answer to a later request means the cancel was seen.
+        var second = await client.RequestAsync("session/prompt", Prompt(session, "and another"));
+        Assert.Equal(-32600, second["error"]!["code"]!.GetValue<int>());
+        release.Set();
+
+        var response = await client.ResponseAsync(prompt);
+        Assert.Equal("answered", status);
+        Assert.Equal("cancelled", response["result"]!["stopReason"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task ACancelBetweenPromptsDoesNotCancelTheNextOne()
+    {
+        var models = new FakeModels(new FakeGenerator(Reply.Say("First."), Reply.Say("Second.")));
+        await using var client = AcpClient.Start(TestHost.Create(models));
+        await client.RequestAsync("initialize", Initialize());
+        var session = await client.NewSessionAsync();
+        await client.RequestAsync("session/prompt", Prompt(session, "one"));
+        await client.NotifyAsync("session/cancel", new { sessionId = session });
+
+        var response = await client.RequestAsync("session/prompt", Prompt(session, "two"));
+
+        Assert.Equal("end_turn", response["result"]!["stopReason"]!.GetValue<string>());
     }
 
     [Fact]

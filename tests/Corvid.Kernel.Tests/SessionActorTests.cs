@@ -97,6 +97,120 @@ public sealed class SessionActorTests
     }
 
     [Fact]
+    public async Task CancelTurn_has_cancelled_the_running_turn_when_it_returns()
+    {
+        // ACP cancels the turn and then lets its permission request end as cancelled; the turn must already see the cancel
+        // when it resumes, or it makes its next model call and ends normally ("end_turn" after session/cancel).
+        var started = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var generator = new FakeGenerator(Reply.Say("answered anyway"));
+        generator.BeforeReply = async (_, token) =>
+        {
+            started.TrySetResult(token);
+            await release.Task; // ignores the token, as a model call that is already returning would
+        };
+        using var harness = new TurnHarness(generator);
+        var sink = new CollectingSink();
+        await using var actor = harness.Actor(sink);
+        await actor.SubmitAsync(Message("hello there"), Ct);
+        var turn = await started.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+        actor.CancelTurn();
+        var cancelledOnReturn = turn.IsCancellationRequested;
+        release.SetResult();
+
+        Assert.True(cancelledOnReturn);
+        Assert.Equal(TurnStatus.Cancelled, (await sink.NextAsync()).Result!.Status);
+    }
+
+    [Fact]
+    public async Task CancelTurn_does_not_cancel_the_turn_that_starts_after_its_target_finished()
+    {
+        // The window: CancelTurn has cancelled the running turn but not yet posted its command. The cancelled turn ends,
+        // the loop starts the queued message, and only then reads the command: it must leave the new turn alone.
+        var startedFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var startedSecond = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSecond = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // The cancelled call never reaches the script, so the second turn gets its first step.
+        var generator = new FakeGenerator(Reply.Say("second answer"));
+        generator.BeforeReply = async (_, _) =>
+        {
+            // Both ignore the token; FakeGenerator throws after this if the token is cancelled.
+            if (generator.Calls.Count == 1)
+            {
+                startedFirst.TrySetResult();
+                await releaseFirst.Task;
+            }
+            else
+            {
+                startedSecond.TrySetResult();
+                await releaseSecond.Task;
+            }
+        };
+        using var harness = new TurnHarness(generator);
+        var sink = new CollectingSink();
+        await using var actor = harness.Actor(sink);
+        await actor.SubmitAsync(Message("hello there"), Ct);
+        await actor.SubmitAsync(Message("hello again"), Ct);
+        await startedFirst.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        actor.CancelSignalled = () =>
+        {
+            releaseFirst.SetResult();
+            startedSecond.Task.Wait(TimeSpan.FromSeconds(30), Ct);
+        };
+
+        actor.CancelTurn();
+        Assert.True(startedSecond.Task.IsCompleted);
+        // The switch is read after the cancel: once it answers, the loop has handled the cancel.
+        await actor.SwitchModelAsync(ModelSlots.Generator, harness.GeneratorBinding, cancellationToken: Ct).WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        releaseSecond.SetResult();
+
+        Assert.Equal(TurnStatus.Cancelled, (await sink.NextAsync()).Result!.Status);
+        var second = (await sink.NextAsync()).Result!;
+        Assert.Equal(TurnStatus.Answered, second.Status);
+        Assert.Equal("second answer", second.Text);
+    }
+
+    [Fact]
+    public async Task CancelTurn_cancels_a_message_submitted_before_it_whose_turn_has_not_started()
+    {
+        var generator = new FakeGenerator(Reply.Say("second answer"));
+        var never = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // The first turn may be cancelled before or at its model call; at the call it waits for the cancel.
+        generator.BeforeReply = (call, token) => call.LastText.Contains("hello there", StringComparison.Ordinal)
+            ? never.Task.WaitAsync(token)
+            : Task.CompletedTask;
+        using var harness = new TurnHarness(generator);
+        var sink = new CollectingSink();
+        await using var actor = harness.Actor(sink);
+
+        // Whether or not the loop has started the turn yet, the cancel is read after the message and targets its turn.
+        await actor.SubmitAsync(Message("hello there"), Ct);
+        actor.CancelTurn();
+        await actor.SubmitAsync(Message("hello again"), Ct);
+
+        Assert.Equal(TurnStatus.Cancelled, (await sink.NextAsync()).Result!.Status);
+        Assert.Equal("second answer", (await sink.NextAsync()).Result!.Text);
+    }
+
+    [Fact]
+    public async Task CancelTurn_with_nothing_running_or_queued_does_not_cancel_a_later_message()
+    {
+        var generator = new FakeGenerator(Reply.Say("answered"));
+        using var harness = new TurnHarness(generator);
+        var sink = new CollectingSink();
+        await using var actor = harness.Actor(sink);
+
+        actor.CancelTurn();
+        await actor.SubmitAsync(Message("hello there"), Ct);
+
+        var delivery = (await sink.NextAsync()).Result!;
+        Assert.Equal(TurnStatus.Answered, delivery.Status);
+        Assert.Equal("answered", delivery.Text);
+    }
+
+    [Fact]
     public async Task A_full_session_makes_surfaces_wait()
     {
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
