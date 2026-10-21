@@ -229,17 +229,24 @@ internal sealed partial class ShellAnalyzer
         var redirects = ImmutableArray.CreateBuilder<(Field, bool)>();
         foreach (var redirect in command.Redirects)
         {
+            // Redirections apply left to right, and only one of descriptor 0 replaces the input: "3<<< ls" leaves it alone,
+            // while "<> file", "0<&3", "0>&3" or "<&-" make it something Corvid does not see.
+            var replacesStdin = redirect.Changes == 0;
             if (redirect.NamesFile)
             {
                 foreach (var target in Expand(redirect.Target, scope, substitutions))
                     redirects.Add((target, redirect.Writes));
-                if (redirect.Kind == RedirectKind.Input)
+                if (replacesStdin)
                     stdin = Stdin.Unknown;
             }
             else if (redirect.Kind is RedirectKind.HereString or RedirectKind.HereDocument)
             {
-                stdin = Joined(redirect.Target, scope, substitutions) is { } text ? new Stdin(StdinKind.Literal, text) : Stdin.Unknown;
+                var text = Joined(redirect.Target, scope, substitutions);
+                if (replacesStdin)
+                    stdin = text is not null ? new Stdin(StdinKind.Literal, text) : Stdin.Unknown;
             }
+            else if (replacesStdin)
+                stdin = Stdin.Unknown;
         }
 
         // Substitutions run first, each in a subshell of this one.
