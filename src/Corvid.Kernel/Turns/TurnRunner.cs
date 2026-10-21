@@ -1212,9 +1212,11 @@ public sealed class TurnRunner
         private async Task BuildShortlistAsync(CancellationToken cancellationToken)
         {
             // A guest's turn (C-020) knows only the tools its scope names: they are never offered, and a call to any other is
-            // refused as not offered. By name, so a tool registered later (an MCP server's, a skill's) is out unless named.
+            // refused as not offered. By name, so a tool registered later (an MCP server's, a skill's) is out unless named. A
+            // tool that writes memory is never a guest's, named or not: the owner's memory and review queue are not theirs.
             foreach (var function in _services.Tools.GetFunctions(_options.SecretNames))
-                if (function.GetService(typeof(ToolDescriptor)) is ToolDescriptor descriptor && envelope.Guest?.Allows(function.Name) != false)
+                if (function.GetService(typeof(ToolDescriptor)) is ToolDescriptor descriptor
+                    && (envelope.Guest is null || envelope.Guest.Allows(function.Name) && !descriptor.Risk.SideEffects.HasFlag(SideEffects.Memory)))
                     _catalogue[function.Name] = new Offered(function, descriptor);
             if (_catalogue.Count == 0 || !_services.Slots.TryCurrent(ModelSlots.TextEmbedder, out var binding)
                 || binding.Service is not IEmbeddingGenerator<string, Embedding<float>> embedder)
@@ -1341,7 +1343,9 @@ public sealed class TurnRunner
             var answer = runner.Append(new AssistantMessage(text)).Sequence;
             var deliver = "reply";
             var egress = new List<KeyValuePair<string, DecisionQuestion>>();
-            if (_services.Memory is not null && status == TurnStatus.Answered)
+            // A guest's message (C-020) is never offered to memory: staged, it would sit in the owner's review queue as a
+            // proposal written by someone else, worded to be approved.
+            if (_services.Memory is not null && status == TurnStatus.Answered && envelope.Guest is null)
                 egress.Add(Ask("remember"));
             if (_options.AskDeliver)
                 egress.Add(Ask("deliver"));

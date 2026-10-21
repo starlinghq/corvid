@@ -1984,7 +1984,13 @@ Unix socket and the real runtime over fake models: no network and no real tokens
   answers stay, as the chat saw them. (An owner answer sent `silent` or to `home_channel`, or a turn the owner ran on the
   chat's session from another surface, is still in that history as text.) Sessions are per chat, so nothing from the
   owner's DM reaches a group. `cron_create` cannot be a guest tool: a job's run is a turn of its own with the whole
-  toolset that reports to the chat. The owner's own turns are unchanged and keep
+  toolset that reports to the chat. Nor does a guest's turn reach the owner's memory write path: it is not asked
+  `remember` at egress, which would stage the guest's message (tainted, so always staged) in the owner's review queue,
+  a proposal worded by someone else and waiting to be approved; and a tool that declares `[SideEffect(Memory)]`
+  (`memory_add`, `memory_approve`, `memory_reject`) is left out of a guest's catalogue even when `GuestTools` names it,
+  which the validator refuses anyway. Two other residuals stay as they are: an approval asked during a guest's turn is
+  posted in that chat, where only the owner can answer it, and an owner answer sent `silent` or to `home_channel`
+  stays in the chat's history as text (above). The owner's own turns are unchanged and keep
   the whole toolset, including the turn right after a guest's in the same chat: as before, the owner's message clears
   taint (C-011), and a guest's earlier text stays in the transcript as a fetched page would, with the injection and
   approval checks that apply to any outside content. The validator refuses a guest tool that is not a tool name or names
@@ -2087,8 +2093,10 @@ Unix socket and the real runtime over fake models: no network and no real tokens
   the files, an MCP-style tool kept from a guest who has other tools, an allowlisted tool working for a guest and the only
   one offered, unknown guest tools refused at start, the shared command registry, a side effect approved in the chat, a persona and
   slot override for one chat only, a job's result reaching its chat (tainted when its run ended tainted), the hosted
-  service, and validation. `tests/Corvid.Kernel.Tests` (`EgressTurnTests`) checks that a guest's turn sees no core
-  block and no recalled fact.
+  service, and validation (memory write tools refused as guest tools). `tests/Corvid.Kernel.Tests` (`EgressTurnTests`)
+  checks that a guest's turn sees no core block and no recalled fact, and `TurnLoopTests` that it is not asked
+  `remember`, stages nothing and cannot call a memory write tool its scope names, while the owner's next turn still
+  stages its message.
 
 Not built yet: Signal, email (IMAP/SMTP) and webhook adapters (§12); Discord's realtime Gateway and Slack's WebSocket
 through Vault (both wait on Vault's WebSocket first-frame substitution, `vault.md` §9); DMs on Discord from people not yet
