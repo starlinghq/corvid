@@ -11,7 +11,7 @@ public sealed class CatalogueTests
 
         Assert.Equal(
             ["clarify", "clear_results", "delegate", "deliver", "difficulty", "done", "injection", "intent", "memory_op", "needs_recall",
-             "remember", "risk", "skill", "skill_opportunity", "skill_write_safe", "stuck", "tool", "wake"],
+             "remember", "risk", "skill", "skill_opportunity", "skill_write_safe", "stuck", "task_succeeded", "tool", "wake"],
             catalogue.Ids.Order(StringComparer.Ordinal));
         Assert.Equal(["memory_op", "risk", "skill_write_safe"],
             catalogue.Questions.Where(q => q.Role == QuestionRole.Gate).Select(q => q.Id).Order(StringComparer.Ordinal));
@@ -55,7 +55,7 @@ public sealed class CatalogueTests
     {
         var floors = FloorConfiguration.Default;
 
-        Assert.Equal("2026-10-19.1", floors.Version);
+        Assert.Equal("2026-10-21.1", floors.Version);
         Assert.False(floors.DegradedTurnBlocking);
         Assert.Equal(0.05, floors.DegradedChoiceMargin);
         Assert.Equal(QuestionCatalogue.Default.Ids.Count, floors.Floors.Count);

@@ -1544,8 +1544,10 @@ directory has its own history and `/skills revert`. Before every change (and
   breakpoints, C-015); below the floor the shortlist's L0 lines are shown, naming `skill_read`
   when it is registered; a confident `none` shows nothing. A body that is not trusted (a hub skill) taints the session
   (§10.3: outside content) and an `injection/skill:<name>` decision is recorded (without Kev, `treat_as_tainted`). With
-  `TurnServices.SkillLearning` bound, an answered turn with at least three tool calls asks `skill_opportunity` at egress with
-  the `tool_steps_at_least_3` condition (shorter turns are not asked: in the degraded tier each ask is a generator call);
+  `TurnServices.SkillLearning` bound, an answered turn with at least three tool calls (or, since C-026, a recovery pattern)
+  asks `skill_opportunity` at egress with the `procedure_evidence` condition, beside `task_succeeded`, whose acting it also
+  requires (other turns are not asked: in the degraded tier each ask is a generator call; see
+  [Skill learning signals](#skill-learning-signals-c-026));
   acting queues `SkillOpportunity` (the user message's and the answer's sequences, the decision id, the request).
   `TurnResult` gained `Skill` and `SkillQueued`. `ToolCallContext.MarkResultTainted` lets a tool that returns outside
   content without the network taint the session after its call.
@@ -2131,6 +2133,107 @@ sends (refused or allowed per token today); pairing from a chat; a cap on the le
 stay in the log); taint that follows content rather than turns (by C-011's rule the owner's next message clears it,
 though a guest's earlier text in a group chat stays in the projection, as a fetched page does); and a run against the real
 platforms with real tokens.
+
+## Skill learning signals (C-026)
+
+Plan §5.3 (`skill_opportunity`, `task_succeeded`), §5.5 (outcomes), §5.6 (the degraded tier) and §11 (learning loop, step
+1). C-017's loop asked one question, `skill_opportunity`, after three tool calls. Three ideas from Asymptote-Labs/agent-beacon
+(MIT, Go), reimplemented here, sharpen it: task success is a precondition with its own threshold, not a vote (Beacon's fix
+for its issue #649, where an average of rubric scores let a failed task through); a failed call recovered by another
+approach is the strongest learning signal; and the drafter sees a turn's head and tail, not an arbitrary prefix (Beacon's
+evaluator projection: 80 events split 40/40, 1,200 characters each, with an omitted-count marker). No project, package or
+checker rule changed.
+
+- Precondition as catalogue data. `task_succeeded` (egress, Noul, act `confirm_task_success`, below the floor
+  `task_unconfirmed`, floor 0.8 in floors `2026-10-21.1`, stricter than `skill_opportunity`'s 0.75) asks "Did this turn
+  accomplish what the user asked, with no tool failure left unresolved?" and requires `tool_failures_recovered`, a
+  deterministic condition, so a turn that ends on an unrecovered failure is never a success whatever a model says.
+  `CatalogueQuestion.Grants` (init) names a condition that holds for the rest of the checkpoint when the question acts;
+  `task_succeeded` grants `task_succeeded`, which `skill_opportunity` now requires with `procedure_evidence` (three tool
+  calls or a recovery; `tool_steps_at_least_3` is gone). `DecisionFabric.DecideAsync` evaluates granting questions first,
+  adds each granted condition whose verdict acted, then evaluates the rest; a caller-supplied condition some question
+  grants (`QuestionCatalogue.Granted`) is stripped, so no caller can assert success. The decider still gets one request per
+  checkpoint and the events are still one batch in key order. `DecisionPolicy` did not change: a `skill_opportunity` yes of
+  0.99 after an unconfirmed task logs `nothing` with the reason `missing condition task_succeeded`, so its `Decision` event
+  never claims a distillation that did not happen (combining verdicts in the kernel would have, corrupting C-021's data).
+  The catalogue refuses a question requiring what it grants, two granters of one condition, and a requirer that shares no
+  checkpoint with its granter. A floors file written before C-026 fails validation with `no floor for 'task_succeeded'`
+  (the host loads only the embedded floors; C-021's `--out` files must be refitted or edited).
+- Degraded tier. `task_succeeded` answers by the generator's yes/no, so the loop still runs without Kev; it is one more
+  background-priority generator call on an eligible turn. Conservatism is in two layers: the deterministic condition
+  above, and `SkillOpportunity.SuccessCalibrated` (true only when `task_succeeded`'s answer was calibrated), stored in
+  `skills.db`. `SkillLearner` stages a draft whose success was not calibrated whatever `skill_write_safe` says, as it does
+  for a tainted turn ("task success was not confirmed by a calibrated decider, so the draft waits for review"). Without
+  Kev every draft was staged already; this also covers mixed tiers, where egress fell back to the degraded tier and the
+  pre-execute gate had Kev.
+- Recovery pattern (`Corvid.Kernel/Turns/ToolRecovery.cs`, pure). `ToolRecovery.Scan` pairs `ToolCallIssued` with
+  `ToolResult` by call id and returns calls, counted failures, unrecovered failures and `RecoveryStep`s. A counted failure
+  is an error result whose kernel `error` is not `not run` (approval denied or never run), `cancelled` or `invalid
+  arguments` (C-011's schema repair, which includes a call to a tool not offered); those strings are now
+  `ToolErrorKinds`, used by `TurnRunner`'s call sites, and an error without the kernel's shape (a tool's or an MCP
+  server's) counts. A call responds to a failure when it was issued after the failure's result in a later round:
+  `ToolCallIssued.Round` (C-026, omitted when null) is the turn's step, one per generator response with calls, because
+  calls that need approval run one at a time and a later call of the failure's own response is issued after its result
+  (events without a round fall back to the order alone). A failure is resolved, so not unrecovered, by a responding
+  success of the same name, or of the same family unless the failed call changes something and the success only reads:
+  `ToolCallIssued.ReadOnly` (C-026, omitted when null; the descriptor's `Risk.ReadOnly`, null for a call naming no offered
+  tool) is unknown-as-change for the failure and unknown-as-read for the success, so `read_file` after a failed
+  `write_file` leaves it unrecovered and `tool_failures_recovered` withheld. A recovery is a counted failure followed by a
+  responding successful call of the same family that differs from it: another name, or the same name with arguments that
+  are not `JsonElement.DeepEquals`; it is the hint, looser than resolution (that read is still listed as what followed).
+  The identical call succeeding resolves the failure but is a retry, not a recovery. Family: an MCP `server__tool` name maps to its server; otherwise the name's `_` tokens, a
+  trailing `s` trimmed, minus a verb stoplist (`read`, `write`, `list`, `search`, `get`, `set`, `add`, `remove`, `create`,
+  `delete`, `update`, `run`, `fetch`, `patch`, `approve`, `reject`, `pending`); names share a family when equal or when
+  they share a token (`read_file`, `list_files`, `search_files`, `patch_file` are `file`; `memory_*` and `search_memory`
+  are `memory`; `web_fetch` is `web`). The heuristic can over- or under-match; the pattern only lets the question be asked
+  and adds a hint, so the answer and the `task_succeeded` floor still decide.
+- Egress (`TurnRunner.FinishAsync`). The base eligibility is unchanged (learning bound, answered, no pinned skill, no
+  guest). The turn is read from the log (`SessionProjection.ReadRange`, paged) from its user message to its answer, not
+  from the snapshot, because compaction during the turn can fold early calls. The checkpoint asks when the turn had three
+  tool calls or a recovery, and then asks both questions in its one request, with JSON instructions that
+  `DecisionFabric.Asked` persists, so C-021's export carries them: `task_succeeded` gets `tool_calls`, `failed_calls` and
+  `unrecovered_failures`; `skill_opportunity` gets `tool_calls` and, when present, `recovery`
+  (`read_file failed, then search_files succeeded`). Conditions: `procedure_evidence` always, `tool_failures_recovered`
+  when nothing is unrecovered. Acting queues `SkillOpportunity` with the `task_succeeded` decision id and its
+  calibration.
+- `skills.db` schema 2 (additive, MemoryDatabase's `if (version < 2)` pattern): `opportunities` gains `success_decision`
+  and `success_calibrated` (default 0, so rows queued earlier are staged). `Enqueue` names its columns; `FindOpportunity`
+  is new; versions 0, 1 and 2 open.
+- Outcomes. Approving or rejecting a staged draft still records `approved`/`rejected` on its `skill_write_safe` decision,
+  and now also `skill_approved`/`skill_rejected` on the opportunity's `skill_opportunity` and `task_succeeded` decisions,
+  in the source session. They are indirect evidence (a user may reject a badly written draft of a successful task), so
+  the strings are distinct: `OutcomeClassifier.Default` labels them positive and negative, and `--positive`/`--negative`
+  can drop them. `FloorFitter` and the exports iterate the catalogue and the `Decision` events, so `task_succeeded` is
+  fitted (once it has 20 calibrated decisions with outcomes) and exported with no other change.
+- Drafting window. `SkillLearnerOptions.ResultChars` (400, results only) became `EventChars` (1,200), `HeadEvents` (40)
+  and `TailEvents` (40), validated positive. `ProcessAsync` pages the turn from the log (the 4,096-event cap is gone),
+  once for the scan and once into `DraftPrompt`, which renders user, call, result or error and assistant events, keeps
+  the first `HeadEvents` and a rolling queue of the last `TailEvents`, and between them writes
+  `[… N events omitted from the middle of this turn …]`. Every event's text, the user's and the assistant's messages
+  included (uncut before), is cut to `EventChars` with the `… [k more]` suffix. When the turn recovered, the prompt says
+  "The turn recovered: X failed, then Y succeeded; write the skill around the approach that worked." The prompt is at
+  most about 80 × 1,200 characters plus the frame; it has no total token budget yet.
+
+Tests: `tests/Corvid.Fabric.Tests` (`GrantTests`): the catalogue row and its floor, grant validation, the #649 regression
+(P(yes) 0.99 below an unconfirmed task logs `nothing`), success with both above their floors, an unrecovered failure
+blocking both, a caller's `task_succeeded` ignored whether or not the granter is asked, granters first whatever their key
+order (with events still in key order), and the degraded tier answering both. `tests/Corvid.Kernel.Tests`
+(`ToolRecoveryTests`): recovery across a family and by different arguments, a repeated call resolving without recovering,
+denials, cancellations and rejected arguments not counted, unrecovered counts, the parallel round, a second call of one
+response run after approval (one round, so no recovery), events without rounds or read-only flags, a read after a failed
+write left unrecovered, changes and reads that resolve, families and MCP servers. The three turn goldens changed in their
+floors version (they bind no learning, so egress gained no question) and their calls' `round` and `read_only`. `tests/Corvid.Skills.Tests`: a two-call recovery turn asked and queued with its features persisted, a
+three-call turn whose success is answered no logging `nothing`, a turn ending on unrecovered failures held back, the
+head-and-tail window with its marker and cap, the recovery line, option validation, an uncalibrated success staged on a
+calibrated `skill_write_safe` yes, review outcomes on all three decisions, and a version-1 `skills.db` migrating.
+`tests/Corvid.Evals.Tests`: the classifier labels the review outcomes.
+
+Not built yet: granted conditions on `Decision` events (C-021's floor replay cannot model that raising `task_succeeded`'s
+floor changes `skill_opportunity`'s verdicts; it flags `conditions unverified`); tool families from declared toolsets or
+descriptor metadata; schema repairs and MCP `isError` content as recovery evidence; replay-test or scanner failures, and
+reverts of auto-applied drafts, as negative outcomes; a total token budget for the drafting prompt and a summary of the
+omitted middle; the recovery pattern as a `stuck`/`done` feature, in the curator or in the skill shortlist; a quality
+score beside the precondition; a fitted `task_succeeded` floor; and back-filling opportunities queued before schema 2.
 
 ## Trace export and Hermes memory import (C-027)
 
