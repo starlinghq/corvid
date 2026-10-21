@@ -53,6 +53,8 @@ public sealed class TurnRunner
     private readonly TurnServices _services;
     private readonly TurnOptions _options;
     private readonly ContextCompactor _compactor;
+    // C-022: the outside tool descriptions injection was asked about this session, by origin and the descriptions' text.
+    private readonly HashSet<string> _describedOrigins = new(StringComparer.Ordinal);
     // Set when the generator moved to a larger window (plan §4.2 step 4); the next generator call expands compacted ranges.
     private int _expansionDue;
 
@@ -262,6 +264,7 @@ public sealed class TurnRunner
                 ingress.Add(ToolQuestion());
             if (!_skills.IsEmpty)
                 ingress.Add(SkillQuestion());
+            ingress.AddRange(DescriptionQuestions());
             var verdicts = await DecideAsync(Checkpoint.Ingress, ingress, cancellationToken).ConfigureAwait(false);
             await LoadSkillAsync(verdicts, cancellationToken).ConfigureAwait(false);
 
@@ -398,6 +401,11 @@ public sealed class TurnRunner
                 budget, cancellationToken).ConfigureAwait(false);
             if (rendered.OverBudget)
                 throw new ContextOverBudgetException($"{rendered.Tokens} tokens against a budget of {rendered.Budget}");
+            // C-022 (§10.3): a description from outside (an untrusted MCP server's) shown to the generator taints the turn
+            // like an untrusted result, before the request's context is built so the egress gate and Vault see it.
+            if (tools.Any(tool => tool.Descriptor.Risk.OutsideDescription))
+                lock (_gate)
+                    runner.Tainted = true;
 
             var messages = rendered.Messages.ToList();
             if (noteTokens > 0)
@@ -1120,6 +1128,32 @@ public sealed class TurnRunner
                 [.. _shortlist.Where(tool => tool.Function.Name != None).Select(tool => new QuestionOption(tool.Function.Name, tool.Function.Description)),
                  new QuestionOption(None, "no tool is needed")]));
 
+        /// <summary>
+        /// C-022: <c>injection</c> about the shortlisted tools whose descriptions came from outside (an untrusted MCP server's),
+        /// one question per origin, asked once per session for the same descriptions and in the ingress batch, the shape
+        /// <see cref="LoadSkillAsync"/> uses for a hub skill's body. As there, asking taints and the verdict is logged only.
+        /// </summary>
+        private List<KeyValuePair<string, DecisionQuestion>> DescriptionQuestions()
+        {
+            var questions = new List<KeyValuePair<string, DecisionQuestion>>();
+            var question = Catalogue["injection"];
+            foreach (var group in _shortlist.Where(tool => tool.Descriptor.Risk.OutsideDescription && tool.Descriptor.Origin is not null)
+                         .GroupBy(tool => tool.Descriptor.Origin!, StringComparer.Ordinal).OrderBy(group => group.Key, StringComparer.Ordinal))
+            {
+                var text = string.Join("\n", group.OrderBy(tool => tool.Function.Name, StringComparer.Ordinal)
+                    .Select(tool => $"- {tool.Function.Name}: {tool.Function.Description}"));
+                if (!runner._describedOrigins.Add(group.Key + "\n" + text))
+                    continue;
+                var body = $"{group.Key} tool descriptions:\n{text}";
+                questions.Add(KeyValuePair.Create("injection/" + group.Key, question.ToQuestion(instructions: DecisionContent.FromText(
+                    $"{question.Instructions}\n" + (body.Length > 1_200 ? body[..1_200] + "…" : body)))));
+            }
+            if (questions.Count > 0)
+                lock (_gate)
+                    runner.Tainted = true;
+            return questions;
+        }
+
         private static bool Acted(CheckpointResult result, string key, out string? option)
         {
             option = null;
@@ -1287,6 +1321,10 @@ public sealed class TurnRunner
                     _skillNote = "Saved skills that may apply (not loaded" +
                         (_catalogue.ContainsKey(SkillTools.Read) ? $"; {SkillTools.Read} loads one" : "") + "):\n" +
                         string.Join("\n", _skills.Select(skill => $"- {skill.Name}: {skill.Description}"));
+                // C-022: a hub skill's L0 description in the index is outside content too.
+                if (_skillNote.Length > 0 && _skills.Any(skill => !skill.Trusted))
+                    lock (_gate)
+                        runner.Tainted = true;
                 return;
             }
             _skill = body.Name;
