@@ -1354,7 +1354,8 @@ public sealed class TurnRunner
             // a generator call. A replay or eval turn is never distilled again.
             var learnable = _services.SkillLearning is not null && status == TurnStatus.Answered && _options.PinnedSkill is null
                 && envelope.Guest is null;
-            var scan = learnable ? ToolRecovery.Scan(TurnEvents(answer, cancellationToken)) : null;
+            // A recovery needs a failed call and a later one, so shorter turns skip the log read.
+            var scan = learnable && _toolCalls >= 2 ? ToolRecovery.Scan(TurnEvents(answer, cancellationToken)) : null;
             var opportunity = scan is not null && (_toolCalls >= 3 || !scan.Recoveries.IsEmpty);
             var conditions = new List<string>();
             if (opportunity)
