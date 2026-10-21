@@ -29,6 +29,8 @@ public sealed class EventJsonTests
         [typeof(TodosSet)] = "todos_set",
         [typeof(CheckpointTaken)] = "checkpoint_taken",
         [typeof(SessionRewound)] = "session_rewound",
+        [typeof(DeliveryQueued)] = "delivery_queued",
+        [typeof(DeliveryResolved)] = "delivery_resolved",
     };
 
     [Fact]

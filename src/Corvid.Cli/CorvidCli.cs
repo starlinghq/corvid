@@ -51,7 +51,7 @@ public static class ExitCodes
 }
 
 /// <summary>
-/// <c>corvid</c> (plan §17 row 1.2): <c>chat</c>, <c>model</c>, <c>doctor</c>, <c>mcp</c>, <c>evals</c>, <c>acp</c> and <c>serve</c>, with typed configuration
+/// <c>corvid</c> (plan §17 row 1.2): <c>chat</c>, <c>model</c>, <c>doctor</c>, <c>mcp</c>, <c>evals</c>, <c>acp</c>, <c>serve</c> and <c>gateway</c>, with typed configuration
 /// validated before anything runs.
 /// </summary>
 public static class CorvidCli
@@ -67,6 +67,11 @@ public static class CorvidCli
           doctor                     check models, sandbox, Vault and configuration     [--thorough]
           mcp [list]                 start each configured MCP server and list the tools it adds
           mcp serve                  Corvid as an MCP server on stdin/stdout: memory search and skills, read-only
+          gateway [run]              run the messaging gateway (Telegram, Discord, Slack) until Ctrl-C
+          gateway status             enabled adapters, whether one runs, deliveries waiting, pairings
+          gateway pair [list]        people waiting to pair, and who is paired
+          gateway pair approve <code> --owner|--guest   pair the sender of a code as the owner, or as a guest (outside content)
+          gateway pair revoke <adapter> <user>   remove a pairing
           evals <command> ...        calibration tooling (corvid-evals): calibrate, report, replay, export-decisions,
                                      export-trajectories; --log defaults to this user's event log
           acp                        an Agent Client Protocol agent on stdin/stdout, for Zed, JetBrains and VS Code
@@ -108,6 +113,9 @@ public static class CorvidCli
         }
 
         var builder = CorvidHost.CreateBuilder(parsed.Overrides, parsed.ConfigFile);
+        // Only `corvid gateway [run]` starts the gateway; its other verbs work on the stores alone.
+        if (GatewayCommand.Runs(parsed))
+            builder.Services.AddCorvidGateway();
         context.ConfigureServices?.Invoke(builder.Services);
         using var host = builder.Build();
         try
@@ -121,6 +129,7 @@ public static class CorvidCli
                 "mcp" => await McpCommand.RunAsync(host, parsed, context, cancellationToken).ConfigureAwait(false),
                 "acp" => await AcpCommand.RunAsync(host, context, cancellationToken).ConfigureAwait(false),
                 "serve" => await ServeCommand.RunAsync(host, context, cancellationToken).ConfigureAwait(false),
+                "gateway" => await GatewayCommand.RunAsync(host, parsed, context, cancellationToken).ConfigureAwait(false),
                 _ => UnknownCommand(console, parsed.Command),
             };
         }

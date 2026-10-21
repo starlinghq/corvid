@@ -289,6 +289,45 @@ public sealed class ModelAndDoctorTests
     }
 }
 
+public sealed class GatewayCommandTests
+{
+    [Fact]
+    public async Task PairingIsApprovedOnTheMachineOnlyWithAnExplicitRole()
+    {
+        using var run = new CliRun();
+        var store = new Corvid.Gateway.PairingStore(Path.Combine(run.Root, "data", "gateway.db"));
+        var code = store.Request("telegram", "42", "ada", "42").Request!.Code;
+
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["gateway", "pair"]));
+        Assert.Contains(Corvid.Gateway.PairingStore.Display(code), run.Output, StringComparison.Ordinal);
+
+        // No default role: approving a stranger's code by habit must not make them the owner.
+        Assert.Equal(ExitCodes.Usage, await run.RunAsync(["gateway", "pair", "approve", code]));
+        Assert.Equal(ExitCodes.Usage, await run.RunAsync(["gateway", "pair", "approve", code, "--owner", "--guest"]));
+        Assert.Empty(store.Users());
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["gateway", "pair", "approve", code.ToLowerInvariant(), "--guest"]));
+        Assert.Equal(Corvid.Gateway.SenderRole.Guest, Assert.Single(store.Users()).Role);
+        Assert.Equal(ExitCodes.Failure, await run.RunAsync(["gateway", "pair", "approve", code, "--owner"]));
+
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["gateway", "status"]));
+        Assert.Contains("No adapter is enabled", run.Output, StringComparison.Ordinal);
+        Assert.Contains("No gateway is running.", run.Output, StringComparison.Ordinal);
+        Assert.Contains("1 paired, 0 waiting", run.Output, StringComparison.Ordinal);
+
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["gateway", "pair", "revoke", "telegram", "42"]));
+        Assert.Empty(store.Users());
+        Assert.Equal(ExitCodes.Usage, await run.RunAsync(["gateway", "frobnicate"]));
+    }
+
+    [Fact]
+    public async Task RunningWithoutAnEnabledAdapterSaysWhatToConfigure()
+    {
+        using var run = new CliRun();
+        Assert.Equal(ExitCodes.Failure, await run.RunAsync(["gateway"]));
+        Assert.Contains("No gateway adapter is enabled", run.Output, StringComparison.Ordinal);
+    }
+}
+
 public sealed class EvalsTests
 {
     [Fact]

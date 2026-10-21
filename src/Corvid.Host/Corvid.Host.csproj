@@ -12,6 +12,11 @@
     <!-- The composition root is the one production project that may reference adapters (the checker's CompositionProjects). -->
     <ProjectReference Include="../Corvid.Approvals/Corvid.Approvals.csproj" />
     <ProjectReference Include="../Corvid.Fabric/Corvid.Fabric.csproj" />
+    <!-- The gateway (C-020) and its platform adapters; only the composition root may reference the adapters. -->
+    <ProjectReference Include="../Corvid.Gateway/Corvid.Gateway.csproj" />
+    <ProjectReference Include="../Corvid.Gateway.Discord/Corvid.Gateway.Discord.csproj" />
+    <ProjectReference Include="../Corvid.Gateway.Slack/Corvid.Gateway.Slack.csproj" />
+    <ProjectReference Include="../Corvid.Gateway.Telegram/Corvid.Gateway.Telegram.csproj" />
     <ProjectReference Include="../Corvid.Kernel/Corvid.Kernel.csproj" />
     <ProjectReference Include="../Corvid.Mcp/Corvid.Mcp.csproj" />
     <ProjectReference Include="../Corvid.Memory/Corvid.Memory.csproj" />

@@ -6,6 +6,7 @@ using Corvid.Abstractions.Sessions;
 using Corvid.Abstractions.Tokens;
 using Corvid.Approvals;
 using Corvid.Fabric;
+using Corvid.Gateway;
 using Corvid.Host.Configuration;
 using Corvid.Host.Models;
 using Corvid.Host.Telemetry;
@@ -43,6 +44,9 @@ public sealed class CorvidRuntime : IAsyncDisposable
     private readonly ConcurrentDictionary<string, CorvidSession> _sessions = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<Delivery>> _waiting = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, SessionSettings> _settings = new(StringComparer.Ordinal);
+    // Job runs whose turn ended tainted, by run session, until QueueJobResult takes them. The scheduler and its completion
+    // callback run in this process, so the job store needs no column for it.
+    private readonly ConcurrentDictionary<string, byte> _taintedRuns = new(StringComparer.Ordinal);
     private readonly ModelComposer _composer;
     private readonly ApprovalRouter _prompters;
     private readonly EmbedderSwapJob? _swap;
@@ -232,25 +236,33 @@ public sealed class CorvidRuntime : IAsyncDisposable
     internal static string NewSessionId(string surface) =>
         string.Create(CultureInfo.InvariantCulture, $"{surface}-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}");
 
-    internal Task<Delivery> SendAsync(CorvidSession session, string text, EnvelopeOrigin origin, CancellationToken cancellationToken)
+    internal async Task<Delivery> SendAsync(CorvidSession session, string text, EnvelopeOrigin origin, CancellationToken cancellationToken)
+    {
+        var delivery = await PostAsync(session, text, origin, cancellationToken).ConfigureAwait(false);
+        return await delivery.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Posts a message and returns once it is queued, with a task for its delivery, so a surface that receives faster than
+    /// turns finish (the gateway) keeps each chat's order without waiting for answers.
+    /// </summary>
+    internal async Task<Task<Delivery>> PostAsync(CorvidSession session, string text, EnvelopeOrigin origin, CancellationToken cancellationToken)
     {
         var messageId = Guid.NewGuid().ToString("N");
         var waiter = new TaskCompletionSource<Delivery>(TaskCreationOptions.RunContinuationsAsynchronously);
         _waiting[messageId] = waiter;
-        return PostAndWaitAsync();
-
-        async Task<Delivery> PostAndWaitAsync()
+        try
         {
-            try
-            {
-                await Sessions.PostAsync(new Envelope(session.Id, session.Surface, text, origin, messageId), cancellationToken).ConfigureAwait(false);
-                return await waiter.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
-            }
-            finally
-            {
-                _waiting.TryRemove(messageId, out _);
-            }
+            await Sessions.PostAsync(new Envelope(session.Id, session.Surface, text, origin, messageId), cancellationToken).ConfigureAwait(false);
         }
+        catch
+        {
+            _waiting.TryRemove(messageId, out _);
+            throw;
+        }
+        _ = waiter.Task.ContinueWith(done => _waiting.TryRemove(messageId, out _), CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        return waiter.Task;
     }
 
     // C-006's privacy hook (plan §4.2 step 6): a switch to a gated model checks the conversation first, with the session's taint.
@@ -263,16 +275,19 @@ public sealed class CorvidRuntime : IAsyncDisposable
     {
         var slots = NewSlots(sessionId);
         var settings = _settings.TryGetValue(sessionId, out var chosen) ? chosen : SessionSettings.Default;
-        var runner = new TurnRunner(sessionId, Services(slots, settings.Interactive, settings.Tools ? Tools : new ToolRegistry()));
+        var runner = new TurnRunner(sessionId, Services(slots, settings.Interactive, settings.Tools ? Tools : new ToolRegistry(), settings));
         var actor = new SessionActor(runner, slots, new Sink(this), new SessionActorOptions { EmbedderSwap = _swap });
         _sessions[sessionId] = new CorvidSession(this, sessionId, slots, runner, actor);
         return actor;
     }
 
     /// <summary>One session's turn services over the shared ones. Scheduled runs are not interactive: nobody can be asked.</summary>
-    private TurnServices Services(SessionModelSlots slots, bool interactive, ToolRegistry? tools = null)
+    private TurnServices Services(SessionModelSlots slots, bool interactive, ToolRegistry? tools = null, SessionSettings? session = null)
     {
         var turn = Options.Turn;
+        var prompt = turn.SystemPrompt is { Length: > 0 } configured ? configured : TurnOptions.DefaultSystemPrompt;
+        if (session?.Persona is { Length: > 0 } persona)
+            prompt = prompt + "\n\n" + persona;
         return new TurnServices
         {
             Log = Log,
@@ -292,7 +307,9 @@ public sealed class CorvidRuntime : IAsyncDisposable
             SkillShortlist = _skillShortlist,
             Options = new TurnOptions
             {
-                SystemPrompt = turn.SystemPrompt is { Length: > 0 } prompt ? prompt : TurnOptions.DefaultSystemPrompt,
+                SystemPrompt = prompt,
+                // A gateway chat can be answered elsewhere: in a thread, the home channel, or not at all (C-020).
+                AskDeliver = session?.AskDeliver ?? false,
                 MaxSteps = turn.MaxSteps,
                 MaxOutputTokens = turn.MaxOutputTokens,
                 ApprovalMode = Options.Approvals.Mode,
@@ -323,18 +340,52 @@ public sealed class CorvidRuntime : IAsyncDisposable
             return;
         }
         var scripts = new SandboxedScriptRunner(Builtin.Shell, Approvals, Options.Approvals.Mode);
-        var agent = new TurnJobAgent(sessionId => Services(NewSlots(sessionId), interactive: false));
+        var agent = RecordingTaint(new TurnJobAgent(sessionId => Services(NewSlots(sessionId), interactive: false)));
         var scheduler = new JobScheduler(Builtin.Jobs, Fabric, scripts, agent,
             options: new JobSchedulerOptions { Generator = Registry.Get(ModelSlots.Generator).Default.Profile.Id })
         {
             Completed = (job, run, _) =>
             {
+                QueueJobResult(job, run);
                 JobCompleted?.Invoke(job, run);
                 return Task.CompletedTask;
             },
         };
         SchedulerState = "running in this process";
         _scheduler = Task.Run(() => scheduler.RunAsync(_lifetime.Token));
+    }
+
+    /// <summary>
+    /// A job created in a gateway chat reports to that chat (plan §13 with §12): its result is queued in the delivery ledger,
+    /// which is in the shared event log, so a gateway sends it even when another process (a CLI holding the scheduler) ran
+    /// the job. Skipped ticks report nothing; jobs created elsewhere stay local.
+    /// </summary>
+    /// <summary>The scheduler's agent, remembering which runs ended tainted for <see cref="QueueJobResult"/>.</summary>
+    internal IJobAgent RecordingTaint(IJobAgent agent) => new TaintRecordingJobAgent(agent, _taintedRuns);
+
+    internal void QueueJobResult(ScheduledJob job, JobRun run)
+    {
+        // A run that fetched a page is tainted whoever created the job; its answer is marked so, like an interactive one.
+        var ranTainted = _taintedRuns.TryRemove(run.SessionId, out _);
+        if (!GatewaySessions.TryParse(job.OriginSession, out var adapter, out var chat))
+            return;
+        var text = run.Status switch
+        {
+            JobRunStatus.Ran or JobRunStatus.ScriptOnly when run.Output is { Length: > 0 } output => output,
+            JobRunStatus.Ran or JobRunStatus.ScriptOnly or JobRunStatus.Skipped => null,
+            _ => $"The job did not complete ({run.Status}{(run.Detail is { Length: > 0 } detail ? ": " + detail : "")}).",
+        };
+        if (text is null)
+            return;
+        try
+        {
+            DeliveryLedger.Queue(Log, new DeliveryQueued("job-" + run.RunId, adapter, chat, $"Scheduled job \"{job.Name}\":\n{text}", "job",
+                SourceSession: run.SessionId, Tainted: job.CreatedTainted || job.Script is not null || ranTainted));
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            // The run is recorded in the job store either way; a ledger that cannot be written loses only the message.
+        }
     }
 
     private void Delivered(Delivery delivery)
@@ -375,10 +426,25 @@ public sealed class CorvidRuntime : IAsyncDisposable
     }
 }
 
-/// <summary>How a session's turns run, chosen by the surface that opens it.</summary>
+/// <summary>Remembers which job runs ended tainted, for <see cref="CorvidRuntime.QueueJobResult"/>.</summary>
+internal sealed class TaintRecordingJobAgent(IJobAgent inner, ConcurrentDictionary<string, byte> tainted) : IJobAgent
+{
+    public async Task<JobAgentResult> RunAsync(JobAgentRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var result = await inner.RunAsync(request, cancellationToken).ConfigureAwait(false);
+        if (result.Tainted || request.Tainted)
+            tainted[request.SessionId] = 0;
+        return result;
+    }
+}
+
+/// <summary>How a session's turns run, chosen by the surface that opens it (applied when the session is first opened).</summary>
 /// <param name="Interactive">False when nobody can answer an approval (an HTTP client): an ask is denied without a prompt.</param>
 /// <param name="Tools">False to offer the model no tools at all.</param>
-public sealed record SessionSettings(bool Interactive = true, bool Tools = true)
+/// <param name="Persona">Added to the system prompt (a gateway channel's persona, plan §12).</param>
+/// <param name="AskDeliver">Ask <c>deliver</c> at egress: the surface can answer in a thread, elsewhere, or not at all.</param>
+public sealed record SessionSettings(bool Interactive = true, bool Tools = true, string? Persona = null, bool AskDeliver = false)
 {
     public static SessionSettings Default { get; } = new();
 }
@@ -414,6 +480,13 @@ public sealed class CorvidSession
     /// <summary>Runs one turn and waits for its delivery.</summary>
     public Task<Delivery> SendAsync(string text, CancellationToken cancellationToken = default) =>
         _runtime.SendAsync(this, text, EnvelopeOrigin.User, cancellationToken);
+
+    /// <summary>
+    /// Queues a message and returns once it is queued, with a task for its delivery. <see cref="EnvelopeOrigin.External"/>
+    /// marks it as someone else's (another gateway user's), which taints the session (plan §10.3).
+    /// </summary>
+    public Task<Task<Delivery>> PostAsync(string text, EnvelopeOrigin origin, CancellationToken cancellationToken = default) =>
+        _runtime.PostAsync(this, text, origin, cancellationToken);
 
     /// <summary>Cancels the running turn (Ctrl-C, <c>/cancel</c>).</summary>
     public void Cancel() => Actor.CancelTurn();

@@ -107,8 +107,10 @@ internal sealed class FakeVault : IAsyncDisposable
         if (Refusals.TryDequeue(out var refusal))
             return new ErrorResponse { Code = refusal.Code, Message = refusal.Message };
         // Only a placeholder this Vault minted is substituted; anything else is refused, as the real one does.
+        // A URL placeholder (Telegram's bot path, C-020) counts too, as it does for a secret with allowInUrl.
         var minted = Minted.ToArray();
-        if (!request.Headers.Any(header => minted.Any(placeholder => header.Value.Contains(placeholder, StringComparison.Ordinal))))
+        if (!request.Headers.Any(header => minted.Any(placeholder => header.Value.Contains(placeholder, StringComparison.Ordinal)))
+            && !minted.Any(placeholder => request.Url.Contains(placeholder, StringComparison.Ordinal)))
             return new ErrorResponse { Code = VaultErrorCodes.BadPlaceholder, Message = "unknown placeholder" };
         return Forward(request);
     }

@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Corvid's gateway (plan §12): the adapter host (lazy, isolated adapters with timeouts), pairing codes and allowlists, per-chat sessions, the delivery ledger in the event log with at-least-once redelivery, and deliver routing. Platform adapters are Corvid.Gateway.* projects.</Description>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <ProjectReference Include="../Corvid.Abstractions/Corvid.Abstractions.csproj" />
+    <!-- IApprovalPrompter: approvals asked in a chat and answered by the owner. -->
+    <ProjectReference Include="../Corvid.Approvals/Corvid.Approvals.csproj" />
+    <!-- Bot tokens only through Vault (plan §10.5): the adapters' HTTP pipeline. -->
+    <ProjectReference Include="../Corvid.Vault.Client/Corvid.Vault.Client.csproj" />
+    <InternalsVisibleTo Include="Corvid.Gateway.Tests" />
+  </ItemGroup>
+</Project>

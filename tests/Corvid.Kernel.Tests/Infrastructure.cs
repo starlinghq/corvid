@@ -75,6 +75,10 @@ internal static class Samples
         new CheckpointTaken("c-1", "abc123"),
         new CheckpointTaken("c-2", "def456", "call-1", CheckpointKinds.After, ["notes.md", "src/a b.cs"]),
         new SessionRewound(4, "undo", ["notes.md"], "c-3"),
+        new DeliveryQueued("d-1", "telegram", "42", "hello", "reply", ReplyTo: "7", SourceSession: "gw-telegram-42", SourceSequence: 9),
+        new DeliveryQueued("d-2", "slack", "C1", "job done", "job", ThreadId: "1700000000.0001", Tainted: true),
+        new DeliveryResolved("d-1", DeliveryStatus.Delivered, "8"),
+        new DeliveryResolved("d-2", DeliveryStatus.Failed, Detail: "chat not found"),
     ];
 
     public static EventData[] Data(params SessionEvent[] events) => events.Select(EventData.Create).ToArray();

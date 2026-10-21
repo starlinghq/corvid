@@ -1267,7 +1267,10 @@ public sealed class TurnRunner
             {
                 var verdicts = await DecideAsync(Checkpoint.Egress, egress, cancellationToken,
                     opportunity ? [FabricConditions.ToolStepsAtLeastThree] : []).ConfigureAwait(false);
-                if (Acted(verdicts, "deliver", out var target) && target is not null)
+                // An embedding pick is no confidence: only a calibrated answer sends the reply anywhere but back (C-020), so
+                // the degraded tier never silences an answer or moves it to another channel.
+                if (Acted(verdicts, "deliver", out var target) && target is not null
+                    && (verdicts["deliver"].Answer?.Calibrated == true || _services.Fabric.Policy.Floors.DegradedTurnBlocking))
                     deliver = target;
                 if (Acted(verdicts, "remember", out _))
                     await RememberAsync(cancellationToken).ConfigureAwait(false);

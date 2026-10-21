@@ -1,4 +1,4 @@
-# Agent foundation (C-001, C-002, C-004a, C-004b, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-012, C-013, C-014, C-015, C-016, C-017, C-018, C-019, C-021)
+# Agent foundation (C-001, C-002, C-004a, C-004b, C-005, C-006, C-007a, C-007b, C-008, C-009, C-010, C-011, C-012, C-013, C-014, C-015, C-016, C-017, C-018, C-019, C-020, C-021)
 
 The solution contains `Corvid.Abstractions`, `Corvid.Kernel`, and
 `Corvid.Models`, alongside the working Vault projects. Kernel and Models each
@@ -30,7 +30,10 @@ references Abstractions, Approvals, Fabric, Kernel, Models, Tools and Tools.Buil
 and the Vault-only HTTP pipeline to `Corvid.Models` (which now references `Corvid.Vault.Client`), and two adapters,
 `Corvid.Models.Anthropic` and `Corvid.Models.OpenAICompat` (see [Cloud slots and privacy egress](#cloud-slots-and-privacy-egress-c-015)). C-018
 added `Corvid.Mcp`, the first surface project, which references Sandbox, Tools and Vault.Client and the ModelContextProtocol
-SDK, and nothing else references it but the host (see [MCP client and server](#mcp-client-and-server-c-018)). Add
+SDK, and nothing else references it but the host (see [MCP client and server](#mcp-client-and-server-c-018)). C-020
+added `Corvid.Gateway`, which references Abstractions, Approvals, `Corvid.Vault.Client` and `Microsoft.Data.Sqlite`, and the
+platform adapters `Corvid.Gateway.Telegram`, `.Discord` and `.Slack`, which reference only the gateway (see
+[Gateway](#gateway-c-020)). Add
 the other projects from the agent plan as their implementations start, rather
 than creating empty projects for every future surface.
 
@@ -322,6 +325,11 @@ C-011's device scheduler to these bindings.
   a package. Shared frameworks are checked too (`FrameworkReferences`): `Microsoft.AspNetCore.App` is allowed only in
   `Corvid.Http` and in the CLI, which inherits it; any other project, and any shared framework other than
   `Microsoft.NETCore.App`, fails. See [ACP and OpenAI-compatible HTTP](#acp-and-openai-compatible-http-c-019).
+- The gateway (C-020): `Corvid.Gateway` and its platform adapters are core libraries under the checker. They use no
+  messaging SDK, only HTTP and WebSockets from the shared framework, so bot tokens stay in Vault, and they need no rule of
+  their own. A future adapter that needs an SDK would take an explicit, documented rule like the provider SDKs above.
+  Only the host references the adapters; the gateway reaches the runtime through `IGatewayAgent` and never references
+  the host.
 - `corvid evals` starts C-021's `corvid-evals` by path (found through `$CORVID_EVALS`, next to `corvid`, or on `PATH`), the
   way Corvid starts `corvid-sandbox`, so no production project references eval code.
 
@@ -876,7 +884,7 @@ described below (see [Host and CLI](#host-and-cli-c-013)).
   because injected text could carry data out in a URL. Untainted network reads run unasked. `injection` adds a decision per
   network result; without Kev it takes `treat_as_tainted`.
 - Egress: the answer is appended as `AssistantMessage`, then `remember` (when a memory writer is bound) and `deliver`
-  (when `AskDeliver`, for gateways) are asked together. `remember` above its floor sends the user message into
+  (when `AskDeliver`, for gateways) are asked together; `deliver` acts only on a calibrated answer (C-020). `remember` above its floor sends the user message into
   `MemoryWriter.WriteAsync`, which without Kev stages it (`MemoryWritten` `staged`). Last, `CompleteTurnAsync`
   de-escalates unpinned slots. Every answer at every checkpoint is a `Decision` event through the fabric.
 - `ToolShortlist` (Fabric, over plain `ShortlistItem`s so Fabric does not reference Tools): hard filters first (the
@@ -1060,7 +1068,7 @@ decider otherwise (C-004b, see [Kev decider](#kev-decider-c-004b)); Starling pac
   `SandboxedScriptRunner` and a `TurnJobAgent` whose turns are not interactive. `JobScheduler.RunAsync` marks runs other
   processes left running as interrupted, so only the process holding an exclusive lock beside the job store
   (`jobs.db.lock`) runs it; `/status` says which. Completed runs raise `CorvidRuntime.JobCompleted`, which `corvid chat`
-  prints as a notice; delivering results to chats is C-020's.
+  prints as a notice. C-020 queues a job's result to the gateway chat it was created in (see [Gateway](#gateway-c-020)).
 - Slash commands (`SlashCommandRegistry`, `CoreCommands`): surface-neutral, returning `CommandOutput` (title, lines, a
   table, a tone, exit) that the CLI renders with Spectre and a gateway can send as `ToPlainText()`. `/model` lists slots or
   switches one through `SessionActor.SwitchModelAsync` (`/model <model>`, `/model <slot> <model> [--pin]`,
@@ -1129,8 +1137,8 @@ decider otherwise (C-004b, see [Kev decider](#kev-decider-c-004b)); Starling pac
 Not built yet: Ctrl+P; typing while a turn runs (the chat reads the next line after the delivery, so `/model` mid-turn is
 available to the gateway and a later CLI, not this one); removing approval rules (`IApprovalRuleStore` has no removal);
 `/memory` block edits; a `/cron` command; the rest of the ~35-command v1 set (`/insights` and
-others arrive with their items; `/skills` came with C-017); the `config`, `gateway`, `skills`, `memory`, `cron` and `export` verbs; a scheduler
-that runs without a chat open (a daemon, or the gateway, C-020); delivering job results to chats (C-020); metrics and logs export; an Aspire
+others arrive with their items; `/skills` came with C-017); the `config`, `skills`, `memory`, `cron` and `export` verbs (`gateway`
+came with C-020, whose gateway also runs the scheduler and delivers job results to chats); a scheduler daemon; metrics and logs export; an Aspire
 dashboard recipe; shipping `corvid-sandbox` and `corvid-evals` inside the publish (doctor reports where it looked);
 per-device memory in `/status`; CUDA placement (C-010's); Vault-backed secret names for tools (`TurnOptions.SecretNames`
 is not set, so secret-bearing tools are not offered); and persisting pins and taint across a resume.
@@ -1223,8 +1231,8 @@ references Builtin except tests and the host (C-013). Everything runs on the deg
   no mapping means no run) and covers the grammar (including daylight-saving changes), the store and the scheduler.
 
 C-013 wires all of this in the host (see [Host and CLI](#host-and-cli-c-013)) and added `/memory`. Not built yet: a
-`/cron` command; delivering job results to surfaces
-(C-020; `JobScheduler.Completed` is the hook); checkpoints before a scheduled pre-run script (C-014 checkpoints the turn
+`/cron` command; delivering job results to surfaces other than gateway chats (C-020 delivers to the chat a job was created
+in); checkpoints before a scheduled pre-run script (C-014 checkpoints the turn
 loop's calls only); network for the shell per toolset and
 Vault's proxy route for sandboxed commands (V-003); the code tool and code mode (§15); container and SSH backends;
 argument validators generated with the tool and the generated examples file (C-005; paths are checked by the tools at run
@@ -1431,9 +1439,8 @@ collecting the store, which grows with every checkpoint; rewinding goals, todos 
 until the user speaks, which errs closed); hiding rewound turns from episodic memory, which indexes the raw log; running git
 inside the sandbox (it runs as Corvid, with the protections above); a cross-process lock on a store (git's index lock makes
 a concurrent second process fail closed); and an approval prompt for restores, which the user starts explicitly. A user
-edit made in the moment between a call's before checkpoint and its after checkpoint is counted as Corvid's. Commands
-typed through a future gateway (C-020) reach `/undo` and `/rollback` like any other command, so pairing must decide who
-may use them.
+edit made in the moment between a call's before checkpoint and its after checkpoint is counted as Corvid's. Through the
+gateway (C-020), `/undo` and `/rollback`, like every command, are the paired owner's alone.
 
 ## Skills (C-017)
 
@@ -1903,6 +1910,141 @@ stdio only); the client's file-system and terminal capabilities (Corvid's own to
 from todos; a workspace per session; HTTP approvals surfaced to another channel (C-020); client-defined tools;
 `/v1/completions`, `/v1/embeddings` and usage numbers; conversation mapping that survives a restart (a known history then
 seeds a new session); HTTPS in Corvid; a Vault compare operation in place of the scrub check.
+
+## Gateway (C-020)
+
+Plan §12 (the gateway), §5.3 (`deliver`), §10.3 (other users' messages are tainted), §10.5 (tokens only through Vault),
+§13 (job results) and §17 row 1.4. Everything was verified with fake adapters, fake platforms behind a stand-in Vault on a
+Unix socket and the real runtime over fake models: no network and no real tokens.
+
+- Projects. `Corvid.Gateway` (core, `IsAotCompatible`) references Abstractions, Approvals (`IApprovalPrompter`) and
+  `Corvid.Vault.Client`, and `Microsoft.Data.Sqlite` (already allowed). `Corvid.Gateway.Telegram`, `.Discord` and `.Slack`
+  reference only `Corvid.Gateway`: each speaks its platform over plain HTTP (`System.Net.Http`, `System.Text.Json.Nodes`)
+  and, for Slack, `ClientWebSocket`, all in the shared framework. No messaging SDK is used, so the adapters are core
+  libraries under the checker and need no rule of their own. The maintained SDKs hold the token and open their own
+  connections, which would bypass Vault. Only `Corvid.Host` references them, and the gateway reaches the runtime through
+  `IGatewayAgent`, so it never references the host.
+- `GatewayHost`: one host for every enabled adapter. An adapter is a `GatewayAdapterRegistration` (name and factory).
+  Nothing is created until `StartAsync`. Each adapter then gets a `Supervisor` with its own instance, linked cancellation,
+  connection task and delivery task. The factory and `ConnectAsync` run off the loop under `ConnectTimeout` (30 s). A
+  constructor or connect that hangs, even one that ignores cancellation, is left behind and disposed whenever it ends, and
+  the adapter is retried with a doubling backoff (2 s up to 5 min). A receive failure disposes the adapter, creates a fresh
+  one and reconnects. Adapter state (`Starting`, `Connecting`, `Connected`, `Retrying`, `Stopped`) and notices go to the
+  surface. A lock beside `gateway.db` lets only one gateway run against a data directory. `StopAsync` stops receiving and
+  gives answers still being written `StopTimeout` (10 s) to reach the ledger and be sent. Then it denies waiting approvals,
+  stops the adapters, each under its own timeout, and saves the ledger's low-water mark.
+- Inbound. Unaddressed group messages are dropped. A group message is addressed when it mentions the bot, replies to it or,
+  on Telegram, is a command; DMs are always addressed. `PairingStore.RoleOf` decides the sender's role: configuration first
+  (`Owners`, then `Guests`), then pairings. An unpaired sender gets the pairing flow and nothing else. Their text is not
+  stored and reaches no session or model. A paired sender's message goes to the chat's own session,
+  `gateway:{adapter}:{chat}`, opened once per process with the chat's settings and an approval prompter. The owner's message
+  is posted as `EnvelopeOrigin.User`. A guest's is posted as `EnvelopeOrigin.External`, which taints the session (C-011)
+  until the owner speaks. Messages are queued in order per adapter, and answers are awaited off the receive loop
+  (`CorvidRuntime.PostAsync` returns once queued), so a long turn never holds up the next message.
+- Pairing (`PairingStore`, `gateway.db`, its own SQLite file with WAL and full sync). A code is 8 characters from an
+  unambiguous alphabet, shown `ABCD-EFGH`. It is bound to the adapter and sender, expires after an hour, and is repeated to
+  that sender at most every 10 minutes. At most 10 codes wait per adapter; senders after that are ignored. Codes are
+  approved only on the machine: `corvid gateway pair approve CODE --owner|--guest`, with no default, so approving a
+  stranger out of habit cannot make them the owner. `pair revoke` removes a pairing. The same file keeps adapters' polling
+  cursors and the ledger's mark.
+- Commands and approvals. Slash commands come from C-013's `SlashCommandRegistry` (`SlashCommandRegistry.IsCommand`, so a
+  pasted path is not a command), run in the chat's session and are sent back as `ToPlainText()`. They run off the receive
+  loop, because `/undo` waits for a running turn that may itself be waiting for an `/approve`. Only the owner runs
+  commands, which settles C-014's question of who may `/undo` and `/rollback` from a chat; guests are told so. An approval
+  the pipeline asks in a gateway session is posted to the chat with its reasons and the scopes on offer. Only the owner
+  answers, with `/approve [once|session|always]` or `/deny`, within `ApprovalTimeout` (5 min, capped by the prompt's own
+  deadline). No answer denies, as does a second prompt while one waits. The confirmation is queued before the turn
+  resumes, so the chat reads it before the answer.
+- `deliver` (§5.3). Gateway sessions set `SessionSettings.AskDeliver`, so `deliver` is asked at egress with `remember`.
+  `TurnRunner` now acts on it only for a calibrated answer (or when `DegradedTurnBlocking` lets the degraded tier divert
+  turns), so without Kev every answer is a reply and the degraded tier never silences one or moves it. `reply` answers the
+  message. `reply_in_thread` answers in its thread: a Slack `thread_ts`, a Discord thread started on the message, or a
+  Telegram reply. `home_channel` sends to the adapter's `HomeChat`. A tainted turn's answer never goes there, since that
+  would be a new recipient (§10.3), and without a home chat the answer is a reply. `silent` sends nothing. A failed turn
+  always replies with a short notice and keeps the details in the log.
+- Delivery ledger (`DeliveryLedger`). It is a table of the event log, kept as the session `gateway-ledger` so no chat's
+  transcript carries it. Two new events: `DeliveryQueued` (`delivery_queued`: id, adapter, chat, text, kind (`reply`,
+  `thread`, `home`, `job` or `notice`), thread, reply-to, source session and sequence, taint) is appended before anything
+  is sent. `DeliveryResolved` (`delivery_resolved`: `delivered` with the platform's message id, or `failed` with why) is
+  appended after. Any process sharing the log may queue (`DeliveryLedger.Queue(log, …)`, retrying on head conflicts). The
+  gateway holds only open deliveries, tails the session every 2 s and on every queue, and sends each adapter's open
+  deliveries in ledger order. A chat whose earlier message is waiting out a retry keeps its later ones back, so a chat
+  never sees answers out of order. Transient failures are retried with a doubling backoff (2 s up to 5 min, or the
+  platform's `retry_after`), up to 8 attempts. Permanent ones are given up at once and recorded `failed`: an unknown
+  chat, a bot removed, or a Vault policy refusal. A delivery for an adapter this gateway does not run is given up the
+  same way. The mark saved in `gateway.db` is the position before the oldest open entry and never past what this
+  process has read, so a restart reads only the open end and sends what was queued and never resolved. Delivery is
+  at least once: a crash between a send and its resolution sends that message again.
+- Scheduled jobs (§13). A job created in a gateway chat records that chat's session as its origin. When a run completes,
+  `CorvidRuntime.QueueJobResult` queues its output (or why it did not complete) to that chat, kind `job`, tainted when the
+  job was created tainted, ran a script, or its run's turn ended tainted (a page fetched during the run; `JobAgentResult`
+  carries the turn's taint and the runtime remembers it by run session until the result is queued). Skipped ticks report nothing; jobs created elsewhere stay local. Because the
+  ledger is in the shared log, a result is delivered even when another process (a CLI holding the scheduler lock) ran the
+  job. The gateway's own runtime runs the scheduler when it holds the lock, so a gateway is the "scheduler without a chat
+  open" C-013 left open.
+- Per-chat settings. `Corvid:Gateway:Adapters:<name>:Chats:<chat>` sets `Persona`, which is appended to the system prompt
+  for that chat's session only (C-019's `SessionSettings`, given to `OpenSession` and applied when the session is first opened), and `Slots`, catalogue models switched
+  in with `pin`. Slots are not restored from the log on resume (C-006), so each start switches them again. The decider
+  is process-wide and refused, and models are checked against the catalogue at validation.
+- Vault (§10.5, `vault.md` §9). `GatewayHttp` builds every adapter's pipeline. A placeholder goes where the token goes:
+  `VaultSecretHandler` for `Authorization: Bot …` (Discord) and `Bearer …` (Slack), and the new
+  `VaultUrlSecretHandler` (`Corvid.Vault.Client`) for Telegram's `/bot<token>/` path. The URL handler replaces a marker
+  with the placeholder, strips credential headers, refuses a request without the marker, and re-mints once on
+  `bad_placeholder`; Vault substitutes in a URL only for a secret with `allowInUrl`. `VaultHandler` sends the request
+  through Vault's proxy with the toolset `gateway` and the answer's taint. Below that sits a handler that refuses, so
+  nothing leaves unproxied. One Vault session serves the gateway process. Vault refusals of a send are classified:
+  `rate_limited`, `budget_exceeded`, `upstream_error` and `bad_placeholder` are retried, and policy refusals are given up
+  with Vault's reason. Under the default `tainted: ask`, Vault refuses answers from a tainted session, so guests get
+  answers only when the user sets `tainted: auto` on the token. Sends are `POST`s with no approval attached, so the
+  token's `methods` must allow `POST` as `auto`.
+- Telegram (`TelegramAdapter`). `getMe` connects and `getUpdates` long-polls (25 s, `message` updates only). An update is
+  confirmed (by the next poll's offset) only after the gateway has taken it, so a restart receives it again rather than
+  losing it. `/cmd@OtherBot` is ignored. `sendMessage` is used in 4,096-character pieces with `reply_parameters` and
+  forum topics. 400, 403 and 404 are permanent, and `retry_after` is honoured.
+- Discord (`DiscordAdapter`). It uses the REST API, polling each configured guild channel and a DM channel opened with
+  each known user (owners and guests from configuration, and pairings, picked up each round) every 5 s. A per-channel
+  cursor in `gateway.db` means messages written while the gateway was down are read on start, and a channel seen for the
+  first time starts at its newest message. Discord's realtime Gateway WebSocket needs the token in its first frame
+  (`IDENTIFY`), which Vault cannot substitute yet. Polling cannot see a DM from someone unknown, so a new person asks to
+  pair by mentioning the bot in a watched channel. Reading message content needs the Message Content intent. Answers come
+  in 2,000-character pieces with an empty `allowed_mentions`, so model text cannot ping `@everyone`. A thread reply starts
+  a thread on the message. On a resend, a thread already created (`160004`) is reused by the message's id, and where no
+  thread can be made (a DM) the answer is a plain reply.
+- Slack (`SlackAdapter`, Socket Mode). `auth.test` uses the bot token and `apps.connections.open` the app-level token,
+  both as Vault placeholders. The one-time `wss://` URL is opened directly, because Vault does not relay WebSockets. It
+  carries a single-use ticket, not a token, and only `wss` is accepted. Envelopes are acknowledged before they are
+  handled, and `disconnect` reconnects. DMs (`message` with `channel_type` `im`) and `app_mention` reach the gateway, while
+  bot messages and subtypes do not. `chat.postMessage` takes `thread_ts`, and text is escaped (`&`, `<`, `>`) so model
+  text cannot ping a channel or a person. Errors such as `channel_not_found` or `not_in_channel` are permanent.
+- Host and CLI. `Corvid:Gateway` (`Adapters` by name with `Enabled`, `Secret`, `AppSecret` for Slack, `Owners`, `Guests`,
+  `HomeChat`, `Chats`, `Channels` for Discord, `PollSeconds`; `ConnectTimeoutSeconds`; `ApprovalTimeoutSeconds`) is
+  validated at start. Secrets must be Vault secret names, never tokens, and Slack needs both. `CorvidGateway.Create`
+  composes the gateway over a running `CorvidRuntime`. Registrations in DI replace a built-in adapter of the same name,
+  which is how tests and future adapters plug in. `AddCorvidGateway` adds `GatewayService`, the one hosted service: it
+  starts the runtime, then the gateway, and stops them in reverse order. `corvid gateway [run]` loads models like `chat`
+  and runs until Ctrl-C. `status` lists the adapters, whether a gateway runs, waiting deliveries and pairings. `pair
+  [list]`, `pair approve <code> --owner|--guest` and `pair revoke <adapter> <user>` manage pairing.
+- Tests: `tests/Corvid.Gateway.Tests` covers the host over a fake agent and fake adapters (pairing only for strangers,
+  unaddressed group messages, owner and guest taint, a chat's session opened again after a failed open, owner-only commands and approvals, an unanswered approval denied,
+  every `deliver` route, silent answers, redelivery after a crash-free restart exactly once, a delivery queued by
+  another process, retries in order and permanent failures, a hanging connect and a hanging constructor isolated from
+  the other adapter, reconnect after a receive failure, and one gateway per data directory), the ledger (only open
+  deliveries held, resolved once, the mark never past an unread entry), pairing, message splitting, and each adapter
+  against a fake platform behind `FakeVault`. The adapter tests check the placeholder in the header or URL path, the
+  toolset and taint flags, cursors, mentions, threads, refusal classification, Vault refusals, and no route without Vault.
+  `tests/Corvid.Host.Tests` (`GatewayTests`) covers the real runtime over fake models: the chat's own session, a guest
+  tainting it until the owner speaks, the shared command registry, a side effect approved in the chat, a persona and
+  slot override for one chat only, a job's result reaching its chat (tainted when its run ended tainted), the hosted
+  service, and validation.
+
+Not built yet: Signal, email (IMAP/SMTP) and webhook adapters (§12); Discord's realtime Gateway and Slack's WebSocket
+through Vault (both wait on Vault's WebSocket first-frame substitution, `vault.md` §9); DMs on Discord from people not yet
+known; Telegram webhooks; non-text content in either direction (images, files, voice, and §12's STT and TTS); streaming
+partial answers or typing indicators into chats; message edits and deletions; Vault's out-of-band `confirm` for tainted
+sends (refused or allowed per token today); pairing from a chat; a cap on the ledger session's size (resolved entries
+stay in the log); taint that follows content rather than turns (by C-011's rule the owner's next message clears it,
+though a guest's earlier text in a group chat stays in the projection, as a fetched page does); and a run against the real
+platforms with real tokens.
 
 ## Running the check
 
