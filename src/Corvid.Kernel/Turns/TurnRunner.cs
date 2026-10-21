@@ -25,9 +25,9 @@ namespace Corvid.Kernel.Turns;
 /// <summary>
 /// One session's turn loop (plan §5.2, §7, §8, §10.3). A turn appends the user message; runs the ingress checkpoint (one
 /// decider request: intent, difficulty, needs_recall, clarify and tool over the embedding shortlist); calls the generator
-/// with one tool schema on a confident pick or the shortlist otherwise; validates each call against its schema, the
-/// extracted slots and its binding, repairing once and escalating on a second failure; sends side-effecting calls through
-/// the approval pipeline (the pre-execute checkpoint); runs a step checkpoint after each round of results (done, stuck,
+/// with one tool schema on a confident pick or the shortlist otherwise; validates each call against its schema and its
+/// binding (extracted slots are hints beside a failed argument), repairing once and escalating on a second failure; sends
+/// side-effecting calls through the approval pipeline (the pre-execute checkpoint); runs a step checkpoint after each round of results (done, stuck,
 /// tool, clear_results, injection); and at egress asks remember (starting the memory write path) and deliver. Before every
 /// generator call the prompt is fitted to the generator's budget with the levers of plan §8 in cost order: clearing results,
 /// dropping completed skill bodies, then compaction; after a switch to a larger window, compacted ranges are expanded.
@@ -202,7 +202,8 @@ public sealed class TurnRunner
     private sealed record Offered(AIFunction Function, ToolDescriptor Descriptor);
 
     /// <param name="Ask">Goes through the pre-execute checkpoint: a side effect, or a network read in a tainted session.</param>
-    private sealed record ValidCall(string CallId, Offered Tool, JsonElement Arguments, bool Ask);
+    /// <param name="Spans">Extracted spans the arguments did not match: hints if the tool's binding refuses one of those arguments.</param>
+    private sealed record ValidCall(string CallId, Offered Tool, JsonElement Arguments, bool Ask, IReadOnlyList<SlotDisagreement> Spans);
 
     private enum CallOutcome
     {
@@ -565,32 +566,27 @@ public sealed class TurnRunner
                 var errors = tool is null
                     ? [$"'{call.Name}' is not one of the tools offered: {string.Join(", ", tools.Select(candidate => candidate.Function.Name))}"]
                     : ArgumentValidator.Validate(tool.Function.JsonSchema, arguments).ToList();
-                object? extracted = null;
-                if (tool is not null && errors.Count == 0 && !_prefillChecked)
-                {
-                    var disagreements = await PrefillAsync(callId, tool, arguments, cancellationToken).ConfigureAwait(false);
-                    if (disagreements.Count > 0)
-                    {
-                        // Shown once: after the repair the generator's value stands, and the disagreement stays in the result.
-                        _prefillChecked = true;
-                        _disagreements.AddRange(disagreements);
-                        errors.AddRange(disagreements.Select(item => item.Argument is null
-                            ? $"'{item.Parameter}' was omitted, but the request says \"{item.Extracted}\""
-                            : $"'{item.Parameter}' is \"{item.Argument}\", but the request says \"{item.Extracted}\""));
-                        extracted = disagreements.ToDictionary(item => item.Parameter, item => (object?)item.Extracted, StringComparer.Ordinal);
-                    }
-                }
+                // Slot pre-fill (§7 step 4): extracted spans are hints, never vetoes. A call whose arguments validate runs as the
+                // generator wrote it; a span is shown only beside an argument that failed, here or in the tool's own binding.
+                IReadOnlyList<SlotDisagreement> spans = [];
+                if (tool is not null && !PrefillShown())
+                    spans = await PrefillAsync(callId, tool, arguments, cancellationToken).ConfigureAwait(false);
                 if (errors.Count > 0)
                 {
                     failed = true;
+                    var hints = tool is null ? []
+                        : await HintsAsync(callId, tool, arguments,
+                            spans.Where(item => errors.Any(error => error.Contains($"'{item.Parameter}'", StringComparison.Ordinal))),
+                            cancellationToken).ConfigureAwait(false);
                     // The call and its error result go in as one append: a concurrent switch never sees the call alone.
-                    IssueRejected(callId, call.Name, arguments, Error("invalid arguments", errors, tool?.Function.JsonSchema, extracted));
+                    IssueRejected(callId, call.Name, arguments,
+                        Error("invalid arguments", [.. errors, .. Describe(hints)], tool?.Function.JsonSchema, Extracted(hints)));
                     continue;
                 }
                 // §10.3: in a tainted session a network read asks too (C-007b forces the tainted_network_egress reason), or
                 // injected text could carry the user's data out in a URL. Taint is judged as of the response that made the call.
                 var risk = tool!.Descriptor.Risk;
-                valid.Add(new ValidCall(callId, tool, arguments, Ask: !risk.ReadOnly || risk.Network && runner.Tainted));
+                valid.Add(new ValidCall(callId, tool, arguments, Ask: !risk.ReadOnly || risk.Network && runner.Tainted, spans));
             }
 
             // Calls that need no approval run in parallel; the rest one at a time, in the order the model gave (§3.3).
@@ -743,8 +739,13 @@ public sealed class TurnRunner
                 catch (ToolArgumentException exception)
                 {
                     await RecordAfterAsync().ConfigureAwait(false);
-                    Result(call.CallId, Error("invalid arguments", [exception.Message], call.Tool.Function.JsonSchema, null), isError: true,
-                        $"{descriptor.Name}: invalid arguments");
+                    // The binding names the argument it refused; a span for that argument is the hint (no name, no hint).
+                    var hints = exception.ParamName is { } refused && !PrefillShown()
+                        ? await HintsAsync(call.CallId, call.Tool, call.Arguments, call.Spans.Where(item => item.Parameter == refused),
+                            cancellationToken).ConfigureAwait(false)
+                        : [];
+                    Result(call.CallId, Error("invalid arguments", [exception.Message, .. Describe(hints)], call.Tool.Function.JsonSchema,
+                        Extracted(hints)), isError: true, $"{descriptor.Name}: invalid arguments");
                     return CallOutcome.BindingFailed;
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -872,6 +873,81 @@ public sealed class TurnRunner
             }
             return found;
         }
+
+        // Hints are shown once per turn: after the repair the generator's value stands. Read-only calls fail in parallel.
+        private bool PrefillShown()
+        {
+            lock (_gate)
+                return _prefillChecked;
+        }
+
+        /// <summary>
+        /// The spans worth showing beside a failed call: each one substituted into the arguments must pass the schema and, for
+        /// a tool that declares [Probe], the tool's own binding (a probe run; a span naming a path that does not exist is dropped).
+        /// The hints kept are recorded and end pre-fill for the turn.
+        /// </summary>
+        private async Task<IReadOnlyList<SlotDisagreement>> HintsAsync(string callId, Offered tool, JsonElement arguments,
+            IEnumerable<SlotDisagreement> spans, CancellationToken cancellationToken)
+        {
+            var hints = new List<SlotDisagreement>();
+            foreach (var span in spans)
+                if (await HintValidatesAsync(callId, tool, arguments, span, cancellationToken).ConfigureAwait(false))
+                    hints.Add(span);
+            if (hints.Count == 0)
+                return hints;
+            lock (_gate)
+            {
+                if (_prefillChecked)
+                    return [];
+                _prefillChecked = true;
+                _disagreements.AddRange(hints);
+            }
+            return hints;
+        }
+
+        private async Task<bool> HintValidatesAsync(string callId, Offered tool, JsonElement arguments, SlotDisagreement span,
+            CancellationToken cancellationToken)
+        {
+            var values = JsonValues.ToDictionary(arguments);
+            values[span.Parameter] = span.Extracted;
+            var substituted = JsonValues.Object(values);
+            // Other arguments may still be wrong (the call failed); only errors about this one count against the hint.
+            var errors = ArgumentValidator.Validate(tool.Function.JsonSchema, substituted);
+            if (errors.Any(error => error.Contains($"'{span.Parameter}'", StringComparison.Ordinal)))
+                return false;
+            // Only a tool that declares [Probe] (read-only, local, leaves no trace) is tried; the probe's result is discarded.
+            // ReadOnly alone is not enough: for an MCP tool it is the server's annotation or the user's configuration, and a
+            // probe runs unlogged and unasked with the user's words, so an outside server would see them.
+            var risk = tool.Descriptor.Risk;
+            if (errors.Count > 0 || !risk.Probe || !risk.ReadOnly || risk.Network)
+                return true;
+            bool tainted;
+            lock (_gate)
+                tainted = runner.Tainted;
+            var context = new ToolCallContext(runner.SessionId, callId) { Tainted = tainted, Interactive = _options.Interactive };
+            try
+            {
+                await tool.Function.InvokeAsync(context.AttachTo(JsonValues.ToArguments(substituted)), cancellationToken).ConfigureAwait(false);
+                return true;
+            }
+            catch (ToolArgumentException exception) when (exception.ParamName == span.Parameter)
+            {
+                return false;
+            }
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                // Some other failure (a tool's own timeout included) says nothing about the hint's value and must not end the
+                // turn: only the turn's cancellation escapes a probe.
+                return true;
+            }
+        }
+
+        private static IEnumerable<string> Describe(IReadOnlyList<SlotDisagreement> hints) => hints.Select(item => item.Argument is null
+            ? $"'{item.Parameter}' was omitted, but the request says \"{item.Extracted}\""
+            : $"'{item.Parameter}' is \"{item.Argument}\", but the request says \"{item.Extracted}\"");
+
+        private static Dictionary<string, object?>? Extracted(IReadOnlyList<SlotDisagreement> hints) => hints.Count == 0 ? null
+            : hints.ToDictionary(item => item.Parameter, item => (object?)item.Extracted, StringComparer.Ordinal);
 
         private static bool IsFreeText(JsonElement schema)
         {

@@ -46,6 +46,7 @@ public sealed partial class FileTools(Workspace workspace, FileToolOptions? opti
     public Workspace Workspace { get; } = workspace ?? throw new ArgumentNullException(nameof(workspace));
 
     [Tool("read_file", Description = "Read a text file in the workspace, with line numbers. Long files come in parts: pass start_line to continue.")]
+    [Probe]
     public JsonNode ReadFile(
         [Description("The file, relative to the workspace.")] string path,
         [Description("The first line to return, counting from 1.")] int start_line = 1,
@@ -84,6 +85,7 @@ public sealed partial class FileTools(Workspace workspace, FileToolOptions? opti
     }
 
     [Tool("list_files", Description = "List a directory in the workspace: subdirectories end with '/', files show their size.")]
+    [Probe]
     public JsonNode ListFiles(
         [Description("The directory, relative to the workspace; '.' is the workspace itself.")] string path = ".",
         [Description("Also list everything below it.")] bool recursive = false)
