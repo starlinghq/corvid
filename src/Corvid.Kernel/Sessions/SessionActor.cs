@@ -43,7 +43,7 @@ public sealed class SessionActor : IAsyncDisposable
     private readonly CancellationTokenSource _lifetime = new();
     private readonly Task _loop;
 
-    // Loop state: touched only by the loop.
+    // Loop state: touched only by the loop, except that CancelTurn reads _turnCancellation (Volatile) from any thread.
     private readonly Queue<Envelope> _pending = new();
     private readonly Queue<Exclusive> _exclusive = new();
     private CancellationTokenSource? _turnCancellation;
