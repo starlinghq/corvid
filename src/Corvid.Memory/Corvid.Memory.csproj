@@ -9,6 +9,8 @@
     <ProjectReference Include="../Corvid.Abstractions/Corvid.Abstractions.csproj" />
     <!-- memory_op is a fabric gate: the write path asks it through DecisionFabric, so the gate rules and Decision events are Fabric's. -->
     <ProjectReference Include="../Corvid.Fabric/Corvid.Fabric.csproj" />
+    <!-- The lesson validator's secret rule is the shared credential detector (C-032). -->
+    <ProjectReference Include="../Corvid.Secrets/Corvid.Secrets.csproj" />
     <InternalsVisibleTo Include="Corvid.Memory.Tests" />
   </ItemGroup>
 </Project>
