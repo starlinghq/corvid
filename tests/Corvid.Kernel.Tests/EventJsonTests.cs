@@ -32,6 +32,8 @@ public sealed class EventJsonTests
         [typeof(DeliveryQueued)] = "delivery_queued",
         [typeof(DeliveryResolved)] = "delivery_resolved",
         [typeof(ProjectBound)] = "project_bound",
+        [typeof(McpToolHeld)] = "mcp_tool_held",
+        [typeof(McpToolAccepted)] = "mcp_tool_accepted",
     };
 
     [Fact]

@@ -23,7 +23,7 @@ public enum McpServerState
 
 /// <summary>What <c>/mcp</c> and <c>corvid mcp list</c> show about one server.</summary>
 /// <param name="Tools">The Corvid names of the tools registered from this server.</param>
-/// <param name="Issues">Tools left out, and why (a schema refused, a name taken, over the limit).</param>
+/// <param name="Issues">Tools left out, and why (a schema refused, a name taken, over the limit, a definition held).</param>
 /// <param name="Detail">Why the server failed, with the end of its standard error; or its name and version when ready.</param>
 public sealed record McpServerStatus(
     string Name,
@@ -33,7 +33,44 @@ public sealed record McpServerStatus(
     string? Detail,
     ImmutableArray<string> Tools,
     ImmutableArray<string> Issues,
-    bool Tasks);
+    bool Tasks)
+{
+    /// <summary>Tools held back until the user reviews them (C-022): new or changed since the server was pinned, or flagged.</summary>
+    public ImmutableArray<McpHeldTool> Held { get; init; } = [];
+}
+
+/// <summary>Why a listed tool is held instead of offered (C-022).</summary>
+public static class McpHoldReasons
+{
+    /// <summary>Not among the server's pins, which were taken on its first listing.</summary>
+    public const string New = "new";
+
+    /// <summary>Its definition's hash differs from its pin.</summary>
+    public const string Changed = "changed";
+
+    /// <summary>Its description, title or schema text matched a poisoning pattern (<see cref="McpDescriptionScan"/>).</summary>
+    public const string Flagged = "flagged";
+}
+
+/// <summary>
+/// A tool this process listed and held (C-022). <see cref="Definition"/> is exactly what was listed, so <c>/mcp diff</c>
+/// shows and <c>/mcp accept</c> pins the same definition, with no window for the server to swap it in between.
+/// </summary>
+/// <param name="Tool">The tool's name on its server.</param>
+/// <param name="Pin">The pin it differs from, when it has one.</param>
+/// <param name="Flag">The poisoning marker its text matched, for a flagged tool.</param>
+public sealed record McpHeldTool(string Server, string Tool, string Reason, McpToolDefinition Definition, McpToolPin? Pin, string? Flag)
+{
+    internal ModelContextProtocol.Protocol.Tool Listed { get; init; } = null!;
+
+    /// <summary>The line <c>/mcp</c> and <c>corvid mcp list</c> show.</summary>
+    public string Issue => Reason switch
+    {
+        McpHoldReasons.Flagged => $"'{Tool}': held, its description matches a poisoning pattern (\"{Flag}\") (/mcp diff {Server} {Tool}; /mcp allow {Server} {Tool})",
+        McpHoldReasons.Changed => $"'{Tool}': held, its definition changed since it was pinned (/mcp diff {Server} {Tool}; /mcp accept {Server} {Tool})",
+        _ => $"'{Tool}': held, new since the server's tools were pinned (/mcp diff {Server} {Tool}; /mcp accept {Server} {Tool})",
+    };
+}
 
 /// <summary>A server could not be reached; nothing was sent.</summary>
 public sealed class McpServerUnavailableException(string message) : InvalidOperationException(message)
@@ -83,6 +120,7 @@ public sealed class McpServerConnection : IAsyncDisposable
     private DateTimeOffset _retryAt;
     private ImmutableArray<string> _tools = [];
     private ImmutableArray<string> _issues = [];
+    private ImmutableArray<McpHeldTool> _held = [];
     private bool _disposed;
 
     public McpServerConnection(McpServerDefinition definition, IMcpTransports transports, TimeProvider? time = null)
@@ -109,17 +147,36 @@ public sealed class McpServerConnection : IAsyncDisposable
             lock (_lock)
             {
                 var tasks = _client is { } client && SupportsTasks(client);
-                return new McpServerStatus(Definition.Name, Definition.Transport, Definition.Trust, _state, _detail, _tools, _issues, tasks);
+                return new McpServerStatus(Definition.Name, Definition.Transport, Definition.Trust, _state, _detail, _tools,
+                    _issues.AddRange(_held.Select(held => held.Issue)), tasks) { Held = _held };
             }
         }
     }
 
-    internal void SetTools(ImmutableArray<string> tools, ImmutableArray<string> issues)
+    internal void SetTools(ImmutableArray<string> tools, ImmutableArray<string> issues, ImmutableArray<McpHeldTool> held = default)
     {
         lock (_lock)
         {
             _tools = tools;
             _issues = issues;
+            _held = held.IsDefault ? [] : held;
+        }
+    }
+
+    /// <summary>The held tool by its name on the server, or null.</summary>
+    internal McpHeldTool? Held(string tool)
+    {
+        lock (_lock)
+            return _held.FirstOrDefault(held => held.Tool == tool);
+    }
+
+    /// <summary>A held tool was accepted and registered under <paramref name="name"/>.</summary>
+    internal void Release(McpHeldTool held, string name)
+    {
+        lock (_lock)
+        {
+            _held = _held.Remove(held);
+            _tools = _tools.Add(name);
         }
     }
 

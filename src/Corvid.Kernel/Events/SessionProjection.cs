@@ -69,9 +69,14 @@ public static class SessionProjection
     }
 
     internal static IEnumerable<StoredEvent> ReadAll(IEventLog log, string sessionId, long through,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) => ReadRange(log, sessionId, 0, through, cancellationToken);
+
+    /// <summary>Every event in (<paramref name="afterSequence"/>, <paramref name="through"/>], read page by page.</summary>
+    public static IEnumerable<StoredEvent> ReadRange(IEventLog log, string sessionId, long afterSequence, long through,
+        CancellationToken cancellationToken = default)
     {
-        for (long after = 0; after < through;)
+        ArgumentNullException.ThrowIfNull(log);
+        for (var after = afterSequence; after < through;)
         {
             var page = log.Read(sessionId, after, through, PageSize, cancellationToken);
             if (page.Count == 0)

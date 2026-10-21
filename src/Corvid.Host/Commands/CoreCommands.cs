@@ -5,9 +5,11 @@ using Corvid.Approvals;
 using Corvid.Kernel.Checkpoints;
 using Corvid.Fabric;
 using Corvid.Host.Composition;
+using Corvid.Host.Configuration;
 using Corvid.Memory;
 using Corvid.Models;
 using Corvid.Mcp;
+using Corvid.Skills;
 using Corvid.Tools;
 
 namespace Corvid.Host.Commands;
@@ -29,12 +31,11 @@ public static class CoreCommands
             .Add(new SlashCommand("status", "Slots with their device, queue depth and median latency; the session's state.", "", Status))
             .Add(new SlashCommand("goal", "Show, set or clear the standing goal.", "[text | clear]", Goal))
             .Add(new SlashCommand("approvals", "Pending approvals and the remembered approval rules.", "", Approvals))
-            .Add(new SlashCommand("memory", "Review staged memory writes and this project's lessons.",
-                "[pending] | approve <id> [operation] | reject <id> | lessons [pending | approve <id> [supersedes <old>] | reject <id> [reason] | supersede <old> <new>]",
-                MemoryAsync))
+            .Add(new SlashCommand("memory", "Review staged memory writes and this project's lessons; import Hermes memories for review.",
+                MemoryUsage, MemoryAsync))
             .Add(new SlashCommand("skills", "Saved skills: list, review drafts, history, import, evals.", SkillCommands.Usage, SkillCommands.RunAsync))
             .Add(new SlashCommand("tools", "The tools the model can be offered, with their risk.", "", Tools))
-            .Add(new SlashCommand("mcp", "Configured MCP servers: state, trust and the tools each one added.", "", Mcp))
+            .Add(new SlashCommand("mcp", "Configured MCP servers: state, trust and the tools each one added.", McpCommands.Usage, McpCommands.RunAsync))
             .Add(new SlashCommand("todos", "The session's todo list.", "", Todos))
             .Add(new SlashCommand("undo", "Revert the last turn's file changes and take it out of the conversation.", "", UndoAsync))
             .Add(new SlashCommand("rollback", "List checkpoints, or go back to before the Nth latest one (files and conversation).",
@@ -253,6 +254,9 @@ public static class CoreCommands
 
     // ---- /memory ----
 
+    private const string MemoryUsage = "[pending] | approve <id> [operation] | reject <id> | import hermes [<hermes home>] [--dry-run]"
+        + " | lessons [pending | approve <id> [supersedes <old>] | reject <id> [reason] | supersede <old> <new>]";
+
     private static async ValueTask<CommandOutput> MemoryAsync(SlashCommandContext context, SlashInvocation invocation, CancellationToken cancellationToken)
     {
         // Lessons (C-025) need no extractor, so they are reviewed whether or not facts can be written.
@@ -292,8 +296,10 @@ public static class CoreCommands
             case ["reject", var id]:
                 writer.Reject(id, cancellationToken: cancellationToken);
                 return CommandOutput.Success($"Rejected {id}.");
+            case ["import", "hermes", .. var rest] when rest.Count(argument => argument != "--dry-run") <= 1:
+                return await ImportHermesAsync(context, writer, rest, cancellationToken).ConfigureAwait(false);
             default:
-                return CommandOutput.Error("Usage: /memory [pending] | approve <id> [operation] | reject <id>.");
+                return CommandOutput.Error("Usage: /memory " + MemoryUsage + ".");
         }
     }
 
@@ -377,6 +383,86 @@ public static class CoreCommands
         };
     }
 
+    /// <summary>
+    /// <c>/memory import hermes</c> (D-9, C-027): each entry of Hermes' <c>MEMORY.md</c> and <c>USER.md</c> becomes one staged,
+    /// local-only fact proposal, never a write. An entry the skill scanner flags is refused, as Hermes blocks a threat pattern
+    /// at load; one the extractor refuses (too long) is reported, never cut; one already pending or already a current fact is
+    /// skipped, so importing again stages nothing new.
+    /// </summary>
+    private static async Task<CommandOutput> ImportHermesAsync(SlashCommandContext context, MemoryWriter writer,
+        ImmutableArray<string> arguments, CancellationToken cancellationToken)
+    {
+        var dryRun = arguments.Contains("--dry-run");
+        var home = arguments.FirstOrDefault(argument => argument != "--dry-run");
+        var location = HermesMemory.Directory(CorvidPaths.Home, home is null ? null : CorvidPaths.ExpandHome(home));
+        if (location.Directory is not { } directory)
+            return CommandOutput.Warning(location.Problem + " Usage: /memory import hermes <hermes home>.");
+        if (!Directory.Exists(directory))
+            return CommandOutput.Warning($"There is no Hermes memories directory at {directory}.");
+
+        var lines = new List<string>();
+        var rows = new List<string[]>();
+        int staged = 0, problems = 0;
+        foreach (var file in HermesMemory.Read(directory))
+        {
+            if (file.Problem is { } problem)
+            {
+                lines.Add($"refused {file.File}: {problem}; nothing from it was imported.");
+                problems++;
+                rows.Add([file.File, "-", "-", "-", "-", "-"]);
+                continue;
+            }
+            int offered = 0, duplicates = 0, refused = 0, flagged = 0;
+            for (var i = 0; i < file.Entries.Length; i++)
+            {
+                var entry = file.Entries[i];
+                if (SkillScanner.Scan(file.File, entry) is { IsEmpty: false } findings)
+                {
+                    flagged++;
+                    lines.Add($"flagged {file.File} entry {i + 1}: {string.Join(", ", findings.Select(finding => finding.Rule).Distinct())}; not imported.");
+                    continue;
+                }
+                if (dryRun)
+                {
+                    offered++;
+                    continue;
+                }
+                try
+                {
+                    var result = await writer.StageImportAsync(context.Session.Id, entry, "import:hermes " + file.File, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (result.Status == MemoryImportStatus.Staged)
+                        offered++;
+                    else
+                        duplicates++;
+                }
+                catch (ArgumentException exception)
+                {
+                    refused++;
+                    lines.Add($"refused {file.File} entry {i + 1}: {exception.Message}");
+                }
+            }
+            staged += offered;
+            problems += refused + flagged;
+            rows.Add([file.File, file.Exists ? file.Entries.Length.ToString(CultureInfo.InvariantCulture) : "missing",
+                offered.ToString(CultureInfo.InvariantCulture), duplicates.ToString(CultureInfo.InvariantCulture),
+                refused.ToString(CultureInfo.InvariantCulture), flagged.ToString(CultureInfo.InvariantCulture)]);
+            if (file.Blocked > 0)
+                lines.Add($"skipped {file.Blocked} entry(ies) of {file.File} shaped like Hermes' [BLOCKED: …] placeholder.");
+        }
+        lines.Insert(0, dryRun
+            ? $"Dry run: {staged} entry(ies) would be offered for review; entries already pending or known are found on import."
+            : staged == 0 ? "Nothing new to review."
+            : $"Staged {staged} local-only memory(ies) for review: /memory pending, then /memory approve <id> or /memory reject <id>.");
+        return new CommandOutput
+        {
+            Title = $"Hermes memories from {directory}",
+            Lines = [.. lines],
+            Table = CommandTable.Of(["file", "entries", dryRun ? "would stage" : "staged", "duplicates", "refused", "flagged"], rows),
+            Tone = problems > 0 ? OutputTone.Warning : OutputTone.Success,
+        };
+    }
+
     // ---- /undo, /rollback (C-014) ----
 
     private static async ValueTask<CommandOutput> UndoAsync(SlashCommandContext context, SlashInvocation invocation, CancellationToken cancellationToken)
@@ -457,33 +543,6 @@ public static class CoreCommands
         {
             Title = "Tools",
             Table = CommandTable.Of(["tool", "risk", "description"], tools.Select(tool => new[] { tool.Name, Risk(tool.Risk), tool.Description })),
-        });
-    }
-
-    // ---- /mcp (C-018) ----
-
-    private static ValueTask<CommandOutput> Mcp(SlashCommandContext context, SlashInvocation invocation, CancellationToken cancellationToken)
-    {
-        if (context.Runtime.Mcp is not { } mcp)
-            return ValueTask.FromResult(CommandOutput.Text("No MCP servers are configured (Corvid:Mcp:Servers)."));
-        var status = mcp.Status();
-        var lines = status.SelectMany(server => server.Issues.Select(issue => $"{server.Name}: left out {issue}"))
-            .Append("Untrusted servers' tools ask before every call and their results taint the session; trusted servers' hints are honoured.")
-            .ToImmutableArray();
-        return ValueTask.FromResult(new CommandOutput
-        {
-            Title = "MCP servers",
-            Table = CommandTable.Of(["server", "transport", "trust", "state", "tools", "detail"], status.Select(server => new[]
-            {
-                server.Name,
-                server.Transport.ToString().ToLowerInvariant() + (server.Tasks ? ", tasks" : ""),
-                server.Trust.ToString().ToLowerInvariant(),
-                server.State.ToString().ToLowerInvariant(),
-                server.Tools.IsEmpty ? "-" : string.Join(", ", server.Tools),
-                server.Detail ?? "",
-            })),
-            Lines = lines,
-            Tone = status.Any(server => server.State == McpServerState.Failed) ? OutputTone.Warning : OutputTone.Normal,
         });
     }
 

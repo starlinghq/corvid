@@ -11,7 +11,7 @@ public sealed class CatalogueTests
 
         Assert.Equal(
             ["clarify", "clear_results", "delegate", "deliver", "difficulty", "done", "injection", "intent", "lesson_opportunity", "memory_op",
-             "needs_recall", "remember", "risk", "skill", "skill_opportunity", "skill_write_safe", "stuck", "tool", "wake"],
+             "needs_recall", "remember", "risk", "skill", "skill_opportunity", "skill_write_safe", "stuck", "task_succeeded", "tool", "wake"],
             catalogue.Ids.Order(StringComparer.Ordinal));
         Assert.Equal(["memory_op", "risk", "skill_write_safe"],
             catalogue.Questions.Where(q => q.Role == QuestionRole.Gate).Select(q => q.Id).Order(StringComparer.Ordinal));
