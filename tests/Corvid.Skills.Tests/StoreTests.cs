@@ -175,6 +175,31 @@ public sealed class StoreTests : IDisposable
         Assert.Contains("core.hookspath", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData(128)]
+    [InlineData(137)]
+    public async Task AFailedCheckForStagedChangesIsAnErrorNotACommit(int exitCode)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        // A git that fails only the "is anything staged?" check, as a broken index or a killed process would.
+        var git = _root["failing-git"];
+        TempRoot.Write(git, $"#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = --cached ] && {{ echo 'fatal: injected failure' >&2; exit {exitCode}; }}; done\nexec git \"$@\"\n");
+        File.SetUnixFileMode(git, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var repository = await SkillRepository.OpenAsync(_root["skills"], git, Token);
+
+        // Nothing changed: the commit that followed used to fail with git's misleading "nothing to commit".
+        var unchanged = await Assert.ThrowsAsync<GitException>(() => repository.RecordOutsideChangesAsync(Token));
+        Assert.Contains($"exit {exitCode}", unchanged.Message, StringComparison.Ordinal);
+        Assert.Contains("injected failure", unchanged.Message, StringComparison.Ordinal);
+
+        // Something changed: it is not committed on the strength of a failed check.
+        TempRoot.Write(_root["skills/notes/SKILL.md"], TempRoot.Skill("notes"));
+        var changed = await Assert.ThrowsAsync<GitException>(() => repository.RecordOutsideChangesAsync(Token));
+        Assert.Contains("injected failure", changed.Message, StringComparison.Ordinal);
+        Assert.Empty(await repository.LogAsync(cancellationToken: Token));
+    }
+
     [Fact]
     public async Task ResourcesAreConfinedToTheSkillFolder()
     {
