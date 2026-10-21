@@ -1840,9 +1840,107 @@ until Corvid restarts) and retrying a server that failed its first start without
 example requests for MCP tools in the shortlist; Vault's exec path for stdio servers that need a secret (a secret-like
 environment name is refused instead); address checks for keyless HTTP servers (the URL is the user's own configuration); the
 privacy egress gate over MCP arguments (an untrusted server's calls are each approved with their arguments shown, and a
-trusted read-only tool's are not); tainting a turn for an untrusted server's tool descriptions, which reach the prompt cleaned and
-capped but untainted, like a hub skill's L0 description; stdio servers where the sandbox does not run; server mode over HTTP
-(C-019's endpoint); and SDK 2.3.0.
+trusted read-only tool's are not); stdio servers where the sandbox does not run; server mode over HTTP (C-019's endpoint); and
+SDK 2.3.0. Tainting a turn for an untrusted server's tool descriptions (and a hub skill's L0 description) is built by C-022
+(see [MCP tool pinning and poisoned descriptions](#mcp-tool-pinning-and-poisoned-descriptions-c-022)).
+
+## MCP tool pinning and poisoned descriptions (C-022)
+
+Plan §10.3, §10.6, §12. C-018 lists each server once per process and registers what it lists; C-022 checks each listed definition
+before it is registered, so a server cannot change what a tool says or does after the user started relying on it (a "rug
+pull"), and a description written to steer the model rather than describe the tool is not offered unreviewed. It also closes
+C-018's gap that descriptions from an untrusted server reached the prompt untainted. All of it is in `Corvid.Mcp` (no new
+project, package or checker rule), with events and spans in the host through a callback.
+
+- Canonical definition (`McpToolDefinition`): one JSON object with `annotations`, `description`, `inputSchema`, `name` and
+  `title`, every object's keys sorted ordinally and recursively, no whitespace, numbers as the server wrote them, arrays in
+  order, text as the server sent it (before `McpToolMapping.Clean`, so an added zero-width or bidirectional character is a
+  change); the hash is SHA-256 over its UTF-8 bytes. Sorted keys mean a server that re-emits the same schema in another order is
+  not held. Annotations are pinned for every server, although an untrusted server's do not affect risk, so every change is
+  visible.
+- Pins (`IMcpPinStore`; `JsonFileMcpPinStore`, format `corvid-mcp-pins` version 1, `InMemoryMcpPinStore` for tests and
+  the default constructor): per server and tool the hash, the canonical definition (a diff needs the old text; the size is bounded
+  by C-018's limits), when it was pinned and `allowed_flagged`, the hash of a flagged definition the user allowed. The file is
+  `mcp-pins.json` in the data directory (`CorvidPaths.McpPins`), Corvid state rather than the user's configuration, already in
+  the protected safety configuration and in every sandboxed server's denied paths, so neither a tool nor a server can rewrite
+  its own pins. Every read goes to the file, and every write re-reads it, merges by server and tool, and replaces it through
+  `<path>.tmp` and a move, so `corvid mcp list` and a running chat do not drop each other's pins. A file of another format or
+  version, an unknown key or a pin without a SHA-256 hash is refused with `InvalidDataException`; then nothing from any server
+  is offered (`/mcp` says why), since a broken store must not turn into trust on first use.
+- Holding (`McpClients.Register`, after the allowlist, duplicate, limit and schema checks): a server with no pins pins every
+  tool it lists (trust on first use) and registers it; after that a tool without a pin is held as `new`, one whose hash differs
+  from its pin as `changed`, and a match registers as before. A removed tool is not registered and its pin stays. Held tools
+  are never added to the registry; they are kept, with the exact `Tool` the server listed, on the connection
+  (`McpServerStatus.Held`) and reported among its issues, e.g. `'send': held, its definition changed since it was pinned (/mcp
+  diff fake send; /mcp accept fake send)`, so `/mcp` and `corvid mcp list` show them without new plumbing.
+  Pins are checked once per process start, which is when C-018 lists.
+- Poisoned descriptions (`McpDescriptionScan`): a `[GeneratedRegex]` (case-insensitive, culture-invariant, 1 s timeout) with
+  the alternatives of the `mcp-poisoned-tool-description` rule of Beacon (Asymptote-Labs/agent-beacon, MIT): an instruction tag
+  (`<important`, `<system`, `<secret`, `<instruction`, `<admin`), concealment (`do not tell|mention|inform|reveal|report|
+  disclose|notify|let`), `ignore (the|all|any) previous|prior|above|earlier|foregoing`, `before using|calling|invoking|running
+  this|the tool`, and `read` followed within 60 characters by `.ssh`, `.env`, `.aws`, an `id_rsa`-style key, `credentials`,
+  `/etc/passwd`, `mcp.json` or `secret(s)`. It runs over the description, the title and every `description` and `title` in the
+  input schema (all of which reach the prompt), after format and control characters are dropped and whitespace runs collapsed,
+  so a hidden character or a line break cannot split a marker; only the regex alternatives are taken from Beacon. It runs for
+  trusted and untrusted servers alike and before pinning, so a match is held as `flagged`, with the matched text in the issue,
+  even on a first listing (and is not pinned). The fabric's `injection` question is asked about untrusted descriptions too
+  (below).
+- Review (`/mcp`, `McpCommands`): `[list] | diff <server> <tool> | accept <server> <tool|--all> | allow <server> <tool>`. The
+  list gains a `held` column and a line on how to review. `diff` shows the held definition against its pin: description and
+  title before and after (hidden characters shown as `\uXXXX`), schema and annotations as a line diff of the indented canonical
+  JSON, the matched text for a flagged tool, and the hashes. `accept` (`McpClients.Accept`) pins exactly the definition this
+  process holds, the one `diff` showed, so the server cannot swap it in between, registers it (turns read the registry per
+  turn, so it is offered from the next one) and refuses a flagged tool, naming `allow`; `--all` accepts every held tool that is
+  not flagged. `allow` is only for flagged tools: it records `allowed_flagged` for that hash and registers the tool as an
+  untrusted server's whatever the configured trust (`McpToolMapping.Risk`/`Describe` with `untrusted`: annotations and
+  `ReadOnlyTools` ignored, a destructive remote side effect that asks on every call unless an approval rule covers it, results
+  tainted, description tainting); any later change flags it again. `corvid mcp list` uses the same store, so a first listing
+  there pins, and prints held tools with a hint to review them in `corvid chat`; it has no review commands of its own.
+- Events and spans: `McpClients` takes an optional `Action<McpDefinitionNotice>` (server, tool, kind `new`, `changed`,
+  `flagged`, `accepted` or `allowed`, hash, pinned hash, matched text), so `Corvid.Mcp` stays free of the event log and the
+  host's telemetry. The host (`McpComposition.Notices`) starts a short `corvid.mcp.pin` span on `HostTelemetry.Source` with
+  `corvid.mcp.server`, `corvid.mcp.tool`, `corvid.mcp.pin.status` and `corvid.mcp.pin.hash`, and appends `McpToolHeld`
+  (`mcp_tool_held`) or `McpToolAccepted` (`mcp_tool_accepted`) to the `mcp-pins` session (`McpSessions.Pins`), retrying on a
+  head conflict as the delivery ledger does; no chat transcript carries them and ACP's `session/list` lists only chat sessions.
+  `corvid mcp list` passes no log.
+- Description taint (§10.3): `ToolRisk` gains `OutsideDescription` (a trailing optional parameter, so generated tools are
+  unchanged), set by `McpToolMapping.Risk` for an untrusted server's tools and for an allowed flagged one, and `ToolDescriptor`
+  an `Origin` (`mcp:<server>`). `TurnRunner.GenerateAsync` taints the turn when any tool it offers the generator has
+  `OutsideDescription`, before it builds the request's `ModelRequestContext`, so the egress gate and Vault see the taint for
+  that very request; a tool that is only registered, or only among the decider's `tool` options, does not taint. At ingress the
+  turn adds `injection/mcp:<server>` to the existing batch for each untrusted origin on the shortlist (the question's
+  instructions with the tools' names and descriptions, capped at 1,200 characters, the shape used for a hub skill's body), once
+  per session for the same descriptions; asking taints, and the verdict is a logged `Decision` (data for C-021), not a
+  withhold. A hub skill's L0 entry is outside content too: when the index shown to the generator lists a skill with
+  `Trusted == false`, the turn is tainted. This is a visible change: with an untrusted server configured (the default trust),
+  most turns that offer its tools are tainted, so read-only network tools ask, the cloud egress gate is stricter, Vault applies
+  taint rules and learned skills are marked tainted; `Trust: Trusted` is the remedy for a server the user vouches for.
+- Limits: a server that puts volatile text (a version, a date) in a description, or reorders arrays, is held at every start;
+  replacing a server under the same name means accepting each changed tool (`--all` helps); a running chat does not see pins
+  another process wrote until it restarts.
+- Tests: `tests/Corvid.Mcp.Tests` (`McpPinningTests`: a first listing pins and registers all; a changed description, schema or
+  annotation holds only that tool; reordered schema keys do not; a new tool is held and a removed one disappears with its pin
+  kept; an added zero-width character holds; accept registers the held definition and the next start offers it; an unreadable
+  pin file offers nothing; the file store's round trip, atomic write, refusal of a bad format, version, key or hash, and merge
+  of two writers; the canonical form. `McpDescriptionScanTests`: Beacon's own poisoned strings match and its benign one, with a
+  few more, does not; a marker in a schema description or title matches; zero-width characters and line breaks do not split a
+  marker; a flagged tool on a trusted server is held on first listing and not pinned, accept refuses it, allow registers it
+  with untrusted risk, `OutsideDescription` and tainted results, the next start keeps it, and a change flags it again).
+  `tests/Corvid.Kernel.Tests` (`DescriptionTaintTests`: a turn offering an outside description is tainted in its result and
+  in the generator request's context, one without is not; `injection/mcp:<server>` is asked once per session in the ingress
+  batch; an L0 index with a hub skill taints and one with only trusted skills does not; `EventJsonTests` pins the two
+  discriminators). `tests/Corvid.Host.Tests` (`McpHostTests`: an untrusted tool offered in a real turn taints it without a call
+  while a trusted one does not; a changed tool is held, recorded in the `mcp-pins` session, shown by `/mcp` and `/mcp diff`,
+  and offered after `/mcp accept` with `McpToolAccepted`; the line diff). The recorded ACP exchanges carry `/mcp`'s new usage.
+
+Not built yet: `corvid mcp diff|accept|allow` (a CLI accept would list in a fresh process and need a hash argument to be sure it
+accepts what was reviewed); withholding a tool on a confident `injection` verdict over its description (it logs and taints,
+like a hub skill body, until C-021's floors are fitted on description rows); re-checking pins on an in-process reconnect or
+`notifications/tools/list_changed` (pins are checked once per start); pruning pins of removed tools, a `/mcp forget <server>`
+to re-trust a replaced server, and keying pins by server identity (command, arguments, URL) as well as name; review from the
+gateway or ACP with a rendered diff, and a doctor check for held tools without starting servers; scanning results, resources,
+prompts and output schemas with the same patterns; signed or registry-published definitions instead of trust on first use; and
+the privacy egress gate over MCP arguments (C-018).
 
 ## ACP and OpenAI-compatible HTTP (C-019)
 
