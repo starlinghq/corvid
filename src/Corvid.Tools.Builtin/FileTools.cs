@@ -132,9 +132,10 @@ public sealed partial class FileTools(Workspace workspace, FileToolOptions? opti
         }
 
         var root = Workspace.Resolve(path);
-        if (File.Exists(root))
+        var single = File.Exists(root);
+        if (single)
             RefuseSpecial(root, path);
-        IEnumerable<FileSystemInfo> files = File.Exists(root) ? [new FileInfo(root)]
+        IEnumerable<FileSystemInfo> files = single ? [new FileInfo(root)]
             : Directory.Exists(root) ? Walk(root, recursive: true)
             : throw new ToolArgumentException($"Argument 'path' is '{path}', which does not exist.", nameof(path));
         var matches = new JsonArray();
