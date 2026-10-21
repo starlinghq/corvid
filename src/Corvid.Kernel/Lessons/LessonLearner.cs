@@ -174,8 +174,7 @@ public sealed class LessonLearner : ILessonLearning
                 "the draft broke the quality bar: " + string.Join("; ", filed.Violations.Select(v => $"{v.Field} {v.Rule}"))),
             LessonFileStatus.Approved => Result(LessonLearningStatus.Approved,
                 filed.Superseded is { } old ? $"approved, superseding {old}" : "approved", filed.Lesson!.LessonId),
-            LessonFileStatus.Duplicate => Result(LessonLearningStatus.Duplicate,
-                filed.Lesson!.ReviewReason is { } reason && filed.Decision is not null ? reason : $"already filed ({filed.Lesson.State})", filed.Lesson.LessonId),
+            LessonFileStatus.Duplicate => Result(LessonLearningStatus.Duplicate, $"already filed ({filed.Lesson!.State})", filed.Lesson.LessonId),
             _ => Result(LessonLearningStatus.Filed, $"filed for review ({filed.Lesson!.ReviewReason})", filed.Lesson.LessonId),
         };
     }

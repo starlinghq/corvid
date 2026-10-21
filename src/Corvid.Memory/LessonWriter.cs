@@ -28,10 +28,7 @@ public enum LessonFileStatus
     Staged,
     /// <summary>The gate let it through: approved (and, for <c>update</c>, superseding its nearest neighbour).</summary>
     Approved,
-    /// <summary>
-    /// Already filed (its evidence was merged and its state left alone), or the gate chose <c>noop</c> and the candidate was
-    /// rejected as a duplicate.
-    /// </summary>
+    /// <summary>Already filed: its evidence was merged and its state left alone.</summary>
     Duplicate,
 }
 
@@ -47,9 +44,9 @@ public sealed record LessonFileResult(
 /// <summary>
 /// The gated write path for lessons (C-025), on the existing <c>memory_op</c> gate with lesson-shaped instructions: the
 /// candidate and up to five approved lessons of the same project as neighbours. An acted <c>add</c> approves; <c>update</c>
-/// approves and supersedes the nearest neighbour; <c>noop</c> rejects the candidate as a duplicate. Everything else, a
-/// tainted source (plan §10.3) included, leaves it a candidate for review, so without Kev every lesson waits for
-/// <c>/memory lessons</c>. Each change appends <c>MemoryWritten</c> to the source session: <c>staged</c>, <c>add</c> or
+/// approves and supersedes the nearest neighbour. Everything else, <c>noop</c> (staged with <c>duplicate of &lt;id&gt;
+/// (decider)</c>, since only review rejects) and a tainted source (plan §10.3) included, leaves it a candidate for review,
+/// so without Kev every lesson waits for <c>/memory lessons</c>. Each change appends <c>MemoryWritten</c> to the source session: <c>staged</c>, <c>add</c> or
 /// <c>update</c> with the lesson id.
 /// </summary>
 public sealed class LessonWriter
@@ -127,11 +124,12 @@ public sealed class LessonWriter
                 return Approve(lesson, verdict, proposed, neighbours[0].LessonId, neighbours);
             case MemoryOperations.Update:
                 return Stage(lesson, verdict, proposed, "no neighbour to update", neighbours);
+            // noop writes nothing, as in MemoryWriter: rejecting here would be final (the content-hash id makes every re-draft a
+            // Duplicate) and unseen, so the candidate waits for review, which records the outcome.
+            case MemoryOperations.Noop when !neighbours.IsEmpty:
+                return Stage(lesson, verdict, proposed, $"duplicate of {neighbours[0].LessonId} (decider)", neighbours);
             case MemoryOperations.Noop:
-                var reason = neighbours.IsEmpty ? "duplicate (decider)" : $"duplicate of {neighbours[0].LessonId} (decider)";
-                // The decider's own call: no review happened, so there is no outcome to record.
-                _store.Reject(lesson.LessonId, reason, verdict.DecisionId, proposed);
-                return new LessonFileResult(LessonFileStatus.Duplicate, _store.Get(lesson.LessonId), [], verdict, neighbours);
+                return Stage(lesson, verdict, proposed, "no neighbour to be a duplicate of", neighbours);
             default:
                 return Stage(lesson, verdict, proposed, $"{operation} does not apply to a lesson", neighbours);
         }

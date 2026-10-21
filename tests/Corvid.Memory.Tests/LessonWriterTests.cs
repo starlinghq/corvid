@@ -79,18 +79,37 @@ public sealed class LessonWriterTests
     }
 
     [Fact]
-    public async Task A_calibrated_noop_rejects_the_candidate_as_a_duplicate()
+    public async Task A_calibrated_noop_stages_the_candidate_for_review_and_review_can_still_approve_it()
     {
         using var store = new TempStore();
         var old = (await Writer(store, FakeCalibratedDecider.MemoryOp("add")).FileAsync(new LessonDraft(Project, Content()), Session, false, Ct)).Lesson!;
         var writer = Writer(store, FakeCalibratedDecider.MemoryOp("noop"));
-        var result = await writer.FileAsync(new LessonDraft(Project, Content(title: "Build the hooks binary with make before go test")),
-            Session, false, Ct);
+        var draft = new LessonDraft(Project, Content(title: "Build the hooks binary with make before go test"));
+        var result = await writer.FileAsync(draft, Session, false, Ct);
 
-        Assert.Equal(LessonFileStatus.Duplicate, result.Status);
-        Assert.Equal(LessonStates.Rejected, result.Lesson!.State);
+        // noop writes nothing and rejects nothing: the candidate waits in /memory lessons pending with the decider's reason.
+        Assert.Equal(LessonFileStatus.Staged, result.Status);
+        Assert.Equal((LessonStates.Candidate, "noop"), (result.Lesson!.State, result.Lesson.Proposed));
         Assert.Equal($"duplicate of {old.LessonId} (decider)", result.Lesson.ReviewReason);
-        Assert.DoesNotContain(Events(store), e => e is DecisionOutcomeRecorded);
+        Assert.Equal(result.Lesson.LessonId, Assert.Single(writer.Pending(Project)).LessonId);
+        Assert.Equal(new MemoryWritten(result.Lesson.LessonId, MemoryOperations.Staged), Events(store)[^1]);
+
+        // Review overrides the decider and records the outcome for calibration.
+        var approved = writer.Approve(result.Lesson.LessonId, cancellationToken: Ct);
+        Assert.Equal(LessonStates.Approved, approved.State);
+        var outcome = Assert.Single(Events(store).OfType<DecisionOutcomeRecorded>());
+        Assert.Equal(("corrected", result.Decision!.DecisionId), (outcome.Outcome, outcome.DecisionId));
+    }
+
+    [Fact]
+    public async Task A_calibrated_noop_with_no_neighbour_stages_the_candidate()
+    {
+        using var store = new TempStore();
+        var writer = Writer(store, FakeCalibratedDecider.MemoryOp("noop"));
+        var result = await writer.FileAsync(new LessonDraft(Project, Content()), Session, false, Ct);
+        Assert.Equal(LessonFileStatus.Staged, result.Status);
+        Assert.Equal((LessonStates.Candidate, "no neighbour to be a duplicate of"), (result.Lesson!.State, result.Lesson.ReviewReason));
+        Assert.Empty(result.Neighbours);
     }
 
     [Fact]
