@@ -1,5 +1,6 @@
 using Corvid.Abstractions.Events;
 using Corvid.Kernel.Turns;
+using Corvid.Tools;
 using Corvid.Tools.Builtin;
 
 namespace Corvid.Kernel.Tests;
@@ -83,5 +84,66 @@ public sealed class SlotPrefillTests : IDisposable
         Assert.True(results[0].IsError);
         Assert.False(results[0].Result.TryGetProperty("from_request", out _));
         Assert.False(results[1].IsError);
+    }
+
+    private const string RecordLabel = "The record to look up.";
+
+    // A read-only local tool whose binding refuses any record but "found". Without [Probe] it stands for an MCP tool that is
+    // read-only only because its server or the user's configuration says so.
+    private static TestTool Lookup(List<string> seen, bool probe, Exception? onSpan = null) => TestTool.Create("lookup",
+        "Look up a record.", new ToolRisk(SideEffects.None, Network: false, Destructive: false, Probe: probe),
+        $$$"""{"type":"object","properties":{"path":{"type":"string","description":"{{{RecordLabel}}}"}},"required":["path"]}""",
+        (arguments, _) =>
+        {
+            var path = arguments["path"]?.ToString() ?? "";
+            lock (seen)
+                seen.Add(path);
+            if (onSpan is not null && path == "notes")
+                throw onSpan;
+            return path == "found" ? ValueTask.FromResult<object?>("ok")
+                : throw new ToolArgumentException($"Argument 'path' is '{path}', which does not exist.", "path");
+        },
+        new ToolParameter("path", RecordLabel, true, false));
+
+    private static TurnHarness LookupHarness(FakeGenerator generator, TestTool tool) =>
+        new(generator, extractor: new FakeExtractor(0.95f, (RecordLabel, "notes")),
+            options: TurnOptions.Default with { ToolFilter = candidate => candidate.Name == "lookup" },
+            tools: tools => tools.Add(tool));
+
+    [Fact]
+    public async Task A_read_only_tool_that_does_not_declare_probe_is_never_tried_with_a_span()
+    {
+        // An untrusted MCP server's tool the user listed as read-only must never be sent the user's words unasked.
+        var seen = new List<string>();
+        var generator = new FakeGenerator(
+            Reply.Call("lookup", """{"path":"nots"}"""),
+            Reply.Call("lookup", """{"path":"found"}"""),
+            Reply.Say("Found it."));
+        using var harness = LookupHarness(generator, Lookup(seen, probe: false));
+
+        var result = await harness.RunAsync("look up my notes");
+
+        Assert.Equal(TurnStatus.Answered, result.Status);
+        Assert.Equal(["nots", "found"], seen);
+        // Without a probe the hint gets the schema check only, as a side-effecting tool's does.
+        Assert.Equal("notes", Assert.Single(result.Disagreements).Extracted);
+    }
+
+    [Fact]
+    public async Task A_probe_that_fails_for_another_reason_does_not_end_the_turn()
+    {
+        // A tool's own timeout surfaces as a cancellation that is not the turn's; it says nothing about the hint.
+        var seen = new List<string>();
+        var generator = new FakeGenerator(
+            Reply.Call("lookup", """{"path":"nots"}"""),
+            Reply.Call("lookup", """{"path":"found"}"""),
+            Reply.Say("Found it."));
+        using var harness = LookupHarness(generator, Lookup(seen, probe: true, onSpan: new TaskCanceledException("the tool timed out")));
+
+        var result = await harness.RunAsync("look up my notes");
+
+        Assert.Equal(TurnStatus.Answered, result.Status);
+        Assert.Equal(["nots", "notes", "found"], seen);
+        Assert.Equal("notes", Assert.Single(result.Disagreements).Extracted);
     }
 }

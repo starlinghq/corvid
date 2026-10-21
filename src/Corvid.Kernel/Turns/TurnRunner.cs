@@ -883,7 +883,7 @@ public sealed class TurnRunner
 
         /// <summary>
         /// The spans worth showing beside a failed call: each one substituted into the arguments must pass the schema and, for
-        /// a read-only local tool, the tool's own binding (a probe run; a span naming a path that does not exist is dropped).
+        /// a tool that declares [Probe], the tool's own binding (a probe run; a span naming a path that does not exist is dropped).
         /// The hints kept are recorded and end pre-fill for the turn.
         /// </summary>
         private async Task<IReadOnlyList<SlotDisagreement>> HintsAsync(string callId, Offered tool, JsonElement arguments,
@@ -915,8 +915,11 @@ public sealed class TurnRunner
             var errors = ArgumentValidator.Validate(tool.Function.JsonSchema, substituted);
             if (errors.Any(error => error.Contains($"'{span.Parameter}'", StringComparison.Ordinal)))
                 return false;
-            // Only a tool that changes nothing and reaches no network can be tried; the probe's result is discarded.
-            if (errors.Count > 0 || !tool.Descriptor.Risk.ReadOnly || tool.Descriptor.Risk.Network)
+            // Only a tool that declares [Probe] (read-only, local, leaves no trace) is tried; the probe's result is discarded.
+            // ReadOnly alone is not enough: for an MCP tool it is the server's annotation or the user's configuration, and a
+            // probe runs unlogged and unasked with the user's words, so an outside server would see them.
+            var risk = tool.Descriptor.Risk;
+            if (errors.Count > 0 || !risk.Probe || !risk.ReadOnly || risk.Network)
                 return true;
             bool tainted;
             lock (_gate)
@@ -931,9 +934,10 @@ public sealed class TurnRunner
             {
                 return false;
             }
-            catch (Exception exception) when (exception is not OperationCanceledException)
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
             {
-                // Some other failure says nothing about the hint's value.
+                // Some other failure (a tool's own timeout included) says nothing about the hint's value and must not end the
+                // turn: only the turn's cancellation escapes a probe.
                 return true;
             }
         }

@@ -337,7 +337,7 @@ C-011's device scheduler to these bindings.
 
 `Corvid.Tools` is a core library (Microsoft.Extensions.AI.Abstractions and
 `Corvid.Vault.Client`, for `SecretRef`). It holds the `[Tool]`, `[SideEffect]`,
-`[Network]` and `[Destructive]` attributes, `ToolDescriptor` and `ToolRisk`,
+`[Network]`, `[Destructive]` and `[Probe]` attributes, `ToolDescriptor` and `ToolRisk`,
 the `ToolFunction` base class (an `AIFunction`), argument binding
 (`ToolArguments`) and `ToolRegistry`.
 
@@ -351,9 +351,10 @@ and AOT analyzers on. The schema is computed by the generator, because the
 compiler cannot run `AIJsonUtilities`; a test compares it with
 `AIJsonUtilities` for every fixture tool. Two differences are deliberate:
 `SecretRef` is a string, and array elements are non-null. Unsupported
-parameter or return types, invalid or duplicate names, a missing description
-and `[Destructive]` without `[SideEffect]` are compile errors (CVTOOL001 to
-CVTOOL008).
+parameter or return types, invalid or duplicate names, a missing description,
+`[Destructive]` without `[SideEffect]`, and `[Probe]` (a tool slot pre-fill may
+try with a substitute argument, its result discarded) on a tool with a
+`[SideEffect]` or `[Network]` are compile errors (CVTOOL001 to CVTOOL009).
 
 `ToolRegistry.List()` returns descriptors; `GetFunctions(secretNames)` returns
 the tools to offer a model. A `SecretRef` parameter is offered as an enum of
@@ -847,8 +848,10 @@ described below (see [Host and CLI](#host-and-cli-c-013)).
   contradicts is a hint, never a veto. A call whose arguments pass the schema and the binding runs as written. The span
   is shown, once per turn, only beside an argument the schema named in an error (missing or wrong) or the binding refused
   (a `ToolArgumentException` names its parameter), and only when the span itself passes: substituted into the arguments
-  it must fit the schema and, for a read-only tool without network, survive a probe run of the tool (its result
-  discarded), so `list_files` is never steered to a directory that does not exist. An invalid call is logged as
+  it must fit the schema and, for a tool that declares `[Probe]` (`list_files` and `read_file`), survive a probe run of
+  the tool (its result discarded), so `list_files` is never steered to a directory that does not exist. The probe is
+  opt-in, never inferred from `ReadOnly`: an MCP tool is read-only on its server's or the user's word, and a probe runs
+  unlogged and unasked with the user's words. Other tools get the schema check only. An invalid call is logged as
   `ToolCallIssued` and an error `ToolResult` in one append (details, the expected schema and any hints: the repair
   message), so a concurrent switch never reads the call without its result. A `ToolArgumentException` from the
   tool's own binding counts the same. A second failed response escalates the generator through C-006
