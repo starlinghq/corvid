@@ -37,6 +37,8 @@ internal static class Verbs
     private static readonly FrozenSet<string> Searchers = FrozenSet.Create(StringComparer.Ordinal,
         "grep", "egrep", "fgrep", "zgrep", "rg", "ag", "ack", "jq", "yq");
 
+    // The launchers (strace, nsenter, systemd-run, script, parallel, ...) are unwrapped by the analyzer; they are listed
+    // here for when they cannot be (run by a path Corvid cannot see, or a perf subcommand it does not read).
     private static readonly FrozenSet<string> Interpreters = FrozenSet.Create(StringComparer.Ordinal,
         "python", "python2", "python3", "pypy", "pypy3", "node", "nodejs", "deno", "ruby", "perl", "php", "lua", "luajit",
         "Rscript", "julia", "java", "jshell", "pwsh", "powershell", "tclsh", "expect", "osascript", "irb", "gdb", "lldb",

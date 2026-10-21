@@ -337,7 +337,7 @@ C-011's device scheduler to these bindings.
 
 `Corvid.Tools` is a core library (Microsoft.Extensions.AI.Abstractions and
 `Corvid.Vault.Client`, for `SecretRef`). It holds the `[Tool]`, `[SideEffect]`,
-`[Network]` and `[Destructive]` attributes, `ToolDescriptor` and `ToolRisk`,
+`[Network]`, `[Destructive]` and `[Probe]` attributes, `ToolDescriptor` and `ToolRisk`,
 the `ToolFunction` base class (an `AIFunction`), argument binding
 (`ToolArguments`) and `ToolRegistry`.
 
@@ -351,9 +351,10 @@ and AOT analyzers on. The schema is computed by the generator, because the
 compiler cannot run `AIJsonUtilities`; a test compares it with
 `AIJsonUtilities` for every fixture tool. Two differences are deliberate:
 `SecretRef` is a string, and array elements are non-null. Unsupported
-parameter or return types, invalid or duplicate names, a missing description
-and `[Destructive]` without `[SideEffect]` are compile errors (CVTOOL001 to
-CVTOOL008).
+parameter or return types, invalid or duplicate names, a missing description,
+`[Destructive]` without `[SideEffect]`, and `[Probe]` (a tool slot pre-fill may
+try with a substitute argument, its result discarded) on a tool with a
+`[SideEffect]` or `[Network]` are compile errors (CVTOOL001 to CVTOOL009).
 
 `ToolRegistry.List()` returns descriptors; `GetFunctions(secretNames)` returns
 the tools to offer a model. A `SecretRef` parameter is offered as an enum of
@@ -752,6 +753,21 @@ a shell tool is assessed as the command line it runs (see [Built-in tools and sc
   `rg --pre`, `ag --pager`, `yq -i`, `sort --compress-program`, `sdiff -o`, `less -o`, and the output operand of
   `uniq` and `xxd`. A computed argument to `git`, or a computed pattern for `rg` or `ag`, may be such an option,
   so it is unresolved.
+- Launchers (`Launchers.cs`) are unwrapped too, with their option syntax parsed strictly (a value-taking option
+  consumes its value; an unknown option refuses), so the command they run meets the hardline list and target
+  extraction as if it ran alone. Unwrapping never lowers risk. Tracers add their own targets: `strace` and
+  `ltrace` (`-o` writes a file, or pipes to a shell command that is analysed; `-p` attaches to PIDs; `-u` elevates;
+  `strace -E` sets the environment; fault injection is unresolved), `valgrind` (`--log-file` and the profilers' output
+  files, with `%p` as a pattern; it reads option files Corvid cannot see, so it executes) and `perf stat`, `record`
+  (`perf.data`) and `trace`. Launchers that change namespaces, mounts or the user mark the launcher and everything
+  it runs unresolved, so they always ask: `nsenter`, `unshare`, `firejail` (a short list of options), `bwrap`
+  (writable binds are write targets, read-only binds recursive reads; the working directory is unknown) and
+  `systemd-run` (elevated for the system manager; a service runs in `/` or the home directory with the manager's
+  environment, which expands `$VAR` in its arguments; resource properties only; `--host`, `--machine` and `--shell`
+  refuse). Shell strings go through the subset parser: `script -c` (permuted options; the typescript is a write
+  target; a `$SHELL` other than `sh`/`bash`/`dash` is unresolved) and GNU `parallel`, whose static `:::` inputs are
+  substituted job by job into the replacement strings (`{}`, `{.}`, `{/}`, `{//}`, `{/.}`, `{#}`, `{N}`; perl
+  expressions refuse), while input from stdin or files stands in as a dynamic value.
 - Tools: `ToolAnalyzer` describes a non-shell call from C-005's `ToolRisk` (filesystem write, destructive
   delete, network, messaging, schedule, memory, configuration, remote) and the targets in its arguments
   (parameters named like paths or addresses, or targets the caller passes). Recipients are targets too. A
@@ -804,10 +820,9 @@ Not built yet: GLiNER2 extraction of free-form targets (SQL, `curl` data, `kill`
 spike S3; calibrated `risk` (C-004b); reversibility now comes from checkpoint state (C-014 sets `ApprovalContext.Reversible`);
 restoring session rules on resume (they are not in the log); removing rules (C-013's `/approvals` lists them, and the
 host keeps always-rules in `Corvid:Approvals:RulesFile`, by default `$XDG_CONFIG_HOME/corvid/approvals.json`); control flow, subshells and other syntax
-outside the subset, which ask rather than run; unwrapping further launchers (`strace`, `nsenter`, `unshare`,
-`runuser`, `systemd-run`, `script -c`, `at`, `parallel`, ...), which today are programs that run code Corvid
-cannot see, so they ask unless a calibrated `risk` answer allows them, and the hardline list does not see the
-command they launch; symlinks and `/proc/<pid>/cwd` paths, which are resolved lexically and left to the sandbox.
+outside the subset, which ask rather than run; unwrapping launchers not yet read (`runuser`, `at`, `gdb`, `perf`
+subcommands other than `stat`, `record` and `trace`, moreutils `parallel`, which is read as GNU's), which remain programs that
+run code Corvid cannot see; symlinks and `/proc/<pid>/cwd` paths, which are resolved lexically and left to the sandbox.
 
 ## Session actor and turn loop (C-011)
 
@@ -842,11 +857,17 @@ described below (see [Host and CLI](#host-and-cli-c-013)).
   recalled memory), user and assistant text, calls as `FunctionCallContent` (consecutive calls in one assistant message),
   results as `FunctionResultContent`, compaction summaries as notes. Each call is validated before it is logged: the
   name must be one offered, the arguments must fit the generator's JSON Schema subset (`required`, `type` lists with null,
-  `enum`, array `items`; unknown names are errors, because the binder would drop them), and, once per turn, slot
-  pre-fill: the tool's free-text parameters become extractor labels (their descriptions), and a span at least 0.8
-  confident that the argument omits or contradicts is shown beside it. An invalid call is logged as `ToolCallIssued` and
-  an error `ToolResult` in one append (details, the expected schema and the extracted values: the repair message), so a
-  concurrent switch never reads the call without its result. A `ToolArgumentException` from the
+  `enum`, array `items`; unknown names are errors, because the binder would drop them). Slot pre-fill makes the tool's
+  free-text parameters extractor labels (their descriptions); a span at least 0.8 confident that the argument omits or
+  contradicts is a hint, never a veto. A call whose arguments pass the schema and the binding runs as written. The span
+  is shown, once per turn, only beside an argument the schema named in an error (missing or wrong) or the binding refused
+  (a `ToolArgumentException` names its parameter), and only when the span itself passes: substituted into the arguments
+  it must fit the schema and, for a tool that declares `[Probe]` (`list_files` and `read_file`), survive a probe run of
+  the tool (its result discarded), so `list_files` is never steered to a directory that does not exist. The probe is
+  opt-in, never inferred from `ReadOnly`: an MCP tool is read-only on its server's or the user's word, and a probe runs
+  unlogged and unasked with the user's words. Other tools get the schema check only. An invalid call is logged as
+  `ToolCallIssued` and an error `ToolResult` in one append (details, the expected schema and any hints: the repair
+  message), so a concurrent switch never reads the call without its result. A `ToolArgumentException` from the
   tool's own binding counts the same. A second failed response escalates the generator through C-006
   (`EscalateAsync`); with nowhere to go, or with `TurnOptions.EscalationAllowed` off (which every trigger respects), the
   turn fails with a message. No-op detection: when the first response with tools
@@ -1884,7 +1905,8 @@ this process.
   turn and the request fails with 403 `approval_required`, naming the tool and `corvid chat --session <id>` to continue where
   it can be approved; under `Deny` the model answers without the call, as in an unattended job. `Corvid:Serve:Tools=false`
   offers the model no tools at all. Hardline denials, the sandbox and privacy egress apply as everywhere.
-- A client that disconnects cancels its turn; one request at a time per session.
+- A client that disconnects cancels its turn; one request at a time per session. `SessionGates` keeps a session's gate only
+  while a request holds or waits for it (a count under one lock), so the endpoint holds no state for idle sessions.
 
 ### Dependency rules for the front ends
 

@@ -45,6 +45,28 @@ public sealed class BypassTests
         "pkexec rm -rf /",
         "busybox rm -rf /",
         "busybox sh -c 'rm -rf /'",
+        // Launchers: tracers, namespaces and sandboxes, the service manager, shell strings.
+        "strace rm -rf ~",
+        "strace -f -o trace.txt rm -rf /",
+        "strace -o '|rm -rf ~' ls",
+        "strace -o ~/.ssh/authorized_keys ls",
+        "ltrace -f rm -rf /",
+        "valgrind --tool=memcheck rm -rf /",
+        "perf stat -e cycles rm -rf /",
+        "perf record -g -- rm -rf ~",
+        "nsenter -t 1 -m rm -rf /",
+        "unshare -r rm -rf /",
+        "firejail --quiet rm -rf ~",
+        "bwrap --bind / / rm -rf /",
+        "systemd-run --user rm -rf ~",
+        "systemd-run --user rm -rf *",
+        "systemd-run --user tee ~/.ssh/authorized_keys",
+        "timeout 5 strace -f systemd-run --user sh -c 'rm -rf ~'",
+        "script -qc 'rm -rf ~' /dev/null",
+        "script -c \"sh -c 'rm -rf /'\"",
+        "parallel rm -rf ::: / ~",
+        "parallel ::: 'rm -rf /'",
+        "echo x | parallel rm -rf /",
         // Programs that may not be what they are named: still read as named, so the hardline list applies.
         "./rm -rf /",
         "env PATH=/tmp/evil rm -rf /",
@@ -178,6 +200,21 @@ public sealed class BypassTests
         "echo 'rm -rf /' | busybox sh",
         "zsh -c 'rm -rf /'",
         "ksh script.sh",
+        // Launchers: the command they run is read, and isolating ones ask whatever it is.
+        "strace cat ~/.ssh/id_rsa",
+        "systemd-run --user cat ~/.ssh/id_rsa",
+        "nsenter -t 1 -m ls",
+        "unshare -n ls",
+        "firejail ls",
+        "bwrap --ro-bind / / ls",
+        "systemd-run --scope ls",
+        "strace -p 1234",
+        "strace -e inject=read:error=EIO ls",
+        "strace --frobnicate ls",
+        "valgrind --db-command=x ls",
+        "systemd-run -p ExecStartPre=/tmp/x ls",
+        "script -c \"$CMD\"",
+        "parallel 'rm {=s/a/b/=}' ::: a",
         // Outside the parsed subset.
         "for p in $(pgrep x); do kill -9 $p; done",
         "(rm -rf build)",
@@ -236,6 +273,8 @@ public sealed class BypassTests
     [InlineData("git status")]
     [InlineData("cat README.md")]
     [InlineData("grep -rn TODO src | head")]
+    [InlineData("strace -f ls")]
+    [InlineData("perf stat -e cycles ls")]
     public async Task Read_only_commands_run_automatically_in_every_mode(string command)
     {
         foreach (var mode in Fixtures.Modes)

@@ -49,8 +49,8 @@ public sealed record TurnOptions
     public ImmutableArray<string> EntityLabels { get; init; } = ["person", "organization", "place", "date", "time", "project", "file", "url"];
 
     /// <summary>
-    /// Slot pre-fill (plan §7 step 4): an extracted span at least this confident that the generator's argument omits or
-    /// contradicts is shown to it in the repair message.
+    /// Slot pre-fill (plan §7 step 4): an extracted span at least this confident is shown in the repair message beside an
+    /// argument that was missing or failed validation, when the span itself would pass. It never rejects a valid call.
     /// </summary>
     public float SlotPrefillConfidence { get; init; } = 0.8f;
 
@@ -166,7 +166,10 @@ public enum TurnStatus
     Cancelled,
 }
 
-/// <summary>A high-confidence extracted span the generator's argument omitted or contradicted (plan §7 step 4).</summary>
+/// <summary>
+/// A high-confidence extracted span shown as a hint beside an argument that was missing or failed validation (plan §7 step
+/// 4). A call whose arguments validate runs as written, whatever the spans say.
+/// </summary>
 public sealed record SlotDisagreement(string CallId, string Tool, string Parameter, string? Argument, string Extracted, float Confidence);
 
 /// <param name="Text">The answer delivered, or null when the turn was cancelled.</param>

@@ -414,11 +414,28 @@ public sealed class TurnLoopTests
     }
 
     [Fact]
-    public async Task A_disagreement_with_an_extracted_slot_is_shown_once_then_the_generator_decides()
+    public async Task A_valid_call_runs_as_written_whatever_an_extracted_slot_says()
+    {
+        // Spans are hints, not vetoes: arguments that pass the schema and the binding are the generator's to choose.
+        var generator = new FakeGenerator(Reply.Call("add_note", """{"text":"buy bread"}"""), Reply.Say("Saved."));
+        var extractor = new FakeExtractor(0.95f, ("The note text.", "buy milk"));
+        using var harness = new TurnHarness(generator, extractor: extractor, prompter: FakePrompter.Always(approve: true));
+
+        var result = await harness.RunAsync("note: buy milk");
+
+        Assert.Equal(TurnStatus.Answered, result.Status);
+        Assert.Equal((1, 1), (result.Steps, result.ToolCalls));
+        Assert.Empty(result.Disagreements);
+        Assert.False(Assert.Single(harness.Payloads().OfType<ToolResult>()).IsError);
+        Assert.Equal("buy bread", Assert.Single(harness.Notes.Notes).Text);
+    }
+
+    [Fact]
+    public async Task A_missing_required_argument_is_shown_the_extracted_slot_once()
     {
         var generator = new FakeGenerator(
-            Reply.Call("add_note", """{"text":"buy bread"}"""),
-            Reply.Call("add_note", """{"text":"buy bread"}"""),
+            Reply.Call("add_note", """{"priority":"High"}"""),
+            Reply.Call("add_note", """{"text":"buy milk","priority":"High"}"""),
             Reply.Say("Saved."));
         var extractor = new FakeExtractor(0.95f, ("The note text.", "buy milk"));
         using var harness = new TurnHarness(generator, extractor: extractor, prompter: FakePrompter.Always(approve: true));
@@ -426,11 +443,12 @@ public sealed class TurnLoopTests
         var result = await harness.RunAsync("note: buy milk");
 
         var disagreement = Assert.Single(result.Disagreements);
-        Assert.Equal(("text", "buy bread", "buy milk"), (disagreement.Parameter, disagreement.Argument, disagreement.Extracted));
+        Assert.Equal(("text", null, "buy milk"), (disagreement.Parameter, disagreement.Argument, disagreement.Extracted));
         var first = harness.Payloads().OfType<ToolResult>().First();
         Assert.True(first.IsError);
         Assert.Equal("buy milk", first.Result.GetProperty("from_request").GetProperty("text").GetString());
-        Assert.Equal("buy bread", Assert.Single(harness.Notes.Notes).Text);
+        Assert.Contains(first.Result.GetProperty("details").EnumerateArray(), detail => detail.GetString()!.Contains("was omitted", StringComparison.Ordinal));
+        Assert.Equal("buy milk", Assert.Single(harness.Notes.Notes).Text);
     }
 
     [Fact]
