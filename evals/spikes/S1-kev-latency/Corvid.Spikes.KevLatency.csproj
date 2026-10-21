@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Spike S1 (C-003): Kev-0.8B and Kev-4B checkpoint latency through Corvid's real path (TurnStateBuilder with the
+    Qwen3.5 token counter, DecisionFabric, KevDecider, SqliteEventLog). Local only: not in Corvid.slnx, so CI never
+    restores it, and outside src/, vault/ and sandbox/, so the dependency-boundary check never scans it.
+
+    -p:UseCuda=true swaps the CPU native package for the CUDA one (both ship libonnxruntime.so under the same file name;
+    never reference both), as Starling's Kev fidelity tool does. Build each variant into its own output directory.
+
+    KevDecider.cs and Qwen35TokenCounter.cs are compiled in from src/Corvid.Models.Starling rather than referencing that
+    project, because it brings Microsoft.ML.OnnxRuntimeGenAI (CPU natives) and its KevDecider.Create refuses the CUDA
+    provider. Linking the source keeps the adapter's Decide logic byte-for-byte while the spike supplies the runner.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Spike-only versions, kept out of Directory.Packages.props: the same ONNX Runtime 1.30.0 the CPU path resolves. -->
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.30.0" />
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime.Gpu.Linux" Version="1.30.0" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseCuda)' != 'true'">
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseCuda)' == 'true'">
+    <!-- CUDA native runtime (includes the CPU provider). The CUDA 13 runtime and cuDNN 9 are not in the package. -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu.Linux" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Starlings.Models.Kev" />
+    <!-- Only for Qwen35ModelFiles in the linked counter; managed code, no natives. -->
+    <PackageReference Include="Starlings.Models.Qwen35" />
+    <PackageVersion Include="Starlings.Models.Qwen35" Version="0.3.0" />
+    <ProjectReference Include="../../../src/Corvid.Fabric/Corvid.Fabric.csproj" />
+    <ProjectReference Include="../../../src/Corvid.Kernel/Corvid.Kernel.csproj" />
+    <Compile Include="../../../src/Corvid.Models.Starling/KevDecider.cs" Link="Linked/KevDecider.cs" />
+    <Compile Include="../../../src/Corvid.Models.Starling/Qwen35TokenCounter.cs" Link="Linked/Qwen35TokenCounter.cs" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,11 @@
+== 10:39:57 0.8b cpu run2b --cells ingress-300-q4 --calls 20 --warmup 2
+exit 0
+== 10:59:34 0.8b cpu run2b --cells ingress-1500-q4 --calls 20 --warmup 2
+exit 0
+== 11:21:40 0.8b cpu run2b --cells rows-600-risk-1000 --calls 20 --warmup 2
+exit 0
+== 11:42:24 4b cpu run2 --cells ingress-600-q4 --calls 10 --warmup 1
+exit 0
+== 12:03:04 4b cpu run2 --cells pre-execute-600-risk --calls 10 --warmup 1
+exit 0
+== done 12:18:30

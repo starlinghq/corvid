@@ -1,0 +1,14 @@
+[08:30:27] Qwen3.5 token counter: /home/mark/.cache/starlings/models/Qwen/Qwen3.5-0.8B/2fc06364715b967f1860aea9cf38778875588b17/transformers-5.18.0/tokenizer.json
+[08:30:27] bundle: /home/mark/.cache/starlings/models/jaredpalmer/kev-4b/139fdd94f1b6a6ad80cc15e08fcb99cac885a101/model.onnx (opened in 28 ms)
+[08:30:49] loaded kev-4b/onnx-fp32-cuda in 21.80 s; serialized native calls: True
+[08:31:22] kev-4b cuda ingress-300-q4: state 297 tok, rows 17-83, p50 481 p90 724.5 p99 1304.9 mean 583.3 ms (n=50, load 9.45->18.06)
+[08:32:06] kev-4b cuda ingress-300-q8: state 297 tok, rows 17-113, p50 787.1 p90 799.2 p99 903.5 mean 775 ms (n=50, load 18.06->12.14)
+[08:32:45] kev-4b cuda ingress-600-q4: state 560 tok, rows 17-83, p50 691.2 p90 754.3 p99 1001.8 mean 716.9 ms (n=50, load 12.14->9.05)
+[08:33:50] kev-4b cuda ingress-600-q8: state 560 tok, rows 17-113, p50 1030.8 p90 1710.5 p99 2239.5 mean 1197 ms (n=50, load 9.05->15.50)
+[08:36:09] kev-4b cuda ingress-1500-q4: state 1496 tok, rows 17-83, p50 2077.5 p90 3594 p99 4572.2 mean 2419.8 ms (n=50, load 15.50->21.80)
+[08:39:00] kev-4b cuda ingress-1500-q8: state 1496 tok, rows 17-113, p50 2681.3 p90 4456.7 p99 5638.7 mean 3020.2 ms (n=50, load 21.80->16.03)
+[08:39:41] kev-4b cuda pre-execute-600-risk: state 560 tok, rows 260-260, p50 752.9 p90 778.8 p99 870.6 mean 734.1 ms (n=50, load 16.03->11.71)
+[08:40:23] kev-4b cuda rows-600-risk-250: state 560 tok, rows 260-260, p50 762.8 p90 796.2 p99 1001.2 mean 774 ms (n=50, load 11.71->10.63)
+[08:41:18] kev-4b cuda rows-600-risk-500: state 560 tok, rows 456-456, p50 973.2 p90 1033.7 p99 1405.9 mean 997.9 ms (n=50, load 10.63->8.48)
+[08:42:33] kev-4b cuda rows-600-risk-750: state 560 tok, rows 750-750, p50 1331.5 p90 1561.8 p99 2942.7 mean 1363.8 ms (n=50, load 8.48->11.44)
+[08:46:31] kev-4b cuda rows-600-risk-1000: state 560 tok, rows 962-962, p50 3697.7 p90 6812.9 p99 9502.8 mean 4335 ms (n=50, load 11.44->48.11)
