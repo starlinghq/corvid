@@ -5,6 +5,10 @@
     <Project Path="src/Corvid.Approvals/Corvid.Approvals.csproj" />
     <Project Path="src/Corvid.Cli/Corvid.Cli.csproj" />
     <Project Path="src/Corvid.Fabric/Corvid.Fabric.csproj" />
+    <Project Path="src/Corvid.Gateway/Corvid.Gateway.csproj" />
+    <Project Path="src/Corvid.Gateway.Discord/Corvid.Gateway.Discord.csproj" />
+    <Project Path="src/Corvid.Gateway.Slack/Corvid.Gateway.Slack.csproj" />
+    <Project Path="src/Corvid.Gateway.Telegram/Corvid.Gateway.Telegram.csproj" />
     <Project Path="src/Corvid.Host/Corvid.Host.csproj" />
     <Project Path="src/Corvid.Http/Corvid.Http.csproj" />
     <Project Path="src/Corvid.Kernel/Corvid.Kernel.csproj" />
@@ -41,6 +45,7 @@
     <Project Path="tests/Corvid.Evals.Tests/Corvid.Evals.Tests.csproj" />
     <Project Path="tests/Corvid.Cli.Tests/Corvid.Cli.Tests.csproj" />
     <Project Path="tests/Corvid.Fabric.Tests/Corvid.Fabric.Tests.csproj" />
+    <Project Path="tests/Corvid.Gateway.Tests/Corvid.Gateway.Tests.csproj" />
     <Project Path="tests/Corvid.Host.Tests/Corvid.Host.Tests.csproj" />
     <Project Path="tests/Corvid.Memory.Tests/Corvid.Memory.Tests.csproj" />
     <Project Path="tests/Corvid.Models.Tests/Corvid.Models.Tests.csproj" />

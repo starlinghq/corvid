@@ -94,4 +94,16 @@ public static class CorvidHost
         }
         return services;
     }
+
+    /// <summary>
+    /// The gateway (C-020) as a hosted service: starting the host starts the runtime and the enabled adapters. Adapters
+    /// registered as <see cref="Gateway.GatewayAdapterRegistration"/> in DI replace the built-in ones of the same name.
+    /// </summary>
+    public static IServiceCollection AddCorvidGateway(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        services.TryAddSingleton<GatewayService>();
+        services.AddHostedService(provider => provider.GetRequiredService<GatewayService>());
+        return services;
+    }
 }

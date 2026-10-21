@@ -11,5 +11,7 @@
     <Compile Include="../Corvid.Models.Remote.Tests/Infrastructure.cs" Link="FakeVault.cs" />
     <!-- The in-process MCP server, shared with the MCP tests (C-018). -->
     <Compile Include="../Corvid.Mcp.Tests/FakeMcpServer.cs" Link="FakeMcpServer.cs" />
+    <!-- The gateway tests' fake platform (C-020). -->
+    <Compile Include="../Corvid.Gateway.Tests/Fakes.cs" Link="GatewayFakes.cs" />
   </ItemGroup>
 </Project>

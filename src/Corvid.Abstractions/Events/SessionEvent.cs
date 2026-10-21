@@ -23,6 +23,8 @@ namespace Corvid.Abstractions.Events;
 [JsonDerivedType(typeof(TodosSet), "todos_set")]
 [JsonDerivedType(typeof(CheckpointTaken), "checkpoint_taken")]
 [JsonDerivedType(typeof(SessionRewound), "session_rewound")]
+[JsonDerivedType(typeof(DeliveryQueued), "delivery_queued")]
+[JsonDerivedType(typeof(DeliveryResolved), "delivery_resolved")]
 public abstract record SessionEvent;
 
 // Text is the initial message surface. Provider-specific message objects are never stored here.
@@ -96,3 +98,28 @@ public static class CheckpointKinds
 // "undo" or "rollback".
 public sealed record SessionRewound(long ThroughSequence, string Reason, ImmutableArray<string> Restored,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? CheckpointId = null) : SessionEvent;
+
+// The gateway's delivery ledger (C-020, plan §12): an append-only table in the event log, kept in its own session so no
+// chat's transcript carries it. A message is queued before it is sent and resolved once the platform has it, so one queued
+// and never resolved is sent again after a restart (at least once). Adapter and ChatId say where it goes; ReplyTo is the
+// platform message it answers and ThreadId the thread it belongs in. Kind is "reply", "thread", "home", "job" or "notice".
+// SourceSession and SourceSequence name the answer it carries. Tainted: the text came from a turn that held outside content
+// (plan §10.3), which the platform request tells Vault.
+public sealed record DeliveryQueued(string DeliveryId, string Adapter, string ChatId, string Text, string Kind,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ThreadId = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ReplyTo = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SourceSession = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? SourceSequence = null,
+    bool Tainted = false) : SessionEvent;
+
+// Status is a DeliveryStatus name: "delivered" (with the platform's message id when it gave one) or "failed" (given up;
+// Detail says why). Readers keep the first resolution of a delivery and ignore any later one.
+public sealed record DeliveryResolved(string DeliveryId, string Status,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PlatformMessageId = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Detail = null) : SessionEvent;
+
+public static class DeliveryStatus
+{
+    public const string Delivered = "delivered";
+    public const string Failed = "failed";
+}

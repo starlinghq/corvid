@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Corvid's Telegram adapter: the Bot API over plain HTTP (long polling), with the bot token only in Vault (a placeholder in the URL path, substituted by Vault's egress proxy).</Description>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Corvid.Gateway/Corvid.Gateway.csproj" />
+    <InternalsVisibleTo Include="Corvid.Gateway.Tests" />
+  </ItemGroup>
+</Project>

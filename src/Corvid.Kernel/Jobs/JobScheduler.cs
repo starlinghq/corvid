@@ -34,7 +34,11 @@ public interface IJobScriptRunner
 /// <param name="Tainted">The text holds content from outside the user (script output, or a prompt written in a tainted turn).</param>
 public sealed record JobAgentRequest(string SessionId, ScheduledJob Job, string Text, bool Tainted);
 
-public sealed record JobAgentResult(string Status, string? Text);
+/// <param name="Tainted">
+/// The run's turn held outside content when it answered (a fetched page, script output), so its text is not the user's
+/// alone (plan §10.3).
+/// </param>
+public sealed record JobAgentResult(string Status, string? Text, bool Tainted = false);
 
 /// <summary>Runs the agent for one job run, in the run's fresh session.</summary>
 public interface IJobAgent
@@ -58,7 +62,7 @@ public sealed class TurnJobAgent(Func<string, TurnServices> services, string sur
         // An external envelope taints the session, so network egress asks (and, unattended, is denied).
         var result = await runner.RunAsync(new Envelope(request.SessionId, surface, request.Text,
             request.Tainted ? EnvelopeOrigin.External : EnvelopeOrigin.User), cancellationToken).ConfigureAwait(false);
-        return new JobAgentResult(result.Status.ToString().ToLowerInvariant(), result.Text);
+        return new JobAgentResult(result.Status.ToString().ToLowerInvariant(), result.Text, result.Tainted);
     }
 }
 

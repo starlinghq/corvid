@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Corvid's Slack adapter: Socket Mode over a plain WebSocket and the Web API over plain HTTP, with both tokens (app-level and bot) only in Vault.</Description>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Corvid.Gateway/Corvid.Gateway.csproj" />
+    <InternalsVisibleTo Include="Corvid.Gateway.Tests" />
+  </ItemGroup>
+</Project>

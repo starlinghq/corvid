@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Corvid's Discord adapter: the REST API over plain HTTP (polling watched channels and the DMs of known users), with the bot token only in Vault.</Description>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Corvid.Gateway/Corvid.Gateway.csproj" />
+    <InternalsVisibleTo Include="Corvid.Gateway.Tests" />
+  </ItemGroup>
+</Project>

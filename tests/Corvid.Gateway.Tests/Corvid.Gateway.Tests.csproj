@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <Using Include="Xunit" />
+    <ProjectReference Include="../../src/Corvid.Gateway/Corvid.Gateway.csproj" />
+    <ProjectReference Include="../../src/Corvid.Gateway.Discord/Corvid.Gateway.Discord.csproj" />
+    <ProjectReference Include="../../src/Corvid.Gateway.Slack/Corvid.Gateway.Slack.csproj" />
+    <ProjectReference Include="../../src/Corvid.Gateway.Telegram/Corvid.Gateway.Telegram.csproj" />
+    <!-- The real SQLite event log for the ledger (and Corvid.Models for the stand-in Vault below). -->
+    <ProjectReference Include="../../src/Corvid.Kernel/Corvid.Kernel.csproj" />
+    <!-- The stand-in Vault on a Unix socket, shared with the model adapter tests: every platform request goes through it. -->
+    <Compile Include="../Corvid.Models.Remote.Tests/Infrastructure.cs" Link="FakeVault.cs" />
+  </ItemGroup>
+</Project>

@@ -50,6 +50,8 @@ public sealed class CorvidOptions
 
     /// <summary><c>corvid serve</c>, the OpenAI-compatible HTTP endpoint (C-019).</summary>
     public ServeSettings Serve { get; set; } = new();
+
+    public GatewaySettings Gateway { get; set; } = new();
 }
 
 /// <summary>MCP (C-018, plan §12): servers whose tools Corvid offers, and what <c>corvid mcp serve</c> shares.</summary>
@@ -163,6 +165,59 @@ public sealed class ServeSettings
         return url.IsLoopback || url.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
             || System.Net.IPAddress.TryParse(url.Host.Trim('[', ']'), out var address) && System.Net.IPAddress.IsLoopback(address);
     }
+}
+
+/// <summary>
+/// The messaging gateway (plan §12, C-020), run by <c>corvid gateway</c>. Adapters by name (<c>telegram</c>, <c>discord</c>,
+/// <c>slack</c>); each bot token is a Vault secret named here, never a value.
+/// </summary>
+public sealed class GatewaySettings
+{
+    public Dictionary<string, GatewayAdapterSettings> Adapters { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>A connect that takes longer is abandoned and retried, so one platform never stalls the gateway.</summary>
+    public int ConnectTimeoutSeconds { get; set; } = 30;
+
+    /// <summary>How long an approval asked in a chat waits for the owner's <c>/approve</c>.</summary>
+    public int ApprovalTimeoutSeconds { get; set; } = 300;
+}
+
+public sealed class GatewayAdapterSettings
+{
+    public bool Enabled { get; set; }
+
+    /// <summary>The Vault secret holding the bot token (Telegram's needs <c>allowInUrl</c> in <c>vault.json</c>).</summary>
+    public string? Secret { get; set; }
+
+    /// <summary>Slack only: the Vault secret holding the app-level token (<c>xapp-</c>) for Socket Mode.</summary>
+    public string? AppSecret { get; set; }
+
+    /// <summary>Platform user ids that are the owner without pairing.</summary>
+    public List<string> Owners { get; set; } = [];
+
+    /// <summary>Platform user ids allowed without pairing; their messages are outside content (tainted).</summary>
+    public List<string> Guests { get; set; } = [];
+
+    /// <summary>Where <c>deliver: home_channel</c> sends.</summary>
+    public string? HomeChat { get; set; }
+
+    /// <summary>Per-chat persona and slot overrides, by chat id.</summary>
+    public Dictionary<string, GatewayChatSettings> Chats { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>Discord only: guild channel ids to watch (the bot answers there when mentioned).</summary>
+    public List<string> Channels { get; set; } = [];
+
+    /// <summary>Discord: seconds between polls of each channel. Telegram: the long-poll wait.</summary>
+    public int? PollSeconds { get; set; }
+}
+
+public sealed class GatewayChatSettings
+{
+    /// <summary>Added to the system prompt for this chat's session.</summary>
+    public string? Persona { get; set; }
+
+    /// <summary>Slot overrides by catalogue model name, pinned for the chat's session (<c>generator</c>: <c>claude</c>).</summary>
+    public Dictionary<string, string> Slots { get; set; } = new(StringComparer.Ordinal);
 }
 
 public sealed class CheckpointSettings

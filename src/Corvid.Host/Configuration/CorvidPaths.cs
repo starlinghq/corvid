@@ -42,6 +42,9 @@ public static class CorvidPaths
         options.Skills.Directory is { Length: > 0 } directory ? ExpandHome(directory)
             : Path.Combine(Xdg("XDG_DATA_HOME", Path.Combine(".local", "share")), "corvid-skills");
 
+    /// <summary>The gateway's pairings, polling cursors and ledger mark (C-020); the ledger itself is in the event log.</summary>
+    public static string GatewayDatabase(CorvidOptions options) => Path.Combine(DataDirectory(options), "gateway.db");
+
     /// <summary>The skill loop's queue, staged drafts, usage and eval results.</summary>
     public static string SkillsDatabase(CorvidOptions options) => Path.Combine(DataDirectory(options), "skills.db");
 

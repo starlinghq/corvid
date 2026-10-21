@@ -11,7 +11,7 @@ var acp = false;
 try
 {
     var parsed = CliArguments.Parse(args);
-    loadsModels = parsed is { Command: "chat" or "acp" or "serve", Help: false, Version: false };
+    loadsModels = parsed is { Help: false, Version: false } && (parsed.Command is "chat" or "acp" or "serve" || GatewayCommand.Runs(parsed));
     acp = parsed is { Command: "acp", Help: false, Version: false };
 }
 catch (ArgumentException)

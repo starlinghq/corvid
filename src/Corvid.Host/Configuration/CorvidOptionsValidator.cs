@@ -89,6 +89,8 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue, IEnumerable
         // values in a server's environment, absolute paths, timeouts and limits).
         errors.AddRange(Composition.McpComposition.Definitions(options).Problems);
 
+        ValidateGateway(errors, options.Gateway);
+
         // The file tools and the shell are confined to it, so it must be there before anything runs.
         if (options.Workspace is { Length: > 0 } workspace && Path.IsPathFullyQualified(CorvidPaths.ExpandHome(workspace))
             && !Directory.Exists(CorvidPaths.ExpandHome(workspace)))
@@ -111,6 +113,47 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue, IEnumerable
             errors.Add("Corvid:Serve:MaxRequestBytes must be between 1024 and 67108864.");
 
         return errors.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(errors);
+    }
+
+    // The gateway (C-020): token secrets are Vault names, never values, and chat overrides name real models and slots.
+    private void ValidateGateway(List<string> errors, GatewaySettings gateway)
+    {
+        if (gateway.ConnectTimeoutSeconds is < 1 or > 600)
+            errors.Add("Corvid:Gateway:ConnectTimeoutSeconds must be between 1 and 600.");
+        if (gateway.ApprovalTimeoutSeconds is < 1 or > 86_400)
+            errors.Add("Corvid:Gateway:ApprovalTimeoutSeconds must be between 1 and 86400.");
+        foreach (var (name, adapter) in gateway.Adapters)
+        {
+            var key = $"Corvid:Gateway:Adapters:{name}";
+            if (adapter is null)
+                continue;
+            if (name.Contains(':', StringComparison.Ordinal) || string.IsNullOrWhiteSpace(name))
+                errors.Add($"{key}: an adapter name cannot be empty or contain ':'.");
+            if (adapter.Enabled && Composition.CorvidGateway.Platforms.Contains(name))
+            {
+                if (adapter.Secret is not { } secret || !Vault.Contracts.Placeholders.IsValidSecretName(secret))
+                    errors.Add($"{key}:Secret must name the Vault secret holding the bot token (lower-case letters, digits, '.', '-'), never the token.");
+                if (name.Equals("slack", StringComparison.OrdinalIgnoreCase)
+                    && (adapter.AppSecret is not { } app || !Vault.Contracts.Placeholders.IsValidSecretName(app)))
+                    errors.Add($"{key}:AppSecret must name the Vault secret holding Slack's app-level token (xapp-) for Socket Mode.");
+            }
+            if (adapter.PollSeconds is < 1 or > 300)
+                errors.Add($"{key}:PollSeconds must be between 1 and 300.");
+            if (adapter.Owners.Concat(adapter.Guests).Concat(adapter.Channels).Any(string.IsNullOrWhiteSpace))
+                errors.Add($"{key}: user and channel ids cannot be empty.");
+            foreach (var (chat, settings) in adapter.Chats)
+            {
+                foreach (var (slot, model) in settings?.Slots ?? [])
+                {
+                    if (!ModelSlots.All.Contains(slot, StringComparer.Ordinal))
+                        errors.Add($"{key}:Chats:{chat}:Slots: '{slot}' is not a slot; the slots are {string.Join(", ", ModelSlots.All)}.");
+                    else if (slot == ModelSlots.Decider)
+                        errors.Add($"{key}:Chats:{chat}:Slots: the decider is process-wide and cannot be overridden per chat.");
+                    else
+                        CheckModel(errors, slot, $"(gateway chat {chat})", model);
+                }
+            }
+        }
     }
 
     private void CheckModel(List<string> errors, string slot, string field, string model)

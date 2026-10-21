@@ -288,6 +288,8 @@ public sealed class JobSchedulerTests
 
         Assert.Equal("answered", result.Status);
         Assert.Equal("Here is your summary.", result.Text);
+        // The run's taint goes back with its answer, so a gateway chat receiving it can mark it (C-020).
+        Assert.True(result.Tainted);
         Assert.Equal("summarize my notes", harness.Payloads().OfType<UserMessage>().Single().Text);
 
         using var interactive = new TurnHarness(new FakeGenerator());
