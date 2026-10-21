@@ -81,8 +81,26 @@ public sealed class SessionActor : IAsyncDisposable
         }
     }
 
-    /// <summary>Cancels the running turn, if any. Queued messages still run.</summary>
-    public void CancelTurn() => _commands.Writer.TryWrite(new CancelRunning());
+    /// <summary>
+    /// Cancels the turn running now, if any; queued messages still run. The turn's token is cancelled before this returns,
+    /// not when the loop next reads its channel: a surface that cancels and then unblocks the turn (ACP answers the open
+    /// permission request as cancelled) must find it cancelled, or the turn goes on to its next model call and ends
+    /// normally. The command still goes through the channel as well, for a message submitted just before whose turn the loop
+    /// has not started yet.
+    /// </summary>
+    public void CancelTurn()
+    {
+        try
+        {
+            // The token is cancelled before CancelAsync returns; its callbacks run on the thread pool, not the caller's thread.
+            _ = Volatile.Read(ref _turnCancellation)?.CancelAsync();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The turn finished meanwhile.
+        }
+        _commands.Writer.TryWrite(new CancelRunning());
+    }
 
     /// <summary>
     /// A <c>/model</c> switch (plan §4.2). It runs beside a turn: it waits for running tool calls, not for calls parked at an
@@ -156,8 +174,7 @@ public sealed class SessionActor : IAsyncDisposable
                         break;
                     case TurnFinished finished:
                         _turn = null;
-                        _turnCancellation?.Dispose();
-                        _turnCancellation = null;
+                        Interlocked.Exchange(ref _turnCancellation, null)?.Dispose();
                         if (!finished.Exclusive)
                             _capacity.Release();
                         break;
@@ -172,8 +189,9 @@ public sealed class SessionActor : IAsyncDisposable
                     _turn = RunExclusiveAsync(work);
                 if (_turn is null && _pending.TryDequeue(out var next))
                 {
-                    _turnCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-                    _turn = RunTurnAsync(next, _turnCancellation.Token);
+                    var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+                    Volatile.Write(ref _turnCancellation, cancellation);
+                    _turn = RunTurnAsync(next, cancellation.Token);
                 }
                 if (_turn is null && _pending.Count == 0)
                 {

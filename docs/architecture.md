@@ -842,7 +842,9 @@ described below (see [Host and CLI](#host-and-cli-c-013)).
   finished. The loop owns the queue of messages and the running turn; it starts each turn as a task and keeps reading, so
   a cancel or a `/model` switch is handled while a turn waits on a model or an approval prompt. Turns run one at a time in
   arrival order, and each finished turn (or the exception that ended it) goes to an `IDeliverySink`. Cancellation is one
-  token per turn, linked to the actor's lifetime, passed to every model, tool, approval and log call.
+  token per turn, linked to the actor's lifetime, passed to every model, tool, approval and log call. `CancelTurn` cancels
+  the running turn's token before it returns (callbacks run on the thread pool) and also posts the cancel, for a message
+  whose turn the loop has not started yet: a caller that cancels and then unblocks the turn finds it already cancelled.
 - A turn (`TurnRunner`): append `UserMessage`; extract entities from the user message when an extractor is bound
   (labels person, organization, place, date, time, project, file, url); rank the tool shortlist; ask the ingress
   checkpoint as one `DecisionFabric.DecideAsync` (intent, difficulty, clarify, `needs_recall` when a retriever is bound,
@@ -1860,7 +1862,9 @@ Plan §12 (ACP; OpenAI-compatible HTTP), §17 row 1.1, R11 (agentclientprotocol.
   cancelled request, an unknown or unoffered option, a client error, the deadline and a prompt outside a running prompt all
   deny; nothing is approved on the user's behalf.
 - Cancellation: `session/cancel` (and `$/cancel_request` on the prompt) cancels the turn and its open permission request; the
-  prompt still answers, with `cancelled`.
+  prompt still answers, with `cancelled`. The kernel turn is cancelled first, so a permission request that ends as cancelled
+  resumes a turn that already sees the cancel and makes no further model call. A prompt that received a cancel answers
+  `cancelled` even if its turn reached its end first (ACP requires it); a cancel between prompts does not touch the next one.
 
 ### Forking at a log position
 

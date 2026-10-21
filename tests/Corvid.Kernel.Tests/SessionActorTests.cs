@@ -97,6 +97,33 @@ public sealed class SessionActorTests
     }
 
     [Fact]
+    public async Task CancelTurn_has_cancelled_the_running_turn_when_it_returns()
+    {
+        // ACP cancels the turn and then lets its permission request end as cancelled; the turn must already see the cancel
+        // when it resumes, or it makes its next model call and ends normally ("end_turn" after session/cancel).
+        var started = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var generator = new FakeGenerator(Reply.Say("answered anyway"));
+        generator.BeforeReply = async (_, token) =>
+        {
+            started.TrySetResult(token);
+            await release.Task; // ignores the token, as a model call that is already returning would
+        };
+        using var harness = new TurnHarness(generator);
+        var sink = new CollectingSink();
+        await using var actor = harness.Actor(sink);
+        await actor.SubmitAsync(Message("hello there"), Ct);
+        var turn = await started.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+        actor.CancelTurn();
+        var cancelledOnReturn = turn.IsCancellationRequested;
+        release.SetResult();
+
+        Assert.True(cancelledOnReturn);
+        Assert.Equal(TurnStatus.Cancelled, (await sink.NextAsync()).Result!.Status);
+    }
+
+    [Fact]
     public async Task A_full_session_makes_surfaces_wait()
     {
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
