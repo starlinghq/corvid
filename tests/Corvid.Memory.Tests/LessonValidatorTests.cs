@@ -150,6 +150,9 @@ public sealed class LessonValidatorTests
     [InlineData("Edit src/Corvid.Kernel/Turns/TurnRunner and src/Corvid.Memory/LessonValidator together.")]
     [InlineData("Run `dotnet test tests/Corvid.Memory.Tests -c Release` after the change.")]
     [InlineData("Bump the version in Directory.Packages.props to 0.3.0 first.")]
+    [InlineData("Pass the token=$GITHUB_TOKEN env to the script.")]
+    [InlineData("Pass token=${GITHUB_TOKEN} or password=%DB_PASSWORD% from the environment.")]
+    [InlineData("Read DependencyInjectionAbstractions1VersionPropertyName from props.")]
     public void Ordinary_project_text_is_not_mistaken_for_a_secret_or_one_off(string line) =>
         Assert.Empty(Rules(Content(body: "Run the hooks build first (event 14).\n" + line + "\nConfirm with a build.")));
 

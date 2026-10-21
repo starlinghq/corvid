@@ -140,6 +140,8 @@ public static partial class LessonValidator
 
     /// <summary>
     /// A long hex run, or a long base64 run that mixes digits and both cases and is not a path: the shape of a key or token.
+    /// A run without <c>+</c>, <c>/</c> or <c>=</c> counts only when it also switches between upper case, lower case and
+    /// digits as often as random text does, so a long PascalCase identifier with a digit is not an encoded secret.
     /// Checked in code because the patterns stay free of lookarounds (<see cref="RegexOptions.NonBacktracking"/>).
     /// </summary>
     private static string? EncodedSecret(string text)
@@ -151,11 +153,28 @@ public static partial class LessonValidator
             var value = match.Value;
             if (value.Count(c => c == '/') >= 2)
                 continue;
-            if (value.Any(char.IsAsciiDigit) && value.Any(char.IsAsciiLetterUpper) && value.Any(char.IsAsciiLetterLower))
+            if (!(value.Any(char.IsAsciiDigit) && value.Any(char.IsAsciiLetterUpper) && value.Any(char.IsAsciiLetterLower)))
+                continue;
+            if (value.AsSpan().IndexOfAny("+/=") >= 0 || Switches(value) >= MinSwitchRate * (value.Length - 1))
                 return value;
         }
         return null;
+
+        // Random base64 changes class (upper, lower, digit, other) at about two characters in three; an identifier made of
+        // words changes about twice a word.
+        static int Switches(string value)
+        {
+            var count = 0;
+            for (var i = 1; i < value.Length; i++)
+                if (Class(value[i]) != Class(value[i - 1]))
+                    count++;
+            return count;
+        }
+
+        static int Class(char c) => char.IsAsciiLetterUpper(c) ? 0 : char.IsAsciiLetterLower(c) ? 1 : char.IsAsciiDigit(c) ? 2 : 3;
     }
+
+    private const double MinSwitchRate = 0.45;
 
     private static string Excerpt(string value) => value.Length > 24 ? value[..12] + "…" : value;
 
@@ -189,7 +208,7 @@ public static partial class LessonValidator
     [GeneratedRegex(@"\b(pr|pull request|pull|issue|ticket|bug)\s*#?\s*\d+\b|(^|[\s(])#\d+\b", RegexOptions.IgnoreCase | RegexOptions.NonBacktracking)]
     private static partial Regex IssuePattern();
 
-    [GeneratedRegex(@"\bAKIA[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}|\bsk-(ant-)?[A-Za-z0-9_-]{16,}|\bxox[abprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|\b(password|passwd|secret|token|api_key|apikey)\s*[:=]\s*[^\s`'""]{4,}", RegexOptions.IgnoreCase | RegexOptions.NonBacktracking)]
+    [GeneratedRegex(@"\bAKIA[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}|\bsk-(ant-)?[A-Za-z0-9_-]{16,}|\bxox[abprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|\b(password|passwd|secret|token|api_key|apikey)\s*[:=]\s*[^\s`'""$%][^\s`'""]{3,}", RegexOptions.IgnoreCase | RegexOptions.NonBacktracking)]
     private static partial Regex SecretPattern();
 
     [GeneratedRegex(@"\b[0-9a-fA-F]{32,}\b", RegexOptions.NonBacktracking)]
