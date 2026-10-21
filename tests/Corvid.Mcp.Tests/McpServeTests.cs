@@ -74,6 +74,17 @@ public sealed class McpServeTests : IDisposable
     }
 
     [Fact]
+    public async Task AnUnconfinedServerStartsInAWorkspaceThatDidNotExistYet()
+    {
+        // The host's default workspace ($XDG_STATE_HOME/corvid-mcp/<name>) is missing on a fresh machine.
+        var corvid = Path.Combine(AppContext.BaseDirectory, "corvid");
+        var workspace = Path.Combine(_root, "state", "corvid-mcp", "corvid");
+        Assert.False(Directory.Exists(workspace));
+        await AssertServesAsync(ServeDefinition(corvid) with { Sandboxed = false, Workspace = workspace });
+        Assert.True(Directory.Exists(workspace));
+    }
+
+    [Fact]
     public async Task CorvidServesOverStdioUnderTheSandboxLauncher()
     {
         if (BubblewrapProblem() is { } reason)

@@ -1703,8 +1703,8 @@ extension is not AOT-qualified). The host composes it; `Corvid.Cli` adds `corvid
   configured read-only paths, Vault's configured locations and Corvid's state (the data directory, the configuration and rules
   files, the launcher; `McpDeniedPaths`, as for the shell) denied on top of the launcher's own denials, no network unless
   `Network`, and the default environment plus the server's own settings, nothing inherited. Off Linux a sandboxed server does
-  not start. `Sandboxed: false` runs the command directly with the SDK's minimal environment and the server's settings, and
-  `corvid doctor` warns about it. An HTTP server uses streamable HTTP only (no SSE fallback, no standalone GET stream, no
+  not start. `Sandboxed: false` runs the command directly in its workspace (created if missing) with the SDK's minimal
+  environment and the server's settings, and `corvid doctor` warns about it. An HTTP server uses streamable HTTP only (no SSE fallback, no standalone GET stream, no
   reconnection): with a secret, through `VaultSecretHandler` (a placeholder in `Authorization: Bearer`) and `VaultHandler` (Vault's
   egress proxy), above a handler that refuses, so no request leaves unproxied, and without Vault the server does not start;
   without one, directly (no proxy, no redirects) with credential headers removed. Every request tells Vault the toolset
@@ -1714,7 +1714,8 @@ extension is not AOT-qualified). The host composes it; `Corvid.Cli` adds `corvid
   extension (no sampling, elicitation or roots, so nothing a server asks reaches the user or a model except through a tool
   result). Listing is bounded by the start timeout; a call by the call timeout; a failure records the reason with the last 20
   lines of standard error (each cut to 300 characters) and makes later calls fail at once for 30 s (`RetryDelay`) before the
-  next attempt; a server that exited or dropped its connection is started again for the next call. `McpClients.Start` runs every
+  next attempt (a start cancelled with its turn or the host is not a failure: the next call starts the server again); a server
+  that exited or dropped its connection is started again for the next call. `McpClients.Start` runs every
   server's first start in the background (`Started` completes when each is ready or failed, never faulting) and registers
   each server's tools as soon as it has listed them; the runtime starts it after the built-in and DI tools, so they keep their
   names, and stops every server after the sessions on dispose. A server that never answers costs only its own tools; turns read
@@ -1756,13 +1757,15 @@ extension is not AOT-qualified). The host composes it; `Corvid.Cli` adds `corvid
 - Tests: `tests/Corvid.Mcp.Tests`, against an in-process SDK server on pipes (`FakeMcpServer`, shared with the host tests):
   prefixed tools with the server's schema, untrusted annotations ignored, taint from untrusted results and errors and none from
   a trusted read-only tool, cut results and described non-text content, a hanging call timing out, a server that never answers
-  not stalling the start, a failed server failing fast until its retry time, a server that exits started again, filtering,
+  not stalling the start, a failed server failing fast until its retry time, a start cancelled with its turn not counted as a
+  failure, a server that exits started again, filtering,
   limits and name clashes, name sanitizing, description cleaning, definition validation; tasks (`McpTaskTests`, the SDK's task
   store on a hosted server: a long call polled to its result, a task over its timeout cancelled on the server); HTTP
   (`McpHttpTests`, with C-015's stand-in Vault: every request through Vault with the placeholder, the toolset and the caller's
   taint, none direct; no Vault, no start; a keyless server reached directly without credentials); server mode (side-effecting
   tools refused, memory search over the protocol without local-only facts, argument errors as error results, and the real
-  `corvid mcp serve` as a stdio server for Corvid's own client, unconfined and under the launcher, which CI requires to run).
+  `corvid mcp serve` as a stdio server for Corvid's own client, unconfined (also in a workspace that does not exist yet) and
+  under the launcher, which CI requires to run).
   `tests/Corvid.Host.Tests` (`McpHostTests`: validation, denied paths and private workspaces, a runtime whose server cannot start
   answering turns at once with `/mcp` and doctor reporting it, and real turns where an untrusted tool asks and taints while a
   trusted read-only one runs unasked), `tests/Corvid.Cli.Tests` (`corvid mcp` with nothing configured, a failing server and a

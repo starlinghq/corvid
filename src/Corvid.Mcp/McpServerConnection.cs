@@ -130,7 +130,7 @@ public sealed class McpServerConnection : IAsyncDisposable
         timeout.CancelAfter(Definition.StartTimeout);
         try
         {
-            var client = await ConnectAsync(timeout.Token).ConfigureAwait(false);
+            var client = await ConnectAsync(timeout.Token, cancellationToken).ConfigureAwait(false);
             var tools = await client.ListToolsAsync(cancellationToken: timeout.Token).ConfigureAwait(false);
             return [.. tools.Select(tool => tool.ProtocolTool)];
         }
@@ -160,7 +160,7 @@ public sealed class McpServerConnection : IAsyncDisposable
             start.CancelAfter(Definition.StartTimeout);
             try
             {
-                client = await ConnectAsync(start.Token).ConfigureAwait(false);
+                client = await ConnectAsync(start.Token, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
@@ -257,7 +257,9 @@ public sealed class McpServerConnection : IAsyncDisposable
         client.ServerCapabilities?.Extensions?.ContainsKey(TasksProtocol.ExtensionId) == true;
 
     /// <summary>The live client, starting the server when there is none or the last one ended.</summary>
-    private async Task<McpClient> ConnectAsync(CancellationToken cancellationToken)
+    /// <param name="cancellationToken">The caller's token with the start timeout.</param>
+    /// <param name="caller">The caller's own token, to tell a cancelled turn from a server that did not start in time.</param>
+    private async Task<McpClient> ConnectAsync(CancellationToken cancellationToken, CancellationToken caller)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (Volatile.Read(ref _client) is { Completion.IsCompleted: false } current)
@@ -306,6 +308,12 @@ public sealed class McpServerConnection : IAsyncDisposable
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
+                // A cancelled turn or a stopping host is not the server's fault: no fail-fast window, and the next call starts it.
+                if (caller.IsCancellationRequested)
+                {
+                    Note(McpServerState.Stopped, "the start was cancelled");
+                    throw;
+                }
                 throw Fail("did not start in time");
             }
             catch (Exception exception) when (exception is not OperationCanceledException)

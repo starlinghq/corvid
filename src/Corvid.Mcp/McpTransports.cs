@@ -67,6 +67,10 @@ public sealed class McpTransports(McpTransportOptions? options = null) : IMcpTra
         if (!server.Sandboxed)
         {
             // Unconfined only because the user said so for this server; still nothing inherited but plain settings.
+            // The host gives every stdio server a private workspace that may not exist yet, and the process cannot start in a
+            // missing working directory.
+            if (server.Workspace is { } directory)
+                Directory.CreateDirectory(directory);
             var plain = StdioClientTransportOptions.GetDefaultEnvironmentVariables();
             foreach (var (name, value) in server.Environment)
                 plain[name] = value;

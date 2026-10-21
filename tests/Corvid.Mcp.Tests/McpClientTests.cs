@@ -212,6 +212,32 @@ public sealed class McpClientTests
     }
 
     [Fact]
+    public async Task ACancelledTurnDoesNotMarkAStartingServerFailed()
+    {
+        await using var fake = new FakeMcpServer().Add("act");
+        var (clients, registry) = await StartAsync(fake);
+        await using var _ = clients;
+        await fake.EndAll();
+        await WaitDisconnectedAsync(clients.Servers[0]);
+
+        // The restart hangs in its handshake and the turn is cancelled while it waits: the call is cancelled, not failed.
+        fake.Silent = true;
+        Assert.True(registry.TryGet("fake__act", out var tool));
+        using (var turn = CancellationTokenSource.CreateLinkedTokenSource(Token))
+        {
+            turn.CancelAfter(TimeSpan.FromMilliseconds(300));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await tool.InvokeAsync(new AIFunctionArguments(), turn.Token));
+        }
+        Assert.NotEqual(McpServerState.Failed, clients.Status()[0].State);
+
+        // So the next call starts the server again at once instead of failing fast for the retry delay.
+        fake.Silent = false;
+        var connections = fake.Connections;
+        Assert.NotNull(await InvokeAsync(registry, "fake__act"));
+        Assert.Equal(connections + 1, fake.Connections);
+    }
+
+    [Fact]
     public async Task AServerThatExitsIsStartedAgainForTheNextCall()
     {
         await using var fake = new FakeMcpServer().Add("act");
