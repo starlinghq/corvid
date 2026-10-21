@@ -15,5 +15,7 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="../../evals/golden/*.json" LinkBase="golden" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The Beacon export's golden lines (C-027). -->
+    <Content Include="Fixtures/*.jsonl" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

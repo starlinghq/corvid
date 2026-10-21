@@ -127,6 +127,16 @@ public sealed class DecisionSetTests : IDisposable
     }
 
     [Fact]
+    public void A_skill_review_labels_the_egress_decisions_that_queued_the_draft()
+    {
+        // C-026: approving or rejecting a staged skill is recorded on skill_opportunity and task_succeeded.
+        Assert.Equal(OutcomeLabel.Positive, OutcomeClassifier.Default.Classify("skill_approved"));
+        Assert.Equal(OutcomeLabel.Negative, OutcomeClassifier.Default.Classify("skill_rejected"));
+        _log.Add("s", WithOutcome(Done(0.9), "skill_rejected"));
+        Assert.Equal(OutcomeLabel.Negative, _log.Load().Records[0].Label);
+    }
+
+    [Fact]
     public async Task Decisions_from_the_fabric_carry_state_and_question_through_to_the_set()
     {
         var fabric = new DecisionFabric(DecisionPolicy.Default, new FixedDecider(Degraded, 0.5), _log.Log, new FixedDecider(Kev, 0.9));

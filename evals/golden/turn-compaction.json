@@ -55,7 +55,7 @@
       "confidence": 0,
       "threshold": 0.7,
       "action": "proceed",
-      "catalogue_version": "2026-10-19.1",
+      "catalogue_version": "2026-10-21.1",
       "decider": "degraded",
       "state": {
         "user_message": "what is next?",
@@ -101,7 +101,7 @@
       "confidence": 1,
       "threshold": 3.5,
       "action": "stay_on_generator",
-      "catalogue_version": "2026-10-19.1",
+      "catalogue_version": "2026-10-21.1",
       "decider": "degraded",
       "state": {
         "user_message": "what is next?",
@@ -157,7 +157,7 @@
       "confidence": 0,
       "threshold": 0.05,
       "action": "generator_with_full_shortlist",
-      "catalogue_version": "2026-10-19.1",
+      "catalogue_version": "2026-10-21.1",
       "decider": "degraded",
       "state": {
         "user_message": "what is next?",
@@ -294,7 +294,7 @@
               "confidence": 0,
               "threshold": 0.7,
               "action": "proceed",
-              "catalogue_version": "2026-10-19.1",
+              "catalogue_version": "2026-10-21.1",
               "decider": "degraded",
               "state": {
                 "user_message": "what is next?",
@@ -343,7 +343,7 @@
               "confidence": 0,
               "threshold": 0.05,
               "action": "generator_with_full_shortlist",
-              "catalogue_version": "2026-10-19.1",
+              "catalogue_version": "2026-10-21.1",
               "decider": "degraded",
               "state": {
                 "user_message": "what is next?",
@@ -407,7 +407,7 @@
               "confidence": 1,
               "threshold": 3.5,
               "action": "stay_on_generator",
-              "catalogue_version": "2026-10-19.1",
+              "catalogue_version": "2026-10-21.1",
               "decider": "degraded",
               "state": {
                 "user_message": "what is next?",

@@ -591,8 +591,8 @@ public sealed class TurnRunner
                             spans.Where(item => errors.Any(error => error.Contains($"'{item.Parameter}'", StringComparison.Ordinal))),
                             cancellationToken).ConfigureAwait(false);
                     // The call and its error result go in as one append: a concurrent switch never sees the call alone.
-                    IssueRejected(callId, call.Name, arguments,
-                        Error("invalid arguments", [.. errors, .. Describe(hints)], tool?.Function.JsonSchema, Extracted(hints)));
+                    IssueRejected(callId, call.Name, arguments, tool?.Descriptor.Risk.ReadOnly,
+                        Error(ToolErrorKinds.InvalidArguments, [.. errors, .. Describe(hints)], tool?.Function.JsonSchema, Extracted(hints)));
                     continue;
                 }
                 // §10.3: in a tainted session a network read asks too (C-007b forces the tainted_network_egress reason), or
@@ -673,18 +673,18 @@ public sealed class TurnRunner
             if (!call.Ask)
             {
                 running = _services.Slots.TrackToolCall(call.CallId);
-                Issue(call.CallId, call.Tool.Function.Name, call.Arguments, running);
+                Issue(call, running);
             }
             else
             {
                 // Parked, not running, while the approval is open: a /model switch neither waits for it nor calls it
                 // orphaned. A denial's result is logged while still parked; an approval moves it to tracked in one step.
                 using var parked = _services.Slots.ParkToolCall(call.CallId);
-                Issue(call.CallId, call.Tool.Function.Name, call.Arguments, parked);
+                Issue(call, parked);
                 (var denial, approval) = await AuthorizeAsync(call, cancellationToken).ConfigureAwait(false);
                 if (denial is not null)
                 {
-                    Result(call.CallId, Error("not run", [denial], null, null), isError: true);
+                    Result(call.CallId, Error(ToolErrorKinds.NotRun, [denial], null, null), isError: true);
                     return CallOutcome.Denied;
                 }
                 // Plan §15: a checkpoint before anything that changes files. The approval was given knowing whether the change
@@ -701,7 +701,7 @@ public sealed class TurnRunner
                     }
                     catch (CheckpointException exception)
                     {
-                        Result(call.CallId, Error("not run", ["no checkpoint could be taken before this change, so it was not made: " + exception.Message],
+                        Result(call.CallId, Error(ToolErrorKinds.NotRun, ["no checkpoint could be taken before this change, so it was not made: " + exception.Message],
                             null, null), isError: true);
                         return CallOutcome.Denied;
                     }
@@ -756,20 +756,20 @@ public sealed class TurnRunner
                         ? await HintsAsync(call.Tool, call.Arguments, call.Spans.Where(item => item.Parameter == refused),
                             cancellationToken).ConfigureAwait(false)
                         : [];
-                    Result(call.CallId, Error("invalid arguments", [exception.Message, .. Describe(hints)], call.Tool.Function.JsonSchema,
+                    Result(call.CallId, Error(ToolErrorKinds.InvalidArguments, [exception.Message, .. Describe(hints)], call.Tool.Function.JsonSchema,
                         Extracted(hints)), isError: true, $"{descriptor.Name}: invalid arguments");
                     return CallOutcome.BindingFailed;
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     await RecordAfterAsync().ConfigureAwait(false);
-                    Result(call.CallId, Error("cancelled", ["the turn was cancelled while the tool ran"], null, null), isError: true);
+                    Result(call.CallId, Error(ToolErrorKinds.Cancelled, ["the turn was cancelled while the tool ran"], null, null), isError: true);
                     throw;
                 }
                 catch (Exception exception)
                 {
                     await RecordAfterAsync().ConfigureAwait(false);
-                    Result(call.CallId, Error("tool failed", [exception.Message], null, null), isError: true, $"{descriptor.Name}: failed");
+                    Result(call.CallId, Error(ToolErrorKinds.ToolFailed, [exception.Message], null, null), isError: true, $"{descriptor.Name}: failed");
                     outcome = CallOutcome.Failed;
                 }
             }
@@ -813,7 +813,7 @@ public sealed class TurnRunner
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 // "not run": the call never started, which is how an undo knows it changed nothing (C-014).
-                Result(call.CallId, Error("not run", ["the turn was cancelled while the approval was pending"], null, null), isError: true);
+                Result(call.CallId, Error(ToolErrorKinds.NotRun, ["the turn was cancelled while the approval was pending"], null, null), isError: true);
                 throw;
             }
             return result.Allowed ? (null, result) : ($"{WireName(result.Resolution)}: {result.Assessment.Summary}", null);
@@ -974,15 +974,17 @@ public sealed class TurnRunner
                 : type.ValueKind == JsonValueKind.Array && type.EnumerateArray().Any(item => item.ValueKind == JsonValueKind.String && item.GetString() == "string");
         }
 
+        // The round is the step: one per generator response with calls. Calls that need approval run one at a time, so a
+        // later call of the same response is issued after an earlier one's result; the round keeps it in its response (C-026).
         /// <param name="lease">Released if the append fails, so a failed call never stays tracked or parked.</param>
-        private void Issue(string callId, string tool, JsonElement arguments, IDisposable? lease = null)
+        private void Issue(ValidCall call, IDisposable? lease = null)
         {
             try
             {
                 lock (_gate)
                 {
-                    runner.Append(new ToolCallIssued(callId, tool, arguments));
-                    _open.Add(callId);
+                    runner.Append(new ToolCallIssued(call.CallId, call.Tool.Function.Name, call.Arguments, _steps, call.Tool.Descriptor.Risk.ReadOnly));
+                    _open.Add(call.CallId);
                 }
             }
             catch
@@ -992,14 +994,14 @@ public sealed class TurnRunner
             }
         }
 
-        private void IssueRejected(string callId, string tool, JsonElement arguments, JsonElement error)
+        private void IssueRejected(string callId, string tool, JsonElement arguments, bool? readOnly, JsonElement error)
         {
             // A call that never ran still gets its span, so a trace shows the repair the next response is asked for.
             using var activity = StartToolActivity(callId, tool, approval: false);
             activity?.SetTag(KernelTelemetry.ToolOutcome, "invalid_arguments");
             activity?.SetStatus(ActivityStatusCode.Error);
             lock (_gate)
-                runner.Append(new ToolCallIssued(callId, tool, arguments), new ToolResult(callId, error, IsError: true));
+                runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, readOnly), new ToolResult(callId, error, IsError: true));
         }
 
         // Read-only calls finish concurrently, so the shared turn state they touch is updated under the lock.
@@ -1018,7 +1020,7 @@ public sealed class TurnRunner
         public void CloseOpenCalls(string reason)
         {
             foreach (var callId in _open.ToArray())
-                Result(callId, Error("cancelled", [reason], null, null), isError: true);
+                Result(callId, Error(ToolErrorKinds.Cancelled, [reason], null, null), isError: true);
         }
 
         private static JsonElement Error(string error, IEnumerable<string> details, JsonElement? expected, object? extracted)
@@ -1387,16 +1389,30 @@ public sealed class TurnRunner
                 egress.Add(Ask("remember"));
             if (_options.AskDeliver)
                 egress.Add(Ask("deliver"));
-            // skill_opportunity acts only after three tool calls (its required condition), so a shorter turn is not asked:
-            // in the degraded tier each ask is a generator call. A replay or eval turn is never distilled again.
-            var opportunity = _services.SkillLearning is not null && status == TurnStatus.Answered && _toolCalls >= 3
-                && _options.PinnedSkill is null && envelope.Guest is null;
+            // skill_opportunity acts only on procedure evidence (its required condition): three tool calls, or a failed call
+            // recovered by a different one of its family (C-026). Other turns are not asked: in the degraded tier each ask is
+            // a generator call. A replay or eval turn is never distilled again.
+            var learnable = _services.SkillLearning is not null && status == TurnStatus.Answered && _options.PinnedSkill is null
+                && envelope.Guest is null;
+            // A recovery needs a failed call and a later one, so shorter turns skip the log read.
+            var scan = learnable && _toolCalls >= 2 ? ToolRecovery.Scan(TurnEvents(answer, cancellationToken)) : null;
+            var opportunity = scan is not null && (_toolCalls >= 3 || !scan.Recoveries.IsEmpty);
+            var conditions = new List<string>();
             if (opportunity)
-                egress.Add(Ask("skill_opportunity"));
+            {
+                // task_succeeded is the precondition with its own floor: the fabric evaluates it first and grants
+                // skill_opportunity its task_succeeded condition only when it acted.
+                egress.Add(KeyValuePair.Create("skill_opportunity", Catalogue["skill_opportunity"].ToQuestion(
+                    instructions: OpportunityInstructions(scan!))));
+                egress.Add(KeyValuePair.Create("task_succeeded", Catalogue["task_succeeded"].ToQuestion(
+                    instructions: SuccessInstructions(scan!))));
+                conditions.Add(FabricConditions.ProcedureEvidence);
+                if (scan!.Unrecovered == 0)
+                    conditions.Add(FabricConditions.ToolFailuresRecovered);
+            }
             if (egress.Count > 0)
             {
-                var verdicts = await DecideAsync(Checkpoint.Egress, egress, cancellationToken,
-                    opportunity ? [FabricConditions.ToolStepsAtLeastThree] : []).ConfigureAwait(false);
+                var verdicts = await DecideAsync(Checkpoint.Egress, egress, cancellationToken, [.. conditions]).ConfigureAwait(false);
                 // An embedding pick is no confidence: only a calibrated answer sends the reply anywhere but back (C-020), so
                 // the degraded tier never silences an answer or moves it to another channel.
                 if (Acted(verdicts, "deliver", out var target) && target is not null
@@ -1404,15 +1420,51 @@ public sealed class TurnRunner
                     deliver = target;
                 if (Acted(verdicts, "remember", out _))
                     await RememberAsync(cancellationToken).ConfigureAwait(false);
+                // Acting implies task_succeeded acted: the fabric granted the condition.
                 if (Acted(verdicts, "skill_opportunity", out _))
                 {
+                    var success = verdicts["task_succeeded"];
                     _services.SkillLearning!.Queue(new SkillOpportunity(runner.SessionId, _turnStart, answer,
-                        verdicts["skill_opportunity"].DecisionId, envelope.Text, runner.Tainted));
+                        verdicts["skill_opportunity"].DecisionId, envelope.Text, runner.Tainted, success.DecisionId,
+                        success.Answer?.Calibrated == true));
                     _skillQueued = true;
                 }
             }
             await runner.DeEscalateAsync(cancellationToken).ConfigureAwait(false);
             return Result(status, text) with { Deliver = deliver };
+        }
+
+        // The turn from the log, not the snapshot: compaction during the turn can fold its early calls into a summary.
+        private IEnumerable<StoredEvent> TurnEvents(long through, CancellationToken cancellationToken) =>
+            SessionProjection.ReadRange(_services.Log, runner.SessionId, _turnStart - 1, through, cancellationToken);
+
+        private DecisionContent SuccessInstructions(ToolRecoveryScan scan) => JsonInstructions(writer =>
+        {
+            writer.WriteString("question", Catalogue["task_succeeded"].Instructions);
+            writer.WriteNumber("tool_calls", scan.Calls);
+            writer.WriteNumber("failed_calls", scan.Failures);
+            writer.WriteNumber("unrecovered_failures", scan.Unrecovered);
+        });
+
+        private DecisionContent OpportunityInstructions(ToolRecoveryScan scan) => JsonInstructions(writer =>
+        {
+            writer.WriteString("question", Catalogue["skill_opportunity"].Instructions);
+            writer.WriteNumber("tool_calls", scan.Calls);
+            if (scan.Describe() is { } recovery)
+                writer.WriteString("recovery", recovery);
+        });
+
+        private static DecisionContent JsonInstructions(Action<Utf8JsonWriter> write)
+        {
+            var buffer = new ArrayBufferWriter<byte>();
+            using (var writer = new Utf8JsonWriter(buffer, WriterOptions))
+            {
+                writer.WriteStartObject();
+                write(writer);
+                writer.WriteEndObject();
+            }
+            using var document = JsonDocument.Parse(buffer.WrittenMemory);
+            return DecisionContent.FromJson(document.RootElement);
         }
 
         /// <summary>
