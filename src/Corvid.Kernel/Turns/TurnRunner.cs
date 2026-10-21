@@ -97,7 +97,8 @@ public sealed class TurnRunner
     /// the latest turn's message, and only when it holds something a summary would shorten. The latest turn stays, so
     /// <c>/undo</c> still finds it. The record budget is the turn loop's, a quarter of the generator's prompt budget. An
     /// expansion pending from an earlier switch to a larger window is dropped, so the next call does not undo an explicit
-    /// compaction; a later switch to a larger window expands it again by design (plan §4.2 step 4).
+    /// compaction; a later switch to a larger window expands it again by design (plan §4.2 step 4). Nothing compacted (unfit,
+    /// cancelled) keeps the pending expansion.
     /// </summary>
     /// <remarks>Not thread-safe, like <see cref="RunAsync"/>: run it on the session actor between turns.</remarks>
     /// <returns>The compaction's result, or <see cref="CompactionStatus.NothingToCompact"/> when there is no earlier turn.</returns>
@@ -111,10 +112,15 @@ public sealed class TurnRunner
         var generator = _services.Slots.GetChatClient(ModelSlots.Generator);
         var profile = _services.Slots.Current(ModelSlots.Generator).Profile;
         var budget = profile.AcceptedContext - _options.MaxOutputTokens - _options.ContextReserve;
-        Interlocked.Exchange(ref _expansionDue, 0);
         // The summarizer may be a cloud binding: its gate and Vault need the session and its taint, as in a turn.
         using var scope = new ModelRequestContext(SessionId, Tainted).Enter();
-        return await _compactor.CompactAsync(range, Counter(generator), Math.Max(1, budget / 4), cancellationToken).ConfigureAwait(false);
+        var result = await _compactor.CompactAsync(range, Counter(generator), Math.Max(1, budget / 4), cancellationToken).ConfigureAwait(false);
+        // Only a compaction that was written drops a pending expansion: an unfit summary or a cancelled command compacted
+        // nothing, so the next call still expands for the larger window (review of PR #46, finding 1). The record is appended
+        // after any switch that arrived meanwhile, so the explicit compaction is the later act and wins.
+        if (result.Status == CompactionStatus.Compacted)
+            Volatile.Write(ref _expansionDue, 0);
+        return result;
     }
 
     private static ITokenCounter Counter(IChatClient generator) =>

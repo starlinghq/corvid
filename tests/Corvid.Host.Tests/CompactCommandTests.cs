@@ -56,4 +56,24 @@ public sealed class CompactCommandTests
         Assert.Equal([1L, 2L], session.Snapshot().Transcript.Select(entry => entry.FromSequence));
         Assert.DoesNotContain(session.Snapshot().Transcript, entry => entry.Content is Compacted);
     }
+
+    [Fact]
+    public async Task An_unfit_summary_is_a_warning_and_leaves_the_history_raw()
+    {
+        await using var host = TestHost.Create(new FakeModels(new FakeGenerator(Reply.Say("not a record"))));
+        await using var runtime = await host.StartAsync();
+        var session = runtime.OpenSession();
+        runtime.Log.Append(session.Id, 0, [
+            EventData.Create(new UserMessage("draft section one")), EventData.Create(new AssistantMessage("Section one is drafted.")),
+            EventData.Create(new UserMessage("now section two")), EventData.Create(new AssistantMessage("Working on it.")),
+        ], Ct);
+
+        var output = await Run(host, runtime, session, "/compact");
+
+        Assert.Equal(OutputTone.Warning, output.Tone);
+        var line = Assert.Single(output.Lines);
+        Assert.StartsWith("kept events 1–2 uncompacted: fake-gen@cpu: ", line, StringComparison.Ordinal);
+        Assert.EndsWith(".", line, StringComparison.Ordinal);
+        Assert.DoesNotContain(session.Snapshot().Transcript, entry => entry.Content is Compacted);
+    }
 }

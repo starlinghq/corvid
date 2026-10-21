@@ -2853,9 +2853,12 @@ Four gaps left by C-012, C-013, C-016, C-021 and C-027, closed with no new proje
   accepted context less `MaxOutputTokens` and `ContextReserve`, a record taking at most a quarter of it, measured with the
   generator client's counter. The call runs inside `ModelRequestContext(session, taint)`, as a turn's `FitAsync` does, so
   a cloud summarizer still passes the privacy gate and Vault, and escalation follows `TurnOptions.EscalationAllowed` as the
-  compactor was built with it. It clears a pending expansion (`_expansionDue`) left by an earlier `/model` switch to a
-  larger window, so the next call does not undo an explicit compaction; a later switch to a larger window expands the
-  range again (plan §4.2 step 4), which is by design. The session runs it with `SessionActor.RunExclusiveAsync`, as
+  compactor was built with it. A written compaction clears a pending expansion (`_expansionDue`) left by an earlier
+  `/model` switch to a larger window, so the next call does not undo an explicit compaction; an unfit summary, nothing to
+  compact or a cancelled command keeps it, so the next call still expands (review of PR #46, finding 1). A later switch to
+  a larger window expands the range again (plan §4.2 step 4), which is by design. `CompactNowTests` covers the expansion
+  both ways and the summarizer seeing `ModelRequestContext.Current` with the session and its taint; `CompactCommandTests`
+  covers the unfit warning. The session runs it with `SessionActor.RunExclusiveAsync`, as
   `/undo` does: it waits for a running turn and goes ahead of queued messages, and the command's cancellation token is
   linked into the summarizer call. Output: `compacted events a–b by <summarizer> in n chunk(s).` with the record's goal and
   next step when it has them; `Nothing before the latest turn needs compacting.`; or, when no record fits
