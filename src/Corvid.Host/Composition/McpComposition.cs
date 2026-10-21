@@ -113,11 +113,27 @@ public static class McpComposition
     /// checked against the pins in <see cref="CorvidPaths.McpPins"/> (C-022), so <c>corvid mcp list</c> pins too; held and
     /// accepted definitions go to <paramref name="eventLog"/>'s <see cref="McpSessions.Pins"/> session when one is given.
     /// </summary>
-    public static McpClients? Start(CorvidOptions options, IEnumerable<string> deniedPaths, ToolRegistry tools, IEventLog? eventLog = null)
+    /// <param name="only">C-033: start only the enabled server of this name (<c>corvid mcp diff|accept|allow</c>); null for all.</param>
+    /// <param name="transports">
+    /// C-033: the transports to use instead of stdio under the sandbox and HTTP through Vault; an <see cref="IMcpTransports"/>
+    /// registered in the host's services (in-process test servers) reaches the runtime this way. Null for the real ones.
+    /// </param>
+    public static McpClients? Start(CorvidOptions options, IEnumerable<string> deniedPaths, ToolRegistry tools, IEventLog? eventLog = null,
+        string? only = null, IMcpTransports? transports = null)
     {
         var (servers, _) = Definitions(options, deniedPaths);
+        if (only is not null)
+            servers = [.. servers.Where(server => server.Name == only)];
         if (servers.IsEmpty)
             return null;
+        transports ??= Transports(options, servers);
+        var clients = new McpClients(servers, transports, tools, new JsonFileMcpPinStore(CorvidPaths.McpPins(options)), Notices(eventLog));
+        clients.Start();
+        return clients;
+    }
+
+    private static McpTransports Transports(CorvidOptions options, ImmutableArray<McpServerDefinition> servers)
+    {
         VaultAccess? vault = null;
         if (servers.Any(server => server.Secret is not null))
         {
@@ -132,15 +148,12 @@ public static class McpComposition
             }
         }
         var launcher = options.Sandbox.LauncherPath is { Length: > 0 } path ? CorvidPaths.ExpandHome(path) : null;
-        var transports = new McpTransports(new McpTransportOptions
+        return new McpTransports(new McpTransportOptions
         {
             Sandbox = new SandboxOptions { LauncherPath = launcher },
             Vault = vault?.Client,
             Placeholders = vault?.Placeholders,
         });
-        var clients = new McpClients(servers, transports, tools, new JsonFileMcpPinStore(CorvidPaths.McpPins(options)), Notices(eventLog));
-        clients.Start();
-        return clients;
     }
 
     private const int MaxAppendAttempts = 32;
@@ -163,6 +176,34 @@ public static class McpComposition
         SessionEvent payload = notice.Kind is McpPinKinds.Accepted or McpPinKinds.Allowed
             ? new McpToolAccepted(notice.Server, notice.Tool, notice.Hash, notice.Kind == McpPinKinds.Allowed)
             : new McpToolHeld(notice.Server, notice.Tool, notice.Kind, notice.Hash, notice.PinnedHash, notice.Detail);
+        Append(log, payload);
+    };
+
+    /// <summary>
+    /// C-033: drops <paramref name="server"/>'s pins (<c>/mcp forget</c>, <c>corvid mcp forget</c>) and, when it had an entry,
+    /// leaves a <c>corvid.mcp.pin</c> span with status <c>forgotten</c> and, with a log, <see cref="McpPinsForgotten"/> in the
+    /// <see cref="McpSessions.Pins"/> session. Returns the number of pins dropped, or null when the server had no entry.
+    /// </summary>
+    public static int? Forget(IMcpPinStore pins, string server, IEventLog? log)
+    {
+        ArgumentNullException.ThrowIfNull(pins);
+        ArgumentException.ThrowIfNullOrEmpty(server);
+        var dropped = pins.Remove(server);
+        if (dropped is not { } count)
+            return null;
+        using (var activity = HostTelemetry.Source.StartActivity("corvid.mcp.pin", ActivityKind.Internal))
+        {
+            activity?.SetTag("corvid.mcp.server", server);
+            activity?.SetTag("corvid.mcp.pin.status", "forgotten");
+            activity?.SetTag("corvid.mcp.pin.count", count);
+        }
+        if (log is not null)
+            Append(log, new McpPinsForgotten(server, count));
+        return count;
+    }
+
+    private static void Append(IEventLog log, SessionEvent payload)
+    {
         var events = new[] { EventData.Create(payload) };
         for (var attempt = 1; ; attempt++)
         {
@@ -176,7 +217,7 @@ public static class McpComposition
                 // Another server's notice, or another process, appended first; try at the new head.
             }
         }
-    };
+    }
 
     /// <summary>
     /// What a served call leaves behind (C-028): one line on <paramref name="log"/> (serve's standard error; standard output is

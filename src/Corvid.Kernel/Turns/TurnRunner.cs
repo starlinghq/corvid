@@ -55,8 +55,14 @@ public sealed class TurnRunner
     private string? _boundProject;
     private readonly TurnOptions _options;
     private readonly ContextCompactor _compactor;
-    // C-022: the outside tool descriptions injection was asked about this session, by origin and the descriptions' text.
+    // C-022: the MCP tool descriptions injection was asked about this session, by origin and the chunk's text (C-033: every
+    // MCP origin, trusted ones too, one chunk of whole lines per question).
     private readonly HashSet<string> _describedOrigins = new(StringComparer.Ordinal);
+    // C-033: a description chunk's lines (whole "- name: description" lines) up to this many characters per question.
+    private const int DescriptionBudget = 1_200;
+    // C-033: description questions per ingress batch, so the batch stays within S1's measured 8-question bound (340 ms on GPU).
+    private const int MaxDescriptionQuestions = 2;
+    private const string McpOrigin = "mcp:";
     // Set when the generator moved to a larger window (plan §4.2 step 4); the next generator call expands compacted ranges.
     private int _expansionDue;
 
@@ -229,6 +235,8 @@ public sealed class TurnRunner
         // The tool decision that picked a tool, by tool name, so its call's result becomes the decision's outcome.
         private readonly Dictionary<string, string> _pickDecisions = new(StringComparer.Ordinal);
         private readonly Dictionary<string, Offered> _catalogue = new(StringComparer.Ordinal);
+        // C-033: the tools each description question of this turn carried, by question key, so a yes withholds exactly those.
+        private readonly Dictionary<string, (string Origin, ImmutableArray<string> Tools)> _described = new(StringComparer.Ordinal);
         // The calls of the latest generator response: budget clearing spares their results, and injection is asked about them.
         private readonly HashSet<string> _lastRound = new(StringComparer.Ordinal);
         private ImmutableSortedDictionary<string, ImmutableArray<string>> _entities = ImmutableSortedDictionary<string, ImmutableArray<string>>.Empty;
@@ -282,6 +290,8 @@ public sealed class TurnRunner
                 ingress.Add(SkillQuestion());
             ingress.AddRange(DescriptionQuestions());
             var verdicts = await DecideAsync(Checkpoint.Ingress, ingress, cancellationToken).ConfigureAwait(false);
+            // C-033: before anything reads the shortlist, so no generator call of this turn sees a withheld description.
+            WithholdDescriptions(verdicts);
             await LoadSkillAsync(verdicts, cancellationToken).ConfigureAwait(false);
 
             if (Acted(verdicts, "difficulty", out _) && _options.EscalationAllowed)
@@ -1160,29 +1170,91 @@ public sealed class TurnRunner
                  new QuestionOption(None, "no tool is needed")]));
 
         /// <summary>
-        /// C-022: <c>injection</c> about the shortlisted tools whose descriptions came from outside (an untrusted MCP server's),
-        /// one question per origin, asked once per session for the same descriptions and in the ingress batch, the shape
-        /// <see cref="LoadSkillAsync"/> uses for a hub skill's body. As there, asking taints and the verdict is logged only.
+        /// C-022, C-033: <c>injection</c> about the shortlisted MCP tools' descriptions, trusted servers' included, in the
+        /// ingress batch, the shape <see cref="LoadSkillAsync"/> uses for a hub skill's body. Each origin's tools are packed
+        /// by name into chunks of whole <c>- name: description</c> lines up to <see cref="DescriptionBudget"/> characters (a
+        /// longer line is cut and asked alone), keyed <c>injection/mcp:&lt;server&gt;</c>, then <c>#2</c> and on; each chunk is
+        /// asked once per session for the same text, at most <see cref="MaxDescriptionQuestions"/> per batch (the rest wait
+        /// for a later turn), and records the tools it carried, so a confident yes withholds exactly those
+        /// (<see cref="WithholdDescriptions"/>). Asking taints only for a chunk with an outside description (an untrusted
+        /// server's, or an allowed flagged tool's): a trusted server's text goes to the decider, not to the generator.
         /// </summary>
         private List<KeyValuePair<string, DecisionQuestion>> DescriptionQuestions()
         {
             var questions = new List<KeyValuePair<string, DecisionQuestion>>();
             var question = Catalogue["injection"];
-            foreach (var group in _shortlist.Where(tool => tool.Descriptor.Risk.OutsideDescription && tool.Descriptor.Origin is not null)
+            var taint = false;
+            foreach (var group in _shortlist.Where(tool => tool.Descriptor.Origin?.StartsWith(McpOrigin, StringComparison.Ordinal) == true)
                          .GroupBy(tool => tool.Descriptor.Origin!, StringComparer.Ordinal).OrderBy(group => group.Key, StringComparer.Ordinal))
             {
-                var text = string.Join("\n", group.OrderBy(tool => tool.Function.Name, StringComparer.Ordinal)
-                    .Select(tool => $"- {tool.Function.Name}: {tool.Function.Description}"));
-                if (!runner._describedOrigins.Add(group.Key + "\n" + text))
-                    continue;
-                var body = $"{group.Key} tool descriptions:\n{text}";
-                questions.Add(KeyValuePair.Create("injection/" + group.Key, question.ToQuestion(instructions: DecisionContent.FromText(
-                    $"{question.Instructions}\n" + (body.Length > 1_200 ? body[..1_200] + "…" : body)))));
+                var chunks = DescriptionChunks(group.OrderBy(tool => tool.Function.Name, StringComparer.Ordinal));
+                for (var index = 0; index < chunks.Count && questions.Count < MaxDescriptionQuestions; index++)
+                {
+                    var (text, tools) = chunks[index];
+                    // Marked only when asked, so a chunk over the cap is asked in a later turn.
+                    if (!runner._describedOrigins.Add(group.Key + "\n" + text))
+                        continue;
+                    var key = "injection/" + group.Key + (index == 0 ? "" : "#" + (index + 1).ToString(CultureInfo.InvariantCulture));
+                    questions.Add(KeyValuePair.Create(key, question.ToQuestion(instructions: DecisionContent.FromText(
+                        $"{question.Instructions}\n{group.Key} tool descriptions:\n{text}"))));
+                    _described[key] = (group.Key, [.. tools.Select(tool => tool.Function.Name)]);
+                    taint |= tools.Any(tool => tool.Descriptor.Risk.OutsideDescription);
+                }
             }
-            if (questions.Count > 0)
+            if (taint)
                 lock (_gate)
                     runner.Tainted = true;
             return questions;
+        }
+
+        /// <summary>Whole description lines packed in order into chunks of at most <see cref="DescriptionBudget"/> characters.</summary>
+        private static List<(string Text, List<Offered> Tools)> DescriptionChunks(IEnumerable<Offered> tools)
+        {
+            var chunks = new List<(string Text, List<Offered> Tools)>();
+            var lines = new List<string>();
+            var members = new List<Offered>();
+            var length = 0;
+            foreach (var tool in tools)
+            {
+                var line = $"- {tool.Function.Name}: {tool.Function.Description}";
+                // Cut to the budget, a long line fills its chunk alone.
+                if (line.Length > DescriptionBudget)
+                    line = line[..(DescriptionBudget - 1)] + "…";
+                if (members.Count > 0 && length + 1 + line.Length > DescriptionBudget)
+                {
+                    chunks.Add((string.Join("\n", lines), members));
+                    lines = [];
+                    members = [];
+                    length = 0;
+                }
+                length += (members.Count > 0 ? 1 : 0) + line.Length;
+                lines.Add(line);
+                members.Add(tool);
+            }
+            if (members.Count > 0)
+                chunks.Add((string.Join("\n", lines), members));
+            return chunks;
+        }
+
+        /// <summary>
+        /// C-033: for each description question whose verdict acted (<c>injection</c> degrades to its conservative default, so
+        /// only a calibrated answer at or above the floor acts), the tools in that chunk leave this turn's shortlist and
+        /// catalogue, so no generator call and no <c>tool</c> pick of the turn offers them, and their source is told to hold
+        /// them until the user allows them. The generator never saw them, so withholding does not taint.
+        /// </summary>
+        private void WithholdDescriptions(CheckpointResult verdicts)
+        {
+            foreach (var (key, (origin, tools)) in _described)
+            {
+                if (!Acted(verdicts, key, out _))
+                    continue;
+                var withheld = tools.ToHashSet(StringComparer.Ordinal);
+                _shortlist = [.. _shortlist.Where(tool => !withheld.Contains(tool.Function.Name))];
+                foreach (var name in tools)
+                    _catalogue.Remove(name);
+                _services.DescriptionReview?.Withhold(new ToolWithholding(origin, tools, verdicts[key].DecisionId));
+            }
+            _described.Clear();
         }
 
         private static bool Acted(CheckpointResult result, string key, out string? option)

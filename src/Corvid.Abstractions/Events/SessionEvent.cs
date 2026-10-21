@@ -29,6 +29,7 @@ namespace Corvid.Abstractions.Events;
 [JsonDerivedType(typeof(ProjectBound), "project_bound")]
 [JsonDerivedType(typeof(McpToolHeld), "mcp_tool_held")]
 [JsonDerivedType(typeof(McpToolAccepted), "mcp_tool_accepted")]
+[JsonDerivedType(typeof(McpPinsForgotten), "mcp_pins_forgotten")]
 public abstract record SessionEvent;
 
 // Text is the initial message surface. Provider-specific message objects are never stored here.
@@ -133,11 +134,16 @@ public sealed record DeliveryResolved(string DeliveryId, string Status,
 // pin (Hash against PinnedHash), or its description matched a poisoning pattern (Reason "flagged", Detail the matched text).
 // Accepted: the user pinned the definition the process held (/mcp accept), or allowed a flagged one (/mcp allow, Flagged), so
 // it is registered; an allowed flagged tool is treated as an untrusted server's, whatever the server's trust.
+// C-033: Held with Reason "injection" (Detail the decision id) for a tool withheld after a confident injection verdict over its
+// description; Accepted with Flagged for one the user then allowed. Forgotten: /mcp forget or corvid mcp forget dropped the
+// server's entry (Tools pins), so its next listing is trusted on first use again.
 public sealed record McpToolHeld(string Server, string Tool, string Reason, string Hash,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PinnedHash = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Detail = null) : SessionEvent;
 
 public sealed record McpToolAccepted(string Server, string Tool, string Hash, bool Flagged = false) : SessionEvent;
+
+public sealed record McpPinsForgotten(string Server, int Tools) : SessionEvent;
 
 public static class McpSessions
 {

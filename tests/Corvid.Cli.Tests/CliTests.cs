@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using Corvid.Cli.Chat;
 using Corvid.Host.Tests;
+using Corvid.Mcp;
 using Spectre.Console.Testing;
 
 namespace Corvid.Cli.Tests;
@@ -372,6 +373,86 @@ public sealed class McpCommandTests
         using var run = new CliRun();
         Assert.Equal(ExitCodes.Usage, await run.RunAsync(["mcp", "frobnicate"]));
         Assert.Contains("usage: corvid mcp", run.Output, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("diff", "notes")]
+    [InlineData("diff", "notes", "send", "extra")]
+    [InlineData("accept", "notes")]
+    [InlineData("accept", "notes", "--all", "--hash", "0123456789ab")]
+    [InlineData("allow", "notes")]
+    [InlineData("forget")]
+    [InlineData("forget", "notes", "--unconfigured")]
+    [InlineData("list", "--hash", "0123456789ab")]
+    [InlineData("accept", "notes", "send", "--hash")]
+    public async Task ReviewVerbsCheckTheirArity(params string[] arguments)
+    {
+        using var run = new CliRun();
+        Assert.Equal(ExitCodes.Usage, await run.RunAsync(["mcp", .. arguments]));
+        Assert.Contains("usage: corvid mcp", run.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AllowOutsideAChatNeedsTheReviewedHash()
+    {
+        using var run = new CliRun();
+        Assert.Equal(ExitCodes.Usage, await run.RunAsync(["mcp", "allow", "notes", "send"]));
+        Assert.Contains("needs --hash", run.Output, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("diff", "nobody", "send")]
+    [InlineData("accept", "nobody", "send")]
+    [InlineData("allow", "nobody", "send", "--hash", "0123456789ab")]
+    public async Task ReviewingAnUnknownServerFails(params string[] arguments)
+    {
+        using var run = new CliRun();
+        Assert.Equal(ExitCodes.Failure, await run.RunAsync(["mcp", .. arguments]));
+        Assert.Contains("There is no enabled MCP server named 'nobody'", run.Output, StringComparison.Ordinal);
+    }
+
+    private static JsonFileMcpPinStore Seed(CliRun run, params string[] servers)
+    {
+        var store = new JsonFileMcpPinStore(Path.Combine(run.Root, "data", "mcp-pins.json"));
+        var definition = McpToolDefinition.From(new ModelContextProtocol.Protocol.Tool { Name = "send", Description = "Send." });
+        foreach (var server in servers)
+            store.Set(server, new Dictionary<string, McpToolPin> { ["send"] = new(definition.Hash, definition.Canonical, DateTimeOffset.UnixEpoch) });
+        return store;
+    }
+
+    [Fact]
+    public async Task ForgetDropsOneServersPinsAndRecordsIt()
+    {
+        using var run = new CliRun();
+        var store = Seed(run, "notes", "github");
+
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["mcp", "forget", "notes"]));
+
+        Assert.Contains("Forgot notes's 1 pinned definition", run.Output, StringComparison.Ordinal);
+        Assert.Contains("picks this up only when it restarts", run.Output, StringComparison.Ordinal);
+        Assert.Equal(["github"], store.Servers());
+        var log = new Kernel.Events.SqliteEventLog(Path.Combine(run.Root, "data", "events.db"));
+        var record = Assert.IsType<Abstractions.Events.McpPinsForgotten>(Assert.Single(log.Read(Abstractions.Events.McpSessions.Pins, cancellationToken: TestContext.Current.CancellationToken)).Payload);
+        Assert.Equal(("notes", 1), (record.Server, record.Tools));
+
+        // Nothing to forget is not a failure.
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["mcp", "forget", "notes"]));
+        Assert.Contains("has no pinned definitions", run.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ForgetUnconfiguredKeepsDisabledServersAndListSaysWhatIsStale()
+    {
+        using var run = new CliRun();
+        var store = Seed(run, "stale", "paused");
+        string[] paused = ["--set", "Mcp:Servers:paused:Enabled=false", "--set", "Mcp:Servers:paused:Command=paused-mcp"];
+
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["mcp", "list", .. paused]));
+        Assert.Contains("stale: pinned but no longer configured (corvid mcp forget stale", run.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("paused: pinned but no longer configured", run.Output, StringComparison.Ordinal);
+
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["mcp", "forget", "--unconfigured", .. paused]));
+        Assert.Equal(["paused"], store.Servers());
     }
 }
 

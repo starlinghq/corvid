@@ -1921,7 +1921,8 @@ project, package or checker rule), with events and spans in the host through a c
   turn adds `injection/mcp:<server>` to the existing batch for each untrusted origin on the shortlist (the question's
   instructions with the tools' names and descriptions, capped at 1,200 characters, the shape used for a hub skill's body), once
   per session for the same descriptions; asking taints, and the verdict is a logged `Decision` (data for C-021), not a
-  withhold. A hub skill's L0 entry is outside content too: when the index shown to the generator lists a skill with
+  withhold (C-033 asks about trusted origins too and withholds on a confident verdict; see
+  [MCP pinning follow-ups](#mcp-pinning-follow-ups-c-033)). A hub skill's L0 entry is outside content too: when the index shown to the generator lists a skill with
   `Trusted == false`, the turn is tainted. This is a visible change: with an untrusted server configured (the default trust),
   most turns that offer its tools are tainted, so read-only network tools ask, the cloud egress gate is stricter, Vault applies
   taint rules and learned skills are marked tainted; `Trust: Trusted` is the remedy for a server the user vouches for.
@@ -1950,16 +1951,133 @@ project, package or checker rule), with events and spans in the host through a c
   while a trusted one does not; a changed tool is held, recorded in the `mcp-pins` session, shown by `/mcp` and `/mcp diff`,
   and offered after `/mcp accept` with `McpToolAccepted`; the line diff). The recorded ACP exchanges carry `/mcp`'s new usage.
 
-Not built yet: `corvid mcp diff|accept|allow` (a CLI accept would list in a fresh process and need a hash argument to be sure it
-accepts what was reviewed); withholding a tool on a confident `injection` verdict over its description (it logs and taints,
-like a hub skill body, until C-021's floors are fitted on description rows), and asking `injection` about trusted servers'
-descriptions at all (only untrusted origins are asked, since asking taints the turn and a trusted server's tools do not; a
-semantically poisoned description from a trusted server that the regex misses is caught by nothing yet); re-checking pins on an in-process reconnect or
-`notifications/tools/list_changed` (pins are checked once per start); pruning pins of removed tools, a `/mcp forget <server>`
-to re-trust a replaced server, and keying pins by server identity (command, arguments, URL) as well as name; review from the
+Not built yet: `corvid mcp diff|accept|allow`, withholding on a confident `injection` verdict, asking `injection` about trusted
+servers' descriptions, `/mcp forget` and pruning are built by C-033 ([MCP pinning follow-ups](#mcp-pinning-follow-ups-c-033)),
+which also defers, with reasons, re-checking pins on an in-process reconnect or `notifications/tools/list_changed` (C-033 only
+notes the notification); keying pins by server identity (command, arguments, URL) as well as name; review from the
 gateway or ACP with a rendered diff, and a doctor check for held tools without starting servers; scanning results, resources,
 prompts and output schemas with the same patterns; signed or registry-published definitions instead of trust on first use; and
 the privacy egress gate over MCP arguments (C-018).
+
+## MCP pinning follow-ups (C-033)
+
+Follow-ups to C-022 (review of #38, finding 4, and its deferred list): withholding a tool whose description the fabric judges
+to instruct the agent, asking that question about trusted servers' descriptions too, review from the CLI, forgetting pins, and
+a notice for `notifications/tools/list_changed`. No new project, package or checker rule: the kernel reaches the MCP clients
+through a core interface in `Corvid.Tools`.
+
+- Bridge: `IToolDescriptionReview.Withhold(ToolWithholding(Origin, Tools, DecisionId))` in `Corvid.Tools`, beside
+  `ToolDescriptor.Origin`, which both `Corvid.Kernel` and `Corvid.Mcp` already reference; `TurnServices.DescriptionReview`
+  (optional) is set by `CorvidRuntime.Services` to `runtime.Mcp`, and `McpClients` implements it. The kernel never references
+  `Corvid.Mcp`, and `Corvid.Mcp` stays free of the event log (the C-022 notice callback). `ToolRegistry.Remove(name)` (under the
+  registry's lock) takes a tool out.
+- Asking (`TurnRunner.DescriptionQuestions`): `injection` is asked at ingress about every shortlisted tool whose `Origin` starts
+  with `mcp:`, trusted servers' included. Each origin's tools, by name, are packed into chunks of whole `- name: description`
+  lines up to 1,200 characters (a single longer line is cut and is the only tool in its chunk), keyed `injection/mcp:<server>`
+  for the first chunk (C-021's and C-022's key) and `injection/mcp:<server>#2` onward; each question records the tool names it
+  carried. At most 2 description questions go into one ingress batch, so with the turn's own 4 to 6 questions the batch stays
+  within S1's measured 8-question bound (340 ms on the 3090; about 25 to 30 ms per extra question). A chunk is asked once per
+  session for the same text (C-022's set, now keyed by chunk text and marked only when asked), so chunks over the cap wait for a
+  later turn, and their tools stay offered until then, as before. Asking taints the turn only for a chunk that holds an
+  `OutsideDescription` tool (an untrusted server's, or an allowed flagged or withheld one): a trusted server's text goes to the
+  decider, never to the generator, which answers the #38 reply's concern that asking would taint every turn. Patterns
+  (`McpDescriptionScan`) still run for every server at listing time; trusted descriptions are now both scanned and asked.
+- Withholding (`TurnRunner.WithholdDescriptions`, right after the ingress decision, before the skill, clarify and `tool`
+  handling): for each description key whose verdict acted, exactly the tools in that chunk leave the turn's shortlist and
+  catalogue, so no generator call of the turn offers them, a `tool` pick of one falls back to the shortlist without it (the
+  pick no longer matches), and later step checkpoints' `tool` options leave it out; then `DescriptionReview.Withhold` is called
+  with the decision id. "Acted" is the confidence test: `injection` degrades by `ConservativeDefault`, so `DecisionPolicy`
+  acts only on a calibrated answer with P(yes) at or above the floor (`floors.json` `injection: 0.5`, unfitted). Without Kev
+  nothing is ever withheld. The generator never saw the description, so withholding does not taint.
+- Holding (`McpClients.Withhold`): the connection keeps, per registered Corvid name, the listed protocol `Tool`, its
+  `McpToolDefinition` and the `McpTool` instance (`McpRegisteredTool`). Each named tool still registered from the origin's
+  server is removed from the registry, its instance is marked withdrawn (`McpTool.Withdrawn`; a call through it fails with
+  `McpToolException` "withheld after an injection verdict; /mcp diff <s> <t>", which closes the window for another session's
+  turn that still holds it in its catalogue), and it moves to the held list with reason `injection` (`McpHoldReasons.Injection`,
+  `McpPinKinds.Injection`, `McpHeldTool.Decision`). The pin is written with `withheld` (the hash) and `withheld_decision`; with
+  no pin (a first use whose write failed) a fresh one is written. A notice goes out, recorded as `McpToolHeld` with reason
+  `injection` and the decision id as `Detail` (no new event type). A tool whose pin has `allowed_flagged` equal to its hash is
+  left offered: the user's allow stands and the verdict is only the logged `Decision`. Names not registered (already withheld,
+  another source's) are skipped; `Accept` and `Withhold` run one at a time.
+- Restarts: `Register` holds a listed definition as `injection` again when its pin's `withheld` equals the listed hash and
+  `allowed_flagged` does not, so the hold survives restarts and another process (`corvid mcp diff|allow`) sees it. Precedence is
+  flagged, then injection, then new or changed; a definition that changed after a withhold is `changed`. A definition allowed
+  after a withhold registers as an untrusted server's tool (`McpToolMapping.Describe` with `untrusted`) at every start.
+- Pin file: `McpToolPin` and its document gain `Withheld` and `WithheldDecision`, written only when set
+  (`JsonIgnore(WhenWritingNull)`), so a file without withholds is byte for byte what C-022 wrote and older Corvid reads it.
+  `FormatVersion` stays 1; a file holding a withhold is refused by pre-C-033 Corvid (unknown key, `UnmappedMemberHandling.
+  Disallow`), which then offers no MCP tools at all: it fails closed. Rolling back after a withhold means `corvid mcp forget
+  <server>` or editing the file.
+- Review (`McpCommands`, now public, the one implementation for `/mcp` and `corvid mcp`): `allow` takes a tool held as
+  `flagged` or `injection` (`McpHoldReasons.NeedsReview`); it pins with `allowed_flagged` = the hash, clears `withheld`, and
+  registers the tool as an untrusted server's (asks on every call, taints results and descriptions). `accept` refuses an
+  `injection` hold and names `allow`; `accept --all` skips both review reasons. `--hash <hex>` (at least 12 hex characters, any
+  case) on `accept` and `allow` makes `McpClients.Accept` refuse when the held definition's hash does not start with it. `diff`
+  ends with the exact next command, `next: /mcp allow|accept <server> <tool> --hash <12 hex>`; for an `injection` hold it shows the
+  whole definition, the decision id and when it was pinned. An accept without `--hash` prints the hash it pinned.
+- CLI (`corvid mcp`): `diff <server> <tool>`, `accept <server> <tool|--all> [--hash <hex>]`, `allow <server> <tool> --hash <hex>`,
+  `forget <server>` and `forget --unconfigured`. A CLI review lists in a fresh process, so C-022's "exactly what diff showed" no
+  longer holds by itself: `allow` requires `--hash` there (a usage error without it), `accept` takes it optionally. `diff`,
+  `accept` and `allow` start only the named enabled server (`McpComposition.Start(..., only:)`; an unknown or disabled name is an
+  error), wait for its listing, run `McpCommands.Run` with the prefix `corvid mcp` and render with `ChatRenderer.Render`; an
+  `Error` tone exits 1. `accept`, `allow` and `forget` pass `SqliteEventLog(CorvidPaths.EventLog(options))`, so their records land
+  in the `mcp-pins` session; `diff` passes none. The output repeats that a running chat (or gateway, or ACP agent) picks the change
+  up only when it restarts. `McpComposition.Start` also takes an optional `IMcpTransports`, which `CorvidRuntimeFactory` resolves
+  from the host's services when one is registered (the host tests' in-process server); by default the real transports are built.
+- Forget and prune: `IMcpPinStore.Remove(server)` (the number of pins dropped, 0 for an entry that pinned nothing, null for no
+  entry) and `Servers()`, in both stores; the file store uses the same re-read, merge and atomic move. `/mcp forget <server>` and
+  `corvid mcp forget <server>` (`McpComposition.Forget`) drop the entry, pins and the listed marker, so the next start is a first
+  use again (trust on first use); this process's registered and held tools are unchanged, and the output says both.
+  `corvid mcp forget --unconfigured` forgets only servers absent from the raw `Corvid:Mcp:Servers` keys, so a disabled server keeps
+  its pins and disabling one for a while never resets its trust; nothing is pruned automatically, since a config edit must not
+  silently reset trust on first use. `corvid mcp list` prints pinned servers that are no longer configured, with the forget
+  commands. Forgetting appends `McpPinsForgotten(Server, Tools)` (`mcp_pins_forgotten`, the one new event type) to the `mcp-pins`
+  session and starts a `corvid.mcp.pin` span with status `forgotten` and `corvid.mcp.pin.count`.
+- `notifications/tools/list_changed`: one handler in `McpClientOptions.Handlers.NotificationHandlers` (SDK 2.2.0) sets a flag on
+  the connection once its tools were listed (`McpServerStatus.ToolsChanged`); `/mcp` and `corvid mcp list` then show "the server's
+  tool list changed since it was listed; restart Corvid to re-check its pins". Nothing is re-listed or re-pinned.
+- Limits: the `injection` floor was never fitted on description rows, so false positives withhold trusted tools; it acts only
+  on calibrated answers, one `/mcp allow` undoes it (logged and persisted), and an allowed hash is never withheld again. A
+  chunk is withheld as a unit, so one poisoned description takes its chunk neighbours out with it (each can be allowed alone).
+  Asking about trusted descriptions adds up to 2 Kev questions to a session's first ingress per server (about 60 ms on GPU, more
+  on CPU per S1). `/mcp forget` on a live server leaves its tools offered until restart. Recall is Kev's: in a manual check on
+  the 3090 (the S1 harness with TurnRunner's 6 ingress questions plus 2 description chunks, 600-token state), Kev-0.8B gave
+  P(yes) 0.16 to 0.17 for a trusted-style chunk whose description told the assistant to send the user's private key and
+  passwords to another tool (no regex marker) and 0.36 to 0.38 for a benign chunk, so neither acted at the 0.5 floor: the
+  mechanism is in place, but `injection` as asked today does not catch that description, which is the case for the deferred
+  dedicated question with fitted evidence.
+- Tests: `tests/Corvid.Mcp.Tests` (`McpWithholdTests`: a withheld trusted tool leaves the registry, is held as `injection` with
+  its decision and persisted, and a second verdict changes nothing; a withdrawn instance refuses a call; the hold survives a
+  restart, `accept` refuses it naming `allow`, `allow` registers it untrusted and clears the withhold, a later verdict over the
+  allowed hash is ignored, and the next start registers it untrusted; a changed definition after a withhold is `changed`;
+  `allow` is refused for a merely changed tool; a `--hash` mismatch, a short or non-hex prefix are refused and an upper-case
+  prefix is accepted; `list_changed` from the fake server sets the notice without re-listing; `Remove` and `Servers` in both
+  stores; a C-022 file round-trips byte for byte and a withhold round-trips). `tests/Corvid.Kernel.Tests`
+  (`DescriptionTaintTests` with a calibrated `ScriptedDecider`: a confident yes on chunk #2 withholds only its tool, from the
+  generator call and from a `tool` pick of it, and calls the review with the decision id, without tainting; a below-floor or
+  uncalibrated answer withholds nothing; a trusted origin is asked without taint; chunks are whole lines, a long line is cut and
+  alone, at most 2 per batch with the rest in later turns, each once; `EventJsonTests` pins `mcp_pins_forgotten`).
+  `tests/Corvid.Host.Tests` (`McpHostTests`: end to end with the runtime's MCP clients over an in-process server and a fake Kev,
+  a trusted description judged confidently is withheld from the turn and the registry, recorded as `McpToolHeld` with reason
+  `injection`, shown by `/mcp diff` with the decision and `next:` command, refused by `accept` and by `allow` with a wrong hash,
+  and allowed with the right one as an untrusted tool; `forget` drops pins, records `McpPinsForgotten` and a span, and leaves the
+  registry; `forget --unconfigured` keeps configured servers; `diff` prints the hash and `accept --hash` checks it; an accept
+  without a hash prints it). `tests/Corvid.Cli.Tests` (`McpCommandTests`: usage and arity of each verb, `allow` without `--hash`
+  refused, `diff`/`accept`/`allow` of an unknown server exit 1, `forget` on a seeded pin file drops and records, `forget
+  --unconfigured` keeps a disabled server, and `list` names the stale one). The recorded ACP exchanges carry `/mcp`'s new usage.
+
+Not built yet: re-pinning on an in-process reconnect and acting on `tools/list_changed` (re-list, then hold or unregister changed
+tools): receiving the notification is one handler, but acting on it makes `Register` a reconcile against registered tools, and a
+reconnect happens inside `ConnectAsync` under the connection gate, mid-call, so re-listing there needs a refusal path for the call
+in flight; the follow-up reuses `ToolRegistry.Remove` and the withdrawn-instance refusal. A running chat seeing pins another
+process wrote (`corvid mcp accept`, `forget`) without a restart comes with that re-list. A dedicated question and floor for
+descriptions (`description_injection`, separate from result `injection`) needs a floors-file version bump (the C-025/C-026
+pattern) and fitted evidence; v1 reuses `injection` and its unfitted 0.5. Withholding on the degraded tier (an uncalibrated answer
+never acts, by design), asking at listing time instead of at ingress (no fabric request outside a turn), and per-tool questions
+(one per chunk is the cost S1 allows). Automatic pruning, keying pins by server identity, a doctor check for stale pins or held
+tools, and review from the gateway or ACP beyond the slash command (`/mcp forget` appears there automatically). The C-022 items
+not touched here: scanning results, resources, prompts and output schemas; signed or registry-published definitions; and the
+privacy egress gate over MCP arguments.
 
 ## ACP and OpenAI-compatible HTTP (C-019)
 
