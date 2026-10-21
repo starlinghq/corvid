@@ -11,6 +11,7 @@ using Corvid.Kernel.Events;
 using Corvid.Kernel.Jobs;
 using Corvid.Memory;
 using Corvid.Models;
+using Corvid.Rules;
 using Corvid.Sandbox;
 using Corvid.Skills;
 using Corvid.Tools;
@@ -125,6 +126,10 @@ public sealed class CorvidRuntimeFactory(
                     Timeout = TimeSpan.FromSeconds(settings.Approvals.TimeoutSeconds),
                     // Without the mapping the shell tool never runs: it requires the approval of its command line.
                     ShellTools = BuiltinTools.ShellToolMapping,
+                    // C-023: the built-in rule pack after the hardline list; enforce rules force a prompt, never more.
+                    Detections = settings.Detections.Enabled
+                        ? new DetectionEngine(RulePack.BuiltIn(), BuiltinTools.ShellToolMapping, settings.Detections.Enforce)
+                        : null,
                 });
 
             var counter = composer.GeneratorCounter();

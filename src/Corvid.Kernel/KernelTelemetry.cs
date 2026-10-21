@@ -34,5 +34,8 @@ public static class KernelTelemetry
     /// <summary>Set on <c>execute_tool</c> when the call went through the approval pipeline.</summary>
     public const string ToolApproval = "corvid.tool.approval";
 
+    /// <summary>Set on <c>execute_tool</c> when the call completed detection rule matches (C-023): their ids.</summary>
+    public const string DetectionRules = "corvid.detection.rules";
+
     public static ActivitySource Source { get; } = new(SourceName);
 }

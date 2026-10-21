@@ -615,8 +615,15 @@ public sealed class TurnRunner
                 }
                 // §10.3: in a tainted session a network read asks too (C-007b forces the tainted_network_egress reason), or
                 // injected text could carry the user's data out in a URL. Taint is judged as of the response that made the call.
+                // C-023: an untainted network read goes through the pipeline too when detection rules have something to say
+                // about it (a web_fetch after a credential read), with this response's earlier calls as if already logged.
                 var risk = tool!.Descriptor.Risk;
-                valid.Add(new ValidCall(callId, tool, arguments, Ask: !risk.ReadOnly || risk.Network && runner.Tainted, spans));
+                var ask = !risk.ReadOnly || risk.Network && (runner.Tainted
+                    || _services.Approvals is { } approvals && approvals.Detects(runner.SessionId, callId,
+                        new ToolAction(tool.Descriptor, arguments),
+                        [.. valid.Select(earlier => new ToolCallIssued(earlier.CallId, earlier.Tool.Function.Name, earlier.Arguments))],
+                        cancellationToken));
+                valid.Add(new ValidCall(callId, tool, arguments, Ask: ask, spans));
             }
 
             // Calls that need no approval run in parallel; the rest one at a time, in the order the model gave (§3.3).
@@ -834,6 +841,10 @@ public sealed class TurnRunner
                 Result(call.CallId, Error(ToolErrorKinds.NotRun, ["the turn was cancelled while the approval was pending"], null, null), isError: true);
                 throw;
             }
+            // The call's execute_tool span is current here (ExecuteAsync started it); tagged before a denial returns too.
+            if (!result.Assessment.Detections.IsEmpty
+                && Activity.Current is { } span && span.DisplayName.StartsWith(KernelTelemetry.ExecuteToolPrefix, StringComparison.Ordinal))
+                span.SetTag(KernelTelemetry.DetectionRules, result.Assessment.Detections.Select(finding => finding.Rule.Id).ToArray());
             return result.Allowed ? (null, result) : ($"{WireName(result.Resolution)}: {result.Assessment.Summary}", null);
         }
 

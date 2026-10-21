@@ -52,6 +52,21 @@ public sealed class CorvidOptions
     public ServeSettings Serve { get; set; } = new();
 
     public GatewaySettings Gateway { get; set; } = new();
+
+    /// <summary>Detection rules over the session event log (C-023), inline at pre_execute and by <c>corvid scan</c>.</summary>
+    public DetectionSettings Detections { get; set; } = new();
+}
+
+public sealed class DetectionSettings
+{
+    /// <summary>Evaluate the built-in rules at pre_execute. <c>corvid scan</c> runs them whatever this says.</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// Let enforce rules force an approval prompt. False records every match as detect only, which keeps scheduled and
+    /// other non-interactive work from being denied by a rule (an ask with nobody to answer is a denial).
+    /// </summary>
+    public bool Enforce { get; set; } = true;
 }
 
 /// <summary>MCP (C-018, plan §12): servers whose tools Corvid offers, and what <c>corvid mcp serve</c> shares.</summary>

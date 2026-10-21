@@ -1,0 +1,62 @@
+{
+  "id": "fork-bomb",
+  "version": 1,
+  "title": "A fork bomb",
+  "description": "The classic shell fork bomb and the Perl one-liner: processes multiply until the machine stops answering.",
+  "severity": "high",
+  "status": "stable",
+  "posture": "detect",
+  "category": "risky-command",
+  "reason": "The command is a fork bomb",
+  "match": {
+    "event": "tool_call_issued",
+    "where": {
+      "field": "derived.command",
+      "regex": ":\\s*\\(\\s*\\)\\s*\\{\\s*:\\s*\\|\\s*:\\s*&\\s*\\}\\s*;\\s*:|\\bfork\\s+while\\s+fork\\b"
+    }
+  },
+  "tests": [
+    {
+      "name": "classic",
+      "verdict": "match",
+      "events": [
+        {
+          "type": "tool_call_issued",
+          "call_id": "c1",
+          "tool_name": "shell",
+          "arguments": {
+            "command": ":(){ :|:& };:"
+          }
+        }
+      ]
+    },
+    {
+      "name": "perl",
+      "verdict": "match",
+      "events": [
+        {
+          "type": "tool_call_issued",
+          "call_id": "c1",
+          "tool_name": "shell",
+          "arguments": {
+            "command": "perl -e 'fork while fork'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "function_definition",
+      "verdict": "no_match",
+      "events": [
+        {
+          "type": "tool_call_issued",
+          "call_id": "c1",
+          "tool_name": "shell",
+          "arguments": {
+            "command": "f() { echo hi; }; f"
+          }
+        }
+      ]
+    }
+  ]
+}
