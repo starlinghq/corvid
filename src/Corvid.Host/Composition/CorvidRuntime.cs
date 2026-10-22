@@ -152,9 +152,12 @@ public sealed class CorvidRuntime : IAsyncDisposable
     /// </summary>
     public string DeciderState => Fabric.CalibratedDecider is { } calibrated
         ? Fabric.EscalationDecider is { } escalation
-            ? $"{calibrated} on {DeciderPlacement}, {escalation} for gates below their floor; degraded tier when Kev declines"
-            : $"{calibrated} on {DeciderPlacement}; degraded tier when Kev declines"
-        : "degraded tier (no calibrated decider)";
+            ? $"{calibrated} on {DeciderPlacement}, {escalation} for gates below their floor{ReducedNote}; degraded tier when Kev declines"
+            : $"{calibrated} on {DeciderPlacement}{ReducedNote}; degraded tier when Kev declines"
+        : $"degraded tier (no calibrated decider){ReducedNote}";
+
+    // C-030: the checkpoint profile, shown only when reduced.
+    private string ReducedNote => Fabric.Reduction is null ? "" : "; reduced checkpoints (C-030)";
 
     /// <summary>
     /// Where the calibrated decider actually runs (C-029): <c>cpu</c> or <c>cuda:N</c>, the effective

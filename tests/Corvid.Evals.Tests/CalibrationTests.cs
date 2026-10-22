@@ -75,6 +75,19 @@ public sealed class DecisionSetTests : IDisposable
     }
 
     [Fact]
+    public void A_question_reduced_checkpoints_skipped_is_in_the_degraded_tier()
+    {
+        // C-030: a skipped question has no answer and no Calibrated flag, so only its decider name keeps it out of the
+        // calibrated tier, even when Kev answered the rest of its checkpoint.
+        var skipped = new Decision(NewId(), "clear_results/call-7", ImmutableDictionary<string, double>.Empty, 0, 0.6,
+            "stub_older_than_last_2", FloorsVersion, DecisionFabric.SkippedDecider("step capped at 2 (kev-0.8b on cpu)"));
+
+        Assert.Equal("degraded skipped: step capped at 2 (kev-0.8b on cpu)", skipped.Decider);
+        Assert.Null(skipped.Calibrated);
+        Assert.Equal(DecisionTier.Degraded, DecisionSet.TierOf(skipped));
+    }
+
+    [Fact]
     public void Measures_follow_each_questions_floor_measure_and_option_order()
     {
         // The stored map is unordered; difficulty's levels must come from the catalogue, not the map.

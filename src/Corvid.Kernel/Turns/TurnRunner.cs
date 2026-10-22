@@ -1167,8 +1167,13 @@ public sealed class TurnRunner
             return DecisionContent.FromJson(document.RootElement);
         }
 
+        private Task<CheckpointResult> DecideAsync(Checkpoint checkpoint, List<KeyValuePair<string, DecisionQuestion>> questions,
+            CancellationToken cancellationToken, params string[] extraConditions) =>
+            DecideAsync(checkpoint, questions, skip: null, cancellationToken, extraConditions);
+
+        /// <param name="skip">Keys not to ask, with why (C-030): the fabric gives each its below-floor action.</param>
         private async Task<CheckpointResult> DecideAsync(Checkpoint checkpoint, List<KeyValuePair<string, DecisionQuestion>> questions,
-            CancellationToken cancellationToken, params string[] extraConditions)
+            IReadOnlyDictionary<string, string>? skip, CancellationToken cancellationToken, params string[] extraConditions)
         {
             var conditions = new HashSet<string>(extraConditions, StringComparer.Ordinal);
             if (_options.EscalationAllowed)
@@ -1176,7 +1181,7 @@ public sealed class TurnRunner
             CheckpointResult result;
             using (RequestScope())
                 result = await _services.Fabric.DecideAsync(runner.SessionId, checkpoint, State(BudgetFor(checkpoint, questions)), questions,
-                    conditions, cancellationToken).ConfigureAwait(false);
+                    conditions, skip, cancellationToken).ConfigureAwait(false);
             if (result.Verdicts.TryGetValue("tool", out var tool) && tool.Verdict.Acted && tool.Verdict.Option is { } pick && pick != None)
                 lock (_gate)
                     _pickDecisions[pick] = tool.DecisionId;
@@ -1492,7 +1497,13 @@ public sealed class TurnRunner
             var question = Catalogue["injection"];
             var instructions = DecisionContent.FromText($"{question.Instructions}\nskill {body.Name}:\n" +
                 (body.Text.Length > 1_200 ? body.Text[..1_200] + "…" : body.Text));
-            await DecideAsync(Checkpoint.Ingress, [KeyValuePair.Create("injection/skill:" + body.Name, question.ToQuestion(instructions: instructions))],
+            var key = "injection/skill:" + body.Name;
+            // C-030: the verdict is never read (the body has tainted the turn already), so with reduced checkpoints the whole
+            // request is saved; the question is still logged, as skipped.
+            IReadOnlyDictionary<string, string>? skip = _services.Fabric.Reduction is { } reduction
+                ? new Dictionary<string, string>(StringComparer.Ordinal) { [key] = "verdict unused, the skill body taints the turn; " + reduction.Reason }
+                : null;
+            await DecideAsync(Checkpoint.Ingress, [KeyValuePair.Create(key, question.ToQuestion(instructions: instructions))], skip,
                 cancellationToken).ConfigureAwait(false);
         }
 

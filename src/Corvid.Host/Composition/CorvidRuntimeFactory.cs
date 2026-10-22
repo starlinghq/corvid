@@ -100,13 +100,16 @@ public sealed class CorvidRuntimeFactory(
             // Kev when the decider slot is bound (C-004b), with Kev-4B as the second tier when configured; the degraded tier
             // always, for states over the hard stop and requests Kev refuses.
             IDecider? calibrated = null, escalation = null;
+            string? placement = null;
             if (registry.TryGet(ModelSlots.Decider, out var decider))
             {
                 calibrated = decider.Default.GetService<IDecider>();
                 escalation = decider.Escalation.FirstOrDefault()?.GetService<IDecider>();
+                placement = decider.Default.Profile.Placement;
             }
+            // C-030: resolved once, as placement is fixed per runtime and /model refuses decider switches.
             var fabric = new DecisionFabric(DecisionPolicy.Default, composer.CreateDegradedDecider(DecisionPolicy.Default), log,
-                calibrated, escalation);
+                calibrated, escalation, ReductionFor(settings.Turn.ReducedCheckpoints, calibrated, placement));
 
             // Vault's locations are protected twice (C-012): the hardline list refuses them, and the shell's sandbox hides them.
             var vault = VaultLocationsFor(settings);
@@ -207,6 +210,19 @@ public sealed class CorvidRuntimeFactory(
     /// safety configuration, so the hardline list refuses writes, the file tools refuse access and the shell's sandbox
     /// hides them. A path that is the workspace or contains it is left out: denying it would deny the whole workspace.
     /// </summary>
+    /// <summary>
+    /// The checkpoint profile (C-030). Auto reduces only when a calibrated decider is bound and its effective placement is
+    /// exactly <c>cpu</c> (a configured CUDA Kev that fell back included); CUDA, a remote decider and the degraded tier
+    /// (placement null) stay full.
+    /// </summary>
+    internal static CheckpointReduction? ReductionFor(ReducedCheckpoints setting, IDecider? calibrated, string? placement) => setting switch
+    {
+        ReducedCheckpoints.On => new CheckpointReduction("configured"),
+        ReducedCheckpoints.Off => null,
+        _ when calibrated is not null && placement == ModelPlacement.Cpu => new CheckpointReduction($"{calibrated.Name} on cpu"),
+        _ => null,
+    };
+
     internal static ApprovalEnvironment ProtectCorvidState(ApprovalEnvironment environment, CorvidOptions settings, string rulesFile,
         string configFile)
     {

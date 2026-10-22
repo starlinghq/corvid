@@ -10,7 +10,12 @@ namespace Corvid.Fabric;
 /// <summary>One question's result at a checkpoint.</summary>
 /// <param name="Answer">The decider's answer, or null when it gave none (the below-floor action then applied).</param>
 /// <param name="Decider">As recorded on this question's event: the checkpoint's decider, or the second tier's for an escalated gate.</param>
-public sealed record FabricVerdict(string DecisionId, DecisionAnswer? Answer, PolicyVerdict Verdict, string? Decider = null);
+/// <param name="SkipReason">Why the question was not asked (C-030), or null when it was: the verdict is then its below-floor action.</param>
+public sealed record FabricVerdict(string DecisionId, DecisionAnswer? Answer, PolicyVerdict Verdict, string? Decider = null,
+    string? SkipReason = null)
+{
+    public bool Skipped => SkipReason is not null;
+}
 
 /// <summary>A checkpoint's results, the decider that answered, and the <c>Decision</c> events appended.</summary>
 /// <param name="Decider">As recorded on the events, for example <c>degraded</c> or <c>degraded after kev-0.8b: state_over_budget</c>.</param>
@@ -22,6 +27,9 @@ public sealed record CheckpointResult(
     DeciderUnavailable? Fallback,
     ImmutableArray<StoredEvent> Events)
 {
+    /// <summary>The checkpoint profile it ran under (C-030): <c>full</c> or <c>reduced</c>.</summary>
+    public string Profile { get; init; } = CheckpointReduction.FullProfile;
+
     public FabricVerdict this[string key] => Verdicts[key];
 }
 
@@ -29,7 +37,9 @@ public sealed record CheckpointResult(
 /// Runs one checkpoint (plan §5.2): one request to the calibrated decider, falling back to the degraded tier when there is
 /// none, the state is over the hard stop, or the decider declines; with a second tier configured, the gates the first tier
 /// answered below their floor go to it on the same state (§5.5); then the policy; then one <c>Decision</c> event per
-/// question, with its threshold, action, floor version and decider, appended as a single batch.
+/// question, with its threshold, action, floor version and decider, appended as a single batch. Under a
+/// <see cref="CheckpointReduction"/> (C-030), and for keys a caller skips, some questions are not asked: they take their
+/// below-floor action and are logged with the decider <c>degraded skipped: &lt;reason&gt;</c>.
 /// </summary>
 public sealed class DecisionFabric
 {
@@ -46,7 +56,9 @@ public sealed class DecisionFabric
     /// The second tier of §5.5 (Kev-4B): asked only about gates (<c>risk</c>, <c>skill_write_safe</c>, <c>memory_op</c>) whose
     /// calibrated answer is below the floor, before the policy falls back to the user. Requires <paramref name="calibrated"/>.
     /// </param>
-    public DecisionFabric(DecisionPolicy policy, IDecider degraded, IEventLog log, IDecider? calibrated = null, IDecider? escalation = null)
+    /// <param name="reduction">The reduced checkpoint profile (C-030), or null for the full one.</param>
+    public DecisionFabric(DecisionPolicy policy, IDecider degraded, IEventLog log, IDecider? calibrated = null, IDecider? escalation = null,
+        CheckpointReduction? reduction = null)
     {
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(degraded);
@@ -58,6 +70,7 @@ public sealed class DecisionFabric
         _log = log;
         _calibrated = calibrated;
         _escalation = escalation;
+        Reduction = reduction;
     }
 
     public DecisionPolicy Policy { get; }
@@ -68,14 +81,36 @@ public sealed class DecisionFabric
     /// <summary>The second tier's name for gates below their floor, or null when there is none.</summary>
     public string? EscalationDecider => _escalation?.Name;
 
+    /// <summary>The reduced checkpoint profile (C-030), or null when every checkpoint is asked whole.</summary>
+    public CheckpointReduction? Reduction { get; }
+
+    /// <summary>The profile's name in spans and surfaces: <c>full</c> or <c>reduced</c>.</summary>
+    public string Profile => Reduction is null ? CheckpointReduction.FullProfile : CheckpointReduction.ReducedProfile;
+
+    /// <summary>
+    /// The decider recorded for a question that was not asked (C-030). Calibration (C-021) reads a decider named
+    /// <c>degraded</c> or starting <c>degraded </c> as the degraded tier, so skipped decisions stay out of calibrated reports.
+    /// </summary>
+    public static string SkippedDecider(string reason) => $"{DegradedDecider.DeciderName} skipped: {reason}";
+
     /// <param name="questions">By request key: a catalogue id, or an id with an instance suffix (<c>clear_results/call-7</c>).</param>
     /// <param name="conditions">
     /// Facts some questions require before acting (<see cref="FabricConditions"/>). A condition some catalogue question grants
     /// (<see cref="CatalogueQuestion.Grants"/>) is ignored here: only its granter acting at this checkpoint makes it hold.
     /// </param>
-    public async Task<CheckpointResult> DecideAsync(string sessionId, Checkpoint checkpoint, TurnState state,
+    public Task<CheckpointResult> DecideAsync(string sessionId, Checkpoint checkpoint, TurnState state,
         IEnumerable<KeyValuePair<string, DecisionQuestion>> questions, IReadOnlySet<string>? conditions = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        DecideAsync(sessionId, checkpoint, state, questions, conditions, skip: null, cancellationToken);
+
+    /// <param name="skip">
+    /// Keys of the request not to ask, with why (C-030): only for a question whose answer the caller can show does not
+    /// change the outcome. Each takes its below-floor action and is logged as skipped. Honoured at any checkpoint and for
+    /// any question, gates included, so the caller carries the proof.
+    /// </param>
+    public async Task<CheckpointResult> DecideAsync(string sessionId, Checkpoint checkpoint, TurnState state,
+        IEnumerable<KeyValuePair<string, DecisionQuestion>> questions, IReadOnlySet<string>? conditions,
+        IReadOnlyDictionary<string, string>? skip, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentNullException.ThrowIfNull(state);
@@ -84,6 +119,7 @@ public sealed class DecisionFabric
         [
             new("gen_ai.conversation.id", sessionId),
             new("corvid.checkpoint", CheckpointWireName(checkpoint)),
+            new("corvid.checkpoint.profile", Profile),
         ], name: FabricTelemetry.DecideSpan);
         foreach (var (key, question) in request.Questions)
         {
@@ -99,18 +135,33 @@ public sealed class DecisionFabric
                 throw new ArgumentException($"'{key}' must use the catalogue's options in order.", nameof(questions));
         }
 
-        var (result, fallback) = await AskAsync(request, state, cancellationToken);
-        var decider = fallback is null ? result.Decider : $"{result.Decider} after {fallback.Decider}: {WireName(fallback.Reason)}";
-        var answers = result is DeciderAnswers answered ? answered.Answers : ImmutableDictionary<string, DecisionAnswer>.Empty;
-        var deciders = result is DeciderAnswers { Declined.IsEmpty: false } partial
-            ? partial.Declined.ToImmutableDictionary(pair => pair.Key, pair => $"{decider} declined: {pair.Value}", StringComparer.Ordinal)
-            : ImmutableDictionary<string, string>.Empty;
-        if (fallback is null && _escalation is not null && result is DeciderAnswers first)
+        // C-030: skipped keys reach no decider, and when nothing is left to ask no decider is called at all.
+        var (asked, skipped) = CheckpointReduction.Partition(Policy.Catalogue, checkpoint, request.Questions.Keys, Reduction, skip);
+        var answers = ImmutableDictionary<string, DecisionAnswer>.Empty;
+        var deciders = ImmutableDictionary<string, string>.Empty;
+        var decider = asked.IsEmpty ? SkippedDecider(skipped.Values.First()) : DegradedDecider.DeciderName;
+        DeciderUnavailable? fallback = null;
+        if (!asked.IsEmpty)
         {
-            var (escalatedAnswers, escalatedBy) = await EscalateAsync(request, first, cancellationToken);
-            answers = escalatedAnswers;
-            deciders = deciders.SetItems(escalatedBy);
+            var askedRequest = skipped.IsEmpty ? request
+                : new DecisionRequest(request.State, request.Questions.Where(pair => !skipped.ContainsKey(pair.Key)));
+            DeciderResult result;
+            (result, fallback) = await AskAsync(askedRequest, state, cancellationToken);
+            decider = fallback is null ? result.Decider : $"{result.Decider} after {fallback.Decider}: {WireName(fallback.Reason)}";
+            if (result is DeciderAnswers answered)
+                answers = answered.Answers;
+            if (result is DeciderAnswers { Declined.IsEmpty: false } partial)
+                deciders = partial.Declined.ToImmutableDictionary(pair => pair.Key, pair => $"{decider} declined: {pair.Value}", StringComparer.Ordinal);
+            if (fallback is null && _escalation is not null && result is DeciderAnswers first)
+            {
+                var (escalatedAnswers, escalatedBy) = await EscalateAsync(askedRequest, first, cancellationToken);
+                answers = escalatedAnswers;
+                deciders = deciders.SetItems(escalatedBy);
+            }
         }
+        // A skipped key has no answer, so the policy gives it its below-floor action.
+        answers = answers.RemoveRange(skipped.Keys);
+        deciders = deciders.SetItems(skipped.Select(pair => KeyValuePair.Create(pair.Key, SkippedDecider(pair.Value))));
 
         // Granting questions are evaluated first (C-026): a granted condition holds for the rest of the checkpoint only when its
         // granter acted, whatever the caller passed. Events are still written in key order.
@@ -123,6 +174,8 @@ public sealed class DecisionFabric
             {
                 var answer = answers.TryGetValue(key, out var candidate) && Fits(candidate, question) ? candidate : null;
                 var verdict = Policy.Evaluate(key, answer, held);
+                if (skipped.TryGetValue(key, out var why))
+                    verdict = verdict with { Reason = "skipped: " + why };
                 evaluated[key] = (answer, verdict);
                 if (grants && verdict.Acted)
                     held.Add(Policy.Catalogue.Resolve(key).Grants!);
@@ -135,7 +188,7 @@ public sealed class DecisionFabric
             var (answer, verdict) = evaluated[key];
             var decisionId = Guid.NewGuid().ToString("N");
             var answeredBy = deciders.GetValueOrDefault(key, decider);
-            verdicts[key] = new FabricVerdict(decisionId, answer, verdict, answeredBy);
+            verdicts[key] = new FabricVerdict(decisionId, answer, verdict, answeredBy, skipped.GetValueOrDefault(key));
             events.Add(EventData.Create(new Decision(decisionId, key,
                 answer?.ToProbabilityMap() ?? ImmutableDictionary<string, double>.Empty,
                 answer?.Confidence ?? 0, verdict.Threshold, verdict.Action, Policy.Floors.Version, answeredBy,
@@ -143,7 +196,7 @@ public sealed class DecisionFabric
         }
 
         var stored = Append(sessionId, events, cancellationToken);
-        var checkpointResult = new CheckpointResult(checkpoint, verdicts.ToImmutable(), decider, fallback, [.. stored]);
+        var checkpointResult = new CheckpointResult(checkpoint, verdicts.ToImmutable(), decider, fallback, [.. stored]) { Profile = Profile };
         if (activity is not null)
             Describe(activity, checkpointResult);
         return checkpointResult;
@@ -272,13 +325,17 @@ public sealed class DecisionFabric
         activity.SetTag("corvid.decider", result.Decider);
         if (result.Fallback is { } fallback)
             activity.SetTag("corvid.decider.fallback", WireName(fallback.Reason));
-        var escalated = verdicts.Where(pair => pair.Value.Decider != result.Decider).Select(pair => pair.Key).ToArray();
+        var escalated = verdicts.Where(pair => !pair.Value.Skipped && pair.Value.Decider != result.Decider).Select(pair => pair.Key).ToArray();
         if (escalated.Length > 0)
             activity.SetTag("corvid.decider.escalated", escalated);
         activity.SetTag("corvid.decide.questions", verdicts.Select(pair => pair.Key).ToArray());
         activity.SetTag("corvid.decide.confidences", verdicts.Select(pair => pair.Value.Answer?.Confidence ?? 0).ToArray());
         activity.SetTag("corvid.decide.actions", verdicts.Select(pair => pair.Value.Verdict.Action).ToArray());
         activity.SetTag("corvid.decide.acted", verdicts.Select(pair => pair.Value.Verdict.Acted).ToArray());
+        // C-030: the questions not asked and why, in key order (empty arrays when every question was asked).
+        var skipped = verdicts.Where(pair => pair.Value.Skipped).ToArray();
+        activity.SetTag("corvid.decide.skipped", skipped.Select(pair => pair.Key).ToArray());
+        activity.SetTag("corvid.decide.skip_reasons", skipped.Select(pair => pair.Value.SkipReason!).ToArray());
         foreach (var (key, verdict) in verdicts)
             activity.AddEvent(new ActivityEvent("corvid.decision", tags: new ActivityTagsCollection
             {
@@ -290,6 +347,7 @@ public sealed class DecisionFabric
                 ["corvid.action"] = verdict.Verdict.Action,
                 ["corvid.acted"] = verdict.Verdict.Acted,
                 ["corvid.answered"] = verdict.Answer is not null,
+                ["corvid.skipped"] = verdict.Skipped,
             }));
     }
 
