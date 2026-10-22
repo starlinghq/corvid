@@ -4,7 +4,8 @@ Version 0.1, 2026-10-22. Status: design proposal for the terminal UI of `corvid 
 scrollback renderer of C-013. The evidence behind it is in [`docs/research/tui/`](../research/tui/README.md): eight
 research notes on Claude Code, Codex CLI, the Ink-based CLIs, OpenCode and pi, terminal protocols, .NET options,
 feature inventories and testing practice, each claim with a URL, gathered 2026-10-21. Plan §12 names the surface;
-this document is its design.
+this document is its design. Mockup screens of it, rendered by a terminal emulator and checked against the
+invariants below, are in [`tui-mockups/`](tui-mockups/README.md).
 
 ## 0. Thesis
 
