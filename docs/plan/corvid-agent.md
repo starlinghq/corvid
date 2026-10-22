@@ -484,7 +484,7 @@ Secrets live in **Corvid Vault** (`corvid-vault`), a separate, model-free proces
 
 ## 12. Surfaces and the gateway
 
-- **CLI/TUI.** Spectre.Console with a scrollback-first renderer (the Claude Code and pi style): streaming output, a live tool panel, approvals inline, and Ctrl+P. Slash commands are a registry shared with the gateway, so each one is defined once. The v1 set is about 35 commands (§17).
+- **CLI/TUI.** Spectre.Console with a scrollback-first renderer (the Claude Code and pi style): streaming output, a live tool panel, approvals inline, and Ctrl+P. Slash commands are a registry shared with the gateway, so each one is defined once. The v1 set is about 35 commands (§17). The terminal UI itself is designed in [`tui.md`](tui.md): a terminal layer written from raw bytes, an inline renderer by default with fullscreen and linear renderers behind the same components.
 - **ACP** over stdio so the agent runs inside Zed, JetBrains and VS Code. It provides diffs, approvals, session load and resume, and fork, which maps to a log position.
 - **OpenAI-compatible HTTP** (`/v1/chat/completions` and `/v1/models`), so Open WebUI and other front ends work. **MCP server** mode exposes Corvid's memory and skills to other agents.
 - **Gateway.**
