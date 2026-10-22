@@ -1,0 +1,8 @@
+{
+  "name": "corvid-tui-mockups",
+  "private": true,
+  "description": "Renders the TUI design's mockup screens through xterm.js in headless Chromium.",
+  "type": "module",
+  "scripts": { "frames": "python3 frames.py", "render": "node render.mjs" },
+  "devDependencies": { "@xterm/xterm": "5.5.0", "@xterm/addon-canvas": "0.7.0", "playwright": "1.56.1" }
+}
