@@ -3333,6 +3333,97 @@ for run history (`JobStore.Runs` exists); waking the scheduler at once on resume
 shipping `corvid-evals` in the single-file publish; Hermes' `-p/--profile` and its fallback from a missing sticky profile;
 and Hermes profiles for `SOUL.md`, memory plugins and session import.
 
+## Reduced checkpoints on CPU-only Kev hosts (C-030)
+
+S1 decision 2 ([write-up](spikes/S1-kev-latency.md)): with Kev-0.8B on the CPU every cell was over 1 s, and a one-question
+`pre-execute` is about 3 s at the p50, so whole Kev requests and questions are what cost. C-030 reads that as: ingress and
+egress stay whole, every `step` checkpoint asks at most two questions, and the per-tool-call `risk` is not asked where no
+answer could change the outcome. No project, package or checker rule was added.
+
+- Profile (`Corvid.Fabric.CheckpointReduction`, a record with the reason). `DecisionFabric` takes it as an optional
+  constructor argument (`Reduction`, null for the full profile, today's behaviour). Under it,
+  `CheckpointReduction.Partition` keeps at most `MaxStepQuestions` (2) step keys in `StepPriority` order (`done`, `stuck`,
+  `tool`) and skips every other step key: `clear_results/<call>`, `injection/<call>` and a third routing question. So
+  `StepAsync` asks `done` and `stuck`, and the no-op check (§7 step 6) asks `done` and `tool`; both keep working. Ingress,
+  egress, `pre_execute` and `tick` are asked exactly as before. The reducer never skips a gate (`QuestionRole.Gate`:
+  `risk`, `memory_op`, `skill_write_safe`) at any checkpoint, nor `injection` at ingress (C-033 withholds an MCP origin's
+  tools on an acted verdict there); `CheckpointReduction.Skippable` states the rule.
+- A skipped question reaches no decider: not Kev, not the Kev-4B second tier, not the degraded tier, so no model call and
+  no generator yes/no. The existing policy loop evaluates it with no answer (`DecisionPolicy.Evaluate(key, null, held)`),
+  which gives its catalogue below-floor action, the deterministic conservative default the degraded tier already uses; the
+  grant ordering of C-026 is unchanged. It is still appended as a `Decision` in the same batch and key order, with
+  `Calibrated` null, empty probabilities, the question as it would have been asked, and the decider
+  `degraded skipped: <reason>` (`DecisionFabric.SkippedDecider`). Logging matters: `PromptRenderer.DecidedViews` stubs an
+  old result only from a `clear_results/<call>` decision whose action is `stub_older_than_last_2`, and C-021's
+  `DecisionSet.TierOf` reads a decider named `degraded` or starting `degraded ` as the degraded tier, so skipped decisions
+  never enter a calibrated report. When every key of a request is skipped no decider is called at all, so `KevDecider`
+  never sees an empty request. `FabricVerdict.SkipReason` (and `Skipped`) and `CheckpointResult.Profile` carry it to
+  callers; the verdict's reason reads `skipped: <reason>`.
+- Caller skips. `DecideAsync` gains an overload with `IReadOnlyDictionary<string, string>? skip` before the token (the
+  six-argument form is unchanged, so no call site moved): keys the caller can prove do not change the outcome, honoured at
+  any checkpoint and for any question, gates included, so the proof is the caller's; a key not in the request is refused.
+  Two callers use it, both only when the fabric is reduced. `TurnRunner.LoadSkillAsync` skips the separate
+  `injection/skill:<name>` ingress checkpoint for a hub skill's body: its verdict is never read, since loading the body
+  already taints the turn, so a whole Kev request is saved. `ApprovalPipeline` skips `risk` (below).
+- `risk` at `pre_execute`. `ApprovalPipeline` skips it only where the outcome is ask whatever it says: forced reasons are
+  non-empty (the outcome stays ask and only "once" is offered), or the mode is Smart and the action is one Smart never
+  auto-runs (a path outside the workspace, a delete at the workspace root, a destructive tool, or network, elevated or
+  system effects). That test is `SmartEligible`, factored out of `Map` and used by both, so the two cannot drift. Outcome
+  and offered scopes are identical to the full profile's; the skipped `risk` is logged with the action `ask`, so
+  `RecordOutcome` still records the user's answer against a decision id. The prompt's reason reads
+  `ask: risk not asked, the outcome is ask whatever it says (kev-0.8b on cpu)`. A Smart contained action and every action
+  in Permissive mode still ask `risk`; Manual mode, rule-allowed and read-only calls skipped it already. Non-interactive
+  turns are unaffected, since a skip happens only where the outcome is already ask.
+- Gates stay as conservative. The reducer never skips a gate, and a gate a caller skips gets exactly the degraded tier's
+  answer without Kev (`ask` or `stage_for_review`). The `memory_op` and `skill_write_safe` checkpoints (`MemoryWriter`,
+  `LessonWriter`, the skill writer) are untouched. A skipped `injection/<call>` at step leaves the result tainted, as
+  either answer does in `TurnRunner`, so the tainted-network-egress forced ask still holds; an item that later acts on that
+  verdict must take it out of the skippable set.
+- Configuration. `Corvid:Turn:ReducedCheckpoints` = `Auto` (default) | `On` | `Off`, validated like
+  `Corvid:Approvals:Mode`. `Auto` reduces only when a calibrated decider is bound and the decider slot's effective
+  placement (C-029's `Profile.Placement`) is exactly `cpu`, with the reason `<decider> on cpu`; CUDA, a remote decider and
+  the degraded tier (placement null) resolve to full, so CI (no Kev weights) and the golden turns are unchanged, and a
+  configured CUDA Kev that fell back to the CPU is reduced. `On` (reason `configured`) applies the step cap on the
+  degraded tier too; `Off` never reduces. `CorvidRuntimeFactory.ReductionFor` resolves it once in `Build`, where the fabric
+  is constructed: placement is fixed per runtime and `/model` refuses decider switches. The skill-replay fabric stays
+  full. `CorvidRuntime.DeciderState`, which `/status` and `/model` print, appends the profile:
+  `kev-0.8b on cpu; reduced checkpoints (C-030); degraded tier when Kev declines`.
+- Spans. `corvid.decide` gains `corvid.checkpoint.profile` (`full` or `reduced`), `corvid.decide.skipped` (keys, in key
+  order) and `corvid.decide.skip_reasons` (one per key, same order); each `corvid.decision` event gains `corvid.skipped`,
+  and its `corvid.decider` is `degraded skipped: …` for a skipped key. Skipped keys are not reported in
+  `corvid.decider.escalated`. A fully skipped checkpoint, such as the hub-skill injection checkpoint, still emits its
+  span, with only skipped keys and the checkpoint decider `degraded skipped: <reason>`.
+- Trade-off. Dropping `tool` at step means each later round offers the whole shortlist, which with the 0.8B generator may
+  mean more invalid calls and repairs; `done` and `stuck` are kept for loop control, from S1.
+- Tests. `tests/Corvid.Fabric.Tests`: `ReducedCheckpointTests` (a five-key step asks only `done` and `stuck` and logs the
+  other three as skipped with their below-floor actions; the `done`+`tool` shape; ingress, egress, `pre_execute` and tick
+  whole; full unchanged; the cap on the degraded tier with no embedding for the skipped `tool`; an all-skipped request
+  calling neither tier nor the second tier; an unknown caller skip refused; span tags and events through an
+  `ActivityListener`) and `GateConservatismTests` (a permissiveness order every gate and `injection` must have, so a new
+  gate without one fails; the reducer skipping no gate at any checkpoint and no ingress `injection`; a caller-skipped gate
+  equal to the degraded tier's answer, in {ask, stage_for_review}, and never more permissive than any answer over every
+  option, peaks giving a measure of 0, the floor, just above it and 1, calibrated or not, with `permissive_mode` and
+  `agent_authored` on and off). `tests/Corvid.Approvals.Tests`: `RiskElisionTests` (six actions × three modes × risk
+  levels 0–4, full against reduced: the same outcome and scopes, `risk` skipped exactly for forced reasons and
+  Smart-ineligible actions, asked for Smart contained actions and in Permissive mode; tainted egress; the user's answer
+  recorded against the skipped decision). `tests/Corvid.Kernel.Tests`: `ReducedCheckpointTurnTests` (every step request
+  has at most two questions and old results are still stubbed; a skipped `injection/<call>` leaves the session tainted and
+  the webhook still asks; a hub skill's injection logged but not sent; a flagged MCP description chunk still withheld).
+  `tests/Corvid.Host.Tests`: `PlacementTests` (Auto with `cpu`, `cuda:N`, `remote` and the degraded tier; On and Off; a
+  CUDA Kev and one that fell back, through the stub loader; the runtime and `DeciderState`; validation).
+  `tests/Corvid.Evals.Tests`: `TierOf` of a skipped decision is degraded.
+
+Not built yet: trimming the ingress checkpoint on the CPU (S1 measured 2.6–7 s with four questions; a question cap, or
+C-029's 300-token state for every CPU checkpoint, both unmeasured for decision quality); asking `remember`,
+`skill_opportunity`, `task_succeeded` and `lesson_opportunity` after delivery (`deliver` must stay before it); skipping
+`risk` for Smart contained actions and Permissive mode on the CPU (never more permissive, but Smart would ask nearly as
+often as Manual; a possible `Corvid:Approvals:SkipRiskOnCpu`); eliding `risk` on GPU hosts (each skip loses a labelled
+calibration example; revisit once C-021 has a fitted `risk` floor); the `memory_op` and `skill_write_safe` checkpoints on
+the CPU; Kev-4B as the second tier on a CPU host (about 15 s; a validator warning or no CPU escalation under reduction);
+the degraded tier's own cost on a CPU generator; a configurable step priority or cap, or `tool` before `stuck` for 0.8B
+generators; the tick (`wake`) checkpoint; a per-session or `/status` toggle; a CPU end-to-end turn-latency eval or CI gate;
+and state reuse across checkpoints with a GPU-resident graph (C-031, upstream Starling).
+
 ## Running the check
 
 ```sh

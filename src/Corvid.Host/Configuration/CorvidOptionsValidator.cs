@@ -57,6 +57,8 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue, IEnumerable
         ValidatePlacement(errors, options.Models.Placement);
         if (options.Turn.DualShortlistStateTokens is < 100 or > 600)
             errors.Add("Corvid:Turn:DualShortlistStateTokens must be between 100 and 600 (600 turns it off).");
+        if (!Enum.IsDefined(options.Turn.ReducedCheckpoints))
+            errors.Add("Corvid:Turn:ReducedCheckpoints must be Auto, On or Off.");
         if (!Enum.IsDefined(options.Approvals.Mode))
             errors.Add("Corvid:Approvals:Mode must be Manual, Smart or Permissive.");
         if (options.Approvals.TimeoutSeconds is < 1 or > 86_400)

@@ -297,7 +297,8 @@ internal sealed class TurnHarness : IDisposable
         IApprovalPrompter? prompter = null, IDecider? calibrated = null, TurnOptions? options = null, ApprovalOptions? approvalOptions = null,
         ToolCallSupport toolCalls = ToolCallSupport.TemplateRendered, Action<ToolRegistry>? tools = null, DecisionPolicy? policy = null,
         int generatorContext = 8_192, IChatClient? summarizer = null, int summarizerContext = 8_192,
-        IChatClient? summarizerEscalation = null, int summarizerEscalationContext = 32_768, string? workspace = null)
+        IChatClient? summarizerEscalation = null, int summarizerEscalationContext = 32_768, string? workspace = null,
+        CheckpointReduction? reduction = null)
     {
         policy ??= DecisionPolicy.Default;
         Log = new SqliteEventLog(Path.Combine(_root, "events.db"));
@@ -320,7 +321,7 @@ internal sealed class TurnHarness : IDisposable
             Registry.Bind(ModelSlots.Extractor, new ModelBinding(Profile("fake-extractor", ToolCallSupport.None, 512), extractor));
         Slots = new SessionModelSlots(Registry, Log, Session);
         Fabric = new DecisionFabric(policy, new DegradedDecider(Embedder, generator, askTurnBlocking: policy.Floors.DegradedTurnBlocking),
-            Log, calibrated);
+            Log, calibrated, reduction: reduction);
         Notes = new NoteTools();
         Tools = new ToolRegistry();
         Tools.Add(Notes);

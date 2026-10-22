@@ -53,7 +53,8 @@ public enum ApprovalOutcome
 /// <param name="Reasons">Hardline denials, reasons that force a prompt, and the policy's own reason, in that order.</param>
 /// <param name="Offered">The scopes a prompt may offer: once only when anything forced the prompt or is unresolved.</param>
 /// <param name="Rule">The session or always rule that decided, if one did.</param>
-/// <param name="Risk">The <c>risk</c> decision, when the fabric was asked.</param>
+/// <param name="Risk">The logged <c>risk</c> decision, when there is one: asked, or skipped under reduced checkpoints
+/// (C-030), where <see cref="FabricVerdict.Skipped"/> is true and no decider scored the action.</param>
 public sealed record ApprovalAssessment(
     ApprovalOutcome Outcome,
     ActionAnalysis Analysis,
@@ -266,9 +267,16 @@ public sealed class ApprovalPipeline
             reasons.Add(new("mode", parsed ? "manual mode asks before every side effect" : "the command could not be parsed"));
         else
         {
-            risk = await RiskAsync(context, analysis, cancellationToken);
+            // C-030: with reduced checkpoints (Kev on the CPU), risk is not asked where no answer could change the outcome:
+            // a forced reason asks anyway, and Smart mode asks for an action it would never auto-run. It is still logged, as
+            // a skipped Decision with the action ask, so the user's answer is recorded against it.
+            var elide = _fabric.Reduction is not null
+                && (!forced.IsEmpty || context.Mode == ApprovalMode.Smart && !SmartEligible(analysis, action));
+            risk = await RiskAsync(context, analysis, elide, cancellationToken);
             var mapped = Map(context.Mode, risk.Verdict, analysis, action);
-            reasons.Add(new("risk", $"{risk.Verdict.Action}: {risk.Verdict.Reason}"));
+            reasons.Add(new("risk", risk.Skipped
+                ? $"{risk.Verdict.Action}: risk not asked, the outcome is ask whatever it says ({_fabric.Reduction!.Reason})"
+                : $"{risk.Verdict.Action}: {risk.Verdict.Reason}"));
             if (forced.IsEmpty)
                 outcome = mapped;
         }
@@ -462,15 +470,22 @@ public sealed class ApprovalPipeline
             _session.AddOrUpdate(sessionId, _ => [.. rules], (_, existing) => existing.AddRange(rules));
     }
 
-    private async Task<FabricVerdict> RiskAsync(ApprovalContext context, ActionAnalysis analysis, CancellationToken cancellationToken)
+    /// <param name="skip">Log <c>risk</c> as skipped (C-030) instead of asking it: its below-floor action, ask, applies.</param>
+    private async Task<FabricVerdict> RiskAsync(ApprovalContext context, ActionAnalysis analysis, bool skip, CancellationToken cancellationToken)
     {
         var entry = _fabric.Policy.Catalogue["risk"];
         var instructions = DecisionContent.FromJson(ActionDocuments.Risk(entry.Instructions, analysis, context.Tainted, context.Reversible));
         IReadOnlySet<string>? conditions = context.Mode == ApprovalMode.Permissive
             ? new HashSet<string>(StringComparer.Ordinal) { FabricConditions.PermissiveMode }
             : null;
+        IReadOnlyDictionary<string, string>? skipped = skip
+            ? new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [entry.Id] = "the outcome is ask whatever risk says; " + _fabric.Reduction!.Reason,
+            }
+            : null;
         var result = await _fabric.DecideAsync(context.SessionId, Checkpoint.PreExecute, context.TurnState,
-            [KeyValuePair.Create(entry.Id, entry.ToQuestion(instructions: instructions))], conditions, cancellationToken);
+            [KeyValuePair.Create(entry.Id, entry.ToQuestion(instructions: instructions))], conditions, skipped, cancellationToken);
         return result[entry.Id];
     }
 
@@ -485,20 +500,28 @@ public sealed class ApprovalPipeline
             {
                 var levels = _fabric.Policy.Catalogue["risk"].Options;
                 var level = verdict.Option is null ? int.MaxValue : levels.IndexOf(levels.First(option => option.Name == verdict.Option));
-                var destructive = action is ToolAction { Tool.Risk.Destructive: true };
-                var contained = analysis.Targets.All(target => target.Kind != TargetKind.Path
-                    || target.Location == PathLocation.Inside
-                    || target.Location == PathLocation.WorkspaceRoot && target.Access is not TargetAccess.Delete);
-                var effects = analysis.Effects;
-                return level <= 1 && contained && !destructive
-                       && !effects.HasFlag(ActionEffects.Network) && !effects.HasFlag(ActionEffects.Elevated)
-                       && !effects.HasFlag(ActionEffects.System)
-                    ? ApprovalOutcome.Auto
-                    : ApprovalOutcome.Ask;
+                return level <= 1 && SmartEligible(analysis, action) ? ApprovalOutcome.Auto : ApprovalOutcome.Ask;
             }
             default:
                 return ApprovalOutcome.Ask;
         }
+    }
+
+    /// <summary>
+    /// Whether Smart mode may auto-run the action at all, whatever <c>risk</c> says: its paths stay in the workspace (no
+    /// delete at its root), it is not a destructive tool, and it has no network, elevated or system effect. <see cref="Map"/>
+    /// and the C-030 risk elision both use it, so the two cannot drift.
+    /// </summary>
+    private static bool SmartEligible(ActionAnalysis analysis, ProposedAction action)
+    {
+        var destructive = action is ToolAction { Tool.Risk.Destructive: true };
+        var contained = analysis.Targets.All(target => target.Kind != TargetKind.Path
+            || target.Location == PathLocation.Inside
+            || target.Location == PathLocation.WorkspaceRoot && target.Access is not TargetAccess.Delete);
+        var effects = analysis.Effects;
+        return contained && !destructive
+            && !effects.HasFlag(ActionEffects.Network) && !effects.HasFlag(ActionEffects.Elevated)
+            && !effects.HasFlag(ActionEffects.System);
     }
 
     /// <summary>Reasons that make an action ask whatever its score, mode or remembered rules (and offer only "once").</summary>
