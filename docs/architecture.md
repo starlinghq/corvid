@@ -3333,6 +3333,98 @@ for run history (`JobStore.Runs` exists); waking the scheduler at once on resume
 shipping `corvid-evals` in the single-file publish; Hermes' `-p/--profile` and its fallback from a missing sticky profile;
 and Hermes profiles for `SOUL.md`, memory plugins and session import.
 
+## Tool-calling golden set (C-034)
+
+Spike S2's benchmark (plan §18, C-003): does the fabric make Qwen3.5-0.8B a usable tool caller? A versioned golden set in
+`evals/tool-calling/`, a harness in `evals/Corvid.Evals/ToolCalling/` that runs it through the real `TurnRunner`, the
+`corvid-evals tool-calling` subcommand (the shipped, CPU path) and a local-only CUDA wrapper for the measured run
+(`evals/spikes/S2-tool-calling/`). No Kernel, Fabric or Tools change; no new package for any project in `Corvid.slnx`.
+Results and method: [S2](spikes/S2-tool-calling.md).
+
+- The set (version `2026-10-21.1`, in `catalogue.json` and in every report with the SHA-256 of both files):
+  - `catalogue.json`, 28 tools. The 15 built-ins with examples in `BuiltinTools.Examples` (the file, shell, web fetch,
+    memory and cron tools) as a snapshot of the generated descriptors: name, description, JSON schema and examples.
+    `tests/Corvid.Tools.Builtin.Tests/CatalogueSnapshotTests` builds the real providers and fails when a description,
+    schema (`JsonElement.DeepEquals`) or example list drifts; `CORVID_RECORD_CATALOGUE=1` rewrites the built-in entries and
+    keeps the rest. 13 MCP-like extras named `server__tool` with origin `mcp:<server>`, as `Corvid.Mcp` registers them, and
+    no examples (as production MCP tools, C-018's deferral): nine are spike S5's tools with description and parameters
+    verbatim (`reminders__*`, `notes__*`, `web__web_search`, `messages__send_message`, `weather__get_weather`,
+    `clock__set_timer`), four are new (`calendar__create_event`, `calendar__list_events`, `email__send_email`,
+    `tasks__add_task`), so near-duplicates make shortlisting matter.
+  - `cases.jsonl`, 208 cases: S5's 100 prompts re-labelled for this catalogue (provenance in `note`; S5's glob
+    `search_files` is not Corvid's content search, so those prompts expect `list_files` or `shell`), and 108 new ones:
+    direct cases for every built-in, near-miss pairs (memory vs notes vs files, a job vs an event vs a task, four kinds of
+    search, fetch vs web search, read vs list, patch vs write, message vs email, approve vs reject vs pending), 17 no-tool
+    cases and 10 multi-step chains with canned results. Tags: `direct`, `near_miss`, `no_tool`, `required` (a call is
+    wanted by construction: S5's 48 tempting prompts and a few new ones), `tempting`, `multi_step`, `s5`.
+  - A case is `id`, `prompt`, `tags`, `expect` (`{tool}`, `{any_of: [...]}` for genuine ambiguity, or `{none: true}`) with
+    `args`, or `steps: [{expect, args}]`; `results` (canned text per tool, else `{"ok":true}`) and `note`. `args` maps a
+    parameter to one constraint: `equals` (strings trimmed and case-insensitive, S5's rule; numbers by value), `contains`
+    (every substring, case-insensitive), `regex` (.NET, case-insensitive), `enum` or `present`. With `any_of` a constraint
+    applies to the called tool only when it declares the parameter. `case.schema.json` describes the format for editors;
+    `ToolCallingSet.Load` enforces it by hand (no schema package) and adds what a schema cannot: unknown fields refused,
+    expected tools in the catalogue, every constrained parameter declared by an expected tool, `equals` and `enum` values
+    inside a declared enum, unique ids. The cases were committed alone before any model ran on them.
+- The harness. `CatalogueTool` is a `ToolFunction` over a descriptor built from the catalogue, read-only and offline
+  (`ToolRisk(None, Network: false)`), so no approval, checkpoint, sandbox, taint or `injection` question runs; it returns
+  the running case's canned result. `ToolCallingRunner` composes, per case and configuration, a fresh session on one
+  `SqliteEventLog` per configuration (`events-<config>.db`), production `TurnOptions` except `MaxSteps` (expected steps
+  + 1) with the built-ins' examples as `ToolExamples` (as the host sets them), and the generator slot bound with one
+  escalation target, `EscalationStub` (fixed text, a 131k window), so `TurnResult.Escalations` names the reason
+  (difficulty, repair, stuck, context). GLiNER2 is bound in every configuration when present. Per case the configurations
+  run interleaved after one untimed warm-up (S5's rule). The configurations differ only in bindings:
+
+  | Configuration | Degraded tier | Calibrated | Embedder | Shortlist |
+  | --- | --- | --- | --- | --- |
+  | (a) `qwen-all` | `AbstainingDecider` | none | none | catalogue size (without an embedder the cap is alphabetical) |
+  | (b) `shortlist` | `AbstainingDecider` | none | EmbeddingGemma 2 | 5 |
+  | (c) `shortlist-kev` | `AbstainingDecider` | Kev-0.8B | EmbeddingGemma 2 | 5 |
+  | `degraded` (opt-in) | `DegradedDecider` as the host builds it | none | EmbeddingGemma 2 | 5 |
+
+  `AbstainingDecider` answers every question uniformly and uncalibrated with no margin, so the policy acts on nothing: a
+  choice has no embedding margin, P(yes) = 0.5 is under every yes/no floor a turn asks here (`clarify` and `stuck` 0.7,
+  `done` 0.8; `wake`'s 0.5 is never asked in a turn), `difficulty` is a heuristic and gates need calibration. The scoring test pins
+  this: every tool offered, `clarify`, `difficulty`, `tool` and `done` at their below-floor actions.
+- Scoring (`ToolCallingScorer`, from the session's events and the `TurnResult`): the decisive call of a single-step case
+  is the first one that ran; a call whose result is an `invalid arguments` error was rejected, and one naming a tool that
+  was not offered is an invalid name. Outcomes: correct, wrong tool, invalid name, malformed, no call (prose on a case
+  that needs a tool), called on a no-tool case, clarified, escalated (with its reason; a miss in the headline), failed.
+  A multi-step case is correct when the calls that ran match its steps in order (repeats of a matched step aside) and
+  nothing else ran. Also: args valid (the first call to an offered tool passed the schema), args match (every applicable
+  constraint holds: S2's "argument exact match"), first response correct vs repaired, nudged (§7 step 6's require-that-tool
+  re-prompt, recognised by its wording), Kev's `tool` pick and confidence, the acted questions, and latency (turn,
+  generator total and calls, decider total, embedding, the first call's prompt tokens) from `TimedChatClient`,
+  `TimedDecider` and `TimedEmbedder`.
+- Report (`ToolCallingReport`): `report.json` (format `corvid-tool-calling-report/1`: header with set version, hashes,
+  floors version, Corvid commit, models and devices, options and the load average; per-configuration summaries with
+  nearest-rank p50/p90; one record per case and configuration) and `report.md` (headline, outcomes, by tag, latency,
+  disagreements), both rewritten after every case. The headline is plan §18's: (c) − (a) in tool-choice and
+  argument-match points over all cases, also among non-escalated cases, and (c)'s escalation rate. For floor fitting, each
+  calibrated `tool` decision in (c)'s log gets a `DecisionOutcomeRecorded` after the run, `accepted` when Kev's pick is
+  what the case expects at that point (the next step, or none once the calls have run) and `corrected` otherwise, after
+  the loop's own `tool_succeeded`, so `corvid-evals calibrate --log events-shortlist-kev.db` reads it as labelled.
+- `corvid-evals tool-calling` (`ToolCallingCli`; `Program.cs` dispatches the verb, everything else stays
+  `CalibrationCli`): `--set`, `--catalogue`, `--cases`, `--configs`, `--tags`, `--limit`, `--out`, `--no-extractor`,
+  `--commit`. Models come from `IToolCallingModels`, so the library loads nothing: `StarlingToolCallingModels` in
+  `Corvid.Evals.Calibrate` opens them offline through `StarlingModelStore` (size verification, `STARLING_MODELS`) and
+  binds them through `StarlingBindings`, the generator wrapped in `ModelRequestScopeChatClient` as `ModelComposer` does. A
+  missing model exits 1 with `<name> is not present: corvid model download <name>`; nothing is downloaded. Exit codes as
+  `CalibrationCli`: 0, 1, 2.
+- Boundaries. `Corvid.Evals.Calibrate` now references `src/Corvid.Models.Starling` (CPU natives, central versions
+  already); the checker scans only `src/`, `vault/` and `sandbox/`, so it needed no change, as for C-021. `Corvid.Evals`
+  stays model-free, so `tests/Corvid.Evals.Tests` (CI) loads no natives: it validates the committed set and its coverage
+  (each built-in expected in at least 5 cases, at least 15 `no_tool` and 15 `required`, 8–12 multi-step, 190–220 in all)
+  and drives a scripted generator, a keyword embedder and a scripted Kev through the real turn loop over nine inline
+  cases, one per outcome class. The GPU wrapper (`Corvid.Spikes.ToolCalling`) is outside `Corvid.slnx` and `src/`: with
+  `-p:UseCuda=true` its one native package is `Microsoft.ML.OnnxRuntimeGenAI.Cuda` 0.17.1 (version inline, S1's
+  precedent), which brings `Microsoft.ML.OnnxRuntime.Gpu` 1.30.0, so the build has a single `libonnxruntime.so`; it links
+  `KevDecider.cs`, `Gliner2Extractor.cs`, `Qwen35TokenCounter.cs` and `StarlingProfiles.cs` and builds Qwen and Kev on
+  CUDA through the constructors the CPU-only factories guard (C-029), the embedder and GLiNER2 on the CPU.
+- Not built: a configuration with the llguidance tool grammar (waits for U-2; the `required` cases are its benchmark),
+  production CUDA placement (C-029), multi-turn cases and recency effects, untrusted MCP servers (their `injection`
+  questions and taint), approvals and `pre-execute`, generated examples for MCP tools, time to first token (the loop does
+  not stream), and fitting floors from the eval log (the outcomes are written; C-021's workflow fits them).
+
 ## Running the check
 
 ```sh
