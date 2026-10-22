@@ -11,13 +11,9 @@ using Corvid.Models.Starling;
 using Microsoft.Extensions.AI;
 using Starlings.Acquisition;
 using Starlings.Generation.OnnxGenAI;
-using Starlings.Models.EmbeddingGemma2;
-using Starlings.Models.EmbeddingGemma2.Extensions.AI;
-using Starlings.Models.Gliner2;
 using Starlings.Models.Kev;
 using Starlings.Models.Qwen35;
 using Starlings.Models.Qwen35.Extensions.AI;
-using Starlings.Runtime.Onnx;
 
 using var cancellation = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) =>
@@ -29,14 +25,15 @@ return await ToolCallingCli.RunAsync(args, Console.Out, Console.Error, () => new
 
 /// <summary>
 /// Qwen3.5-0.8B and Kev-0.8B on CUDA device 0 (run.sh pins it to the 3090 by UUID); EmbeddingGemma 2 and GLiNER2 on the
-/// CPU, as in production. Files are located offline with size verification, as <c>StarlingModelStore.Open*</c> do
-/// (<c>STARLING_MODELS</c> honoured); nothing is downloaded. Profiles are production's (<see cref="StarlingProfiles"/>),
-/// so the TurnState Kev reads names the generator as the product does; the header records the real devices.
+/// CPU, as in production. Files are opened offline through <see cref="StarlingModelStore"/> (size verification,
+/// <c>STARLING_MODELS</c> honoured); nothing is downloaded. Kev, the embedder and GLiNER2 are bound through
+/// <see cref="StarlingBindings"/> exactly as the host binds them (Kev with C-029's CUDA options, so its profile is
+/// <c>kev-0.8b@cuda:0</c>). Qwen on CUDA is spike-only: production places only Kev on a GPU, so the generator is built
+/// here as <see cref="StarlingBindings.Qwen35Generator"/> builds it, with the CUDA provider instead of the CPU one.
 /// </summary>
 internal sealed class CudaToolCallingModels : IToolCallingModels
 {
-    private static readonly ModelAcquisitionOptions Offline = new() { Verification = CacheVerification.Size };
-
+    private readonly StarlingModelStore _store = new();
     private readonly List<IDisposable> _owned = [];
     private readonly Dictionary<string, string> _described = new(StringComparer.Ordinal);
     private ModelBinding? _generator;
@@ -47,13 +44,15 @@ internal sealed class CudaToolCallingModels : IToolCallingModels
     {
         if (_generator is not null)
             return _generator;
-        var files = Open("qwen3.5-0.8b", () => Qwen35ModelAssets.OpenLocal(Qwen35Variant.Fp32x, Offline));
-        // Starling's defaults (Qwen35ChatClientOptions null): greedy, thinking off; prefill in 512-token chunks on CUDA.
+        var files = Open(StarlingModels.Qwen35, () => _store.OpenQwen35());
+        // Qwen35ChatClientOptions null: greedy, thinking off (Starlings' defaults; the turn loop sets no sampling option);
+        // prefill in 512-token chunks on CUDA.
         var client = Qwen35ChatClient.Create(files, new Qwen35ModelOptions { Provider = GenAIExecutionProvider.Cuda });
         _owned.Add(client);
-        // As StarlingBindings and ModelComposer bind it: the token counter, then the request scope (TokenCountingChatClient is internal).
-        _generator = new ModelBinding(StarlingProfiles.Qwen35, new ModelRequestScopeChatClient(new CountingChatClient(client, Qwen35TokenCounter.Create(files))));
-        _described["qwen3.5-0.8b"] = $"cuda:0 (GenAI CUDA provider), fp32x, Starlings {Version(typeof(Qwen35ChatClient))}; Qwen35ChatClientOptions defaults: greedy, thinking off";
+        // As StarlingBindings and ModelComposer bind it: the token counter, then the request scope.
+        _generator = new ModelBinding(StarlingProfiles.Qwen35,
+            new ModelRequestScopeChatClient(new CountingChatClient(client, Qwen35TokenCounter.Create(files))));
+        Note(StarlingModels.Qwen35, "cuda:0 (GenAI CUDA provider, spike-only); Qwen35ChatClientOptions defaults: greedy, thinking off");
         return _generator;
     }
 
@@ -61,74 +60,69 @@ internal sealed class CudaToolCallingModels : IToolCallingModels
     {
         if (_embedder is not null)
             return _embedder;
-        var generator = EmbeddingGemma2EmbeddingGenerator.Create(Open("embeddinggemma-2", () => EmbeddingGemma2ModelAssets.OpenLocal(Offline)));
-        _owned.Add(generator);
-        _embedder = new ModelBinding(StarlingProfiles.EmbeddingGemma2, generator);
-        _described["embeddinggemma-2"] = $"cpu, Starlings {Version(typeof(EmbeddingGemma2EmbeddingGenerator))}";
+        _embedder = StarlingBindings.EmbeddingGemma2Embedder(Open(StarlingModels.EmbeddingGemma2, () => _store.OpenEmbeddingGemma2()));
+        Own(_embedder.Service);
+        Note(StarlingModels.EmbeddingGemma2, $"{_embedder.Profile.Id}, cpu");
         return _embedder;
     }
 
     public ModelBinding? Extractor()
     {
-        Gliner2ModelFiles files;
-        try
+        if (!_store.Check(StarlingModel.Gliner2, CacheVerification.Size).IsReady)
         {
-            files = Gliner2ModelAssets.OpenLocal(Offline);
-        }
-        catch (Exception exception) when (exception is ModelAssetMissingException or ModelAssetIntegrityException)
-        {
-            _described["gliner2-base-v1"] = "not present; extractor off";
+            _described[StarlingModels.Gliner2.Name] = "not present; extractor off";
             return null;
         }
-        var extractor = Gliner2EntityExtractor.Create(files);
-        _owned.Add(extractor);
-        // Gliner2Extractor.Create is the same delegate over the CPU model; the internal constructor skips nothing else.
-        var adapter = new Gliner2Extractor((text, labels, threshold, token) => extractor.Extract(text, labels, threshold, token).Entities, null, null);
-        _described["gliner2-base-v1"] = $"cpu, Starlings {Version(typeof(Gliner2EntityExtractor))}";
-        return new ModelBinding(StarlingProfiles.Gliner2, adapter);
+        var binding = StarlingBindings.Gliner2Extractor(_store.OpenGliner2());
+        Own(binding.Service);
+        Note(StarlingModels.Gliner2, $"{binding.Profile.Id}, cpu");
+        return binding;
     }
 
     public IDecider Kev()
     {
         if (_kev is not null)
             return _kev;
-        var files = Open("kev-0.8b", () => KevModelAssets.OpenLocal(KevModel.Kev08B, Offline));
-        var model = KevDecisionModel.Create(files, new KevOptions { Session = new OnnxSessionOptions { Provider = OnnxExecutionProvider.Cuda, CudaDeviceId = 0 } });
-        // KevDecider.Create refuses CUDA (C-029); this is what it does, minus that guard (S1's construction).
-        var kev = new KevDecider(KevDecider.NameOf(KevModel.Kev08B), new Runner(model), model);
-        _owned.Add(kev);
-        _described["kev-0.8b"] = $"cuda:0 ({model.ProfileId}), calibrated temperature, Starlings {Version(typeof(KevDecisionModel))}";
-        return _kev = kev;
+        // C-029's production construction: CUDA is checked before the weights are read, and nothing falls back.
+        var binding = StarlingBindings.KevDecider(Open(StarlingModels.Kev08B, () => _store.OpenKev(KevModel.Kev08B)),
+            KevDecider.OptionsFor(ModelPlacement.Cuda(0)));
+        Own(binding.Service);
+        Note(StarlingModels.Kev08B, $"{binding.Profile.Id} (KevDecider.Create, C-029); calibrated temperature");
+        return _kev = (IDecider)binding.Service;
     }
 
     public IReadOnlyDictionary<string, string> Describe() => _described;
 
-    private static T Open<T>(string name, Func<T> open)
+    private static T Open<T>(StarlingModelInfo model, Func<T> open)
     {
         try
         {
             return open();
         }
-        catch (Exception exception) when (exception is ModelAssetMissingException or ModelAssetIntegrityException)
+        catch (StarlingModelUnavailableException exception)
         {
-            throw new ToolCallingModelMissingException(name, exception.Message, exception);
+            throw new ToolCallingModelMissingException(model.Name, $"{exception.Status.State.ToString().ToLowerInvariant()} in {exception.Status.SnapshotDirectory}", exception);
         }
     }
 
-    private static string Version(Type type) =>
-        type.Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0] ?? "?";
+    private void Note(StarlingModelInfo model, string detail) =>
+        _described[model.Name] = $"{detail}, {model.StarlingProfile}, {model.Lock.Repository}@{model.Lock.Revision[..8]}, " +
+            $"Starlings {Version(typeof(KevDecisionModel).Assembly)}";
+
+    private static string Version(Assembly assembly) =>
+        assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0] ?? "?";
+
+    private void Own(object service)
+    {
+        if (service is IDisposable disposable)
+            _owned.Add(disposable);
+    }
 
     public void Dispose()
     {
         foreach (var owned in Enumerable.Reverse(_owned))
             owned.Dispose();
-    }
-
-    private sealed class Runner(KevDecisionModel model) : IKevRunner
-    {
-        public KevEncoding Encode(KevRecord record) => model.Encode(record);
-
-        public IReadOnlyList<float[]> Run(KevEncoding encoding, CancellationToken cancellationToken) => model.Run(encoding, cancellationToken);
+        _owned.Clear();
     }
 }
 
