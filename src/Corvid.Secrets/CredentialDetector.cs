@@ -57,6 +57,9 @@ public enum CredentialKind
     ProseValue,
     EncodedHex,
     EncodedBase64,
+
+    /// <summary>The password of a <c>user:password</c> pair on a command line (<c>curl -u</c>, <c>--user</c>).</summary>
+    UserPassword,
 }
 
 /// <summary>One credential value in a text.</summary>
@@ -90,10 +93,17 @@ public readonly record struct CredentialMatch(CredentialKind Kind, int Start, in
 /// <see cref="Contains"/> fail closed. Thread-safe.
 /// </para>
 /// <para>
-/// Never a credential, under every rule: a Vault placeholder (<see cref="Placeholders"/>; session-bound and meaningless off the
-/// machine), an egress placeholder (<c>&lt;CREDENTIAL_1&gt;</c>) or any other value in angle brackets, <c>[REDACTED]</c>, a
-/// variable reference (<c>$VAR</c>, <c>${VAR}</c>, <c>%VAR%</c>, <c>{{ ... }}</c>), a mask (<c>***</c>, <c>xxxx</c>), the JSON
-/// literals, a bare Authorization scheme, and a number of at most six digits.
+/// Never a credential, under every rule, when it is the whole value: a Vault placeholder (<see cref="Placeholders"/>;
+/// session-bound and meaningless off the machine), an egress placeholder (<c>&lt;CREDENTIAL_1&gt;</c>) or another name in angle
+/// brackets (<c>&lt;YOUR_API_KEY&gt;</c>), <c>[REDACTED]</c> alone or after a kept prefix (<c>ghp_[REDACTED]</c>, so
+/// <see cref="Redact"/> is idempotent), a variable reference (<c>$VAR</c>, <c>${VAR}</c>, <c>$(cmd)</c>, <c>%VAR%</c>,
+/// <c>{{ ... }}</c>), a mask (<c>***</c>, <c>xxxx</c>), the JSON literals, a bare Authorization scheme, and a number of at most
+/// six digits. A value that only contains one of these is not exempt.
+/// </para>
+/// <para>
+/// A bare (unquoted) value ends at whitespace or <c>, ; &amp; ) ] }</c>, since those separate fields in connection strings,
+/// query strings and JSON; a password holding one is cut there, and only its first part is found. A quoted value is found
+/// whole.
 /// </para>
 /// <para>
 /// A screen, not a proof: a credential in no known shape under no telling label passes. Vault exact-value scrubbing is a
@@ -107,7 +117,7 @@ public static partial class CredentialDetector
     /// <summary>The privacy egress gate: shapes and labelled values. No encoded blobs, or every git SHA in a prompt would go.</summary>
     public const CredentialRules Egress = CredentialRules.Shapes | CredentialRules.Labelled;
 
-    /// <summary>Trace export: the same rules as egress; an assignment's value is redacted whatever it looks like.</summary>
+    /// <summary>Trace export: the same rules as egress; an assignment's value is redacted whatever it looks like, to where a bare value ends.</summary>
     public const CredentialRules Traces = CredentialRules.Shapes | CredentialRules.Labelled;
 
     /// <summary>Lessons: everything, including encoded blobs and a bare key header, since a lesson should hold neither.</summary>
@@ -213,7 +223,9 @@ public static partial class CredentialDetector
         Prefixed(text, AwsAccessKey(), CredentialKind.AwsAccessKey, 4, found);
         Prefixed(text, GitHubToken(), CredentialKind.GitHubToken, 4, found);
         Prefixed(text, GitHubFineGrained(), CredentialKind.GitHubToken, "github_pat_".Length, found);
-        Prefixed(text, SlackToken(), CredentialKind.SlackToken, "xoxb-".Length, found);
+        foreach (var match in SlackToken().EnumerateMatches(text))
+            if (!IsSlug(text.AsSpan(match.Index + 5, match.Length - 5)))
+                found.Add(new(CredentialKind.SlackToken, match.Index, match.Length, 5, CredentialStrength.Shape));
         foreach (var match in SkKey().EnumerateMatches(text))
             if (!IsSlug(text.AsSpan(match.Index + 3, match.Length - 3)))
                 found.Add(new(CredentialKind.SkKey, match.Index, match.Length, 3, CredentialStrength.Shape));
@@ -263,11 +275,27 @@ public static partial class CredentialDetector
         {
             var group = match.Groups["value"];
             var (start, length) = Unquote(group);
-            if (IsBare(group))
-                length = TrimSentenceEnd(text, start, length);
+            var bare = IsBare(group);
+            if (bare && IsCutExemption(text, start, length))
+                continue;
+            if (bare)
+                length = TrimBareEnd(text, start, length);
+            if (length == 0)
+                continue;
             var value = text.Substring(start, length);
-            if (!IsExcluded(value) && !(IsBare(group) && IsStopword(value)))
-                found.Add(new(CredentialKind.LabelledValue, start, length, 0, CredentialStrength.Labelled));
+            if (IsExcluded(value) || (bare && IsStopword(value)) || (bare && IsBlockIndicator(value)))
+                continue;
+            // PWD=/home/me is the shell's working directory, not a password.
+            if (match.Groups["label"].ValueSpan.EndsWith("pwd", StringComparison.OrdinalIgnoreCase) && IsPathOrUrl(value))
+                continue;
+            found.Add(new(CredentialKind.LabelledValue, start, length, 0, CredentialStrength.Labelled));
+        }
+
+        foreach (Match match in UserOption().Matches(text))
+        {
+            var value = match.Groups["value"];
+            if (!IsExcluded(value.Value))
+                found.Add(new(CredentialKind.UserPassword, value.Index, value.Length, 0, CredentialStrength.Labelled));
         }
 
         foreach (Match match in UrlPassword().Matches(text))
@@ -289,7 +317,11 @@ public static partial class CredentialDetector
     {
         var (start, length) = Unquote(group);
         if (IsBare(group))
-            length = TrimSentenceEnd(text, start, length);
+        {
+            if (IsCutExemption(text, start, length))
+                return;
+            length = TrimBareEnd(text, start, length);
+        }
         if (length == 0)
             return;
         var value = text.Substring(start, length);
@@ -297,13 +329,55 @@ public static partial class CredentialDetector
             found.Add(new(CredentialKind.ProseValue, start, length, 0, CredentialStrength.Labelled));
     }
 
-    // A sentence's own punctuation is not part of a bare value; "!" and "?" are kept, since passwords end in them.
+    // A sentence's own punctuation is not part of a bare value; "!" and "?" are kept, since passwords end in them. A bare value
+    // may hold a quote (Xk9"vQ2), so one closing quote around the assignment (say "TOKEN=abc") is trimmed too, with the
+    // backslash that escapes it in JSON text ("TOKEN=abc\"" is TOKEN=abc" in the leaf).
+    private static int TrimBareEnd(string text, int start, int length)
+    {
+        length = TrimSentenceEnd(text, start, length);
+        if (length > 1 && text[start + length - 1] is '"' or '\'' or '`')
+        {
+            length--;
+            var backslashes = 0;
+            while (backslashes < length && text[start + length - 1 - backslashes] == '\\')
+                backslashes++;
+            if (backslashes % 2 == 1)
+                length--;
+            length = TrimSentenceEnd(text, start, length);
+        }
+        return length;
+    }
+
     private static int TrimSentenceEnd(string text, int start, int length)
     {
         while (length > 0 && text[start + length - 1] is '.' or ',' or ';' or ':' or ')' or ']' or '}')
             length--;
         return length;
     }
+
+    // A bare value stops before "]" and "}" and at a space, so a redaction's own output (ghp_[REDACTED]) and a reference
+    // (${GITHUB_TOKEN}, ${{ secrets.X }}) arrive cut short. Either is left as it is; redacting ghp_[REDACTED] again would give
+    // ghp_[REDACTED]], so this keeps Redact idempotent.
+    private static bool IsCutExemption(string text, int start, int length)
+    {
+        var end = start + length;
+        // A prose value keeps its "]" until the sentence's punctuation is trimmed.
+        if (RedactionOutput().IsMatch(text.AsSpan(start, length)))
+            return true;
+        if (end < text.Length && text[end] == ']' && text.AsSpan(start, length).EndsWith(Redacted.AsSpan(0, Redacted.Length - 1), StringComparison.Ordinal))
+            return RedactionOutput().IsMatch(text.AsSpan(start, length + 1));
+        if (length == 0 || text[start] is not ('$' or '{'))
+            return false;
+        var close = text.IndexOf('}', start);
+        if (close < 0 || close - start > 256)
+            return false;
+        if (close + 1 < text.Length && text[close + 1] == '}')
+            close++;
+        return close + 1 >= end && Reference().IsMatch(text.AsSpan(start, close + 1 - start));
+    }
+
+    // "password: |" opens a YAML block scalar; the value is on the lines after it, which no rule reads (C-032's deferrals).
+    private static bool IsBlockIndicator(string value) => value.Length <= 3 && value[0] is '|' or '>';
 
     private static void FindEncoded(string text, List<CredentialMatch> found)
     {
@@ -364,20 +438,29 @@ public static partial class CredentialDetector
         }
     }
 
+    /// <summary>
+    /// Whether <paramref name="value"/>, as a whole, is one no rule reports (see the class remarks): for a caller that decodes a
+    /// match (a JSON-escaped <c><CREDENTIAL_1></c>) and must check the decoded value again.
+    /// </summary>
+    public static bool IsExempt(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        return IsExcluded(value);
+    }
+
     /// <summary>The values no rule ever reports (see the class remarks).</summary>
     internal static bool IsExcluded(string value)
     {
         var trimmed = value.AsSpan().Trim();
         if (trimmed.IsEmpty)
             return true;
-        if (trimmed.Contains(Redacted, StringComparison.Ordinal) || Placeholders.Contains(value))
+        // Only a whole value is exempt: a secret that merely holds [REDACTED], a placeholder, a $ or angle brackets is not.
+        // [REDACTED] alone or after a public prefix (ghp_[REDACTED]) is this detector's own output.
+        if (RedactionOutput().IsMatch(trimmed) || IsWholePlaceholder(trimmed.ToString()))
             return true;
-        // Variable references and templates: $VAR, ${VAR}, $(cmd), %VAR%, {{ secrets.X }}.
-        if (trimmed[0] == '$' || trimmed.StartsWith("{{", StringComparison.Ordinal)
-            || (trimmed.Length > 2 && trimmed[0] == '%' && trimmed[^1] == '%'))
-            return true;
-        // Placeholders of any kind: <CREDENTIAL_1>, <YOUR_API_KEY>, and the neutralized ‹EMAIL_1›.
-        if ((trimmed[0] == '<' && trimmed[^1] == '>') || (trimmed[0] == '‹' && trimmed[^1] == '›'))
+        // Variable references and templates ($VAR, ${VAR}, $(cmd), %VAR%, {{ secrets.X }}) and placeholders whose content
+        // reads as a name (<CREDENTIAL_1>, <YOUR_API_KEY>, the neutralized ‹EMAIL_1›).
+        if (Reference().IsMatch(trimmed))
             return true;
         if (trimmed.Equals("null", StringComparison.OrdinalIgnoreCase) || trimmed.Equals("true", StringComparison.OrdinalIgnoreCase)
             || trimmed.Equals("false", StringComparison.OrdinalIgnoreCase) || trimmed.Equals("none", StringComparison.OrdinalIgnoreCase)
@@ -389,6 +472,14 @@ public static partial class CredentialDetector
             return true;
         // A mask: ***, xxxx, ••••.
         return !trimmed.ContainsAnyExcept("*xX•·#.-_?");
+    }
+
+    private static bool IsWholePlaceholder(string value)
+    {
+        if (!value.StartsWith(Placeholders.Prefix, StringComparison.Ordinal))
+            return false;
+        var match = Placeholders.Find(value).FirstOrDefault();
+        return match.Value is not null && match.Index == 0 && match.Length == value.Length;
     }
 
     private static bool IsScheme(ReadOnlySpan<char> value) =>
@@ -475,17 +566,18 @@ public static partial class CredentialDetector
     [GeneratedRegex(@"\b(?:AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16}\b", Options, TimeoutMilliseconds)]
     private static partial Regex AwsAccessKey();
 
-    [GeneratedRegex(@"\bgh[pousr]_[A-Za-z0-9]{30,}", Options, TimeoutMilliseconds)]
+    [GeneratedRegex(@"\bgh[pousr]_[A-Za-z0-9]{20,}", Options, TimeoutMilliseconds)]
     private static partial Regex GitHubToken();
 
-    [GeneratedRegex(@"\bgithub_pat_[A-Za-z0-9_]{22,}", Options, TimeoutMilliseconds)]
+    [GeneratedRegex(@"\bgithub_pat_[A-Za-z0-9_]{20,}", Options, TimeoutMilliseconds)]
     private static partial Regex GitHubFineGrained();
 
-    [GeneratedRegex(@"\bxox[abposr]-[A-Za-z0-9-]{10,}", Options, TimeoutMilliseconds)]
+    // Bot, user, app-level, refresh and legacy tokens: xoxb-, xoxp-, xoxa-, xoxe-, xoxo-, xoxs-, xoxr-, xapp-. Slugs are dropped in code.
+    [GeneratedRegex(@"\b(?:xox[abeposr]|xapp)-[A-Za-z0-9-]{10,}", Options, TimeoutMilliseconds)]
     private static partial Regex SlackToken();
 
     // Anthropic sk-ant-, OpenAI sk-proj- and plain sk- keys; slugs are dropped in code.
-    [GeneratedRegex(@"\bsk-[A-Za-z0-9_-]{20,}", Options, TimeoutMilliseconds)]
+    [GeneratedRegex(@"\bsk-[A-Za-z0-9_-]{16,}", Options, TimeoutMilliseconds)]
     private static partial Regex SkKey();
 
     [GeneratedRegex(@"\b[sr]k_live_[A-Za-z0-9]{16,}", Options, TimeoutMilliseconds)]
@@ -500,16 +592,36 @@ public static partial class CredentialDetector
     [GeneratedRegex(@"\bhf_[A-Za-z0-9]{30,}", Options, TimeoutMilliseconds)]
     private static partial Regex HuggingFaceToken();
 
-    [GeneratedRegex(@"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}", Options, TimeoutMilliseconds)]
+    // The payload need not start eyJ, as the lesson rule this replaced did not require it.
+    [GeneratedRegex(@"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}", Options, TimeoutMilliseconds)]
     private static partial Regex Jwt();
 
     // key=value, key: value, "key": "value", export KEY='value': a label naming a credential (any prefix, so GITHUB_TOKEN and
-    // aws_secret_access_key count), the closing quote of a quoted label, a separator on the same line, then a quoted value to
-    // its closing quote or a bare value to whitespace or punctuation. One value group; quotes are stripped in code.
+    // aws_secret_access_key count; pass and pwd only whole or after a separator, so DB_PASS and Pwd= count and compass does
+    // not), the closing quote of a quoted label, a separator on the same line, then a quoted value to its closing quote, past
+    // backslash escapes (a JSON \" is inside the value), or a bare value to whitespace or , ; & ) ] }. A bare value may hold a
+    // quote after its first character (Xk9"vQ2). One value group; quotes are stripped in code.
     [GeneratedRegex(
-        """\b[A-Za-z0-9_.-]*(?:api[_-]?key|access[_-]?key|secret[_-]?key|secret|token|password|passwd|passphrase|private[_-]?key|client[_-]?secret)["'`]?[ \t]*[:=][ \t]*(?<value>"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;"'`}\]&)\[][^\s,;"'`}\]&)]*)""",
+        """\b(?<label>[A-Za-z0-9_.-]*(?:api[_-]?key|access[_-]?key|secret[_-]?key|secret|token|password|passwd|passphrase|private[_-]?key|client[_-]?secret)|(?:[A-Za-z0-9_.-]*[_.-])?(?:pass|pwd))["'`]?[ \t]*[:=][ \t]*(?<value>"(?:[^"\\\r\n]|\\[^\r\n])*"|'(?:[^'\\\r\n]|\\[^\r\n])*'|[^\s,;"'`}\]&)\[][^\s,;}\]&)]*)""",
         IgnoreCase, TimeoutMilliseconds)]
     private static partial Regex LabelledValue();
+
+    // curl -u user:PASSWORD, --user user:PASSWORD, --user='user:PASSWORD'.
+    [GeneratedRegex(
+        """(?:\A|\s)(?:-u|--user|--proxy-user)(?:[ \t]+|=)(?:"[^":\s]+:(?<value>(?:[^"\\\r\n]|\\[^\r\n])+)"|'[^':\s]+:(?<value>[^'\r\n]+)'|[^\s:"'@]+:(?<value>[^\s"'@]+))""",
+        Options, TimeoutMilliseconds)]
+    private static partial Regex UserOption();
+
+    // [REDACTED], alone or after a public prefix this detector keeps: what Redact writes.
+    [GeneratedRegex(@"\A(?:gh[pousr]_|github_pat_|xox[abeposr]-|xapp-|sk-|[sr]k_live_|glpat-|AIza|hf_|eyJ|AKIA|ASIA|ABIA|ACCA)?\[REDACTED\]\z",
+        Options, TimeoutMilliseconds)]
+    private static partial Regex RedactionOutput();
+
+    // A whole value that is a reference or a placeholder: $VAR, ${VAR}, $(cmd), %VAR%, {{ ... }}, <NAME>, ‹NAME›.
+    [GeneratedRegex(
+        """\A(?:\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$\([^()\r\n]*\)|%[A-Za-z_][A-Za-z0-9_]*%|\$\{\{[^{}\r\n]*\}\}|\{\{[^{}\r\n]*\}\}|<[A-Za-z][A-Za-z0-9_ .-]*>|‹[A-Za-z][A-Za-z0-9_ .-]*›)\z""",
+        Options, TimeoutMilliseconds)]
+    private static partial Regex Reference();
 
     // scheme://user:PASSWORD@host
     [GeneratedRegex(@"\b[A-Za-z][A-Za-z0-9+.-]{1,20}://[^\s:/@]{1,128}:(?<value>[^\s/@]{1,256})@", Options, TimeoutMilliseconds)]
@@ -518,13 +630,13 @@ public static partial class CredentialDetector
     // "the password is X", "the wifi password at the cabin is X", "the root password was changed to X", "secret access key: X".
     // The longer separators come first: the engine prefers the first alternative that matches, as a backtracking one would.
     [GeneratedRegex(
-        """\b(?:passwords?|passwd|passphrase|passcode|secret access key|secret key|access key|api key|api token|access token|auth token|bot token|bearer token|refresh token|session token|client secret|secret)(?<words>(?:[ \t]+[A-Za-z0-9_'-]+){0,5}?)(?:[ \t]+(?:is|was|has[ \t]+been)[ \t]+(?:set|changed|reset)[ \t]+to|[ \t]+(?:set|changed|reset)[ \t]+to|[ \t]+(?:is|was)(?:[ \t]+(?:now|still))?|[ \t]*[:=])[ \t]+(?<value>"[^"\r\n]{1,200}"|'[^'\r\n]{1,200}'|[^\s"'`<>]{1,256})""",
+        """\b(?:passwords?|passwd|passphrase|passcode|secret access key|secret key|access key|api key|api token|access token|auth token|bot token|bearer token|refresh token|session token|client secret|secret)(?<words>(?:[ \t]+[A-Za-z0-9_'-]+){0,5}?)(?:[ \t]+(?:is|was|has[ \t]+been)[ \t]+(?:set|changed|reset)[ \t]+to|[ \t]+(?:set|changed|reset)[ \t]+to|[ \t]+(?:is|was)(?:[ \t]+(?:now|still))?|[ \t]*[:=])[ \t]+(?<value>"(?:[^"\\\r\n]|\\[^\r\n]){1,200}"|'(?:[^'\\\r\n]|\\[^\r\n]){1,200}'|[^\s"'`<>][^\s<>]{0,255})""",
         IgnoreCase, TimeoutMilliseconds)]
     private static partial Regex ProseIs();
 
     // "log in with password X", "use the passphrase X".
     [GeneratedRegex(
-        """\b(?:with|using|use)[ \t]+(?:the[ \t]+|a[ \t]+|my[ \t]+)?(?:password|passphrase|passcode)[ \t]+(?<value>"[^"\r\n]{1,200}"|'[^'\r\n]{1,200}'|[^\s"'`<>]{1,256})""",
+        """\b(?:with|using|use)[ \t]+(?:the[ \t]+|a[ \t]+|my[ \t]+)?(?:password|passphrase|passcode)[ \t]+(?<value>"(?:[^"\\\r\n]|\\[^\r\n]){1,200}"|'(?:[^'\\\r\n]|\\[^\r\n]){1,200}'|[^\s"'`<>][^\s<>]{0,255})""",
         IgnoreCase, TimeoutMilliseconds)]
     private static partial Regex ProseWith();
 

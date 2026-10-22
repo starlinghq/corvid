@@ -90,5 +90,8 @@ Detector spans on the 41 texts without a credential: 0.
 
 | Set | Texts | Texts with a detector span | Spans |
 | --- | --- | --- | --- |
-| targets-corpus.jsonl commands | 300 | 0 | 0 |
-| everyday.txt | 286 | 0 | 0 |
+| targets-corpus.jsonl commands | 300 | 1 | 1 |
+| everyday.txt | 286 | 1 | 1 |
+
+- targets-corpus.jsonl commands: `secret` in `curl -u admin:secret https://jenkins.internal.example.com/api/json`
+- everyday.txt: `secret` in `curl -u admin:secret https://jenkins.internal.example.com/api/json`

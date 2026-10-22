@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using Corvid.Abstractions.Events;
 using Corvid.Abstractions.Extraction;
 using Corvid.Models.Privacy;
+using Corvid.Secrets;
 using Microsoft.Extensions.AI;
 
 namespace Corvid.Models.Tests;
@@ -520,6 +521,98 @@ public sealed class PrivacyEgressTests
         var refused = await Assert.ThrowsAsync<PrivacyEgressRefusedException>(() => client.GetResponseAsync(image, Session("s1"), Ct));
 
         Assert.Contains("1 credential value and DataContent", refused.Reason, StringComparison.Ordinal);
+    }
+
+    private static IEnumerable<string> Arguments(IEnumerable<ChatMessage> messages) =>
+        messages.SelectMany(message => message.Contents).OfType<FunctionCallContent>().SelectMany(call => call.Arguments!.Values).Select(value => value?.ToString() ?? "");
+
+    // Review of C-032, finding 1: a JSON-escaped quote inside a tool-call argument no longer cuts the value short.
+    [Theory]
+    [InlineData("command", "mysql -u root password = Xk9\"vQ2!mL7pZ", "mysql -u root password = <CREDENTIAL_1>")]
+    [InlineData("password", "Xk9\"vQ2!mL7pZ", "<CREDENTIAL_1>")]
+    [InlineData("command", "say \"TOKEN=Xk9vQ2mL7pZ\" twice", "say \"TOKEN=<CREDENTIAL_1>\" twice")]
+    public async Task A_quote_inside_a_tool_call_argument_is_redacted_with_the_rest_of_the_value(string key, string value, string expected)
+    {
+        var egress = Egress(new FakePiiExtractor(), EgressPolicy.Default with { Action = EgressAction.Send });
+        List<ChatMessage> messages = [new(ChatRole.Assistant, [new FunctionCallContent("c1", "shell", new Dictionary<string, object?> { [key] = value })])];
+
+        var prepared = await egress.PrepareAsync(Cloud, messages, new ModelRequestContext("s1", false), Ct);
+
+        Assert.Equal(EgressOutcome.Redacted, prepared.Decision.Outcome);
+        Assert.Equal(expected, Assert.Single(Arguments(prepared.Messages)));
+    }
+
+    [Fact]
+    public async Task A_credential_found_in_json_that_cannot_be_decoded_refuses_the_request()
+    {
+        // A finder that cuts a value at an escape, as the detector did before finding 1: the JSON form decodes to nothing valid.
+        var egress = new PrivacyEgress(new FakePiiExtractor(), new PrivacyEgressOptions
+        {
+            PolicyFor = _ => EgressPolicy.Default with { Action = EgressAction.Send },
+            FindCredentials = text => text.IndexOf("\\SECRET", StringComparison.Ordinal) is var at and >= 0
+                ? [new CredentialMatch(CredentialKind.LabelledValue, at, "\\SECRETVALUE".Length, 0, CredentialStrength.Labelled)]
+                : [],
+        });
+        List<ChatMessage> messages = [new(ChatRole.Assistant, [new FunctionCallContent("c1", "shell", new Dictionary<string, object?> { ["p"] = "x\\SECRETVALUE" })])];
+
+        var prepared = await egress.PrepareAsync(Cloud, messages, new ModelRequestContext("s1", false), Ct);
+
+        Assert.Equal(EgressOutcome.Refused, prepared.Decision.Outcome);
+        Assert.Contains("could not be decoded", prepared.Decision.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_credential_the_detector_finds_again_after_redaction_refuses_the_request()
+    {
+        // The first scan finds only the head of a value; the redacted text shows the rest. The gate refuses rather than send it.
+        var egress = new PrivacyEgress(new FakePiiExtractor(), new PrivacyEgressOptions
+        {
+            PolicyFor = _ => EgressPolicy.Default with { Action = EgressAction.Send },
+            FindCredentials = text =>
+                text.Contains("<CREDENTIAL_1>", StringComparison.Ordinal) && text.IndexOf("TAILSECRET", StringComparison.Ordinal) is var tail and >= 0
+                    ? [new CredentialMatch(CredentialKind.LabelledValue, tail, "TAILSECRET".Length, 0, CredentialStrength.Labelled)]
+                    : text.IndexOf("HEADSECRET", StringComparison.Ordinal) is var head and >= 0 ? [new CredentialMatch(CredentialKind.LabelledValue, head, "HEADSECRET".Length, 0, CredentialStrength.Labelled)] : [],
+        });
+
+        var prepared = await egress.PrepareAsync(Cloud, [new(ChatRole.User, "HEADSECRET TAILSECRET")], new ModelRequestContext("s1", false), Ct);
+
+        Assert.Equal(EgressOutcome.Refused, prepared.Decision.Outcome);
+        Assert.Contains("still in the request after redaction", prepared.Decision.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("SECRET", prepared.Decision.Reason, StringComparison.Ordinal);
+    }
+
+    // Finding 3: a PII span that starts before a credential and overlaps it no longer leaves the credential's tail.
+    [Fact]
+    public async Task A_pii_span_overlapping_a_credential_is_redacted_as_one_value_and_restored_exactly()
+    {
+        const string text = "Clone https://alice:Tr0ub4dor&3xyz@git.example.com/repo first.";
+        var egress = Egress(new FakePiiExtractor(("person", "alice:Tr0ub4dor")), EgressPolicy.Default with { Action = EgressAction.Send });
+
+        var prepared = await egress.PrepareAsync(Cloud, [new(ChatRole.User, text)], new ModelRequestContext("s1", false), Ct);
+
+        var sent = Sent(prepared.Messages);
+        Assert.Equal(EgressOutcome.Redacted, prepared.Decision.Outcome);
+        Assert.DoesNotContain("Tr0ub4dor", sent, StringComparison.Ordinal);
+        Assert.DoesNotContain("3xyz", sent, StringComparison.Ordinal);
+        Assert.Matches(@"^Clone https://<CREDENTIAL_\d+>@git\.example\.com/repo first\.$", sent);
+        Assert.Equal(text, prepared.Map!.Restore(sent));
+    }
+
+    [Fact]
+    public void Overlapping_values_are_replaced_by_their_union_and_a_contained_one_by_the_outer()
+    {
+        var map = new RedactionMap();
+        map.PlaceholderFor("person", "alice:Tr0ub4dor");
+        map.PlaceholderFor("credential", "Tr0ub4dor&3xyz");
+        map.PlaceholderFor("person", "Bob Lee");
+        map.PlaceholderFor("person", "Bob");
+
+        var redacted = map.Redact("u=alice:Tr0ub4dor&3xyz@h, Bob Lee and Bob");
+
+        Assert.Equal("u=<CREDENTIAL_2>@h, <PERSON_2> and <PERSON_3>", redacted);
+        Assert.True(map.TryResolve("<CREDENTIAL_2>", out var union));
+        Assert.Equal("alice:Tr0ub4dor&3xyz", union);
+        Assert.Equal("u=alice:Tr0ub4dor&3xyz@h, Bob Lee and Bob", map.Restore(redacted));
     }
 
     [Fact]

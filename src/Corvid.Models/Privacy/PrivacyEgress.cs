@@ -201,7 +201,8 @@ public sealed class PrivacyEgress
             foreach (var text in distinct)
                 AddCredentials(text, json: false, values);
             foreach (var text in structured.Distinct(StringComparer.Ordinal))
-                AddCredentials(text, json: true, values);
+                if (!AddCredentials(text, json: true, values))
+                    return new([.. values.Values], "a credential value in a tool call's JSON could not be decoded, so it could not be redacted");
         }
         catch (RegexMatchTimeoutException)
         {
@@ -243,31 +244,69 @@ public sealed class PrivacyEgress
     // Shorter values would rewrite unrelated text everywhere in the session (RedactionMap replaces substrings).
     internal const int MinCredentialLength = 4;
 
-    private void AddCredentials(string text, bool json, Dictionary<string, DetectedValue> values)
+    // False when a value found in JSON text cannot be decoded: it would not match the leaf it came from, so it could not be
+    // redacted, and the scan refuses rather than report it redacted.
+    private bool AddCredentials(string text, bool json, Dictionary<string, DetectedValue> values)
     {
         foreach (var match in Options.FindCredentials(text))
         {
             var value = match.ValueIn(text);
             if (json && value.Contains('\\', StringComparison.Ordinal))
-                value = JsonUnescape(value);
+            {
+                if (!TryJsonUnescape(value, out value))
+                    return false;
+                // An escaped placeholder (<CREDENTIAL_1> in a re-serialized tool result) is a placeholder once decoded.
+                if (CredentialDetector.IsExempt(value))
+                    continue;
+            }
             value = value.Trim();
             if (value.Length >= MinCredentialLength)
                 values[value] = new DetectedValue(CredentialLabel, value, Credential: true);
         }
+        return true;
     }
 
     // A value found in JSON text, as the request's leaves hold it: escapes decoded, so the redaction finds it.
-    private static string JsonUnescape(string value)
+    private static bool TryJsonUnescape(string value, out string decoded)
     {
         try
         {
             using var document = JsonDocument.Parse("\"" + value + "\"");
-            return document.RootElement.GetString() ?? value;
+            decoded = document.RootElement.GetString() ?? value;
+            return true;
         }
         catch (JsonException)
         {
-            return value;
+            decoded = value;
+            return false;
         }
+    }
+
+    /// <summary>
+    /// Why the redacted request still carries a credential, or null. A found credential value still in a leaf, or a credential
+    /// the detector finds again in the leaves or the JSON of tool calls (a value cut short, or one a PII placeholder split),
+    /// means the redaction missed part of it, and the request is refused rather than reported redacted.
+    /// </summary>
+    private string? CredentialLeft(EgressScan scan, IReadOnlyList<ChatMessage> redacted)
+    {
+        var leaves = OutgoingTexts(redacted).ToList();
+        foreach (var value in scan.Values.Where(value => value.Credential))
+            if (leaves.Any(leaf => leaf.Contains(value.Value, StringComparison.Ordinal)))
+                return "a credential value is still in the request after redaction";
+        var left = new Dictionary<string, DetectedValue>(StringComparer.Ordinal);
+        try
+        {
+            foreach (var leaf in leaves.Distinct(StringComparer.Ordinal))
+                AddCredentials(leaf, json: false, left);
+            foreach (var text in StructuredTexts(redacted).Distinct(StringComparer.Ordinal))
+                if (!AddCredentials(text, json: true, left))
+                    return "a credential value in a tool call's JSON could not be decoded after redaction";
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return "the credential detector timed out on the redacted request";
+        }
+        return left.Count == 0 ? null : "part of a credential value is still in the request after redaction";
     }
 
     /// <summary>
@@ -321,7 +360,11 @@ public sealed class PrivacyEgress
         var map = MapFor(context.SessionId);
         foreach (var value in scan.Values)
             map.PlaceholderFor(value.Label, value.Value);
-        return new(decision, [.. messages.Select(message => Transform(message, map.Redact))], map);
+        List<ChatMessage> redacted = [.. messages.Select(message => Transform(message, map.Redact))];
+        // The credential floor is checked on what would be sent, not assumed from the scan.
+        if (CredentialLeft(scan, redacted) is { } left)
+            return new(new(EgressOutcome.Refused, decision.Action, left, decision.Labels), messages, null);
+        return new(decision, redacted, map);
     }
 
     /// <summary>Maps the session's placeholders in a response back to their values, in text and in tool-call arguments.</summary>

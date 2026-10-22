@@ -242,4 +242,90 @@ public sealed class CredentialDetectorTests
     [InlineData("PasswordManager", false)]
     public void The_secret_like_test(string value, bool expected) =>
         Assert.Equal(expected, CredentialDetector.IsSecretLike(value));
+
+    // Review of C-032, finding 1: a quote inside a value, escaped in JSON or bare in plain text, does not end it.
+    [Theory]
+    [InlineData("""{"cmd": "password = Xk9\"vQ2!mL7pZ"}""", "Xk9\\\"vQ2!mL7pZ")]
+    [InlineData("""{"password": "Xk9\"vQ2!mL7pZ"}""", "Xk9\\\"vQ2!mL7pZ")]
+    [InlineData("password = Xk9\"vQ2!mL7pZ", "Xk9\"vQ2!mL7pZ")]
+    [InlineData("password = \"Xk9\\\"vQ2!mL7pZ\"", "Xk9\\\"vQ2!mL7pZ")]
+    [InlineData("The password is \"Xk9\\\"vQ2!mL7pZ\" now.", "Xk9\\\"vQ2!mL7pZ")]
+    [InlineData("The password is Xk9\"vQ2!mL7pZ.", "Xk9\"vQ2!mL7pZ")]
+    // A quote that closes the text around a bare assignment is not part of its value, nor the backslash escaping it in JSON.
+    [InlineData("say \"TOKEN=abc123def\" to it", "abc123def")]
+    [InlineData("""{"cmd": "export TOKEN=abc123def"}""", "abc123def")]
+    [InlineData("""{"msg": "set \"TOKEN=abc123def\" now"}""", "abc123def")]
+    public void A_quote_inside_a_value_does_not_end_it(string text, string value) =>
+        Assert.Equal([value], Values(text));
+
+    // Finding 2: only a whole value is exempt.
+    [Fact]
+    public void A_secret_that_only_contains_a_placeholder_or_redacted_marker_is_still_found()
+    {
+        var placeholder = Placeholders.Format("db", "Ab3dEf6hIj9kLm2nOp5qRs8t");
+        Assert.Equal(["hunter2" + placeholder], Values($"password=hunter2{placeholder}"));
+        Assert.Equal(["Xk9[REDACTED]vQ2"], Values("password: 'Xk9[REDACTED]vQ2'"));
+        Assert.Equal(["Xk9[REDACTED]"], Values("password: 'Xk9[REDACTED]'"));
+        Assert.Empty(Values($"password={placeholder}"));
+        Assert.Empty(Values("password: '[REDACTED]'"));
+    }
+
+    // Finding 5: a $, % or angle bracket alone does not make a value a reference.
+    [Theory]
+    [InlineData("password=$ecretP4ss!word", "$ecretP4ss!word")]
+    [InlineData("password: '%Xk9vQ2%mL7%'", "%Xk9vQ2%mL7%")]
+    [InlineData("password: '<Xk9\"vQ2!>'", "<Xk9\"vQ2!>")]
+    [InlineData("password: '${DB_PASS:-hunter2}'", "${DB_PASS:-hunter2}")]
+    [InlineData("password: '{{ x }}hunter2'", "{{ x }}hunter2")]
+    public void A_value_only_starting_like_a_reference_is_found(string text, string value) =>
+        Assert.Equal([value], Values(text));
+
+    [Theory]
+    [InlineData("password: '$(cat /run/secrets/db)'")]
+    [InlineData("password: '<your password here>'")]
+    [InlineData("password: ‹EMAIL_1›")]
+    [InlineData("token: ${{ secrets.GITHUB_TOKEN }}.")]
+    public void A_whole_reference_or_placeholder_is_not_a_credential(string text) =>
+        Assert.Empty(Values(text));
+
+    // Finding 7: the shapes and labels the spec names.
+    [Theory]
+    [InlineData("xoxe-1-My0xLTEyMzQ1Njc4OTAtYWJjZGVm", "xoxe-1-My0xLTEyMzQ1Njc4OTAtYWJjZGVm")]
+    [InlineData("SLACK_APP_TOKEN=xapp-1-A0123456789-0123456789012-abcdef0123", "xapp-1-A0123456789-0123456789012-abcdef0123")]
+    [InlineData("pass=Xk9vQ2mL7pZ", "Xk9vQ2mL7pZ")]
+    [InlineData("export DB_PASS=Xk9vQ2mL7pZ", "Xk9vQ2mL7pZ")]
+    [InlineData("Server=db;Uid=sa;Pwd=Xk9vQ2mL7pZ;", "Xk9vQ2mL7pZ")]
+    [InlineData("curl -u admin:Xk9vQ2mL7pZ https://api.example.com", "Xk9vQ2mL7pZ")]
+    [InlineData("curl --user 'admin:Xk9 vQ2' https://api.example.com", "Xk9 vQ2")]
+    public void Slack_app_and_refresh_tokens_short_password_labels_and_curl_users_are_found(string text, string value) =>
+        Assert.Equal([value], Values(text));
+
+    [Theory]
+    [InlineData("The compass: north by northwest.")]
+    [InlineData("PWD=/home/mark/projects")]
+    [InlineData("git push -u origin main")]
+    [InlineData("docker run -u 1000:1000 image")]
+    [InlineData("xoxo-hugs-and-kisses")]
+    [InlineData("password: |")]
+    public void Lookalikes_of_the_new_labels_are_not_credentials(string text) =>
+        Assert.Empty(Values(text));
+
+    // Finding 8: redacting a redacted text changes nothing.
+    [Theory]
+    [InlineData("token: ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8.")]
+    [InlineData("GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789")]
+    [InlineData("export GITHUB_TOKEN=abc123def")]
+    [InlineData("The staging database password is hunter2-Staging!")]
+    [InlineData("postgres://app:S3cretPass@db/prod")]
+    [InlineData("Authorization: Bearer abc.def.ghi123")]
+    [InlineData("""{"api_key": "abc123", "password": "Xk9\"vQ2!mL7pZ"}""")]
+    [InlineData("key AKIAIOSFODNN7EXAMPLE and sk-ant-api03-abcdefghijklmnopqrstuvwxyz, xoxb-1234567890-abcdef")]
+    [InlineData("curl -u admin:Xk9vQ2mL7pZ https://x")]
+    public void Redact_is_idempotent(string text)
+    {
+        var once = CredentialDetector.Redact(text, CredentialDetector.Traces);
+        Assert.NotEqual(text, once);
+        Assert.Equal(once, CredentialDetector.Redact(once, CredentialDetector.Traces));
+        Assert.Empty(Values(once, CredentialDetector.Lessons));
+    }
 }

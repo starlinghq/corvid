@@ -75,17 +75,37 @@ public sealed partial class RedactionMap
         if (matches.Count == 0)
             return text;
         matches.Sort((a, b) => a.Start != b.Start ? a.Start.CompareTo(b.Start) : b.Length.CompareTo(a.Length));
+
+        // Values that overlap without one containing the other (a person "alice:Tr0ub4dor" over a credential "Tr0ub4dor&3xyz")
+        // are replaced as one: their union becomes a value of its own, so neither's tail is sent, and it restores exactly.
         var builder = new StringBuilder(text.Length);
         var position = 0;
-        foreach (var (start, length, placeholder) in matches)
+        for (var i = 0; i < matches.Count;)
         {
-            if (start < position)
-                continue;
+            var (start, length, placeholder) = matches[i];
+            var end = start + length;
+            var joined = false;
+            for (i++; i < matches.Count && matches[i].Start < end; i++)
+            {
+                if (matches[i].Start + matches[i].Length <= end)
+                    continue;
+                end = matches[i].Start + matches[i].Length;
+                joined = true;
+                if (IsCredential(matches[i].Placeholder))
+                    placeholder = matches[i].Placeholder;
+            }
+            if (joined)
+                placeholder = PlaceholderFor(TagOf(placeholder), text[start..end]);
             builder.Append(text, position, start - position).Append(placeholder);
-            position = start + length;
+            position = end;
         }
         return builder.Append(text, position, text.Length - position).ToString();
     }
+
+    // A union holding a credential is named as one, so the reason and the placeholder say what it holds.
+    private static bool IsCredential(string placeholder) => placeholder.StartsWith("<" + Tag(PrivacyEgress.CredentialLabel) + "_", StringComparison.Ordinal);
+
+    private static string TagOf(string placeholder) => placeholder[1..placeholder.LastIndexOf('_')];
 
     /// <summary>Maps this session's placeholders in <paramref name="text"/> back to their values; unknown ones stay as written.</summary>
     public string Restore(string text)

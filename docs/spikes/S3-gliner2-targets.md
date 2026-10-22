@@ -212,10 +212,14 @@ is `PiiEval`'s: covered recall, and spans with no labelled value behind them.
 | `credentials.jsonl`, report half (29 values, 30 negatives) | 1.000 | 0.793 | **1.000** | 0 |
 | `credentials.jsonl`, tune half (32 values, 31 negatives) | 1.000 | 0.531 | 1.000 | 0 |
 | `pii.jsonl` credentials (9; 41 texts without one) | 1.000 | 0.556 | **1.000** | 0 |
-| 300 corpus commands and 286 `everyday.txt` lines | – | – | – | 0 |
+| 300 corpus commands and 286 `everyday.txt` lines | – | – | – | 1 each (see below) |
 
 The tune half needed no change after the fixture was committed. These are upper bounds: the same author wrote the fixture
 and the rules, and neither set is drawn from real traffic. GLiNER2's false positives on the new fixture (75 spans on the
 report half, 47 of them on the 30 negatives) are the credential nouns (`password`, `API key`, `GITHUB_TOKEN`), digests,
 SHAs and token counts read as account numbers, and paths and URLs read as addresses or emails. They cost needless
 placeholders, not leaks, and C-032 leaves them alone. The address gap stays open.
+
+After PR #48's review the detector also reads `curl -u user:pass`. Its one span on the commands and on `everyday.txt` is the
+same line, `curl -u admin:secret https://jenkins.internal.example.com/api/json`, whose `secret` is the password of a real
+user:password pair; the sets counted that line as credential-free. The fixture figures did not move.
