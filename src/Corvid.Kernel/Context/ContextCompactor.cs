@@ -29,7 +29,17 @@ public enum CompactionStatus
 /// <param name="Chunks">Map calls: 1 when the range fit the summarizer in one call.</param>
 /// <param name="Summarizer">The profile that wrote the record, or that last tried.</param>
 public sealed record CompactionResult(CompactionStatus Status, long From, long Through, long? Sequence = null, int Chunks = 0,
-    string? Summarizer = null, string? Detail = null, CompactionSummary? Record = null);
+    string? Summarizer = null, string? Detail = null, CompactionSummary? Record = null)
+{
+    /// <summary>One line for the user: a turn's compaction notes and <c>/compact</c> both say it this way.</summary>
+    public string Describe() => Status switch
+    {
+        CompactionStatus.Compacted => string.Create(CultureInfo.InvariantCulture,
+            $"compacted events {From}–{Through} by {Summarizer} in {Chunks} chunk(s)"),
+        CompactionStatus.NothingToCompact => string.Create(CultureInfo.InvariantCulture, $"nothing to compact in events {From}–{Through}"),
+        _ => string.Create(CultureInfo.InvariantCulture, $"kept events {From}–{Through} uncompacted: {Detail}"),
+    };
+}
 
 /// <summary>A range of the log that may be compacted: nothing in it is split from its call or result.</summary>
 public readonly record struct CompactionRange(long From, long Through);

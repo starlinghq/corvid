@@ -196,6 +196,41 @@ public sealed class EgressTurnTests : IDisposable
         Assert.Equal([$"gen-Local: {TurnRunner.PrivacyRetreat}"], result.Escalations);
     }
 
+    [Fact]
+    public async Task A_tool_result_carrying_a_token_reaches_a_cloud_generator_redacted_even_under_a_send_policy()
+    {
+        const string token = "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"; // fictitious, in GitHub's classic shape
+        var readPage = TestTool.Create("read_page", "Read a page of the project notes.", new ToolRisk(SideEffects.None, Network: false, Destructive: false),
+            """{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}""",
+            (_, _) => ValueTask.FromResult<object?>($"deploy notes: export GH_TOKEN={token}"), new ToolParameter("path", null, true, false));
+        var cloudProvider = new FakeGenerator(Reply.Call("read_page", """{"path":"deploy"}"""), Reply.Say("Read it."));
+        var cloudProfile = Generator(PrivacyClass.Cloud, PromptCachingStyle.Breakpoints);
+        var cloud = new ModelBinding(cloudProfile, new PrivacyEgressChatClient(cloudProvider, cloudProfile, Egress(EgressAction.Send)));
+        var local = new FakeGenerator();
+        var embedder = new KeywordEmbedder(TurnHarness.Keywords);
+        var registry = new ModelSlotRegistry()
+            .Bind(ModelSlots.Generator, cloud)
+            .Bind(ModelSlots.TextEmbedder, new ModelBinding(TurnHarness.Profile("keywords", ToolCallSupport.None, 512), embedder));
+        var tools = new ToolRegistry();
+        tools.Add(readPage);
+        var services = new TurnServices
+        {
+            Log = _log,
+            Slots = new SessionModelSlots(registry, _log, Session),
+            Fabric = new DecisionFabric(DecisionPolicy.Default, new DegradedDecider(embedder, local), _log),
+            Tools = tools,
+            Options = new TurnOptions { ToolFilter = tool => tool.Name == "read_page" },
+        };
+
+        var result = await new TurnRunner(Session, services).RunAsync(new Envelope(Session, "cli", "read the deploy page"), Ct);
+
+        Assert.Equal("Read it.", result.Text);
+        Assert.Equal(1, readPage.Invocations);
+        var afterTool = cloudProvider.Calls[1].AllText;
+        Assert.DoesNotContain(token, afterTool, StringComparison.Ordinal);
+        Assert.Contains("export GH_TOKEN=<CREDENTIAL_1>", afterTool, StringComparison.Ordinal);
+    }
+
     private (SessionModelSlots Slots, ModelBinding Cloud) Escalating(PrivacyEgress egress)
     {
         var local = new ModelBinding(Generator(PrivacyClass.Local, PromptCachingStyle.None), new FakeGenerator());

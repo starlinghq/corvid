@@ -9,6 +9,7 @@ using Corvid.Host.Telemetry;
 using Corvid.Kernel.Checkpoints;
 using Corvid.Kernel.Events;
 using Corvid.Kernel.Jobs;
+using Corvid.Mcp;
 using Corvid.Memory;
 using Corvid.Models;
 using Corvid.Rules;
@@ -55,7 +56,8 @@ public sealed class CorvidRuntimeFactory(
     TurnFeed feed,
     IEnumerable<IToolProvider> toolProviders,
     IEnumerable<ToolFunction> tools,
-    CorvidConfigFile? configFile = null)
+    CorvidConfigFile? configFile = null,
+    IMcpTransports? mcpTransports = null)
 {
     /// <summary>
     /// Configured models that stop the runtime from starting, checked offline (by size for Starling's): every missing or
@@ -179,7 +181,7 @@ public sealed class CorvidRuntimeFactory(
             // C-018: configured MCP servers start in the background and add their tools as they list them; last, so built-in
             // and DI tools keep their names. A sandboxed server is denied what the shell is denied. C-022: held and accepted
             // definitions are recorded in the log's mcp-pins session.
-            var mcp = McpComposition.Start(settings, McpDeniedPaths(vault, environment), toolRegistry, log);
+            var mcp = McpComposition.Start(settings, McpDeniedPaths(vault, environment), toolRegistry, log, transports: mcpTransports);
 
             // C-025: the workspace's project, once, with the checkpoints' git and the user's home as discovery's ceiling.
             ProjectIdentity? project = memory?.Lessons is null ? null

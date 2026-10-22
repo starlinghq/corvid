@@ -142,6 +142,14 @@ public sealed class LessonValidatorTests
     [InlineData("Set api_key: abcd1234efgh in the config.")]
     [InlineData("Use the key 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 for signing.")]
     [InlineData("Use the key QWxhZGRpbjpPcGVuU2VzYW1lMTIzNDU2Nzg5MEFCQ0RFRkdI for signing.")]
+    // The shared detector's (C-032) prose and URL rules.
+    [InlineData("The staging database password is hunter2-Staging! for the migration.")]
+    [InlineData("Connect with postgres://app:S3cretPass@db.internal/app before migrating.")]
+    // The minimums of the rule C-032 replaced: ghp_ plus 20, github_pat_ plus 20, sk- plus 16, a JWT payload of any shape.
+    [InlineData("Use ghp_abcdefghijklmnopqrstuvwxyz to clone.")]
+    [InlineData("Use github_pat_11ABCDEFG0123456789_a to clone.")]
+    [InlineData("Use sk-abcdefghijklmnopqr to call the model.")]
+    [InlineData("Send eyJhbGciOiJIUzI1NiJ9.c3ViamVjdDEyMzQ1Ng.dozjgNryP4J3jVmNHl0w5N as the bearer.")]
     public void Secret_looking_strings_are_refused(string line) =>
         Assert.Contains("secret", Rules(Content(body: "Run the hooks build first (event 14).\n" + line + "\nConfirm with a build.")));
 

@@ -130,6 +130,7 @@ public sealed class JobScheduler
         {
             await RunDueAsync(cancellationToken).ConfigureAwait(false);
             var now = _time.GetUtcNow();
+            // A paused job has no next run, so an overdue paused job cannot make this wait zero and spin.
             var next = _store.List().Select(job => job.NextRunAt).Where(at => at is not null).Min();
             var wait = next is { } at ? at - now : _options.PollInterval;
             wait = wait < TimeSpan.Zero ? TimeSpan.Zero : wait > _options.PollInterval ? _options.PollInterval : wait;

@@ -24,6 +24,19 @@ public sealed class ToolRegistry
         }
     }
 
+    /// <summary>
+    /// Removes a tool by name (C-033: a definition withheld after review, so later turns no longer offer it). A turn that
+    /// already holds the tool's function keeps it until its next shortlist; the tool itself must refuse such calls.
+    /// </summary>
+    public bool Remove(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        lock (_gate)
+        {
+            return _tools.Remove(name);
+        }
+    }
+
     public void Add(IToolProvider provider)
     {
         ArgumentNullException.ThrowIfNull(provider);

@@ -14,5 +14,6 @@
     <ProjectReference Include="../../../src/Corvid.Fabric/Corvid.Fabric.csproj" />
     <ProjectReference Include="../../../src/Corvid.Kernel/Corvid.Kernel.csproj" />
     <ProjectReference Include="../../../src/Corvid.Models.Starling/Corvid.Models.Starling.csproj" />
+    <ProjectReference Include="../../../src/Corvid.Secrets/Corvid.Secrets.csproj" />
   </ItemGroup>
 </Project>

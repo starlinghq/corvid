@@ -196,3 +196,30 @@ These are 50 texts, too few for a confident rate. The credential and address gap
 - In review, the `corpus` command regenerated the fixtures byte for byte, and a rerun of `targets` reproduced `targets-predictions.jsonl` byte for byte. Only the timing line changed.
 - The corpus keeps only commands the analyzer parses exactly, because its labels come from the analyzer. So GLiNER2 was measured only where the analyzer already has the answer. It was never measured on the 82 dropped commands that are not duplicates (unresolved, dynamic, opaque, outside the subset or not as written), where the analyzer has no exact answer. That gap does not affect the approval decision, because the analyzer asks on all of those (point 2 above). But this spike does not show how GLiNER2 does on them.
 - The PID and host counts per half (34 and 32 on the report half) are small, but a recall of 0.00 is not a sampling artefact.
+
+## Follow-up: credential values (C-032)
+
+Point 4's first gap is closed by C-032, a deterministic credential-value detector that the egress gate runs beside GLiNER2
+([architecture](../architecture.md#credential-value-detection-c-032)). It was measured with this harness: `S3.Gliner2Targets
+credentials <repo>` (GLiNER2 once over the new fixture; the PII fixture through the committed `pii-predictions.jsonl`),
+results in `results/credentials.md`. The fixture, `fixtures/credentials.jsonl`, holds 61 texts with fictitious credential
+values across 14 kinds (provider shapes, Authorization values, assignments, URL passwords, prose) and 61 hard negatives.
+It was committed before the detector existed and split per kind by SHA-256 of the text, as the targets corpus was. Scoring
+is `PiiEval`'s: covered recall, and spans with no labelled value behind them.
+
+| Set | Detector alone | GLiNER2 alone (0.4) | Gate: both | Detector false-positive spans |
+| --- | --- | --- | --- | --- |
+| `credentials.jsonl`, report half (29 values, 30 negatives) | 1.000 | 0.793 | **1.000** | 0 |
+| `credentials.jsonl`, tune half (32 values, 31 negatives) | 1.000 | 0.531 | 1.000 | 0 |
+| `pii.jsonl` credentials (9; 41 texts without one) | 1.000 | 0.556 | **1.000** | 0 |
+| 300 corpus commands and 286 `everyday.txt` lines | – | – | – | 1 each (see below) |
+
+The tune half needed no change after the fixture was committed. These are upper bounds: the same author wrote the fixture
+and the rules, and neither set is drawn from real traffic. GLiNER2's false positives on the new fixture (75 spans on the
+report half, 47 of them on the 30 negatives) are the credential nouns (`password`, `API key`, `GITHUB_TOKEN`), digests,
+SHAs and token counts read as account numbers, and paths and URLs read as addresses or emails. They cost needless
+placeholders, not leaks, and C-032 leaves them alone. The address gap stays open.
+
+After PR #48's review the detector also reads `curl -u user:pass`. Its one span on the commands and on `everyday.txt` is the
+same line, `curl -u admin:secret https://jenkins.internal.example.com/api/json`, whose `secret` is the password of a real
+user:password pair; the sets counted that line as credential-free. The fixture figures did not move.

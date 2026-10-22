@@ -1057,8 +1057,8 @@ the turn's own message or latest round; keeping a pending expansion across a res
 after a `/model` to a larger window and a restart the next turn renders compacted, which is safe but not expanded); host
 configuration of `CompactionOptions` (defaults only); summarizer calls in parallel; telling summarizer calls apart from
 answers when the generator's binding serves both (they are `chat {model}` spans tagged `corvid.slot=generator` under
-`corvid.compact`, and count toward the generator's `/status` latency); a `/compact` command; and an implementation of
-`ISkillBodyLever` (C-017).
+`corvid.compact`, and count toward the generator's `/status` latency); and an implementation of
+`ISkillBodyLever` (C-017). `/compact` came with C-035 (see [C-035](#slash-command-and-import-gaps-c-035)).
 
 ## Host and CLI (C-013)
 
@@ -1178,7 +1178,7 @@ decider otherwise (C-004b, see [Kev decider](#kev-decider-c-004b)); Starling pac
 
 Not built yet: Ctrl+P; typing while a turn runs (the chat reads the next line after the delivery, so `/model` mid-turn is
 available to the gateway and a later CLI, not this one); removing approval rules (`IApprovalRuleStore` has no removal);
-`/memory` block edits; a `/cron` command; the rest of the ~35-command v1 set (`/insights` and
+`/memory` block edits; the rest of the ~35-command v1 set (`/compact` and `/cron` came with C-035) (`/insights` and
 others arrive with their items; `/skills` came with C-017); the `config`, `skills`, `memory`, `cron` and `export` verbs (`gateway`
 came with C-020, whose gateway also runs the scheduler and delivers job results to chats); a scheduler daemon; metrics and logs export; an Aspire
 dashboard recipe; shipping `corvid-sandbox` and `corvid-evals` inside the publish (doctor reports where it looked);
@@ -1281,13 +1281,13 @@ references Builtin except tests and the host (C-013). Everything runs on the deg
   through the real turn loop (read-only runs unasked, a side effect asks, hardline never prompts, an unattended turn denies,
   no mapping means no run) and covers the grammar (including daylight-saving changes), the store and the scheduler.
 
-C-013 wires all of this in the host (see [Host and CLI](#host-and-cli-c-013)) and added `/memory`. Not built yet: a
-`/cron` command; delivering job results to surfaces other than gateway chats (C-020 delivers to the chat a job was created
+C-013 wires all of this in the host (see [Host and CLI](#host-and-cli-c-013)) and added `/memory`; `/cron` and pausing came
+with C-035 (see [C-035](#slash-command-and-import-gaps-c-035)). Not built yet: delivering job results to surfaces other than gateway chats (C-020 delivers to the chat a job was created
 in); checkpoints before a scheduled pre-run script (C-014 checkpoints the turn
 loop's calls only); network for the shell per toolset and
 Vault's proxy route for sandboxed commands (V-003); the code tool and code mode (§15); container and SSH backends;
 argument validators generated with the tool and the generated examples file (C-005; paths are checked by the tools at run
-time, as argument errors the generator repairs); editing, pausing or resuming jobs, per-job toolsets, delivery targets and
+time, as argument errors the generator repairs); editing jobs, per-job toolsets, delivery targets and
 pruning run history; a calibrated `wake` (C-004b; the degraded tier asks the generator yes or no); pre-run scripts with
 side effects or network when unattended; for web fetch, the Vault handler itself, address checks after resolution when a
 caller supplies its own handler (only literal addresses are checked then), charsets declared only in a page's markup,
@@ -1580,7 +1580,7 @@ opportunity is processed is not distilled: the opportunity fails with that reaso
   unchanged since their last commit) and move them to `.archive/` as the agent (`/skills stale [days] [--archive]`, default
   90 days). Pinned skills (`/skills pin`) and anything the user or a hub wrote are never touched.
 - Supply chain (§10.6, `SkillScanner`, `ImportAsync`): an import copies the skills under a folder (one skill or a tree such as
-  `~/.hermes/skills`, or `$HERMES_HOME/skills`; D-9) as `hub:<source>` in one commit. Each skill is all or nothing: a link,
+  `~/.hermes/skills`; D-9; `/skills import hermes` finds the Hermes home as C-035 does) as `hub:<source>` in one commit. Each skill is all or nothing: a link,
   a special file, a `.git` entry or git attributes, an unreadable SKILL.md, a name already in use, more than 5 MB or 500
   files, or a scanner finding refuses it and the rest import. Hidden files are not copied and nothing runs. The scanner
   flags instruction overrides, hiding things from the user, downloads piped to a shell, credential-store and Vault paths,
@@ -1639,7 +1639,9 @@ Everything was verified against fake HTTP handlers and a stand-in Vault on a Uni
   cannot read under `Redact` or `Refuse` refuses the request. Unreadable means images and files, and also any tool argument
   or result that is not a string, number, boolean or JSON (an adapter would serialize such an object, which the scan cannot
   see). A request marked local-only (below) is refused by every cloud model, whatever its policy. Under `Send` the scan still runs and the same extractor failures refuse, because without it the gate
-  cannot apply the taint rule. Maps live in memory, for at most 256 sessions (the least recently used is dropped).
+  cannot apply the taint rule. Maps live in memory, for at most 256 sessions (the least recently used is dropped). Since
+  C-032 a deterministic credential-value detector runs beside the extractor, and a credential value is never sent whatever
+  the policy ([credential-value detection](#credential-value-detection-c-032)).
 - `PrivacyEgressChatClient` wraps each gated binding. It reads the session and taint from `ChatOptions.AdditionalProperties`
   (`corvid.session_id`, `corvid.tainted`, which `TurnRunner` sets on every generator call) or the ambient
   `ModelRequestContext`, strips every `corvid.` key, moves `ChatOptions.Instructions` into a leading system message so it is
@@ -1921,7 +1923,8 @@ project, package or checker rule), with events and spans in the host through a c
   turn adds `injection/mcp:<server>` to the existing batch for each untrusted origin on the shortlist (the question's
   instructions with the tools' names and descriptions, capped at 1,200 characters, the shape used for a hub skill's body), once
   per session for the same descriptions; asking taints, and the verdict is a logged `Decision` (data for C-021), not a
-  withhold. A hub skill's L0 entry is outside content too: when the index shown to the generator lists a skill with
+  withhold (C-033 asks about trusted origins too and withholds on a confident verdict; see
+  [MCP pinning follow-ups](#mcp-pinning-follow-ups-c-033)). A hub skill's L0 entry is outside content too: when the index shown to the generator lists a skill with
   `Trusted == false`, the turn is tainted. This is a visible change: with an untrusted server configured (the default trust),
   most turns that offer its tools are tainted, so read-only network tools ask, the cloud egress gate is stricter, Vault applies
   taint rules and learned skills are marked tainted; `Trust: Trusted` is the remedy for a server the user vouches for.
@@ -1950,16 +1953,161 @@ project, package or checker rule), with events and spans in the host through a c
   while a trusted one does not; a changed tool is held, recorded in the `mcp-pins` session, shown by `/mcp` and `/mcp diff`,
   and offered after `/mcp accept` with `McpToolAccepted`; the line diff). The recorded ACP exchanges carry `/mcp`'s new usage.
 
-Not built yet: `corvid mcp diff|accept|allow` (a CLI accept would list in a fresh process and need a hash argument to be sure it
-accepts what was reviewed); withholding a tool on a confident `injection` verdict over its description (it logs and taints,
-like a hub skill body, until C-021's floors are fitted on description rows), and asking `injection` about trusted servers'
-descriptions at all (only untrusted origins are asked, since asking taints the turn and a trusted server's tools do not; a
-semantically poisoned description from a trusted server that the regex misses is caught by nothing yet); re-checking pins on an in-process reconnect or
-`notifications/tools/list_changed` (pins are checked once per start); pruning pins of removed tools, a `/mcp forget <server>`
-to re-trust a replaced server, and keying pins by server identity (command, arguments, URL) as well as name; review from the
+Not built yet: `corvid mcp diff|accept|allow`, withholding on a confident `injection` verdict, asking `injection` about trusted
+servers' descriptions, `/mcp forget` and pruning are built by C-033 ([MCP pinning follow-ups](#mcp-pinning-follow-ups-c-033)),
+which also defers, with reasons, re-checking pins on an in-process reconnect or `notifications/tools/list_changed` (C-033 only
+notes the notification); keying pins by server identity (command, arguments, URL) as well as name; review from the
 gateway or ACP with a rendered diff, and a doctor check for held tools without starting servers; scanning results, resources,
 prompts and output schemas with the same patterns; signed or registry-published definitions instead of trust on first use; and
 the privacy egress gate over MCP arguments (C-018).
+
+## MCP pinning follow-ups (C-033)
+
+Follow-ups to C-022 (review of #38, finding 4, and its deferred list): withholding a tool whose description the fabric judges
+to instruct the agent, asking that question about trusted servers' descriptions too, review from the CLI, forgetting pins, and
+a notice for `notifications/tools/list_changed`. No new project, package or checker rule: the kernel reaches the MCP clients
+through a core interface in `Corvid.Tools`.
+
+- Bridge: `IToolDescriptionReview.Withhold(ToolWithholding(Origin, Tools, DecisionId))` in `Corvid.Tools`, beside
+  `ToolDescriptor.Origin`, which both `Corvid.Kernel` and `Corvid.Mcp` already reference; `TurnServices.DescriptionReview`
+  (optional) is set by `CorvidRuntime.Services` to `runtime.Mcp`, and `McpClients` implements it. The kernel never references
+  `Corvid.Mcp`, and `Corvid.Mcp` stays free of the event log (the C-022 notice callback). `ToolRegistry.Remove(name)` (under the
+  registry's lock) takes a tool out.
+- Asking (`TurnRunner.DescriptionQuestions`): `injection` is asked at ingress about every shortlisted tool whose `Origin` starts
+  with `mcp:`, trusted servers' included. Each origin's tools, by name, are packed into chunks of whole `- name: description`
+  lines up to 1,200 characters (a single longer line is cut and is the only tool in its chunk), keyed `injection/mcp:<server>`
+  for the first chunk (C-021's and C-022's key) and `injection/mcp:<server>#2` onward; each question records the tool names it
+  carried. Chunks holding an `OutsideDescription` tool are asked first and always, uncapped, as every untrusted origin was
+  before C-033; chunks of only trusted text fill the batch up to 2 description questions in all, so with the turn's own 4 to 6
+  questions a batch without outside chunks stays within S1's measured 8-question bound (340 ms on the 3090; about 25 to 30 ms
+  per extra question). A chunk is asked once per session for the same text (C-022's set, now keyed by chunk text and marked only
+  when asked), so trusted chunks over the cap wait for a later turn, and their tools stay offered unjudged until then. Asking taints the turn only for a chunk that holds an
+  `OutsideDescription` tool (an untrusted server's, or an allowed flagged or withheld one): a trusted server's text goes to the
+  decider, never to the generator, which answers the #38 reply's concern that asking would taint every turn. Patterns
+  (`McpDescriptionScan`) still run for every server at listing time; trusted descriptions are now both scanned and asked.
+- Withholding (`TurnRunner.WithholdDescriptions`, right after the ingress decision, before the skill, clarify and `tool`
+  handling): for each description key whose verdict acted, exactly the tools in that chunk leave the turn's shortlist and
+  catalogue, so no generator call of the turn offers them, a `tool` pick of one falls back to the shortlist without it (the
+  pick no longer matches), and later step checkpoints' `tool` options leave it out; then `DescriptionReview.Withhold` is called
+  with the decision id. "Acted" is the confidence test: `injection` degrades by `ConservativeDefault`, so `DecisionPolicy`
+  acts only on a calibrated answer with P(yes) at or above the floor (`floors.json` `injection: 0.5`, unfitted). Without Kev
+  nothing is ever withheld. The generator never saw the description, so withholding does not taint.
+- Holding (`McpClients.Withhold`): the connection keeps, per registered Corvid name, the listed protocol `Tool`, its
+  `McpToolDefinition` and the `McpTool` instance (`McpRegisteredTool`). Each named tool still registered from the origin's
+  server is removed from the registry, its instance is marked withdrawn (`McpTool.Withdrawn`; a call through it fails with
+  `McpToolException` "withheld after an injection verdict; /mcp diff <s> <t>", which closes the window for another session's
+  turn that still holds it in its catalogue), and it moves to the held list with reason `injection` (`McpHoldReasons.Injection`,
+  `McpPinKinds.Injection`, `McpHeldTool.Decision`). The pin is written with `withheld` (the hash) and `withheld_decision`; with
+  no pin (a first use whose write failed) a fresh one is written. A notice goes out, recorded as `McpToolHeld` with reason
+  `injection` and the decision id as `Detail` (no new event type). A tool whose pin has `allowed_flagged` equal to its hash is
+  left offered: the user's allow stands and the verdict is only the logged `Decision`. Names not registered (already withheld,
+  another source's) are skipped; `Accept` and `Withhold` run one at a time.
+- Restarts: `Register` holds a listed definition as `injection` again when its pin's `withheld` equals the listed hash and
+  `allowed_flagged` does not, so the hold survives restarts and another process (`corvid mcp diff|allow`) sees it. Precedence is
+  flagged, then injection, then new or changed; a definition that changed after a withhold is `changed`, with the pin's
+  `withheld` kept (`McpHeldTool.ChangedAfterWithhold`). A definition allowed
+  after a withhold registers as an untrusted server's tool (`McpToolMapping.Describe` with `untrusted`) at every start.
+- Pin file: `McpToolPin` and its document gain `Withheld` and `WithheldDecision`, written only when set
+  (`JsonIgnore(WhenWritingNull)`), so a file without withholds is byte for byte what C-022 wrote and older Corvid reads it.
+  `FormatVersion` stays 1; a file holding a withhold is refused by pre-C-033 Corvid (unknown key, `UnmappedMemberHandling.
+  Disallow`), which then offers no MCP tools at all: it fails closed. Rolling back after a withhold means `corvid mcp forget
+  <server>` or editing the file.
+- Review (`McpCommands`, now public, the one implementation for `/mcp` and `corvid mcp`): `allow` takes a tool held as
+  `flagged` or `injection` (`McpHoldReasons.NeedsReview`); it pins with `allowed_flagged` = the hash, clears `withheld`, and
+  registers the tool as an untrusted server's (asks on every call, taints results and descriptions). `accept` refuses an
+  `injection` hold and names `allow`; `accept --all` skips both review reasons and a changed-after-withhold hold. `--hash <hex>` (at least 12 hex characters, any
+  case) on `accept` and `allow` makes `McpClients.Accept` refuse when the held definition's hash does not start with it. `diff`
+  ends with the exact next command, `next: /mcp allow|accept <server> <tool> --hash <12 hex>`; for an `injection` hold it shows the
+  whole definition, the decision id and when it was pinned. An accept without `--hash` prints the hash it pinned.
+- CLI (`corvid mcp`): `diff <server> <tool>`, `accept <server> <tool|--all> [--hash <hex>]`, `allow <server> <tool> --hash <hex>`,
+  `forget <server>` and `forget --unconfigured`. A CLI review lists in a fresh process, so C-022's "exactly what diff showed" no
+  longer holds by itself: `allow` requires `--hash` there (a usage error without it), `accept` takes it optionally. `diff`,
+  `accept` and `allow` start only the named enabled server (`McpComposition.Start(..., only:)`; an unknown or disabled name is an
+  error), wait for its listing, run `McpCommands.Run` with the prefix `corvid mcp` and render with `ChatRenderer.Render`; an
+  `Error` tone exits 1. `accept`, `allow` and `forget` pass `SqliteEventLog(CorvidPaths.EventLog(options))`, so their records land
+  in the `mcp-pins` session; `diff` passes none. The output repeats that a running chat (or gateway, or ACP agent) picks the change
+  up only when it restarts. `McpComposition.Start` also takes an optional `IMcpTransports`, which `CorvidRuntimeFactory` resolves
+  from the host's services when one is registered (the host tests' in-process server); by default the real transports are built.
+- Forget and prune: `IMcpPinStore.Remove(server)` (the number of pins dropped, 0 for an entry that pinned nothing, null for no
+  entry) and `Servers()`, in both stores; the file store uses the same re-read, merge and atomic move. `/mcp forget <server>` and
+  `corvid mcp forget <server>` (`McpComposition.Forget`) drop the entry, pins and the listed marker, so the next start is a first
+  use again (trust on first use); this process's registered and held tools are unchanged, and the output says both.
+  `corvid mcp forget --unconfigured` forgets only servers absent from the raw `Corvid:Mcp:Servers` keys, so a disabled server keeps
+  its pins and disabling one for a while never resets its trust; nothing is pruned automatically, since a config edit must not
+  silently reset trust on first use. `corvid mcp list` prints pinned servers that are no longer configured, with the forget
+  commands. Forgetting appends `McpPinsForgotten(Server, Tools)` (`mcp_pins_forgotten`, the one new event type) to the `mcp-pins`
+  session and starts a `corvid.mcp.pin` span with status `forgotten` and `corvid.mcp.pin.count`.
+- `notifications/tools/list_changed`: one handler in `McpClientOptions.Handlers.NotificationHandlers` (SDK 2.2.0) sets a flag on
+  the connection once its tools were listed (`McpServerStatus.ToolsChanged`); `/mcp` and `corvid mcp list` then show "the server's
+  tool list changed since it was listed; restart Corvid to re-check its pins". Nothing is re-listed or re-pinned.
+- Limits: the `injection` floor was never fitted on description rows, so false positives withhold trusted tools; it acts only
+  on calibrated answers, and `/mcp allow` offers the tool again (logged and persisted) but as an untrusted server's tool (asks
+  on every call, taints) for as long as the server lists that hash; an allowed hash is never withheld again. There is no way
+  back to trusted for one tool: `accept` refuses an `injection` hold, and the only route is `forget <server>`, which resets trust
+  on first use for every tool of that server (or the server changing the definition, which is then a `changed` hold that
+  `accept` takes after review). A chunk is withheld as a unit, so one poisoned description takes its chunk neighbours out with
+  it (each can be allowed alone). Asking about trusted descriptions adds up to 2 Kev questions per ingress batch (about 60 ms on
+  GPU, more on CPU per S1), on top of one per outside chunk. `/mcp forget` on a live server leaves its tools offered until restart. Recall is Kev's: in a manual check on
+  the 3090 (the S1 harness with TurnRunner's 6 ingress questions plus 2 description chunks, 600-token state), Kev-0.8B gave
+  P(yes) 0.16 to 0.17 for a trusted-style chunk whose description told the assistant to send the user's private key and
+  passwords to another tool (no regex marker) and 0.36 to 0.38 for a benign chunk, so neither acted at the 0.5 floor: the
+  mechanism is in place, but `injection` as asked today does not catch that description, which is the case for the deferred
+  dedicated question with fitted evidence.
+- Tests: `tests/Corvid.Mcp.Tests` (`McpWithholdTests`: a withheld trusted tool leaves the registry, is held as `injection` with
+  its decision and persisted, and a second verdict changes nothing; a withdrawn instance refuses a call; the hold survives a
+  restart, `accept` refuses it naming `allow`, `allow` registers it untrusted and clears the withhold, a later verdict over the
+  allowed hash is ignored, and the next start registers it untrusted; a changed definition after a withhold is `changed`;
+  `allow` is refused for a merely changed tool; a `--hash` mismatch, a short or non-hex prefix are refused and an upper-case
+  prefix is accepted; `list_changed` from the fake server sets the notice without re-listing; `Remove` and `Servers` in both
+  stores; a C-022 file round-trips byte for byte and a withhold round-trips). `tests/Corvid.Kernel.Tests`
+  (`DescriptionTaintTests` with a calibrated `ScriptedDecider`: a confident yes on chunk #2 withholds only its tool, from the
+  generator call and from a `tool` pick of it, and calls the review with the decision id, without tainting; a below-floor or
+  uncalibrated answer withholds nothing; a trusted origin is asked without taint; chunks are whole lines, a long line is cut and
+  alone, at most 2 per batch with the rest in later turns, each once; `EventJsonTests` pins `mcp_pins_forgotten`).
+  `tests/Corvid.Host.Tests` (`McpHostTests`: end to end with the runtime's MCP clients over an in-process server and a fake Kev,
+  a trusted description judged confidently is withheld from the turn and the registry, recorded as `McpToolHeld` with reason
+  `injection`, shown by `/mcp diff` with the decision and `next:` command, refused by `accept` and by `allow` with a wrong hash,
+  and allowed with the right one as an untrusted tool; `forget` drops pins, records `McpPinsForgotten` and a span, and leaves the
+  registry; `forget --unconfigured` keeps configured servers; `diff` prints the hash and `accept --hash` checks it; an accept
+  without a hash prints it). `tests/Corvid.Cli.Tests` (`McpCommandTests`: usage and arity of each verb, `allow` without `--hash`
+  refused, `diff`/`accept`/`allow` of an unknown server exit 1, `forget` on a seeded pin file drops and records, `forget
+  --unconfigured` keeps a disabled server, and `list` names the stale one). The recorded ACP exchanges carry `/mcp`'s new usage.
+- Review of #47: (1) the cap no longer orders by origin alone, so trusted origins that sort first cannot starve an untrusted
+  one (outside chunks first and uncapped, above). (2) A withheld definition that then changes is held as `changed` with
+  `ChangedAfterWithhold` set: its `Issue` and `/mcp diff` name the earlier withhold and decision, and `accept --all` leaves it out
+  with its own line ("Changed after an injection withhold, not accepted"); `accept <tool>` after the diff pins it as a trusted
+  server's tool and clears `withheld`. (3) The limit above: `allow` is a permanent untrusted downgrade for that hash. (4) A guest's
+  turn (C-020, `Envelope.Guest`) withholds a confidently judged chunk from that turn only: `DescriptionReview.Withhold` is not
+  called and the chunk's marker is removed, so the owner's next turn asks again; a guest's words are in `State()`, which the
+  question is conditioned on, and must not hold the owner's tools for every session. Accepted residual: an owner's own turn
+  whose state carries outside text (the last tool result, which `State()` includes, or a pasted message) can still push a
+  trusted tool into a persistent hold; it fails closed, names the decision, and `/mcp allow` (untrusted) recovers it; a
+  separate state for description questions is deferred with the dedicated question. (5) `corvid mcp list`, `diff`,
+  `accept` and `allow` pass `host.Services.GetService<IMcpTransports>()` to `McpComposition.Start`, as `CorvidRuntimeFactory`
+  does. Tests: `DescriptionTaintTests` (trusted alpha, beta and gamma with untrusted zeta: zeta is asked in the first batch and
+  withheld on a confident yes; three outside origins are all asked past the cap; a guest's confident yes withholds from its
+  turn, calls no review, and the owner's next turn asks again and withholds), `McpWithholdTests` (a changed definition after a
+  withhold carries `ChangedAfterWithhold`, and accept clears `withheld`), `McpHostTests` (`accept --all` leaves it out, `diff`
+  names decision and withhold, `accept <tool>` registers it trusted), `McpCommandTests` (over `FakeMcpServer` registered as the
+  transports: `diff` then `accept --hash` pins and records `McpToolAccepted`; `diff` then `allow --hash` of a withheld pin, with
+  `accept` refused).
+
+Not built yet: re-pinning on an in-process reconnect and acting on `tools/list_changed` (re-list, then hold or unregister changed
+tools): receiving the notification is one handler, but acting on it makes `Register` a reconcile against registered tools, and a
+reconnect happens inside `ConnectAsync` under the connection gate, mid-call, so re-listing there needs a refusal path for the call
+in flight; the follow-up reuses `ToolRegistry.Remove` and the withdrawn-instance refusal. A running chat seeing pins another
+process wrote (`corvid mcp accept`, `forget`) without a restart comes with that re-list. A dedicated question and floor for
+descriptions (`description_injection`, separate from result `injection`) needs a floors-file version bump (the C-025/C-026
+pattern) and fitted evidence; v1 reuses `injection` and its unfitted 0.5. Withholding on the degraded tier (an uncalibrated answer
+never acts, by design), asking at listing time instead of at ingress (no fabric request outside a turn), and per-tool questions
+(one per chunk is the cost S1 allows). Automatic pruning, keying pins by server identity, a doctor check for stale pins or held
+tools, and review from the gateway or ACP beyond the slash command (`/mcp forget` appears there automatically). The C-022 items
+not touched here: scanning results, resources, prompts and output schemas; signed or registry-published definitions; and the
+privacy egress gate over MCP arguments. Restoring trust for one allowed tool (review of #47, finding 3): a verb that re-pins a
+withheld or allowed definition as trusted (with `--hash`, recorded) is a trust decision against the fabric's verdict, so it
+waits for the dedicated question's fitted floor, which bounds how often a trusted tool lands there; until then `forget
+<server>` is the only route. Conditioning description questions on a state without the turn's outside text (review of #47,
+finding 4, for the owner's turns) goes with the dedicated question.
 
 ## ACP and OpenAI-compatible HTTP (C-019)
 
@@ -2421,14 +2569,16 @@ Hermes session mapper, and reimplemented; no Beacon code is used. The Hermes for
   key, access key, secret, token, password, passwd, private key or client secret (an Authorization scheme or JSON literal
   is left), AWS access key ids, GitHub `gh[pousr]_` and `github_pat_` tokens, Slack `xox?-` tokens, `sk-` keys and
   JWT-shaped strings. It is a screen, not a proof; Corvid keeps real secrets behind Vault placeholders, but tool output can
-  hold one.
+  hold one. Since C-032 it is a facade over the shared detector's trace rules, which add more shapes, URL passwords and
+  prose values ([credential-value detection](#credential-value-detection-c-032)).
 - `/memory import hermes [<hermes home>] [--dry-run]` (`CoreCommands`), next to `/skills import hermes`, so it works from
   chat, ACP and the gateway (the owner's alone). `HermesMemory` (`Corvid.Memory`) reads `$HERMES_HOME/memories/MEMORY.md`
   (the agent's notes) and `USER.md` (the user profile), an explicit argument winning, as Hermes' `get_hermes_home` finds
   the home: `$HERMES_HOME` trimmed, with `$VAR` and `${VAR}` (and `%VAR%` on Windows) and a leading `~` expanded as
   `expandvars` and `expanduser` do, else `~/.hermes` (`%LOCALAPPDATA%\hermes` on Windows) with `$HERMES_DATA_DIR_SUFFIX`
   appended. A `HERMES_HOME` still relative after expansion is reported and nothing is imported, rather than falling back
-  to the default profile. The files are read as Hermes' `MemoryStore` reads them: strict UTF-8 (a file with an invalid byte is refused whole, as Hermes refuses to
+  to the default profile. C-035 moved this resolution to `HermesHome` (`Corvid.Host`), shared with `/skills import hermes`,
+  and added Hermes' sticky `active_profile` (see [C-035](#slash-command-and-import-gaps-c-035)). The files are read as Hermes' `MemoryStore` reads them: strict UTF-8 (a file with an invalid byte is refused whole, as Hermes refuses to
   read it), a leading BOM stripped (`utf-8-sig`), CRLF read as LF (Python's universal newlines), entries split on the
   whole `"\n§\n"` delimiter so a bare `§` survives, each stripped, blanks dropped and repeats dropped keeping the first. A
   missing file has no entries; an entry shaped like Hermes' `[BLOCKED: …]` placeholder is skipped and counted, though
@@ -2453,8 +2603,8 @@ Hermes session mapper, and reimplemented; no Beacon code is used. The Hermes for
   patterns. `tests/Corvid.Cli.Tests` (`TracesCommandTests`): `--session` on stdout, `--all` with ids equal to a
   single-session export, metadata retention, `--out` owner-only and never overwritten, an unknown session, a missing log
   (not created) and bad arguments. `tests/Corvid.Memory.Tests` (`HermesMemoryTests`): the parser (a bare `§`, blanks,
-  duplicates, `[BLOCKED:`, BOM, CRLF, invalid UTF-8, a missing file, directory resolution with `HERMES_HOME` expansion,
-  the suffix and an unusable value) and `StageImportAsync` (staged
+  duplicates, `[BLOCKED:`, BOM, CRLF, invalid UTF-8 and a missing file; the directory resolution cases moved to
+  `tests/Corvid.Host.Tests` `HermesHomeTests` with C-035) and `StageImportAsync` (staged
   local-only with its reason and no decision, applied only on approval, pending and known duplicates skipped, an extractor
   refusal staging nothing). `tests/Corvid.Host.Tests` (`MemoryImportCommandTests`): the command against a temporary
   Hermes home, with a dry run, a scanner refusal, re-import idempotency before and after an approval, a missing home and
@@ -2470,7 +2620,7 @@ recorded per turn); the skipped event kinds (decisions, compaction, model switch
 todos, per-path file events from checkpoints, rewinds, deliveries) and session start, end and handoff events; a
 per-session working directory; importing Hermes memory into the core blocks (`USER.md` to `user`, `MEMORY.md` to
 `agent`), which waits for block editing (C-013) because an over-budget block edit cannot be approved; `SOUL.md` to the
-persona block, Hermes profiles and memory provider plugins; a `corvid memory` verb; `traces` tail, follow, date ranges
+persona block, Hermes profiles beyond the sticky active profile (C-035), and memory provider plugins; a `corvid memory` verb; `traces` tail, follow, date ranges
 and pushing to a Beacon endpoint or SIEM; host, user and repository enrichment and the `redacted` retention level; and a
 per-item local-only filter for memory tool results.
 
@@ -2529,7 +2679,8 @@ the projection or git in `Corvid.Kernel`, the catalogue row in `Corvid.Fabric`, 
   and both cases, are not paths, and either hold `+`, `/` or `=` or switch between upper case, lower case and digits at 45%
   or more of their characters, as random text does and a PascalCase identifier with a digit does not) and instructions
   aimed at the agent. The long-hex rule refuses a commit hash too, which is one-off anyway. The rules are heuristics: they refuse a
-  draft, never a turn.
+  draft, never a turn. Since C-032 the secret rule is the shared detector under its lesson rules
+  ([credential-value detection](#credential-value-detection-c-032)).
 - Gated write (`LessonWriter`): validate, file as a candidate, then ask the existing `memory_op` gate at the pre-execute
   checkpoint in the source session, with lesson-shaped JSON instructions (the candidate, and up to five approved lessons of
   the same project from `SearchApproved` as neighbours). An acted `add` approves; `update` approves and supersedes the
@@ -2838,6 +2989,242 @@ repository maps without git; linked-worktree caller paths other than through the
 projects; vectors for lessons and an embedder in the serve process; fact history and lesson evidence in `get_memory`; MCP
 resources, prompts and change notifications for memory; write tools of any kind; serve's HTTP transport (still deferred
 from C-018); and per-caller rate limits or quotas.
+
+## Credential-value detection (C-032)
+
+Spike S3 found that GLiNER2's `credential` label tags the noun (`API key`, `wifi password`), never the value, so the egress
+gate covered 5 of 9 credentials in its PII fixture. C-032 adds one deterministic detector for credential values and uses it
+in the three places that screened for secrets with their own copies: the egress gate (C-015), trace export (C-027) and the
+lesson validator (C-025).
+
+- Project: `src/Corvid.Secrets`, a leaf core project (`IsAotCompatible`, no packages), whose one reference is
+  `Corvid.Vault.Contracts` for `Placeholders`. `Corvid.Abstractions` was the only project Memory, Models and Kernel all reach,
+  but the boundary checker keeps it free of dependencies, and a regex engine is no contract. Memory, Models and Kernel
+  reference it; the checker needed no change.
+- API: static `CredentialDetector`. `Find(text, rules)` returns non-overlapping `CredentialMatch(Kind, Start, Length,
+  PrefixLength, Strength)` in order, where `Strength` is `Shape`, `Labelled` or `Encoded`, and a labelled match is the value
+  alone, never its label or quotes. `Redact(text, rules)` replaces each match with `[REDACTED]`, keeping its public prefix
+  (`ghp_[REDACTED]`). `Contains(text, rules)` is the yes-or-no form. Candidates from different rules that overlap merge into
+  one span, so no rule's extent leaks past another's. On a tie the shape names the span, so `GITHUB_TOKEN=ghp_…` keeps
+  `ghp_`.
+- Rules (`CredentialRules` flags):
+  - `Shapes`: PEM private key blocks (a header, then at least 16 characters of key material, optionally after RFC 1421
+    headers and with JSON-escaped line breaks, to the END line or the end of the text); Authorization `Bearer`, `Basic`,
+    `token`, `Digest` and `Negotiate` values (with a digit or a symbol, or 16+ mixed-case characters, so `Bearer
+    authentication` passes); AWS `AKIA`/`ASIA`/`ABIA`/`ACCA` ids; GitHub `gh[pousr]_` and `github_pat_` (20+ characters
+    after the prefix); Slack `xox[abeposr]-` and `xapp-` (an all-lower-case hyphenated slug is dropped); `sk-` keys with 16+
+    characters (`sk-ant-`, `sk-proj-`, `sk-live-`; a slug is dropped); Stripe `sk_live_` and `rk_live_`; GitLab `glpat-`;
+    Google `AIza`; Hugging Face `hf_`; and JWTs (`eyJ….….sig`; the payload need not start `eyJ`). The minimums and the JWT
+    payload are the lesson rule's from before C-032, which was the loosest of the replaced copies.
+  - `Labelled`: assignments whose label names an API key, access key, secret key, secret, token, password, passwd,
+    passphrase, private key or client secret, or ends in `pass` or `pwd` after a separator or alone (`DB_PASS=`, ODBC
+    `Pwd=`; not `compass:`, and not `PWD=` holding a path) (`key=value`, `key: value`, `"key": "value"`, `export KEY='v'`,
+    on one line). A quoted value runs to its closing quote past backslash escapes, so a JSON `\"` stays inside it. A bare
+    value ends at whitespace or `, ; & ) ] }`, the field separators of connection strings, query strings and JSON, and may
+    hold a quote after its first character (`Xk9"vQ2`); one closing quote around the assignment (`say "TOKEN=abc"`) and the
+    backslash escaping it in JSON are trimmed. A password holding one of those separators is cut there (C-032's
+    deferrals). `curl -u user:PASS`, `--user` and `--proxy-user` (after any command: `docker run -u www-data:www-data` reports the group, a needless placeholder, not a leak); URL userinfo passwords (`scheme://user:PASS@host`); and
+    prose (`the password is X`, `the wifi password at the cabin is X`,
+    `was changed to X`, `with password X`, `passphrase`, `secret access key`, `client secret` and named token kinds, up to
+    five words between label and verb). An assignment's value is accepted unless excluded; a bare one-word value that is a
+    stopword is not. A prose value must also look like a secret: at least 8 characters with a digit or a symbol, a hyphenated
+    phrase of 12 or more, or 16+ mixed-case characters that switch class like random text (the test lessons used for base64,
+    rate 0.45); and it is not a stopword, a path or a URL, and the word after the label is not a modifier (`password
+    manager`, `password reset`, `secret name`). The gate matters because `RedactionMap` replaces a value everywhere in the
+    session.
+  - `Encoded`: hex runs of 32+ and base64 runs of 40+ that mix digits and both cases, are not paths, and hold `+`, `/` or `=`
+    or switch class at random text's rate. `KeyHeader`: a bare PEM private key header. Both are strict: a git SHA or digest
+    matches.
+- Three uses: `CredentialDetector.Egress` and `.Traces` are `Shapes | Labelled`; `.Lessons` adds `Encoded | KeyHeader`, since a
+  lesson should hold no digest either. Egress and traces never use the encoded rules, or every commit hash in a coding
+  prompt would be redacted.
+- Never a credential, under every rule, and only as the whole value: a Vault placeholder (session-bound and meaningless
+  off the machine), a name in angle brackets (`<CREDENTIAL_1>`, `<YOUR_API_KEY>`, the neutralized `‹EMAIL_1›`; letters,
+  digits, spaces, `_`, `.` and `-`), `[REDACTED]` alone or after a kept prefix (`ghp_[REDACTED]`), `$VAR`, `${VAR}`,
+  `$(cmd)`, `%VAR%`, `{{ … }}`, `${{ … }}`, masks (`***`, `xxxx`), `null`/`true`/`false`/`none`/`nil`/`undefined`, a bare
+  Authorization scheme, and numbers of at most six digits (`token: 4096`). A value that only holds one of these
+  (`hunter2vsec_…`, `$ecretP4ss!word`, `${DB_PASS:-hunter2}`) is found. A bare value cut before its `]` or `}`
+  (`ghp_[REDACTED`, `${GITHUB_TOKEN`) is read whole for this test, so `Redact` is idempotent. `IsExempt(value)` exposes the
+  test for a caller that decodes a match.
+- Engine: every pattern is `[GeneratedRegex]` with `RegexOptions.NonBacktracking | CultureInvariant` and a 1,000 ms
+  timeout, without lookarounds; each has one `value` group, with quotes stripped in code. Where a pattern offers alternatives
+  (the prose verbs), the longer comes first, since the engine takes the first that matches, as a backtracking one would.
+  Entropy, exclusions and the secret-like test run in code over each candidate. `Find` throws `RegexMatchTimeoutException`;
+  every consumer fails closed: `Redact` returns `[REDACTED]` for the whole text, `Contains` says yes, the lesson validator
+  refuses the field, and the egress gate refuses the request.
+- Egress gate. `PrivacyEgress.ScanAsync` runs the detector over each whole distinct text before the extractor, with no
+  cache. Whole texts mean a PEM block or JWT on a chunk boundary is seen whole. It also scans tool-call arguments and
+  object or array JSON tool results as JSON text, so `{"password": "…"}` keeps the key that labels the value. A value found
+  in JSON is unescaped to match the leaves; one that does not decode refuses the request, since it could not match its leaf,
+  and a decoded value that is exempt (an escaped `\u003CCREDENTIAL_1\u003E` in a re-serialized result) is dropped. Each
+  value of 4 or more characters becomes `DetectedValue("credential", value,
+  Credential: true)`, entered before the extractor's spans so a GLiNER2 label for the same string cannot replace it. There is
+  no threshold, and it runs whether or not the policy's labels include `credential`. GLiNER2's own `credential` spans keep
+  `Credential: false`, since they are nouns. `EgressScan.HasCredentials` and `.Credentials` count them. `Decide` applies the
+  floor after the scan, as `EffectiveAction` applies taint before it: a credential raises `Send` to `Redact`, and `Refuse`
+  stays `Refuse`. Values redact to `<CREDENTIAL_n>`, which `Restore` maps back in text and tool-call arguments. After
+  redaction `PrepareAsync` checks what would be sent: a found credential value still in a leaf, or a credential of 4+
+  characters the detector finds again in the redacted leaves or tool-call JSON, refuses the request (`a credential value is
+  still in the request after redaction`) instead of reporting it redacted (`AssessAsync`, which prepares no request, cannot make this check, so a switch-time assessment can say redacted where the request is then refused). `RedactionMap.Redact` replaces values that
+  overlap without one containing the other by their union, minted as a value of its own (under `credential` when either
+  is one), so a GLiNER2 span that starts before a credential and runs into it (`person` = `alice:Tr0ub4dor` in
+  `alice:Tr0ub4dor&3xyz@`) cannot leave the credential's tail, and the union restores exactly. A floored
+  request that also holds content the extractor cannot read (an image) is refused, as `Redact` would refuse it. Reasons give
+  counts (`redacted credential (1 credential value): a credential value is never sent, whatever the policy`), never a
+  value. With no extractor the gate still refuses before the detector runs. C-006's switch-time hook (`AssessAsync`) gets
+  the detector through `ScanAsync`. No configuration was added: credentials are floored at `Redact` for every profile.
+- Trace export: `SecretRedactor.Redact` is `CredentialDetector.Redact(text, Traces)`, and `SecretRedactor.Redacted` is kept, so
+  `BeaconContent` is unchanged. Behaviour changes from C-027's copy. No longer redacted: `$VAR`, `${VAR}`, `%VAR%`,
+  `{{ … }}`, placeholders, masks and numbers of up to six digits under a secret label (references, not values); a `Bearer`
+  word of letters only (`Bearer authentication`); `sk-` slugs of lower-case words; a label and a value on different lines
+  (separators now stay on one line); and a sentence's trailing `.`, `:`, `)`, `]` or `}` after a bare value. Redacted
+  differently: an assignment whose value has a known shape keeps the prefix (`GITHUB_TOKEN=ghp_[REDACTED]`, was
+  `GITHUB_TOKEN=[REDACTED]`). Newly redacted: `Basic`, `token`, `Digest` and `Negotiate` Authorization values, Stripe, GitLab,
+  Google and Hugging Face keys, URL passwords, prose values, `passphrase` and `secret_key` labels, and PEM blocks with RFC 1421 headers or JSON-escaped line breaks. After PR #48's review also: GitHub tokens of 20 to 29 characters, `sk-` keys of 16 to 19, JWTs whose payload does not start `eyJ`, Slack `xoxe-` and `xapp-`, `pass`/`pwd` labels, `curl -u` passwords, and a bare value's part after a quote (`Xk9"vQ2` was cut at the quote). A redacted trace redacts to itself. The
+  golden export and `BeaconExportTests`' redactor theory pass unchanged.
+- Lessons: `LessonValidator` drops its own secret, hex and base64 patterns and reports rule `secret` from `Find(text,
+  Lessons)`, at most one violation per field for a credential (`'<excerpt>'`) and one for an encoded blob (`'<excerpt>' looks
+  like an encoded secret`), so `LessonWriter` and the existing tests are unchanged. The lesson rules now also refuse prose
+  passwords, URL passwords and the new shapes. They accept what the old rule refused only in two places: an all-lower-case
+  hyphenated `sk-` slug (`sk-learn-pipeline-examples`), and a label and value on different lines (the old `\s*` crossed a
+  line break). The shape minimums are the old rule's (`ghp_` 20, `github_pat_` 20, `sk-` 16), so no token it refused
+  passes.
+- Vault. Corvid holds no secret values: `Corvid.Vault.Client` never sees one, and the only Vault operation that compares
+  values, `ScrubAsync`, is an RPC budgeted per user and an oracle (vault.md §5). So the detector uses Vault only to exempt
+  placeholders, and exact-value scrubbing waits for the kernel scrub step.
+- Measurement (`evals/spikes/S3-gliner2-targets`, `credentials <repo>`, results in `results/credentials.md`). The fixture,
+  `fixtures/credentials.jsonl`, has 61 texts holding fictitious credential values across 14 kinds and 61 hard negatives
+  (digests, SHAs, UUIDs, variable references, placeholders, prose about passwords and tokens). It was committed before the
+  detector and split per kind by SHA-256. On the report half (29 values, 30 negatives), covered recall is 1.000 for the
+  detector, 0.793 for GLiNER2 alone at 0.4 and 1.000 for both, and the detector has 0 false-positive spans. On S3's
+  `pii.jsonl` it covers 9 of 9 credentials (GLiNER2 alone 5 of 9) with no span on the 41 texts without one. It also has no
+  span on the corpus's 300 shell commands or `everyday.txt`'s 286 but one, the same line in both: `curl -u admin:secret`,
+  whose `secret` is a real password, read since the `curl -u` rule. The same author wrote the fixture and the rules, so
+  these are upper bounds, not field rates.
+- Tests: `tests/Corvid.Secrets.Tests` (each shape with its prefix, Authorization values, assignments, URL passwords, prose
+  values, S3's nine credential texts, hard negatives under the egress rules, Vault placeholders built with
+  `Placeholders.Format`, PEM extents including a cut block, two blocks and JSON escapes, quoted values, overlap merging,
+  encoded and header rules only for lessons, the timeout path through an internal finder seam, ordered non-overlapping
+  matches in a long text, the secret-like test, quotes inside values, whole-value-only exemptions, the new Slack shapes,
+  `pass`/`pwd` labels and `curl -u` with their lookalikes, and `Redact` idempotence); `PrivacyEgressTests` (a credential under `Send` at threshold 0.99 with
+  an extractor that finds nothing is redacted to `<CREDENTIAL_1>` and restored in text and tool-call arguments; `Refuse`
+  refuses without naming the value; a GLiNER2 `credential` noun does not raise `Send`; a PEM block across a chunk boundary
+  is redacted whole; a labelled value in a JSON tool result; no extractor still refuses; a detector timeout refuses; a
+  floored request with an image refuses; a JSON-escaped quote inside a tool-call argument is redacted with the rest of the
+  value; a value that does not decode, and a credential found again after redaction, refuse; a PII span overlapping a
+  credential is redacted as one union and restored exactly); `EgressTurnTests` (a tool result carrying a `ghp_` token reaches a cloud generator
+  under `Send` as `<CREDENTIAL_1>`); new `LessonValidatorTests` cases (a prose password, a URL password, and the old rule's
+  shape minimums).
+
+Deferred: the Vault exact-value scrub inside the egress gate, and the kernel-wide scrub step of vault.md §5, under which every
+tool result and script output would pass through `ScrubAsync` before the event log and any model (only
+`Corvid.Http/BearerTokens` calls scrub today); a per-profile credential action (refuse credentials while redacting PII);
+a gitleaks-scale provider catalogue (Azure, Twilio, SendGrid, npm, PyPI, Discord) and base64-wrapped credentials (a decoded
+`Basic` header, a token base64-encoded in a URL); a value-oriented GLiNER2 label; S3's address gap; running the credential
+evaluation in CI (the spike project stays outside `Corvid.slnx`); redacting credentials in the event log itself and in memory
+writes; treating `vsec_` placeholders as credentials; and exfiltration through a restored placeholder (the model echoing
+`<CREDENTIAL_n>` into a tool call that `Restore` maps back), which is the existing PII behaviour, covered by taint and
+approvals. From PR #48's review: a bare value holding `, ; & ) ] }` (`DB_PASSWORD=Ab1x,Z9q-pw77` finds `Ab1x`; the egress gate
+sends `,Z9q-pw77`, and a first part under 4 characters is not redacted at all), since those characters end fields in
+connection strings, query strings and JSON and the detector has no context to tell a separator from a password character
+(quote the value and it is found whole); and YAML block scalars (`password: |` with the value on the following lines),
+since separators stay on one line by design and the indicator alone is now ignored rather than redacted as the value.
+
+## Slash-command and import gaps (C-035)
+
+Four gaps left by C-012, C-013, C-016, C-021 and C-027, closed with no new project, package or checker rule.
+
+- `/compact` (`CoreCommands`, `CorvidSession.CompactAsync`, `TurnRunner.CompactNowAsync`): compaction now, by C-016's own
+  rule and nothing new. The latest `UserMessage` in the transcript is taken as the turn's start, and
+  `ContextCompactor.Ranges(snapshot, latest, keepFrom: null)` gives the range: everything before that message, offered
+  only when it holds something a summary would shorten (one record standing alone does not). The latest turn is never
+  compacted, because `CheckpointService.PlanUndo` goes back to the last `UserMessage` in the projected transcript: a
+  whole-history compaction would hide it and leave `/undo` with nothing. The budget is the turn loop's: the generator's
+  accepted context less `MaxOutputTokens` and `ContextReserve`, a record taking at most a quarter of it, measured with the
+  generator client's counter. The call runs inside `ModelRequestContext(session, taint)`, as a turn's `FitAsync` does, so
+  a cloud summarizer still passes the privacy gate and Vault, and escalation follows `TurnOptions.EscalationAllowed` as the
+  compactor was built with it. A written compaction clears a pending expansion (`_expansionDue`) left by an earlier
+  `/model` switch to a larger window, so the next call does not undo an explicit compaction; an unfit summary, nothing to
+  compact or a cancelled command keeps it, so the next call still expands (review of PR #46, finding 1). A later switch to
+  a larger window expands the range again (plan §4.2 step 4), which is by design. `CompactNowTests` covers the expansion
+  both ways and the summarizer seeing `ModelRequestContext.Current` with the session and its taint; `CompactCommandTests`
+  covers the unfit warning. The session runs it with `SessionActor.RunExclusiveAsync`, as
+  `/undo` does: it waits for a running turn and goes ahead of queued messages, and the command's cancellation token is
+  linked into the summarizer call. Output: `compacted events a–b by <summarizer> in n chunk(s).` with the record's goal and
+  next step when it has them; `Nothing before the latest turn needs compacting.`; or, when no record fits
+  (`CompactionStatus.Unfit`), a warning `kept events a–b uncompacted: <detail>`, with nothing appended. The line is
+  `CompactionResult.Describe()`, which the turn loop's compaction notes now use too. A later `/undo` goes back to before
+  the latest turn's message, and the `Compacted` event was appended after it, so the earlier turns are raw again: nothing
+  is lost and `/compact` can run again. Telemetry is C-016's `corvid.compact` span.
+- `/cron [list] [--all] | pause <id> | resume <id> | remove <id>` (`CronCommands`, over `runtime.Builtin.Jobs`): the user
+  acting directly, so no approval step, as with `/skills` and `/undo` (the model's `cron_remove` still asks). `list` is a
+  table of id, name, schedule as written, state (`active`, `paused`, `completed` or `removed`; `--all` adds the last two),
+  next run in the job's own zone (`CronTools.Local`, now public), the last run's start and status, and flags
+  (`no_agent`, `script`, `tainted`). Commands are registered like the others, so ACP's `available_commands_update` lists
+  them (the recorded exchanges were re-recorded; only the command list changed) and the gateway allows them to the owner
+  alone.
+- Pausing (`JobStore.Pause` and `Resume`, schema version 2). A `paused` column (`INTEGER NOT NULL DEFAULT 0`, checked 0 or
+  1), not a new state: the `state` CHECK could change only through SQLite's table rebuild, which `job_runs`' foreign key
+  makes awkward. A version 1 file is migrated by `ALTER TABLE jobs ADD COLUMN paused …; PRAGMA user_version = 2;` inside
+  the constructor's immediate transaction, so two processes opening it at once do not both migrate; its jobs stay
+  unpaused. An older binary refuses a version 2 file (`Unsupported job database schema version 2`), so a downgrade stops
+  scheduling. `Pause` sets `paused = 1` and clears `next_run_at` on an active, unpaused job (false otherwise); `ClaimDue`
+  skips paused jobs, and the scheduler's wait, the minimum of the jobs' next runs, cannot spin on an overdue paused job
+  because it has none. `Resume` computes the next run from now with `JobSchedule.First`: an interval one period from now,
+  a cron expression its next match, so ticks missed while paused are not run (as missed ticks collapse in C-012), and a
+  one-shot its time, or now when that passed while it was paused, so it runs once. It returns null for an unknown,
+  removed, completed or unpaused job. `Remove` works on a paused job, which is still active. `ScheduledJob.Paused` is an
+  init property, so positional constructions are unchanged, and `cron_list` adds `"paused": true`. The tools are
+  unchanged: pausing is the user's alone. A scheduler in another process (the gateway, or another chat) reads the same
+  file and sees a change at its next poll, within `PollInterval` (30 s).
+- Hermes home (`HermesHome.Resolve` in `Corvid.Host/Configuration`, beside `CorvidPaths`; the host is the only project that
+  references both Memory and Skills and already holds both import commands). `/memory import hermes` reads
+  `<home>/memories` and `/skills import hermes [<hermes home>]` reads `<home>/skills`, resolved alike. Checked against
+  NousResearch/hermes-agent at 55ee4acd (`hermes_constants.py` `get_default_hermes_root`, `_hermes_root_of`,
+  `_expand_hermes_home`, `_platform_default_hermes_home`; `hermes_cli/main.py` `_apply_profile_override`;
+  `hermes_cli/profiles.py` `normalize_profile_name`, `validate_profile_name`, `resolve_profile_env`): an explicit home wins,
+  with no profile; else `$HERMES_HOME` trimmed and expanded as C-027 did (still relative is a problem); a `HERMES_HOME`
+  whose parent is named `profiles` is a profile's home and is used as it is, without the sticky read, as Hermes does (it
+  tests the raw value; Corvid the expanded path); otherwise `active_profile` is read from the Hermes root (the platform
+  default when `HERMES_HOME` is unset or inside it, else `HERMES_HOME`), BOM dropped and trimmed, a read error counting as
+  no file. Empty or `default` (any case) is `HERMES_HOME`, or the platform default; any other name is lowercased and must
+  match `^[a-z0-9][a-z0-9_-]{0,63}$` and not be reserved (`hermes`, `test`, `tmp`, `root`, `sudo`), and the home is
+  `profiles/<name>` under `HERMES_HOME` or the default, which must exist without a tombstone (`profiles/.deleted/<name>`).
+  An invalid or missing sticky profile is a warning naming the file and the expected directory, never a fallback: Hermes
+  itself exits there, and importing another profile's data silently is worse than asking for the home. Before C-035 the
+  memory import read no sticky profile at all and the skills import took only an absolute `HERMES_HOME` (no expansion, no
+  Windows default, no suffix; review of PR #37, finding 3); both now share this code. `HermesMemory` keeps the file
+  reading, and `SkillStore.HermesSkillsDirectory` is gone. `/memory import hermes` names the profile in its title.
+  Parsing change: `/skills import hermes <x>` used to mean a folder `./hermes` with source `x`; it now means Hermes home
+  `x`, so a folder named `hermes` is written `./hermes`. Not followed: Hermes' per-invocation `-p/--profile`, its recovery
+  commands' fallback from a missing sticky profile to the default, its identity-marker test for a profile directory (any
+  existing directory counts), and its `sudo` remapping.
+- `corvid evals`: nothing to build. C-013 already shipped the verb (`EvalsCommand`: `corvid-evals` found by path,
+  `--log` defaulting to the user's event log, `--help` passed through, tested in `tests/Corvid.Cli.Tests`); `evals/README.md`
+  and C-021's deferred list still called it missing. The README now names `corvid evals <command>` as the entry point, with
+  the raw `corvid-evals` form kept for a checkout without an installed `corvid`.
+- Tests. `tests/Corvid.Kernel.Tests`: `JobPauseTests` (a paused job is not claimed and has no next run; resume from now for
+  an interval and a cron expression with no catch-up run; a one-shot past due runs once on resume; unknown, removed,
+  completed and unpaused ids refused, and a paused job removed; a hand-built version 1 file migrated with its job
+  unpaused, opened twice, then paused and claimed; a newer version refused) and `CompactNowTests` (three turns compact to
+  events 1–4 with the latest turn and `PlanUndo` untouched; nothing to compact with no turn, one turn or a lone record).
+  `tests/Corvid.Host.Tests`: `CompactCommandTests` (the fake generator as summarizer: the output lines, the `Compacted`
+  event, a second `/compact`, bad usage, and `/undo` afterwards), `CronCommandTests` (list columns and flags, pause, resume,
+  remove, `--all`, errors, the last run), `HermesHomeTests` (C-027's expansion cases moved from `HermesMemoryTests`, plus
+  the sticky profile from the default root, `HERMES_HOME` naming the root, a custom root, `default` and blank, a profile
+  home trusted without the read, missing, tombstoned, invalid and reserved names, an explicit home) and
+  `HermesImportCommandTests` (both imports with `HERMES_HOME` and `active_profile`, run alone because they set the process
+  environment). `tests/Corvid.Tools.Builtin.Tests`: `cron_list` shows a paused job. `tests/Corvid.Acp.Tests`: the
+  re-recorded exchanges.
+
+Not built yet: `/compact <what to keep>` (focus instructions, which need a `ContextCompactor` parameter and a change to
+the `Compacted` event); compacting the latest turn (excluded so `/undo` keeps working); before and after prompt token
+figures (a full `PromptRenderer.Render` with the system prompt and tool schemas, a turn-loop concern); editing jobs
+(schedule, prompt, script) from `/cron` or a tool; per-job toolsets; `cron_pause` and `cron_resume` tools; `/cron runs <id>`
+for run history (`JobStore.Runs` exists); waking the scheduler at once on resume; a golden-trajectory replay verb
+(`corvid evals golden`; replay of `evals/golden` runs through `dotnet test`, and `corvid-evals` has no such command);
+shipping `corvid-evals` in the single-file publish; Hermes' `-p/--profile` and its fallback from a missing sticky profile;
+and Hermes profiles for `SOUL.md`, memory plugins and session import.
 
 ## Running the check
 
