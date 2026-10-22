@@ -179,8 +179,8 @@ These are 50 texts, too few for a confident rate. The credential and address gap
 
 1. **The analyzer stays authoritative for approval targets, and GLiNER2 is not added to them.** Recall this low would hide targets from the risk question and from structural rules. The spans that do appear need re-segmentation the parser already does exactly. No phrasing or threshold comes near the bar.
 2. **Where GLiNER2 might still serve shell targets: nowhere in the approval decision.** The analyzer already refuses to auto-approve what it cannot read: unresolved commands, opaque `python -c` text and dynamic targets all ask. GLiNER2 spans could at most be shown beside such a prompt as unverified hints, under the same rule as slot pre-fill (§7: a hint, never a veto, never a gate input). That display has not been measured and is not built. Free-form arguments to tools that are not shells (C-005 `ToolAction`) keep their parameter-name rule.
-3. **Proposed plan changes** (left for a plan revision, not made in this PR):
-   - §10.2 step 2 stops using GLiNER2 for paths, PIDs (`kill` targets) and hosts, which are what this spike measured. Its other free-form arguments, SQL strings and `curl` data, were not measured: the `database table` and `credential` labels were sent but not scored, and the corpus has command lines, not payloads. Whether to drop those too, or measure them, is left to the plan revision.
+3. **Plan changes** (proposed here, made in C-036, plan 0.5):
+   - §10.2 step 2 stops using GLiNER2 for paths, PIDs (`kill` targets) and hosts, which are what this spike measured. Its other free-form arguments, SQL strings and `curl` data, were not measured: the `database table` and `credential` labels were sent but not scored, and the corpus has command lines, not payloads. C-036 drops those too: GLiNER2 is out of the approval decision entirely, and measuring it on SQL and `curl` payloads is deferred.
    - C-007b's "Deferred: GLiNER2 target extraction (S3)" is closed as not to be built.
    - C-007b stays unblocked: it never depended on GLiNER2 for its targets.
 4. **PII egress (C-015) keeps GLiNER2, with two gaps to close outside this spike.**

@@ -17,7 +17,8 @@ is slowed more: the p90 of per-case guided/free ratios is +15.5% and +20.5% (+13
 runs wrote the same number of tokens), over 10%. The tail of the latency distribution itself does not move: p90
 total time is +1.7% and −3.2%. Read as "9 requests in 10 within 10%", S5 fails; read as the paired median, summed
 time or tail latency, it passes (the unpaired median on the shortlist, a noisier estimate, is +11.0%). This write-up
-does not pick one; the plan should say which statistic it meant.
+does not pick one; the plan should say which statistic it meant. The maintainer has since decided: the median gates,
+so S5 passes (see [Decision](#decision-2026-10-22)).
 
 - **Feasible, no upgrade.** ONNX Runtime GenAI 0.17.1, the version Starling pins exactly, has a public
   `GeneratorParams.SetGuidance(type, data, enableFFTokens)`. llguidance is compiled into both linux-x64 natives, CPU
@@ -268,6 +269,14 @@ The same runs summarized without pairing, guided / free (A/A: repeat / free):
 - **§7's sketch needs one correction**: the grammar has to describe the template's `<tool_call><function=...>` XML,
   not a JSON `{name, arguments}` object.
 
+### Decision (2026-10-22)
+
+The maintainer gates the 10% condition on the **median** of paired per-request ratios: +6.0% (all 12 tools) and +8.5%
+(5-tool shortlist), so S5 passes. The p90 of those ratios (+15.5% and +20.5%; +13.5% and +16.0% on equal-length outputs)
+is reported and does not gate. Until fast-forward tokens exist (U-2 item 4), Corvid uses the grammar in Required mode
+only where a call is already required: the fabric's confident `tool` pick and §7 step 6's re-prompt. Recorded in plan 0.5
+(C-036) as D-13, with §7 corrected to the XML form and U-2 rewritten as the ask below.
+
 ### The U-2 ask
 
 Proposed text for §19 U-2, to raise on starlinghq/starling. None of it needs a GenAI upgrade; all of it was prototyped
@@ -281,7 +290,8 @@ on `spike/s5-llguidance` against `Microsoft.ML.OnnxRuntimeGenAI` 0.17.1:
 3. A tool-grammar builder in `Starlings.Models.Qwen35` (Required and Auto) for the template's format, with value-length
    bounds, and `ChatToolMode.RequireSpecific`/`RequireAny` in the Extensions.AI adapter mapped to it. `ResponseFormat`
    JSON Schema maps to `json_schema`.
-4. Fast-forward tokens supported in the decode loop, measured against the 10% budget at the p90 of per-request ratios.
+4. Fast-forward tokens supported in the decode loop. The median per-request slowdown gates the 10% budget (D-13); the p90 of
+   per-request ratios is reported alongside, and fast-forward tokens are what should move it.
 
 ## Reproduce
 
