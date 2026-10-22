@@ -205,10 +205,13 @@ internal sealed class GatewayFixture : IAsyncDisposable
 
 internal static class Wait
 {
-    /// <summary>Polls until <paramref name="condition"/> holds; fails after five seconds.</summary>
+    /// <summary>
+    /// Polls until <paramref name="condition"/> holds; fails after thirty seconds. Generous because CI runs every test project
+    /// at once on one shared runner, where a gateway turn has taken over five seconds; a passing wait returns as soon as it holds.
+    /// </summary>
     public static async Task Until(Func<bool> condition, string because)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
         while (!condition())
         {
             if (DateTime.UtcNow > deadline)
