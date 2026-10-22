@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/starlinghq/corvid/evals/tool-calling/case.schema.json",
+  "title": "Corvid tool-calling golden case (C-034)",
+  "description": "One line of evals/tool-calling/cases.jsonl. For editors and the docs: Corvid.Evals.ToolCalling.ToolCallingSet.Load enforces the same rules by hand, plus the ones a schema cannot state (expected tools are in catalogue.json, constrained parameters are declared by an expected tool, equals and enum values lie inside a declared enum, ids are unique).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "prompt", "tags"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$" },
+    "prompt": { "type": "string", "minLength": 1, "description": "The user message, sent as the turn's only message." },
+    "tags": {
+      "type": "array",
+      "uniqueItems": true,
+      "minItems": 1,
+      "items": { "enum": ["direct", "near_miss", "no_tool", "required", "tempting", "multi_step", "s5"] }
+    },
+    "expect": { "$ref": "#/$defs/expect" },
+    "args": { "$ref": "#/$defs/args" },
+    "steps": {
+      "type": "array",
+      "minItems": 2,
+      "description": "A multi-step case: the calls expected, in order.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["expect"],
+        "properties": { "expect": { "$ref": "#/$defs/expect" }, "args": { "$ref": "#/$defs/args" } }
+      }
+    },
+    "results": {
+      "type": "object",
+      "description": "Canned result text by tool name; a tool without one returns {\"ok\":true}.",
+      "additionalProperties": { "type": "string" }
+    },
+    "note": { "type": "string", "description": "Provenance or why the label is what it is." }
+  },
+  "oneOf": [
+    { "required": ["expect"], "not": { "required": ["steps"] } },
+    { "required": ["steps"], "not": { "anyOf": [{ "required": ["expect"] }, { "required": ["args"] }] } }
+  ],
+  "$defs": {
+    "expect": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["tool"], "properties": { "tool": { "type": "string" } } },
+        {
+          "type": "object", "additionalProperties": false, "required": ["any_of"],
+          "properties": { "any_of": { "type": "array", "minItems": 2, "uniqueItems": true, "items": { "type": "string" } } }
+        },
+        { "type": "object", "additionalProperties": false, "required": ["none"], "properties": { "none": { "const": true } } }
+      ]
+    },
+    "args": {
+      "type": "object",
+      "description": "One constraint per parameter. With any_of, a constraint applies to the called tool only when that tool declares the parameter.",
+      "additionalProperties": { "$ref": "#/$defs/constraint" }
+    },
+    "constraint": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "equals": { "type": ["string", "number", "boolean"], "description": "Strings compare trimmed and case-insensitively (S5's rule); numbers and booleans exactly." },
+        "contains": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "Every substring, case-insensitively." },
+        "regex": { "type": "string", "description": ".NET regular expression, case-insensitive, matched against the value's text." },
+        "enum": { "type": "array", "minItems": 1, "items": { "type": ["string", "number", "boolean"] }, "description": "One of these (equals rules)." },
+        "present": { "const": true, "description": "The argument is given and not null." }
+      }
+    }
+  }
+}

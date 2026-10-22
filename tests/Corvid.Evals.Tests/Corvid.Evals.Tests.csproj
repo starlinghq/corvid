@@ -11,5 +11,7 @@
   <ItemGroup>
     <!-- Copied at build time, so a no-build test run replays the golden set as committed. -->
     <Content Include="../../evals/golden/*.json" LinkBase="golden" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The S2 tool-calling golden set (C-034): validated and covered by ToolCallingSetTests. -->
+    <Content Include="../../evals/tool-calling/*.json;../../evals/tool-calling/*.jsonl" LinkBase="tool-calling" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

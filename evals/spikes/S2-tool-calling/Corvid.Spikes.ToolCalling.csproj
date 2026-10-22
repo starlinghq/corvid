@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Spike S2 (C-003, C-034): the tool-calling golden set with Qwen3.5-0.8B and Kev-0.8B on the RTX 3090. It runs the same
+    ToolCallingCli as `corvid-evals tool-calling`, which is the shipped (CPU) path; only the model bindings differ. Local
+    only: not in Corvid.slnx, so CI never restores it, and outside src/, vault/ and sandbox/, so the dependency-boundary
+    check never scans it.
+
+    Build it with -p:UseCuda=true (run.sh build does): the property flows to Corvid.Models.Starling, which then references
+    Microsoft.ML.OnnxRuntimeGenAI.Cuda instead of the CPU package (C-029), the one native package, bringing
+    Microsoft.ML.OnnxRuntime.Gpu for Kev, EmbeddingGemma 2 and GLiNER2. That restore shares Corvid.Models.Starling's obj/
+    with the solution build, so rebuild the solution afterwards (a solution build restores the CPU flavour again).
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <RootNamespace>Corvid.Spikes.ToolCalling</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../Corvid.Evals/Corvid.Evals.csproj" />
+    <ProjectReference Include="../../../src/Corvid.Models.Starling/Corvid.Models.Starling.csproj" />
+    <Content Include="../../tool-calling/*.json;../../tool-calling/*.jsonl" LinkBase="tool-calling" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

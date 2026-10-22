@@ -18,4 +18,9 @@
     <ProjectReference Include="../../sandbox/Corvid.Sandbox.Launcher/Corvid.Sandbox.Launcher.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The S2 golden set's snapshot of the built-in descriptors (C-034), checked by CatalogueSnapshotTests. -->
+    <Content Include="../../evals/tool-calling/catalogue.json" LinkBase="tool-calling" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
