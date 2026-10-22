@@ -404,6 +404,23 @@ public sealed class PrivacyEgressTests
     }
 
     [Fact]
+    public async Task The_switch_time_assessment_applies_the_credential_floor()
+    {
+        string[] texts = [$"token {GitHubToken}"];
+
+        var sending = await Egress(new FakePiiExtractor(), EgressPolicy.Default with { Action = EgressAction.Send })
+            .AssessAsync(Cloud, texts, tainted: false, Ct);
+        Assert.Equal(EgressOutcome.Redacted, sending.Outcome);
+        Assert.Equal(EgressAction.Redact, sending.Action);
+
+        var refusing = await Egress(new FakePiiExtractor(), EgressPolicy.Default with { Action = EgressAction.Refuse })
+            .AssessAsync(Cloud, texts, tainted: false, Ct);
+        Assert.Equal(EgressOutcome.Refused, refusing.Outcome);
+        Assert.Contains("1 credential value", refusing.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain(GitHubToken, refusing.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_credential_value_under_a_refuse_policy_is_refused_and_the_reason_never_names_it()
     {
         var provider = new ScriptedChatClient(_ => throw new InvalidOperationException("must not be called"));

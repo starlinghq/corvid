@@ -2907,10 +2907,14 @@ lesson validator (C-025).
   value. With no extractor the gate still refuses before the detector runs. C-006's switch-time hook (`AssessAsync`) gets
   the detector through `ScanAsync`. No configuration was added: credentials are floored at `Redact` for every profile.
 - Trace export: `SecretRedactor.Redact` is `CredentialDetector.Redact(text, Traces)`, and `SecretRedactor.Redacted` is kept, so
-  `BeaconContent` is unchanged. Behaviour changes from C-027's copy: `$VAR`, `${VAR}`, `%VAR%`, placeholders and masks under
-  a secret label are no longer redacted (they are references, not values); a sentence's trailing `.` or `,` stays outside a
-  bare value; and prose values, URL passwords and the new provider shapes are redacted. The golden export and
-  `BeaconExportTests`' redactor theory pass unchanged.
+  `BeaconContent` is unchanged. Behaviour changes from C-027's copy. No longer redacted: `$VAR`, `${VAR}`, `%VAR%`,
+  `{{ … }}`, placeholders, masks and numbers of up to six digits under a secret label (references, not values); a `Bearer`
+  word of letters only (`Bearer authentication`); `sk-` slugs of lower-case words; a label and a value on different lines
+  (separators now stay on one line); and a sentence's trailing `.`, `:`, `)`, `]` or `}` after a bare value. Redacted
+  differently: an assignment whose value has a known shape keeps the prefix (`GITHUB_TOKEN=ghp_[REDACTED]`, was
+  `GITHUB_TOKEN=[REDACTED]`). Newly redacted: `Basic`, `token`, `Digest` and `Negotiate` Authorization values, Stripe, GitLab,
+  Google and Hugging Face keys, URL passwords, prose values, `passphrase` and `secret_key` labels, and PEM blocks with RFC 1421 headers or JSON-escaped line breaks. The
+  golden export and `BeaconExportTests`' redactor theory pass unchanged.
 - Lessons: `LessonValidator` drops its own secret, hex and base64 patterns and reports rule `secret` from `Find(text,
   Lessons)`, at most one violation per field for a credential (`'<excerpt>'`) and one for an encoded blob (`'<excerpt>' looks
   like an encoded secret`), so `LessonWriter` and the existing tests are unchanged. The lesson rules now also refuse prose
