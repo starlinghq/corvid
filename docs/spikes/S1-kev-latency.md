@@ -83,6 +83,7 @@ run 4, the review rerun at load 3–6):
    cache passes through host memory for every row. The builder's own CUDA graph (`-e cuda -p fp32`) is faster but did
    not load unpatched with ONNX Runtime GenAI 0.17.1. A GPU-resident graph and state reuse across checkpoints are the
    levers for 8-question checkpoints and `pre-execute`; that is Starling work, proposed as C-031.
+   Recorded in plan 0.5 (C-036) as upstream ask U-8 (the GPU-resident graph) and in U-4 (state reuse across checkpoints).
 
 ## Setup
 
