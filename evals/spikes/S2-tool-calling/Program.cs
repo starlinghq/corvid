@@ -52,7 +52,7 @@ internal sealed class CudaToolCallingModels : IToolCallingModels
         // As StarlingBindings and ModelComposer bind it: the token counter, then the request scope.
         _generator = new ModelBinding(StarlingProfiles.Qwen35,
             new ModelRequestScopeChatClient(new CountingChatClient(client, Qwen35TokenCounter.Create(files))));
-        Note(StarlingModels.Qwen35, "cuda:0 (GenAI CUDA provider, spike-only); Qwen35ChatClientOptions defaults: greedy, thinking off");
+        Note(StarlingModels.Qwen35, "cuda:0 (GenAI CUDA provider, spike-only); Qwen35ChatClientOptions defaults: greedy, thinking off", cuda: true);
         return _generator;
     }
 
@@ -87,7 +87,7 @@ internal sealed class CudaToolCallingModels : IToolCallingModels
         var binding = StarlingBindings.KevDecider(Open(StarlingModels.Kev08B, () => _store.OpenKev(KevModel.Kev08B)),
             KevDecider.OptionsFor(ModelPlacement.Cuda(0)));
         Own(binding.Service);
-        Note(StarlingModels.Kev08B, $"{binding.Profile.Id} (KevDecider.Create, C-029); calibrated temperature");
+        Note(StarlingModels.Kev08B, $"{binding.Profile.Id} (KevDecider.Create, C-029); calibrated temperature", cuda: true);
         return _kev = (IDecider)binding.Service;
     }
 
@@ -105,8 +105,9 @@ internal sealed class CudaToolCallingModels : IToolCallingModels
         }
     }
 
-    private void Note(StarlingModelInfo model, string detail) =>
-        _described[model.Name] = $"{detail}, {model.StarlingProfile}, {model.Lock.Repository}@{model.Lock.Revision[..8]}, " +
+    // The catalogue's Starling profile names the CPU artifact, so it is printed only for the models that run on the CPU.
+    private void Note(StarlingModelInfo model, string detail, bool cuda = false) =>
+        _described[model.Name] = $"{detail}, {(cuda ? "" : model.StarlingProfile + ", ")}{model.Lock.Repository}@{model.Lock.Revision[..8]}, " +
             $"Starlings {Version(typeof(KevDecisionModel).Assembly)}";
 
     private static string Version(Assembly assembly) =>
