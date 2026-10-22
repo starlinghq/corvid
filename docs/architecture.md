@@ -1639,7 +1639,9 @@ Everything was verified against fake HTTP handlers and a stand-in Vault on a Uni
   cannot read under `Redact` or `Refuse` refuses the request. Unreadable means images and files, and also any tool argument
   or result that is not a string, number, boolean or JSON (an adapter would serialize such an object, which the scan cannot
   see). A request marked local-only (below) is refused by every cloud model, whatever its policy. Under `Send` the scan still runs and the same extractor failures refuse, because without it the gate
-  cannot apply the taint rule. Maps live in memory, for at most 256 sessions (the least recently used is dropped).
+  cannot apply the taint rule. Maps live in memory, for at most 256 sessions (the least recently used is dropped). Since
+  C-032 a deterministic credential-value detector runs beside the extractor, and a credential value is never sent whatever
+  the policy ([credential-value detection](#credential-value-detection-c-032)).
 - `PrivacyEgressChatClient` wraps each gated binding. It reads the session and taint from `ChatOptions.AdditionalProperties`
   (`corvid.session_id`, `corvid.tainted`, which `TurnRunner` sets on every generator call) or the ambient
   `ModelRequestContext`, strips every `corvid.` key, moves `ChatOptions.Instructions` into a leading system message so it is
@@ -2567,7 +2569,8 @@ Hermes session mapper, and reimplemented; no Beacon code is used. The Hermes for
   key, access key, secret, token, password, passwd, private key or client secret (an Authorization scheme or JSON literal
   is left), AWS access key ids, GitHub `gh[pousr]_` and `github_pat_` tokens, Slack `xox?-` tokens, `sk-` keys and
   JWT-shaped strings. It is a screen, not a proof; Corvid keeps real secrets behind Vault placeholders, but tool output can
-  hold one.
+  hold one. Since C-032 it is a facade over the shared detector's trace rules, which add more shapes, URL passwords and
+  prose values ([credential-value detection](#credential-value-detection-c-032)).
 - `/memory import hermes [<hermes home>] [--dry-run]` (`CoreCommands`), next to `/skills import hermes`, so it works from
   chat, ACP and the gateway (the owner's alone). `HermesMemory` (`Corvid.Memory`) reads `$HERMES_HOME/memories/MEMORY.md`
   (the agent's notes) and `USER.md` (the user profile), an explicit argument winning, as Hermes' `get_hermes_home` finds
@@ -2676,7 +2679,8 @@ the projection or git in `Corvid.Kernel`, the catalogue row in `Corvid.Fabric`, 
   and both cases, are not paths, and either hold `+`, `/` or `=` or switch between upper case, lower case and digits at 45%
   or more of their characters, as random text does and a PascalCase identifier with a digit does not) and instructions
   aimed at the agent. The long-hex rule refuses a commit hash too, which is one-off anyway. The rules are heuristics: they refuse a
-  draft, never a turn.
+  draft, never a turn. Since C-032 the secret rule is the shared detector under its lesson rules
+  ([credential-value detection](#credential-value-detection-c-032)).
 - Gated write (`LessonWriter`): validate, file as a candidate, then ask the existing `memory_op` gate at the pre-execute
   checkpoint in the source session, with lesson-shaped JSON instructions (the candidate, and up to five approved lessons of
   the same project from `SearchApproved` as neighbours). An acted `add` approves; `update` approves and supersedes the
@@ -3092,6 +3096,146 @@ the models placed on one GPU; trimming shortlist descriptions and the 7+ questio
 rows; reduced checkpoints on CPU-only hosts (C-030) and a GPU-resident Kev graph with state reuse (C-031); a Kev-weight
 cache for CI; separate `obj/` for the two variants; Windows CUDA; and a latency gate in CI (S1's 300 ms stays evidence
 rerun by hand).
+
+## Credential-value detection (C-032)
+
+Spike S3 found that GLiNER2's `credential` label tags the noun (`API key`, `wifi password`), never the value, so the egress
+gate covered 5 of 9 credentials in its PII fixture. C-032 adds one deterministic detector for credential values and uses it
+in the three places that screened for secrets with their own copies: the egress gate (C-015), trace export (C-027) and the
+lesson validator (C-025).
+
+- Project: `src/Corvid.Secrets`, a leaf core project (`IsAotCompatible`, no packages), whose one reference is
+  `Corvid.Vault.Contracts` for `Placeholders`. `Corvid.Abstractions` was the only project Memory, Models and Kernel all reach,
+  but the boundary checker keeps it free of dependencies, and a regex engine is no contract. Memory, Models and Kernel
+  reference it; the checker needed no change.
+- API: static `CredentialDetector`. `Find(text, rules)` returns non-overlapping `CredentialMatch(Kind, Start, Length,
+  PrefixLength, Strength)` in order, where `Strength` is `Shape`, `Labelled` or `Encoded`, and a labelled match is the value
+  alone, never its label or quotes. `Redact(text, rules)` replaces each match with `[REDACTED]`, keeping its public prefix
+  (`ghp_[REDACTED]`). `Contains(text, rules)` is the yes-or-no form. Candidates from different rules that overlap merge into
+  one span, so no rule's extent leaks past another's. On a tie the shape names the span, so `GITHUB_TOKEN=ghp_…` keeps
+  `ghp_`.
+- Rules (`CredentialRules` flags):
+  - `Shapes`: PEM private key blocks (a header, then at least 16 characters of key material, optionally after RFC 1421
+    headers and with JSON-escaped line breaks, to the END line or the end of the text); Authorization `Bearer`, `Basic`,
+    `token`, `Digest` and `Negotiate` values (with a digit or a symbol, or 16+ mixed-case characters, so `Bearer
+    authentication` passes); AWS `AKIA`/`ASIA`/`ABIA`/`ACCA` ids; GitHub `gh[pousr]_` and `github_pat_` (20+ characters
+    after the prefix); Slack `xox[abeposr]-` and `xapp-` (an all-lower-case hyphenated slug is dropped); `sk-` keys with 16+
+    characters (`sk-ant-`, `sk-proj-`, `sk-live-`; a slug is dropped); Stripe `sk_live_` and `rk_live_`; GitLab `glpat-`;
+    Google `AIza`; Hugging Face `hf_`; and JWTs (`eyJ….….sig`; the payload need not start `eyJ`). The minimums and the JWT
+    payload are the lesson rule's from before C-032, which was the loosest of the replaced copies.
+  - `Labelled`: assignments whose label names an API key, access key, secret key, secret, token, password, passwd,
+    passphrase, private key or client secret, or ends in `pass` or `pwd` after a separator or alone (`DB_PASS=`, ODBC
+    `Pwd=`; not `compass:`, and not `PWD=` holding a path) (`key=value`, `key: value`, `"key": "value"`, `export KEY='v'`,
+    on one line). A quoted value runs to its closing quote past backslash escapes, so a JSON `\"` stays inside it. A bare
+    value ends at whitespace or `, ; & ) ] }`, the field separators of connection strings, query strings and JSON, and may
+    hold a quote after its first character (`Xk9"vQ2`); one closing quote around the assignment (`say "TOKEN=abc"`) and the
+    backslash escaping it in JSON are trimmed. A password holding one of those separators is cut there (C-032's
+    deferrals). `curl -u user:PASS`, `--user` and `--proxy-user` (after any command: `docker run -u www-data:www-data` reports the group, a needless placeholder, not a leak); URL userinfo passwords (`scheme://user:PASS@host`); and
+    prose (`the password is X`, `the wifi password at the cabin is X`,
+    `was changed to X`, `with password X`, `passphrase`, `secret access key`, `client secret` and named token kinds, up to
+    five words between label and verb). An assignment's value is accepted unless excluded; a bare one-word value that is a
+    stopword is not. A prose value must also look like a secret: at least 8 characters with a digit or a symbol, a hyphenated
+    phrase of 12 or more, or 16+ mixed-case characters that switch class like random text (the test lessons used for base64,
+    rate 0.45); and it is not a stopword, a path or a URL, and the word after the label is not a modifier (`password
+    manager`, `password reset`, `secret name`). The gate matters because `RedactionMap` replaces a value everywhere in the
+    session.
+  - `Encoded`: hex runs of 32+ and base64 runs of 40+ that mix digits and both cases, are not paths, and hold `+`, `/` or `=`
+    or switch class at random text's rate. `KeyHeader`: a bare PEM private key header. Both are strict: a git SHA or digest
+    matches.
+- Three uses: `CredentialDetector.Egress` and `.Traces` are `Shapes | Labelled`; `.Lessons` adds `Encoded | KeyHeader`, since a
+  lesson should hold no digest either. Egress and traces never use the encoded rules, or every commit hash in a coding
+  prompt would be redacted.
+- Never a credential, under every rule, and only as the whole value: a Vault placeholder (session-bound and meaningless
+  off the machine), a name in angle brackets (`<CREDENTIAL_1>`, `<YOUR_API_KEY>`, the neutralized `‹EMAIL_1›`; letters,
+  digits, spaces, `_`, `.` and `-`), `[REDACTED]` alone or after a kept prefix (`ghp_[REDACTED]`), `$VAR`, `${VAR}`,
+  `$(cmd)`, `%VAR%`, `{{ … }}`, `${{ … }}`, masks (`***`, `xxxx`), `null`/`true`/`false`/`none`/`nil`/`undefined`, a bare
+  Authorization scheme, and numbers of at most six digits (`token: 4096`). A value that only holds one of these
+  (`hunter2vsec_…`, `$ecretP4ss!word`, `${DB_PASS:-hunter2}`) is found. A bare value cut before its `]` or `}`
+  (`ghp_[REDACTED`, `${GITHUB_TOKEN`) is read whole for this test, so `Redact` is idempotent. `IsExempt(value)` exposes the
+  test for a caller that decodes a match.
+- Engine: every pattern is `[GeneratedRegex]` with `RegexOptions.NonBacktracking | CultureInvariant` and a 1,000 ms
+  timeout, without lookarounds; each has one `value` group, with quotes stripped in code. Where a pattern offers alternatives
+  (the prose verbs), the longer comes first, since the engine takes the first that matches, as a backtracking one would.
+  Entropy, exclusions and the secret-like test run in code over each candidate. `Find` throws `RegexMatchTimeoutException`;
+  every consumer fails closed: `Redact` returns `[REDACTED]` for the whole text, `Contains` says yes, the lesson validator
+  refuses the field, and the egress gate refuses the request.
+- Egress gate. `PrivacyEgress.ScanAsync` runs the detector over each whole distinct text before the extractor, with no
+  cache. Whole texts mean a PEM block or JWT on a chunk boundary is seen whole. It also scans tool-call arguments and
+  object or array JSON tool results as JSON text, so `{"password": "…"}` keeps the key that labels the value. A value found
+  in JSON is unescaped to match the leaves; one that does not decode refuses the request, since it could not match its leaf,
+  and a decoded value that is exempt (an escaped `\u003CCREDENTIAL_1\u003E` in a re-serialized result) is dropped. Each
+  value of 4 or more characters becomes `DetectedValue("credential", value,
+  Credential: true)`, entered before the extractor's spans so a GLiNER2 label for the same string cannot replace it. There is
+  no threshold, and it runs whether or not the policy's labels include `credential`. GLiNER2's own `credential` spans keep
+  `Credential: false`, since they are nouns. `EgressScan.HasCredentials` and `.Credentials` count them. `Decide` applies the
+  floor after the scan, as `EffectiveAction` applies taint before it: a credential raises `Send` to `Redact`, and `Refuse`
+  stays `Refuse`. Values redact to `<CREDENTIAL_n>`, which `Restore` maps back in text and tool-call arguments. After
+  redaction `PrepareAsync` checks what would be sent: a found credential value still in a leaf, or a credential of 4+
+  characters the detector finds again in the redacted leaves or tool-call JSON, refuses the request (`a credential value is
+  still in the request after redaction`) instead of reporting it redacted (`AssessAsync`, which prepares no request, cannot make this check, so a switch-time assessment can say redacted where the request is then refused). `RedactionMap.Redact` replaces values that
+  overlap without one containing the other by their union, minted as a value of its own (under `credential` when either
+  is one), so a GLiNER2 span that starts before a credential and runs into it (`person` = `alice:Tr0ub4dor` in
+  `alice:Tr0ub4dor&3xyz@`) cannot leave the credential's tail, and the union restores exactly. A floored
+  request that also holds content the extractor cannot read (an image) is refused, as `Redact` would refuse it. Reasons give
+  counts (`redacted credential (1 credential value): a credential value is never sent, whatever the policy`), never a
+  value. With no extractor the gate still refuses before the detector runs. C-006's switch-time hook (`AssessAsync`) gets
+  the detector through `ScanAsync`. No configuration was added: credentials are floored at `Redact` for every profile.
+- Trace export: `SecretRedactor.Redact` is `CredentialDetector.Redact(text, Traces)`, and `SecretRedactor.Redacted` is kept, so
+  `BeaconContent` is unchanged. Behaviour changes from C-027's copy. No longer redacted: `$VAR`, `${VAR}`, `%VAR%`,
+  `{{ … }}`, placeholders, masks and numbers of up to six digits under a secret label (references, not values); a `Bearer`
+  word of letters only (`Bearer authentication`); `sk-` slugs of lower-case words; a label and a value on different lines
+  (separators now stay on one line); and a sentence's trailing `.`, `:`, `)`, `]` or `}` after a bare value. Redacted
+  differently: an assignment whose value has a known shape keeps the prefix (`GITHUB_TOKEN=ghp_[REDACTED]`, was
+  `GITHUB_TOKEN=[REDACTED]`). Newly redacted: `Basic`, `token`, `Digest` and `Negotiate` Authorization values, Stripe, GitLab,
+  Google and Hugging Face keys, URL passwords, prose values, `passphrase` and `secret_key` labels, and PEM blocks with RFC 1421 headers or JSON-escaped line breaks. After PR #48's review also: GitHub tokens of 20 to 29 characters, `sk-` keys of 16 to 19, JWTs whose payload does not start `eyJ`, Slack `xoxe-` and `xapp-`, `pass`/`pwd` labels, `curl -u` passwords, and a bare value's part after a quote (`Xk9"vQ2` was cut at the quote). A redacted trace redacts to itself. The
+  golden export and `BeaconExportTests`' redactor theory pass unchanged.
+- Lessons: `LessonValidator` drops its own secret, hex and base64 patterns and reports rule `secret` from `Find(text,
+  Lessons)`, at most one violation per field for a credential (`'<excerpt>'`) and one for an encoded blob (`'<excerpt>' looks
+  like an encoded secret`), so `LessonWriter` and the existing tests are unchanged. The lesson rules now also refuse prose
+  passwords, URL passwords and the new shapes. They accept what the old rule refused only in two places: an all-lower-case
+  hyphenated `sk-` slug (`sk-learn-pipeline-examples`), and a label and value on different lines (the old `\s*` crossed a
+  line break). The shape minimums are the old rule's (`ghp_` 20, `github_pat_` 20, `sk-` 16), so no token it refused
+  passes.
+- Vault. Corvid holds no secret values: `Corvid.Vault.Client` never sees one, and the only Vault operation that compares
+  values, `ScrubAsync`, is an RPC budgeted per user and an oracle (vault.md §5). So the detector uses Vault only to exempt
+  placeholders, and exact-value scrubbing waits for the kernel scrub step.
+- Measurement (`evals/spikes/S3-gliner2-targets`, `credentials <repo>`, results in `results/credentials.md`). The fixture,
+  `fixtures/credentials.jsonl`, has 61 texts holding fictitious credential values across 14 kinds and 61 hard negatives
+  (digests, SHAs, UUIDs, variable references, placeholders, prose about passwords and tokens). It was committed before the
+  detector and split per kind by SHA-256. On the report half (29 values, 30 negatives), covered recall is 1.000 for the
+  detector, 0.793 for GLiNER2 alone at 0.4 and 1.000 for both, and the detector has 0 false-positive spans. On S3's
+  `pii.jsonl` it covers 9 of 9 credentials (GLiNER2 alone 5 of 9) with no span on the 41 texts without one. It also has no
+  span on the corpus's 300 shell commands or `everyday.txt`'s 286 but one, the same line in both: `curl -u admin:secret`,
+  whose `secret` is a real password, read since the `curl -u` rule. The same author wrote the fixture and the rules, so
+  these are upper bounds, not field rates.
+- Tests: `tests/Corvid.Secrets.Tests` (each shape with its prefix, Authorization values, assignments, URL passwords, prose
+  values, S3's nine credential texts, hard negatives under the egress rules, Vault placeholders built with
+  `Placeholders.Format`, PEM extents including a cut block, two blocks and JSON escapes, quoted values, overlap merging,
+  encoded and header rules only for lessons, the timeout path through an internal finder seam, ordered non-overlapping
+  matches in a long text, the secret-like test, quotes inside values, whole-value-only exemptions, the new Slack shapes,
+  `pass`/`pwd` labels and `curl -u` with their lookalikes, and `Redact` idempotence); `PrivacyEgressTests` (a credential under `Send` at threshold 0.99 with
+  an extractor that finds nothing is redacted to `<CREDENTIAL_1>` and restored in text and tool-call arguments; `Refuse`
+  refuses without naming the value; a GLiNER2 `credential` noun does not raise `Send`; a PEM block across a chunk boundary
+  is redacted whole; a labelled value in a JSON tool result; no extractor still refuses; a detector timeout refuses; a
+  floored request with an image refuses; a JSON-escaped quote inside a tool-call argument is redacted with the rest of the
+  value; a value that does not decode, and a credential found again after redaction, refuse; a PII span overlapping a
+  credential is redacted as one union and restored exactly); `EgressTurnTests` (a tool result carrying a `ghp_` token reaches a cloud generator
+  under `Send` as `<CREDENTIAL_1>`); new `LessonValidatorTests` cases (a prose password, a URL password, and the old rule's
+  shape minimums).
+
+Deferred: the Vault exact-value scrub inside the egress gate, and the kernel-wide scrub step of vault.md §5, under which every
+tool result and script output would pass through `ScrubAsync` before the event log and any model (only
+`Corvid.Http/BearerTokens` calls scrub today); a per-profile credential action (refuse credentials while redacting PII);
+a gitleaks-scale provider catalogue (Azure, Twilio, SendGrid, npm, PyPI, Discord) and base64-wrapped credentials (a decoded
+`Basic` header, a token base64-encoded in a URL); a value-oriented GLiNER2 label; S3's address gap; running the credential
+evaluation in CI (the spike project stays outside `Corvid.slnx`); redacting credentials in the event log itself and in memory
+writes; treating `vsec_` placeholders as credentials; and exfiltration through a restored placeholder (the model echoing
+`<CREDENTIAL_n>` into a tool call that `Restore` maps back), which is the existing PII behaviour, covered by taint and
+approvals. From PR #48's review: a bare value holding `, ; & ) ] }` (`DB_PASSWORD=Ab1x,Z9q-pw77` finds `Ab1x`; the egress gate
+sends `,Z9q-pw77`, and a first part under 4 characters is not redacted at all), since those characters end fields in
+connection strings, query strings and JSON and the detector has no context to tell a separator from a password character
+(quote the value and it is found whole); and YAML block scalars (`password: |` with the value on the following lines),
+since separators stay on one line by design and the indicator alone is now ignored rather than redacted as the value.
 
 ## Slash-command and import gaps (C-035)
 
