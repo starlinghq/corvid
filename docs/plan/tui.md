@@ -346,7 +346,7 @@ listed in §9.
 | Memory rows: "memory staged: 2 facts (`/memory pending`)" | differentiator | | |
 | Detection rows in red with the rule id and posture, and the approval they forced | differentiator | `DetectionMatched` | |
 | MCP rows: "tool held: notes__search changed (`/mcp diff`)" | differentiator | `McpToolHeld`, `McpToolAccepted` | |
-| Job notices: "job nightly-tidy ran (session job:…)" with a key to open that session's transcript | differentiator | scheduler events and `/jobs` (§4.6) | |
+| Job notices: "job nightly-tidy ran (session job:…)" with a key to open that session's transcript | differentiator | scheduler events and `/cron` (§4.6) | |
 | Question block for a clarifying turn, with the composer focused and the question kept visible | table stakes | | K-6 |
 | Task list (`Ctrl+T` in fullscreen, a block in inline) from `TodosSet` | nice to have | | |
 | Transcript view `Ctrl+O` in fullscreen: `less`-style keys, `/` search, `n`/`N`, `{`/`}` by prompt, `[` dumps to scrollback, `v` opens in `$EDITOR` | table stakes for fullscreen | | |
@@ -414,7 +414,7 @@ only while the terminal is unfocused (focus events) unless configured always. A 
 ### 4.6 Jobs, skills, memory, MCP
 
 Corvid has durable scheduled jobs, a reviewed memory tier, git-versioned skills and pinned MCP tools. Each gets a
-view rather than a wall of text: `/jobs` lists jobs with next run and last outcome and opens a run's session;
+view rather than a wall of text: `/cron` (C-035: list, pause, resume, remove) lists jobs with next run and last outcome and opens a run's session;
 `/memory` shows pending writes as a review list with approve, correct and reject on each row; `/skills` lists with
 authorship and drafts awaiting replay; `/mcp` shows servers, trust, held tools and `diff` as a diff card. These are
 slash commands today with table output; the TUI renders their `CommandOutput` as navigable lists and adds the row
@@ -593,7 +593,7 @@ K-4, K-6, K-7, K-10.
 
 **T1, fullscreen and polish.** The fullscreen renderer with mouse, selection, clipboard paths, search, scrollbars
 and the `[` dump; `/tui` and the setting; vim mode; `keybindings.json`; `/statusline` with the external command;
-notifications and progress; `/terminal-setup`; auto titles; steer now; the context gauge and cost; `/jobs`,
+notifications and progress; `/terminal-setup`; auto titles; steer now; the context gauge and cost; `/cron`,
 `/memory`, `/skills` and `/mcp` as navigable lists. K-3, K-5, K-9.
 
 **T2, reach.** The daemon and attach; images; multi-session view once subagents exist; remote control.
