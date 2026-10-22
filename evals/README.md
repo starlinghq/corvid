@@ -9,7 +9,7 @@ harness are described in [`docs/architecture.md`](../docs/architecture.md).
 | `golden/` | one trajectory per file: events in the log's persisted form and the projections they must replay to |
 | `Corvid.Evals/` | `GoldenTrajectoryFile` (format), `ReplaySession` and `ReplayRunner` (replay), `SnapshotJson` and `JsonDiff` (comparison) |
 | `Corvid.Evals/Calibration/` | `DecisionSet` (decisions joined with outcomes), `FloorFitter`, `CalibrationReport`, `FloorReplay`, `KevTrainingExport`, `ShareGptExport`, `CalibrationCli` |
-| `Corvid.Evals.Calibrate/` | `corvid-evals`, the command-line entry point (later `corvid evals calibrate`, C-013) |
+| `Corvid.Evals.Calibrate/` | `corvid-evals`, the command-line tool; `corvid evals <command>` (C-013) runs it with `--log` defaulting to the user's event log |
 
 `dotnet test --solution Corvid.slnx` replays every file in `golden/` through
 `tests/Corvid.Evals.Tests`.
@@ -29,6 +29,16 @@ and approval ids aside). Record them with
 
 ## Calibrating floors
 
+`corvid evals <command>` is the normal entry point. It finds `corvid-evals` through `$CORVID_EVALS`, next to `corvid` or
+on `PATH`, and passes `--log` as the user's event log when none is given:
+
+```sh
+corvid evals calibrate --version 2026-11-01.1 --out floors.json --report-json report.json
+corvid evals replay --candidate floors.json
+```
+
+Without an installed `corvid`, run the tool from a checkout with the log named:
+
 ```sh
 dotnet build Corvid.slnx -c Release
 evals/Corvid.Evals.Calibrate/bin/Release/net10.0/corvid-evals calibrate --log ~/path/to/events.db \
@@ -39,4 +49,4 @@ evals/Corvid.Evals.Calibrate/bin/Release/net10.0/corvid-evals replay --log ~/pat
 Only calibrated decisions (recorded with `calibrated: true` by a non-degraded decider) fit floors; degraded-tier and
 unproven decisions are reported separately. `report`,
 `export-decisions` (Kev training records) and `export-trajectories` (ShareGPT) take the same `--log` options; run
-`corvid-evals --help` for the rest. Replaying recorded states against a new decider model is not built.
+`corvid evals --help` (or `corvid-evals --help`) for the rest. Replaying recorded states against a new decider model is not built.

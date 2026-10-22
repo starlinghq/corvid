@@ -104,10 +104,13 @@ public sealed partial class CronTools
             described["pre_run_script"] = script;
         if (job.NoAgent)
             described["no_agent"] = true;
+        if (job.Paused)
+            described["paused"] = true;
         return described;
     }
 
-    private static string Local(DateTimeOffset at, ScheduledJob job) =>
+    /// <summary>A time in the job's own zone, as the tools and <c>/cron</c> show it.</summary>
+    public static string Local(DateTimeOffset at, ScheduledJob job) =>
         TimeZoneInfo.ConvertTime(at, JobStore.FindZone(job.TimeZoneId)).ToString("yyyy-MM-dd'T'HH:mmzzz", CultureInfo.InvariantCulture);
 
     private static string Shorten(string text)

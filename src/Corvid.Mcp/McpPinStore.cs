@@ -10,9 +10,17 @@ namespace Corvid.Mcp;
 /// </summary>
 /// <param name="AllowedFlagged">
 /// The hash of a definition whose description matched a poisoning pattern and that the user allowed anyway (<c>/mcp allow</c>);
-/// any other definition of the tool is flagged again.
+/// any other definition of the tool is flagged again. C-033: also the hash of a definition withheld after an
+/// <c>injection</c> verdict that the user allowed; a later verdict over that definition is only logged.
 /// </param>
-public sealed record McpToolPin(string Hash, string Definition, DateTimeOffset PinnedAt, string? AllowedFlagged = null);
+/// <param name="Withheld">
+/// C-033: the hash of a definition withheld after a confident <c>injection</c> verdict over its description. A start that
+/// lists that definition holds it as <c>injection</c> again until the user allows it; written only when set, so a file
+/// without withholds stays as C-022 wrote it.
+/// </param>
+/// <param name="WithheldDecision">The <c>Decision</c> that withheld it, for <c>/mcp diff</c> and the log.</param>
+public sealed record McpToolPin(string Hash, string Definition, DateTimeOffset PinnedAt, string? AllowedFlagged = null,
+    string? Withheld = null, string? WithheldDecision = null);
 
 /// <summary>Where pinned tool definitions live, per configured server and tool name. Corvid state, not the user's configuration.</summary>
 public interface IMcpPinStore
@@ -29,6 +37,15 @@ public interface IMcpPinStore
 
     /// <summary>Adds or replaces the given tools' pins, and records the server even when <paramref name="pins"/> is empty; the server's other pins are kept.</summary>
     void Set(string server, IReadOnlyDictionary<string, McpToolPin> pins);
+
+    /// <summary>
+    /// Drops the server's entry, pins and all (C-033, <c>/mcp forget</c>), so its next listing is a first use again. Returns
+    /// how many pins were dropped (0 for an entry that pinned nothing), or null when the server had no entry.
+    /// </summary>
+    int? Remove(string server);
+
+    /// <summary>Every server with an entry, ordered ordinally (C-033: <c>corvid mcp forget --unconfigured</c>, <c>corvid mcp list</c>).</summary>
+    IReadOnlyList<string> Servers();
 }
 
 public sealed class InMemoryMcpPinStore : IMcpPinStore
@@ -56,6 +73,19 @@ public sealed class InMemoryMcpPinStore : IMcpPinStore
         ArgumentNullException.ThrowIfNull(pins);
         lock (_gate)
             _pins[server] = (_pins.GetValueOrDefault(server) ?? ImmutableDictionary.Create<string, McpToolPin>(StringComparer.Ordinal)).SetItems(pins);
+    }
+
+    public int? Remove(string server)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(server);
+        lock (_gate)
+            return _pins.Remove(server, out var removed) ? removed.Count : null;
+    }
+
+    public IReadOnlyList<string> Servers()
+    {
+        lock (_gate)
+            return [.. _pins.Keys.Order(StringComparer.Ordinal)];
     }
 }
 
@@ -107,11 +137,36 @@ public sealed class JsonFileMcpPinStore : IMcpPinStore
             foreach (var (tool, pin) in pins)
                 merged[tool] = pin;
             all[server] = merged;
-            Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-            var temporary = _path + ".tmp";
-            File.WriteAllText(temporary, Serialize(all));
-            File.Move(temporary, _path, overwrite: true);
+            Write(all);
         }
+    }
+
+    public int? Remove(string server)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(server);
+        lock (_gate)
+        {
+            // The same re-read and atomic replace as Set, so another process's pins for other servers are kept.
+            var all = Read();
+            if (!all.Remove(server, out var removed))
+                return null;
+            Write(all);
+            return removed.Count;
+        }
+    }
+
+    public IReadOnlyList<string> Servers()
+    {
+        lock (_gate)
+            return [.. Read().Keys];
+    }
+
+    private void Write(SortedDictionary<string, IReadOnlyDictionary<string, McpToolPin>> all)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
+        var temporary = _path + ".tmp";
+        File.WriteAllText(temporary, Serialize(all));
+        File.Move(temporary, _path, overwrite: true);
     }
 
     private SortedDictionary<string, IReadOnlyDictionary<string, McpToolPin>> Read() =>
@@ -124,7 +179,8 @@ public sealed class JsonFileMcpPinStore : IMcpPinStore
             pair => pair.Key,
             pair => pair.Value.OrderBy(tool => tool.Key, StringComparer.Ordinal).ToDictionary(
                 tool => tool.Key,
-                tool => new PinDocument(tool.Value.Hash, tool.Value.Definition, tool.Value.PinnedAt, tool.Value.AllowedFlagged),
+                tool => new PinDocument(tool.Value.Hash, tool.Value.Definition, tool.Value.PinnedAt, tool.Value.AllowedFlagged,
+                    tool.Value.Withheld, tool.Value.WithheldDecision),
                 StringComparer.Ordinal),
             StringComparer.Ordinal);
         return JsonSerializer.Serialize(new PinFileDocument(Format, FormatVersion, servers), McpPinJsonContext.Default.PinFileDocument);
@@ -147,14 +203,19 @@ public sealed class JsonFileMcpPinStore : IMcpPinStore
         var result = new SortedDictionary<string, IReadOnlyDictionary<string, McpToolPin>>(StringComparer.Ordinal);
         foreach (var (server, tools) in file.Servers)
             result[server] = tools.ToDictionary(pair => pair.Key, pair => pair.Value.Hash.Length == 64 && pair.Value.Definition.Length > 0
-                    ? new McpToolPin(pair.Value.Hash, pair.Value.Definition, pair.Value.PinnedAt, pair.Value.AllowedFlagged)
+                    ? new McpToolPin(pair.Value.Hash, pair.Value.Definition, pair.Value.PinnedAt, pair.Value.AllowedFlagged,
+                        pair.Value.Withheld, pair.Value.WithheldDecision)
                     : throw new InvalidDataException($"The pin of {server}/{pair.Key} has no SHA-256 hash or definition."),
                 StringComparer.Ordinal);
         return result;
     }
 }
 
-internal sealed record PinDocument(string Hash, string Definition, DateTimeOffset PinnedAt, string? AllowedFlagged);
+// C-033's two fields are written only when set: a file without withholds is byte for byte what C-022 wrote, and one with a
+// withhold is refused by an older Corvid (an unknown key), which then offers nothing from any server, i.e. it fails closed.
+internal sealed record PinDocument(string Hash, string Definition, DateTimeOffset PinnedAt, string? AllowedFlagged,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Withheld = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? WithheldDecision = null);
 
 internal sealed record PinFileDocument(string Format, int FormatVersion, Dictionary<string, Dictionary<string, PinDocument>> Servers);
 

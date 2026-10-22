@@ -18,6 +18,7 @@ namespace Corvid.Mcp;
 public sealed class McpTool : ToolFunction
 {
     private readonly McpServerConnection _server;
+    private volatile bool _withdrawn;
 
     internal McpTool(McpServerConnection server, string remoteName, ToolDescriptor descriptor)
         : base(descriptor)
@@ -32,9 +33,21 @@ public sealed class McpTool : ToolFunction
     /// <summary>The tool's name on its server; <see cref="AIFunction.Name"/> is the prefixed name the model calls.</summary>
     public string RemoteName { get; }
 
+    /// <summary>C-033: withheld after an <c>injection</c> verdict; every later call through this instance is refused.</summary>
+    public bool Withdrawn => _withdrawn;
+
+    /// <summary>
+    /// Marks the instance withheld (C-033). It is also removed from the registry, but another session's turn may hold it in its
+    /// catalogue until its next shortlist; this closes that window. A tool allowed later is registered as a new instance.
+    /// </summary>
+    internal void Withdraw() => _withdrawn = true;
+
     protected override async ValueTask<object?> InvokeCoreAsync(AIFunctionArguments arguments, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(arguments);
+        if (_withdrawn)
+            throw new McpToolException(
+                $"{_server.Definition.Name}/{RemoteName} was withheld after an injection verdict; /mcp diff {_server.Definition.Name} {RemoteName}");
         var context = ToolCallContext.From(arguments);
         // Plan §10.3: whatever an untrusted server returns (a result or an error message) is outside content. Marked before the
         // call, so an error text that reaches the model taints the session too.

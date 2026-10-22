@@ -75,6 +75,13 @@ internal sealed class FakeMcpServer : IMcpTransports, IAsyncDisposable
         return new StreamClientTransport(toServer.Writer.AsStream(), toClient.Reader.AsStream());
     }
 
+    /// <summary>Sends <c>notifications/tools/list_changed</c> from every running server (C-033).</summary>
+    public async Task NotifyToolsChangedAsync(CancellationToken cancellationToken = default)
+    {
+        foreach (var running in _running)
+            await running.Server.SendNotificationAsync(NotificationMethods.ToolListChangedNotification, cancellationToken);
+    }
+
     /// <summary>Ends every running server, as if its process exited: the client sees its connection close.</summary>
     public async Task EndAll()
     {
