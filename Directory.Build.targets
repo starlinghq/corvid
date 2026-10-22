@@ -1,0 +1,15 @@
+<Project>
+  <!--
+    C-029, the CUDA variant (-p:UseCuda=true). Microsoft.ML.OnnxRuntimeGenAI.Cuda brings Microsoft.ML.OnnxRuntime.Gpu, which
+    brings both Gpu.Linux and Gpu.Windows, and Gpu.Windows's props copy its win-x64 DLLs (about 205 MB, the CUDA provider
+    alone 187 MB) into every x64 output whatever the runtime identifier. Off Windows they are never loaded, so drop them
+    there; a win-* publish keeps them. The default CPU build has no such package, so this never applies to it.
+  -->
+  <Target Name="CorvidDropWindowsCudaNatives" BeforeTargets="AssignTargetPaths"
+          Condition="'$(UseCuda)' == 'true' and !$(RuntimeIdentifier.StartsWith('win')) and !$([MSBuild]::IsOSPlatform('Windows'))">
+    <ItemGroup>
+      <_CorvidWindowsCudaNative Include="@(None)" Condition="$([System.String]::Copy('%(None.FullPath)').ToLowerInvariant().Contains('microsoft.ml.onnxruntime.gpu.windows'))" />
+      <None Remove="@(_CorvidWindowsCudaNative)" />
+    </ItemGroup>
+  </Target>
+</Project>

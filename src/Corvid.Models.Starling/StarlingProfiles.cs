@@ -6,12 +6,12 @@ using Starlings.Models.Qwen35;
 namespace Corvid.Models.Starling;
 
 /// <summary>
-/// Model profiles of the in-process Starling slots (plan §2, §4.1). Every model is local and free; placement is
-/// <c>cpu</c> because this adapter ships the CPU natives only (CUDA selection is a follow-up).
+/// Model profiles of the in-process Starling slots (plan §2, §4.1). Every model is local and free. The properties are the
+/// CPU profiles; <see cref="For"/> gives Kev's placed ones (C-029: <c>kev-0.8b@cuda:0</c>, placement <c>cuda:0</c>).
 /// </summary>
 public static class StarlingProfiles
 {
-    public const string CpuPlacement = "cpu";
+    public const string CpuPlacement = ModelPlacement.Cpu;
 
     /// <summary>
     /// Qwen3.5-0.8B fp32x. Starling refuses prompt plus completion above <see cref="Qwen35ChatModel.MaxContextTokens"/>
@@ -54,7 +54,28 @@ public static class StarlingProfiles
     /// <summary>Kev-4B: the same limits as Kev-0.8B.</summary>
     public static ModelProfile Kev4B { get; } = Encoder("kev-4b@cpu", KevModelProfile.MaxStateTokens);
 
-    private static ModelProfile Encoder(string id, int maxTokens) => new ModelProfile(
+    /// <summary>
+    /// A model's profile on <paramref name="placement"/> (<c>cpu</c> or <c>cuda:N</c>). Only Kev can be placed on CUDA in
+    /// C-029; its profile id carries the device (<c>kev-0.8b@cuda:0</c>) so metrics and <c>/status</c> show it, while the
+    /// decider name (<c>kev-0.8b</c>), and with it floors and calibration, stays the same on every device.
+    /// </summary>
+    /// <exception cref="NotSupportedException">CUDA placement for a model other than Kev.</exception>
+    public static ModelProfile For(StarlingModel model, string placement)
+    {
+        if (!ModelPlacement.TryParse(placement, out var canonical, out _))
+            throw new ArgumentException($"'{placement}' is not a placement: cpu or cuda:N.", nameof(placement));
+        var cpu = StarlingModels.Get(model).Profile;
+        if (canonical == CpuPlacement)
+            return cpu;
+        return model switch
+        {
+            StarlingModel.Kev08B => Encoder("kev-0.8b@" + canonical, KevModelProfile.MaxStateTokens, canonical),
+            StarlingModel.Kev4B => Encoder("kev-4b@" + canonical, KevModelProfile.MaxStateTokens, canonical),
+            _ => throw new NotSupportedException($"CUDA placement for {StarlingModels.Get(model).Name} is not built yet (plan §18 C-029, Deferred)."),
+        };
+    }
+
+    private static ModelProfile Encoder(string id, int maxTokens, string placement = CpuPlacement) => new ModelProfile(
         id, maxTokens, maxTokens, ToolCallSupport.None, StructuredOutputSupport.None, PromptCachingStyle.None,
-        ModelCost.Free, PrivacyClass.Local, CpuPlacement).Validate();
+        ModelCost.Free, PrivacyClass.Local, placement).Validate();
 }

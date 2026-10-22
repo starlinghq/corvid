@@ -65,6 +65,8 @@ run 4, the review rerun at load 3–6):
    301 ms, so with both shortlists present keep that state nearer 300 tokens (212 ms measured) or trim the shortlist
    descriptions. Splitting `tool` and `skill` into a second request costs another state pass (about 250 ms) and only
    helps if that request can run off the critical path. Proposed as C-029.
+   Built in C-029 ([architecture](../architecture.md#kev-on-cuda-c-029)): `-p:UseCuda=true`, `Corvid:Models:Placement`, and a
+   300-token state for the ingress that asks both `tool` and `skill`.
 2. **On CPU-only hosts, reduce checkpoints** to ingress + egress and drop `step` questions to two, as the plan's
    fallback says: no CPU cell came in under 1 s. Proposed as C-030, not implemented.
 3. **Kev-4B stays the gate escalation tier**, on the GPU only; on the CPU (about 15 s) it is not interactive.

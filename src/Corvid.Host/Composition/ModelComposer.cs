@@ -66,7 +66,10 @@ public sealed class ModelComposer : IDisposable
         [.. ConfiguredModels.Where(pair => pair.Slot != ModelSlots.Decider).Select(pair => pair.Model).Distinct(StringComparer.OrdinalIgnoreCase)
             .Select(model => _catalogue.Check(model)).Where(availability => !availability.IsReady)];
 
-    /// <summary>Why the decider runs on the degraded tier or without its second tier, after <see cref="Compose"/>; empty when Kev is bound as configured.</summary>
+    /// <summary>
+    /// Why the decider runs on the degraded tier or without its second tier, or on the CPU instead of its configured GPU
+    /// (C-029, <see cref="PlacementFallback.Cpu"/>), after <see cref="Compose"/>; empty when Kev is bound as configured.
+    /// </summary>
     public IReadOnlyList<string> DeciderNotices
     {
         get
@@ -274,7 +277,9 @@ public sealed class ModelComposer : IDisposable
             var scheduler = DeviceSchedulers.IsLocalDevice(placement)
                 ? _devices.For(placement).GetTaskScheduler(DevicePriority.Interactive)
                 : TaskScheduler.Default;
-            raw = _catalogue.Load(descriptor.Name, new ModelLoadContext(slot, scheduler));
+            // A placement fallback (C-029: Kev configured on CUDA, loaded on the CPU) is reported with the decider's notices;
+            // the binding's own profile then says cpu, and Wrap schedules by it.
+            raw = _catalogue.Load(descriptor.Name, new ModelLoadContext(slot, scheduler) { Notice = Notice });
             _raw[descriptor.Name] = raw;
             return raw;
         }

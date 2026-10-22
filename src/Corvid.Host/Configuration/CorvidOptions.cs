@@ -283,6 +283,13 @@ public sealed class ModelOptions
     public Dictionary<string, RemoteModelSettings> Remote { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// Where in-process Starling models run, by catalogue name (C-029), for example
+    /// <c>{ "kev-0.8b": { "Device": "cuda", "Fallback": "Cpu" } }</c>. Models left out run on the CPU. In v1 only Kev-0.8B
+    /// and Kev-4B can be placed on CUDA, and only a <c>-p:UseCuda=true</c> build has the CUDA natives.
+    /// </summary>
+    public Dictionary<string, ModelPlacementSettings> Placement { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// The defaults: Starling's in-process models on the CPU. The decider is Kev-0.8B (C-004b), and it is optional: while it
     /// is not downloaded the fabric runs on the degraded tier (plan §5.6) and says so. Kev-4B, the second tier for gates
     /// below their floor (§5.5), is the decider's escalation when configured (<c>Corvid:Models:Slots:decider:Escalation</c>).
@@ -336,6 +343,27 @@ public sealed class SlotSettings
     public List<string> Fallbacks { get; set; } = [];
 }
 
+/// <summary>What happens when a model placed on a GPU cannot run there (C-029). Nothing falls back silently.</summary>
+public enum PlacementFallback
+{
+    /// <summary>
+    /// The load fails. For the decider that means the degraded tier with a notice (the decider never stops a start, C-004b)
+    /// and <c>corvid doctor</c> reporting Failed; it does not mean Kev on the CPU.
+    /// </summary>
+    Fail,
+
+    /// <summary>Load on the CPU instead, with a notice at start (CPU checkpoints take over 1 s, spike S1).</summary>
+    Cpu,
+}
+
+public sealed class ModelPlacementSettings
+{
+    /// <summary><c>cpu</c> (the default), <c>cuda</c> (device 0) or <c>cuda:N</c>, N as CUDA numbers devices.</summary>
+    public string Device { get; set; } = ModelPlacement.Cpu;
+
+    public PlacementFallback Fallback { get; set; } = PlacementFallback.Fail;
+}
+
 public sealed class DeviceOptions
 {
     /// <summary>Worker threads of the CPU device scheduler. One by default: Starling serializes native work anyway.</summary>
@@ -360,6 +388,12 @@ public sealed class TurnSettings
     public int MaxSteps { get; set; } = 8;
 
     public int MaxOutputTokens { get; set; } = 1_024;
+
+    /// <summary>
+    /// The TurnState size, in the generator's tokens, for an ingress checkpoint that asks both <c>tool</c> and <c>skill</c>
+    /// (C-029; spike S1: 212 ms at 300 tokens against 301 ms at 600 on the GPU). 100 to 600; 600 turns it off.
+    /// </summary>
+    public int DualShortlistStateTokens { get; set; } = Kernel.Turns.TurnOptions.DefaultDualShortlistStateTokens;
 }
 
 public sealed class MemorySettings

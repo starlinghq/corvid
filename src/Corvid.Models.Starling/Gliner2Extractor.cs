@@ -30,7 +30,7 @@ public sealed class Gliner2Extractor : IExtractor, IDisposable
     {
         ArgumentNullException.ThrowIfNull(files);
         if (options?.Session is { Provider: not OnnxExecutionProvider.Cpu })
-            throw new NotSupportedException("Corvid.Models.Starling ships the CPU ONNX Runtime natives only; CUDA placement is not supported yet.");
+            throw new NotSupportedException("CUDA placement is built for Kev only (C-029); GLiNER2 and the embedders run on the CPU.");
         var extractor = Gliner2EntityExtractor.Create(files, options);
         return new Gliner2Extractor((text, labels, threshold, token) => extractor.Extract(text, labels, threshold, token).Entities,
             extractor, scheduler);

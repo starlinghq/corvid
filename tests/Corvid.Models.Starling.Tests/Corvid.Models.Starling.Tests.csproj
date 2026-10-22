@@ -2,6 +2,8 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
+    <!-- The linked GPU probe (NVML through LibraryImport) below. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="xunit.v3" />
@@ -9,5 +11,7 @@
     <ProjectReference Include="../../src/Corvid.Models.Starling/Corvid.Models.Starling.csproj" />
     <!-- The device scheduler (C-011) supplies the extractor's TaskScheduler; the host will wire the two together. -->
     <ProjectReference Include="../../src/Corvid.Kernel/Corvid.Kernel.csproj" />
+    <!-- C-029: the doctor's GPU probe, so the Category=Gpu tests check the GPU exactly as corvid doctor does. -->
+    <Compile Include="../../src/Corvid.Host/Diagnostics/Cuda.cs" Link="Linked/Cuda.cs" />
   </ItemGroup>
 </Project>

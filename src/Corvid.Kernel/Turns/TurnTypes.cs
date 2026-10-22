@@ -80,6 +80,18 @@ public sealed record TurnOptions
 
     public TurnStateBudget? StateBudget { get; init; }
 
+    /// <summary>
+    /// The TurnState budget for an ingress checkpoint that asks both <c>tool</c> and <c>skill</c> (C-029): six questions,
+    /// with the two longest rows. Spike S1 measured that checkpoint on Kev-0.8B (RTX 3090) at 301 ms with a 600-token
+    /// state, on the 300 ms line, and at 212 ms with this 300-token one (297 tokens by Corvid's counter, 307 by Kev's).
+    /// Every other checkpoint, and the approval context, keep <see cref="StateBudget"/>. Null uses <see cref="StateBudget"/>
+    /// here too.
+    /// </summary>
+    public TurnStateBudget? DualShortlistStateBudget { get; init; } = new(Total: DefaultDualShortlistStateTokens);
+
+    /// <summary>S1's 300-token cell.</summary>
+    public const int DefaultDualShortlistStateTokens = 300;
+
     /// <summary>Compaction (plan §8 lever 3, C-016): the summarizer's completion, the record's budget and expansion's fill.</summary>
     public CompactionOptions Compaction { get; init; } = CompactionOptions.Default;
 

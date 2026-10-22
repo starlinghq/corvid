@@ -152,9 +152,17 @@ public sealed class CorvidRuntime : IAsyncDisposable
     /// </summary>
     public string DeciderState => Fabric.CalibratedDecider is { } calibrated
         ? Fabric.EscalationDecider is { } escalation
-            ? $"{calibrated}, {escalation} for gates below their floor; degraded tier when Kev declines"
-            : $"{calibrated}; degraded tier when Kev declines"
+            ? $"{calibrated} on {DeciderPlacement}, {escalation} for gates below their floor; degraded tier when Kev declines"
+            : $"{calibrated} on {DeciderPlacement}; degraded tier when Kev declines"
         : "degraded tier (no calibrated decider)";
+
+    /// <summary>
+    /// Where the calibrated decider actually runs (C-029): <c>cpu</c> or <c>cuda:N</c>, the effective
+    /// <see cref="ModelProfile.Placement"/> of the decider slot's default binding, so a configured GPU that fell back
+    /// reads <c>cpu</c>; null on the degraded tier. C-030 reads this (or <c>Registry.Get("decider").Default.Profile.Placement</c>)
+    /// and treats a value starting with <c>cuda</c> (<see cref="ModelPlacement.IsCuda"/>) as the GPU path.
+    /// </summary>
+    public string? DeciderPlacement => Registry.TryGet(ModelSlots.Decider, out var decider) ? decider.Default.Profile.Placement : null;
 
     /// <summary>Why the decider is on the degraded tier or without its second tier: a configured Kev that is not downloaded or did not load.</summary>
     public IReadOnlyList<string> DeciderNotices => _composer.DeciderNotices;
@@ -337,6 +345,10 @@ public sealed class CorvidRuntime : IAsyncDisposable
                 AskDeliver = session?.AskDeliver ?? false,
                 MaxSteps = turn.MaxSteps,
                 MaxOutputTokens = turn.MaxOutputTokens,
+                // C-029: the six-question ingress (both shortlists) on a smaller state; 600, the default state, turns it off.
+                DualShortlistStateBudget = turn.DualShortlistStateTokens < TurnStateBudget.Default.Total
+                    ? new TurnStateBudget(Total: turn.DualShortlistStateTokens)
+                    : null,
                 ApprovalMode = Options.Approvals.Mode,
                 Interactive = interactive,
                 // C-005 has no examples file; C-012 wrote the built-in tools' examples by hand.

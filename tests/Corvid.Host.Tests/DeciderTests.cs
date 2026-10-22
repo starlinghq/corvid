@@ -40,7 +40,9 @@ public sealed class DeciderTests
         Assert.Null(runtime.Fabric.EscalationDecider);
         Assert.Empty(runtime.DeciderNotices);
         Assert.Equal("fake-kev@cpu", runtime.Registry.Get(ModelSlots.Decider).Default.Profile.Id);
-        Assert.Contains("fake-kev", runtime.DeciderState, StringComparison.Ordinal);
+        Assert.Contains("fake-kev on cpu", runtime.DeciderState, StringComparison.Ordinal);
+        // C-029's flag for C-030: where the calibrated decider runs.
+        Assert.Equal("cpu", runtime.DeciderPlacement);
         // One request per checkpoint, run on the CPU device (fabric priority), never on the session actor.
         Assert.NotEmpty(models.Kev.Requests);
         Assert.True(onDevice);
@@ -65,6 +67,7 @@ public sealed class DeciderTests
         Assert.Contains("degraded tier", notice, StringComparison.Ordinal);
         Assert.Contains("corvid model download fake-kev", notice, StringComparison.Ordinal);
         Assert.StartsWith("degraded tier", runtime.DeciderState, StringComparison.Ordinal);
+        Assert.Null(runtime.DeciderPlacement);
 
         var delivery = await runtime.OpenSession().SendAsync("hello", Ct);
         Assert.Null(delivery.Error);

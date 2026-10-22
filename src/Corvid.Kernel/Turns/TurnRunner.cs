@@ -1175,8 +1175,8 @@ public sealed class TurnRunner
                 conditions.Add(FabricConditions.EscalationAllowed);
             CheckpointResult result;
             using (RequestScope())
-                result = await _services.Fabric.DecideAsync(runner.SessionId, checkpoint, State(), questions, conditions, cancellationToken)
-                    .ConfigureAwait(false);
+                result = await _services.Fabric.DecideAsync(runner.SessionId, checkpoint, State(BudgetFor(checkpoint, questions)), questions,
+                    conditions, cancellationToken).ConfigureAwait(false);
             if (result.Verdicts.TryGetValue("tool", out var tool) && tool.Verdict.Acted && tool.Verdict.Option is { } pick && pick != None)
                 lock (_gate)
                     _pickDecisions[pick] = tool.DecisionId;
@@ -1316,13 +1316,25 @@ public sealed class TurnRunner
             return _shortlist.FirstOrDefault(tool => tool.Function.Name == pick) is { } chosen ? [chosen] : null;
         }
 
-        private TurnState State()
+        /// <summary>
+        /// C-029: the ingress checkpoint that asks both <c>tool</c> and <c>skill</c> (six questions, the two longest rows)
+        /// gets <see cref="TurnOptions.DualShortlistStateBudget"/>, which keeps it under S1's 300 ms line on the GPU; every
+        /// other checkpoint gets the configured state budget. It only ever shrinks the state.
+        /// </summary>
+        private TurnStateBudget? BudgetFor(Checkpoint checkpoint, List<KeyValuePair<string, DecisionQuestion>> questions) =>
+            checkpoint == Checkpoint.Ingress && _options.DualShortlistStateBudget is { } dual
+            && dual.Total < (_options.StateBudget ?? TurnStateBudget.Default).Total
+            && questions.Exists(question => question.Key == "tool") && questions.Exists(question => question.Key == "skill")
+                ? dual
+                : _options.StateBudget;
+
+        private TurnState State(TurnStateBudget? budget = null)
         {
             var generator = _services.Slots.GetChatClient(ModelSlots.Generator);
             var profile = _services.Slots.Current(ModelSlots.Generator).Profile;
             var snapshot = runner.Snapshot();
             // The generator's own tokenizer when its binding offers one (Starling's Qwen does), so budgets are in its units.
-            var builder = new TurnStateBuilder(Counter(generator), _options.StateBudget);
+            var builder = new TurnStateBuilder(Counter(generator), budget ?? _options.StateBudget);
             return builder.Build(new TurnStateInput(envelope.Text, envelope.Surface, Describe(profile), Recent(snapshot), snapshot.Goal,
                 _entities.IsEmpty ? null : _entities, _steps, _lastToolResult));
         }

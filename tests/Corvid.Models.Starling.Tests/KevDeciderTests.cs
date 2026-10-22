@@ -300,15 +300,24 @@ public sealed class KevDeciderTests
     }
 
     [Fact]
-    public void Create_refuses_cuda_and_any_temperature_but_the_calibrated_one()
+    public void Create_refuses_any_temperature_but_the_calibrated_one_and_cuda_only_without_the_cuda_natives()
     {
         var files = new KevModelFiles(KevModelProfile.Kev08B, "/nonexistent/model.onnx", "/nonexistent/head.safetensors",
             "/nonexistent/head.json", "/nonexistent/tokenizer.json", null!);
-        Assert.Throws<NotSupportedException>(() => KevDecider.Create(files, new KevOptions
+        // C-029: CUDA is accepted. A CPU build refuses it before the model is read; a CUDA build gets as far as the files.
+        var cuda = new KevOptions
         {
-            Session = new Starlings.Runtime.Onnx.OnnxSessionOptions { Provider = Starlings.Runtime.Onnx.OnnxExecutionProvider.Cuda },
-        }));
+            Session = new Starlings.Runtime.Onnx.OnnxSessionOptions { Provider = Starlings.Runtime.Onnx.OnnxExecutionProvider.Cuda, CudaDeviceId = 1 },
+        };
+        if (KevDecider.HasCudaProvider(out _) == false)
+            Assert.Equal("cuda:1", Assert.Throws<ModelPlacementUnavailableException>(() => KevDecider.Create(files, cuda)).Placement);
         Assert.Throws<ArgumentException>(() => KevDecider.Create(files, new KevOptions { Temperature = 1.0 }));
+        Assert.Throws<ArgumentException>(() => KevDecider.Create(files, new KevOptions { Temperature = 1.0, Session = cuda.Session }));
+        Assert.Equal("cpu", KevDecider.PlacementOf(null));
+        Assert.Equal("cuda:1", KevDecider.PlacementOf(cuda.Session));
+        Assert.Null(KevDecider.OptionsFor("cpu"));
+        Assert.Equal(2, KevDecider.OptionsFor("cuda:2")!.Session!.CudaDeviceId);
+        Assert.Throws<ArgumentException>(() => KevDecider.OptionsFor("gpu"));
         Assert.Equal("kev-0.8b", KevDecider.NameOf(KevModel.Kev08B));
         Assert.Equal("kev-4b", KevDecider.NameOf(KevModel.Kev4B));
     }
