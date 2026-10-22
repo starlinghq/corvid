@@ -33,6 +33,12 @@ public sealed record CudaProbeResult(
     /// so <c>cuda:0</c> need not be NVML's (and <c>nvidia-smi</c>'s) GPU 0.
     /// </summary>
     public bool OrderAmbiguous => Devices.Length > 1 && !string.Equals(DeviceOrder, "PCI_BUS_ID", StringComparison.Ordinal);
+
+    /// <summary>
+    /// How many devices CUDA numbers <c>cuda:0</c>.. for this process (<see cref="CudaProbe.CountVisible"/>), or null when
+    /// NVML did not answer. NVML lists every GPU whatever <c>CUDA_VISIBLE_DEVICES</c> says.
+    /// </summary>
+    public int? VisibleDeviceCount => NvmlProblem is null ? CudaProbe.CountVisible(VisibleDevices, Devices) : null;
 }
 
 /// <summary>
@@ -76,6 +82,39 @@ public static partial class CudaProbe
         {
             return new CudaProbeResult($"NVML failed: {exception.Message}", null, null, [], libraries, visible, order);
         }
+    }
+
+    /// <summary>
+    /// How many of <paramref name="devices"/> (NVML's list) CUDA exposes under <c>CUDA_VISIBLE_DEVICES</c>: all when it is
+    /// unset; otherwise the comma-separated entries up to the first invalid one, as CUDA reads it. An entry is valid when it
+    /// is an NVML index that exists, a <c>GPU-</c> UUID prefix matching exactly one device, or a <c>MIG-</c> instance
+    /// (counted, not resolved); an empty value, <c>-1</c>, an unknown index or UUID, or a repeated device ends the list.
+    /// </summary>
+    public static int CountVisible(string? visible, IReadOnlyList<CudaDevice> devices)
+    {
+        ArgumentNullException.ThrowIfNull(devices);
+        if (visible is null)
+            return devices.Count;
+        var seen = new HashSet<int>();
+        var count = 0;
+        foreach (var raw in visible.Split(','))
+        {
+            var entry = raw.Trim();
+            if (entry.StartsWith("MIG-", StringComparison.OrdinalIgnoreCase))
+            {
+                count++;
+                continue;
+            }
+            CudaDevice[] matches = int.TryParse(entry, NumberStyles.None, CultureInfo.InvariantCulture, out var index)
+                ? [.. devices.Where(device => device.Index == index)]
+                : entry.StartsWith("GPU-", StringComparison.OrdinalIgnoreCase)
+                    ? [.. devices.Where(device => device.Uuid.StartsWith(entry, StringComparison.OrdinalIgnoreCase))]
+                    : [];
+            if (matches.Length != 1 || !seen.Add(matches[0].Index))
+                break;
+            count++;
+        }
+        return count;
     }
 
     private static bool Resolves(string library)

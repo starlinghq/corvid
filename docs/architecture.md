@@ -3043,7 +3043,11 @@ package version and one `Directory.Build.targets` were.
   `libcufft.so.12` resolve for this user, cuDNN 9 (reported only: Kev's graph ran on the 3090 without it), the
   `CUDA_VISIBLE_DEVICES`/`CUDA_DEVICE_ORDER` values (a Warning when a model is placed on CUDA, there is more than one GPU
   and the order is not `PCI_BUS_ID`: NVML indexes are in PCI order, CUDA's default is fastest first), and one line per
-  model placed on CUDA (`kev-0.8b on cuda:0, fallback cpu`). With nothing placed on CUDA every line is Info, so the
+  model placed on CUDA (`kev-0.8b on cuda:0, fallback cpu`), which is a miss by that model's fallback when `cuda:N` is at
+  or above the device count CUDA exposes (review of #50, finding 1: NVML lists every GPU, so `cuda:1` under one visible
+  device passed every other line and then failed with "Invalid device ID"; `CudaProbe.CountVisible` reads
+  `CUDA_VISIBLE_DEVICES` as CUDA does: unset is every GPU, otherwise indexes and `GPU-` UUID prefixes up to the first
+  invalid or repeated entry, `MIG-` entries counted unresolved). With nothing placed on CUDA every line is Info, so the
   default output only gains Info lines; with a model placed there a missing prerequisite is Failed under `Fail` and a
   Warning under `Cpu`, each with a fix (`-p:UseCuda=true`, the missing library, the driver). Nothing is spawned and no
   model or CUDA context is created.
@@ -3059,7 +3063,8 @@ package version and one `Directory.Build.targets` were.
   ingress and the step checkpoint stay above it and within 600, and a null budget turns it off.
   `Corvid.Host.Tests` (`PlacementTests`, `DoctorTests`, `DeciderTests`): validation, the placed descriptor, the lenient
   read, the fallback both ways through a stub loader (`StarlingModelProvider.Loader`, no model), the composer's notice and
-  degraded tier, the `cuda:0` scheduler, the doctor's statuses in a CPU build, and `DeciderPlacement`.
+  degraded tier, the `cuda:0` scheduler, the doctor's statuses in a CPU build, `CUDA_VISIBLE_DEVICES` parsing and a
+  placement past the visible devices, and `DeciderPlacement`.
   `Corvid.Models.Starling.Tests`: a CPU build refuses Kev on CUDA before reading the model; a hand-encoded one-node ONNX
   graph (`Add`, built in code) checked on the CPU in every build; and, with `Category=Gpu`, that graph in a CUDA session
   (the session lists `CUDAExecutionProvider`), the doctor's probe finding a GPU with memory, and Kev-0.8B on `cuda:0`

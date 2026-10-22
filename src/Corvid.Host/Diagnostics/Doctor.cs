@@ -143,10 +143,10 @@ public sealed class Doctor(IConfiguration configuration, ModelCatalogue catalogu
     /// </summary>
     private IEnumerable<DoctorCheck> Gpu()
     {
-        var placed = new List<(string Model, string Device, PlacementFallback Fallback)>();
+        var placed = new List<(string Model, string Device, int Ordinal, PlacementFallback Fallback)>();
         foreach (var (name, settings) in CorvidHost.ReadPlacement(configuration))
-            if (ModelPlacement.TryParse(settings.Device, out var device, out _) && ModelPlacement.IsCuda(device) && catalogue.TryFind(name, out var model))
-                placed.Add((model.Name, device, settings.Fallback));
+            if (ModelPlacement.TryParse(settings.Device, out var device, out var ordinal) && ordinal is { } cuda && catalogue.TryFind(name, out var model))
+                placed.Add((model.Name, device, cuda, settings.Fallback));
         var missing = placed.Count == 0 ? CheckStatus.Info
             : placed.Exists(item => item.Fallback == PlacementFallback.Fail) ? CheckStatus.Failed
             : CheckStatus.Warning;
@@ -200,13 +200,36 @@ public sealed class Doctor(IConfiguration configuration, ModelCatalogue catalogu
                 "export CUDA_DEVICE_ORDER=PCI_BUS_ID (and CUDA_VISIBLE_DEVICES=<GPU UUID> to pin one).")
             : new DoctorCheck("gpu", "device order", placed.Count == 0 ? CheckStatus.Info : CheckStatus.Ok, order);
 
-        foreach (var (model, device, fallback) in placed)
-            yield return new DoctorCheck("gpu", model, problems == 0 ? CheckStatus.Ok : missing,
-                $"{model} on {device}, fallback {fallback.ToString().ToLowerInvariant()}" + (problems == 0 ? ""
-                    : fallback == PlacementFallback.Cpu ? "; it will run on the CPU (checkpoints over 1 s)"
-                    : model.StartsWith("kev", StringComparison.OrdinalIgnoreCase)
-                        ? "; it will not load, so the fabric runs on the degraded tier"
-                        : "; it will not load"));
+        foreach (var (model, device, ordinal, fallback) in placed)
+            yield return PlacedModel(model, device, ordinal, fallback, problems, probe.VisibleDeviceCount, probe.VisibleDevices,
+                fallback == PlacementFallback.Fail ? CheckStatus.Failed : CheckStatus.Warning);
+    }
+
+    /// <summary>
+    /// The per-model gpu line: Ok only when no gpu check above missed and CUDA exposes the ordinal (review of #50, finding 1:
+    /// NVML lists every GPU, so <c>cuda:1</c> with one visible device passed every other line and then failed to load with
+    /// "Invalid device ID"). A miss is Failed under <see cref="PlacementFallback.Fail"/>, a Warning under <see cref="PlacementFallback.Cpu"/>.
+    /// </summary>
+    /// <param name="problems">How many gpu checks above missed.</param>
+    /// <param name="visibleCount">How many devices CUDA exposes (<see cref="CudaProbeResult.VisibleDeviceCount"/>); null when unknown.</param>
+    internal static DoctorCheck PlacedModel(string model, string device, int ordinal, PlacementFallback fallback, int problems,
+        int? visibleCount, string? visibleDevices, CheckStatus missing)
+    {
+        var absent = ordinal >= visibleCount;
+        var ok = problems == 0 && !absent;
+        var detail = $"{model} on {device}, fallback {fallback.ToString().ToLowerInvariant()}";
+        if (absent)
+            detail += $"; CUDA exposes {visibleCount} device{(visibleCount == 1 ? "" : "s")} " +
+                $"(CUDA_VISIBLE_DEVICES={visibleDevices ?? "(unset)"}), so there is no {device}";
+        if (!ok)
+            detail += fallback == PlacementFallback.Cpu ? "; it will run on the CPU (checkpoints over 1 s)"
+                : model.StartsWith("kev", StringComparison.OrdinalIgnoreCase) ? "; it will not load, so the fabric runs on the degraded tier"
+                : "; it will not load";
+        return new DoctorCheck("gpu", model, ok ? CheckStatus.Ok : missing, detail,
+            !absent ? null
+            : visibleCount == 0 ? "CUDA_VISIBLE_DEVICES hides every GPU: unset it or name a GPU index or UUID."
+            : visibleCount == 1 ? $"Place {model} on cuda:0, or widen CUDA_VISIBLE_DEVICES."
+            : $"Place {model} on cuda:0 to cuda:{visibleCount - 1}, or widen CUDA_VISIBLE_DEVICES.");
     }
 
     /// <summary>
