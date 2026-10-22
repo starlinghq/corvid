@@ -105,7 +105,6 @@ jobs:
       CORVID_GPU_TESTS: ${{ vars.CORVID_GPU_TESTS || 'required' }}
       CORVID_STARLING_MODELS: ${{ vars.CORVID_STARLING_MODELS }}
       MALLOC_MMAP_THRESHOLD_: 65536
-      TMPDIR: ${{ runner.temp }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
@@ -131,7 +130,10 @@ jobs:
       - name: Production dependency boundaries (CUDA graph)
         run: dotnet run --project tools/Corvid.Architecture -c Release -- .
 
+      # The runner context is not available in a job's env, so TMPDIR is set per step, as in the test job.
       - name: GPU tests
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: |
           set -o pipefail
           tests/Corvid.Models.Starling.Tests/bin/Release/net10.0/Corvid.Models.Starling.Tests -trait "Category=Gpu" -noColor | tee gpu.log
@@ -140,6 +142,8 @@ jobs:
       # skipped, whenever the GPU is required. The Kev-0.8B test is counted apart: it skips without weights.
       - name: Weight-free GPU tests ran and passed
         if: env.CORVID_GPU_TESTS == 'required'
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: |
           tests/Corvid.Models.Starling.Tests/bin/Release/net10.0/Corvid.Models.Starling.Tests -trait "Category=Gpu" \
             -method "*tiny_graph_on_the_gpu" -method "*doctor_probe_reports_a_gpu*" -noColor | tee gpu-required.log
