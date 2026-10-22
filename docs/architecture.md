@@ -3339,8 +3339,9 @@ Spike S2's benchmark (plan §18, C-003): does the fabric make Qwen3.5-0.8B a usa
 `evals/tool-calling/`, a harness in `evals/Corvid.Evals/ToolCalling/` that runs it through the real `TurnRunner`, the
 `corvid-evals tool-calling` subcommand (the shipped, CPU path) and a local-only CUDA wrapper for the measured run
 (`evals/spikes/S2-tool-calling/`). No Kernel, Fabric or Tools change; no new package for any project in `Corvid.slnx`.
-Results and method: [S2](spikes/S2-tool-calling.md) (2026-10-22: fail; Qwen alone 86.1% right tool, the shortlist
-81.3%, (c) 55.3% because C-033's description check withholds benign MCP tools on Kev's yes, 80.8% without it).
+Results and method: [S2](spikes/S2-tool-calling.md) (2026-10-22: fail; right tool and nothing else: Qwen alone 71.2%,
+86.1% counting unasked further calls; the shortlist 74.5% (81.3%); (c) 53.4% (55.3%) because C-033's description check
+withholds benign MCP tools on Kev's yes, 78.4% (80.8%) without it).
 
 - The set (version `2026-10-21.1`, in `catalogue.json` and in every report with the SHA-256 of both files):
   - `catalogue.json`, 28 tools. The 15 built-ins with examples in `BuiltinTools.Examples` (the file, shell, web fetch,
@@ -3392,23 +3393,28 @@ Results and method: [S2](spikes/S2-tool-calling.md) (2026-10-22: fail; Qwen alon
   `done` 0.8; `wake`'s 0.5 is never asked in a turn), `difficulty` is a heuristic, and gates and `injection` need
   calibration. The scoring test pins
   this: every tool offered, `clarify`, `difficulty`, `tool` and `done` at their below-floor actions.
-- Scoring (`ToolCallingScorer`, from the session's events and the `TurnResult`): the decisive call of a single-step case
-  is the first one that ran; a call whose result is an `invalid arguments` error was rejected, and one naming a tool that
-  was not offered is an invalid name. Outcomes: correct, wrong tool, invalid name, malformed, no call (prose on a case
-  that needs a tool), called on a no-tool case, clarified, escalated (with its reason; a miss in the headline), failed.
-  A multi-step case is correct when the calls that ran match its steps in order (repeats of a matched step aside) and
-  nothing else ran. Also: args valid (the first call to an offered tool passed the schema), args match (every applicable
+- Scoring (`ToolCallingScorer`, from the session's events and the `TurnResult`): a call whose result is an `invalid
+  arguments` error was rejected (it never ran; one before the right call is a repair), and one naming a tool that was not
+  offered is an invalid name. One rule for single- and multi-step cases, a single-step case being a chain of one: the
+  calls that ran are matched to the steps in order, and a call some matched step accepts again (a repeat, or the other
+  tool of an `any_of`) is not an extra. All steps matched and nothing else ran is correct; all matched and an extra only
+  after the last is over-called (read the file, then patch it unasked); an extra before the steps are done, or a step
+  never matched, is a wrong tool. Outcomes: correct, over-called, wrong tool, invalid name, malformed, no call (prose on
+  a case that needs a tool), called on a no-tool case, clarified, escalated (with its reason; a miss in the headline),
+  failed. Correct tool and args match are strict (over-called is a miss, as in the headline); the summaries also give
+  the lenient pair, correct or over-called. Also: args valid (the first call to an offered tool passed the schema), args match (every applicable
   constraint holds: S2's "argument exact match"), first response correct vs repaired, nudged (§7 step 6's require-that-tool
   re-prompt, recognised by its wording), Kev's `tool` pick and confidence, the acted questions, and latency (turn,
   generator total and calls, decider total, embedding, the first call's prompt tokens) from `TimedChatClient`,
   `TimedDecider` and `TimedEmbedder`.
-- Report (`ToolCallingReport`): `report.json` (format `corvid-tool-calling-report/1`: header with set version, hashes,
+- Report (`ToolCallingReport`): `report.json` (format `corvid-tool-calling-report/2`; `/2` added the over-called outcome and the lenient counts: header with set version, hashes,
   floors version, Corvid commit, models and devices, options and the load average; per-configuration summaries with
   nearest-rank p50/p90; one record per case and configuration) and `report.md` (headline, outcomes, by tag, latency,
   disagreements), both rewritten after every case. The headline is plan §18's: (c) − (a) in tool-choice and
   argument-match points over all cases, also among non-escalated cases, and (c)'s escalation rate. For floor fitting, each
   calibrated `tool` decision in (c)'s log gets a `DecisionOutcomeRecorded` after the run, `accepted` when Kev's pick is
-  what the case expects at that point (the next step, or none once the calls have run) and `corrected` otherwise, after
+  what the case expects at that point (the first step no call that ran has matched yet, or none once every step has; a
+  wrong or repeated call does not move it) and `corrected` otherwise, after
   the loop's own `tool_succeeded`, so `corvid-evals calibrate --log events-shortlist-kev.db` reads it as labelled.
 - `corvid-evals tool-calling` (`ToolCallingCli`; `Program.cs` dispatches the verb, everything else stays
   `CalibrationCli`): `--set`, `--catalogue`, `--cases`, `--configs`, `--tags`, `--limit`, `--out`, `--no-extractor`,
