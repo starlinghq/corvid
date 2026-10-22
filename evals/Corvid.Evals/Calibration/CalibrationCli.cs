@@ -21,6 +21,8 @@ public static class CalibrationCli
           replay               decisions a candidate floors file would change            --candidate <floors.json> [--json <file>]
           export-decisions     Kev training records, JSON lines                          --out <file> [--labelled-only] [--calibrated-only]
           export-trajectories  ShareGPT trajectories, JSON lines                         --out <file>
+          tool-calling         the S2 tool-calling golden set on the local models (C-034); takes no --log,
+                                 see corvid-evals tool-calling --help
 
         common options:
           --positive <a,b>     extra outcome names that count as positive

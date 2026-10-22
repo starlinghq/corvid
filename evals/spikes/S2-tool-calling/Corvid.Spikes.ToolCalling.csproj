@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Spike S2 (C-003, C-034): the tool-calling golden set with Qwen3.5-0.8B and Kev-0.8B on the RTX 3090. It runs the same
+    ToolCallingCli as `corvid-evals tool-calling`, which is the shipped (CPU) path; only the model bindings differ. Local
+    only: not in Corvid.slnx, so CI never restores it, and outside src/, vault/ and sandbox/, so the dependency-boundary
+    check never scans it.
+
+    -p:UseCuda=true swaps ONNX Runtime GenAI's CPU natives for Microsoft.ML.OnnxRuntimeGenAI.Cuda, the one native package,
+    which brings Microsoft.ML.OnnxRuntime.Gpu (CUDA and CPU providers) for Kev, EmbeddingGemma 2 and GLiNER2; never
+    reference both. Build each variant into its own output directory.
+
+    KevDecider.cs, Gliner2Extractor.cs, Qwen35TokenCounter.cs and StarlingProfiles.cs are compiled in from
+    src/Corvid.Models.Starling rather than referencing that project, because it brings the CPU GenAI natives and its
+    factories refuse the CUDA provider (C-029). Linking keeps the adapters' logic byte-for-byte; Program.cs supplies the
+    providers, as spike S1 did.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <RootNamespace>Corvid.Spikes.ToolCalling</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Spike-only version, kept out of Directory.Packages.props (S1's precedent): the GenAI version Starling pins. -->
+    <PackageVersion Include="Microsoft.ML.OnnxRuntimeGenAI.Cuda" Version="0.17.1" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseCuda)' != 'true'">
+    <PackageReference Include="Microsoft.ML.OnnxRuntimeGenAI" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseCuda)' == 'true'">
+    <!-- CUDA natives (CPU provider included). The CUDA 13 runtime and cuDNN 9 are not in the package. -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntimeGenAI.Cuda" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Starlings.Acquisition" />
+    <PackageReference Include="Starlings.Models.Kev" />
+    <PackageReference Include="Starlings.Models.Gliner2" />
+    <PackageReference Include="Starlings.Models.EmbeddingGemma2.Extensions.AI" />
+    <PackageReference Include="Starlings.Models.Qwen35.Extensions.AI" />
+    <ProjectReference Include="../../Corvid.Evals/Corvid.Evals.csproj" />
+    <Compile Include="../../../src/Corvid.Models.Starling/KevDecider.cs" Link="Linked/KevDecider.cs" />
+    <Compile Include="../../../src/Corvid.Models.Starling/Gliner2Extractor.cs" Link="Linked/Gliner2Extractor.cs" />
+    <Compile Include="../../../src/Corvid.Models.Starling/Qwen35TokenCounter.cs" Link="Linked/Qwen35TokenCounter.cs" />
+    <Compile Include="../../../src/Corvid.Models.Starling/StarlingProfiles.cs" Link="Linked/StarlingProfiles.cs" />
+    <Content Include="../../tool-calling/*.json;../../tool-calling/*.jsonl" LinkBase="tool-calling" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

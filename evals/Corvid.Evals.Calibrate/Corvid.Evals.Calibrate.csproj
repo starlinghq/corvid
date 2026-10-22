@@ -1,11 +1,17 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <Description>corvid-evals: calibrate floors, report, replay candidate floors and export decisions from event logs (C-021).</Description>
+    <Description>corvid-evals: calibrate floors, report, replay candidate floors and export decisions from event logs (C-021); run the S2 tool-calling golden set on the local Starling models (C-034).</Description>
     <OutputType>Exe</OutputType>
     <AssemblyName>corvid-evals</AssemblyName>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Corvid.Evals/Corvid.Evals.csproj" />
+    <!-- tool-calling binds Qwen3.5, EmbeddingGemma 2, GLiNER2 and Kev on the CPU as the host does. Corvid.Evals stays model-free. -->
+    <ProjectReference Include="../../src/Corvid.Models.Starling/Corvid.Models.Starling.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The golden set next to the binary, for a run outside the repository root. -->
+    <Content Include="../tool-calling/*.json;../tool-calling/*.jsonl" LinkBase="tool-calling" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
