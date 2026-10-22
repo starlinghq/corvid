@@ -153,8 +153,9 @@ prompt size is what separates (a) from the rest. The decider total for (a) and (
 
 ### Kev's picks
 
-Kev's top `tool` answer at ingress matched the label on 108 of 208 cases. It acted (confidence at or above the 0.45
-floor) on 51 and was right on 46 of those. Below the floor the loop offers the whole shortlist, and Qwen chose right
+Kev's top `tool` answer at ingress matched the label on 108 of 208 cases. It acted there (confidence at or above the
+0.45 floor) on 51 cases and its pick matched the label on 46 of them. Counting every turn in which a confident pick of a
+named tool acted (later checkpoints included, `none` excluded), the ablation has 48 such turns, 46 of them correct. Below the floor the loop offers the whole shortlist, and Qwen chose right
 on 122 of the 157 cases where Kev did not act (no-desc).
 
 ## Reproduce
