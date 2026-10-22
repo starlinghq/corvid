@@ -16,8 +16,8 @@ namespace Corvid.Host.Commands;
 
 /// <summary>
 /// The v1 core set (plan §17 row 1.3): <c>/model</c>, <c>/status</c>, <c>/goal</c>, <c>/approvals</c>, <c>/memory</c>,
-/// <c>/undo</c> and <c>/rollback</c> (C-014), <c>/skills</c> (C-017), <c>/mcp</c> (C-018), <c>/help</c>, <c>/exit</c>, and commands that map
-/// directly onto existing APIs: <c>/tools</c>, <c>/todos</c> and <c>/cancel</c>.
+/// <c>/undo</c> and <c>/rollback</c> (C-014), <c>/skills</c> (C-017), <c>/mcp</c> (C-018), <c>/compact</c> and <c>/cron</c> (C-035),
+/// <c>/help</c>, <c>/exit</c>, and commands that map directly onto existing APIs: <c>/tools</c>, <c>/todos</c> and <c>/cancel</c>.
 /// </summary>
 public static class CoreCommands
 {
@@ -38,6 +38,8 @@ public static class CoreCommands
             .Add(new SlashCommand("mcp", "Configured MCP servers: state, trust and the tools each one added.", McpCommands.Usage, McpCommands.RunAsync))
             .Add(new SlashCommand("todos", "The session's todo list.", "", Todos))
             .Add(new SlashCommand("undo", "Revert the last turn's file changes and take it out of the conversation.", "", UndoAsync))
+            .Add(new SlashCommand("compact", "Compact the conversation before the latest turn now.", "", CompactAsync))
+            .Add(new SlashCommand("cron", "Scheduled jobs: list, pause, resume or remove one.", CronCommands.Usage, CronCommands.RunAsync))
             .Add(new SlashCommand("rollback", "List checkpoints, or go back to before the Nth latest one (files and conversation).",
                 "[N]", RollbackAsync))
             .Add(new SlashCommand("cancel", "Cancel the running turn.", "", Cancel))
@@ -394,9 +396,10 @@ public static class CoreCommands
     {
         var dryRun = arguments.Contains("--dry-run");
         var home = arguments.FirstOrDefault(argument => argument != "--dry-run");
-        var location = HermesMemory.Directory(CorvidPaths.Home, home is null ? null : CorvidPaths.ExpandHome(home));
-        if (location.Directory is not { } directory)
+        var location = HermesHome.Resolve(CorvidPaths.Home, home is null ? null : CorvidPaths.ExpandHome(home));
+        if (location.Home is not { } hermesHome)
             return CommandOutput.Warning(location.Problem + " Usage: /memory import hermes <hermes home>.");
+        var directory = Path.Combine(hermesHome, "memories");
         if (!Directory.Exists(directory))
             return CommandOutput.Warning($"There is no Hermes memories directory at {directory}.");
 
@@ -456,11 +459,38 @@ public static class CoreCommands
             : $"Staged {staged} local-only memory(ies) for review: /memory pending, then /memory approve <id> or /memory reject <id>.");
         return new CommandOutput
         {
-            Title = $"Hermes memories from {directory}",
+            Title = $"Hermes memories from {directory}" + (location.Profile is { } profile ? $" (profile {profile})" : ""),
             Lines = [.. lines],
             Table = CommandTable.Of(["file", "entries", dryRun ? "would stage" : "staged", "duplicates", "refused", "flagged"], rows),
             Tone = problems > 0 ? OutputTone.Warning : OutputTone.Success,
         };
+    }
+
+    // ---- /compact (C-035) ----
+
+    /// <summary>
+    /// Compacts everything before the latest turn now, by the turn loop's own rule and budget; the user acting directly, so
+    /// there is no approval step.
+    /// </summary>
+    private static async ValueTask<CommandOutput> CompactAsync(SlashCommandContext context, SlashInvocation invocation, CancellationToken cancellationToken)
+    {
+        if (!invocation.Arguments.IsEmpty)
+            return CommandOutput.Error("Usage: /compact (it takes no arguments).");
+        var result = await context.Session.CompactAsync(cancellationToken).ConfigureAwait(false);
+        switch (result.Status)
+        {
+            case Kernel.Context.CompactionStatus.Compacted:
+                var lines = new List<string> { result.Describe() + "." };
+                if (result.Record?.Goal is { Length: > 0 } goal)
+                    lines.Add("goal: " + goal);
+                if (result.Record?.NextStep is { Length: > 0 } next)
+                    lines.Add("next step: " + next);
+                return new CommandOutput { Lines = [.. lines], Tone = OutputTone.Success };
+            case Kernel.Context.CompactionStatus.NothingToCompact:
+                return CommandOutput.Text("Nothing before the latest turn needs compacting.");
+            default:
+                return CommandOutput.Warning(result.Describe() + ".");
+        }
     }
 
     // ---- /undo, /rollback (C-014) ----

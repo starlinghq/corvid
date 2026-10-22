@@ -1057,8 +1057,8 @@ the turn's own message or latest round; keeping a pending expansion across a res
 after a `/model` to a larger window and a restart the next turn renders compacted, which is safe but not expanded); host
 configuration of `CompactionOptions` (defaults only); summarizer calls in parallel; telling summarizer calls apart from
 answers when the generator's binding serves both (they are `chat {model}` spans tagged `corvid.slot=generator` under
-`corvid.compact`, and count toward the generator's `/status` latency); a `/compact` command; and an implementation of
-`ISkillBodyLever` (C-017).
+`corvid.compact`, and count toward the generator's `/status` latency); and an implementation of
+`ISkillBodyLever` (C-017). `/compact` came with C-035 (see [C-035](#slash-command-and-import-gaps-c-035)).
 
 ## Host and CLI (C-013)
 
@@ -1178,7 +1178,7 @@ decider otherwise (C-004b, see [Kev decider](#kev-decider-c-004b)); Starling pac
 
 Not built yet: Ctrl+P; typing while a turn runs (the chat reads the next line after the delivery, so `/model` mid-turn is
 available to the gateway and a later CLI, not this one); removing approval rules (`IApprovalRuleStore` has no removal);
-`/memory` block edits; a `/cron` command; the rest of the ~35-command v1 set (`/insights` and
+`/memory` block edits; the rest of the ~35-command v1 set (`/compact` and `/cron` came with C-035) (`/insights` and
 others arrive with their items; `/skills` came with C-017); the `config`, `skills`, `memory`, `cron` and `export` verbs (`gateway`
 came with C-020, whose gateway also runs the scheduler and delivers job results to chats); a scheduler daemon; metrics and logs export; an Aspire
 dashboard recipe; shipping `corvid-sandbox` and `corvid-evals` inside the publish (doctor reports where it looked);
@@ -1281,13 +1281,13 @@ references Builtin except tests and the host (C-013). Everything runs on the deg
   through the real turn loop (read-only runs unasked, a side effect asks, hardline never prompts, an unattended turn denies,
   no mapping means no run) and covers the grammar (including daylight-saving changes), the store and the scheduler.
 
-C-013 wires all of this in the host (see [Host and CLI](#host-and-cli-c-013)) and added `/memory`. Not built yet: a
-`/cron` command; delivering job results to surfaces other than gateway chats (C-020 delivers to the chat a job was created
+C-013 wires all of this in the host (see [Host and CLI](#host-and-cli-c-013)) and added `/memory`; `/cron` and pausing came
+with C-035 (see [C-035](#slash-command-and-import-gaps-c-035)). Not built yet: delivering job results to surfaces other than gateway chats (C-020 delivers to the chat a job was created
 in); checkpoints before a scheduled pre-run script (C-014 checkpoints the turn
 loop's calls only); network for the shell per toolset and
 Vault's proxy route for sandboxed commands (V-003); the code tool and code mode (§15); container and SSH backends;
 argument validators generated with the tool and the generated examples file (C-005; paths are checked by the tools at run
-time, as argument errors the generator repairs); editing, pausing or resuming jobs, per-job toolsets, delivery targets and
+time, as argument errors the generator repairs); editing jobs, per-job toolsets, delivery targets and
 pruning run history; a calibrated `wake` (C-004b; the degraded tier asks the generator yes or no); pre-run scripts with
 side effects or network when unattended; for web fetch, the Vault handler itself, address checks after resolution when a
 caller supplies its own handler (only literal addresses are checked then), charsets declared only in a page's markup,
@@ -1580,7 +1580,7 @@ opportunity is processed is not distilled: the opportunity fails with that reaso
   unchanged since their last commit) and move them to `.archive/` as the agent (`/skills stale [days] [--archive]`, default
   90 days). Pinned skills (`/skills pin`) and anything the user or a hub wrote are never touched.
 - Supply chain (§10.6, `SkillScanner`, `ImportAsync`): an import copies the skills under a folder (one skill or a tree such as
-  `~/.hermes/skills`, or `$HERMES_HOME/skills`; D-9) as `hub:<source>` in one commit. Each skill is all or nothing: a link,
+  `~/.hermes/skills`; D-9; `/skills import hermes` finds the Hermes home as C-035 does) as `hub:<source>` in one commit. Each skill is all or nothing: a link,
   a special file, a `.git` entry or git attributes, an unreadable SKILL.md, a name already in use, more than 5 MB or 500
   files, or a scanner finding refuses it and the rest import. Hidden files are not copied and nothing runs. The scanner
   flags instruction overrides, hiding things from the user, downloads piped to a shell, credential-store and Vault paths,
@@ -2428,7 +2428,8 @@ Hermes session mapper, and reimplemented; no Beacon code is used. The Hermes for
   the home: `$HERMES_HOME` trimmed, with `$VAR` and `${VAR}` (and `%VAR%` on Windows) and a leading `~` expanded as
   `expandvars` and `expanduser` do, else `~/.hermes` (`%LOCALAPPDATA%\hermes` on Windows) with `$HERMES_DATA_DIR_SUFFIX`
   appended. A `HERMES_HOME` still relative after expansion is reported and nothing is imported, rather than falling back
-  to the default profile. The files are read as Hermes' `MemoryStore` reads them: strict UTF-8 (a file with an invalid byte is refused whole, as Hermes refuses to
+  to the default profile. C-035 moved this resolution to `HermesHome` (`Corvid.Host`), shared with `/skills import hermes`,
+  and added Hermes' sticky `active_profile` (see [C-035](#slash-command-and-import-gaps-c-035)). The files are read as Hermes' `MemoryStore` reads them: strict UTF-8 (a file with an invalid byte is refused whole, as Hermes refuses to
   read it), a leading BOM stripped (`utf-8-sig`), CRLF read as LF (Python's universal newlines), entries split on the
   whole `"\n§\n"` delimiter so a bare `§` survives, each stripped, blanks dropped and repeats dropped keeping the first. A
   missing file has no entries; an entry shaped like Hermes' `[BLOCKED: …]` placeholder is skipped and counted, though
@@ -2453,8 +2454,8 @@ Hermes session mapper, and reimplemented; no Beacon code is used. The Hermes for
   patterns. `tests/Corvid.Cli.Tests` (`TracesCommandTests`): `--session` on stdout, `--all` with ids equal to a
   single-session export, metadata retention, `--out` owner-only and never overwritten, an unknown session, a missing log
   (not created) and bad arguments. `tests/Corvid.Memory.Tests` (`HermesMemoryTests`): the parser (a bare `§`, blanks,
-  duplicates, `[BLOCKED:`, BOM, CRLF, invalid UTF-8, a missing file, directory resolution with `HERMES_HOME` expansion,
-  the suffix and an unusable value) and `StageImportAsync` (staged
+  duplicates, `[BLOCKED:`, BOM, CRLF, invalid UTF-8 and a missing file; the directory resolution cases moved to
+  `tests/Corvid.Host.Tests` `HermesHomeTests` with C-035) and `StageImportAsync` (staged
   local-only with its reason and no decision, applied only on approval, pending and known duplicates skipped, an extractor
   refusal staging nothing). `tests/Corvid.Host.Tests` (`MemoryImportCommandTests`): the command against a temporary
   Hermes home, with a dry run, a scanner refusal, re-import idempotency before and after an approval, a missing home and
@@ -2470,7 +2471,7 @@ recorded per turn); the skipped event kinds (decisions, compaction, model switch
 todos, per-path file events from checkpoints, rewinds, deliveries) and session start, end and handoff events; a
 per-session working directory; importing Hermes memory into the core blocks (`USER.md` to `user`, `MEMORY.md` to
 `agent`), which waits for block editing (C-013) because an over-budget block edit cannot be approved; `SOUL.md` to the
-persona block, Hermes profiles and memory provider plugins; a `corvid memory` verb; `traces` tail, follow, date ranges
+persona block, Hermes profiles beyond the sticky active profile (C-035), and memory provider plugins; a `corvid memory` verb; `traces` tail, follow, date ranges
 and pushing to a Beacon endpoint or SIEM; host, user and repository enrichment and the `redacted` retention level; and a
 per-item local-only filter for memory tool results.
 
@@ -2838,6 +2839,102 @@ repository maps without git; linked-worktree caller paths other than through the
 projects; vectors for lessons and an embedder in the serve process; fact history and lesson evidence in `get_memory`; MCP
 resources, prompts and change notifications for memory; write tools of any kind; serve's HTTP transport (still deferred
 from C-018); and per-caller rate limits or quotas.
+
+## Slash-command and import gaps (C-035)
+
+Four gaps left by C-012, C-013, C-016, C-021 and C-027, closed with no new project, package or checker rule.
+
+- `/compact` (`CoreCommands`, `CorvidSession.CompactAsync`, `TurnRunner.CompactNowAsync`): compaction now, by C-016's own
+  rule and nothing new. The latest `UserMessage` in the transcript is taken as the turn's start, and
+  `ContextCompactor.Ranges(snapshot, latest, keepFrom: null)` gives the range: everything before that message, offered
+  only when it holds something a summary would shorten (one record standing alone does not). The latest turn is never
+  compacted, because `CheckpointService.PlanUndo` goes back to the last `UserMessage` in the projected transcript: a
+  whole-history compaction would hide it and leave `/undo` with nothing. The budget is the turn loop's: the generator's
+  accepted context less `MaxOutputTokens` and `ContextReserve`, a record taking at most a quarter of it, measured with the
+  generator client's counter. The call runs inside `ModelRequestContext(session, taint)`, as a turn's `FitAsync` does, so
+  a cloud summarizer still passes the privacy gate and Vault, and escalation follows `TurnOptions.EscalationAllowed` as the
+  compactor was built with it. A written compaction clears a pending expansion (`_expansionDue`) left by an earlier
+  `/model` switch to a larger window, so the next call does not undo an explicit compaction; an unfit summary, nothing to
+  compact or a cancelled command keeps it, so the next call still expands (review of PR #46, finding 1). A later switch to
+  a larger window expands the range again (plan §4.2 step 4), which is by design. `CompactNowTests` covers the expansion
+  both ways and the summarizer seeing `ModelRequestContext.Current` with the session and its taint; `CompactCommandTests`
+  covers the unfit warning. The session runs it with `SessionActor.RunExclusiveAsync`, as
+  `/undo` does: it waits for a running turn and goes ahead of queued messages, and the command's cancellation token is
+  linked into the summarizer call. Output: `compacted events a–b by <summarizer> in n chunk(s).` with the record's goal and
+  next step when it has them; `Nothing before the latest turn needs compacting.`; or, when no record fits
+  (`CompactionStatus.Unfit`), a warning `kept events a–b uncompacted: <detail>`, with nothing appended. The line is
+  `CompactionResult.Describe()`, which the turn loop's compaction notes now use too. A later `/undo` goes back to before
+  the latest turn's message, and the `Compacted` event was appended after it, so the earlier turns are raw again: nothing
+  is lost and `/compact` can run again. Telemetry is C-016's `corvid.compact` span.
+- `/cron [list] [--all] | pause <id> | resume <id> | remove <id>` (`CronCommands`, over `runtime.Builtin.Jobs`): the user
+  acting directly, so no approval step, as with `/skills` and `/undo` (the model's `cron_remove` still asks). `list` is a
+  table of id, name, schedule as written, state (`active`, `paused`, `completed` or `removed`; `--all` adds the last two),
+  next run in the job's own zone (`CronTools.Local`, now public), the last run's start and status, and flags
+  (`no_agent`, `script`, `tainted`). Commands are registered like the others, so ACP's `available_commands_update` lists
+  them (the recorded exchanges were re-recorded; only the command list changed) and the gateway allows them to the owner
+  alone.
+- Pausing (`JobStore.Pause` and `Resume`, schema version 2). A `paused` column (`INTEGER NOT NULL DEFAULT 0`, checked 0 or
+  1), not a new state: the `state` CHECK could change only through SQLite's table rebuild, which `job_runs`' foreign key
+  makes awkward. A version 1 file is migrated by `ALTER TABLE jobs ADD COLUMN paused …; PRAGMA user_version = 2;` inside
+  the constructor's immediate transaction, so two processes opening it at once do not both migrate; its jobs stay
+  unpaused. An older binary refuses a version 2 file (`Unsupported job database schema version 2`), so a downgrade stops
+  scheduling. `Pause` sets `paused = 1` and clears `next_run_at` on an active, unpaused job (false otherwise); `ClaimDue`
+  skips paused jobs, and the scheduler's wait, the minimum of the jobs' next runs, cannot spin on an overdue paused job
+  because it has none. `Resume` computes the next run from now with `JobSchedule.First`: an interval one period from now,
+  a cron expression its next match, so ticks missed while paused are not run (as missed ticks collapse in C-012), and a
+  one-shot its time, or now when that passed while it was paused, so it runs once. It returns null for an unknown,
+  removed, completed or unpaused job. `Remove` works on a paused job, which is still active. `ScheduledJob.Paused` is an
+  init property, so positional constructions are unchanged, and `cron_list` adds `"paused": true`. The tools are
+  unchanged: pausing is the user's alone. A scheduler in another process (the gateway, or another chat) reads the same
+  file and sees a change at its next poll, within `PollInterval` (30 s).
+- Hermes home (`HermesHome.Resolve` in `Corvid.Host/Configuration`, beside `CorvidPaths`; the host is the only project that
+  references both Memory and Skills and already holds both import commands). `/memory import hermes` reads
+  `<home>/memories` and `/skills import hermes [<hermes home>]` reads `<home>/skills`, resolved alike. Checked against
+  NousResearch/hermes-agent at 55ee4acd (`hermes_constants.py` `get_default_hermes_root`, `_hermes_root_of`,
+  `_expand_hermes_home`, `_platform_default_hermes_home`; `hermes_cli/main.py` `_apply_profile_override`;
+  `hermes_cli/profiles.py` `normalize_profile_name`, `validate_profile_name`, `resolve_profile_env`): an explicit home wins,
+  with no profile; else `$HERMES_HOME` trimmed and expanded as C-027 did (still relative is a problem); a `HERMES_HOME`
+  whose parent is named `profiles` is a profile's home and is used as it is, without the sticky read, as Hermes does (it
+  tests the raw value; Corvid the expanded path); otherwise `active_profile` is read from the Hermes root (the platform
+  default when `HERMES_HOME` is unset or inside it, else `HERMES_HOME`), BOM dropped and trimmed, a read error counting as
+  no file. Empty or `default` (any case) is `HERMES_HOME`, or the platform default; any other name is lowercased and must
+  match `^[a-z0-9][a-z0-9_-]{0,63}$` and not be reserved (`hermes`, `test`, `tmp`, `root`, `sudo`), and the home is
+  `profiles/<name>` under `HERMES_HOME` or the default, which must exist without a tombstone (`profiles/.deleted/<name>`).
+  An invalid or missing sticky profile is a warning naming the file and the expected directory, never a fallback: Hermes
+  itself exits there, and importing another profile's data silently is worse than asking for the home. Before C-035 the
+  memory import read no sticky profile at all and the skills import took only an absolute `HERMES_HOME` (no expansion, no
+  Windows default, no suffix; review of PR #37, finding 3); both now share this code. `HermesMemory` keeps the file
+  reading, and `SkillStore.HermesSkillsDirectory` is gone. `/memory import hermes` names the profile in its title.
+  Parsing change: `/skills import hermes <x>` used to mean a folder `./hermes` with source `x`; it now means Hermes home
+  `x`, so a folder named `hermes` is written `./hermes`. Not followed: Hermes' per-invocation `-p/--profile`, its recovery
+  commands' fallback from a missing sticky profile to the default, its identity-marker test for a profile directory (any
+  existing directory counts), and its `sudo` remapping.
+- `corvid evals`: nothing to build. C-013 already shipped the verb (`EvalsCommand`: `corvid-evals` found by path,
+  `--log` defaulting to the user's event log, `--help` passed through, tested in `tests/Corvid.Cli.Tests`); `evals/README.md`
+  and C-021's deferred list still called it missing. The README now names `corvid evals <command>` as the entry point, with
+  the raw `corvid-evals` form kept for a checkout without an installed `corvid`.
+- Tests. `tests/Corvid.Kernel.Tests`: `JobPauseTests` (a paused job is not claimed and has no next run; resume from now for
+  an interval and a cron expression with no catch-up run; a one-shot past due runs once on resume; unknown, removed,
+  completed and unpaused ids refused, and a paused job removed; a hand-built version 1 file migrated with its job
+  unpaused, opened twice, then paused and claimed; a newer version refused) and `CompactNowTests` (three turns compact to
+  events 1–4 with the latest turn and `PlanUndo` untouched; nothing to compact with no turn, one turn or a lone record).
+  `tests/Corvid.Host.Tests`: `CompactCommandTests` (the fake generator as summarizer: the output lines, the `Compacted`
+  event, a second `/compact`, bad usage, and `/undo` afterwards), `CronCommandTests` (list columns and flags, pause, resume,
+  remove, `--all`, errors, the last run), `HermesHomeTests` (C-027's expansion cases moved from `HermesMemoryTests`, plus
+  the sticky profile from the default root, `HERMES_HOME` naming the root, a custom root, `default` and blank, a profile
+  home trusted without the read, missing, tombstoned, invalid and reserved names, an explicit home) and
+  `HermesImportCommandTests` (both imports with `HERMES_HOME` and `active_profile`, run alone because they set the process
+  environment). `tests/Corvid.Tools.Builtin.Tests`: `cron_list` shows a paused job. `tests/Corvid.Acp.Tests`: the
+  re-recorded exchanges.
+
+Not built yet: `/compact <what to keep>` (focus instructions, which need a `ContextCompactor` parameter and a change to
+the `Compacted` event); compacting the latest turn (excluded so `/undo` keeps working); before and after prompt token
+figures (a full `PromptRenderer.Render` with the system prompt and tool schemas, a turn-loop concern); editing jobs
+(schedule, prompt, script) from `/cron` or a tool; per-job toolsets; `cron_pause` and `cron_resume` tools; `/cron runs <id>`
+for run history (`JobStore.Runs` exists); waking the scheduler at once on resume; a golden-trajectory replay verb
+(`corvid evals golden`; replay of `evals/golden` runs through `dotnet test`, and `corvid-evals` has no such command);
+shipping `corvid-evals` in the single-file publish; Hermes' `-p/--profile` and its fallback from a missing sticky profile;
+and Hermes profiles for `SOUL.md`, memory plugins and session import.
 
 ## Running the check
 
