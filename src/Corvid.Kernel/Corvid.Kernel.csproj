@@ -13,6 +13,8 @@
     <ProjectReference Include="../Corvid.Fabric/Corvid.Fabric.csproj" />
     <ProjectReference Include="../Corvid.Memory/Corvid.Memory.csproj" />
     <ProjectReference Include="../Corvid.Models/Corvid.Models.csproj" />
+    <!-- Trace export redacts with the shared credential detector (C-032). -->
+    <ProjectReference Include="../Corvid.Secrets/Corvid.Secrets.csproj" />
     <ProjectReference Include="../Corvid.Tools/Corvid.Tools.csproj" />
     <InternalsVisibleTo Include="Corvid.Kernel.Tests" />
     <!-- The replay harness reads and writes fixtures in the persisted event format, not a copy of it. -->

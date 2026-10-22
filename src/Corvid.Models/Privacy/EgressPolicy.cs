@@ -5,7 +5,10 @@ namespace Corvid.Models.Privacy;
 /// <summary>What the privacy egress gate does with PII in a request bound for a gated model (plan §10.4).</summary>
 public enum EgressAction
 {
-    /// <summary>Send as is. The scan still runs: tainted content raises the action, and an unavailable extractor refuses.</summary>
+    /// <summary>
+    /// Send as is. The scan still runs: tainted content and a credential value (C-032) raise the action to redact, and an
+    /// unavailable extractor refuses.
+    /// </summary>
     Send,
     /// <summary>Replace each PII value with a stable placeholder (<c>&lt;PERSON_1&gt;</c>), mapped back in the response.</summary>
     Redact,
