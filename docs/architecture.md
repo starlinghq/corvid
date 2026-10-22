@@ -3339,7 +3339,8 @@ Spike S2's benchmark (plan §18, C-003): does the fabric make Qwen3.5-0.8B a usa
 `evals/tool-calling/`, a harness in `evals/Corvid.Evals/ToolCalling/` that runs it through the real `TurnRunner`, the
 `corvid-evals tool-calling` subcommand (the shipped, CPU path) and a local-only CUDA wrapper for the measured run
 (`evals/spikes/S2-tool-calling/`). No Kernel, Fabric or Tools change; no new package for any project in `Corvid.slnx`.
-Results and method: [S2](spikes/S2-tool-calling.md).
+Results and method: [S2](spikes/S2-tool-calling.md) (2026-10-22: fail; Qwen alone 86.1% right tool, the shortlist
+81.3%, (c) 55.3% because C-033's description check withholds benign MCP tools on Kev's yes, 80.8% without it).
 
 - The set (version `2026-10-21.1`, in `catalogue.json` and in every report with the SHA-256 of both files):
   - `catalogue.json`, 28 tools. The 15 built-ins with examples in `BuiltinTools.Examples` (the file, shell, web fetch,
@@ -3370,18 +3371,20 @@ Results and method: [S2](spikes/S2-tool-calling.md).
   question runs; it returns the running case's canned result. The extras' descriptions are trusted, so C-033's ingress
   `injection` question about shortlisted MCP descriptions is asked (up to two chunks) in every configuration, without
   tainting; only a calibrated yes at the floor acts, which in (c) withholds that chunk's tools from the turn, as in
-  production (the report counts it among the acted questions). `ToolCallingRunner` composes, per case and configuration, a fresh session on one
+  production (the report counts the cases as "MCP tools withheld"). `ToolCallingRunner` composes, per case and configuration, a fresh session on one
   `SqliteEventLog` per configuration (`events-<config>.db`), production `TurnOptions` except `MaxSteps` (expected steps
   + 1) with the built-ins' examples as `ToolExamples` (as the host sets them), and the generator slot bound with one
   escalation target, `EscalationStub` (fixed text, a 131k window), so `TurnResult.Escalations` names the reason
   (difficulty, repair, stuck, context). GLiNER2 is bound in every configuration when present. Per case the configurations
-  run interleaved after one untimed warm-up (S5's rule). The configurations differ only in bindings:
+  run interleaved after one untimed warm-up (S5's rule). The configurations differ only in bindings (and the ablation in
+  the extras' origin, so C-033's description question is never asked; it isolates that check, it is not production):
 
   | Configuration | Degraded tier | Calibrated | Embedder | Shortlist |
   | --- | --- | --- | --- | --- |
   | (a) `qwen-all` | `AbstainingDecider` | none | none | catalogue size (without an embedder the cap is alphabetical) |
   | (b) `shortlist` | `AbstainingDecider` | none | EmbeddingGemma 2 | 5 |
   | (c) `shortlist-kev` | `AbstainingDecider` | Kev-0.8B | EmbeddingGemma 2 | 5 |
+  | `shortlist-kev-no-desc` (opt-in) | `AbstainingDecider` | Kev-0.8B | EmbeddingGemma 2 | 5, extras registered without their `mcp:` origin |
   | `degraded` (opt-in) | `DegradedDecider` as the host builds it | none | EmbeddingGemma 2 | 5 |
 
   `AbstainingDecider` answers every question uniformly and uncalibrated with no margin, so the policy acts on nothing: a

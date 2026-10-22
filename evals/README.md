@@ -61,7 +61,7 @@ unproven decisions are reported separately. `report`,
 dotnet build Corvid.slnx -c Release
 corvid model download qwen3.5-0.8b    # and embeddinggemma-2, kev-0.8b; gliner2-base-v1 is optional
 MALLOC_MMAP_THRESHOLD_=65536 evals/Corvid.Evals.Calibrate/bin/Release/net10.0/corvid-evals tool-calling \
-    --out /tmp/s2 [--configs qwen-all,shortlist,shortlist-kev,degraded] [--tags near_miss] [--limit 20] [--no-extractor]
+    --out /tmp/s2 [--configs qwen-all,shortlist,shortlist-kev,shortlist-kev-no-desc,degraded] [--tags near_miss] [--limit 20] [--no-extractor]
 evals/Corvid.Evals.Calibrate/bin/Release/net10.0/corvid-evals calibrate --log /tmp/s2/events-shortlist-kev.db \
     --version 2026-11-01.1 --out floors.json   # Kev's tool decisions carry accepted/corrected outcomes
 ```
