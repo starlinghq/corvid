@@ -86,6 +86,8 @@ internal static class Samples
         new McpToolHeld("notes", "save", "flagged", "ef56", Detail: "<IMPORTANT"),
         new McpToolAccepted("notes", "add", "ab12"),
         new McpToolAccepted("notes", "save", "ef56", Flagged: true),
+        new McpToolHeld("notes", "send", "injection", "ab78", PinnedHash: "ab78", Detail: "d-9"),
+        new McpPinsForgotten("notes", 3),
     ];
 
     public static EventData[] Data(params SessionEvent[] events) => events.Select(EventData.Create).ToArray();

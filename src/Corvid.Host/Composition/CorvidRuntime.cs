@@ -328,6 +328,8 @@ public sealed class CorvidRuntime : IAsyncDisposable
             Project = Memory?.Lessons is null ? null : Project,
             LessonLearning = interactive ? Memory?.LessonLearner : null,
             SkillShortlist = _skillShortlist,
+            // C-033: a confident injection verdict over an MCP tool's description holds the tool in the MCP clients.
+            DescriptionReview = Mcp,
             Options = new TurnOptions
             {
                 SystemPrompt = prompt,

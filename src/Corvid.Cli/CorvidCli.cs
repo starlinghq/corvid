@@ -68,6 +68,10 @@ public static class CorvidCli
           model download <model>...  fetch models explicitly (--all for every model); the only command that downloads
           doctor                     check models, sandbox, Vault and configuration     [--thorough]
           mcp [list]                 start each configured MCP server and list the tools it adds
+          mcp diff <server> <tool>   a held tool definition against its pin, and the command that takes it
+          mcp accept <server> <tool|--all> [--hash <hex>]   pin a held definition (starts only that server)
+          mcp allow <server> <tool> --hash <hex>   offer a flagged or withheld definition as an untrusted tool
+          mcp forget <server|--unconfigured>   drop a server's pins (its next start is trust on first use)
           mcp serve                  Corvid as an MCP server on stdin/stdout: memory search and skills, read-only
           gateway [run]              run the messaging gateway (Telegram, Discord, Slack) until Ctrl-C
           gateway status             enabled adapters, whether one runs, deliveries waiting, pairings
