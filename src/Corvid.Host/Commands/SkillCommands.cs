@@ -14,7 +14,7 @@ public static class SkillCommands
 {
     public const string Usage =
         "[list] | show <name> | pending | approve <id> | reject <id> | log [name] | diff [rev] | revert <rev> | " +
-        "import <folder> [source] | import hermes | evals <name> | pin <name> | unpin <name> | stale [days] [--archive]";
+        "import <folder> [source] | import hermes [<hermes home>] | evals <name> | pin <name> | unpin <name> | stale [days] [--archive]";
 
     internal static async ValueTask<CommandOutput> RunAsync(SlashCommandContext context, SlashInvocation invocation, CancellationToken cancellationToken)
     {
@@ -49,8 +49,12 @@ public static class SkillCommands
                 case ["revert", var revision]:
                     var reverted = await store.RevertAsync(revision, context.Session.Id, cancellationToken).ConfigureAwait(false);
                     return CommandOutput.Success($"Reverted {revision} as user: {Short(reverted)}. The files it touched are now the user's.");
-                case ["import", "hermes"]:
-                    return Imported(await store.ImportAsync(SkillStore.HermesSkillsDirectory(CorvidPaths.Home), SkillAuthor.Hub("hermes"),
+                case ["import", "hermes", .. var hermesHome] when hermesHome.Length <= 1:
+                    // The same Hermes home, sticky profile included, as /memory import hermes (C-035). A folder named hermes is ./hermes.
+                    var location = HermesHome.Resolve(CorvidPaths.Home, hermesHome.FirstOrDefault() is { } given ? CorvidPaths.ExpandHome(given) : null);
+                    if (location.Home is not { } resolved)
+                        return CommandOutput.Warning(location.Problem + " Usage: /skills import hermes <hermes home>.");
+                    return Imported(await store.ImportAsync(Path.Combine(resolved, "skills"), SkillAuthor.Hub("hermes"),
                         context.Session.Id, cancellationToken).ConfigureAwait(false), "hub:hermes");
                 case ["import", var folder, .. var source] when source.Length <= 1:
                     var author = SkillAuthor.Hub(source.FirstOrDefault() ?? "local");

@@ -22,7 +22,7 @@ public enum JobState
 /// The job was created while that session held outside content, so its prompt may carry someone else's instructions:
 /// its runs are tainted (plan §10.3).
 /// </param>
-/// <param name="NextRunAt">Null once a one-shot job has run or a job is removed.</param>
+/// <param name="NextRunAt">Null once a one-shot job has run, while a job is paused, or once it is removed.</param>
 public sealed record ScheduledJob(
     string JobId,
     string Name,
@@ -40,6 +40,12 @@ public sealed record ScheduledJob(
     DateTimeOffset? LastRunAt)
 {
     public JobSchedule ParsedSchedule => JobSchedule.FromCanonical(Spec, JobStore.FindZone(TimeZoneId));
+
+    /// <summary>
+    /// The user paused the job (<see cref="JobStore.Pause"/>): it stays active but is never claimed, and has no next run,
+    /// until it is resumed.
+    /// </summary>
+    public bool Paused { get; init; }
 }
 
 /// <summary>What a caller asks to schedule.</summary>
@@ -91,7 +97,7 @@ public sealed record ClaimedRun(ScheduledJob Job, JobRun Run);
 /// <remarks>SQLite calls are synchronous. Call from a storage worker if the caller must not block.</remarks>
 public sealed class JobStore
 {
-    private const int SchemaVersion = 1;
+    private const int SchemaVersion = 2;
 
     private readonly string _connectionString;
     private readonly TimeProvider _time;
@@ -125,11 +131,19 @@ public sealed class JobStore
         command.Transaction = transaction;
         command.CommandText = "PRAGMA user_version;";
         var version = Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
-        if (version is not (0 or SchemaVersion))
+        if (version is not (0 or 1 or SchemaVersion))
             throw new InvalidDataException($"Unsupported job database schema version {version}.");
         if (version == 0)
         {
             command.CommandText = Schema;
+            command.ExecuteNonQuery();
+        }
+        else if (version == 1)
+        {
+            // Version 2 adds pausing as its own column: the state CHECK could change only through a table rebuild, which
+            // job_runs' foreign key makes awkward. It runs in the same immediate transaction as the version check, so two
+            // processes starting together do not both migrate.
+            command.CommandText = MigrateToVersion2;
             command.ExecuteNonQuery();
         }
         transaction.Commit();
@@ -218,6 +232,59 @@ public sealed class JobStore
     }
 
     /// <summary>
+    /// Pauses an active job: it keeps its state but is not claimed, and its next run is cleared so nothing waits for it.
+    /// False when there is no active, unpaused job with that id.
+    /// </summary>
+    public bool Pause(string jobId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE jobs SET paused = 1, next_run_at = NULL WHERE job_id = $id AND state = 'active' AND paused = 0;";
+        command.Parameters.AddWithValue("$id", jobId);
+        return command.ExecuteNonQuery() == 1;
+    }
+
+    /// <summary>
+    /// Resumes a paused job from now: a recurring job on its next natural tick (ticks missed while paused are not run), a
+    /// one-shot at its time, or now when that time passed while it was paused, so it runs once. Null when there is no
+    /// paused active job with that id.
+    /// </summary>
+    public ScheduledJob? Resume(string jobId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
+        var now = _time.GetUtcNow();
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction(deferred: false);
+        ScheduledJob? job;
+        using (var select = connection.CreateCommand())
+        {
+            select.Transaction = transaction;
+            select.CommandText = $"SELECT {JobColumns} FROM jobs WHERE job_id = $id AND state = 'active' AND paused = 1;";
+            select.Parameters.AddWithValue("$id", jobId);
+            using var reader = select.ExecuteReader();
+            job = reader.Read() ? ReadJob(reader) : null;
+        }
+        if (job is null)
+            return null;
+
+        // A schedule with no time left (a cron that never matches again) resumes with nothing to run.
+        var next = job.ParsedSchedule.First(now);
+        if (next < now)
+            next = now;
+        using (var update = connection.CreateCommand())
+        {
+            update.Transaction = transaction;
+            update.CommandText = "UPDATE jobs SET paused = 0, next_run_at = $next WHERE job_id = $id;";
+            update.Parameters.AddWithValue("$next", next is { } at ? at.UtcTicks : DBNull.Value);
+            update.Parameters.AddWithValue("$id", jobId);
+            update.ExecuteNonQuery();
+        }
+        transaction.Commit();
+        return job with { NextRunAt = next, Paused = false };
+    }
+
+    /// <summary>
     /// Claims every active job due at <paramref name="now"/>: moves its next time on (missed ticks collapse into this one)
     /// or completes a one-shot, and records a running run with a fresh session id, all in one transaction.
     /// </summary>
@@ -229,7 +296,7 @@ public sealed class JobStore
         using (var select = connection.CreateCommand())
         {
             select.Transaction = transaction;
-            select.CommandText = $"SELECT {JobColumns} FROM jobs WHERE state = 'active' AND next_run_at <= $now ORDER BY next_run_at, job_id;";
+            select.CommandText = $"SELECT {JobColumns} FROM jobs WHERE state = 'active' AND paused = 0 AND next_run_at <= $now ORDER BY next_run_at, job_id;";
             select.Parameters.AddWithValue("$now", now.UtcTicks);
             using var reader = select.ExecuteReader();
             while (reader.Read())
@@ -367,7 +434,7 @@ public sealed class JobStore
     }
 
     private const string JobColumns =
-        "job_id, name, prompt, schedule, spec, time_zone, script, no_agent, origin_session, created_tainted, created_at, next_run_at, state, last_run_at";
+        "job_id, name, prompt, schedule, spec, time_zone, script, no_agent, origin_session, created_tainted, created_at, next_run_at, state, last_run_at, paused";
 
     private const string RunColumns =
         "run_id, job_id, session_id, scheduled_for, started_at, finished_at, status, wake_decision_id, script_exit_code, output, detail";
@@ -376,7 +443,10 @@ public sealed class JobStore
         r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3), r.GetString(4), r.GetString(5),
         r.IsDBNull(6) ? null : r.GetString(6), r.GetInt64(7) != 0, r.IsDBNull(8) ? null : r.GetString(8), r.GetInt64(9) != 0,
         Time(r.GetInt64(10)), r.IsDBNull(11) ? null : Time(r.GetInt64(11)), ParseState(r.GetString(12)),
-        r.IsDBNull(13) ? null : Time(r.GetInt64(13)));
+        r.IsDBNull(13) ? null : Time(r.GetInt64(13)))
+    {
+        Paused = r.GetInt64(14) != 0,
+    };
 
     private static JobRun ReadRun(SqliteDataReader r) => new(
         r.GetString(0), r.GetString(1), r.GetString(2), Time(r.GetInt64(3)), Time(r.GetInt64(4)), r.IsDBNull(5) ? null : Time(r.GetInt64(5)),
@@ -415,7 +485,8 @@ public sealed class JobStore
             created_at INTEGER NOT NULL,
             next_run_at INTEGER,
             state TEXT NOT NULL CHECK (state IN ('active', 'completed', 'removed')),
-            last_run_at INTEGER
+            last_run_at INTEGER,
+            paused INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1))
         );
         CREATE INDEX jobs_due ON jobs (state, next_run_at);
 
@@ -434,6 +505,11 @@ public sealed class JobStore
         );
         CREATE INDEX job_runs_by_job ON job_runs (job_id, started_at);
 
-        PRAGMA user_version = 1;
+        PRAGMA user_version = 2;
+        """;
+
+    private const string MigrateToVersion2 = """
+        ALTER TABLE jobs ADD COLUMN paused INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1));
+        PRAGMA user_version = 2;
         """;
 }
