@@ -68,6 +68,17 @@ public sealed record ConfigurationSummary(
 public sealed record Headline(double ToolPoints, double ArgsPoints, double ToolPointsNonEscalated, double ArgsPointsNonEscalated,
     double EscalationRate, bool Pass);
 
+/// <summary>Outcomes appended to Kev's <c>tool</c> decisions: each turn's first (ingress) and the later ones.</summary>
+public sealed record KevOutcomes(int FirstAccepted, int FirstCorrected, int LaterAccepted, int LaterCorrected)
+{
+    public int Accepted => FirstAccepted + LaterAccepted;
+
+    public int Corrected => FirstCorrected + LaterCorrected;
+
+    public override string ToString() => string.Create(CultureInfo.InvariantCulture,
+        $"{Accepted} accepted, {Corrected} corrected (first tool decision of a turn: {FirstAccepted} accepted, {FirstCorrected} corrected; later: {LaterAccepted} accepted, {LaterCorrected} corrected)");
+}
+
 /// <summary>The scored run: header, per-case records and per-configuration summaries; JSON and markdown (S5's tables).</summary>
 public sealed class ToolCallingReport
 {
@@ -148,16 +159,18 @@ public sealed class ToolCallingReport
     /// <c>tool_succeeded</c>, so it is the decision's last outcome and labels it. The log is then valid input to
     /// <c>corvid-evals calibrate --log</c>.
     /// </summary>
-    /// <returns>Outcomes appended: accepted, corrected.</returns>
-    public static (int Accepted, int Corrected) AppendKevOutcomes(IEventLog log, IEnumerable<CaseRun> runs)
+    /// <returns>The outcomes appended, split into each turn's first <c>tool</c> decision (ingress) and later ones (the no-op
+    /// check and step checkpoints, where a case whose calls have all run expects none).</returns>
+    public static KevOutcomes AppendKevOutcomes(IEventLog log, IEnumerable<CaseRun> runs)
     {
         ArgumentNullException.ThrowIfNull(log);
         ArgumentNullException.ThrowIfNull(runs);
-        int accepted = 0, corrected = 0;
+        int firstAccepted = 0, firstCorrected = 0, laterAccepted = 0, laterCorrected = 0;
         foreach (var run in runs)
         {
             var events = new List<EventData>();
             var done = 0;
+            var first = true;
             foreach (var payload in run.Events)
             {
                 if (payload is ToolResult { IsError: false })
@@ -168,15 +181,27 @@ public sealed class ToolCallingReport
                 var expect = run.Case.ExpectsNoTool || done >= run.Case.Steps.Length ? Expectation.NoTool : run.Case.Steps[done].Expect;
                 var right = expect.None ? pick == "none" : expect.Accepts(pick);
                 events.Add(EventData.Create(new DecisionOutcomeRecorded(decision.DecisionId, right ? "accepted" : "corrected")));
-                if (right)
-                    accepted++;
+                if (first)
+                {
+                    if (right)
+                        firstAccepted++;
+                    else
+                        firstCorrected++;
+                }
+                else if (right)
+                {
+                    laterAccepted++;
+                }
                 else
-                    corrected++;
+                {
+                    laterCorrected++;
+                }
+                first = false;
             }
             if (events.Count > 0)
                 log.Append(run.SessionId, log.GetHead(run.SessionId), events);
         }
-        return (accepted, corrected);
+        return new KevOutcomes(firstAccepted, firstCorrected, laterAccepted, laterCorrected);
     }
 
     // ---- JSON ----

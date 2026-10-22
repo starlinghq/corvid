@@ -154,52 +154,59 @@ public static class ToolCallingCli
         var loadBefore = LoadAverage();
         var runner = new ToolCallingRunner(set, bindings, configurations, outputDirectory);
         var total = cases.Count * runner.Configurations.Length;
-        var done = 0;
         output.WriteLine($"Running {cases.Count} case(s) × {runner.Configurations.Length} configuration(s) of set {set.Version}; warm-up first.");
+        var scores = new List<CaseScore>();
+        var kevOutcomes = "appended at the end of the run";
+        // Rewritten after every case, so a run that dies part-way still leaves a report of what it scored.
+        string WriteReport()
+        {
+            var described = loaded.Describe().ToImmutableSortedDictionary(StringComparer.Ordinal).SetItem("generator profile", bindings.Generator.Profile.Id);
+            var header = new ToolCallingHeader(set.Version, set.CatalogueSha256, set.CasesSha256, set.Catalogue.Length, ToolCallingRunner.FloorsVersion,
+                options.GetValueOrDefault("--commit") ?? Environment.GetEnvironmentVariable("CORVID_COMMIT") ?? "unknown",
+                described,
+                new Dictionary<string, string>
+                {
+                    ["configurations"] = string.Join(", ", runner.Configurations.Select(ToolCallingConfigurations.Name)),
+                    ["cases"] = string.Create(CultureInfo.InvariantCulture, $"{scores.Count / runner.Configurations.Length} scored of {cases.Count} selected of {set.Cases.Length}") +
+                        (tags.IsEmpty ? "" : $", tags {string.Join(",", tags)}") + (limit is null ? "" : string.Create(CultureInfo.InvariantCulture, $", limit {limit}")),
+                    ["extractor"] = bindings.Extractor is null ? "off" : bindings.Extractor.Profile.Id,
+                    ["turn options"] = "production defaults (MaxOutputTokens 1024, approval mode smart), MaxSteps = expected steps + 1",
+                    ["shortlist"] = string.Create(CultureInfo.InvariantCulture, $"qwen-all: {set.Catalogue.Length} (every tool, no embedder); others: 5, built-in examples"),
+                    ["escalation"] = "generator slot escalates to a stub that answers with fixed text",
+                    ["warm-up"] = "one untimed case per configuration: " + WarmUp.Prompt,
+                    ["kev outcomes appended"] = kevOutcomes,
+                }.ToImmutableSortedDictionary(StringComparer.Ordinal),
+                new Dictionary<string, string>
+                {
+                    ["load average before"] = loadBefore,
+                    ["load average after"] = LoadAverage(),
+                    ["processors"] = Environment.ProcessorCount.ToString(CultureInfo.InvariantCulture),
+                    ["os"] = RuntimeInformation.OSDescription,
+                    ["runtime"] = RuntimeInformation.FrameworkDescription,
+                    ["CUDA_VISIBLE_DEVICES"] = Environment.GetEnvironmentVariable("CUDA_VISIBLE_DEVICES") ?? "(unset)",
+                }.ToImmutableSortedDictionary(StringComparer.Ordinal),
+                started, DateTimeOffset.UtcNow);
+            var report = ToolCallingReport.Build(header, scores);
+            File.WriteAllText(Path.Combine(outputDirectory, "report.json"), report.ToJson());
+            var text = report.ToMarkdown();
+            File.WriteAllText(Path.Combine(outputDirectory, "report.md"), text);
+            return text;
+        }
+
         var runs = await runner.RunAsync(cases, WarmUp, run =>
         {
-            done++;
             var score = ToolCallingScorer.Score(run, set);
+            scores.Add(score);
             output.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                $"[{done}/{total}] {score.Id} {score.Configuration}: {ToolCallingScorer.Name(score.Outcome)}{(score.ArgsMatch == false ? " (args miss)" : "")} {score.TurnMs:0} ms"));
+                $"[{scores.Count}/{total}] {score.Id} {score.Configuration}: {ToolCallingScorer.Name(score.Outcome)}{(score.ArgsMatch == false ? " (args miss)" : "")} {score.TurnMs:0} ms"));
+            WriteReport();
         }, cancellationToken).ConfigureAwait(false);
 
-        var scores = runs.Select(run => ToolCallingScorer.Score(run, set)).ToList();
-        var appended = (Accepted: 0, Corrected: 0);
-        if (runner.Configurations.Contains(ToolCallingConfiguration.ShortlistKev))
-            appended = ToolCallingReport.AppendKevOutcomes(runner.Log(ToolCallingConfiguration.ShortlistKev),
-                runs.Where(run => run.Configuration == ToolCallingConfiguration.ShortlistKev));
-
-        var described = loaded.Describe().ToImmutableSortedDictionary(StringComparer.Ordinal).SetItem("generator profile", bindings.Generator.Profile.Id);
-        var header = new ToolCallingHeader(set.Version, set.CatalogueSha256, set.CasesSha256, set.Catalogue.Length, ToolCallingRunner.FloorsVersion,
-            options.GetValueOrDefault("--commit") ?? Environment.GetEnvironmentVariable("CORVID_COMMIT") ?? "unknown",
-            described,
-            new Dictionary<string, string>
-            {
-                ["configurations"] = string.Join(", ", runner.Configurations.Select(ToolCallingConfigurations.Name)),
-                ["cases"] = string.Create(CultureInfo.InvariantCulture, $"{cases.Count} of {set.Cases.Length}") + (tags.IsEmpty ? "" : $", tags {string.Join(",", tags)}") +
-                    (limit is null ? "" : string.Create(CultureInfo.InvariantCulture, $", limit {limit}")),
-                ["extractor"] = bindings.Extractor is null ? "off" : bindings.Extractor.Profile.Id,
-                ["turn options"] = "production defaults (MaxOutputTokens 1024, approval mode smart), MaxSteps = expected steps + 1",
-                ["shortlist"] = string.Create(CultureInfo.InvariantCulture, $"qwen-all: {set.Catalogue.Length} (every tool, no embedder); others: 5, built-in examples"),
-                ["escalation"] = "generator slot escalates to a stub that answers with fixed text",
-                ["warm-up"] = "one untimed case per configuration: " + WarmUp.Prompt,
-                ["kev outcomes appended"] = string.Create(CultureInfo.InvariantCulture, $"{appended.Accepted} accepted, {appended.Corrected} corrected"),
-            }.ToImmutableSortedDictionary(StringComparer.Ordinal),
-            new Dictionary<string, string>
-            {
-                ["load average before"] = loadBefore,
-                ["load average after"] = LoadAverage(),
-                ["processors"] = Environment.ProcessorCount.ToString(CultureInfo.InvariantCulture),
-                ["os"] = RuntimeInformation.OSDescription,
-                ["runtime"] = RuntimeInformation.FrameworkDescription,
-                ["CUDA_VISIBLE_DEVICES"] = Environment.GetEnvironmentVariable("CUDA_VISIBLE_DEVICES") ?? "(unset)",
-            }.ToImmutableSortedDictionary(StringComparer.Ordinal),
-            started, DateTimeOffset.UtcNow);
-        var report = ToolCallingReport.Build(header, scores);
-        File.WriteAllText(Path.Combine(outputDirectory, "report.json"), report.ToJson());
-        var markdown = report.ToMarkdown();
-        File.WriteAllText(Path.Combine(outputDirectory, "report.md"), markdown);
+        kevOutcomes = runner.Configurations.Contains(ToolCallingConfiguration.ShortlistKev)
+            ? ToolCallingReport.AppendKevOutcomes(runner.Log(ToolCallingConfiguration.ShortlistKev),
+                runs.Where(run => run.Configuration == ToolCallingConfiguration.ShortlistKev)).ToString()
+            : "none (shortlist-kev did not run)";
+        var markdown = WriteReport();
         output.WriteLine();
         output.WriteLine(markdown[..Math.Max(0, markdown.IndexOf("## By tag", StringComparison.Ordinal))].TrimEnd());
         output.WriteLine();

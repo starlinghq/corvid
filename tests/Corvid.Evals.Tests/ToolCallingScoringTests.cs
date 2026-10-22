@@ -215,13 +215,13 @@ public sealed class ToolCallingScoringTests : IDisposable
         var (_, runner, runs, _) = Run();
         var log = runner.Log(ToolCallingConfiguration.ShortlistKev);
 
-        var (accepted, corrected) = ToolCallingReport.AppendKevOutcomes(log,
+        var outcomes = ToolCallingReport.AppendKevOutcomes(log,
             runs.Where(run => run.Configuration == ToolCallingConfiguration.ShortlistKev));
 
         // Only the narrating case has calibrated tool answers, all the weather tool: at ingress and at the no-op check, before
         // the call (accepted), and at the step checkpoint after it ran, when the case wants no more tools (corrected).
-        Assert.Equal(2, accepted);
-        Assert.Equal(1, corrected);
+        Assert.Equal(new KevOutcomes(1, 0, 1, 1), outcomes);
+        Assert.Equal(2, outcomes.Accepted);
         var decisions = Calibration.DecisionSet.Load([runner.LogPath(ToolCallingConfiguration.ShortlistKev)], cancellationToken: Ct);
         var labelled = decisions.Records.Where(record => record.QuestionId == "tool" && record.Tier == Calibration.DecisionTier.Calibrated && record.Answer is not null).ToList();
         Assert.Equal(["accepted", "accepted", "corrected"], labelled.Select(record => record.Outcome));
