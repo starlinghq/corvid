@@ -26,6 +26,15 @@ namespace Corvid.Host.Composition;
 public sealed record BuiltinServices(ApprovalEnvironment Environment, SandboxedShell Shell, JobStore Jobs, WebFetchTool? Web);
 
 /// <summary>
+/// The handler the built-in <c>web_fetch</c> tool sends its requests through, when one is registered in DI; without one
+/// the tool uses its own handler, which connects only to public addresses. The prompt-injection suite (C-024) registers a
+/// recording sink here, so the real tool, with its URL checks, taint and approval path, fetches from the sink; Vault's
+/// egress proxy (V-003) is the production use. A handler given here replaces the resolved-address check (the tool's own
+/// check of literal addresses still applies), so it must not follow redirects and must apply its own address policy.
+/// </summary>
+public sealed record WebFetchTransport(HttpMessageHandler Handler);
+
+/// <summary>
 /// Skills (C-017): the store, the loop's database, the learning loop and the curator. <paramref name="Store"/> is null when
 /// skills are off or the repository could not be opened; <paramref name="State"/> says which.
 /// </summary>
@@ -57,7 +66,8 @@ public sealed class CorvidRuntimeFactory(
     IEnumerable<IToolProvider> toolProviders,
     IEnumerable<ToolFunction> tools,
     CorvidConfigFile? configFile = null,
-    IMcpTransports? mcpTransports = null)
+    IMcpTransports? mcpTransports = null,
+    WebFetchTransport? webTransport = null)
 {
     /// <summary>
     /// Configured models that stop the runtime from starting, checked offline (by size for Starling's): every missing or
@@ -100,13 +110,16 @@ public sealed class CorvidRuntimeFactory(
             // Kev when the decider slot is bound (C-004b), with Kev-4B as the second tier when configured; the degraded tier
             // always, for states over the hard stop and requests Kev refuses.
             IDecider? calibrated = null, escalation = null;
+            string? placement = null;
             if (registry.TryGet(ModelSlots.Decider, out var decider))
             {
                 calibrated = decider.Default.GetService<IDecider>();
                 escalation = decider.Escalation.FirstOrDefault()?.GetService<IDecider>();
+                placement = decider.Default.Profile.Placement;
             }
+            // C-030: resolved once, as placement is fixed per runtime and /model refuses decider switches.
             var fabric = new DecisionFabric(DecisionPolicy.Default, composer.CreateDegradedDecider(DecisionPolicy.Default), log,
-                calibrated, escalation);
+                calibrated, escalation, ReductionFor(settings.Turn.ReducedCheckpoints, calibrated, placement));
 
             // Vault's locations are protected twice (C-012): the hardline list refuses them, and the shell's sandbox hides them.
             var vault = VaultLocationsFor(settings);
@@ -150,7 +163,7 @@ public sealed class CorvidRuntimeFactory(
                 ReadOnlyPaths = skillsGuard.ReadOnly,
             });
             var jobs = new JobStore(CorvidPaths.JobStore(settings));
-            var builtin = new BuiltinServices(environment, shell, jobs, settings.Tools.Builtin ? new WebFetchTool() : null);
+            var builtin = new BuiltinServices(environment, shell, jobs, settings.Tools.Builtin ? new WebFetchTool(webTransport?.Handler) : null);
 
             // Tools registered in DI (any later toolset) are offered alongside the built-in ones.
             var toolRegistry = new ToolRegistry();
@@ -198,6 +211,19 @@ public sealed class CorvidRuntimeFactory(
             throw;
         }
     }
+
+    /// <summary>
+    /// The checkpoint profile (C-030). Auto reduces only when a calibrated decider is bound and its effective placement is
+    /// exactly <c>cpu</c> (a configured CUDA Kev that fell back included); CUDA, a remote decider and the degraded tier
+    /// (placement null) stay full.
+    /// </summary>
+    internal static CheckpointReduction? ReductionFor(ReducedCheckpoints setting, IDecider? calibrated, string? placement) => setting switch
+    {
+        ReducedCheckpoints.On => new CheckpointReduction("configured"),
+        ReducedCheckpoints.Off => null,
+        _ when calibrated is not null && placement == ModelPlacement.Cpu => new CheckpointReduction($"{calibrated.Name} on cpu"),
+        _ => null,
+    };
 
     /// <summary>
     /// Corvid's own state wherever configuration puts it: the data directory (the event log, the job store that feeds

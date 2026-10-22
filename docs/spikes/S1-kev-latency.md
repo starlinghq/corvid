@@ -69,6 +69,9 @@ run 4, the review rerun at load 3–6):
    300-token state for the ingress that asks both `tool` and `skill`.
 2. **On CPU-only hosts, reduce checkpoints** to ingress + egress and drop `step` questions to two, as the plan's
    fallback says: no CPU cell came in under 1 s. Proposed as C-030, not implemented.
+   Built in C-030 ([architecture](../architecture.md#reduced-checkpoints-on-cpu-only-kev-hosts-c-030)): ingress and egress
+   stay whole, a `step` checkpoint asks at most `done`, `stuck`, `tool` (two of them), the per-tool-call `risk` is skipped
+   where the outcome is ask whatever it says, and `Corvid:Turn:ReducedCheckpoints` (`Auto` reduces for Kev on the CPU).
 3. **Kev-4B stays the gate escalation tier**, on the GPU only; on the CPU (about 15 s) it is not interactive.
 4. **A `pre-execute` checkpoint costs about 250 ms** on the GPU, almost as much as a 4-question ingress, because the
    state pass dominates and Kev does not reuse a state across requests. A per-tool-call `pre-execute` adds a quarter

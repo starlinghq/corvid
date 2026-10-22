@@ -127,10 +127,10 @@ internal static class Fixtures
 
     /// <param name="calibrated">A fake calibrated decider; without one the degraded tier answers (it never answers a gate).</param>
     public static ApprovalPipeline Pipeline(TempLog db, IDecider? calibrated = null, IApprovalPrompter? prompter = null,
-        IApprovalRuleStore? always = null, ApprovalOptions? options = null)
+        IApprovalRuleStore? always = null, ApprovalOptions? options = null, CheckpointReduction? reduction = null)
     {
         var fabric = new DecisionFabric(DecisionPolicy.Default, new DegradedDecider(new UnusedEmbedder(), new UnusedChatClient()), db.Log,
-            calibrated);
+            calibrated, reduction: reduction);
         return new ApprovalPipeline(Environment, fabric, db.Log, prompter, always, options);
     }
 

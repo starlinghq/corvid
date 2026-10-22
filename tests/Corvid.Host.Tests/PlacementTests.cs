@@ -170,6 +170,78 @@ public sealed class PlacementTests
         Assert.Contains("degraded tier", notice, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(ReducedCheckpoints.Auto, true, "cpu", "kev-0.8b on cpu")]
+    [InlineData(ReducedCheckpoints.Auto, true, "cuda:0", null)]
+    [InlineData(ReducedCheckpoints.Auto, true, "cuda:1", null)]
+    [InlineData(ReducedCheckpoints.Auto, true, "remote", null)]
+    [InlineData(ReducedCheckpoints.Auto, false, null, null)]
+    [InlineData(ReducedCheckpoints.On, false, null, "configured")]
+    [InlineData(ReducedCheckpoints.On, true, "cuda:0", "configured")]
+    [InlineData(ReducedCheckpoints.Off, true, "cpu", null)]
+    public void Auto_reduces_checkpoints_only_for_kev_on_the_cpu(ReducedCheckpoints setting, bool calibrated, string? placement, string? reason)
+    {
+        var reduction = CorvidRuntimeFactory.ReductionFor(setting, calibrated ? new FakeKev("kev-0.8b") : null, placement);
+
+        Assert.Equal(reason, reduction?.Reason);
+    }
+
+    [Theory]
+    [InlineData(true, null)]
+    [InlineData(false, "kev-0.8b on cpu")]
+    public void A_cuda_kev_stays_full_and_one_that_fell_back_to_the_cpu_is_reduced(bool cudaWorks, string? reason)
+    {
+        var (composer, devices) = Composer(Placement("kev-0.8b", "cuda", PlacementFallback.Cpu), cudaWorks);
+        using var composed = composer;
+        using var scheduled = devices;
+
+        var decider = composer.Compose().Get(ModelSlots.Decider).Default;
+        var reduction = CorvidRuntimeFactory.ReductionFor(ReducedCheckpoints.Auto, decider.GetService<Abstractions.Fabric.IDecider>(),
+            decider.Profile.Placement);
+
+        Assert.Equal(reason, reduction?.Reason);
+    }
+
+    [Fact]
+    public async Task The_runtime_reduces_for_kev_on_the_cpu_and_says_so_in_the_decider_state()
+    {
+        var kev = new Dictionary<string, string?> { ["Corvid:Models:Slots:decider:Model"] = "fake-kev" };
+        await using (var host = TestHost.Create(new FakeModels(), kev))
+        await using (var runtime = await host.StartAsync())
+        {
+            Assert.Equal("fake-kev on cpu", runtime.Fabric.Reduction?.Reason);
+            Assert.Equal("fake-kev on cpu; reduced checkpoints (C-030); degraded tier when Kev declines", runtime.DeciderState);
+        }
+
+        var off = new Dictionary<string, string?>(kev) { ["Corvid:Turn:ReducedCheckpoints"] = "off" };
+        await using (var host = TestHost.Create(new FakeModels(), off))
+        await using (var runtime = await host.StartAsync())
+        {
+            Assert.Null(runtime.Fabric.Reduction);
+            Assert.Equal("fake-kev on cpu; degraded tier when Kev declines", runtime.DeciderState);
+        }
+
+        // The degraded tier stays full under Auto, so CI (no Kev weights) and the golden turns are unchanged; On reduces it.
+        await using (var host = TestHost.Create(new FakeModels(kevReady: false), kev))
+        await using (var runtime = await host.StartAsync())
+            Assert.Null(runtime.Fabric.Reduction);
+        var on = new Dictionary<string, string?> { ["Corvid:Turn:ReducedCheckpoints"] = "On" };
+        await using (var host = TestHost.Create(new FakeModels(), on))
+        await using (var runtime = await host.StartAsync())
+        {
+            Assert.Equal("configured", runtime.Fabric.Reduction?.Reason);
+            Assert.Equal("degraded tier (no calibrated decider); reduced checkpoints (C-030)", runtime.DeciderState);
+        }
+    }
+
+    [Fact]
+    public void An_undefined_reduced_checkpoints_value_is_refused()
+    {
+        Assert.Contains(Validate(options => options.Turn.ReducedCheckpoints = (ReducedCheckpoints)9).Failures!,
+            failure => failure.Contains("Corvid:Turn:ReducedCheckpoints must be Auto, On or Off", StringComparison.Ordinal));
+        Assert.True(Validate(options => options.Turn.ReducedCheckpoints = ReducedCheckpoints.Off).Succeeded);
+    }
+
     // Kev on CUDA fails as a CPU build fails it; on the CPU it binds a fake decider under the CPU profile.
     private static StarlingModelProvider Stubbed(Dictionary<string, ModelPlacementSettings> placement, bool cudaWorks, out List<string> tried)
     {

@@ -152,15 +152,18 @@ public sealed class CorvidRuntime : IAsyncDisposable
     /// </summary>
     public string DeciderState => Fabric.CalibratedDecider is { } calibrated
         ? Fabric.EscalationDecider is { } escalation
-            ? $"{calibrated} on {DeciderPlacement}, {escalation} for gates below their floor; degraded tier when Kev declines"
-            : $"{calibrated} on {DeciderPlacement}; degraded tier when Kev declines"
-        : "degraded tier (no calibrated decider)";
+            ? $"{calibrated} on {DeciderPlacement}, {escalation} for gates below their floor{ReducedNote}; degraded tier when Kev declines"
+            : $"{calibrated} on {DeciderPlacement}{ReducedNote}; degraded tier when Kev declines"
+        : $"degraded tier (no calibrated decider){ReducedNote}";
+
+    // C-030: the checkpoint profile, shown only when reduced.
+    private string ReducedNote => Fabric.Reduction is null ? "" : "; reduced checkpoints (C-030)";
 
     /// <summary>
     /// Where the calibrated decider actually runs (C-029): <c>cpu</c> or <c>cuda:N</c>, the effective
     /// <see cref="ModelProfile.Placement"/> of the decider slot's default binding, so a configured GPU that fell back
-    /// reads <c>cpu</c>; null on the degraded tier. C-030 reads this (or <c>Registry.Get("decider").Default.Profile.Placement</c>)
-    /// and treats a value starting with <c>cuda</c> (<see cref="ModelPlacement.IsCuda"/>) as the GPU path.
+    /// reads <c>cpu</c>; null on the degraded tier. C-030 reads the same placement in <c>CorvidRuntimeFactory.ReductionFor</c>
+    /// and reduces checkpoints under <c>Auto</c> only when it is exactly <c>cpu</c>, so CUDA and a remote decider stay full.
     /// </summary>
     public string? DeciderPlacement => Registry.TryGet(ModelSlots.Decider, out var decider) ? decider.Default.Profile.Placement : null;
 

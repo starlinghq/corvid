@@ -394,6 +394,26 @@ public sealed class TurnSettings
     /// (C-029; spike S1: 212 ms at 300 tokens against 301 ms at 600 on the GPU). 100 to 600; 600 turns it off.
     /// </summary>
     public int DualShortlistStateTokens { get; set; } = Kernel.Turns.TurnOptions.DefaultDualShortlistStateTokens;
+
+    /// <summary>
+    /// Fewer decider questions per turn (C-030, spike S1 decision 2): step checkpoints ask at most two questions (done, stuck,
+    /// tool in that order) and pre_execute skips <c>risk</c> where the outcome is ask whatever it says. <see cref="ReducedCheckpoints.Auto"/>
+    /// reduces only when Kev runs on the CPU.
+    /// </summary>
+    public ReducedCheckpoints ReducedCheckpoints { get; set; } = ReducedCheckpoints.Auto;
+}
+
+/// <summary>Whether the fabric runs the reduced checkpoint profile (C-030).</summary>
+public enum ReducedCheckpoints
+{
+    /// <summary>Reduced only when a calibrated decider is bound and its effective placement is <c>cpu</c>; CUDA, a remote decider and the degraded tier stay full.</summary>
+    Auto,
+
+    /// <summary>Always reduced, the degraded tier included.</summary>
+    On,
+
+    /// <summary>Never reduced: every checkpoint is asked whole.</summary>
+    Off,
 }
 
 public sealed class MemorySettings

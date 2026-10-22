@@ -263,7 +263,7 @@ internal sealed class FakeKev(string name) : IDecider
 /// <summary>Fake slots: a scripted generator (and a larger one to switch to), a keyword embedder, an extractor and two fake Kevs.</summary>
 internal sealed class FakeModels
 {
-    public static readonly string[] Keywords = ["list", "note", "add", "weather"];
+    public static readonly string[] Keywords = ["list", "note", "add", "weather", "fetch", "page", "send"];
 
     public FakeModels(FakeGenerator? generator = null, bool generatorReady = true, bool kevReady = true, bool kevLargeReady = true)
     {
