@@ -1975,10 +1975,11 @@ through a core interface in `Corvid.Tools`.
   with `mcp:`, trusted servers' included. Each origin's tools, by name, are packed into chunks of whole `- name: description`
   lines up to 1,200 characters (a single longer line is cut and is the only tool in its chunk), keyed `injection/mcp:<server>`
   for the first chunk (C-021's and C-022's key) and `injection/mcp:<server>#2` onward; each question records the tool names it
-  carried. At most 2 description questions go into one ingress batch, so with the turn's own 4 to 6 questions the batch stays
-  within S1's measured 8-question bound (340 ms on the 3090; about 25 to 30 ms per extra question). A chunk is asked once per
-  session for the same text (C-022's set, now keyed by chunk text and marked only when asked), so chunks over the cap wait for a
-  later turn, and their tools stay offered until then, as before. Asking taints the turn only for a chunk that holds an
+  carried. Chunks holding an `OutsideDescription` tool are asked first and always, uncapped, as every untrusted origin was
+  before C-033; chunks of only trusted text fill the batch up to 2 description questions in all, so with the turn's own 4 to 6
+  questions a batch without outside chunks stays within S1's measured 8-question bound (340 ms on the 3090; about 25 to 30 ms
+  per extra question). A chunk is asked once per session for the same text (C-022's set, now keyed by chunk text and marked only
+  when asked), so trusted chunks over the cap wait for a later turn, and their tools stay offered unjudged until then. Asking taints the turn only for a chunk that holds an
   `OutsideDescription` tool (an untrusted server's, or an allowed flagged or withheld one): a trusted server's text goes to the
   decider, never to the generator, which answers the #38 reply's concern that asking would taint every turn. Patterns
   (`McpDescriptionScan`) still run for every server at listing time; trusted descriptions are now both scanned and asked.
@@ -2001,7 +2002,8 @@ through a core interface in `Corvid.Tools`.
   another source's) are skipped; `Accept` and `Withhold` run one at a time.
 - Restarts: `Register` holds a listed definition as `injection` again when its pin's `withheld` equals the listed hash and
   `allowed_flagged` does not, so the hold survives restarts and another process (`corvid mcp diff|allow`) sees it. Precedence is
-  flagged, then injection, then new or changed; a definition that changed after a withhold is `changed`. A definition allowed
+  flagged, then injection, then new or changed; a definition that changed after a withhold is `changed`, with the pin's
+  `withheld` kept (`McpHeldTool.ChangedAfterWithhold`). A definition allowed
   after a withhold registers as an untrusted server's tool (`McpToolMapping.Describe` with `untrusted`) at every start.
 - Pin file: `McpToolPin` and its document gain `Withheld` and `WithheldDecision`, written only when set
   (`JsonIgnore(WhenWritingNull)`), so a file without withholds is byte for byte what C-022 wrote and older Corvid reads it.
@@ -2011,7 +2013,7 @@ through a core interface in `Corvid.Tools`.
 - Review (`McpCommands`, now public, the one implementation for `/mcp` and `corvid mcp`): `allow` takes a tool held as
   `flagged` or `injection` (`McpHoldReasons.NeedsReview`); it pins with `allowed_flagged` = the hash, clears `withheld`, and
   registers the tool as an untrusted server's (asks on every call, taints results and descriptions). `accept` refuses an
-  `injection` hold and names `allow`; `accept --all` skips both review reasons. `--hash <hex>` (at least 12 hex characters, any
+  `injection` hold and names `allow`; `accept --all` skips both review reasons and a changed-after-withhold hold. `--hash <hex>` (at least 12 hex characters, any
   case) on `accept` and `allow` makes `McpClients.Accept` refuse when the held definition's hash does not start with it. `diff`
   ends with the exact next command, `next: /mcp allow|accept <server> <tool> --hash <12 hex>`; for an `injection` hold it shows the
   whole definition, the decision id and when it was pinned. An accept without `--hash` prints the hash it pinned.
@@ -2037,10 +2039,13 @@ through a core interface in `Corvid.Tools`.
   the connection once its tools were listed (`McpServerStatus.ToolsChanged`); `/mcp` and `corvid mcp list` then show "the server's
   tool list changed since it was listed; restart Corvid to re-check its pins". Nothing is re-listed or re-pinned.
 - Limits: the `injection` floor was never fitted on description rows, so false positives withhold trusted tools; it acts only
-  on calibrated answers, one `/mcp allow` undoes it (logged and persisted), and an allowed hash is never withheld again. A
-  chunk is withheld as a unit, so one poisoned description takes its chunk neighbours out with it (each can be allowed alone).
-  Asking about trusted descriptions adds up to 2 Kev questions to a session's first ingress per server (about 60 ms on GPU, more
-  on CPU per S1). `/mcp forget` on a live server leaves its tools offered until restart. Recall is Kev's: in a manual check on
+  on calibrated answers, and `/mcp allow` offers the tool again (logged and persisted) but as an untrusted server's tool (asks
+  on every call, taints) for as long as the server lists that hash; an allowed hash is never withheld again. There is no way
+  back to trusted for one tool: `accept` refuses an `injection` hold, and the only route is `forget <server>`, which resets trust
+  on first use for every tool of that server (or the server changing the definition, which is then a `changed` hold that
+  `accept` takes after review). A chunk is withheld as a unit, so one poisoned description takes its chunk neighbours out with
+  it (each can be allowed alone). Asking about trusted descriptions adds up to 2 Kev questions per ingress batch (about 60 ms on
+  GPU, more on CPU per S1), on top of one per outside chunk. `/mcp forget` on a live server leaves its tools offered until restart. Recall is Kev's: in a manual check on
   the 3090 (the S1 harness with TurnRunner's 6 ingress questions plus 2 description chunks, 600-token state), Kev-0.8B gave
   P(yes) 0.16 to 0.17 for a trusted-style chunk whose description told the assistant to send the user's private key and
   passwords to another tool (no regex marker) and 0.36 to 0.38 for a benign chunk, so neither acted at the 0.5 floor: the
@@ -2065,6 +2070,25 @@ through a core interface in `Corvid.Tools`.
   without a hash prints it). `tests/Corvid.Cli.Tests` (`McpCommandTests`: usage and arity of each verb, `allow` without `--hash`
   refused, `diff`/`accept`/`allow` of an unknown server exit 1, `forget` on a seeded pin file drops and records, `forget
   --unconfigured` keeps a disabled server, and `list` names the stale one). The recorded ACP exchanges carry `/mcp`'s new usage.
+- Review of #47: (1) the cap no longer orders by origin alone, so trusted origins that sort first cannot starve an untrusted
+  one (outside chunks first and uncapped, above). (2) A withheld definition that then changes is held as `changed` with
+  `ChangedAfterWithhold` set: its `Issue` and `/mcp diff` name the earlier withhold and decision, and `accept --all` leaves it out
+  with its own line ("Changed after an injection withhold, not accepted"); `accept <tool>` after the diff pins it as a trusted
+  server's tool and clears `withheld`. (3) The limit above: `allow` is a permanent untrusted downgrade for that hash. (4) A guest's
+  turn (C-020, `Envelope.Guest`) withholds a confidently judged chunk from that turn only: `DescriptionReview.Withhold` is not
+  called and the chunk's marker is removed, so the owner's next turn asks again; a guest's words are in `State()`, which the
+  question is conditioned on, and must not hold the owner's tools for every session. Accepted residual: an owner's own turn
+  whose state carries outside text (the last tool result, which `State()` includes, or a pasted message) can still push a
+  trusted tool into a persistent hold; it fails closed, names the decision, and `/mcp allow` (untrusted) recovers it; a
+  separate state for description questions is deferred with the dedicated question. (5) `corvid mcp list`, `diff`,
+  `accept` and `allow` pass `host.Services.GetService<IMcpTransports>()` to `McpComposition.Start`, as `CorvidRuntimeFactory`
+  does. Tests: `DescriptionTaintTests` (trusted alpha, beta and gamma with untrusted zeta: zeta is asked in the first batch and
+  withheld on a confident yes; three outside origins are all asked past the cap; a guest's confident yes withholds from its
+  turn, calls no review, and the owner's next turn asks again and withholds), `McpWithholdTests` (a changed definition after a
+  withhold carries `ChangedAfterWithhold`, and accept clears `withheld`), `McpHostTests` (`accept --all` leaves it out, `diff`
+  names decision and withhold, `accept <tool>` registers it trusted), `McpCommandTests` (over `FakeMcpServer` registered as the
+  transports: `diff` then `accept --hash` pins and records `McpToolAccepted`; `diff` then `allow --hash` of a withheld pin, with
+  `accept` refused).
 
 Not built yet: re-pinning on an in-process reconnect and acting on `tools/list_changed` (re-list, then hold or unregister changed
 tools): receiving the notification is one handler, but acting on it makes `Register` a reconcile against registered tools, and a
@@ -2077,7 +2101,11 @@ never acts, by design), asking at listing time instead of at ingress (no fabric 
 (one per chunk is the cost S1 allows). Automatic pruning, keying pins by server identity, a doctor check for stale pins or held
 tools, and review from the gateway or ACP beyond the slash command (`/mcp forget` appears there automatically). The C-022 items
 not touched here: scanning results, resources, prompts and output schemas; signed or registry-published definitions; and the
-privacy egress gate over MCP arguments.
+privacy egress gate over MCP arguments. Restoring trust for one allowed tool (review of #47, finding 3): a verb that re-pins a
+withheld or allowed definition as trusted (with `--hash`, recorded) is a trust decision against the fabric's verdict, so it
+waits for the dedicated question's fitted floor, which bounds how often a trusted tool lands there; until then `forget
+<server>` is the only route. Conditioning description questions on a state without the turn's outside text (review of #47,
+finding 4, for the owner's turns) goes with the dedicated question.
 
 ## ACP and OpenAI-compatible HTTP (C-019)
 

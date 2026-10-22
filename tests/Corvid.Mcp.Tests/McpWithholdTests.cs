@@ -151,7 +151,16 @@ public sealed class McpWithholdTests : IDisposable
         var (clients, _) = await StartAsync(fake, store);
         await using var __ = clients;
 
-        Assert.Equal(McpHoldReasons.Changed, Assert.Single(clients.Status()[0].Held).Reason);
+        var held = Assert.Single(clients.Status()[0].Held);
+        Assert.Equal(McpHoldReasons.Changed, held.Reason);
+        // Review of #47, finding 2: the hold remembers the withhold, so review does not take it as a plain change.
+        Assert.True(held.ChangedAfterWithhold);
+        Assert.Contains("changed after it was withheld on an injection verdict (decision d-1)", held.Issue, StringComparison.Ordinal);
+
+        // Accepting it after a review pins the new definition and clears the withhold.
+        Assert.True(clients.Accept("fake", "send").Accepted);
+        var pin = store.Pins("fake")["send"];
+        Assert.Equal((held.Definition.Hash, (string?)null), (pin.Hash, pin.Withheld));
     }
 
     [Fact]

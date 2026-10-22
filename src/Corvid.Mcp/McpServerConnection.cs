@@ -84,9 +84,18 @@ public sealed record McpHeldTool(string Server, string Tool, string Reason, McpT
     /// <summary>C-033: the <c>Decision</c> whose <c>injection</c> verdict withheld the tool, for an <c>injection</c> hold.</summary>
     public string? Decision { get; init; }
 
+    /// <summary>
+    /// Review of #47, finding 2: a <c>changed</c> hold whose pin was withheld after an <c>injection</c> verdict and never
+    /// allowed. The new definition was not judged, so <c>/mcp accept --all</c> leaves it out and <c>/mcp diff</c> names the
+    /// earlier withhold; <c>/mcp accept &lt;tool&gt;</c> after reading the diff still takes it.
+    /// </summary>
+    public bool ChangedAfterWithhold => Reason == McpHoldReasons.Changed && Pin?.Withheld is not null;
+
     /// <summary>The line <c>/mcp</c> and <c>corvid mcp list</c> show.</summary>
     public string Issue => Reason switch
     {
+        McpHoldReasons.Changed when ChangedAfterWithhold =>
+            $"'{Tool}': held, its definition changed after it was withheld on an injection verdict (decision {Pin!.WithheldDecision}) (/mcp diff {Server} {Tool}, then /mcp accept {Server} {Tool})",
         McpHoldReasons.Flagged => $"'{Tool}': held, its description matches a poisoning pattern (\"{Flag}\") (/mcp diff {Server} {Tool}; /mcp allow {Server} {Tool})",
         McpHoldReasons.Injection => $"'{Tool}': held, the injection question judged its description to instruct the agent (decision {Decision}) (/mcp diff {Server} {Tool}; /mcp allow {Server} {Tool})",
         McpHoldReasons.Changed => $"'{Tool}': held, its definition changed since it was pinned (/mcp diff {Server} {Tool}; /mcp accept {Server} {Tool})",

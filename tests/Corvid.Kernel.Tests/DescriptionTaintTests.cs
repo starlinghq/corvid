@@ -1,5 +1,6 @@
 using Corvid.Abstractions.Events;
 using Corvid.Abstractions.Fabric;
+using Corvid.Abstractions.Sessions;
 using Corvid.Kernel.Turns;
 using Corvid.Models.Privacy;
 using Corvid.Tools;
@@ -9,10 +10,11 @@ namespace Corvid.Kernel.Tests;
 /// <summary>C-022 (§10.3): tool and skill descriptions from outside taint the turn that shows them to the generator.</summary>
 public sealed class DescriptionTaintTests
 {
-    private static TestTool ServerTool(bool outside, string name = "notes_list", string description = "List the notes kept on the server.") =>
+    private static TestTool ServerTool(bool outside, string name = "notes_list", string description = "List the notes kept on the server.",
+        string origin = "mcp:notes") =>
         new(new ToolDescriptor(name, description, """{"type":"object","properties":{}}""",
             new ToolRisk(SideEffects.Remote, Network: false, Destructive: true, OutsideDescription: outside), [])
-        { Origin = "mcp:notes" }, (_, _) => ValueTask.FromResult<object?>("[]"));
+        { Origin = origin }, (_, _) => ValueTask.FromResult<object?>("[]"));
 
     [Theory]
     [InlineData(true)]
@@ -157,6 +159,78 @@ public sealed class DescriptionTaintTests
         Assert.Equal("injection/mcp:notes#5", Asked()[^1]);
         await harness.RunAsync(runner, "weather report");
         Assert.Equal(5, Asked().Count);
+    }
+
+    private static IReadOnlyList<string> DescriptionKeys(TurnHarness harness) =>
+        [.. harness.Decisions().Select(decision => decision.QuestionId).Where(id => id.StartsWith("injection/", StringComparison.Ordinal))];
+
+    [Fact]
+    public async Task Trusted_origins_that_sort_first_never_starve_an_untrusted_origins_descriptions()
+    {
+        // Review of #47, finding 1: alpha, beta and gamma (trusted) sort before zeta (untrusted), yet zeta is asked in the
+        // first batch, and a confident yes keeps zeta_a from the generator.
+        var kev = new ScriptedDecider((key, _) => key.StartsWith("injection/", StringComparison.Ordinal)
+            ? key == "injection/mcp:zeta" ? [0.9, 0.1] : [0.1, 0.9]
+            : null);
+        var generator = new FakeGenerator(Reply.Say("Done."));
+        using var harness = new TurnHarness(generator, calibrated: kev, options: McpOnly, tools: tools =>
+        {
+            tools.Add(ServerTool(outside: false, "alpha_a", "Read alpha.", "mcp:alpha"));
+            tools.Add(ServerTool(outside: false, "beta_a", "Read beta.", "mcp:beta"));
+            tools.Add(ServerTool(outside: false, "gamma_a", "Read gamma.", "mcp:gamma"));
+            tools.Add(ServerTool(outside: true, "zeta_a", "Read zeta.", "mcp:zeta"));
+        });
+        var review = new Review();
+
+        var result = await harness.RunAsync(Runner(harness, review), "read everything");
+
+        // The outside chunk first, then trusted ones up to 2 description questions in all; beta and gamma wait for later turns.
+        Assert.Equal(["injection/mcp:alpha", "injection/mcp:zeta"], DescriptionKeys(harness).Order(StringComparer.Ordinal));
+        Assert.DoesNotContain("zeta_a", Assert.Single(generator.Calls).ToolNames);
+        var request = Assert.Single(review.Requests);
+        Assert.Equal(("mcp:zeta", "zeta_a"), (request.Origin, Assert.Single(request.Tools)));
+        Assert.True(result.Tainted);
+    }
+
+    [Fact]
+    public async Task Chunks_with_an_outside_description_are_asked_beyond_the_cap()
+    {
+        var generator = new FakeGenerator(Reply.Say("Done."));
+        using var harness = new TurnHarness(generator, options: McpOnly, tools: tools =>
+        {
+            foreach (var origin in (string[])["a", "b", "c"])
+                tools.Add(ServerTool(outside: true, origin + "_read", "Read " + origin + ".", "mcp:" + origin));
+            tools.Add(ServerTool(outside: false, "t_read", "Read t.", "mcp:t"));
+        });
+
+        await harness.RunAsync("read everything");
+
+        Assert.Equal(["injection/mcp:a", "injection/mcp:b", "injection/mcp:c"], DescriptionKeys(harness).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_guests_turn_withholds_from_that_turn_only_and_the_owners_next_turn_asks_again()
+    {
+        // Review of #47, finding 4: a guest's words are in the state the question sees, so its verdict holds nothing for good.
+        var kev = new ScriptedDecider((key, _) => key.StartsWith("injection/", StringComparison.Ordinal) ? [0.9, 0.1] : null);
+        var generator = new FakeGenerator(Reply.Say("Guest answer."), Reply.Say("Owner answer."));
+        using var harness = new TurnHarness(generator, calibrated: kev, options: McpOnly, tools: tools => tools.Add(Weather("weather_a")));
+        var review = new Review();
+        var runner = Runner(harness, review);
+
+        await runner.RunAsync(new Envelope(TurnHarness.Session, "gateway", "weather report", EnvelopeOrigin.External)
+        {
+            Guest = new GuestScope(["weather_a"]),
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Single(harness.Decisions("injection/mcp:notes"));
+        Assert.DoesNotContain("weather_a", Assert.Single(generator.Calls).ToolNames);
+        Assert.Empty(review.Requests);
+
+        await harness.RunAsync(runner, "weather report");
+
+        Assert.Equal(2, harness.Decisions("injection/mcp:notes").Count);
+        Assert.Equal("weather_a", Assert.Single(Assert.Single(review.Requests).Tools));
     }
 
     [Fact]

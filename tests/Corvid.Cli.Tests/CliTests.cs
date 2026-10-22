@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using Corvid.Cli.Chat;
 using Corvid.Host.Tests;
 using Corvid.Mcp;
+using Microsoft.Extensions.DependencyInjection;
 using Spectre.Console.Testing;
 
 namespace Corvid.Cli.Tests;
@@ -22,6 +23,9 @@ internal sealed class CliRun : IDisposable
     public FakeModels? Models { get; }
 
     public TestConsole Console { get; } = new();
+
+    /// <summary>More services for the host, after the fake slots (an in-process MCP server's transports, C-033).</summary>
+    public Action<IServiceCollection>? Services { get; init; }
 
     public string ConfigFile => Path.Combine(Root, "corvid.json");
 
@@ -46,7 +50,14 @@ internal sealed class CliRun : IDisposable
 
     public async Task<int> RunAsync(string[] args, params string?[] input)
     {
-        var context = new CliContext(Console, new ScriptedChatInput(input)) { ConfigureServices = Models is null ? null : Models.Register };
+        var context = new CliContext(Console, new ScriptedChatInput(input))
+        {
+            ConfigureServices = services =>
+            {
+                Models?.Register(services);
+                Services?.Invoke(services);
+            },
+        };
         // The test's own switches last, so they override the run's settings.
         return await CorvidCli.RunAsync([.. Settings(), .. args], context, TestContext.Current.CancellationToken);
     }
@@ -453,6 +464,73 @@ public sealed class McpCommandTests
 
         Assert.Equal(ExitCodes.Success, await run.RunAsync(["mcp", "forget", "--unconfigured", .. paused]));
         Assert.Equal(["paused"], store.Servers());
+    }
+
+    // Review of #47, finding 5: a successful review outside a chat, over an in-process server registered as the transports.
+    private static string[] FakeServer(CliRun run) =>
+    [
+        "--set", "Mcp:Servers:fake:Command=fake", "--set", "Mcp:Servers:fake:Trust=Trusted",
+        "--set", $"Mcp:Servers:fake:Workspace={Path.Combine(run.Root, "fake")}",
+    ];
+
+    private static string Next(CliRun run, string verb)
+    {
+        var marker = $"next: corvid mcp {verb} fake send --hash ";
+        var output = run.Output;
+        var at = output.LastIndexOf(marker, StringComparison.Ordinal);
+        Assert.True(at >= 0, output);
+        return output.Substring(at + marker.Length, McpClients.MinHashPrefix);
+    }
+
+    [Fact]
+    public async Task DiffThenAcceptWithTheHashPinsTheChangedDefinitionAndRecordsIt()
+    {
+        await using var server = new Mcp.Tests.FakeMcpServer().Add("send", "Send a message.");
+        using var run = new CliRun { Services = services => services.AddSingleton<IMcpTransports>(server) };
+        var store = Seed(run, "fake");
+        var listed = McpToolDefinition.From(server.Tools[0]).Hash;
+
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["mcp", "diff", "fake", "send", .. FakeServer(run)]));
+        Assert.Contains("fake/send: held (changed)", run.Output, StringComparison.Ordinal);
+        var hash = Next(run, "accept");
+        Assert.Equal(listed[..McpClients.MinHashPrefix], hash);
+
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["mcp", "accept", "fake", "send", "--hash", hash, .. FakeServer(run)]));
+        Assert.Contains("Accepted fake/send as fake__send", run.Output, StringComparison.Ordinal);
+        Assert.Contains("picks this up only when it restarts", run.Output, StringComparison.Ordinal);
+        Assert.Equal(listed, store.Pins("fake")["send"].Hash);
+        var log = new Kernel.Events.SqliteEventLog(Path.Combine(run.Root, "data", "events.db"));
+        var record = Assert.IsType<Abstractions.Events.McpToolAccepted>(log.Read(Abstractions.Events.McpSessions.Pins,
+            cancellationToken: TestContext.Current.CancellationToken)[^1].Payload);
+        Assert.Equal((listed, false), (record.Hash, record.Flagged));
+
+        // Nothing is held any more: a second accept fails.
+        Assert.Equal(ExitCodes.Failure, await run.RunAsync(["mcp", "accept", "fake", "send", "--hash", hash, .. FakeServer(run)]));
+    }
+
+    [Fact]
+    public async Task DiffThenAllowWithTheHashOffersAWithheldDefinitionAsUntrusted()
+    {
+        await using var server = new Mcp.Tests.FakeMcpServer().Add("send", "Send a message.");
+        using var run = new CliRun { Services = services => services.AddSingleton<IMcpTransports>(server) };
+        var listed = McpToolDefinition.From(server.Tools[0]);
+        var store = new JsonFileMcpPinStore(Path.Combine(run.Root, "data", "mcp-pins.json"));
+        store.Set("fake", new Dictionary<string, McpToolPin>
+        {
+            ["send"] = new(listed.Hash, listed.Canonical, DateTimeOffset.UnixEpoch, Withheld: listed.Hash, WithheldDecision: "d-9"),
+        });
+
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["mcp", "diff", "fake", "send", .. FakeServer(run)]));
+        Assert.Contains("fake/send: held (injection)", run.Output, StringComparison.Ordinal);
+        Assert.Contains("decision d-9", run.Output, StringComparison.Ordinal);
+        var hash = Next(run, "allow");
+
+        // accept refuses a withheld definition, even with the right hash.
+        Assert.Equal(ExitCodes.Failure, await run.RunAsync(["mcp", "accept", "fake", "send", "--hash", hash, .. FakeServer(run)]));
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["mcp", "allow", "fake", "send", "--hash", hash, .. FakeServer(run)]));
+        Assert.Contains("Allowed fake/send as fake__send", run.Output, StringComparison.Ordinal);
+        var pin = store.Pins("fake")["send"];
+        Assert.Equal((listed.Hash, (string?)null), (pin.AllowedFlagged, pin.Withheld));
     }
 }
 

@@ -458,6 +458,48 @@ public sealed class McpHostTests
     }
 
     [Fact]
+    public async Task AWithheldDefinitionThatChangedIsLeftOutOfAcceptAllAndDiffNamesTheWithhold()
+    {
+        // Review of #47, finding 2: an edit to a withheld definition is a change the injection question never judged.
+        var store = new InMemoryMcpPinStore();
+        await using var server = new FakeMcpServer().Add("send", "Send a message.").Add("list", "List the messages.");
+        var definition = new McpServerDefinition
+        {
+            Name = "fake", Command = "fake", Workspace = "/tmp/unused", Trust = McpTrust.Trusted,
+            StartTimeout = TimeSpan.FromSeconds(10), CallTimeout = TimeSpan.FromSeconds(10),
+        };
+        await using (var first = new McpClients([definition], server, new ToolRegistry(), store))
+        {
+            first.Start();
+            await first.Started.WaitAsync(TimeSpan.FromSeconds(30), Token);
+            first.Withhold(new ToolWithholding("mcp:fake", ["fake__send"], "d-7"));
+        }
+        server.Tools.Single(tool => tool.Name == "send").Description = "Send a message, politely.";
+        server.Tools.Single(tool => tool.Name == "list").Description = "List the messages, newest first.";
+        var registry = new ToolRegistry();
+        await using var clients = new McpClients([definition], server, registry, store);
+        clients.Start();
+        await clients.Started.WaitAsync(TimeSpan.FromSeconds(30), Token);
+
+        var all = McpCommands.Run(clients, ["accept", "fake", "--all"]);
+        Assert.Equal(OutputTone.Warning, all.Tone);
+        Assert.Contains(all.Lines, line => line.StartsWith("Changed after an injection withhold, not accepted", StringComparison.Ordinal)
+            && line.EndsWith(": send.", StringComparison.Ordinal));
+        Assert.True(registry.TryGet("fake__list", out _));
+        Assert.False(registry.TryGet("fake__send", out _));
+
+        var diff = McpCommands.Run(clients, ["diff", "fake", "send"]);
+        Assert.Contains(diff.Lines, line => line.StartsWith("Changed since it was withheld", StringComparison.Ordinal)
+            && line.Contains("decision d-7", StringComparison.Ordinal));
+        Assert.Contains("description, pinned: Send a message.", diff.Lines);
+        Assert.Contains("description, now: Send a message, politely.", diff.Lines);
+
+        Assert.Equal(OutputTone.Success, McpCommands.Run(clients, ["accept", "fake", "send"]).Tone);
+        Assert.True(registry.TryGet("fake__send", out var sent));
+        Assert.False(sent.Descriptor.Risk.OutsideDescription);
+    }
+
+    [Fact]
     public void TheLineDiffKeepsCommonLinesAndMarksTheRest()
     {
         Assert.Equal(["  {", "-   \"a\": 1", "+   \"a\": 2", "+   \"b\": 3", "  }"],

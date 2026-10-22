@@ -97,7 +97,9 @@ internal static class McpCommand
         // and writes the same pins (C-022), with no event log: held tools are printed, not recorded.
         var registry = new ToolRegistry();
         var configFile = host.Services.GetService<CorvidConfigFile>()?.Path ?? CorvidPaths.UserConfigFile;
-        await using var clients = McpComposition.Start(options, McpComposition.DeniedPaths(options, configFile), registry)!;
+        // The host's transports when one is registered (the CLI tests' in-process server), as CorvidRuntimeFactory does.
+        await using var clients = McpComposition.Start(options, McpComposition.DeniedPaths(options, configFile), registry,
+            transports: host.Services.GetService<IMcpTransports>())!;
         await clients.Started.WaitAsync(cancellationToken).ConfigureAwait(false);
         var table = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).AddColumns("server", "transport", "trust", "state", "tools", "detail");
         foreach (var server in clients.Status())
@@ -141,7 +143,8 @@ internal static class McpCommand
         }
         var log = record ? new SqliteEventLog(CorvidPaths.EventLog(options)) : null;
         var configFile = host.Services.GetService<CorvidConfigFile>()?.Path ?? CorvidPaths.UserConfigFile;
-        await using var clients = McpComposition.Start(options, McpComposition.DeniedPaths(options, configFile), new ToolRegistry(), log, only: server)!;
+        await using var clients = McpComposition.Start(options, McpComposition.DeniedPaths(options, configFile), new ToolRegistry(), log, only: server,
+            transports: host.Services.GetService<IMcpTransports>())!;
         await clients.Started.WaitAsync(cancellationToken).ConfigureAwait(false);
         var status = clients.Status().Single();
         if (status.State != McpServerState.Ready)

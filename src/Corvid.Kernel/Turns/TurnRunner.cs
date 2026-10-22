@@ -60,7 +60,8 @@ public sealed class TurnRunner
     private readonly HashSet<string> _describedOrigins = new(StringComparer.Ordinal);
     // C-033: a description chunk's lines (whole "- name: description" lines) up to this many characters per question.
     private const int DescriptionBudget = 1_200;
-    // C-033: description questions per ingress batch, so the batch stays within S1's measured 8-question bound (340 ms on GPU).
+    // C-033: description questions per ingress batch for trusted text, so the batch stays within S1's measured 8-question bound
+    // (340 ms on GPU); chunks with an outside description are asked regardless, ahead of these (review of #47, finding 1).
     private const int MaxDescriptionQuestions = 2;
     private const string McpOrigin = "mcp:";
     // Set when the generator moved to a larger window (plan §4.2 step 4); the next generator call expands compacted ranges.
@@ -236,7 +237,7 @@ public sealed class TurnRunner
         private readonly Dictionary<string, string> _pickDecisions = new(StringComparer.Ordinal);
         private readonly Dictionary<string, Offered> _catalogue = new(StringComparer.Ordinal);
         // C-033: the tools each description question of this turn carried, by question key, so a yes withholds exactly those.
-        private readonly Dictionary<string, (string Origin, ImmutableArray<string> Tools)> _described = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, (string Origin, ImmutableArray<string> Tools, string Marker)> _described = new(StringComparer.Ordinal);
         // The calls of the latest generator response: budget clearing spares their results, and injection is asked about them.
         private readonly HashSet<string> _lastRound = new(StringComparer.Ordinal);
         private ImmutableSortedDictionary<string, ImmutableArray<string>> _entities = ImmutableSortedDictionary<string, ImmutableArray<string>>.Empty;
@@ -1174,32 +1175,41 @@ public sealed class TurnRunner
         /// ingress batch, the shape <see cref="LoadSkillAsync"/> uses for a hub skill's body. Each origin's tools are packed
         /// by name into chunks of whole <c>- name: description</c> lines up to <see cref="DescriptionBudget"/> characters (a
         /// longer line is cut and asked alone), keyed <c>injection/mcp:&lt;server&gt;</c>, then <c>#2</c> and on; each chunk is
-        /// asked once per session for the same text, at most <see cref="MaxDescriptionQuestions"/> per batch (the rest wait
-        /// for a later turn), and records the tools it carried, so a confident yes withholds exactly those
-        /// (<see cref="WithholdDescriptions"/>). Asking taints only for a chunk with an outside description (an untrusted
-        /// server's, or an allowed flagged tool's): a trusted server's text goes to the decider, not to the generator.
+        /// asked once per session for the same text and records the tools it carried, so a confident yes withholds exactly
+        /// those (<see cref="WithholdDescriptions"/>). A chunk with an outside description (an untrusted server's, or an allowed
+        /// flagged tool's) is asked first and always, as every untrusted origin was before C-033, and asking it taints; chunks
+        /// of only trusted text fill the batch up to <see cref="MaxDescriptionQuestions"/> description questions in all (the
+        /// rest wait for a later turn), and their text goes to the decider, not to the generator, so they do not taint.
+        /// Review of #47, finding 1: the cap no longer lets trusted origins that sort first starve an untrusted one.
         /// </summary>
         private List<KeyValuePair<string, DecisionQuestion>> DescriptionQuestions()
         {
             var questions = new List<KeyValuePair<string, DecisionQuestion>>();
             var question = Catalogue["injection"];
-            var taint = false;
+            var candidates = new List<(string Origin, int Index, string Text, List<Offered> Tools, bool Outside)>();
             foreach (var group in _shortlist.Where(tool => tool.Descriptor.Origin?.StartsWith(McpOrigin, StringComparison.Ordinal) == true)
                          .GroupBy(tool => tool.Descriptor.Origin!, StringComparer.Ordinal).OrderBy(group => group.Key, StringComparer.Ordinal))
             {
                 var chunks = DescriptionChunks(group.OrderBy(tool => tool.Function.Name, StringComparer.Ordinal));
-                for (var index = 0; index < chunks.Count && questions.Count < MaxDescriptionQuestions; index++)
-                {
-                    var (text, tools) = chunks[index];
-                    // Marked only when asked, so a chunk over the cap is asked in a later turn.
-                    if (!runner._describedOrigins.Add(group.Key + "\n" + text))
-                        continue;
-                    var key = "injection/" + group.Key + (index == 0 ? "" : "#" + (index + 1).ToString(CultureInfo.InvariantCulture));
-                    questions.Add(KeyValuePair.Create(key, question.ToQuestion(instructions: DecisionContent.FromText(
-                        $"{question.Instructions}\n{group.Key} tool descriptions:\n{text}"))));
-                    _described[key] = (group.Key, [.. tools.Select(tool => tool.Function.Name)]);
-                    taint |= tools.Any(tool => tool.Descriptor.Risk.OutsideDescription);
-                }
+                for (var index = 0; index < chunks.Count; index++)
+                    candidates.Add((group.Key, index, chunks[index].Text, chunks[index].Tools,
+                        chunks[index].Tools.Any(tool => tool.Descriptor.Risk.OutsideDescription)));
+            }
+            var taint = false;
+            // Outside chunks first (stable: by origin, then chunk), then trusted ones while the cap allows.
+            foreach (var (origin, index, text, tools, outside) in candidates.Where(chunk => chunk.Outside).Concat(candidates.Where(chunk => !chunk.Outside)))
+            {
+                if (!outside && questions.Count >= MaxDescriptionQuestions)
+                    break;
+                var marker = origin + "\n" + text;
+                // Marked only when asked, so a chunk over the cap is asked in a later turn.
+                if (!runner._describedOrigins.Add(marker))
+                    continue;
+                var key = "injection/" + origin + (index == 0 ? "" : "#" + (index + 1).ToString(CultureInfo.InvariantCulture));
+                questions.Add(KeyValuePair.Create(key, question.ToQuestion(instructions: DecisionContent.FromText(
+                    $"{question.Instructions}\n{origin} tool descriptions:\n{text}"))));
+                _described[key] = (origin, [.. tools.Select(tool => tool.Function.Name)], marker);
+                taint |= outside;
             }
             if (taint)
                 lock (_gate)
@@ -1240,11 +1250,14 @@ public sealed class TurnRunner
         /// C-033: for each description question whose verdict acted (<c>injection</c> degrades to its conservative default, so
         /// only a calibrated answer at or above the floor acts), the tools in that chunk leave this turn's shortlist and
         /// catalogue, so no generator call and no <c>tool</c> pick of the turn offers them, and their source is told to hold
-        /// them until the user allows them. The generator never saw them, so withholding does not taint.
+        /// them until the user allows them. The generator never saw them, so withholding does not taint. A guest's turn
+        /// (C-020; review of #47, finding 4) withholds them from that turn only: what a guest says is in the state the question
+        /// is conditioned on, so it must not hold the owner's tools for every session; the chunk is unmarked, so the owner's
+        /// next turn asks about it again.
         /// </summary>
         private void WithholdDescriptions(CheckpointResult verdicts)
         {
-            foreach (var (key, (origin, tools)) in _described)
+            foreach (var (key, (origin, tools, marker)) in _described)
             {
                 if (!Acted(verdicts, key, out _))
                     continue;
@@ -1252,7 +1265,10 @@ public sealed class TurnRunner
                 _shortlist = [.. _shortlist.Where(tool => !withheld.Contains(tool.Function.Name))];
                 foreach (var name in tools)
                     _catalogue.Remove(name);
-                _services.DescriptionReview?.Withhold(new ToolWithholding(origin, tools, verdicts[key].DecisionId));
+                if (envelope.Guest is not null)
+                    runner._describedOrigins.Remove(marker);
+                else
+                    _services.DescriptionReview?.Withhold(new ToolWithholding(origin, tools, verdicts[key].DecisionId));
             }
             _described.Clear();
         }

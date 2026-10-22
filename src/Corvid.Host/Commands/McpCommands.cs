@@ -101,6 +101,10 @@ public static class McpCommands
             McpHoldReasons.Injection => $"Withheld: the injection question judged its description to instruct the agent (decision {held.Decision}; " +
                 $"pinned {held.Pin?.PinnedAt.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) ?? "never"} UTC). " +
                 $"{prefix} allow offers it as an untrusted tool (asks before every call, taints the session).",
+            McpHoldReasons.Changed when held.ChangedAfterWithhold =>
+                $"Changed since it was withheld on {held.Pin!.PinnedAt.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)} UTC after an injection verdict " +
+                $"(decision {held.Pin.WithheldDecision}); the new definition was not judged and accept --all leaves it out. " +
+                $"{prefix} accept {server} {tool} pins the definition below as a trusted server's tool.",
             McpHoldReasons.Changed => $"Changed since it was pinned on {held.Pin!.PinnedAt:yyyy-MM-dd HH:mm} UTC. {prefix} accept pins the definition below.",
             _ => $"New since the server's tools were pinned. {prefix} accept pins the definition below.",
         });
@@ -154,17 +158,22 @@ public static class McpCommands
         var status = mcp.Status().FirstOrDefault(item => item.Name == server);
         if (status is null)
             return CommandOutput.Error($"There is no MCP server named '{server}'.");
-        var results = status.Held.Where(held => !McpHoldReasons.NeedsReview(held.Reason)).Select(held => mcp.Accept(server, held.Tool)).ToList();
+        var results = status.Held.Where(held => !McpHoldReasons.NeedsReview(held.Reason) && !held.ChangedAfterWithhold)
+            .Select(held => mcp.Accept(server, held.Tool)).ToList();
         var review = status.Held.Where(held => McpHoldReasons.NeedsReview(held.Reason)).Select(held => held.Tool).ToList();
+        // Review of #47, finding 2: a withheld definition that changed since is reviewed one by one, never taken in bulk.
+        var rewithheld = status.Held.Where(held => held.ChangedAfterWithhold).Select(held => held.Tool).ToList();
         var lines = results.Select(result => result.Message).ToList();
         if (review.Count > 0)
             lines.Add($"Flagged or withheld, not accepted (review each with {prefix} diff, then {prefix} allow): {string.Join(", ", review)}.");
+        if (rewithheld.Count > 0)
+            lines.Add($"Changed after an injection withhold, not accepted (review each with {prefix} diff, then {prefix} accept <tool>): {string.Join(", ", rewithheld)}.");
         if (lines.Count == 0)
             return CommandOutput.Text($"{server} has no held tools.");
         return new CommandOutput
         {
             Lines = [.. lines],
-            Tone = results.All(result => result.Accepted) && review.Count == 0 ? OutputTone.Success : OutputTone.Warning,
+            Tone = results.All(result => result.Accepted) && review.Count == 0 && rewithheld.Count == 0 ? OutputTone.Success : OutputTone.Warning,
         };
     }
 
