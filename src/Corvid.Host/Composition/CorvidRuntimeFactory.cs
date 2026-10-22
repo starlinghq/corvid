@@ -26,6 +26,15 @@ namespace Corvid.Host.Composition;
 public sealed record BuiltinServices(ApprovalEnvironment Environment, SandboxedShell Shell, JobStore Jobs, WebFetchTool? Web);
 
 /// <summary>
+/// The handler the built-in <c>web_fetch</c> tool sends its requests through, when one is registered in DI; without one
+/// the tool uses its own handler, which connects only to public addresses. The prompt-injection suite (C-024) registers a
+/// recording sink here, so the real tool, with its URL checks, taint and approval path, fetches from the sink; Vault's
+/// egress proxy (V-003) is the production use. A handler given here replaces the resolved-address check (the tool's own
+/// check of literal addresses still applies), so it must not follow redirects and must apply its own address policy.
+/// </summary>
+public sealed record WebFetchTransport(HttpMessageHandler Handler);
+
+/// <summary>
 /// Skills (C-017): the store, the loop's database, the learning loop and the curator. <paramref name="Store"/> is null when
 /// skills are off or the repository could not be opened; <paramref name="State"/> says which.
 /// </summary>
@@ -57,7 +66,8 @@ public sealed class CorvidRuntimeFactory(
     IEnumerable<IToolProvider> toolProviders,
     IEnumerable<ToolFunction> tools,
     CorvidConfigFile? configFile = null,
-    IMcpTransports? mcpTransports = null)
+    IMcpTransports? mcpTransports = null,
+    WebFetchTransport? webTransport = null)
 {
     /// <summary>
     /// Configured models that stop the runtime from starting, checked offline (by size for Starling's): every missing or
@@ -153,7 +163,7 @@ public sealed class CorvidRuntimeFactory(
                 ReadOnlyPaths = skillsGuard.ReadOnly,
             });
             var jobs = new JobStore(CorvidPaths.JobStore(settings));
-            var builtin = new BuiltinServices(environment, shell, jobs, settings.Tools.Builtin ? new WebFetchTool() : null);
+            var builtin = new BuiltinServices(environment, shell, jobs, settings.Tools.Builtin ? new WebFetchTool(webTransport?.Handler) : null);
 
             // Tools registered in DI (any later toolset) are offered alongside the built-in ones.
             var toolRegistry = new ToolRegistry();
