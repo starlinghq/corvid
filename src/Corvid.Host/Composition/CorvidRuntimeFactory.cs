@@ -213,14 +213,6 @@ public sealed class CorvidRuntimeFactory(
     }
 
     /// <summary>
-    /// Corvid's own state wherever configuration puts it: the data directory (the event log, the job store that feeds
-    /// unattended runs, memory), the configuration file that sets the approval mode, the approval rules and the sandbox
-    /// launcher. Approvals' safety configuration covers only <c>$XDG_CONFIG_HOME/corvid</c>; without these a workspace
-    /// that contains them (the home directory, say) would let a tool rewrite its own rules or schedule jobs. They become
-    /// safety configuration, so the hardline list refuses writes, the file tools refuse access and the shell's sandbox
-    /// hides them. A path that is the workspace or contains it is left out: denying it would deny the whole workspace.
-    /// </summary>
-    /// <summary>
     /// The checkpoint profile (C-030). Auto reduces only when a calibrated decider is bound and its effective placement is
     /// exactly <c>cpu</c> (a configured CUDA Kev that fell back included); CUDA, a remote decider and the degraded tier
     /// (placement null) stay full.
@@ -233,6 +225,14 @@ public sealed class CorvidRuntimeFactory(
         _ => null,
     };
 
+    /// <summary>
+    /// Corvid's own state wherever configuration puts it: the data directory (the event log, the job store that feeds
+    /// unattended runs, memory), the configuration file that sets the approval mode, the approval rules and the sandbox
+    /// launcher. Approvals' safety configuration covers only <c>$XDG_CONFIG_HOME/corvid</c>; without these a workspace
+    /// that contains them (the home directory, say) would let a tool rewrite its own rules or schedule jobs. They become
+    /// safety configuration, so the hardline list refuses writes, the file tools refuse access and the shell's sandbox
+    /// hides them. A path that is the workspace or contains it is left out: denying it would deny the whole workspace.
+    /// </summary>
     internal static ApprovalEnvironment ProtectCorvidState(ApprovalEnvironment environment, CorvidOptions settings, string rulesFile,
         string configFile)
     {

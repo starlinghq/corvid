@@ -53,7 +53,8 @@ public enum ApprovalOutcome
 /// <param name="Reasons">Hardline denials, reasons that force a prompt, and the policy's own reason, in that order.</param>
 /// <param name="Offered">The scopes a prompt may offer: once only when anything forced the prompt or is unresolved.</param>
 /// <param name="Rule">The session or always rule that decided, if one did.</param>
-/// <param name="Risk">The <c>risk</c> decision, when the fabric was asked.</param>
+/// <param name="Risk">The logged <c>risk</c> decision, when there is one: asked, or skipped under reduced checkpoints
+/// (C-030), where <see cref="FabricVerdict.Skipped"/> is true and no decider scored the action.</param>
 public sealed record ApprovalAssessment(
     ApprovalOutcome Outcome,
     ActionAnalysis Analysis,
