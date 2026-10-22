@@ -2876,7 +2876,7 @@ lesson validator (C-025).
     value ends at whitespace or `, ; & ) ] }`, the field separators of connection strings, query strings and JSON, and may
     hold a quote after its first character (`Xk9"vQ2`); one closing quote around the assignment (`say "TOKEN=abc"`) and the
     backslash escaping it in JSON are trimmed. A password holding one of those separators is cut there (C-032's
-    deferrals). `curl -u user:PASS`, `--user` and `--proxy-user`; URL userinfo passwords (`scheme://user:PASS@host`); and
+    deferrals). `curl -u user:PASS`, `--user` and `--proxy-user` (after any command: `docker run -u www-data:www-data` reports the group, a needless placeholder, not a leak); URL userinfo passwords (`scheme://user:PASS@host`); and
     prose (`the password is X`, `the wifi password at the cabin is X`,
     `was changed to X`, `with password X`, `passphrase`, `secret access key`, `client secret` and named token kinds, up to
     five words between label and verb). An assignment's value is accepted unless excluded; a bare one-word value that is a
@@ -2918,7 +2918,7 @@ lesson validator (C-025).
   stays `Refuse`. Values redact to `<CREDENTIAL_n>`, which `Restore` maps back in text and tool-call arguments. After
   redaction `PrepareAsync` checks what would be sent: a found credential value still in a leaf, or a credential of 4+
   characters the detector finds again in the redacted leaves or tool-call JSON, refuses the request (`a credential value is
-  still in the request after redaction`) instead of reporting it redacted. `RedactionMap.Redact` replaces values that
+  still in the request after redaction`) instead of reporting it redacted (`AssessAsync`, which prepares no request, cannot make this check, so a switch-time assessment can say redacted where the request is then refused). `RedactionMap.Redact` replaces values that
   overlap without one containing the other by their union, minted as a value of its own (under `credential` when either
   is one), so a GLiNER2 span that starts before a credential and runs into it (`person` = `alice:Tr0ub4dor` in
   `alice:Tr0ub4dor&3xyz@`) cannot leave the credential's tail, and the union restores exactly. A floored
