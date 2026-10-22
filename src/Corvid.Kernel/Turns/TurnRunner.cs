@@ -99,6 +99,41 @@ public sealed class TurnRunner
     public string SessionId { get; }
 
     /// <summary>
+    /// <c>/compact</c> (C-035): compacts now what a turn would compact first when its prompt did not fit, by the loop's own
+    /// rule (<see cref="ContextCompactor.Ranges"/> with the latest <c>UserMessage</c> as the turn's start): everything before
+    /// the latest turn's message, and only when it holds something a summary would shorten. The latest turn stays, so
+    /// <c>/undo</c> still finds it. The record budget is the turn loop's, a quarter of the generator's prompt budget. An
+    /// expansion pending from an earlier switch to a larger window is dropped, so the next call does not undo an explicit
+    /// compaction; a later switch to a larger window expands it again by design (plan §4.2 step 4). Nothing compacted (unfit,
+    /// cancelled) keeps the pending expansion.
+    /// </summary>
+    /// <remarks>Not thread-safe, like <see cref="RunAsync"/>: run it on the session actor between turns.</remarks>
+    /// <returns>The compaction's result, or <see cref="CompactionStatus.NothingToCompact"/> when there is no earlier turn.</returns>
+    public async Task<CompactionResult> CompactNowAsync(CancellationToken cancellationToken = default)
+    {
+        var snapshot = Snapshot();
+        var latest = snapshot.Transcript.LastOrDefault(entry => entry.Content is UserMessage)?.FromSequence;
+        if (latest is not { } turnStart || ContextCompactor.Ranges(snapshot, turnStart, keepFrom: null) is not [var range, ..])
+            return new CompactionResult(CompactionStatus.NothingToCompact, 1, Math.Max(0, (latest ?? 1) - 1));
+
+        var generator = _services.Slots.GetChatClient(ModelSlots.Generator);
+        var profile = _services.Slots.Current(ModelSlots.Generator).Profile;
+        var budget = profile.AcceptedContext - _options.MaxOutputTokens - _options.ContextReserve;
+        // The summarizer may be a cloud binding: its gate and Vault need the session and its taint, as in a turn.
+        using var scope = new ModelRequestContext(SessionId, Tainted).Enter();
+        var result = await _compactor.CompactAsync(range, Counter(generator), Math.Max(1, budget / 4), cancellationToken).ConfigureAwait(false);
+        // Only a compaction that was written drops a pending expansion: an unfit summary or a cancelled command compacted
+        // nothing, so the next call still expands for the larger window (review of PR #46, finding 1). The record is appended
+        // after any switch that arrived meanwhile, so the explicit compaction is the later act and wins.
+        if (result.Status == CompactionStatus.Compacted)
+            Volatile.Write(ref _expansionDue, 0);
+        return result;
+    }
+
+    private static ITokenCounter Counter(IChatClient generator) =>
+        generator.GetService(typeof(ITokenCounter)) as ITokenCounter ?? CharsPerTokenCounter.Instance;
+
+    /// <summary>
     /// The session's context holds content from outside the user (§10.3): a network tool's result, or an envelope from
     /// someone else. Only an envelope from the user clears it.
     /// </summary>
@@ -522,7 +557,7 @@ public sealed class TurnRunner
             foreach (var range in ContextCompactor.Ranges(current, _turnStart, KeepFrom(current)))
             {
                 var result = await runner._compactor.CompactAsync(range, counter, recordTokens, cancellationToken).ConfigureAwait(false);
-                _compactions.Add(Describe(result));
+                _compactions.Add(result.Describe());
                 if (result.Status != CompactionStatus.Compacted)
                     continue;
                 rendered = render(runner.Snapshot(), false);
@@ -538,14 +573,6 @@ public sealed class TurnRunner
             var calls = snapshot.Transcript.Where(entry => entry.Content is ToolCallIssued call && _lastRound.Contains(call.CallId)).ToList();
             return calls.Count == 0 ? null : calls.Min(entry => entry.FromSequence);
         }
-
-        private static string Describe(CompactionResult result) => result.Status switch
-        {
-            CompactionStatus.Compacted => string.Create(CultureInfo.InvariantCulture,
-                $"compacted events {result.From}–{result.Through} by {result.Summarizer} in {result.Chunks} chunk(s)"),
-            CompactionStatus.NothingToCompact => string.Create(CultureInfo.InvariantCulture, $"nothing to compact in events {result.From}–{result.Through}"),
-            _ => string.Create(CultureInfo.InvariantCulture, $"kept events {result.From}–{result.Through} uncompacted: {result.Detail}"),
-        };
 
         // Local-only core blocks and facts (plan §10.4) reach local and local-server models only; a local server is the user's
         // own (C-015's configuration refuses a public endpoint for that class).
@@ -574,9 +601,6 @@ public sealed class TurnRunner
             var items = profile.Privacy == PrivacyClass.Cloud ? _recalled.Where(item => !item.LocalOnly).ToList() : [.. _recalled];
             return items.Count == 0 ? "" : "Relevant memory:\n" + string.Join("\n", items.Select(item => "- " + item.Text));
         }
-
-        private static ITokenCounter Counter(IChatClient generator) =>
-            generator.GetService(typeof(ITokenCounter)) as ITokenCounter ?? CharsPerTokenCounter.Instance;
 
         private static string Text(ChatResponse response) => response.Text.Trim();
 

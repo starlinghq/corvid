@@ -11,6 +11,7 @@ using Corvid.Host.Configuration;
 using Corvid.Host.Models;
 using Corvid.Host.Telemetry;
 using Corvid.Kernel.Checkpoints;
+using Corvid.Kernel.Context;
 using Corvid.Kernel.Events;
 using Corvid.Kernel.Jobs;
 using Corvid.Kernel.Sessions;
@@ -536,6 +537,13 @@ public sealed class CorvidSession
     /// </summary>
     public Task<RestoreResult?> UndoAsync(CancellationToken cancellationToken = default) =>
         RestoreAsync(snapshot => CheckpointService.PlanUndo(snapshot, ChangesFiles), cancellationToken);
+
+    /// <summary>
+    /// <c>/compact</c> (C-035): compacts the conversation before the latest turn now (<see cref="TurnRunner.CompactNowAsync"/>).
+    /// On the actor, like <see cref="UndoAsync"/>: it waits for a running turn and goes ahead of queued messages.
+    /// </summary>
+    public Task<CompactionResult> CompactAsync(CancellationToken cancellationToken = default) =>
+        Actor.RunExclusiveAsync(token => Runner.CompactNowAsync(token), cancellationToken);
 
     /// <summary><c>/rollback N</c>: back to before the Nth latest checkpoint's call. Null when there are fewer checkpoints.</summary>
     public Task<RestoreResult?> RollbackAsync(int number, CancellationToken cancellationToken = default) =>

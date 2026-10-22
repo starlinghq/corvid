@@ -257,7 +257,7 @@ public sealed class ImportTests : IDisposable
         TempRoot.Write(Path.Combine(hermes, ".bundled_manifest"), "x");
         var store = await SkillStore.OpenAsync(new SkillStoreOptions { Root = _root["skills"] }, Token);
 
-        var result = await store.ImportAsync(SkillStore.HermesSkillsDirectory(_root["home"], name => name == "HERMES_HOME" ? _root["hermes"] : null),
+        var result = await store.ImportAsync(hermes,
             SkillAuthor.Hub("hermes"), cancellationToken: Token);
 
         Assert.Equal(["deploy-k8s", "arxiv"], result.Imported);

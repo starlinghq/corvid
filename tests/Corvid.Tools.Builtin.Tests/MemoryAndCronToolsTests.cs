@@ -193,6 +193,23 @@ public sealed class CronToolsTests : IDisposable
         await Assert.ThrowsAsync<ToolArgumentException>(() => Invoke(_tools, "cron_remove", $$"""{"job_id":"{{jobId}}"}"""));
     }
 
+    [Fact]
+    public async Task A_paused_job_is_listed_as_paused_without_a_next_run()
+    {
+        var job = _store.Add(new NewJob("inbox", "check the inbox", "every 30m"));
+        _store.Pause(job.JobId);
+
+        var listed = Assert.Single((await Invoke(_tools, "cron_list", "{}")).GetProperty("jobs").EnumerateArray());
+        Assert.True(listed.GetProperty("paused").GetBoolean());
+        Assert.Equal("active", listed.GetProperty("state").GetString());
+        Assert.False(listed.TryGetProperty("next_run", out _));
+
+        _store.Resume(job.JobId);
+        listed = Assert.Single((await Invoke(_tools, "cron_list", "{}")).GetProperty("jobs").EnumerateArray());
+        Assert.False(listed.TryGetProperty("paused", out _));
+        Assert.True(listed.TryGetProperty("next_run", out _));
+    }
+
     [Theory]
     [InlineData("""{"schedule":"sometime soon","prompt":"x"}""", "schedule")]
     [InlineData("""{"schedule":"every 5s","prompt":"x"}""", "schedule")]

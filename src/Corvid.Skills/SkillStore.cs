@@ -361,14 +361,6 @@ public sealed class SkillStore : ISkillSource
         return new ImportResult(imported.ToImmutable(), refused.ToImmutable(), revision);
     }
 
-    /// <summary>The Hermes skills directory (D-9): <c>~/.hermes/skills</c>, or <c>$HERMES_HOME/skills</c>.</summary>
-    public static string HermesSkillsDirectory(string home, Func<string, string?>? environment = null)
-    {
-        var hermesHome = (environment ?? Environment.GetEnvironmentVariable)("HERMES_HOME");
-        return System.IO.Path.Combine(hermesHome is { Length: > 0 } && System.IO.Path.IsPathFullyQualified(hermesHome) ? hermesHome
-            : System.IO.Path.Combine(home, ".hermes"), "skills");
-    }
-
     private List<string> CheckImportFolder(string folder)
     {
         var files = new List<string>();
