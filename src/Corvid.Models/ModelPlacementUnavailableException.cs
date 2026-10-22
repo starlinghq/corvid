@@ -2,7 +2,7 @@ namespace Corvid.Models;
 
 /// <summary>
 /// A model could not be placed where configuration asked (C-029): this build has the CPU natives only, or the CUDA
-/// provider is compiled in but cannot start (no CUDA runtime, cuBLAS or cuDNN on the loader path, no device). The host
+/// provider is compiled in but cannot start (no CUDA runtime or cuBLAS on the loader path, no such device). The host
 /// catches it to apply the placement's fallback policy; it never falls back on its own.
 /// </summary>
 public sealed class ModelPlacementUnavailableException(string model, string placement, string message, Exception? innerException = null)

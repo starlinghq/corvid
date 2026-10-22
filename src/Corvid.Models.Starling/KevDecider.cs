@@ -73,7 +73,8 @@ public sealed class KevDecider : IDecider, IDisposable
     /// <remarks>
     /// On Linux, a long-running process should start with <c>MALLOC_MMAP_THRESHOLD_=65536</c> (Starling's Kev README).
     /// CUDA needs the CUDA natives (a <c>-p:UseCuda=true</c> build), checked before the roughly 3 GB model is read, and
-    /// the CUDA 13 runtime, cuBLAS and cuDNN 9 on the loader path, which ONNX Runtime checks when the session starts.
+    /// the CUDA 13 runtime (cudart, cuBLAS, cuRAND, cuFFT) on the loader path, which ONNX Runtime checks when the session
+    /// starts. cuDNN 9 is optional: the CUDA provider dlopens it only for kernels that use it, and Kev's graph ran without it.
     /// Either failure is a <see cref="ModelPlacementUnavailableException"/>; nothing falls back to the CPU here.
     /// </remarks>
     /// <param name="rowBudget">Tokens one question's row may take after the state; larger rows are declined.</param>
@@ -123,7 +124,7 @@ public sealed class KevDecider : IDecider, IDisposable
     /// <summary>
     /// Whether this process's ONNX Runtime has the CUDA provider compiled in: true in a <c>-p:UseCuda=true</c> build,
     /// false in the default CPU build, null (with the reason) when the native runtime does not load at all. A listed
-    /// provider can still fail to start without the CUDA runtime, cuBLAS or cuDNN.
+    /// provider can still fail to start without the CUDA runtime (cudart, cuBLAS, cuRAND, cuFFT) or a visible device.
     /// </summary>
     public static bool? HasCudaProvider(out string? problem)
     {
