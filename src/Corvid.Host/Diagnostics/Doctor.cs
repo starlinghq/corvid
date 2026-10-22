@@ -2,6 +2,7 @@ using System.Net.Sockets;
 using Corvid.Host.Configuration;
 using Corvid.Host.Models;
 using Corvid.Models;
+using Corvid.Models.Starling;
 using Corvid.Vault.Client;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
@@ -66,6 +67,7 @@ public sealed class Doctor(IConfiguration configuration, ModelCatalogue catalogu
         }
         checks.Add(Decider(options, models));
         checks.Add(Malloc());
+        checks.AddRange(Gpu());
 
         checks.Add(Bubblewrap());
         checks.Add(SandboxLauncher(options));
@@ -130,6 +132,81 @@ public sealed class Doctor(IConfiguration configuration, ModelCatalogue catalogu
                 $"{(value is null ? "not set" : $"set to {value}")} in this process; Starling requires {MallocValue} for GLiNER2 and Kev on Linux. " +
                 "`corvid chat` re-executes itself with it set.",
                 $"export {MallocVariable}={MallocValue} for other hosts of the extractor or the decider.");
+    }
+
+    /// <summary>
+    /// C-029: the GPU, for models placed on CUDA (<c>Corvid:Models:Placement</c>). The NVIDIA driver and each GPU through
+    /// NVML, whether this build's ONNX Runtime has the CUDA provider, which CUDA libraries resolve for this user, and the
+    /// device-order variables. With nothing placed on CUDA every line is Info. With a model placed there, a missing
+    /// prerequisite is Failed under <see cref="PlacementFallback.Fail"/> and a Warning under <see cref="PlacementFallback.Cpu"/>.
+    /// Nothing is spawned and no model or CUDA context is created.
+    /// </summary>
+    private IEnumerable<DoctorCheck> Gpu()
+    {
+        var placed = new List<(string Model, string Device, PlacementFallback Fallback)>();
+        foreach (var (name, settings) in CorvidHost.ReadPlacement(configuration))
+            if (ModelPlacement.TryParse(settings.Device, out var device, out _) && ModelPlacement.IsCuda(device) && catalogue.TryFind(name, out var model))
+                placed.Add((model.Name, device, settings.Fallback));
+        var missing = placed.Count == 0 ? CheckStatus.Info
+            : placed.Exists(item => item.Fallback == PlacementFallback.Fail) ? CheckStatus.Failed
+            : CheckStatus.Warning;
+        var ready = placed.Count == 0 ? CheckStatus.Info : CheckStatus.Ok;
+        var problems = 0;
+        DoctorCheck Check(string name, bool ok, string detail, string? fix = null)
+        {
+            if (!ok)
+                problems++;
+            return new DoctorCheck("gpu", name, ok ? ready : missing, detail, ok ? null : fix);
+        }
+
+        var probe = CudaProbe.Probe();
+        yield return probe.NvmlProblem is { } nvml
+            ? Check("driver", false, nvml, "Install the NVIDIA driver (it provides libnvidia-ml.so.1 and libcuda.so.1), or place the models on cpu.")
+            : Check("driver", true, $"NVIDIA {probe.DriverVersion ?? "unknown"}, CUDA driver API {probe.CudaDriverVersion ?? "unknown"}");
+        if (probe.NvmlProblem is null && probe.Devices.IsEmpty)
+            yield return Check("devices", false, "NVML lists no GPU.", "Check nvidia-smi and the driver.");
+        foreach (var device in probe.Devices)
+            yield return new DoctorCheck("gpu", $"GPU {device.Index}", placed.Count == 0 ? CheckStatus.Info : CheckStatus.Ok,
+                $"{device.Name} ({device.Uuid}), {device.UsedBytes >> 20} of {device.TotalBytes >> 20} MiB used");
+
+        yield return KevDecider.HasCudaProvider(out var runtimeProblem) switch
+        {
+            true => Check("onnx runtime", true, "CUDA build: ONNX Runtime lists CUDAExecutionProvider"),
+            false => Check("onnx runtime", false, "CPU build: ONNX Runtime has no CUDAExecutionProvider, so nothing can run on a GPU",
+                "Publish the CUDA variant: dotnet publish src/Corvid.Cli -c Release -r linux-x64 -p:UseCuda=true -o out-cli-cuda."),
+            null => Check("onnx runtime", false, $"ONNX Runtime did not load: {runtimeProblem}", "Reinstall corvid; its native libraries are missing."),
+        };
+
+        if (OperatingSystem.IsLinux())
+        {
+            // cuDNN is dlopened by ONNX Runtime's CUDA provider for the kernels that use it; Kev's graph and the tiny graph of
+            // the GPU tests ran without it on the RTX 3090 (C-029), so its absence is reported, never a failure.
+            var required = probe.Libraries.Where(library => library.Required).ToArray();
+            var absent = probe.MissingLibraries.ToArray();
+            yield return absent.Length == 0
+                ? Check("cuda runtime", true, $"{string.Join(", ", required.Select(library => library.Name))} resolve for this user")
+                : Check("cuda runtime", false, $"not found by the loader for this user: {string.Join(", ", absent)}",
+                    "Install the CUDA 13 runtime (cudart, cuBLAS, cuRAND, cuFFT) where the loader finds it: the ldconfig cache or LD_LIBRARY_PATH.");
+            yield return new DoctorCheck("gpu", "cudnn", CheckStatus.Info,
+                probe.Libraries.Any(library => library.Name == CudaProbe.Cudnn && library.Resolves)
+                    ? $"{CudaProbe.Cudnn} resolves"
+                    : $"{CudaProbe.Cudnn} does not resolve; Kev runs on CUDA without it, other CUDA graphs may need it (ONNX Runtime loads it on demand)");
+        }
+
+        var order = $"CUDA_VISIBLE_DEVICES={probe.VisibleDevices ?? "(unset)"}, CUDA_DEVICE_ORDER={probe.DeviceOrder ?? "(unset)"}";
+        yield return probe.OrderAmbiguous && placed.Count > 0
+            ? new DoctorCheck("gpu", "device order", CheckStatus.Warning,
+                $"{order}: with {probe.Devices.Length} GPUs CUDA numbers them fastest first, so cuda:0 may not be GPU 0 above.",
+                "export CUDA_DEVICE_ORDER=PCI_BUS_ID (and CUDA_VISIBLE_DEVICES=<GPU UUID> to pin one).")
+            : new DoctorCheck("gpu", "device order", placed.Count == 0 ? CheckStatus.Info : CheckStatus.Ok, order);
+
+        foreach (var (model, device, fallback) in placed)
+            yield return new DoctorCheck("gpu", model, problems == 0 ? CheckStatus.Ok : missing,
+                $"{model} on {device}, fallback {fallback.ToString().ToLowerInvariant()}" + (problems == 0 ? ""
+                    : fallback == PlacementFallback.Cpu ? "; it will run on the CPU (checkpoints over 1 s)"
+                    : model.StartsWith("kev", StringComparison.OrdinalIgnoreCase)
+                        ? "; it will not load, so the fabric runs on the degraded tier"
+                        : "; it will not load"));
     }
 
     /// <summary>

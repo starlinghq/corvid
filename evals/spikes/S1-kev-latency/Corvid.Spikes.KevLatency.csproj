@@ -11,6 +11,8 @@
     KevDecider.cs and Qwen35TokenCounter.cs are compiled in from src/Corvid.Models.Starling rather than referencing that
     project, because it brings Microsoft.ML.OnnxRuntimeGenAI (CPU natives) and its KevDecider.Create refuses the CUDA
     provider. Linking the source keeps the adapter's Decide logic byte-for-byte while the spike supplies the runner.
+    Historical since C-029: Corvid.Models.Starling now has the same -p:UseCuda=true swap and KevDecider.Create accepts
+    CUDA, so a new harness would reference the project. This one is kept as run, so its results stay reproducible.
   -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>

@@ -16,7 +16,8 @@ namespace Corvid.Models.Starling;
 /// <summary>
 /// Loads Starling models from resolved files and pairs each service with its profile, ready for
 /// <see cref="ModelSlotRegistry.Bind"/>. Loading is synchronous and reads the model from disk; resolve the files
-/// first with <see cref="StarlingModelStore"/>. Every service runs on the CPU.
+/// first with <see cref="StarlingModelStore"/>. Every service runs on the CPU, except Kev, which runs on a GPU when its
+/// options ask for CUDA (C-029); the embedders and GLiNER2 still refuse CUDA options.
 /// </summary>
 /// <remarks>The caller owns the bound services: dispose <see cref="ModelBinding.Service"/> when the binding is retired.</remarks>
 public static class StarlingBindings
@@ -51,12 +52,16 @@ public static class StarlingBindings
     /// <summary>
     /// Kev-0.8B or Kev-4B as the <c>decider</c> slot's <see cref="Corvid.Abstractions.Fabric.IDecider"/>, with the head's
     /// calibrated temperature. Runs on the calling thread; schedule it on the device (the host does, at fabric priority).
+    /// The profile follows where the decider actually runs (<see cref="Starling.KevDecider.Placement"/>): <c>kev-0.8b@cpu</c>
+    /// or, with CUDA options, <c>kev-0.8b@cuda:0</c>, so the host schedules it on that device.
     /// </summary>
+    /// <exception cref="ModelPlacementUnavailableException">CUDA options in a CPU build, or CUDA cannot start.</exception>
     public static ModelBinding KevDecider(KevModelFiles files, KevOptions? options = null, int rowBudget = Starling.KevDecider.DefaultRowBudget)
     {
         ArgumentNullException.ThrowIfNull(files);
-        var profile = files.Profile.Model == KevModel.Kev4B ? StarlingProfiles.Kev4B : StarlingProfiles.Kev08B;
-        return new ModelBinding(profile, Starling.KevDecider.Create(files, options, rowBudget));
+        var decider = Starling.KevDecider.Create(files, options, rowBudget);
+        var model = files.Profile.Model == KevModel.Kev4B ? StarlingModel.Kev4B : StarlingModel.Kev08B;
+        return new ModelBinding(StarlingProfiles.For(model, decider.Placement), decider);
     }
 
     /// <summary>multilingual-e5-small text embeddings (384 dimensions). Runs on the calling thread.</summary>
@@ -70,7 +75,7 @@ public static class StarlingBindings
     private static void RequireCpu(OnnxSessionOptions? session)
     {
         if (session is { Provider: not OnnxExecutionProvider.Cpu })
-            throw new NotSupportedException("Corvid.Models.Starling ships the CPU ONNX Runtime natives only; CUDA placement is not supported yet.");
+            throw new NotSupportedException("CUDA placement is built for Kev only (C-029); GLiNER2 and the embedders run on the CPU.");
     }
 }
 

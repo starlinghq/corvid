@@ -11,7 +11,9 @@ public sealed class DoctorTests
         await using var host = TestHost.Create();
         var checks = await host.Services.GetRequiredService<Doctor>().RunAsync(cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(["config", "models", "sandbox", "checkpoints", "vault", "skills"], checks.Select(check => check.Area).Distinct());
+        Assert.Equal(["config", "models", "gpu", "sandbox", "checkpoints", "vault", "skills"], checks.Select(check => check.Area).Distinct());
+        // Nothing is placed on a GPU (C-029): the gpu area only informs.
+        Assert.All(checks.Where(check => check.Area == "gpu"), check => Assert.Equal(CheckStatus.Info, check.Status));
         Assert.Contains(checks, check => check is { Name: "configuration", Status: CheckStatus.Ok });
         Assert.Contains(checks, check => check is { Name: "data directory", Status: CheckStatus.Ok });
         Assert.Contains(checks, check => check is { Name: "fake-gen", Status: CheckStatus.Ok } && check.Detail.Contains("generator", StringComparison.Ordinal));
@@ -59,5 +61,31 @@ public sealed class DoctorTests
         {
             File.Delete(launcher);
         }
+    }
+
+    /// <summary>
+    /// C-029: a model placed on CUDA turns the gpu area into checks. This test process has the CPU natives, so the ONNX
+    /// Runtime check misses: Failed under Fallback=Fail, a Warning under Fallback=Cpu, with the fix naming the CUDA build.
+    /// </summary>
+    [Theory]
+    [InlineData("Fail", CheckStatus.Failed)]
+    [InlineData("Cpu", CheckStatus.Warning)]
+    public async Task A_model_placed_on_cuda_in_a_cpu_build_is_reported_by_its_fallback(string fallback, CheckStatus expected)
+    {
+        await using var host = TestHost.Create(settings: new Dictionary<string, string?>
+        {
+            ["Corvid:Models:Placement:fake-kev:Device"] = "cuda",
+            ["Corvid:Models:Placement:fake-kev:Fallback"] = fallback,
+        });
+        var checks = await host.Services.GetRequiredService<Doctor>().RunAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        var runtime = Assert.Single(checks, check => check is { Area: "gpu", Name: "onnx runtime" });
+        Assert.Equal(expected, runtime.Status);
+        Assert.StartsWith("CPU build", runtime.Detail, StringComparison.Ordinal);
+        Assert.Contains("-p:UseCuda=true", runtime.Fix, StringComparison.Ordinal);
+        var model = Assert.Single(checks, check => check is { Area: "gpu", Name: "fake-kev" });
+        Assert.Equal(expected, model.Status);
+        Assert.StartsWith($"fake-kev on cuda:0, fallback {fallback.ToLowerInvariant()}", model.Detail, StringComparison.Ordinal);
+        Assert.Empty(host.Models.Provider.Loaded);
     }
 }

@@ -239,7 +239,7 @@ Not built yet: CUDA placement (switch the native package to
 make placement per binding; plan §4.4 puts the generator on the 3090), media embeddings
 (`embedder.media`), the fp16x Qwen variant, batch extraction, label descriptions,
 and conversation-level token counting before a call. C-013 built `corvid doctor` on `StarlingModelStore` and wires
-C-011's device scheduler to these bindings.
+C-011's device scheduler to these bindings. C-029 built the CUDA variant and placement for Kev (see [Kev on CUDA](#kev-on-cuda-c-029)).
 
 ## Dependency rules
 
@@ -1382,7 +1382,7 @@ Plan §2 (Kev's limits), §4.4, §5 (all), §5.5's two-tier decider and §5.6's 
   C-011's slot pre-fill took GLiNER2's `workspace` span as a contradiction, and the repaired call followed it into a
   path that does not exist (a C-011 matter, not changed here).
 
-Not built yet: Kev on CUDA (the adapter ships CPU natives only, as C-010 does); Kev-0.8B against Kev-4B agreement in
+Kev on CUDA came with C-029 ([Kev on CUDA](#kev-on-cuda-c-029)). Not built yet: Kev-0.8B against Kev-4B agreement in
 C-021's report (the replaced first-tier answer is not recorded); switching the decider per session (the fabric is
 process-wide); asking the degraded tier about the questions Kev declined while keeping Kev's other answers; Kev state
 prefix reuse across checkpoints (Unsupported upstream, U-4); spikes S1, S2 and S4 (C-003) on the published package; and
@@ -2838,6 +2838,108 @@ repository maps without git; linked-worktree caller paths other than through the
 projects; vectors for lessons and an embedder in the serve process; fact history and lesson evidence in `get_memory`; MCP
 resources, prompts and change notifications for memory; write tools of any kind; serve's HTTP transport (still deferred
 from C-018); and per-caller rate limits or quotas.
+
+## Kev on CUDA (C-029)
+
+Kev-0.8B (and Kev-4B) on a GPU, by configuration, after spike S1 ([write-up](spikes/S1-kev-latency.md)): on the RTX 3090
+a 4-question ingress is 220–260 ms and every CPU cell is over 1 s. No project and no checker rule was added; one central
+package version and one `Directory.Build.targets` were.
+
+- Build variant. `Corvid.Models.Starling` references `Microsoft.ML.OnnxRuntimeGenAI` (CPU) by default and, under
+  `-p:UseCuda=true` (the property S1 and Starling's Kev fidelity tool use), `Microsoft.ML.OnnxRuntimeGenAI.Cuda` 0.17.1
+  instead, which brings `Microsoft.ML.OnnxRuntime.Gpu` 1.30.0: still one native flavour per runtime, which the checker's
+  `NativeRuntimePackages` already enforces. The default build and publish are unchanged. The CUDA publish is
+  `dotnet publish src/Corvid.Cli -c Release -r linux-x64 -p:UseCuda=true -o out-cli-cuda`; it adds the CUDA provider
+  (`libonnxruntime_providers_cuda.so`, 272 MB) and GenAI's CUDA library. `Microsoft.ML.OnnxRuntime.Gpu` also brings
+  `Gpu.Windows`, whose props copy about 205 MB of win-x64 DLLs into any x64 output; `Directory.Build.targets` drops them
+  in a `UseCuda` build that is neither on Windows nor for a `win-*` runtime. `libonnxruntime.so` and
+  `libonnxruntime-genai.so` from the CUDA packages list no CUDA library as NEEDED, so a CUDA build starts and runs CPU
+  sessions on a host without CUDA. Which flavour a process has is read at run time
+  (`OnnxRuntimeInfo.AvailableProviders`), never a compile constant, so one assembly serves both. The two variants share
+  `obj/` and `bin/`: build each into its own `-o` directory or worktree (a CPU build after a CUDA one in the same tree can
+  keep `libonnxruntime_providers_cuda.so` in `bin/`).
+- Kev on CUDA. `KevDecider.Create` accepts `KevOptions.Session` with `OnnxExecutionProvider.Cuda` (`CudaDeviceId` N), as
+  S1's harness did. Before reading about 3 GB it checks that ONNX Runtime lists `CUDAExecutionProvider`; if not, or if
+  ONNX Runtime does not load, it throws `ModelPlacementUnavailableException` (in `Corvid.Models`, so the host catches it
+  without Starling types) naming `-p:UseCuda=true`; Starling's `OnnxProviderUnavailableException` and
+  `OnnxRuntimeUnavailableException` at session creation are wrapped the same way. Nothing falls back inside the adapter.
+  `KevDecider.PlacementOf` and `OptionsFor` map between session options and `cpu`/`cuda:N`. The temperature guard stays.
+  GLiNER2 and the embedders still refuse CUDA options (`NotSupportedException`).
+- Placed profiles. `StarlingProfiles.For(model, placement)` gives Kev's profile on a device: id `kev-0.8b@cuda:0`,
+  placement `cuda:0` (on the CPU it is the existing `kev-0.8b@cpu`). The decider name stays `kev-0.8b`/`kev-4b`, so
+  decisions, floors and C-021 calibration do not split by device (Starling's CUDA evidence: within 1.33e-5 of PyTorch
+  fp32, no argmax flip; Corvid's GPU test holds CUDA within 1e-4 of the CPU decider). Because the placement is `cuda:0`,
+  `DeviceSchedulers` gives Kev its own single-thread `cuda:0` scheduler, so it no longer queues behind the CPU generator.
+  `StarlingBindings.KevDecider` takes the profile from where the decider actually runs (`KevDecider.Placement`).
+- Configuration. `Corvid:Models:Placement`, keyed by catalogue name (ignoring case), each with `Device` (`cpu`, `cuda` for
+  `cuda:0`, or `cuda:N` with N up to 15, as CUDA numbers devices after `CUDA_VISIBLE_DEVICES` and `CUDA_DEVICE_ORDER`;
+  default `cpu`) and `Fallback` (`Fail`, the default, or `Cpu`):
+  `{ "Models": { "Placement": { "kev-0.8b": { "Device": "cuda", "Fallback": "Cpu" } } } }` runs Kev on the GPU when it
+  can and on the CPU otherwise. With no entry nothing changes. `CorvidOptionsValidator` refuses an unknown model, a model
+  that is not an in-process Starling one, an unparseable device, an undefined fallback, and CUDA for anything but Kev
+  ("CUDA placement for qwen3.5-0.8b is not built yet"). The host reads the section leniently from `IConfiguration` for
+  `StarlingModelProvider` (as it reads `Models:Cache`), whose descriptors then carry the placed profiles.
+- Fallback. `StarlingModelProvider.Load` opens the files first (missing weights stay a plain missing model), then loads
+  on the configured device. On `ModelPlacementUnavailableException` with `Fallback: Cpu` it loads on the CPU and reports
+  `kev-0.8b: configured cuda:0, running on cpu: <reason> CPU checkpoints take over 1 s (spike S1).` through
+  `ModelLoadContext.Notice`; `ModelComposer` adds it to `DeciderNotices`, which `corvid chat` prints at start, and the
+  binding's CPU profile is what the composer schedules by. With `Fallback: Fail` the exception propagates; for the decider
+  that means C-004b's rule, not an aborted start: the degraded tier, a notice ("kev-0.8b did not load (...)"), and
+  `corvid doctor` reporting Failed.
+- C-030's flag. `KevDecider.Placement` (`cpu` or `cuda:N`) on the decider, and `CorvidRuntime.DeciderPlacement`: the
+  effective `Profile.Placement` of the decider slot's default binding, null on the degraded tier, so a CPU fallback reads
+  `cpu`. C-030 reads it (or `Registry.Get("decider").Default.Profile.Placement`) and treats a value starting with `cuda`
+  (`ModelPlacement.IsCuda`) as the GPU path. `DeciderState` (`/status`, `/model`) shows it: `kev-0.8b on cuda:0; ...`.
+- Doctor. A `gpu` area (`Diagnostics/Cuda.cs`: NVML through `LibraryImport`, `libnvidia-ml.so.1` loaded only if present):
+  the driver and CUDA driver API versions, each GPU's index, name, UUID and memory, whether this build's ONNX Runtime is
+  the CPU or the CUDA build, whether `libcudart.so.13`, `libcublas.so.13`, `libcublasLt.so.13`, `libcurand.so.10` and
+  `libcufft.so.12` resolve for this user, cuDNN 9 (reported only: Kev's graph ran on the 3090 without it), the
+  `CUDA_VISIBLE_DEVICES`/`CUDA_DEVICE_ORDER` values (a Warning when a model is placed on CUDA, there is more than one GPU
+  and the order is not `PCI_BUS_ID`: NVML indexes are in PCI order, CUDA's default is fastest first), and one line per
+  model placed on CUDA (`kev-0.8b on cuda:0, fallback cpu`). With nothing placed on CUDA every line is Info, so the
+  default output only gains Info lines; with a model placed there a missing prerequisite is Failed under `Fail` and a
+  Warning under `Cpu`, each with a fix (`-p:UseCuda=true`, the missing library, the driver). Nothing is spawned and no
+  model or CUDA context is created.
+- State budget. S1's 6-question ingress (both the `tool` and the `skill` shortlist) was at 301 ms with a 600-token state
+  and 212 ms at 300. `TurnOptions.DualShortlistStateBudget` (default `TurnStateBudget(Total: 300)`, S1's cell) applies
+  only to the `Checkpoint.Ingress` request that asks both `tool` and `skill`, and only when smaller than the configured
+  budget; every other checkpoint, the `injection/skill:*` request and the approval context keep the 600 default.
+  `Corvid:Turn:DualShortlistStateTokens` sets it (100 to 600; 600 turns it off). Measured: the Kernel test's oversized turn
+  gives a 293-token ingress state and a 402-token step state (chars/4); S1's oversized input through
+  `Qwen35TokenCounter` at the 300 budget is 300 Corvid tokens and 317 in Kev's own encoding (`KevEncoding.StateIds`).
+  Shortlist descriptions are not trimmed.
+- Tests. `Corvid.Kernel.Tests` (`StateBudgetTests`, CI): the dual-shortlist ingress is at most 300 tokens, a tool-only
+  ingress and the step checkpoint stay above it and within 600, and a null budget turns it off.
+  `Corvid.Host.Tests` (`PlacementTests`, `DoctorTests`, `DeciderTests`): validation, the placed descriptor, the lenient
+  read, the fallback both ways through a stub loader (`StarlingModelProvider.Loader`, no model), the composer's notice and
+  degraded tier, the `cuda:0` scheduler, the doctor's statuses in a CPU build, and `DeciderPlacement`.
+  `Corvid.Models.Starling.Tests`: a CPU build refuses Kev on CUDA before reading the model; a hand-encoded one-node ONNX
+  graph (`Add`, built in code) checked on the CPU in every build; and, with `Category=Gpu`, that graph in a CUDA session
+  (the session lists `CUDAExecutionProvider`), the doctor's probe finding a GPU with memory, and Kev-0.8B on `cuda:0`
+  against the CPU decider on the same request (within 1e-4, `Placement` `cuda:0`, a 20-call p50 reported, bound 1 s
+  because the machine is shared). The `Gpu` helper skips with the reason (CPU build, no GPU, or which CUDA library does
+  not resolve), and fails instead under `CORVID_GPU_TESTS=required`; the Kev test then still skips without Kev-0.8B in
+  `$CORVID_STARLING_MODELS`, because weights are not a GPU prerequisite. Measured on the 3090 (2026-10-21, as `mark`,
+  machine load 80–170): all three pass without cuDNN on the loader path, Kev-0.8B 20-call p50 117–208 ms; the
+  model-backed Qwen, GLiNER2 and embedder tests pass from the CUDA build too (Qwen on the CPU through the `.Cuda`
+  package's GenAI native, which Starling qualified only as CUDA: observed working, not qualified).
+- CI. A `gpu` job on the same runner: the visibility of `/dev/nvidia*` and `nvidia-smi`, a solution restore and the
+  Starling tests' build with `-p:UseCuda=true`, the boundary checker on that CUDA graph, then the `Category=Gpu` tests
+  pinned to the 3090 (`CUDA_DEVICE_ORDER=PCI_BUS_ID`, `CUDA_VISIBLE_DEVICES` = the repository variable
+  `CORVID_CUDA_DEVICE`, defaulting to the 3090's UUID). `CORVID_GPU_TESTS` is the repository variable, defaulting to
+  `required`; while required, a step checks that the two weight-free GPU tests ran with no skip. CI has no Kev weights
+  (`CORVID_STARLING_MODELS` is a repository variable, unset), so the Kev-on-CUDA test skips there.
+
+Not built yet: CUDA for the generator (two lines in the binding, but it changes the default experience, is unmeasured
+in Corvid, shares the card and the `cuda:0` scheduler with Kev, and the TurnState `generator` field and learner options
+record the profile id); CUDA for EmbeddingGemma 2, e5 and GLiNER2 (placement is in the profile id, and `CorvidRuntime`
+re-embeds memory when the active vector id differs from the embedder's profile id, so embedders first need an identity
+independent of placement; GLiNER2 also feeds the egress gate and gains little); Kev-4B on CUDA in tests and CI (17–19 GB
+of a shared 24 GB card; the configuration allows it); an `auto` device and build-dependent defaults; a VRAM budget across
+the models placed on one GPU; trimming shortlist descriptions and the 7+ question first turn with `injection/<server>`
+rows; reduced checkpoints on CPU-only hosts (C-030) and a GPU-resident Kev graph with state reuse (C-031); a Kev-weight
+cache for CI; separate `obj/` for the two variants; Windows CUDA; and a latency gate in CI (S1's 300 ms stays evidence
+rerun by hand).
 
 ## Running the check
 

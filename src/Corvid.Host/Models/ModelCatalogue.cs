@@ -33,7 +33,14 @@ public sealed record ModelAvailability(ModelDescriptor Model, ModelReadiness Rea
 /// The device's <see cref="TaskScheduler"/> for extractors that take one (GLiNER2 does); the composer never wraps an
 /// extractor itself.
 /// </param>
-public sealed record ModelLoadContext(string Slot, TaskScheduler ExtractorScheduler);
+public sealed record ModelLoadContext(string Slot, TaskScheduler ExtractorScheduler)
+{
+    /// <summary>
+    /// Reports a load that went other than configured but still succeeded, for example a model placed on a GPU that fell
+    /// back to the CPU (C-029). The composer shows these at start with the decider's notices.
+    /// </summary>
+    public Action<string>? Notice { get; init; }
+}
 
 /// <summary>
 /// A source of slot bindings: the in-process Starling models by default, and remote models (local servers and cloud

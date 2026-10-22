@@ -10,13 +10,21 @@
     <PackageReference Include="Starlings.Models.Gliner2" />
     <PackageReference Include="Starlings.Models.Kev" />
     <PackageReference Include="Starlings.Models.Qwen35.Extensions.AI" />
-    <!--
-      The one native runtime package. It brings Microsoft.ML.OnnxRuntime 1.30.0 (CPU), which GLiNER2, e5 and
-      EmbeddingGemma 2 load through Starlings.Runtime.Onnx. CUDA swaps it for Microsoft.ML.OnnxRuntimeGenAI.Cuda
-      (bringing Microsoft.ML.OnnxRuntime.Gpu); never reference both.
-    -->
-    <PackageReference Include="Microsoft.ML.OnnxRuntimeGenAI" />
     <ProjectReference Include="../Corvid.Models/Corvid.Models.csproj" />
     <InternalsVisibleTo Include="Corvid.Models.Starling.Tests" />
+  </ItemGroup>
+  <!--
+    The one native runtime package. By default it is Microsoft.ML.OnnxRuntimeGenAI, which brings Microsoft.ML.OnnxRuntime
+    1.30.0 (CPU) for GLiNER2, e5, EmbeddingGemma 2 and Kev through Starlings.Runtime.Onnx. -p:UseCuda=true (C-029, the
+    property S1 and Starling's Kev fidelity tool use) swaps it for Microsoft.ML.OnnxRuntimeGenAI.Cuda, which brings
+    Microsoft.ML.OnnxRuntime.Gpu 1.30.0: the CUDA provider plus the CPU one, under the same file names. Never reference
+    both. The CUDA 13 runtime, cuBLAS and cuDNN 9 are not in the package; they must be on the loader path (corvid doctor
+    checks). Build each variant into its own output directory: they share obj/ and bin/ otherwise.
+  -->
+  <ItemGroup Condition="'$(UseCuda)' != 'true'">
+    <PackageReference Include="Microsoft.ML.OnnxRuntimeGenAI" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseCuda)' == 'true'">
+    <PackageReference Include="Microsoft.ML.OnnxRuntimeGenAI.Cuda" />
   </ItemGroup>
 </Project>

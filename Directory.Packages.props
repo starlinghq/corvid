@@ -38,5 +38,8 @@
     <PackageVersion Include="Starlings.Models.Qwen35.Extensions.AI" Version="0.3.0" />
     <!-- CPU natives: ONNX Runtime GenAI, which brings Microsoft.ML.OnnxRuntime 1.30.0 for the ONNX models too. -->
     <PackageVersion Include="Microsoft.ML.OnnxRuntimeGenAI" Version="0.17.1" />
+    <!-- CUDA natives (C-029), referenced instead of the CPU package only under -p:UseCuda=true: ONNX Runtime GenAI CUDA,
+         which brings Microsoft.ML.OnnxRuntime.Gpu 1.30.0. Declared always so restore stays central either way. -->
+    <PackageVersion Include="Microsoft.ML.OnnxRuntimeGenAI.Cuda" Version="0.17.1" />
   </ItemGroup>
 </Project>

@@ -54,6 +54,9 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue, IEnumerable
 
         if (options.Devices.CpuThreads is < 1 or > 64)
             errors.Add("Corvid:Devices:CpuThreads must be between 1 and 64.");
+        ValidatePlacement(errors, options.Models.Placement);
+        if (options.Turn.DualShortlistStateTokens is < 100 or > 600)
+            errors.Add("Corvid:Turn:DualShortlistStateTokens must be between 100 and 600 (600 turns it off).");
         if (!Enum.IsDefined(options.Approvals.Mode))
             errors.Add("Corvid:Approvals:Mode must be Manual, Smart or Permissive.");
         if (options.Approvals.TimeoutSeconds is < 1 or > 86_400)
@@ -169,6 +172,35 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue, IEnumerable
                         CheckModel(errors, slot, $"(gateway chat {chat})", model);
                 }
             }
+        }
+    }
+
+    // C-029: placement applies to in-process Starling models, and in v1 only Kev can go on CUDA.
+    private void ValidatePlacement(List<string> errors, IReadOnlyDictionary<string, ModelPlacementSettings> placement)
+    {
+        foreach (var (model, settings) in placement)
+        {
+            var key = $"Corvid:Models:Placement:{model}";
+            if (settings is null)
+                continue;
+            if (!catalogue.TryFind(model, out var descriptor))
+            {
+                errors.Add($"{key}: no model is named '{model}'; known models: {string.Join(", ", catalogue.Models.Select(item => item.Name))}.");
+                continue;
+            }
+            if (descriptor.Provider != StarlingModelProvider.ProviderName)
+            {
+                errors.Add($"{key}: '{descriptor.Name}' is not an in-process Starling model; placement applies only to those " +
+                    "(a remote model runs where its server does).");
+                continue;
+            }
+            if (!ModelPlacement.TryParse(settings.Device, out var device, out _))
+                errors.Add($"{key}:Device must be cpu, cuda or cuda:0 to cuda:{ModelPlacement.MaxCudaDevice}, not '{settings.Device}'.");
+            else if (ModelPlacement.IsCuda(device) && !StarlingModelProvider.CanPlaceOnCuda(descriptor.Name))
+                errors.Add($"{key}: CUDA placement for {descriptor.Name} is not built yet; only kev-0.8b and kev-4b can run on CUDA " +
+                    "(see plan §18 C-029, Deferred).");
+            if (!Enum.IsDefined(settings.Fallback))
+                errors.Add($"{key}:Fallback must be Fail or Cpu.");
         }
     }
 

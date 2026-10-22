@@ -129,9 +129,9 @@ public sealed class WiringTests
     }
 
     [Fact]
-    public void Cuda_options_are_refused_before_any_model_loads()
+    public void Cuda_options_for_gliner2_and_the_embedders_are_refused_before_any_model_loads()
     {
-        // CPU natives only: a CUDA request would fail later with a provider error, so it fails here with the reason.
+        // C-029 places only Kev on CUDA (KevDeciderTests, GpuTests): the others still fail here with the reason.
         var snapshot = (ModelSnapshot)null!;
         var gliner = new Gliner2ModelFiles("/nonexistent/model.onnx", "/nonexistent/tokenizer.json", snapshot);
         var e5 = new E5ModelFiles("/nonexistent/model.onnx", "/nonexistent/tokenizer.json", snapshot);

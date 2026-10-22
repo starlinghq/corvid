@@ -2,7 +2,7 @@
 
 A local-first .NET 10 agent in the spirit of Hermes Agent, built on Starling's in-process models. Kev, GLiNER2 and the embedding models make the agent's many small decisions (System One); a swappable generator, local or cloud, does the writing (System Two).
 
-Vault M1, the agent's initial project layout and dependency checks, the session event log (C-002), the tool generator and registry (C-005), the golden-trajectory replay harness (C-009), calibration tooling with decision export (C-021), the session actor and turn loop (C-011), the built-in tools with the durable scheduler (C-012), the host and `corvid` CLI with OpenTelemetry spans (C-013), the Kev decider with its Kev-4B second tier (C-004b), checkpoints with `/undo` and `/rollback` (C-014), compaction with map-reduce summaries and goal re-injection (C-016), skills with the git-versioned store, the learning loop and replay tests (C-017) and its sharper learning signals: a task-success precondition, the recovery-pattern trigger and a head-and-tail drafting window (C-026), and cloud and local-server model slots behind the privacy egress gate, keyed only through Vault (C-015), and the MCP client and `corvid mcp serve` (C-018), the ACP endpoint for editors and the OpenAI-compatible HTTP endpoint (C-019), and the messaging gateway with pairing, the delivery ledger and Telegram, Discord and Slack adapters (C-020), MCP tool-definition pinning with poisoned-description detection (C-022), trace export in Beacon's JSONL schema with Hermes memory import (C-027), per-project lessons, a reviewed memory tier between facts and skills (C-025), detection rules over the session event log, inline at approval time and post-hoc with `corvid scan` (C-023), and project memory over `corvid mcp serve` (C-028), are built. Without Kev downloaded, the decisions run on the degraded tier and `corvid chat` says so. The design is in [`docs/plan/corvid-agent.md`](docs/plan/corvid-agent.md); secrets live in a separate process, Corvid Vault ([`docs/plan/vault.md`](docs/plan/vault.md)).
+Vault M1, the agent's initial project layout and dependency checks, the session event log (C-002), the tool generator and registry (C-005), the golden-trajectory replay harness (C-009), calibration tooling with decision export (C-021), the session actor and turn loop (C-011), the built-in tools with the durable scheduler (C-012), the host and `corvid` CLI with OpenTelemetry spans (C-013), the Kev decider with its Kev-4B second tier (C-004b), checkpoints with `/undo` and `/rollback` (C-014), compaction with map-reduce summaries and goal re-injection (C-016), skills with the git-versioned store, the learning loop and replay tests (C-017) and its sharper learning signals: a task-success precondition, the recovery-pattern trigger and a head-and-tail drafting window (C-026), and cloud and local-server model slots behind the privacy egress gate, keyed only through Vault (C-015), and the MCP client and `corvid mcp serve` (C-018), the ACP endpoint for editors and the OpenAI-compatible HTTP endpoint (C-019), and the messaging gateway with pairing, the delivery ledger and Telegram, Discord and Slack adapters (C-020), MCP tool-definition pinning with poisoned-description detection (C-022), trace export in Beacon's JSONL schema with Hermes memory import (C-027), per-project lessons, a reviewed memory tier between facts and skills (C-025), detection rules over the session event log, inline at approval time and post-hoc with `corvid scan` (C-023), and project memory over `corvid mcp serve` (C-028), and Kev on CUDA with placement configuration and a CUDA build variant (C-029), are built. Without Kev downloaded, the decisions run on the degraded tier and `corvid chat` says so. The design is in [`docs/plan/corvid-agent.md`](docs/plan/corvid-agent.md); secrets live in a separate process, Corvid Vault ([`docs/plan/vault.md`](docs/plan/vault.md)).
 
 ## Run
 
@@ -13,11 +13,20 @@ dotnet run --project src/Corvid.Cli -- model download qwen3.5-0.8b gliner2-base-
 dotnet run --project src/Corvid.Cli -- model download kev-4b # optional second tier for gates (about 17 GB, 18 GB of RAM)
 dotnet run --project src/Corvid.Cli -- chat
 dotnet publish src/Corvid.Cli -c Release -r linux-x64      # a single-file `corvid`
+dotnet publish src/Corvid.Cli -c Release -r linux-x64 -p:UseCuda=true -o out-cli-cuda
+                                                           # the CUDA variant, for Kev on an NVIDIA GPU (about 300 MB more)
 ```
 
 Configuration is `$XDG_CONFIG_HOME/corvid/corvid.json` (section `Corvid`), `CORVID__` environment variables, or `--set key=value`;
 it is validated at start. Kev-4B is used only when configured: `--set Models:Slots:decider:Escalation:0=kev-4b`, or the same
 key in the file. See [`docs/architecture.md`](docs/architecture.md#host-and-cli-c-013).
+
+Kev answers a checkpoint in about a quarter of a second on an RTX 3090 and in seconds on a CPU ([S1](docs/spikes/S1-kev-latency.md)).
+To run it on the GPU, use the CUDA variant (it needs the NVIDIA driver and the CUDA 13 runtime; `corvid doctor` checks) and place it:
+`--set Models:Placement:kev-0.8b:Device=cuda --set Models:Placement:kev-0.8b:Fallback=Cpu`, or in the file
+`"Models": { "Placement": { "kev-0.8b": { "Device": "cuda", "Fallback": "Cpu" } } }`. `Fallback: Cpu` runs it on the CPU, with a
+notice, when the GPU cannot be used; the default `Fail` leaves the decisions on the degraded tier instead. Build the two variants
+into separate output directories ([details](docs/architecture.md#kev-on-cuda-c-029)).
 
 Tool calls that change files are checkpointed first, so `/undo` (the last turn) and `/rollback N` can put the files back and take
 those turns out of the conversation; your own edits are kept or the restore is refused. Checkpoints need `git` on `PATH`

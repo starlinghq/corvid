@@ -62,7 +62,9 @@ public static class CorvidHost
             provider.GetRequiredService<IConfiguration>()[$"{CorvidOptions.Section}:Models:Cache"] is { Length: > 0 } cache
                 ? CorvidPaths.ExpandHome(cache)
                 : null));
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IModelProvider, StarlingModelProvider>());
+        // C-029: placement read the same lenient way; CorvidOptionsValidator refuses what is wrong with it.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IModelProvider, StarlingModelProvider>(provider => new StarlingModelProvider(
+            provider.GetRequiredService<StarlingModelStore>(), ReadPlacement(provider.GetRequiredService<IConfiguration>()))));
         // Remote models from Corvid:Models:Remote (C-015): local servers and cloud providers, keyed only through Vault.
         services.TryAddSingleton<RemoteModelProvider>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IModelProvider, RemoteModelProvider>(provider => provider.GetRequiredService<RemoteModelProvider>()));
@@ -93,6 +95,26 @@ public static class CorvidHost
                 });
         }
         return services;
+    }
+
+    /// <summary>
+    /// <c>Corvid:Models:Placement</c> without failing: an unparseable fallback reads as <see cref="PlacementFallback.Fail"/>
+    /// and an unparseable device is passed on for the provider to ignore, because the validator reports both.
+    /// </summary>
+    internal static Dictionary<string, ModelPlacementSettings> ReadPlacement(IConfiguration configuration)
+    {
+        var placement = new Dictionary<string, ModelPlacementSettings>(StringComparer.OrdinalIgnoreCase);
+        foreach (var model in configuration.GetSection($"{CorvidOptions.Section}:Models:Placement").GetChildren())
+        {
+            placement[model.Key] = new ModelPlacementSettings
+            {
+                Device = model["Device"] is { Length: > 0 } device ? device : Corvid.Models.ModelPlacement.Cpu,
+                Fallback = Enum.TryParse<PlacementFallback>(model["Fallback"], ignoreCase: true, out var fallback) && Enum.IsDefined(fallback)
+                    ? fallback
+                    : PlacementFallback.Fail,
+            };
+        }
+        return placement;
     }
 
     /// <summary>

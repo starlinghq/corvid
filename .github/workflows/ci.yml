@@ -89,6 +89,62 @@ jobs:
           tests/Corvid.Tools.Builtin.Tests/bin/Release/net10.0/Corvid.Tools.Builtin.Tests -trait "Category=Confinement" -noColor | tee builtin-sandbox.log
           grep -q "Total: 6, Errors: 0, Failed: 0, Skipped: 0, Not Run: 0" builtin-sandbox.log
 
+  # C-029: the CUDA variant (-p:UseCuda=true) and Kev on the RTX 3090. The CUDA build and the boundary check run every
+  # time, so the variant cannot rot; obj/ is restored with UseCuda here, so the checker validates the CUDA graph. The GPU
+  # tests need no root: /dev/nvidia* are world-accessible and the CUDA 13 runtime is in /opt/cuda (ldconfig). They run as
+  # required unless the repository variable CORVID_GPU_TESTS says otherwise (set it to "skip" to make them opt-in), and
+  # are pinned to the 3090 by UUID (repository variable CORVID_CUDA_DEVICE, defaulting to it) in PCI order, so the
+  # 4060 Ti is never touched. The Kev-0.8B test skips until CORVID_STARLING_MODELS names a cache gh-runner can read.
+  gpu:
+    name: CUDA build and GPU tests (RTX 3090)
+    runs-on: [self-hosted, omarchy]
+    timeout-minutes: 20
+    env:
+      CUDA_DEVICE_ORDER: PCI_BUS_ID
+      CUDA_VISIBLE_DEVICES: ${{ vars.CORVID_CUDA_DEVICE || 'GPU-9e21a72e-3a6f-e082-3d74-4b8d361de70c' }}
+      CORVID_GPU_TESTS: ${{ vars.CORVID_GPU_TESTS || 'required' }}
+      CORVID_STARLING_MODELS: ${{ vars.CORVID_STARLING_MODELS }}
+      MALLOC_MMAP_THRESHOLD_: 65536
+      TMPDIR: ${{ runner.temp }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
+        with:
+          global-json-file: global.json
+
+      - name: GPU visibility for gh-runner
+        run: |
+          ls -l /dev/nvidia*
+          nvidia-smi --query-gpu=index,uuid,name,memory.used,memory.total --format=csv || echo "nvidia-smi failed"
+          echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES CORVID_GPU_TESTS=$CORVID_GPU_TESTS"
+          ldconfig -p | grep -E "libcudart.so.13|libcublas.so.13|libcublasLt.so.13|libcurand.so.10|libcufft.so.12|libcudnn.so.9" || true
+
+      # The whole solution is restored with UseCuda (the checker reads every production project's assets), then the
+      # Starling tests are built against the CUDA natives.
+      - name: Build the CUDA variant
+        run: |
+          dotnet restore Corvid.slnx -p:UseCuda=true
+          dotnet build tests/Corvid.Models.Starling.Tests -c Release -p:UseCuda=true --no-restore
+
+      - name: Production dependency boundaries (CUDA graph)
+        run: dotnet run --project tools/Corvid.Architecture -c Release -- .
+
+      - name: GPU tests
+        run: |
+          set -o pipefail
+          tests/Corvid.Models.Starling.Tests/bin/Release/net10.0/Corvid.Models.Starling.Tests -trait "Category=Gpu" -noColor | tee gpu.log
+
+      # The weight-free GPU tests (a CUDA session on a hand-encoded graph, and the doctor's NVML probe) must have run, not
+      # skipped, whenever the GPU is required. The Kev-0.8B test is counted apart: it skips without weights.
+      - name: Weight-free GPU tests ran and passed
+        if: env.CORVID_GPU_TESTS == 'required'
+        run: |
+          tests/Corvid.Models.Starling.Tests/bin/Release/net10.0/Corvid.Models.Starling.Tests -trait "Category=Gpu" \
+            -method "*tiny_graph_on_the_gpu" -method "*doctor_probe_reports_a_gpu*" -noColor | tee gpu-required.log
+          grep -q "Total: 2, Errors: 0, Failed: 0, Skipped: 0, Not Run: 0" gpu-required.log
+
   cli:
     name: Single-file publish (corvid)
     runs-on: [self-hosted, omarchy]

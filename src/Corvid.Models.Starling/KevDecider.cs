@@ -33,8 +33,8 @@ internal interface IKevRunner
 /// <see cref="DeciderUnavailableReason.Refused"/>.
 /// </para>
 /// <para>
-/// <see cref="DecideAsync"/> runs Kev synchronously on the calling thread (about 0.4 s per question on CPU) and returns a
-/// completed task. The host schedules it on the device scheduler at fabric priority (C-011), never on a session actor.
+/// <see cref="DecideAsync"/> runs Kev synchronously on the calling thread (about 0.4 s per question on CPU, 0.2-0.3 s per
+/// ingress checkpoint on an RTX 3090 in spike S1) and returns a completed task. The host schedules it on the device scheduler at fabric priority (C-011), never on a session actor.
 /// </para>
 /// </remarks>
 public sealed class KevDecider : IDecider, IDisposable
@@ -52,31 +52,105 @@ public sealed class KevDecider : IDecider, IDisposable
     private readonly IDisposable? _owned;
     private readonly int _rowBudget;
 
-    internal KevDecider(string name, IKevRunner runner, IDisposable? owned = null, int rowBudget = DefaultRowBudget)
+    internal KevDecider(string name, IKevRunner runner, IDisposable? owned = null, int rowBudget = DefaultRowBudget,
+        string placement = ModelPlacement.Cpu)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(runner);
         ArgumentOutOfRangeException.ThrowIfLessThan(rowBudget, 1);
+        ArgumentException.ThrowIfNullOrWhiteSpace(placement);
         Name = name;
         _runner = runner;
         _owned = owned;
         _rowBudget = rowBudget;
+        Placement = placement;
     }
 
-    /// <summary>Loads Kev on the CPU (this adapter ships CPU natives only) with the head's calibrated temperature.</summary>
-    /// <remarks>On Linux, a long-running process should start with <c>MALLOC_MMAP_THRESHOLD_=65536</c> (Starling's Kev README).</remarks>
+    /// <summary>
+    /// Loads Kev with the head's calibrated temperature, on the CPU by default or on a GPU when
+    /// <paramref name="options"/> asks for <see cref="OnnxExecutionProvider.Cuda"/> (C-029).
+    /// </summary>
+    /// <remarks>
+    /// On Linux, a long-running process should start with <c>MALLOC_MMAP_THRESHOLD_=65536</c> (Starling's Kev README).
+    /// CUDA needs the CUDA natives (a <c>-p:UseCuda=true</c> build), checked before the roughly 3 GB model is read, and
+    /// the CUDA 13 runtime, cuBLAS and cuDNN 9 on the loader path, which ONNX Runtime checks when the session starts.
+    /// Either failure is a <see cref="ModelPlacementUnavailableException"/>; nothing falls back to the CPU here.
+    /// </remarks>
     /// <param name="rowBudget">Tokens one question's row may take after the state; larger rows are declined.</param>
+    /// <exception cref="ModelPlacementUnavailableException">CUDA was asked for and cannot be used.</exception>
     public static KevDecider Create(KevModelFiles files, KevOptions? options = null, int rowBudget = DefaultRowBudget)
     {
         ArgumentNullException.ThrowIfNull(files);
-        if (options?.Session is { Provider: not OnnxExecutionProvider.Cpu })
-            throw new NotSupportedException("Corvid.Models.Starling ships the CPU ONNX Runtime natives only; CUDA placement is not supported yet.");
         // Answers are recorded as calibrated, and calibration tooling (C-021) fits floors only on those; raw probabilities
         // (temperature 1.0) or any other temperature would make that flag false.
         if (options?.Temperature is not null)
             throw new ArgumentException("Corvid records Kev's answers as calibrated, so the head's calibrated temperature must apply.", nameof(options));
-        var model = KevDecisionModel.Create(files, options);
-        return new KevDecider(NameOf(files.Profile.Model), new ModelRunner(model), model, rowBudget);
+        var name = NameOf(files.Profile.Model);
+        var placement = PlacementOf(options?.Session);
+        if (placement != ModelPlacement.Cpu)
+            RequireCudaProvider(name, placement);
+        KevDecisionModel model;
+        try
+        {
+            model = KevDecisionModel.Create(files, options);
+        }
+        catch (Exception exception) when (placement != ModelPlacement.Cpu
+                                          && exception is OnnxProviderUnavailableException or OnnxRuntimeUnavailableException)
+        {
+            throw new ModelPlacementUnavailableException(name, placement, $"{name} cannot run on {placement}: {exception.Message}", exception);
+        }
+        return new KevDecider(name, new ModelRunner(model), model, rowBudget, placement);
+    }
+
+    /// <summary>The placement a session's options ask for: <c>cpu</c>, or <c>cuda:N</c> for the CUDA provider on device N.</summary>
+    public static string PlacementOf(OnnxSessionOptions? session) => session switch
+    {
+        null or { Provider: OnnxExecutionProvider.Cpu } => ModelPlacement.Cpu,
+        { Provider: OnnxExecutionProvider.Cuda } => ModelPlacement.Cuda(session.CudaDeviceId),
+        _ => throw new NotSupportedException($"ONNX execution provider {session.Provider} is not supported; use Cpu or Cuda."),
+    };
+
+    /// <summary>The options that place Kev on <paramref name="placement"/> (<c>cpu</c> or <c>cuda:N</c>); null for the CPU.</summary>
+    public static KevOptions? OptionsFor(string placement)
+    {
+        if (!ModelPlacement.TryParse(placement, out _, out var device))
+            throw new ArgumentException($"'{placement}' is not a placement: cpu or cuda:N.", nameof(placement));
+        return device is { } ordinal
+            ? new KevOptions { Session = new OnnxSessionOptions { Provider = OnnxExecutionProvider.Cuda, CudaDeviceId = ordinal } }
+            : null;
+    }
+
+    /// <summary>
+    /// Whether this process's ONNX Runtime has the CUDA provider compiled in: true in a <c>-p:UseCuda=true</c> build,
+    /// false in the default CPU build, null (with the reason) when the native runtime does not load at all. A listed
+    /// provider can still fail to start without the CUDA runtime, cuBLAS or cuDNN.
+    /// </summary>
+    public static bool? HasCudaProvider(out string? problem)
+    {
+        problem = null;
+        try
+        {
+            return OnnxRuntimeInfo.AvailableProviders.Contains(OnnxRuntimeInfo.CudaProviderName, StringComparer.Ordinal);
+        }
+        catch (Exception exception) when (exception is OnnxRuntimeUnavailableException or DllNotFoundException or TypeInitializationException)
+        {
+            problem = exception.Message;
+            return null;
+        }
+    }
+
+    private static void RequireCudaProvider(string name, string placement)
+    {
+        switch (HasCudaProvider(out var problem))
+        {
+            case null:
+                throw new ModelPlacementUnavailableException(name, placement,
+                    $"{name} cannot run on {placement}: ONNX Runtime did not load ({problem}).");
+            case false:
+                throw new ModelPlacementUnavailableException(name, placement,
+                    $"{name} cannot run on {placement}: this build has the CPU natives (no {OnnxRuntimeInfo.CudaProviderName}); " +
+                    "build with -p:UseCuda=true.");
+        }
     }
 
     /// <summary>The decider name recorded on decisions, which is also the catalogue name: <c>kev-0.8b</c> or <c>kev-4b</c>.</summary>
@@ -88,6 +162,12 @@ public sealed class KevDecider : IDecider, IDisposable
     };
 
     public string Name { get; }
+
+    /// <summary>
+    /// Where this decider runs: <c>cpu</c> or <c>cuda:N</c> (C-029). A small, stable flag for C-030, which reduces
+    /// checkpoints when the decider is not on a GPU (<see cref="ModelPlacement.IsCuda"/>).
+    /// </summary>
+    public string Placement { get; }
 
     public ValueTask<DeciderResult> DecideAsync(DecisionRequest request, CancellationToken cancellationToken = default)
     {
