@@ -168,6 +168,12 @@ public sealed class TurnServices
     /// <summary>The skill shortlist: a few candidates, since each becomes an option of <c>skill</c>.</summary>
     public ToolShortlist SkillShortlist { get; init; } = new(new ShortlistOptions(Size: 3));
 
+    /// <summary>
+    /// Told of tools withheld after a confident <c>injection</c> verdict over their descriptions (C-033), so their source
+    /// stops offering them until the user allows them. The turn drops them either way; without it they return next turn.
+    /// </summary>
+    public IToolDescriptionReview? DescriptionReview { get; init; }
+
     public TurnOptions Options { get; init; } = TurnOptions.Default;
 
     public TimeProvider Time { get; init; } = TimeProvider.System;

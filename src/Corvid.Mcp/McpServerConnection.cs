@@ -37,6 +37,15 @@ public sealed record McpServerStatus(
 {
     /// <summary>Tools held back until the user reviews them (C-022): new or changed since the server was pinned, or flagged.</summary>
     public ImmutableArray<McpHeldTool> Held { get; init; } = [];
+
+    /// <summary>
+    /// C-033: the server sent <c>notifications/tools/list_changed</c> after its tools were listed. Nothing is re-listed or
+    /// re-pinned in this process; <c>/mcp</c> and <c>corvid mcp list</c> say so.
+    /// </summary>
+    public bool ToolsChanged { get; init; }
+
+    /// <summary>The line shown for <see cref="ToolsChanged"/>.</summary>
+    public const string ToolsChangedNote = "the server's tool list changed since it was listed; restart Corvid to re-check its pins";
 }
 
 /// <summary>Why a listed tool is held instead of offered (C-022).</summary>
@@ -50,6 +59,15 @@ public static class McpHoldReasons
 
     /// <summary>Its description, title or schema text matched a poisoning pattern (<see cref="McpDescriptionScan"/>).</summary>
     public const string Flagged = "flagged";
+
+    /// <summary>
+    /// C-033: the decision fabric's <c>injection</c> question judged its description, with a calibrated answer at or above
+    /// the floor, to try to instruct the agent; it was withheld from the turn that asked and from the registry.
+    /// </summary>
+    public const string Injection = "injection";
+
+    /// <summary>Whether a hold needs <c>/mcp allow</c> (the tool is then offered as an untrusted server's) rather than <c>/mcp accept</c>.</summary>
+    public static bool NeedsReview(string reason) => reason is Flagged or Injection;
 }
 
 /// <summary>
@@ -63,14 +81,33 @@ public sealed record McpHeldTool(string Server, string Tool, string Reason, McpT
 {
     internal ModelContextProtocol.Protocol.Tool Listed { get; init; } = null!;
 
+    /// <summary>C-033: the <c>Decision</c> whose <c>injection</c> verdict withheld the tool, for an <c>injection</c> hold.</summary>
+    public string? Decision { get; init; }
+
+    /// <summary>
+    /// Review of #47, finding 2: a <c>changed</c> hold whose pin was withheld after an <c>injection</c> verdict and never
+    /// allowed. The new definition was not judged, so <c>/mcp accept --all</c> leaves it out and <c>/mcp diff</c> names the
+    /// earlier withhold; <c>/mcp accept &lt;tool&gt;</c> after reading the diff still takes it.
+    /// </summary>
+    public bool ChangedAfterWithhold => Reason == McpHoldReasons.Changed && Pin?.Withheld is not null;
+
     /// <summary>The line <c>/mcp</c> and <c>corvid mcp list</c> show.</summary>
     public string Issue => Reason switch
     {
+        McpHoldReasons.Changed when ChangedAfterWithhold =>
+            $"'{Tool}': held, its definition changed after it was withheld on an injection verdict (decision {Pin!.WithheldDecision}) (/mcp diff {Server} {Tool}, then /mcp accept {Server} {Tool})",
         McpHoldReasons.Flagged => $"'{Tool}': held, its description matches a poisoning pattern (\"{Flag}\") (/mcp diff {Server} {Tool}; /mcp allow {Server} {Tool})",
+        McpHoldReasons.Injection => $"'{Tool}': held, the injection question judged its description to instruct the agent (decision {Decision}) (/mcp diff {Server} {Tool}; /mcp allow {Server} {Tool})",
         McpHoldReasons.Changed => $"'{Tool}': held, its definition changed since it was pinned (/mcp diff {Server} {Tool}; /mcp accept {Server} {Tool})",
         _ => $"'{Tool}': held, new since the server's tools were pinned (/mcp diff {Server} {Tool}; /mcp accept {Server} {Tool})",
     };
 }
+
+/// <summary>
+/// A tool registered from a server (C-033): what was listed, so a later withholding can hold exactly that definition, and the
+/// instance in the registry, so it can be marked withdrawn.
+/// </summary>
+internal sealed record McpRegisteredTool(string Name, ModelContextProtocol.Protocol.Tool Listed, McpToolDefinition Definition, McpTool Instance);
 
 /// <summary>A server could not be reached; nothing was sent.</summary>
 public sealed class McpServerUnavailableException(string message) : InvalidOperationException(message)
@@ -121,6 +158,9 @@ public sealed class McpServerConnection : IAsyncDisposable
     private ImmutableArray<string> _tools = [];
     private ImmutableArray<string> _issues = [];
     private ImmutableArray<McpHeldTool> _held = [];
+    private ImmutableDictionary<string, McpRegisteredTool> _registered = ImmutableDictionary<string, McpRegisteredTool>.Empty;
+    private bool _listed;
+    private bool _toolsChanged;
     private bool _disposed;
 
     public McpServerConnection(McpServerDefinition definition, IMcpTransports transports, TimeProvider? time = null)
@@ -148,19 +188,47 @@ public sealed class McpServerConnection : IAsyncDisposable
             {
                 var tasks = _client is { } client && SupportsTasks(client);
                 return new McpServerStatus(Definition.Name, Definition.Transport, Definition.Trust, _state, _detail, _tools,
-                    _issues.AddRange(_held.Select(held => held.Issue)), tasks) { Held = _held };
+                    _issues.AddRange(_held.Select(held => held.Issue)), tasks) { Held = _held, ToolsChanged = _toolsChanged };
             }
         }
     }
 
-    internal void SetTools(ImmutableArray<string> tools, ImmutableArray<string> issues, ImmutableArray<McpHeldTool> held = default)
+    internal void SetTools(ImmutableArray<string> tools, ImmutableArray<string> issues, ImmutableArray<McpHeldTool> held = default,
+        IEnumerable<McpRegisteredTool>? registered = null)
     {
         lock (_lock)
         {
             _tools = tools;
             _issues = issues;
             _held = held.IsDefault ? [] : held;
+            _registered = (registered ?? []).ToImmutableDictionary(tool => tool.Name, StringComparer.Ordinal);
+            _listed = true;
         }
+    }
+
+    /// <summary>The registered tool by its Corvid name, or null (C-033).</summary>
+    internal McpRegisteredTool? Registered(string name)
+    {
+        lock (_lock)
+            return _registered.GetValueOrDefault(name);
+    }
+
+    /// <summary>A registered tool was withheld (C-033): it leaves the offered tools and is held instead.</summary>
+    internal void Withdraw(McpRegisteredTool registered, McpHeldTool held)
+    {
+        lock (_lock)
+        {
+            _registered = _registered.Remove(registered.Name);
+            _tools = _tools.Remove(registered.Name);
+            _held = _held.Add(held);
+        }
+    }
+
+    /// <summary>C-033: <c>notifications/tools/list_changed</c> arrived; counted only once the tools were listed.</summary>
+    internal void NoteToolsChanged()
+    {
+        lock (_lock)
+            _toolsChanged |= _listed;
     }
 
     /// <summary>The held tool by its name on the server, or null.</summary>
@@ -170,13 +238,14 @@ public sealed class McpServerConnection : IAsyncDisposable
             return _held.FirstOrDefault(held => held.Tool == tool);
     }
 
-    /// <summary>A held tool was accepted and registered under <paramref name="name"/>.</summary>
-    internal void Release(McpHeldTool held, string name)
+    /// <summary>A held tool was accepted and registered as <paramref name="registered"/>.</summary>
+    internal void Release(McpHeldTool held, McpRegisteredTool registered)
     {
         lock (_lock)
         {
             _held = _held.Remove(held);
-            _tools = _tools.Add(name);
+            _tools = _tools.Add(registered.Name);
+            _registered = _registered.SetItem(registered.Name, registered);
         }
     }
 
@@ -353,6 +422,18 @@ public sealed class McpServerConnection : IAsyncDisposable
                     Extensions = new Dictionary<string, object> { [TasksProtocol.ExtensionId] = EmptyObject() },
                 },
                 InitializationTimeout = Definition.StartTimeout,
+                // C-033: a changed tool list is noted for /mcp, not acted on (re-listing and re-pinning are deferred).
+                Handlers = new McpClientHandlers
+                {
+                    NotificationHandlers =
+                    [
+                        new(NotificationMethods.ToolListChangedNotification, (_, _) =>
+                        {
+                            NoteToolsChanged();
+                            return ValueTask.CompletedTask;
+                        }),
+                    ],
+                },
             };
             try
             {

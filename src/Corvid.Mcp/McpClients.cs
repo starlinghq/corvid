@@ -7,7 +7,7 @@ namespace Corvid.Mcp;
 /// <param name="Kind">One of <see cref="McpPinKinds"/>.</param>
 /// <param name="Hash">The listed definition's hash.</param>
 /// <param name="PinnedHash">The pin it differs from, for a changed tool.</param>
-/// <param name="Detail">The matched marker for a flagged tool.</param>
+/// <param name="Detail">The matched marker for a flagged tool; the withholding decision's id for an <c>injection</c> hold (C-033).</param>
 public sealed record McpDefinitionNotice(string Server, string Tool, string Kind, string Hash, string? PinnedHash = null, string? Detail = null);
 
 public static class McpPinKinds
@@ -15,12 +15,13 @@ public static class McpPinKinds
     public const string New = McpHoldReasons.New;
     public const string Changed = McpHoldReasons.Changed;
     public const string Flagged = McpHoldReasons.Flagged;
+    public const string Injection = McpHoldReasons.Injection;
     public const string Accepted = "accepted";
     public const string Allowed = "allowed";
 }
 
-/// <summary>The outcome of <see cref="McpClients.Accept"/>: the tool's Corvid name when registered, or why not.</summary>
-public sealed record McpAcceptResult(bool Accepted, string Message, string? Name = null);
+/// <summary>The outcome of <see cref="McpClients.Accept"/>: the tool's Corvid name and the pinned hash when registered, or why not.</summary>
+public sealed record McpAcceptResult(bool Accepted, string Message, string? Name = null, string? Hash = null);
 
 /// <summary>
 /// The configured MCP servers (plan §7, §12). <see cref="Start"/> connects to each in the background and registers its tools
@@ -33,9 +34,17 @@ public sealed record McpAcceptResult(bool Accepted, string Message, string? Name
 /// tool (trust on first use) and records the server even if it pins nothing; after that a new tool or a changed definition is held until the user accepts it, and a tool
 /// whose text matches a poisoning pattern is held even on the first listing until the user allows it.
 /// </para>
+/// <para>
+/// C-033: as the turn loop's <see cref="IToolDescriptionReview"/>, a registered tool whose description the fabric's
+/// <c>injection</c> question judged confidently is removed from the registry and held as <c>injection</c>, persistently,
+/// until the user allows it.
+/// </para>
 /// </summary>
-public sealed class McpClients : IAsyncDisposable
+public sealed class McpClients : IToolDescriptionReview, IAsyncDisposable
 {
+    /// <summary>The prefix of an MCP tool's <see cref="ToolDescriptor.Origin"/>.</summary>
+    public const string OriginPrefix = "mcp:";
+
     private readonly ToolRegistry _registry;
     private readonly ImmutableArray<McpServerConnection> _servers;
     private readonly IMcpPinStore _pins;
@@ -43,6 +52,8 @@ public sealed class McpClients : IAsyncDisposable
     private readonly TimeProvider _time;
     private readonly CancellationTokenSource _stopping = new();
     private readonly Lock _gate = new();
+    // Accept and Withhold change the registry, a connection's tools and the pins together; one at a time.
+    private readonly Lock _review = new();
     private Task _started = Task.CompletedTask;
     private bool _running;
 
@@ -72,6 +83,9 @@ public sealed class McpClients : IAsyncDisposable
     }
 
     public ImmutableArray<McpServerConnection> Servers => _servers;
+
+    /// <summary>Where the definitions are pinned; <c>/mcp forget</c> removes a server's entry through it (C-033).</summary>
+    public IMcpPinStore PinStore => _pins;
 
     /// <summary>Completes when every server's first start has finished, ready or failed. Never faults.</summary>
     public Task Started
@@ -117,6 +131,7 @@ public sealed class McpClients : IAsyncDisposable
     {
         var definition = server.Definition;
         var registered = new List<string>();
+        var entries = new List<McpRegisteredTool>();
         var issues = new List<string>();
         var held = new List<McpHeldTool>();
         var allowed = definition.Tools.IsEmpty ? null : definition.Tools.ToHashSet(StringComparer.Ordinal);
@@ -163,12 +178,18 @@ public sealed class McpClients : IAsyncDisposable
             var pin = pins.GetValueOrDefault(tool.Name);
             var flag = McpDescriptionScan.Scan(tool);
             string? hold = null;
+            var untrusted = false;
             if (flag is not null)
             {
                 if (pin?.AllowedFlagged == listed.Hash && pin.Hash == listed.Hash)
-                    descriptor = McpToolMapping.Describe(definition, tool, untrusted: true).Descriptor!;
+                    untrusted = true;
                 else
                     hold = McpHoldReasons.Flagged;
+            }
+            else if (pin?.Withheld == listed.Hash && pin.AllowedFlagged != listed.Hash)
+            {
+                // C-033: withheld in an earlier process (or by another one) and not allowed since: still held.
+                hold = McpHoldReasons.Injection;
             }
             else if (pin is null)
             {
@@ -181,17 +202,27 @@ public sealed class McpClients : IAsyncDisposable
             {
                 hold = McpHoldReasons.Changed;
             }
+            else if (pin.AllowedFlagged == listed.Hash)
+            {
+                // A definition the user allowed after an injection verdict (C-033) stays an untrusted server's tool.
+                untrusted = true;
+            }
             if (hold is not null)
             {
-                held.Add(new McpHeldTool(definition.Name, tool.Name, hold, listed, pin, flag) { Listed = tool });
-                Notify(new McpDefinitionNotice(definition.Name, tool.Name, hold, listed.Hash, pin?.Hash, flag));
+                var decision = hold == McpHoldReasons.Injection ? pin!.WithheldDecision : null;
+                held.Add(new McpHeldTool(definition.Name, tool.Name, hold, listed, pin, flag) { Listed = tool, Decision = decision });
+                Notify(new McpDefinitionNotice(definition.Name, tool.Name, hold, listed.Hash, pin?.Hash, flag ?? decision));
                 continue;
             }
+            if (untrusted)
+                descriptor = McpToolMapping.Describe(definition, tool, untrusted: true).Descriptor!;
 
             try
             {
-                _registry.Add(new McpTool(server, tool.Name, descriptor));
+                var instance = new McpTool(server, tool.Name, descriptor);
+                _registry.Add(instance);
                 registered.Add(descriptor.Name);
+                entries.Add(new McpRegisteredTool(descriptor.Name, tool, listed, instance));
             }
             catch (InvalidOperationException)
             {
@@ -214,30 +245,114 @@ public sealed class McpClients : IAsyncDisposable
                 issues.Add($"the tools' definitions could not be pinned ({exception.Message})");
             }
         }
-        server.SetTools([.. registered], [.. issues], [.. held]);
+        server.SetTools([.. registered], [.. issues], [.. held], entries);
     }
 
     /// <summary>
-    /// Pins the definition this process holds for <paramref name="tool"/> (the one <c>/mcp diff</c> shows) and registers it,
-    /// so it is offered from the next turn. A flagged tool is accepted only with <paramref name="allowFlagged"/> (<c>/mcp
-    /// allow</c>), which records that this exact definition was allowed and registers it as an untrusted server's tool;
-    /// <paramref name="allowFlagged"/> is refused for a tool that is not flagged.
+    /// C-033: withholds the named tools after a confident <c>injection</c> verdict over their descriptions. Each one this
+    /// process registered from the origin's server is removed from the registry, its instance refuses further calls, and it
+    /// is held as <c>injection</c> with the definition it was listed with; the pin records the withheld hash and the decision,
+    /// so the hold survives a restart and another process sees it. A definition the user allowed (<c>/mcp allow</c>) is left
+    /// offered: the verdict is only logged. Names that are not registered (already withheld, or another source's) are skipped.
     /// </summary>
-    public McpAcceptResult Accept(string server, string tool, bool allowFlagged = false)
+    public void Withhold(ToolWithholding request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!request.Origin.StartsWith(OriginPrefix, StringComparison.Ordinal))
+            return;
+        var server = request.Origin[OriginPrefix.Length..];
+        var connection = _servers.FirstOrDefault(candidate => candidate.Definition.Name == server);
+        if (connection is null)
+            return;
+        lock (_review)
+        {
+            foreach (var name in request.Tools.Distinct(StringComparer.Ordinal))
+            {
+                if (connection.Registered(name) is not { } entry)
+                    continue;
+                var hash = entry.Definition.Hash;
+                McpToolPin? pin;
+                try
+                {
+                    pin = _pins.Pins(server).GetValueOrDefault(entry.Listed.Name);
+                }
+                catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException)
+                {
+                    // Without the pins an earlier allow cannot be seen; withholding is the safe side.
+                    pin = null;
+                }
+                if (pin?.AllowedFlagged == hash)
+                    continue;
+
+                _registry.Remove(name);
+                entry.Instance.Withdraw();
+                var withheld = (pin ?? new McpToolPin(hash, entry.Definition.Canonical, _time.GetUtcNow())) with
+                {
+                    Withheld = hash,
+                    WithheldDecision = request.DecisionId,
+                };
+                try
+                {
+                    _pins.Set(server, new Dictionary<string, McpToolPin>(StringComparer.Ordinal) { [entry.Listed.Name] = withheld });
+                }
+                catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException)
+                {
+                    // Held in this process; the next start checks the definition against its pin as before.
+                }
+                connection.Withdraw(entry, new McpHeldTool(server, entry.Listed.Name, McpHoldReasons.Injection, entry.Definition, withheld, null)
+                {
+                    Listed = entry.Listed,
+                    Decision = request.DecisionId,
+                });
+                Notify(new McpDefinitionNotice(server, entry.Listed.Name, McpPinKinds.Injection, hash, pin?.Hash, request.DecisionId));
+            }
+        }
+    }
+
+    /// <summary>The shortest hash prefix <c>--hash</c> takes (C-033).</summary>
+    public const int MinHashPrefix = 12;
+
+    /// <summary>
+    /// Pins the definition this process holds for <paramref name="tool"/> (the one <c>/mcp diff</c> shows) and registers it,
+    /// so it is offered from the next turn. A flagged tool, or one withheld after an <c>injection</c> verdict (C-033), is
+    /// accepted only with <paramref name="allowFlagged"/> (<c>/mcp allow</c>), which records that this exact definition was
+    /// allowed, clears the withhold and registers it as an untrusted server's tool; <paramref name="allowFlagged"/> is refused
+    /// for any other hold. With <paramref name="expectedHash"/> (at least <see cref="MinHashPrefix"/> hex characters) the held
+    /// definition's hash must start with it, so a review in another process accepts what it showed (C-033).
+    /// </summary>
+    public McpAcceptResult Accept(string server, string tool, bool allowFlagged = false, string? expectedHash = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(server);
         ArgumentException.ThrowIfNullOrEmpty(tool);
         var connection = _servers.FirstOrDefault(candidate => candidate.Definition.Name == server);
         if (connection is null)
             return new McpAcceptResult(false, $"There is no MCP server named '{server}'.");
+        lock (_review)
+            return Accept(connection, tool, allowFlagged, expectedHash);
+    }
+
+    private McpAcceptResult Accept(McpServerConnection connection, string tool, bool allowFlagged, string? expectedHash)
+    {
+        var server = connection.Definition.Name;
         if (connection.Held(tool) is not { } held)
             return new McpAcceptResult(false, $"{server} has no held tool named '{tool}'.");
-        var flagged = held.Reason == McpHoldReasons.Flagged;
-        if (flagged && !allowFlagged)
-            return new McpAcceptResult(false,
-                $"{server}/{tool} is flagged (\"{held.Flag}\"), so accept does not take it; read /mcp diff {server} {tool}, then /mcp allow {server} {tool} to offer it as an untrusted tool.");
-        if (!flagged && allowFlagged)
-            return new McpAcceptResult(false, $"{server}/{tool} is not flagged; /mcp accept {server} {tool} pins it.");
+        if (expectedHash is not null)
+        {
+            var prefix = expectedHash.Trim().ToLowerInvariant();
+            if (prefix.Length < MinHashPrefix || prefix.Length > held.Definition.Hash.Length || !prefix.All(char.IsAsciiHexDigit))
+                return new McpAcceptResult(false, $"--hash takes at least {MinHashPrefix} hex characters of the hash /mcp diff {server} {tool} shows.");
+            if (!held.Definition.Hash.StartsWith(prefix, StringComparison.Ordinal))
+                return new McpAcceptResult(false,
+                    $"{server}/{tool} is held with hash {held.Definition.Hash[..MinHashPrefix]}, not {prefix}: the server listed another definition since it was reviewed; read /mcp diff {server} {tool} again.");
+        }
+        var review = McpHoldReasons.NeedsReview(held.Reason);
+        if (review && !allowFlagged)
+            return new McpAcceptResult(false, held.Reason == McpHoldReasons.Flagged
+                ? $"{server}/{tool} is flagged (\"{held.Flag}\"), so accept does not take it; read /mcp diff {server} {tool}, then /mcp allow {server} {tool} to offer it as an untrusted tool."
+                : $"{server}/{tool} was withheld after an injection verdict (decision {held.Decision}), so accept does not take it; read /mcp diff {server} {tool}, then /mcp allow {server} {tool} to offer it as an untrusted tool.");
+        if (!review && allowFlagged)
+            return new McpAcceptResult(false, $"{server}/{tool} is not flagged or withheld; /mcp accept {server} {tool} pins it.");
+        var flagged = review;
 
         if (connection.Status.Tools.Length >= connection.Definition.MaxTools)
             return new McpAcceptResult(false, $"{server} already offers {connection.Definition.MaxTools} tools, its limit (MaxTools), so {server}/{tool} is not taken.");
@@ -253,19 +368,22 @@ public sealed class McpClients : IAsyncDisposable
         {
             return new McpAcceptResult(false, $"The pin could not be written: {exception.Message}");
         }
+        var instance = new McpTool(connection, tool, descriptor);
         try
         {
-            _registry.Add(new McpTool(connection, tool, descriptor));
+            _registry.Add(instance);
         }
         catch (InvalidOperationException)
         {
             return new McpAcceptResult(false, $"Pinned, but the name {descriptor.Name} is already taken, so {server}/{tool} is not offered.");
         }
-        connection.Release(held, descriptor.Name);
-        Notify(new McpDefinitionNotice(server, tool, flagged ? McpPinKinds.Allowed : McpPinKinds.Accepted, held.Definition.Hash, held.Pin?.Hash, held.Flag));
+        connection.Release(held, new McpRegisteredTool(descriptor.Name, held.Listed, held.Definition, instance));
+        Notify(new McpDefinitionNotice(server, tool, flagged ? McpPinKinds.Allowed : McpPinKinds.Accepted, held.Definition.Hash, held.Pin?.Hash,
+            held.Flag ?? held.Decision));
         return new McpAcceptResult(true, flagged
-            ? $"Allowed {server}/{tool} as {descriptor.Name}: it is treated as an untrusted server's tool (asks before every call, taints the session); a later change flags it again."
-            : $"Accepted {server}/{tool} as {descriptor.Name}; it is offered from the next turn.", descriptor.Name);
+            ? $"Allowed {server}/{tool} as {descriptor.Name}: it is treated as an untrusted server's tool (asks before every call, taints the session); " +
+              (held.Reason == McpHoldReasons.Injection ? "a later injection verdict over this definition is only logged, and a change holds it again." : "a later change flags it again.")
+            : $"Accepted {server}/{tool} as {descriptor.Name}; it is offered from the next turn.", descriptor.Name, held.Definition.Hash);
     }
 
     private void Notify(McpDefinitionNotice notice)
