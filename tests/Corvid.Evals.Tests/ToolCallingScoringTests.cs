@@ -261,6 +261,111 @@ public sealed class ToolCallingScoringTests : IDisposable
         Assert.Equal(0, report.Summaries.Single(summary => summary.Configuration == "shortlist-kev-no-desc").DescriptionsWithheld);
     }
 
+    private const string OverCallCases = """
+        {"id":"over","prompt":"Open notes.txt.","tags":["direct"],"expect":{"tool":"read_file"},"args":{"path":{"equals":"notes.txt"}},"results":{"read_file":"hello"}}
+        {"id":"late","prompt":"Open late.txt.","tags":["direct"],"expect":{"tool":"read_file"},"results":{"read_file":"hello"}}
+        {"id":"alternate","prompt":"Look up hiking trails.","tags":["near_miss"],"expect":{"any_of":["read_file","web__web_search"]}}
+        {"id":"chain-over","prompt":"Read todo.txt into a note, then search.","tags":["multi_step"],"steps":[{"expect":{"tool":"read_file"}},{"expect":{"tool":"notes__create_note"}}],"results":{"read_file":"buy milk"}}
+        {"id":"chain-wrong","prompt":"Read todo.txt into a note.","tags":["multi_step"],"steps":[{"expect":{"tool":"read_file"}},{"expect":{"tool":"notes__create_note"}}],"results":{"read_file":"buy milk"}}
+        {"id":"chatty","prompt":"Thanks, that's all.","tags":["no_tool"],"expect":{"none":true}}
+        """;
+
+    /// <summary>Calls past the expected steps, and calls before them, for the over-call rule.</summary>
+    private static ChatResponse OverCallScript(GeneratorTurn turn) => (turn.Prompt, turn.Results) switch
+    {
+        // The right tool, then a different one: over-called on a single-step case, as on a chain.
+        ("Open notes.txt.", 0) => Call("read_file", """{"path":"notes.txt"}"""),
+        ("Open notes.txt.", 1) => Call("web__web_search", """{"query":"notes"}"""),
+        // A different tool, then the right one: the first call that ran was wrong.
+        ("Open late.txt.", 0) => Call("web__web_search", """{"query":"late.txt"}"""),
+        ("Open late.txt.", 1) => Call("read_file", """{"path":"late.txt"}"""),
+        // Both tools the step accepts: the second is a repeat of the matched step, not an extra.
+        ("Look up hiking trails.", 0) => Call("read_file", """{"path":"trails.txt"}"""),
+        ("Look up hiking trails.", 1) => Call("web__web_search", """{"query":"hiking trails"}"""),
+        ("Read todo.txt into a note, then search.", 0) => Call("read_file", """{"path":"todo.txt"}"""),
+        ("Read todo.txt into a note, then search.", 1) => Call("notes__create_note", """{"title":"Todo","body":"buy milk"}"""),
+        ("Read todo.txt into a note, then search.", 2) => Call("web__web_search", """{"query":"milk"}"""),
+        ("Read todo.txt into a note.", 0) => Call("read_file", """{"path":"todo.txt"}"""),
+        ("Read todo.txt into a note.", 1) => Call("web__web_search", """{"query":"todo"}"""),
+        ("Thanks, that's all.", 0) => Call("read_file", """{"path":"thanks.txt"}"""),
+        _ => Text("Done."),
+    };
+
+    [Fact]
+    public async Task One_rule_scores_an_extra_call_on_single_and_multi_step_cases()
+    {
+        var set = ToolCallingSet.Parse(Catalogue, OverCallCases);
+        var bindings = new ToolCallingBindings(
+            new ModelBinding(Profile("fake-qwen", ToolCallSupport.TemplateRendered, 8_192), new ScriptedGenerator(OverCallScript)),
+            new ModelBinding(Profile("keywords", ToolCallSupport.None, 512), new KeywordEmbedder("weather", "note", "file", "web", "online")),
+            null, new ScriptedDecider((_, _, _) => null));
+        var runner = new ToolCallingRunner(set, bindings, [ToolCallingConfiguration.QwenAll], _root);
+        var runs = await runner.RunAsync(set.Cases, cancellationToken: Ct);
+        var scores = runs.Select(run => ToolCallingScorer.Score(run, set)).ToList();
+        const string a = "qwen-all";
+
+        var over = Get(scores, "over", a);
+        Assert.Equal(CaseOutcome.OverCalled, over.Outcome);
+        Assert.Equal(["read_file", "web__web_search"], over.Calls.Select(call => call.Tool));
+        Assert.False(over.ToolCorrect);
+        Assert.False(over.ArgumentsCorrect);
+        Assert.True(over.ToolCorrectOrOverCalled);
+        Assert.True(over.ArgumentsCorrectOrOverCalled);
+        Assert.True(over.ArgsMatch);
+
+        var late = Get(scores, "late", a);
+        Assert.Equal(CaseOutcome.WrongTool, late.Outcome);
+        Assert.False(late.ToolCorrectOrOverCalled);
+        Assert.Equal(CaseOutcome.Correct, Get(scores, "alternate", a).Outcome);
+
+        var chainOver = Get(scores, "chain-over", a);
+        Assert.Equal(CaseOutcome.OverCalled, chainOver.Outcome);
+        Assert.Equal(2, chainOver.StepsMatched);
+        var chainWrong = Get(scores, "chain-wrong", a);
+        Assert.Equal(CaseOutcome.WrongTool, chainWrong.Outcome);
+        Assert.Equal(1, chainWrong.StepsMatched);
+        Assert.Equal(CaseOutcome.CalledOnNoTool, Get(scores, "chatty", a).Outcome);
+
+        var report = ToolCallingReport.Build(new ToolCallingHeader("test.1", new string('a', 64), new string('b', 64), 4, "floors", "abc1234",
+            ImmutableSortedDictionary<string, string>.Empty, ImmutableSortedDictionary<string, string>.Empty,
+            ImmutableSortedDictionary<string, string>.Empty, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch), scores);
+        var summary = Assert.Single(report.Summaries);
+        Assert.Equal(1, summary.ToolCorrect);
+        Assert.Equal(2, summary.Outcomes["over_called"]);
+        Assert.Equal(3, summary.ToolCorrectOrOverCalled);
+        Assert.Contains("| qwen-all | 6 | 1 (16.7%) | 1 (16.7%) | 2 | 3 (50.0%) | 3 (50.0%) | 2 |", report.ToMarkdown(), StringComparison.Ordinal);
+        using var json = JsonDocument.Parse(report.ToJson());
+        Assert.Equal(3, json.RootElement.GetProperty("summaries")[0].GetProperty("tool_correct_or_over_called").GetInt32());
+    }
+
+    [Fact]
+    public async Task A_wrong_tool_that_ran_does_not_move_the_expected_step_for_Kev_outcomes()
+    {
+        var set = ToolCallingSet.Parse(Catalogue, Cases);
+        // Kev's top answer on the wrong-tool case is always the expected web search, below the floor so nothing acts and the
+        // generator still calls read_file. Every one of those picks is right: the case never got its web search.
+        var bindings = new ToolCallingBindings(
+            new ModelBinding(Profile("fake-qwen", ToolCallSupport.TemplateRendered, 8_192), new ScriptedGenerator(Script)),
+            new ModelBinding(Profile("keywords", ToolCallSupport.None, 512), new KeywordEmbedder("weather", "note", "file", "web", "online")),
+            null, new ScriptedDecider((prompt, key, question) => key == "tool" && prompt.StartsWith("Search online", StringComparison.Ordinal)
+                ? [.. question.Options.Select(option => option.Name == "web__web_search" ? 0.4 : 0.6 / (question.Options.Length - 1))]
+                : null));
+        var runner = new ToolCallingRunner(set, bindings, [ToolCallingConfiguration.ShortlistKev], _root);
+        var runs = await runner.RunAsync([.. set.Cases.Where(item => item.Id == "wrong")], cancellationToken: Ct);
+        var run = Assert.Single(runs);
+        Assert.Equal(CaseOutcome.WrongTool, ToolCallingScorer.Score(run, set).Outcome);
+        Assert.Contains(run.Events.OfType<ToolResult>(), result => !result.IsError);
+
+        var outcomes = ToolCallingReport.AppendKevOutcomes(runner.Log(ToolCallingConfiguration.ShortlistKev), runs);
+
+        // At ingress and at the step checkpoint after read_file ran: both still expect the web search, so both are accepted.
+        Assert.True(outcomes.LaterAccepted > 0);
+        Assert.Equal(0, outcomes.Corrected);
+        var decisions = Calibration.DecisionSet.Load([runner.LogPath(ToolCallingConfiguration.ShortlistKev)], cancellationToken: Ct);
+        Assert.All(decisions.Records.Where(record => record.QuestionId == "tool" && record.Tier == Calibration.DecisionTier.Calibrated
+            && record.Answer is not null), record => Assert.Equal("accepted", record.Outcome));
+    }
+
     [Fact]
     public async Task A_missing_model_exits_with_the_download_command_and_never_loads_the_others()
     {

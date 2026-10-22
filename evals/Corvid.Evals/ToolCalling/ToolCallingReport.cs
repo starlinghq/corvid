@@ -34,13 +34,16 @@ public sealed record Distribution(int N, double P50, double P90, double Mean, do
     }
 }
 
-/// <summary>One configuration's totals.</summary>
+/// <summary>One configuration's totals. <c>ToolCorrect</c> and <c>ArgsCorrect</c> are strict (an over-call is a miss);
+/// the <c>OrOverCalled</c> pair is the lenient rate that also counts a case whose steps all ran before an extra call.</summary>
 public sealed record ConfigurationSummary(
     string Configuration,
     int Cases,
     ImmutableSortedDictionary<string, int> Outcomes,
     int ToolCorrect,
     int ArgsCorrect,
+    int ToolCorrectOrOverCalled,
+    int ArgsCorrectOrOverCalled,
     int NonEscalated,
     int ToolCorrectNonEscalated,
     int ArgsCorrectNonEscalated,
@@ -136,6 +139,7 @@ public sealed class ToolCallingReport
         var offeredCalls = scores.Where(score => score.ArgsValid is not null).ToList();
         return new ConfigurationSummary(name, scores.Count, outcomes,
             scores.Count(score => score.ToolCorrect), scores.Count(score => score.ArgumentsCorrect),
+            scores.Count(score => score.ToolCorrectOrOverCalled), scores.Count(score => score.ArgumentsCorrectOrOverCalled),
             kept.Count, kept.Count(score => score.ToolCorrect), kept.Count(score => score.ArgumentsCorrect),
             scores.Count(score => score.Outcome == CaseOutcome.Escalated),
             scores.Where(score => score.EscalationReason is not null).GroupBy(score => score.EscalationReason!, StringComparer.Ordinal)
@@ -156,8 +160,9 @@ public sealed class ToolCallingReport
 
     /// <summary>
     /// For floor fitting (C-021): one <c>DecisionOutcomeRecorded</c> per calibrated <c>tool</c> decision in (c)'s runs,
-    /// <c>accepted</c> when Kev's pick is what the case expects at that point (the step after the calls that ran so far, or
-    /// none once they are done or on a no-tool case), <c>corrected</c> otherwise. Appended after the loop's own
+    /// <c>accepted</c> when Kev's pick is what the case expects at that point (the first step not yet matched by a call that
+    /// ran, or none once every step has or on a no-tool case), <c>corrected</c> otherwise. A call that ran but that the next
+    /// step does not accept (a wrong tool, a repeat) does not move the expectation. Appended after the loop's own
     /// <c>tool_succeeded</c>, so it is the decision's last outcome and labels it. The log is then valid input to
     /// <c>corvid-evals calibrate --log</c>.
     /// </summary>
@@ -171,11 +176,14 @@ public sealed class ToolCallingReport
         foreach (var run in runs)
         {
             var events = new List<EventData>();
+            var tools = run.Events.OfType<ToolCallIssued>().GroupBy(call => call.CallId, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.First().ToolName, StringComparer.Ordinal);
             var done = 0;
             var first = true;
             foreach (var payload in run.Events)
             {
-                if (payload is ToolResult { IsError: false })
+                if (payload is ToolResult { IsError: false } result && !run.Case.ExpectsNoTool && done < run.Case.Steps.Length
+                    && tools.TryGetValue(result.CallId, out var ranTool) && run.Case.Steps[done].Expect.Accepts(ranTool))
                     done++;
                 if (payload is not Decision { QuestionId: "tool", Calibrated: true } decision || decision.Probabilities.IsEmpty)
                     continue;
@@ -214,7 +222,7 @@ public sealed class ToolCallingReport
         using (var writer = new Utf8JsonWriter(stream, Indented))
         {
             writer.WriteStartObject();
-            writer.WriteString("format", "corvid-tool-calling-report/1");
+            writer.WriteString("format", "corvid-tool-calling-report/2");
             WriteHeader(writer);
             writer.WritePropertyName("headline");
             if (Headline is { } headline)
@@ -273,6 +281,8 @@ public sealed class ToolCallingReport
         writer.WriteEndObject();
         writer.WriteNumber("tool_correct", summary.ToolCorrect);
         writer.WriteNumber("args_correct", summary.ArgsCorrect);
+        writer.WriteNumber("tool_correct_or_over_called", summary.ToolCorrectOrOverCalled);
+        writer.WriteNumber("args_correct_or_over_called", summary.ArgsCorrectOrOverCalled);
         writer.WriteNumber("non_escalated", summary.NonEscalated);
         writer.WriteNumber("tool_correct_non_escalated", summary.ToolCorrectNonEscalated);
         writer.WriteNumber("args_correct_non_escalated", summary.ArgsCorrectNonEscalated);
@@ -434,13 +444,15 @@ public sealed class ToolCallingReport
 
         md.AppendLine("## Outcomes");
         md.AppendLine();
-        md.AppendLine("| Configuration | n | Correct tool | Args match | Wrong tool | Invalid name | Malformed | No call | Called on no-tool | Clarified | Escalated | Failed | Correct, non-escalated | Args valid (first offered call) | First response correct | Repaired | Nudged | MCP tools withheld |");
-        md.AppendLine("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+        md.AppendLine("Correct tool and args match are strict: a case whose expected steps all ran and then another tool ran is over-called, a miss. The two lenient columns count it as correct.");
+        md.AppendLine();
+        md.AppendLine("| Configuration | n | Correct tool | Args match | Over-called | Correct tool, lenient | Args match, lenient | Wrong tool | Invalid name | Malformed | No call | Called on no-tool | Clarified | Escalated | Failed | Correct, non-escalated | Args valid (first offered call) | First response correct | Repaired | Nudged | MCP tools withheld |");
+        md.AppendLine("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
         foreach (var s in Summaries)
         {
             int O(CaseOutcome outcome) => s.Outcomes[ToolCallingScorer.Name(outcome)];
             md.AppendLine(CultureInfo.InvariantCulture,
-                $"| {s.Configuration} | {s.Cases} | {Share(s.ToolCorrect, s.Cases)} | {Share(s.ArgsCorrect, s.Cases)} | {O(CaseOutcome.WrongTool)} | {O(CaseOutcome.InvalidName)} | {O(CaseOutcome.Malformed)} | {O(CaseOutcome.NoCall)} of {s.ToolCases} | {O(CaseOutcome.CalledOnNoTool)} | {s.Clarified} | {s.Escalated}{Reasons(s)} | {O(CaseOutcome.Failed)} | {Share(s.ToolCorrectNonEscalated, s.NonEscalated)} | {s.ArgsValid}/{s.ArgsValidOf} | {s.FirstResponseCorrect} | {s.RepairedToCorrect} | {s.Nudged} | {s.DescriptionsWithheld} |");
+                $"| {s.Configuration} | {s.Cases} | {Share(s.ToolCorrect, s.Cases)} | {Share(s.ArgsCorrect, s.Cases)} | {O(CaseOutcome.OverCalled)} | {Share(s.ToolCorrectOrOverCalled, s.Cases)} | {Share(s.ArgsCorrectOrOverCalled, s.Cases)} | {O(CaseOutcome.WrongTool)} | {O(CaseOutcome.InvalidName)} | {O(CaseOutcome.Malformed)} | {O(CaseOutcome.NoCall)} of {s.ToolCases} | {O(CaseOutcome.CalledOnNoTool)} | {s.Clarified} | {s.Escalated}{Reasons(s)} | {O(CaseOutcome.Failed)} | {Share(s.ToolCorrectNonEscalated, s.NonEscalated)} | {s.ArgsValid}/{s.ArgsValidOf} | {s.FirstResponseCorrect} | {s.RepairedToCorrect} | {s.Nudged} | {s.DescriptionsWithheld} |");
         }
         md.AppendLine();
 
@@ -495,8 +507,8 @@ public sealed class ToolCallingReport
     private static string Describe(CaseScore score)
     {
         var text = ToolCallingScorer.Name(score.Outcome);
-        if (score.Outcome == CaseOutcome.Correct && score.ArgsMatch == false)
-            text = "correct, args miss";
+        if (score.Outcome is CaseOutcome.Correct or CaseOutcome.OverCalled && score.ArgsMatch == false)
+            text += ", args miss";
         if (score.EscalationReason is not null)
             text += $" ({score.EscalationReason})";
         if (!score.Calls.IsEmpty)

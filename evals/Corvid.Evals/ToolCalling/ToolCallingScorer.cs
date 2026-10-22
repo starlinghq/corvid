@@ -8,9 +8,14 @@ namespace Corvid.Evals.ToolCalling;
 /// <summary>How one case ended in one configuration (S5's outcome classes, plus the turn loop's own endings).</summary>
 public enum CaseOutcome
 {
-    /// <summary>The expected tool (or tools, in order), or no call on a no-tool case.</summary>
+    /// <summary>The expected tool (or tools, in order) and nothing else, or no call on a no-tool case.</summary>
     Correct,
-    /// <summary>An offered tool ran, but not the expected one (or a multi-step chain went off its steps).</summary>
+    /// <summary>
+    /// Every expected step ran in order, then a tool no step accepts ran as well (read the file, then patch it unasked). A miss
+    /// in the headline; the report also counts it with <see cref="Correct"/> as the lenient rate.
+    /// </summary>
+    OverCalled,
+    /// <summary>An offered tool ran, but not the expected one, or another tool ran before the expected steps were done.</summary>
     WrongTool,
     /// <summary>Every call named a tool that was not offered.</summary>
     InvalidName,
@@ -74,20 +79,29 @@ public sealed record CaseScore(
     /// <summary>The headline's argument match: correct, and every constraint holds (S2's "argument exact match").</summary>
     public bool ArgumentsCorrect => Outcome == CaseOutcome.Correct && ArgsMatch != false;
 
+    /// <summary>The lenient tool choice: the expected steps all ran, whether or not another tool ran after them.</summary>
+    public bool ToolCorrectOrOverCalled => Outcome is CaseOutcome.Correct or CaseOutcome.OverCalled;
+
+    /// <summary>The lenient argument match: <see cref="ToolCorrectOrOverCalled"/>, and every constraint on the matched calls holds.</summary>
+    public bool ArgumentsCorrectOrOverCalled => ToolCorrectOrOverCalled && ArgsMatch != false;
+
     /// <summary>C-033's ingress description check acted: some shortlisted MCP tools were withheld from this turn.</summary>
     public bool WithheldDescriptions => Acted.Any(acted => acted.StartsWith("injection/mcp:", StringComparison.Ordinal));
 }
 
 /// <summary>
-/// Scores a <see cref="CaseRun"/> from its session's events and the turn's result (C-034). The decisive call of a
-/// single-step case is the first one that ran; a rejected call before it is a repair. A multi-step case is correct when the
-/// calls that ran match its steps in order, repeats of a matched step aside, with nothing else run.
+/// Scores a <see cref="CaseRun"/> from its session's events and the turn's result (C-034). One rule for single- and
+/// multi-step cases (a single-step case is a chain of one): the calls that ran are matched to the steps in order, and a
+/// call that a matched step accepts again is a repeat, not an extra. All steps matched with nothing else run is correct;
+/// all matched with an extra only after the last is over-called; an extra before the steps are done, or a step never
+/// matched, is a wrong tool. A call rejected for invalid arguments never ran, so one before the right call is a repair.
 /// </summary>
 public static class ToolCallingScorer
 {
     public static string Name(CaseOutcome outcome) => outcome switch
     {
         CaseOutcome.Correct => "correct",
+        CaseOutcome.OverCalled => "over_called",
         CaseOutcome.WrongTool => "wrong_tool",
         CaseOutcome.InvalidName => "invalid_name",
         CaseOutcome.Malformed => "malformed",
@@ -121,36 +135,30 @@ public static class ToolCallingScorer
         CaseOutcome local;
         bool? argsMatch = null;
         var matched = 0;
-        ScoredCall? decisive = null;
         if (item.ExpectsNoTool)
         {
             local = calls.IsEmpty ? CaseOutcome.Correct : CaseOutcome.CalledOnNoTool;
         }
         else if (ran.Count > 0)
         {
-            if (item.MultiStep)
+            var extraBefore = false;
+            var extraAfter = false;
+            var chain = new List<(ExpectedStep Step, ScoredCall Call)>();
+            foreach (var call in ran)
             {
-                var extra = false;
-                var chain = new List<(ExpectedStep Step, ScoredCall Call)>();
-                foreach (var call in ran)
-                {
-                    if (matched < item.Steps.Length && item.Steps[matched].Expect.Accepts(call.Tool))
-                        chain.Add((item.Steps[matched++], call));
-                    else if (!chain.Any(link => link.Call.Tool == call.Tool))
-                        extra = true;
-                }
-                local = matched == item.Steps.Length && !extra ? CaseOutcome.Correct : CaseOutcome.WrongTool;
-                argsMatch = chain.Count == 0 ? null : chain.Aggregate(true, (all, link) => Matches(link.Step, link.Call, set, misses) & all);
-                decisive = ran[0];
+                if (matched < item.Steps.Length && item.Steps[matched].Expect.Accepts(call.Tool))
+                    chain.Add((item.Steps[matched++], call));
+                else if (chain.Any(link => link.Step.Expect.Accepts(call.Tool)))
+                    continue;
+                else if (matched == item.Steps.Length)
+                    extraAfter = true;
+                else
+                    extraBefore = true;
             }
-            else
-            {
-                decisive = ran[0];
-                local = item.Steps[0].Expect.Accepts(decisive.Tool) ? CaseOutcome.Correct : CaseOutcome.WrongTool;
-                if (local == CaseOutcome.Correct)
-                    argsMatch = Matches(item.Steps[0], decisive, set, misses);
-                matched = local == CaseOutcome.Correct ? 1 : 0;
-            }
+            local = matched < item.Steps.Length || extraBefore ? CaseOutcome.WrongTool
+                : extraAfter ? CaseOutcome.OverCalled
+                : CaseOutcome.Correct;
+            argsMatch = chain.Count == 0 ? null : chain.Aggregate(true, (all, link) => Matches(link.Step, link.Call, set, misses) & all);
         }
         else if (!calls.IsEmpty)
         {
