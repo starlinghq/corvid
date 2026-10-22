@@ -21,6 +21,11 @@ public enum ToolCallingConfiguration
     Shortlist,
     /// <summary>(c) Shortlist plus Kev-0.8B as the calibrated decider: production with Kev.</summary>
     ShortlistKev,
+    /// <summary>
+    /// Optional ablation of (c): the same bindings, but the extras are registered without their <c>mcp:</c> origin, so
+    /// C-033's ingress <c>injection</c> question about MCP descriptions is never asked and never withholds them. Not production.
+    /// </summary>
+    ShortlistKevNoDescriptions,
     /// <summary>Optional: production without Kev (<see cref="DegradedDecider"/>; embedding-margin tool pick, generator yes/no). §5.6's A/B baseline.</summary>
     Degraded,
 }
@@ -36,6 +41,7 @@ public static class ToolCallingConfigurations
         ToolCallingConfiguration.QwenAll => "qwen-all",
         ToolCallingConfiguration.Shortlist => "shortlist",
         ToolCallingConfiguration.ShortlistKev => "shortlist-kev",
+        ToolCallingConfiguration.ShortlistKevNoDescriptions => "shortlist-kev-no-desc",
         ToolCallingConfiguration.Degraded => "degraded",
         _ => throw new ArgumentOutOfRangeException(nameof(configuration)),
     };
@@ -54,7 +60,8 @@ public static class ToolCallingConfigurations
 
     public static bool NeedsEmbedder(ToolCallingConfiguration configuration) => configuration != ToolCallingConfiguration.QwenAll;
 
-    public static bool NeedsKev(ToolCallingConfiguration configuration) => configuration == ToolCallingConfiguration.ShortlistKev;
+    public static bool NeedsKev(ToolCallingConfiguration configuration) =>
+        configuration is ToolCallingConfiguration.ShortlistKev or ToolCallingConfiguration.ShortlistKevNoDescriptions;
 }
 
 /// <summary>The models a run binds, loaded once. The generator's service is an <see cref="IChatClient"/> bound as the host binds it.</summary>
@@ -91,6 +98,7 @@ public sealed class ToolCallingRunner
     private readonly CannedResults _results = new();
     private readonly TurnMeter _meter = new();
     private readonly Corvid.Tools.ToolRegistry _tools;
+    private readonly Corvid.Tools.ToolRegistry _toolsWithoutOrigins;
     private readonly IReadOnlyDictionary<string, ImmutableArray<string>> _examples;
 
     public ToolCallingRunner(ToolCallingSet set, ToolCallingBindings bindings, IEnumerable<ToolCallingConfiguration> configurations,
@@ -104,6 +112,7 @@ public sealed class ToolCallingRunner
             throw new ArgumentException("The generator binding must be a chat client.", nameof(bindings));
         _set = set;
         _tools = CatalogueTool.Registry(set, _results);
+        _toolsWithoutOrigins = CatalogueTool.Registry(set, _results, mcpOrigins: false);
         _examples = set.Catalogue.Where(tool => !tool.Examples.IsEmpty).ToDictionary(tool => tool.Name, tool => tool.Examples, StringComparer.Ordinal);
         Directory.CreateDirectory(outputDirectory);
         _setups = [.. configurations.Distinct().Select(configuration => Configure(configuration, bindings, outputDirectory))];
@@ -122,7 +131,7 @@ public sealed class ToolCallingRunner
     public static string FloorsVersion => DecisionPolicy.Default.Floors.Version;
 
     private sealed record Setup(ToolCallingConfiguration Configuration, string LogPath, SqliteEventLog Log, ModelSlotRegistry Registry,
-        DecisionFabric Fabric, ToolShortlist Shortlist);
+        DecisionFabric Fabric, ToolShortlist Shortlist, Corvid.Tools.ToolRegistry Tools);
 
     private Setup Configure(ToolCallingConfiguration configuration, ToolCallingBindings bindings, string outputDirectory)
     {
@@ -159,7 +168,8 @@ public sealed class ToolCallingRunner
         var shortlist = configuration == ToolCallingConfiguration.QwenAll
             ? new ToolShortlist(new ShortlistOptions(Size: _set.Catalogue.Length))
             : new ToolShortlist();
-        return new Setup(configuration, path, log, registry, fabric, shortlist);
+        return new Setup(configuration, path, log, registry, fabric, shortlist,
+            configuration == ToolCallingConfiguration.ShortlistKevNoDescriptions ? _toolsWithoutOrigins : _tools);
     }
 
     /// <param name="warmup">Run once in every configuration before the first case, untimed and unscored (S5's warm-up).</param>
@@ -191,7 +201,7 @@ public sealed class ToolCallingRunner
             Log = setup.Log,
             Slots = new SessionModelSlots(setup.Registry, setup.Log, sessionId),
             Fabric = setup.Fabric,
-            Tools = _tools,
+            Tools = setup.Tools,
             Shortlist = setup.Shortlist,
             Options = TurnOptions.Default with
             {

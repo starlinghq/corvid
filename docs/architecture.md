@@ -3366,8 +3366,11 @@ Results and method: [S2](spikes/S2-tool-calling.md).
     expected tools in the catalogue, every constrained parameter declared by an expected tool, `equals` and `enum` values
     inside a declared enum, unique ids. The cases were committed alone before any model ran on them.
 - The harness. `CatalogueTool` is a `ToolFunction` over a descriptor built from the catalogue, read-only and offline
-  (`ToolRisk(None, Network: false)`), so no approval, checkpoint, sandbox, taint or `injection` question runs; it returns
-  the running case's canned result. `ToolCallingRunner` composes, per case and configuration, a fresh session on one
+  (`ToolRisk(None, Network: false)`), so no approval, `pre-execute` checkpoint, sandbox, taint or result `injection`
+  question runs; it returns the running case's canned result. The extras' descriptions are trusted, so C-033's ingress
+  `injection` question about shortlisted MCP descriptions is asked (up to two chunks) in every configuration, without
+  tainting; only a calibrated yes at the floor acts, which in (c) withholds that chunk's tools from the turn, as in
+  production (the report counts it among the acted questions). `ToolCallingRunner` composes, per case and configuration, a fresh session on one
   `SqliteEventLog` per configuration (`events-<config>.db`), production `TurnOptions` except `MaxSteps` (expected steps
   + 1) with the built-ins' examples as `ToolExamples` (as the host sets them), and the generator slot bound with one
   escalation target, `EscalationStub` (fixed text, a 131k window), so `TurnResult.Escalations` names the reason
@@ -3383,7 +3386,8 @@ Results and method: [S2](spikes/S2-tool-calling.md).
 
   `AbstainingDecider` answers every question uniformly and uncalibrated with no margin, so the policy acts on nothing: a
   choice has no embedding margin, P(yes) = 0.5 is under every yes/no floor a turn asks here (`clarify` and `stuck` 0.7,
-  `done` 0.8; `wake`'s 0.5 is never asked in a turn), `difficulty` is a heuristic and gates need calibration. The scoring test pins
+  `done` 0.8; `wake`'s 0.5 is never asked in a turn), `difficulty` is a heuristic, and gates and `injection` need
+  calibration. The scoring test pins
   this: every tool offered, `clarify`, `difficulty`, `tool` and `done` at their below-floor actions.
 - Scoring (`ToolCallingScorer`, from the session's events and the `TurnResult`): the decisive call of a single-step case
   is the first one that ran; a call whose result is an `invalid arguments` error was rejected, and one naming a tool that
@@ -3415,13 +3419,15 @@ Results and method: [S2](spikes/S2-tool-calling.md).
   stays model-free, so `tests/Corvid.Evals.Tests` (CI) loads no natives: it validates the committed set and its coverage
   (each built-in expected in at least 5 cases, at least 15 `no_tool` and 15 `required`, 8–12 multi-step, 190–220 in all)
   and drives a scripted generator, a keyword embedder and a scripted Kev through the real turn loop over nine inline
-  cases, one per outcome class. The GPU wrapper (`Corvid.Spikes.ToolCalling`) is outside `Corvid.slnx` and `src/`: with
-  `-p:UseCuda=true` its one native package is `Microsoft.ML.OnnxRuntimeGenAI.Cuda` 0.17.1 (version inline, S1's
-  precedent), which brings `Microsoft.ML.OnnxRuntime.Gpu` 1.30.0, so the build has a single `libonnxruntime.so`; it links
-  `KevDecider.cs`, `Gliner2Extractor.cs`, `Qwen35TokenCounter.cs` and `StarlingProfiles.cs` and builds Qwen and Kev on
-  CUDA through the constructors the CPU-only factories guard (C-029), the embedder and GLiNER2 on the CPU.
+  cases, one per outcome class. The GPU wrapper (`Corvid.Spikes.ToolCalling`) is outside `Corvid.slnx` and `src/`. It
+  references `Corvid.Models.Starling` and is built with `-p:UseCuda=true`, so its one native package is C-029's
+  `Microsoft.ML.OnnxRuntimeGenAI.Cuda` 0.17.1 (central version), which brings `Microsoft.ML.OnnxRuntime.Gpu` 1.30.0 and a
+  single `libonnxruntime.so`. Kev, EmbeddingGemma 2 and GLiNER2 are bound through `StarlingBindings` as the host binds
+  them (Kev with `KevDecider.OptionsFor("cuda:0")`, profile `kev-0.8b@cuda:0`); Qwen on CUDA is spike-only (production
+  places only Kev on a GPU), built as `StarlingBindings.Qwen35Generator` builds it with the CUDA provider. Its restore
+  shares `Corvid.Models.Starling`'s `obj/` with the solution build, so `run.sh build` is followed by a solution build.
 - Not built: a configuration with the llguidance tool grammar (waits for U-2; the `required` cases are its benchmark),
-  production CUDA placement (C-029), multi-turn cases and recency effects, untrusted MCP servers (their `injection`
+  Qwen on CUDA in production (C-029 places only Kev), multi-turn cases and recency effects, untrusted MCP servers (their `injection`
   questions and taint), approvals and `pre-execute`, generated examples for MCP tools, time to first token (the loop does
   not stream), and fitting floors from the eval log (the outcomes are written; C-021's workflow fits them).
 

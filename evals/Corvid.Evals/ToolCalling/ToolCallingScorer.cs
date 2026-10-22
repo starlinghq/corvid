@@ -73,6 +73,9 @@ public sealed record CaseScore(
 
     /// <summary>The headline's argument match: correct, and every constraint holds (S2's "argument exact match").</summary>
     public bool ArgumentsCorrect => Outcome == CaseOutcome.Correct && ArgsMatch != false;
+
+    /// <summary>C-033's ingress description check acted: some shortlisted MCP tools were withheld from this turn.</summary>
+    public bool WithheldDescriptions => Acted.Any(acted => acted.StartsWith("injection/mcp:", StringComparison.Ordinal));
 }
 
 /// <summary>
@@ -215,6 +218,8 @@ public static class ToolCallingScorer
         "difficulty" => decision.Action == "escalate_generator",
         "done" => decision.Action == "stop",
         "stuck" => decision.Action == "change_strategy",
+        // C-033: a description question that acted withholds that chunk's MCP tools from the turn.
+        _ when decision.QuestionId.StartsWith("injection/mcp:", StringComparison.Ordinal) => decision.Action == "mark_tainted",
         _ => false,
     };
 

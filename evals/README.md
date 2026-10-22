@@ -69,7 +69,8 @@ evals/Corvid.Evals.Calibrate/bin/Release/net10.0/corvid-evals calibrate --log /t
 This is the shipped path: every model on the CPU, located offline as `corvid` locates them, never downloaded (a missing
 one exits 1 naming `corvid model download`). It is slow on the CPU (Kev is 2.6 s or more per checkpoint, S1); the
 measured run used the GPU wrapper, `evals/spikes/S2-tool-calling/run.sh build` then `run.sh run --out <dir>`, which binds
-Qwen and Kev on the 3090 and otherwise runs the same `ToolCallingCli`. Results and the method are in
+Qwen and Kev on the 3090 and otherwise runs the same `ToolCallingCli` (its `-p:UseCuda=true` restore shares
+`Corvid.Models.Starling`'s `obj/`, so build the solution again afterwards). Results and the method are in
 [`docs/spikes/S2-tool-calling.md`](../docs/spikes/S2-tool-calling.md).
 
 CI runs no model: `tests/Corvid.Evals.Tests` validates the committed cases and their coverage and scores a fake model

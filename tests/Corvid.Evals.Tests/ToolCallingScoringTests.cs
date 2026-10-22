@@ -229,6 +229,39 @@ public sealed class ToolCallingScoringTests : IDisposable
     }
 
     [Fact]
+    public async Task A_confident_description_verdict_withholds_the_tool_and_the_ablation_never_asks()
+    {
+        var set = ToolCallingSet.Parse(Catalogue, Cases);
+        // Kev says the weather server's description instructs the agent, as Kev-0.8B did for most benign extras in the S2 run.
+        var bindings = new ToolCallingBindings(
+            new ModelBinding(Profile("fake-qwen", ToolCallSupport.TemplateRendered, 8_192), new ScriptedGenerator(Script)),
+            new ModelBinding(Profile("keywords", ToolCallSupport.None, 512), new KeywordEmbedder("weather", "note", "file", "web", "online")),
+            null, new ScriptedDecider((_, key, _) => key == "injection/mcp:weather" ? [0.9, 0.1] : null));
+        var runner = new ToolCallingRunner(set, bindings,
+            [ToolCallingConfiguration.ShortlistKev, ToolCallingConfiguration.ShortlistKevNoDescriptions], _root);
+        var runs = await runner.RunAsync([.. set.Cases.Where(item => item.Id == "correct")], cancellationToken: Ct);
+        var scores = runs.Select(run => ToolCallingScorer.Score(run, set)).ToList();
+
+        var withheld = Get(scores, "correct", "shortlist-kev");
+        Assert.Contains("injection/mcp:weather=mark_tainted", withheld.Acted);
+        Assert.True(withheld.WithheldDescriptions);
+        Assert.DoesNotContain("weather__get_weather", withheld.Offered);
+        Assert.Equal(CaseOutcome.InvalidName, withheld.Outcome);
+
+        var ablation = Get(scores, "correct", "shortlist-kev-no-desc");
+        Assert.DoesNotContain(runs.Single(run => run.Configuration == ToolCallingConfiguration.ShortlistKevNoDescriptions).Events.OfType<Decision>(),
+            decision => decision.QuestionId.StartsWith("injection/", StringComparison.Ordinal));
+        Assert.False(ablation.WithheldDescriptions);
+        Assert.Equal(CaseOutcome.Correct, ablation.Outcome);
+
+        var report = ToolCallingReport.Build(new ToolCallingHeader("test.1", new string('a', 64), new string('b', 64), 4, "floors", "abc1234",
+            ImmutableSortedDictionary<string, string>.Empty, ImmutableSortedDictionary<string, string>.Empty,
+            ImmutableSortedDictionary<string, string>.Empty, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch), scores);
+        Assert.Equal(1, report.Summaries.Single(summary => summary.Configuration == "shortlist-kev").DescriptionsWithheld);
+        Assert.Equal(0, report.Summaries.Single(summary => summary.Configuration == "shortlist-kev-no-desc").DescriptionsWithheld);
+    }
+
+    [Fact]
     public async Task A_missing_model_exits_with_the_download_command_and_never_loads_the_others()
     {
         var set = Path.Combine(_root, "set");

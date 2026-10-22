@@ -18,15 +18,16 @@ public sealed class CatalogueTool : ToolFunction
 
     private readonly CannedResults _results;
 
-    public CatalogueTool(CatalogueEntry entry, CannedResults results)
-        : base(Describe(entry))
+    public CatalogueTool(CatalogueEntry entry, CannedResults results, bool mcpOrigin = true)
+        : base(Describe(entry, mcpOrigin))
     {
         ArgumentNullException.ThrowIfNull(results);
         _results = results;
     }
 
     /// <summary>The descriptor the generator and the shortlist see: the snapshot's name, description and schema.</summary>
-    public static ToolDescriptor Describe(CatalogueEntry entry)
+    /// <param name="mcpOrigin">False drops an extra's <c>mcp:</c> origin (the <c>shortlist-kev-no-desc</c> ablation).</param>
+    public static ToolDescriptor Describe(CatalogueEntry entry, bool mcpOrigin = true)
     {
         ArgumentNullException.ThrowIfNull(entry);
         var parameters = entry.ParameterNames.Select(name =>
@@ -38,7 +39,7 @@ public sealed class CatalogueTool : ToolFunction
         return new ToolDescriptor(entry.Name, entry.Description, entry.Parameters.GetRawText(),
             new ToolRisk(SideEffects.None, Network: false, Destructive: false), parameters)
         {
-            Origin = entry.IsBuiltin ? null : entry.Origin,
+            Origin = entry.IsBuiltin || !mcpOrigin ? null : entry.Origin,
         };
     }
 
@@ -60,12 +61,12 @@ public sealed class CatalogueTool : ToolFunction
     }
 
     /// <summary>A tool for every catalogue entry, sharing one <see cref="CannedResults"/>.</summary>
-    public static ToolRegistry Registry(ToolCallingSet set, CannedResults results)
+    public static ToolRegistry Registry(ToolCallingSet set, CannedResults results, bool mcpOrigins = true)
     {
         ArgumentNullException.ThrowIfNull(set);
         var registry = new ToolRegistry();
         foreach (var entry in set.Catalogue)
-            registry.Add(new CatalogueTool(entry, results));
+            registry.Add(new CatalogueTool(entry, results, mcpOrigins));
         return registry;
     }
 }

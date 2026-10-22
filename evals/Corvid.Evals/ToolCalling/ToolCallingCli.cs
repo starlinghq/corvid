@@ -53,7 +53,8 @@ public static class ToolCallingCli
           --set <dir>          directory holding catalogue.json and cases.jsonl   [evals/tool-calling, else next to the binary]
           --catalogue <file>   catalogue.json, overriding --set
           --cases <file>       cases.jsonl, overriding --set
-          --configs <a,b>      qwen-all, shortlist, shortlist-kev, degraded         [qwen-all,shortlist,shortlist-kev]
+          --configs <a,b>      qwen-all, shortlist, shortlist-kev, and the opt-in     [qwen-all,shortlist,shortlist-kev]
+                               shortlist-kev-no-desc (no C-033 description check) and degraded
           --tags <a,b>         only cases with any of these tags
           --limit <n>          only the first n cases (after --tags)
           --no-extractor       leave GLiNER2 out of every configuration

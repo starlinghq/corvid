@@ -50,6 +50,7 @@ public sealed record ConfigurationSummary(
     int ToolCases,
     int NoCall,
     int Nudged,
+    int DescriptionsWithheld,
     int FirstResponseCorrect,
     int RepairedToCorrect,
     int ArgsValid,
@@ -141,7 +142,8 @@ public sealed class ToolCallingReport
                 .ToImmutableSortedDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal),
             scores.Count(score => score.Outcome == CaseOutcome.Clarified),
             toolCases.Count, toolCases.Count(score => score.Outcome == CaseOutcome.NoCall),
-            scores.Count(score => score.Nudged), scores.Count(score => score.FirstResponseCorrect), scores.Count(score => score.RepairedToCorrect),
+            scores.Count(score => score.Nudged), scores.Count(score => score.WithheldDescriptions),
+            scores.Count(score => score.FirstResponseCorrect), scores.Count(score => score.RepairedToCorrect),
             offeredCalls.Count(score => score.ArgsValid == true), offeredCalls.Count,
             Distribution.Of(scores.Select(score => score.TurnMs)), Distribution.Of(scores.Select(score => score.GeneratorMs)),
             Distribution.Of(scores.Select(score => (double)score.GeneratorCalls)),
@@ -283,6 +285,7 @@ public sealed class ToolCallingReport
         writer.WriteNumber("tool_cases", summary.ToolCases);
         writer.WriteNumber("no_call", summary.NoCall);
         writer.WriteNumber("nudged", summary.Nudged);
+        writer.WriteNumber("descriptions_withheld", summary.DescriptionsWithheld);
         writer.WriteNumber("first_response_correct", summary.FirstResponseCorrect);
         writer.WriteNumber("repaired_to_correct", summary.RepairedToCorrect);
         writer.WriteNumber("args_valid", summary.ArgsValid);
@@ -431,13 +434,13 @@ public sealed class ToolCallingReport
 
         md.AppendLine("## Outcomes");
         md.AppendLine();
-        md.AppendLine("| Configuration | n | Correct tool | Args match | Wrong tool | Invalid name | Malformed | No call | Called on no-tool | Clarified | Escalated | Failed | Correct, non-escalated | Args valid (first offered call) | First response correct | Repaired | Nudged |");
-        md.AppendLine("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+        md.AppendLine("| Configuration | n | Correct tool | Args match | Wrong tool | Invalid name | Malformed | No call | Called on no-tool | Clarified | Escalated | Failed | Correct, non-escalated | Args valid (first offered call) | First response correct | Repaired | Nudged | MCP tools withheld |");
+        md.AppendLine("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
         foreach (var s in Summaries)
         {
             int O(CaseOutcome outcome) => s.Outcomes[ToolCallingScorer.Name(outcome)];
             md.AppendLine(CultureInfo.InvariantCulture,
-                $"| {s.Configuration} | {s.Cases} | {Share(s.ToolCorrect, s.Cases)} | {Share(s.ArgsCorrect, s.Cases)} | {O(CaseOutcome.WrongTool)} | {O(CaseOutcome.InvalidName)} | {O(CaseOutcome.Malformed)} | {O(CaseOutcome.NoCall)} of {s.ToolCases} | {O(CaseOutcome.CalledOnNoTool)} | {s.Clarified} | {s.Escalated}{Reasons(s)} | {O(CaseOutcome.Failed)} | {Share(s.ToolCorrectNonEscalated, s.NonEscalated)} | {s.ArgsValid}/{s.ArgsValidOf} | {s.FirstResponseCorrect} | {s.RepairedToCorrect} | {s.Nudged} |");
+                $"| {s.Configuration} | {s.Cases} | {Share(s.ToolCorrect, s.Cases)} | {Share(s.ArgsCorrect, s.Cases)} | {O(CaseOutcome.WrongTool)} | {O(CaseOutcome.InvalidName)} | {O(CaseOutcome.Malformed)} | {O(CaseOutcome.NoCall)} of {s.ToolCases} | {O(CaseOutcome.CalledOnNoTool)} | {s.Clarified} | {s.Escalated}{Reasons(s)} | {O(CaseOutcome.Failed)} | {Share(s.ToolCorrectNonEscalated, s.NonEscalated)} | {s.ArgsValid}/{s.ArgsValidOf} | {s.FirstResponseCorrect} | {s.RepairedToCorrect} | {s.Nudged} | {s.DescriptionsWithheld} |");
         }
         md.AppendLine();
 
