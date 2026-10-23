@@ -98,6 +98,9 @@ public sealed class JobWakeTests
             Assert.Empty(store.Runs(once.JobId));
             Assert.NotNull(store.Resume(once.JobId));
             await RanAsync(store, once.JobId);
+            // RanAsync returns once Finish records the run, before the loop reads List() for its next sleep; let it go
+            // back to sleep first, or it could see the job below while computing that sleep and run it without a Wake.
+            await Task.Delay(500, Ct);
 
             // Written through another instance (as another process would), so only Wake ends the sleep.
             var elsewhere = new JobStore(path, TimeZoneInfo.Utc).Add(new NewJob("elsewhere", "say hi from afar", At(1)));

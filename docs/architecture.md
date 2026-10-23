@@ -3884,8 +3884,8 @@ Five of C-035's deferrals (plan §18, C-041), with no new project, package or ch
   the scheduler runs at its time, not up to `PollInterval` (30 s) later, with no wiring in the callers. Handlers run on
   the writer's thread and must not throw; the scheduler's only sets a result. Another process still sees the change at
   its next poll.
-- Waking on session open or resume. `CorvidRuntime.OpenSession` (also reached by `ForkSessionAsync` and ACP's
-  `session/new`, `session/load` and `session/resume`) calls the internal `WakeScheduler()`. A runtime holding the
+- Waking on session open or resume. `CorvidRuntime.OpenSession` (also reached by `ForkSessionAsync`, ACP's
+  `session/new`, and ACP's `session/load` and `session/resume` for a session that ACP process has not opened yet) calls the internal `WakeScheduler()`. A runtime holding the
   scheduler calls `Wake()`. One that lost `jobs.db.lock` at start (`SchedulerState` "run by another corvid process") tries
   the lock again through `TryStartScheduler()`, the old `StartScheduler` made idempotent under a gate and skipped once
   disposal has begun (`_lifetime` cancelled; `DisposeAsync` reads the scheduler task and releases the lock under the
@@ -3893,7 +3893,8 @@ Five of C-035's deferrals (plan §18, C-041), with no new project, package or ch
   next time it opens a session, and its first pass runs what became due meanwhile; `SchedulerState` can now change from
   "run by another corvid process" to "running in this process" mid-life. The gateway opens each chat's session once per
   process (`GatewayHost` caches the open), so a message in a chat it already opened does not retry; a new chat, an ACP
-  `session/new`, `session/load` or `session/resume`, a fork or a `corvid chat` start does. Only that state is retried:
+  `session/new`, a `session/load` or `session/resume` of a session this ACP process has not opened yet (`AcpServer`
+  keeps opened sessions, so loading one it already holds does not retry), a fork or a `corvid chat` start does. Only that state is retried:
   an unwritable lock file (`off: …`) stays off until a restart. With `Corvid:Scheduler:Enabled` off it does nothing.
 - Catch-up policy, as the code behaves (C-012's semantics, written down; nothing new). When a scheduler starts, wakes or
   takes over, each overdue active job runs once: missed ticks collapse in `ClaimDue`, the run's `scheduled_for` is the
