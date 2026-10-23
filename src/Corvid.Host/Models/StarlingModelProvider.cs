@@ -107,7 +107,8 @@ public sealed class StarlingModelProvider : IModelProvider
         CancellationToken cancellationToken = default)
     {
         var info = Info(model);
-        var relay = progress is null ? null : new Progress<ModelAssetProgress>(item =>
+        // Synchronous (C-039): a Progress<T> here would hop each report to the thread pool before the caller saw it.
+        var relay = progress is null ? null : new SynchronousProgress<ModelAssetProgress>(item =>
             progress.Report(new ModelDownloadProgress(item.Path, item.BytesProcessed, item.TotalBytes)));
         return ToAvailability(await Store.DownloadAsync(info.Model, relay, cancellationToken).ConfigureAwait(false));
     }

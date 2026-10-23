@@ -286,6 +286,9 @@ public sealed class ModelAndDoctorTests
         Assert.Equal(ExitCodes.Success, await run.RunAsync(["model", "download", "fake-gen"]));
         Assert.Contains("Downloading fake-gen", run.Output, StringComparison.Ordinal);
         Assert.Contains("✓ Model 'fake-gen' is ready.", run.Output, StringComparison.Ordinal);
+        // Each file's line is written before the result line (C-039: progress is synchronous, not posted to the pool).
+        var file = run.Output.IndexOf("model.onnx", StringComparison.Ordinal);
+        Assert.InRange(file, 0, run.Output.IndexOf("✓ Model 'fake-gen' is ready.", StringComparison.Ordinal) - 1);
         Assert.Equal(ExitCodes.Failure, await run.RunAsync(["model", "download", "nope"]));
         Assert.Equal(ExitCodes.Usage, await run.RunAsync(["model", "download"]));
     }
