@@ -441,6 +441,13 @@ public sealed class ToolSettings
     /// <c>IToolProvider</c> in DI are offered either way.
     /// </summary>
     public bool Builtin { get; set; } = true;
+
+    /// <summary>
+    /// V-003b: give shell commands HTTPS through Corvid Vault's per-sandbox proxy, the only route out (never the host
+    /// network). Off by default. In a tainted turn a command gets the route only when a person approved it as network
+    /// egress; scheduled scripts from tainted jobs never do. With it on, a shell command does not run when Vault is absent.
+    /// </summary>
+    public bool ShellNetwork { get; set; }
 }
 
 public sealed class SchedulerSettings

@@ -36,6 +36,44 @@ internal sealed partial record SandboxPlan
 
     public string? ResolvConf { get; init; }
 
+    /// <summary>Vault's proxy socket on the host, canonical (V-003b); mounted at <see cref="ProxySocketInside"/>.</summary>
+    public string? ProxySocket { get; init; }
+
+    /// <summary>The sandbox CA file on the host, canonical; mounted at <see cref="ProxyCaInside"/>.</summary>
+    public string? ProxyCa { get; init; }
+
+    /// <summary>Where the proxy's two files appear inside: under the sandbox's own empty /run, nothing else beside them.</summary>
+    public const string ProxyDirectoryInside = "/run/corvid-sandbox";
+
+    public const string ProxySocketInside = ProxyDirectoryInside + "/proxy.sock";
+
+    public const string ProxyCaInside = ProxyDirectoryInside + "/ca.pem";
+
+    /// <summary>The largest CA file accepted; a sandbox CA is well under 1 KiB.</summary>
+    public const int MaxProxyCaBytes = 64 * 1024;
+
+    /// <summary>
+    /// The variables a proxied command gets, set by the launcher itself (not passed through by name). Proxy settings for
+    /// curl, Python, Node, git and pip, and trust settings that name the sandbox CA alone, never the host trust store.
+    /// </summary>
+    internal static readonly IReadOnlyList<KeyValuePair<string, string>> ProxyEnvironment =
+    [
+        new("https_proxy", $"http://127.0.0.1:{Relay.Port}"),
+        new("HTTPS_PROXY", $"http://127.0.0.1:{Relay.Port}"),
+        new("http_proxy", $"http://127.0.0.1:{Relay.Port}"),
+        new("HTTP_PROXY", $"http://127.0.0.1:{Relay.Port}"),
+        new("no_proxy", "localhost,127.0.0.1,::1"),
+        new("NO_PROXY", "localhost,127.0.0.1,::1"),
+        new("SSL_CERT_FILE", ProxyCaInside),
+        new("SSL_CERT_DIR", ProxyDirectoryInside),
+        new("CURL_CA_BUNDLE", ProxyCaInside),
+        new("REQUESTS_CA_BUNDLE", ProxyCaInside),
+        new("NODE_EXTRA_CA_CERTS", ProxyCaInside),
+        new("NODE_USE_ENV_PROXY", "1"),
+        new("GIT_SSL_CAINFO", ProxyCaInside),
+        new("PIP_CERT", ProxyCaInside),
+    ];
+
     /// <summary>How bubblewrap starts stage 2: the launcher itself, or <c>dotnet corvid-sandbox.dll</c> when run that way.</summary>
     public required IReadOnlyList<string> Stage2 { get; init; }
 
@@ -156,10 +194,25 @@ internal sealed partial record SandboxPlan
                 throw new RefusedException($"--env {name} looks like a secret. Secrets reach commands only through Corvid Vault.");
             }
 
+            if (request.ProxySocket is not null && ProxyEnvironment.Any(p => string.Equals(p.Key, name, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new RefusedException($"--env {name} collides with a variable the proxy sets; it is not passed through.");
+            }
+
             if (environment(name) is { } value)
             {
                 env.Add(name + "=" + value);
             }
+        }
+
+        string? proxySocket = null, proxyCa = null;
+        if (request.ProxySocket is not null && request.ProxyCa is not null)
+        {
+            proxySocket = Native.RealPath(Absolute(request.ProxySocket, "--proxy-socket")) is { } socket && !Directory.Exists(socket)
+                ? socket
+                : throw new RefusedException($"--proxy-socket {request.ProxySocket} does not exist.");
+            proxyCa = CheckProxyCa(request.ProxyCa, workspace);
+            env.AddRange(ProxyEnvironment.Select(p => p.Key + "=" + p.Value));
         }
 
         string? resolv = null;
@@ -193,6 +246,8 @@ internal sealed partial record SandboxPlan
             Network = request.Network,
             BestEffortLayers = request.BestEffortLayers,
             ResolvConf = resolv,
+            ProxySocket = proxySocket,
+            ProxyCa = proxyCa,
             Stage2 = launcher.Stage2Command,
             Stage2Environment = stage2Env,
             OutsideNamespaces = outside,
@@ -241,6 +296,13 @@ internal sealed partial record SandboxPlan
             a.AddRange(["--ro-bind", "/dev/null", file]);
         }
 
+        // After the masks, so no denial covers them, and after --tmpfs /run, so they are the only entries under
+        // /run/corvid-sandbox: Vault's own socket and the other sandboxes' stay out of view.
+        if (ProxySocket is not null && ProxyCa is not null)
+        {
+            a.AddRange(["--ro-bind", ProxySocket, ProxySocketInside, "--ro-bind", ProxyCa, ProxyCaInside]);
+        }
+
         a.AddRange(["--chdir", WorkingDirectory, "--clearenv"]);
         foreach (var (name, value) in Stage2Environment)
         {
@@ -270,10 +332,63 @@ internal sealed partial record SandboxPlan
             a.Add("--best-effort-layers");
         }
 
+        if (ProxySocket is not null)
+        {
+            a.AddRange(["--relay", ProxySocketInside]);
+        }
+
         a.Add("--");
         a.AddRange(Command);
         return a;
     }
+
+    /// <summary>
+    /// The CA file the command will trust: a regular file (not a symlink), small, certificates only, and outside the
+    /// workspace, so the command can neither swap it nor read a key from it.
+    /// </summary>
+    private static string CheckProxyCa(string path, string workspace)
+    {
+        string absolute = Absolute(path, "--proxy-ca");
+        var info = new FileInfo(absolute);
+        if (info.LinkTarget is not null)
+        {
+            throw new RefusedException($"--proxy-ca {path} is a symlink.");
+        }
+
+        if (!info.Exists || Native.RealPath(absolute) is not { } real)
+        {
+            throw new RefusedException($"--proxy-ca {path} does not exist.");
+        }
+
+        if (Under(real, workspace))
+        {
+            throw new RefusedException($"--proxy-ca {real} is inside the workspace {workspace}.");
+        }
+
+        if (info.Length > MaxProxyCaBytes)
+        {
+            throw new RefusedException($"--proxy-ca {path} is larger than {MaxProxyCaBytes} bytes.");
+        }
+
+        string text = File.ReadAllText(real);
+        if (text.Contains("PRIVATE KEY", StringComparison.Ordinal))
+        {
+            throw new RefusedException($"--proxy-ca {path} holds a private key; only certificates may be given.");
+        }
+
+        if (!IsCertificatesOnly(text))
+        {
+            throw new RefusedException($"--proxy-ca {path} must hold PEM CERTIFICATE blocks and nothing else.");
+        }
+
+        return real;
+    }
+
+    /// <summary>One or more <c>-----BEGIN CERTIFICATE-----</c> blocks of base64, with only white space around them.</summary>
+    internal static bool IsCertificatesOnly(string text) => CertificatesOnly().IsMatch(text);
+
+    [GeneratedRegex(@"\A\s*(-----BEGIN CERTIFICATE-----\s*[A-Za-z0-9+/=\s]+-----END CERTIFICATE-----\s*)+\z")]
+    private static partial Regex CertificatesOnly();
 
     /// <summary>Relative to each home: credentials other tools keep in plain files (vault.md §8).</summary>
     internal static readonly string[] SecretDirectories = [".ssh", ".gnupg", ".aws", ".config/gh"];

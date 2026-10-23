@@ -26,6 +26,23 @@ public sealed record SandboxPolicy
     public bool Network { get; init; }
 
     /// <summary>
+    /// HTTPS through Corvid Vault's per-sandbox proxy (V-003b), the only route out: the network namespace stays private,
+    /// 127.0.0.1:3128 inside relays to <see cref="SandboxProxy.SocketPath"/>, and the proxy and trust variables
+    /// (<see cref="ProxyEnvironmentNames"/>) point at it and at the sandbox CA alone. Not with <see cref="Network"/>.
+    /// </summary>
+    public SandboxProxy? Proxy { get; init; }
+
+    /// <summary>
+    /// The variables the launcher sets for a proxied command. A policy with <see cref="Proxy"/> may not also pass any of
+    /// these names through (compared without case); the launcher refuses them too.
+    /// </summary>
+    public static ImmutableArray<string> ProxyEnvironmentNames { get; } =
+    [
+        "https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY", "no_proxy", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR",
+        "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "NODE_USE_ENV_PROXY", "GIT_SSL_CAINFO", "PIP_CERT",
+    ];
+
+    /// <summary>
     /// Names whose values pass from Corvid's environment to the command. Secret-like names (tokens, keys, passwords,
     /// agent sockets) are refused: secrets reach commands only through Corvid Vault (plan §10.5).
     /// </summary>
@@ -72,6 +89,30 @@ public sealed record SandboxPolicy
             {
                 throw new ArgumentException($"{name} looks like a secret. Secrets reach commands only through Corvid Vault.", nameof(Environment));
             }
+
+            if (Proxy is not null && ProxyEnvironmentNames.Contains(name, StringComparer.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException($"{name} is set by the Vault proxy route; it cannot also be passed through.", nameof(Environment));
+            }
+        }
+
+        if (Proxy is { } proxy)
+        {
+            if (Network)
+            {
+                throw new ArgumentException("A policy cannot have both Network and Proxy: the proxy is the only route out.", nameof(Proxy));
+            }
+
+            Absolute(proxy.SocketPath, nameof(SandboxProxy.SocketPath));
+            if (string.IsNullOrEmpty(proxy.CaCertificatePem) || !proxy.CaCertificatePem.Contains("-----BEGIN CERTIFICATE-----", StringComparison.Ordinal))
+            {
+                throw new ArgumentException("The proxy's CA must be a PEM CERTIFICATE block.", nameof(Proxy));
+            }
+
+            if (proxy.CaCertificatePem.Contains("PRIVATE KEY", StringComparison.Ordinal))
+            {
+                throw new ArgumentException("The proxy's CA must not contain a private key.", nameof(Proxy));
+            }
         }
     }
 
@@ -83,6 +124,11 @@ public sealed record SandboxPolicy
         }
     }
 }
+
+/// <summary>Corvid Vault's per-sandbox proxy (V-003a's <c>sandbox_open</c>): its Unix socket and the CA certificate it presents.</summary>
+/// <param name="SocketPath">The per-sandbox socket. Absolute.</param>
+/// <param name="CaCertificatePem">The sandbox CA, PEM, public part only: the only certificate the command trusts.</param>
+public sealed record SandboxProxy(string SocketPath, string CaCertificatePem);
 
 /// <summary>
 /// The launcher's rule for environment names, repeated here so a secret-like name is refused before any value leaves

@@ -53,8 +53,8 @@ public sealed class ShellTurnTests
         Assert.Equal(["-c", "ls -la src"], command.Arguments);
         Assert.Equal("/bin/bash", command.FileName);
         Assert.False(policy.Network);
-        // Vault's configured, non-default locations are hidden from every command.
-        Assert.Equal(["/srv/vault/data", "/etc/corvid-vault/policy.json", "/run/vault/vault.sock"], policy.DeniedPaths);
+        // Vault's configured, non-default locations, and the per-sandbox proxy sockets beside its socket, are hidden from every command.
+        Assert.Equal(["/srv/vault/data", "/etc/corvid-vault/policy.json", "/run/vault/vault.sock", "/run/vault/sandbox"], policy.DeniedPaths);
         var output = Assert.Single(harness.Payloads().OfType<ToolResult>());
         Assert.False(output.IsError);
         Assert.Equal("ran: ls -la src", output.Result.GetProperty("stdout").GetString());
