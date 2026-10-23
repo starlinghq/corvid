@@ -91,6 +91,13 @@ public sealed record CaseScore(
     /// this stays false. Under C-033 (reports in <c>results/</c>) the same count was the turns that withheld tools.
     /// </summary>
     public bool DescriptionFlagged => Acted.Any(acted => acted.StartsWith("injection/mcp:", StringComparison.Ordinal));
+
+    /// <summary>Kev's <c>tool</c> and <c>done</c> decisions labelled against the case (S4, C-038); null outside a Kev configuration.</summary>
+    public KevDecisionScore? Kev { get; init; }
+
+    /// <summary>The case's cue (<see cref="ToolCallingCase.Cue"/>): the history entry the answer depends on; null when the current
+    /// message decides.</summary>
+    public int? Cue { get; init; }
 }
 
 /// <summary>
@@ -202,7 +209,11 @@ public static class ToolCallingScorer
             kevTool is null ? null : Pick(kevTool), kevTool?.Confidence, kevTool is not null && Acted(kevTool), acted,
             run.TurnMs, generatorMs, run.GeneratorCalls.Length, run.DeciderMs.Sum(), run.DeciderMs.Length, run.EmbedMs.Sum(),
             run.GeneratorCalls.FirstOrDefault()?.InputTokens, run.GeneratorCalls.FirstOrDefault()?.Offered ?? [],
-            TimedChatClient.Short(run.Result?.Text ?? "", 300), run.Error);
+            TimedChatClient.Short(run.Result?.Text ?? "", 300), run.Error)
+        {
+            Kev = ToolCallingConfigurations.NeedsKev(run.Configuration) ? KevDecisionScorer.Score(run) : null,
+            Cue = item.Cue,
+        };
     }
 
     /// <summary>Whether every constraint that applies to the called tool holds. With any_of, a constraint applies when the tool declares it.</summary>

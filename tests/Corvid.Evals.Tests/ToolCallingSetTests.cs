@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Corvid.Evals.ToolCalling;
+using Corvid.Kernel.Turns;
 
 namespace Corvid.Evals.Tests;
 
@@ -16,9 +17,10 @@ public sealed class ToolCallingSetTests
     {
         var set = Committed();
 
-        Assert.Equal("2026-10-22.1", set.Version);
+        Assert.Equal("2026-10-23.1", set.Version);
         Assert.Equal(64, set.CatalogueSha256.Length);
-        Assert.InRange(set.Cases.Length, 190, 220);
+        // S2's 218 single-turn cases (208, then C-041's cron cases) and S4's 41 history cases (C-038).
+        Assert.InRange(set.Cases.Length, 240, 270);
         Assert.Equal(17, set.Catalogue.Count(tool => tool.IsBuiltin));
         Assert.Equal(13, set.Catalogue.Count(tool => !tool.IsBuiltin));
         // MCP-like extras carry no examples (as production MCP tools), built-ins carry BuiltinTools.Examples.
@@ -39,7 +41,7 @@ public sealed class ToolCallingSetTests
             Assert.Contains(set.Cases, item => item.ExpectedTools.Contains(extra.Name));
         Assert.True(Tagged("no_tool") >= 15, "no_tool");
         Assert.True(Tagged("required") >= 15, "required");
-        Assert.InRange(Tagged("multi_step"), 8, 12);
+        Assert.InRange(set.Cases.Count(item => item.HasTag("multi_step") && !item.HasTag("history")), 8, 12);
         Assert.InRange(Tagged("near_miss"), 25, 120);
         Assert.Equal(100, Tagged("s5"));
         Assert.Equal(48, Tagged("tempting"));
@@ -48,6 +50,36 @@ public sealed class ToolCallingSetTests
         Assert.All(set.Cases.Where(item => item.MultiStep), item => Assert.InRange(item.Steps.Length, 2, 4));
         // A required case wants a call by construction: prose is wrong.
         Assert.All(set.Cases.Where(item => item.HasTag("required")), item => Assert.False(item.ExpectsNoTool));
+    }
+
+    [Fact]
+    public void The_history_cases_meet_S4s_minima()
+    {
+        var set = Committed();
+        var history = set.Cases.Where(item => item.HasTag("history")).ToList();
+        var far = history.Where(item => item.HasTag("history_far")).ToList();
+        var narrow = TurnOptions.Default.RecentEvents;
+
+        Assert.True(history.Count >= 36, $"{history.Count} history cases");
+        Assert.True(far.Count >= 15, $"{far.Count} history_far cases");
+        Assert.All(set.Cases, item => Assert.Equal(item.HasTag("history"), !item.History.IsEmpty));
+        Assert.All(history, item => Assert.InRange(item.History.Length, ToolCallingSet.MinHistory, ToolCallingSet.MaxHistory));
+        // history_far: the cue is outside the 600 arm's window even counting one line per entry (a tool entry renders two).
+        Assert.All(far, item => Assert.True(item.Cue < item.History.Length - narrow, $"{item.Id}: cue {item.Cue} of {item.History.Length}"));
+        Assert.All(history.Where(item => !item.HasTag("history_far") && item.Cue is not null),
+            item => Assert.True(item.Cue >= item.History.Length - narrow, $"{item.Id}: a near cue is in the last {narrow} entries"));
+        // The wide arm is lossless for message text: TurnRunner cuts each one-liner at 80 characters, and every rendered line
+        // of the history, plus a four-step turn's own eight, fits its RecentEvents.
+        Assert.All(history.SelectMany(item => item.History.Where(entry => entry.Kind != HistoryKind.Tool).Select(entry => (item.Id, entry.Text))),
+            pair => Assert.True(pair.Text.Length <= 80, $"{pair.Id}: '{pair.Text}' is over 80 characters"));
+        Assert.All(history, item => Assert.True(item.History.Sum(entry => entry.RenderedLines) + 8 <= ToolCallingRunner.TranscriptRecentEvents, item.Id));
+        // Every shape: single-step, chains and no-tool; history cases are not S5's or tempting ones (their counts are fixed).
+        Assert.Contains(history, item => item.MultiStep);
+        Assert.Contains(history, item => item.ExpectsNoTool);
+        Assert.Contains(history, item => !item.MultiStep && !item.ExpectsNoTool);
+        Assert.True(history.Count(item => item.Cue is null) >= 5, "controls: the current message alone decides");
+        Assert.DoesNotContain(history, item => item.HasTag("s5") || item.HasTag("tempting"));
+        Assert.All(history, item => Assert.StartsWith("S4 ", item.Note, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -99,7 +131,29 @@ public sealed class ToolCallingSetTests
         { """{"id":"a","prompt":"p","tags":["direct"],"expect":{"tool":"send"},"results":{"post":"x"}}""", "'post' is not in the catalogue" },
         { """{"id":"A b","prompt":"p","tags":["direct"],"expect":{"tool":"send"}}""", "lower-case words" },
         { """{"id":"a","prompt":"p","tags":["direct"],"expect":{"tool":"send"}""", "line 1" },
+        { History("""{"tool":"post","args":{},"result":"ok"}"""), "'post' is not in the catalogue" },
+        { History("""{"tool":"send","args":{"subject":"x"},"result":"ok"}"""), "send does not declare 'subject'" },
+        { History("""{"tool":"send","args":{"to":"x"}}"""), "missing 'result'" },
+        { History("""{"user":"hi","assistant":"hello"}"""), "is one of" },
+        { History("""{"system":"be brief"}"""), "unknown field 'system'" },
+        { History("", cue: 15), "cue 15 is out of range: the history has 15 entries" },
+        { History("", cue: -1), "cue -1 is out of range" },
+        { History("", count: 14), "history holds 15 to 40 entries, not 14" },
+        { History("", count: 41), "not 41" },
+        { History("", tags: "\"direct\""), "a history and the history tag go together" },
+        { """{"id":"a","prompt":"p","tags":["direct","history_far"],"expect":{"tool":"send"}}""", "a history_far case has a history" },
+        { History("", tags: "\"direct\",\"history\",\"history_far\""), "a history_far case has a history and names its cue" },
     };
+
+    /// <summary>A case with a valid history of <paramref name="count"/> messages, the last replaced by <paramref name="last"/> when given.</summary>
+    private static string History(string last, int count = 15, int? cue = null, string tags = "\"direct\",\"history\"")
+    {
+        var entries = Enumerable.Range(0, count).Select(i => i % 2 == 0 ? $$"""{"user":"message {{i}}"}""" : $$"""{"assistant":"reply {{i}}"}""").ToList();
+        if (last.Length > 0)
+            entries[^1] = last;
+        var cueField = cue is null ? "" : $",\"cue\":{cue}";
+        return $$"""{"id":"a","prompt":"p","tags":[{{tags}}],"expect":{"tool":"send"}{{cueField}},"history":[{{string.Join(",", entries)}}]}""";
+    }
 
     [Theory]
     [MemberData(nameof(MalformedCases))]

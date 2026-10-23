@@ -209,6 +209,34 @@ public sealed class ToolCallingScoringTests : IDisposable
         using var json = JsonDocument.Parse(report.ToJson());
         Assert.Equal(18, json.RootElement.GetProperty("cases").GetArrayLength());
         Assert.Equal("test.1", json.RootElement.GetProperty("header").GetProperty("set_version").GetString());
+        Assert.Equal(9, headline.Cases);
+        Assert.Equal(9, json.RootElement.GetProperty("headline").GetProperty("cases").GetInt32());
+    }
+
+    [Fact]
+    public void S2s_headline_leaves_the_history_cases_out()
+    {
+        var (_, _, _, scores) = Run();
+        var header = new ToolCallingHeader("test.1", new string('a', 64), new string('b', 64), 4, "floors", "abc1234",
+            ImmutableSortedDictionary<string, string>.Empty, ImmutableSortedDictionary<string, string>.Empty,
+            ImmutableSortedDictionary<string, string>.Empty, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch);
+        var singleTurn = ToolCallingReport.Build(header, scores).Headline!;
+        // The same run plus history cases where (c) is right and (a) wrong on everything: they would move the gate if counted.
+        var history = scores.Select(score => score with
+        {
+            Id = "hist-" + score.Id,
+            Tags = [.. score.Tags, S4Comparison.GatingTag],
+            Outcome = score.Configuration == "qwen-all" ? CaseOutcome.WrongTool : CaseOutcome.Correct,
+        });
+
+        var report = ToolCallingReport.Build(header, [.. scores, .. history]);
+
+        Assert.Equal(18, report.Summaries.Single(summary => summary.Configuration == "qwen-all").Cases);
+        Assert.Equal(singleTurn, report.Headline);
+        Assert.Equal(9, report.Headline!.Cases);
+        Assert.Contains("Over the 9 single-turn case(s) of the run", report.ToMarkdown(), StringComparison.Ordinal);
+        // A history-only run has no S2 headline.
+        Assert.Null(ToolCallingReport.Build(header, [.. history]).Headline);
     }
 
     [Fact]
@@ -299,6 +327,165 @@ public sealed class ToolCallingScoringTests : IDisposable
         var summaryJson = json.RootElement.GetProperty("summaries")[0];
         Assert.Equal(1, summaryJson.GetProperty("descriptions_flagged").GetInt32());
         Assert.False(summaryJson.TryGetProperty("descriptions_withheld", out _));
+    }
+
+    private const string CueLine = "user: What's the weather in Lisbon?";
+
+    /// <summary>
+    /// S4's worst case for the wide arm (C-038): 40 entries, every message at the 80-character cut, the cue at entry 0, and
+    /// two seeded calls (the cue's weather lookup and a read later on).
+    /// </summary>
+    private static string HistoryCase()
+    {
+        var entries = new List<string>
+        {
+            """{"user":"What's the weather in Lisbon?"}""",
+            """{"tool":"weather__get_weather","args":{"city":"Lisbon"},"result":"{\"city\":\"Lisbon\",\"now\":\"clear\"}"}""",
+            """{"assistant":"Clear in Lisbon."}""",
+        };
+        for (var i = 3; entries.Count < ToolCallingSet.MaxHistory; i++)
+            entries.Add(i == 10
+                ? """{"tool":"read_file","args":{"path":"owls.txt"},"result":"1\towls"}"""
+                : JsonSerializer.Serialize(new Dictionary<string, string>
+                {
+                    [i % 2 == 1 ? "user" : "assistant"] = $"Message {i:00} about owls, barn owls and tawny owls, kept to the cut".PadRight(80, '.'),
+                }));
+        return $$$"""{"id":"same-for-porto","prompt":"And the same for Porto.","tags":["history","history_far","direct"],"expect":{"tool":"weather__get_weather"},"args":{"city":{"equals":"Porto"}},"cue":0,"history":[{{{string.Join(",", entries)}}}]}""";
+    }
+
+    /// <summary>
+    /// Kev as S4 would find it if the state mattered: it knows "the same" means the weather only when the cue's one-liner is in
+    /// <c>recent</c>; without it the top pick is a web search below the floor, and <c>done</c> after the call says no.
+    /// </summary>
+    private static double[]? HistoryKev(JsonElement state, string key, DecisionQuestion question)
+    {
+        var sees = state.GetProperty("recent").EnumerateArray().Any(item => item.GetString() == CueLine);
+        var step = state.GetProperty("step").GetInt32();
+        double[] Pick(string tool, double p) =>
+            [.. question.Options.Select(option => option.Name == tool ? p : (1 - p) / (question.Options.Length - 1))];
+        return key switch
+        {
+            "tool" when step == 0 => sees ? Pick("weather__get_weather", 0.9) : Pick("web__web_search", 0.4),
+            "tool" => Pick("none", 0.8),
+            "done" => sees ? [0.9, 0.1] : [0.3, 0.7],
+            _ => null,
+        };
+    }
+
+    [Fact]
+    public async Task S4_seeds_the_history_and_scores_only_the_turns_own_decisions_in_both_state_arms()
+    {
+        var set = ToolCallingSet.Parse(Catalogue, HistoryCase());
+        var item = Assert.Single(set.Cases);
+        Assert.Equal(ToolCallingSet.MaxHistory, item.History.Length);
+        var seededLines = item.History.Sum(entry => entry.RenderedLines);
+        var generator = new ScriptedGenerator(turn => turn.Prompt == "And the same for Porto." && turn.Results == 0
+            ? Call("weather__get_weather", """{"city":"Porto"}""")
+            : Text("Rain in Porto."));
+        var bindings = new ToolCallingBindings(
+            new ModelBinding(Profile("fake-qwen", ToolCallSupport.TemplateRendered, 8_192), generator),
+            new ModelBinding(Profile("keywords", ToolCallSupport.None, 512), new KeywordEmbedder("weather", "note", "file", "web", "online")),
+            null, new StateScriptedDecider(HistoryKev));
+        var runner = new ToolCallingRunner(set, bindings,
+            [ToolCallingConfiguration.ShortlistKev, ToolCallingConfiguration.ShortlistKevTranscriptState], _root);
+        var runs = await runner.RunAsync(set.Cases, cancellationToken: Ct);
+        var scores = runs.Select(run => ToolCallingScorer.Score(run, set)).ToList();
+
+        foreach (var run in runs)
+        {
+            // The seed is in the log, before the turn; the run's events are the turn's own.
+            Assert.Equal(item.History.Length + 2, run.SeedHead);
+            var log = runner.Log(run.Configuration).Read(run.SessionId, 0, limit: 4096, cancellationToken: Ct);
+            Assert.Equal(["h-1", "h-2"], log.Take((int)run.SeedHead).Select(stored => stored.Payload).OfType<ToolCallIssued>().Select(call => call.CallId));
+            Assert.IsType<UserMessage>(run.Events[0]);
+            Assert.DoesNotContain(run.Events.OfType<ToolCallIssued>(), call => call.CallId.StartsWith(ToolCallingRunner.SeededCallPrefix, StringComparison.Ordinal));
+            Assert.DoesNotContain(run.Events, payload => payload is Compacted);
+        }
+        var narrow = Get(scores, "same-for-porto", "shortlist-kev");
+        var wide = Get(scores, "same-for-porto", "shortlist-kev-transcript");
+        foreach (var score in new[] { narrow, wide })
+        {
+            // Seeded calls are never the turn's: the only call scored is the turn's weather lookup.
+            Assert.Equal("weather__get_weather", Assert.Single(score.Calls).Tool);
+            Assert.Equal(CaseOutcome.Correct, score.Outcome);
+            Assert.Equal(0, score.Cue);
+            Assert.Equal(0, score.Kev!.Fallbacks);
+            Assert.True(score.Kev.ShortlistHit);
+        }
+
+        // 600: the eight latest one-liners at most, the cue long gone. Transcript: every seeded one-liner, the cue first.
+        static JsonElement IngressState(CaseRun run) =>
+            run.Events.OfType<Decision>().First(decision => decision.QuestionId == "tool").State!.Value;
+        var narrowRecent = IngressState(runs.Single(run => run.Configuration == ToolCallingConfiguration.ShortlistKev)).GetProperty("recent");
+        var wideRecent = IngressState(runs.Single(run => run.Configuration == ToolCallingConfiguration.ShortlistKevTranscriptState)).GetProperty("recent");
+        Assert.InRange(narrowRecent.GetArrayLength(), 1, 8);
+        Assert.DoesNotContain(narrowRecent.EnumerateArray(), line => line.GetString() == CueLine);
+        Assert.Equal(seededLines, wideRecent.GetArrayLength());
+        Assert.Equal(CueLine, wideRecent[0].GetString());
+        Assert.Contains(wideRecent.EnumerateArray(), line => line.GetString() == "called read_file");
+        Assert.All(wideRecent.EnumerateArray(), line => Assert.DoesNotContain("…", line.GetString(), StringComparison.Ordinal));
+
+        // As scripted: the wide arm right on both tool decisions and on done; 600 wrong at ingress and on done.
+        Assert.Equal(["tool:weather__get_weather:True:True", "done:yes:True:True", "tool:none:True:True"],
+            wide.Kev!.Decisions.Select(decision => $"{decision.Question}:{decision.Answer}:{decision.Right}:{decision.Acted}"));
+        Assert.Equal(["tool:web__web_search:False:False", "done:no:False:False", "tool:none:True:True"],
+            narrow.Kev!.Decisions.Select(decision => $"{decision.Question}:{decision.Answer}:{decision.Right}:{decision.Acted}"));
+        Assert.True(wide.Kev.Decisions[0].Ingress);
+        Assert.Equal("yes", wide.Kev.Decisions[1].Expected);
+        Assert.True(narrow.Kev.Decisions.Single(decision => decision.Ingress).StateTokens < wide.Kev.Decisions.Single(decision => decision.Ingress).StateTokens);
+
+        var report = ToolCallingReport.Build(new ToolCallingHeader("test.1", new string('a', 64), new string('b', 64), 4, "floors", "abc1234",
+            ImmutableSortedDictionary<string, string>.Empty, ImmutableSortedDictionary<string, string>.Empty,
+            ImmutableSortedDictionary<string, string>.Empty, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch), scores);
+        var s4 = report.S4!;
+        Assert.Equal((1, 0, 2, 1, 1, 0), (s4.Short.IngressTool, s4.Short.IngressToolRight, s4.Short.Tool, s4.Short.ToolRight, s4.Short.Done, s4.Short.DoneRight));
+        Assert.Equal((1, 1, 2, 2, 1, 1), (s4.Wide.IngressTool, s4.Wide.IngressToolRight, s4.Wide.Tool, s4.Wide.ToolRight, s4.Wide.Done, s4.Wide.DoneRight));
+        Assert.Equal(-50, s4.ToolPoints, 6);
+        Assert.Equal(-100, s4.DonePoints, 6);
+        Assert.Equal((1, 0, 0, 1), (s4.PairedCases, s4.BothRight, s4.ShortOnlyRight, s4.WideOnlyRight));
+        Assert.False(s4.Pass);
+        Assert.Contains("## S4: 600-token state against a transcript-sized state", report.ToMarkdown(), StringComparison.Ordinal);
+        using var json = JsonDocument.Parse(report.ToJson());
+        Assert.Equal("corvid-tool-calling-report/4", json.RootElement.GetProperty("format").GetString());
+        Assert.False(json.RootElement.GetProperty("s4").GetProperty("pass").GetBoolean());
+        Assert.False(s4.Inconclusive);
+        Assert.False(json.RootElement.GetProperty("s4").GetProperty("inconclusive").GetBoolean());
+        Assert.StartsWith("c-038", json.RootElement.GetProperty("s4").GetProperty("pass_condition").GetString(), StringComparison.Ordinal);
+
+        // Both arms' logs label tool and done for calibration, never a seeded call.
+        var outcomes = ToolCallingReport.AppendKevOutcomes(runner.Log(ToolCallingConfiguration.ShortlistKevTranscriptState),
+            runs.Where(run => run.Configuration == ToolCallingConfiguration.ShortlistKevTranscriptState));
+        Assert.Equal(new KevOutcomes(1, 0, 1, 0) { DoneAccepted = 1 }, outcomes);
+        var narrowOutcomes = ToolCallingReport.AppendKevOutcomes(runner.Log(ToolCallingConfiguration.ShortlistKev),
+            runs.Where(run => run.Configuration == ToolCallingConfiguration.ShortlistKev));
+        Assert.Equal(new KevOutcomes(0, 1, 1, 0) { DoneCorrected = 1 }, narrowOutcomes);
+        var labelled = Calibration.DecisionSet.Load([runner.LogPath(ToolCallingConfiguration.ShortlistKev)], cancellationToken: Ct).Records
+            .Where(record => record.QuestionId is "tool" or "done" && record.Tier == Calibration.DecisionTier.Calibrated).ToList();
+        Assert.Equal(["corrected", "corrected", "accepted"], labelled.Select(record => record.Outcome));
+    }
+
+    [Fact]
+    public void The_s4_condition_allows_the_600_arm_three_points_below_on_tool_and_on_done()
+    {
+        static S4Arm Arm(int tool, int done) => new("x", 40, 40, 30, 100, tool, 100, done);
+
+        Assert.True(S4Comparison.Passes(Arm(70, 80), Arm(73, 83)));
+        Assert.True(S4Comparison.Passes(Arm(90, 90), Arm(73, 83)));
+        Assert.False(S4Comparison.Passes(Arm(69, 80), Arm(73, 83)));
+        Assert.False(S4Comparison.Passes(Arm(70, 79), Arm(73, 83)));
+        // No decisions in an arm is no evidence: it fails.
+        Assert.False(S4Comparison.Passes(new S4Arm("x", 40, 0, 0, 0, 0, 100, 80), Arm(73, 83)));
+        Assert.False(S4Comparison.Passes(Arm(70, 80), new S4Arm("x", 40, 40, 30, 100, 73, 0, 0)));
+        // A fallback or a compaction in either arm leaves calibrated decisions out of a rate unseen: inconclusive, not a pass.
+        Assert.False(S4Comparison.IsInconclusive(Arm(90, 90), Arm(73, 83)));
+        Assert.False(S4Comparison.Passes(Arm(90, 90), Arm(73, 83) with { Fallbacks = 1 }));
+        Assert.False(S4Comparison.Passes(Arm(90, 90) with { Fallbacks = 2 }, Arm(73, 83)));
+        Assert.False(S4Comparison.Passes(Arm(90, 90), Arm(73, 83) with { Compacted = 1 }));
+        Assert.False(S4Comparison.Passes(Arm(90, 90) with { Compacted = 1 }, Arm(73, 83)));
+        Assert.True(S4Comparison.IsInconclusive(Arm(90, 90), Arm(73, 83) with { Fallbacks = 1 }));
+        var (low, high) = S4Comparison.Wilson(30, 40);
+        Assert.Equal(59.8, low, 1);
+        Assert.Equal(85.8, high, 1);
     }
 
     private const string OverCallCases = """
@@ -457,16 +644,22 @@ public sealed class ToolCallingScoringTests : IDisposable
 /// <summary>One generator request as a script sees it: the turn's prompt, results so far and the loop's nudge.</summary>
 internal sealed record GeneratorTurn(string Prompt, int Results, string? Nudge);
 
-/// <summary>A minimal scripted generator: the script decides from the conversation so far, so turns can interleave.</summary>
+/// <summary>
+/// A minimal scripted generator: the script decides from the conversation so far, so turns can interleave. The prompt is the
+/// turn's message, the last user message that is not the loop's nudge, and only results after it count, so a seeded history
+/// (S4) neither renames the turn nor adds to its results.
+/// </summary>
 internal sealed class ScriptedGenerator(Func<GeneratorTurn, ChatResponse> script) : IChatClient
 {
     public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
         var list = messages.ToList();
-        var prompt = list.First(message => message.Role == ChatRole.User).Text;
-        var results = list.SelectMany(message => message.Contents).OfType<FunctionResultContent>().Count();
-        return Task.FromResult(script(new GeneratorTurn(prompt, results, TimedChatClient.NudgeOf(list))));
+        var nudge = TimedChatClient.NudgeOf(list);
+        var last = list.FindLastIndex(nudge is null ? list.Count - 1 : list.Count - 2, message => message.Role == ChatRole.User);
+        var prompt = list[last].Text;
+        var results = list.Skip(last + 1).SelectMany(message => message.Contents).OfType<FunctionResultContent>().Count();
+        return Task.FromResult(script(new GeneratorTurn(prompt, results, nudge)));
     }
 
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> messages,
@@ -502,6 +695,21 @@ internal sealed class KeywordEmbedder(params string[] keywords) : IEmbeddingGene
 
     public void Dispose()
     {
+    }
+}
+
+/// <summary>A calibrated decider answering from a function of the whole state (S4's tests read <c>recent</c> and <c>step</c>).</summary>
+internal sealed class StateScriptedDecider(Func<JsonElement, string, DecisionQuestion, double[]?> answer) : IDecider
+{
+    public string Name => "kev-test";
+
+    public ValueTask<DeciderResult> DecideAsync(DecisionRequest request, CancellationToken cancellationToken = default)
+    {
+        var answers = ImmutableDictionary.CreateBuilder<string, DecisionAnswer>(StringComparer.Ordinal);
+        foreach (var (key, question) in request.Questions)
+            if (answer(request.State, key, question) is { } probabilities)
+                answers[key] = DecisionAnswer.For(question, probabilities);
+        return ValueTask.FromResult<DeciderResult>(new DeciderAnswers(Name, answers.ToImmutable()));
     }
 }
 

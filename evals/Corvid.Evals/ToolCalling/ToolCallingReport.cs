@@ -73,11 +73,15 @@ public sealed record ConfigurationSummary(
 /// strict correct-tool and strict argument-match rates each match or beat (a)'s and its turn p50 is no worse than (a)'s.
 /// <paramref name="TurnP50DeltaMs"/> is (c)'s turn p50 minus (a)'s. The non-escalated deltas, the lenient rates and
 /// (c)'s escalation rate are reported, not gating. Reports written before C-037 computed <c>pass</c> under the plan's
-/// original rule (≥ 25 points on both, escalation under 30%).
+/// original rule (≥ 25 points on both, escalation under 30%). Since C-038 it is computed over the single-turn cases only:
+/// the S4 <c>history</c> cases in a run are left out of it, so S2's gate reads the same set whatever <c>--tags</c> selects.
 /// </summary>
 public sealed record Headline(double ToolPoints, double ArgsPoints, double ToolPointsNonEscalated, double ArgsPointsNonEscalated,
     double EscalationRate, double TurnP50DeltaMs, bool Pass)
 {
+    /// <summary>The cases (c) was scored on: the selected single-turn cases.</summary>
+    public int Cases { get; init; }
+
     /// <summary>(c) against (a) under the restated condition.</summary>
     public static Headline For(ConfigurationSummary a, ConfigurationSummary c)
     {
@@ -92,21 +96,221 @@ public sealed record Headline(double ToolPoints, double ArgsPoints, double ToolP
             && (long)c.ArgsCorrect * a.Cases >= (long)a.ArgsCorrect * c.Cases
             && latency <= 0;
         return new Headline(tool, args, Pct(c.ToolCorrectNonEscalated, c.NonEscalated) - Pct(a.ToolCorrectNonEscalated, a.NonEscalated),
-            Pct(c.ArgsCorrectNonEscalated, c.NonEscalated) - Pct(a.ArgsCorrectNonEscalated, a.NonEscalated), c.Rate(c.Escalated), latency, pass);
+            Pct(c.ArgsCorrectNonEscalated, c.NonEscalated) - Pct(a.ArgsCorrectNonEscalated, a.NonEscalated), c.Rate(c.Escalated), latency, pass)
+        {
+            Cases = c.Cases,
+        };
     }
 
     private static double Pct(int count, int of) => of == 0 ? double.NaN : 100.0 * count / of;
 }
 
-/// <summary>Outcomes appended to Kev's <c>tool</c> decisions: each turn's first (ingress) and the later ones.</summary>
+/// <summary>Outcomes appended to Kev's <c>tool</c> decisions (each turn's first, at ingress, and the later ones) and, since
+/// C-038, its <c>done</c> decisions.</summary>
 public sealed record KevOutcomes(int FirstAccepted, int FirstCorrected, int LaterAccepted, int LaterCorrected)
 {
+    public int DoneAccepted { get; init; }
+
+    public int DoneCorrected { get; init; }
+
+    /// <summary>The <c>tool</c> outcomes.</summary>
     public int Accepted => FirstAccepted + LaterAccepted;
 
     public int Corrected => FirstCorrected + LaterCorrected;
 
     public override string ToString() => string.Create(CultureInfo.InvariantCulture,
-        $"{Accepted} accepted, {Corrected} corrected (first tool decision of a turn: {FirstAccepted} accepted, {FirstCorrected} corrected; later: {LaterAccepted} accepted, {LaterCorrected} corrected)");
+        $"tool: {Accepted} accepted, {Corrected} corrected (first tool decision of a turn: {FirstAccepted} accepted, {FirstCorrected} corrected; later: {LaterAccepted} accepted, {LaterCorrected} corrected); done: {DoneAccepted} accepted, {DoneCorrected} corrected");
+}
+
+/// <summary>
+/// One S4 arm (C-038) over a set of cases: Kev's labelled <c>tool</c> and <c>done</c> decisions (<see cref="KevDecisionScore"/>),
+/// counted over calibrated answers only. The ingress <c>tool</c> decision is one per case and is paired across arms; the
+/// later <c>tool</c> and the <c>done</c> decisions follow each arm's own trajectory.
+/// </summary>
+public sealed record S4Arm(string Configuration, int Cases, int IngressTool, int IngressToolRight, int Tool, int ToolRight, int Done, int DoneRight)
+{
+    public int ToolActed { get; init; }
+
+    public int ToolActedRight { get; init; }
+
+    public int DoneActed { get; init; }
+
+    public int DoneActedRight { get; init; }
+
+    /// <summary><c>tool</c> or <c>done</c> decisions not answered by Kev; S4 needs none.</summary>
+    public int Fallbacks { get; init; }
+
+    /// <summary>Tool cases whose ingress shortlist held an expected tool of the first step, of <see cref="ShortlistOf"/>.</summary>
+    public int ShortlistHits { get; init; }
+
+    public int ShortlistOf { get; init; }
+
+    /// <summary>Ingress <c>tool</c> accuracy on the cases whose shortlist held the answer (Kev could pick it).</summary>
+    public int IngressToolOnHits { get; init; }
+
+    public int IngressToolRightOnHits { get; init; }
+
+    /// <summary>Turns that compacted (C-016); S4 needs none, or <c>recent</c> held summary lines.</summary>
+    public int Compacted { get; init; }
+
+    public Distribution IngressMs { get; init; } = Distribution.Of([]);
+
+    public Distribution StepMs { get; init; } = Distribution.Of([]);
+
+    /// <summary>The <c>tool</c> and <c>done</c> decisions' state size, characters / 4.</summary>
+    public Distribution StateTokens { get; init; } = Distribution.Of([]);
+
+    /// <summary>Items in those states' <c>recent</c>.</summary>
+    public Distribution RecentItems { get; init; } = Distribution.Of([]);
+
+    public double IngressToolRate => Pct(IngressToolRight, IngressTool);
+
+    public double ToolRate => Pct(ToolRight, Tool);
+
+    public double DoneRate => Pct(DoneRight, Done);
+
+    private static double Pct(int count, int of) => of == 0 ? double.NaN : 100.0 * count / of;
+
+    public static S4Arm Of(string configuration, IReadOnlyCollection<CaseScore> scores)
+    {
+        ArgumentNullException.ThrowIfNull(scores);
+        var kev = scores.Select(score => score.Kev).OfType<KevDecisionScore>().ToList();
+        var ingress = kev.Select(score => score.IngressTool).OfType<KevDecision>().Where(decision => decision.Scored).ToList();
+        var hits = kev.Where(score => score.ShortlistHit == true).Select(score => score.IngressTool).OfType<KevDecision>()
+            .Where(decision => decision.Scored).ToList();
+        var decisions = kev.SelectMany(score => score.Decisions).ToList();
+        return new S4Arm(configuration, scores.Count, ingress.Count, ingress.Count(decision => decision.Right),
+            kev.Sum(score => score.Tool), kev.Sum(score => score.ToolRight), kev.Sum(score => score.Done), kev.Sum(score => score.DoneRight))
+        {
+            ToolActed = kev.Sum(score => score.ToolActed),
+            ToolActedRight = kev.Sum(score => score.ToolActedRight),
+            DoneActed = kev.Sum(score => score.DoneActed),
+            DoneActedRight = kev.Sum(score => score.DoneActedRight),
+            Fallbacks = kev.Sum(score => score.Fallbacks),
+            ShortlistHits = kev.Count(score => score.ShortlistHit == true),
+            ShortlistOf = kev.Count(score => score.ShortlistHit is not null),
+            IngressToolOnHits = hits.Count,
+            IngressToolRightOnHits = hits.Count(decision => decision.Right),
+            Compacted = kev.Count(score => score.Compacted),
+            IngressMs = Distribution.Of(kev.Where(score => !score.DeciderMs.IsEmpty).Select(score => score.DeciderMs[0])),
+            StepMs = Distribution.Of(kev.SelectMany(score => score.DeciderMs.Skip(1))),
+            StateTokens = Distribution.Of(decisions.Select(decision => decision.StateTokens).OfType<int>().Select(tokens => (double)tokens)),
+            RecentItems = Distribution.Of(decisions.Select(decision => decision.RecentItems).OfType<int>().Select(items => (double)items)),
+        };
+    }
+}
+
+/// <summary>One slice of the S4 comparison: the same cases in both arms.</summary>
+public sealed record S4Slice(string Name, S4Arm Short, S4Arm Wide);
+
+/// <summary>
+/// Spike S4's headline (plan §18, C-038): Kev's <c>tool</c> and <c>done</c> accuracy with the 600-token TurnState
+/// (<c>shortlist-kev</c>) against a transcript-sized one (<c>shortlist-kev-transcript</c>), on the <c>history</c> cases. The
+/// plan's "within 3 points" is read one-sided: <see cref="Pass"/> when the 600 arm is no more than 3 points below the wide
+/// arm on all calibrated <c>tool</c> decisions and on <c>done</c>. The deltas are 600 − transcript. The paired ingress
+/// <c>tool</c> figures (discordant cases, Wilson 95% intervals) say how much one case moves a rate; they do not gate.
+/// </summary>
+public sealed record S4Comparison(S4Arm Short, S4Arm Wide, double ToolPoints, double DonePoints, double IngressToolPoints,
+    int PairedCases, int BothRight, int ShortOnlyRight, int WideOnlyRight, int BothWrong,
+    (double Low, double High) ShortIngressInterval, (double Low, double High) WideIngressInterval, ImmutableArray<S4Slice> Slices, bool Pass)
+{
+    public const string ShortConfiguration = "shortlist-kev";
+
+    public const string WideConfiguration = "shortlist-kev-transcript";
+
+    public const string GatingTag = "history";
+
+    /// <summary>The plan's tolerance, in points.</summary>
+    public const double Tolerance = 3.0;
+
+    /// <summary>
+    /// The 600 arm is at most <see cref="Tolerance"/> points below the wide arm on <c>tool</c> and on <c>done</c>; no
+    /// decisions (a NaN rate) fails, and so does an <see cref="IsInconclusive"/> pair: the rates count calibrated answers
+    /// only, so a fallback would leave the arm's denominator silently.
+    /// </summary>
+    public static bool Passes(S4Arm shortArm, S4Arm wideArm)
+    {
+        ArgumentNullException.ThrowIfNull(shortArm);
+        ArgumentNullException.ThrowIfNull(wideArm);
+        if (IsInconclusive(shortArm, wideArm))
+            return false;
+        // A small epsilon so a delta of exactly −3 points passes despite rounding.
+        return shortArm.ToolRate >= wideArm.ToolRate - Tolerance - 1e-9 && shortArm.DoneRate >= wideArm.DoneRate - Tolerance - 1e-9;
+    }
+
+    /// <summary>Either arm has a <c>tool</c> or <c>done</c> decision Kev did not answer (a fallback) or a compacted turn: the
+    /// comparison is not the one S4 measures, and <see cref="Pass"/> is false.</summary>
+    public static bool IsInconclusive(S4Arm shortArm, S4Arm wideArm)
+    {
+        ArgumentNullException.ThrowIfNull(shortArm);
+        ArgumentNullException.ThrowIfNull(wideArm);
+        return shortArm.Fallbacks > 0 || wideArm.Fallbacks > 0 || shortArm.Compacted > 0 || wideArm.Compacted > 0;
+    }
+
+    /// <summary>See <see cref="IsInconclusive"/>.</summary>
+    public bool Inconclusive => IsInconclusive(Short, Wide);
+
+    /// <summary>Null unless both arms ran on some <c>history</c> case.</summary>
+    public static S4Comparison? For(IReadOnlyList<CaseScore> scores)
+    {
+        ArgumentNullException.ThrowIfNull(scores);
+        List<CaseScore> Of(string configuration, Func<CaseScore, bool> filter) =>
+            [.. scores.Where(score => score.Configuration == configuration && filter(score))];
+        static bool History(CaseScore score) => score.Tags.Contains(GatingTag);
+        static bool Far(CaseScore score) => score.Tags.Contains("history_far");
+        var shortHistory = Of(ShortConfiguration, History);
+        var wideHistory = Of(WideConfiguration, History);
+        if (shortHistory.Count == 0 || wideHistory.Count == 0)
+            return null;
+
+        var slices = new (string Name, Func<CaseScore, bool> Filter)[]
+        {
+            ("history", History),
+            ("history_far", Far),
+            ("history, cue near", score => History(score) && !Far(score) && score.Cue is not null),
+            ("history, no cue (controls)", score => History(score) && score.Cue is null),
+            ("history, multi_step", score => History(score) && score.Tags.Contains("multi_step")),
+            ("history, no_tool", score => History(score) && score.Tags.Contains("no_tool")),
+            ("all cases", _ => true),
+        }.Select(slice => new S4Slice(slice.Name, S4Arm.Of(ShortConfiguration, Of(ShortConfiguration, slice.Filter)),
+            S4Arm.Of(WideConfiguration, Of(WideConfiguration, slice.Filter)))).ToImmutableArray();
+
+        var shortArm = slices[0].Short;
+        var wideArm = slices[0].Wide;
+        var wideById = wideHistory.ToDictionary(score => score.Id, StringComparer.Ordinal);
+        int both = 0, shortOnly = 0, wideOnly = 0, neither = 0;
+        foreach (var score in shortHistory)
+        {
+            if (score.Kev?.IngressTool is not { Scored: true } left || !wideById.TryGetValue(score.Id, out var other)
+                || other.Kev?.IngressTool is not { Scored: true } right)
+                continue;
+            if (left.Right && right.Right)
+                both++;
+            else if (left.Right)
+                shortOnly++;
+            else if (right.Right)
+                wideOnly++;
+            else
+                neither++;
+        }
+        return new S4Comparison(shortArm, wideArm, shortArm.ToolRate - wideArm.ToolRate, shortArm.DoneRate - wideArm.DoneRate,
+            shortArm.IngressToolRate - wideArm.IngressToolRate, both + shortOnly + wideOnly + neither, both, shortOnly, wideOnly, neither,
+            Wilson(shortArm.IngressToolRight, shortArm.IngressTool), Wilson(wideArm.IngressToolRight, wideArm.IngressTool), slices,
+            Passes(shortArm, wideArm));
+    }
+
+    /// <summary>The Wilson score interval at 95%, in percent; NaN without trials.</summary>
+    public static (double Low, double High) Wilson(int successes, int trials)
+    {
+        if (trials == 0)
+            return (double.NaN, double.NaN);
+        const double z = 1.96;
+        var p = (double)successes / trials;
+        var denominator = 1 + z * z / trials;
+        var centre = (p + z * z / (2 * trials)) / denominator;
+        var half = z * Math.Sqrt(p * (1 - p) / trials + z * z / (4.0 * trials * trials)) / denominator;
+        return (100 * Math.Max(0, centre - half), 100 * Math.Min(1, centre + half));
+    }
 }
 
 /// <summary>The scored run: header, per-case records and per-configuration summaries; JSON and markdown (S5's tables).</summary>
@@ -115,13 +319,17 @@ public sealed class ToolCallingReport
     private static readonly JsonWriterOptions Indented = new() { Indented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     private ToolCallingReport(ToolCallingHeader header, ImmutableArray<CaseScore> scores, ImmutableArray<ConfigurationSummary> summaries,
-        Headline? headline)
+        Headline? headline, S4Comparison? s4)
     {
         Header = header;
         Scores = scores;
         Summaries = summaries;
         Headline = headline;
+        S4 = s4;
     }
+
+    /// <summary>Spike S4 (C-038); null unless both <c>shortlist-kev</c> and <c>shortlist-kev-transcript</c> ran on <c>history</c> cases.</summary>
+    public S4Comparison? S4 { get; }
 
     public ToolCallingHeader Header { get; }
 
@@ -139,10 +347,13 @@ public sealed class ToolCallingReport
         var all = scores.ToImmutableArray();
         var order = all.Select(score => score.Configuration).Distinct(StringComparer.Ordinal).ToList();
         var summaries = order.Select(name => Summarize(name, all.Where(score => score.Configuration == name).ToList())).ToImmutableArray();
-        var a = summaries.FirstOrDefault(summary => summary.Configuration == "qwen-all");
-        var c = summaries.FirstOrDefault(summary => summary.Configuration == "shortlist-kev");
-        var headline = a is not null && c is not null ? Headline.For(a, c) : null;
-        return new ToolCallingReport(header, all, summaries, headline);
+        // S2's headline reads the single-turn cases only (C-038): the S4 history cases never move its gate.
+        List<CaseScore> SingleTurn(string name) =>
+            [.. all.Where(score => score.Configuration == name && !score.Tags.Contains(S4Comparison.GatingTag))];
+        var a = SingleTurn("qwen-all");
+        var c = SingleTurn("shortlist-kev");
+        var headline = a.Count > 0 && c.Count > 0 ? Headline.For(Summarize("qwen-all", a), Summarize("shortlist-kev", c)) : null;
+        return new ToolCallingReport(header, all, summaries, headline, S4Comparison.For(all));
     }
 
     private static ConfigurationSummary Summarize(string name, List<CaseScore> scores)
@@ -174,46 +385,42 @@ public sealed class ToolCallingReport
     // ---- floor fitting ----
 
     /// <summary>
-    /// For floor fitting (C-021): one <c>DecisionOutcomeRecorded</c> per calibrated <c>tool</c> decision in (c)'s runs,
-    /// <c>accepted</c> when Kev's pick is what the case expects at that point (the first step not yet matched by a call that
-    /// ran, or none once every step has or on a no-tool case), <c>corrected</c> otherwise. A call that ran but that the next
-    /// step does not accept (a wrong tool, a repeat) does not move the expectation. Appended after the loop's own
-    /// <c>tool_succeeded</c>, so it is the decision's last outcome and labels it. The log is then valid input to
-    /// <c>corvid-evals calibrate --log</c>.
+    /// For floor fitting (C-021): one <c>DecisionOutcomeRecorded</c> per calibrated <c>tool</c> and <c>done</c> decision in a
+    /// Kev configuration's runs, <c>accepted</c> when Kev's answer is what the case expects at that point
+    /// (<see cref="KevDecisionScorer"/>: the first step not yet matched by a call that ran, or none once every step has or on a
+    /// no-tool case; <c>done</c> yes exactly then), <c>corrected</c> otherwise. A call that ran but that the next step does not
+    /// accept (a wrong tool, a repeat) does not move the expectation, and a seeded history call (S4) is never counted. Appended
+    /// after the loop's own <c>tool_succeeded</c>, so it is the decision's last outcome and labels it. The log is then valid
+    /// input to <c>corvid-evals calibrate --log</c>.
     /// </summary>
-    /// <returns>The outcomes appended, split into each turn's first <c>tool</c> decision (ingress) and later ones (the no-op
-    /// check and step checkpoints, where a case whose calls have all run expects none).</returns>
+    /// <returns>The outcomes appended: <c>tool</c> split into each turn's first decision (ingress) and later ones (the no-op
+    /// check and step checkpoints, where a case whose calls have all run expects none), and <c>done</c>.</returns>
     public static KevOutcomes AppendKevOutcomes(IEventLog log, IEnumerable<CaseRun> runs)
     {
         ArgumentNullException.ThrowIfNull(log);
         ArgumentNullException.ThrowIfNull(runs);
-        int firstAccepted = 0, firstCorrected = 0, laterAccepted = 0, laterCorrected = 0;
+        int firstAccepted = 0, firstCorrected = 0, laterAccepted = 0, laterCorrected = 0, doneAccepted = 0, doneCorrected = 0;
         foreach (var run in runs)
         {
             var events = new List<EventData>();
-            var tools = run.Events.OfType<ToolCallIssued>().GroupBy(call => call.CallId, StringComparer.Ordinal)
-                .ToDictionary(group => group.Key, group => group.First().ToolName, StringComparer.Ordinal);
-            var done = 0;
-            var first = true;
-            foreach (var payload in run.Events)
+            foreach (var decision in KevDecisionScorer.Score(run).Decisions.Where(decision => decision.Scored))
             {
-                if (payload is ToolResult { IsError: false } result && !run.Case.ExpectsNoTool && done < run.Case.Steps.Length
-                    && tools.TryGetValue(result.CallId, out var ranTool) && run.Case.Steps[done].Expect.Accepts(ranTool))
-                    done++;
-                if (payload is not Decision { QuestionId: "tool", Calibrated: true } decision || decision.Probabilities.IsEmpty)
-                    continue;
-                var pick = decision.Probabilities.OrderByDescending(pair => pair.Value).ThenBy(pair => pair.Key, StringComparer.Ordinal).First().Key;
-                var expect = run.Case.ExpectsNoTool || done >= run.Case.Steps.Length ? Expectation.NoTool : run.Case.Steps[done].Expect;
-                var right = expect.None ? pick == "none" : expect.Accepts(pick);
-                events.Add(EventData.Create(new DecisionOutcomeRecorded(decision.DecisionId, right ? "accepted" : "corrected")));
-                if (first)
+                events.Add(EventData.Create(new DecisionOutcomeRecorded(decision.DecisionId, decision.Right ? "accepted" : "corrected")));
+                if (decision.Question == KevDecisionScorer.DoneQuestion)
                 {
-                    if (right)
+                    if (decision.Right)
+                        doneAccepted++;
+                    else
+                        doneCorrected++;
+                }
+                else if (decision.Ingress)
+                {
+                    if (decision.Right)
                         firstAccepted++;
                     else
                         firstCorrected++;
                 }
-                else if (right)
+                else if (decision.Right)
                 {
                     laterAccepted++;
                 }
@@ -221,12 +428,15 @@ public sealed class ToolCallingReport
                 {
                     laterCorrected++;
                 }
-                first = false;
             }
             if (events.Count > 0)
                 log.Append(run.SessionId, log.GetHead(run.SessionId), events);
         }
-        return new KevOutcomes(firstAccepted, firstCorrected, laterAccepted, laterCorrected);
+        return new KevOutcomes(firstAccepted, firstCorrected, laterAccepted, laterCorrected)
+        {
+            DoneAccepted = doneAccepted,
+            DoneCorrected = doneCorrected,
+        };
     }
 
     // ---- JSON ----
@@ -237,7 +447,7 @@ public sealed class ToolCallingReport
         using (var writer = new Utf8JsonWriter(stream, Indented))
         {
             writer.WriteStartObject();
-            writer.WriteString("format", "corvid-tool-calling-report/3");
+            writer.WriteString("format", "corvid-tool-calling-report/4");
             WriteHeader(writer);
             writer.WritePropertyName("headline");
             if (Headline is { } headline)
@@ -249,7 +459,8 @@ public sealed class ToolCallingReport
                 Number(writer, "args_points_non_escalated", headline.ArgsPointsNonEscalated);
                 Number(writer, "escalation_rate", headline.EscalationRate);
                 Number(writer, "turn_p50_delta_ms", headline.TurnP50DeltaMs);
-                writer.WriteString("pass_condition", "c-037");
+                writer.WriteNumber("cases", headline.Cases);
+                writer.WriteString("pass_condition", "c-037, single-turn cases (history cases excluded since c-038)");
                 writer.WriteBoolean("pass", headline.Pass);
                 writer.WriteEndObject();
             }
@@ -257,6 +468,11 @@ public sealed class ToolCallingReport
             {
                 writer.WriteNullValue();
             }
+            writer.WritePropertyName("s4");
+            if (S4 is { } s4)
+                WriteS4(writer, s4);
+            else
+                writer.WriteNullValue();
             writer.WriteStartArray("summaries");
             foreach (var summary in Summaries)
                 WriteSummary(writer, summary);
@@ -268,6 +484,113 @@ public sealed class ToolCallingReport
             writer.WriteEndObject();
         }
         return Encoding.UTF8.GetString(stream.ToArray()) + "\n";
+    }
+
+    private static void WriteS4(Utf8JsonWriter writer, S4Comparison s4)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("short", S4Comparison.ShortConfiguration);
+        writer.WriteString("wide", S4Comparison.WideConfiguration);
+        writer.WriteString("gating_tag", S4Comparison.GatingTag);
+        Number(writer, "tool_points", s4.ToolPoints);
+        Number(writer, "done_points", s4.DonePoints);
+        Number(writer, "ingress_tool_points", s4.IngressToolPoints);
+        writer.WriteStartObject("ingress_tool_paired");
+        writer.WriteNumber("cases", s4.PairedCases);
+        writer.WriteNumber("both_right", s4.BothRight);
+        writer.WriteNumber("short_only_right", s4.ShortOnlyRight);
+        writer.WriteNumber("wide_only_right", s4.WideOnlyRight);
+        writer.WriteNumber("both_wrong", s4.BothWrong);
+        Interval(writer, "short_wilson95", s4.ShortIngressInterval);
+        Interval(writer, "wide_wilson95", s4.WideIngressInterval);
+        writer.WriteEndObject();
+        writer.WriteString("pass_condition", "c-038: 600 tool >= transcript tool - 3 AND 600 done >= transcript done - 3, history cases; inconclusive (not a pass) with any fallback or compaction in either arm");
+        writer.WriteBoolean("inconclusive", s4.Inconclusive);
+        writer.WriteBoolean("pass", s4.Pass);
+        writer.WriteStartArray("slices");
+        foreach (var slice in s4.Slices)
+        {
+            writer.WriteStartObject();
+            writer.WriteString("slice", slice.Name);
+            WriteArm(writer, "short", slice.Short);
+            WriteArm(writer, "wide", slice.Wide);
+            writer.WriteEndObject();
+        }
+        writer.WriteEndArray();
+        writer.WriteEndObject();
+    }
+
+    private static void WriteArm(Utf8JsonWriter writer, string name, S4Arm arm)
+    {
+        writer.WriteStartObject(name);
+        writer.WriteString("configuration", arm.Configuration);
+        writer.WriteNumber("cases", arm.Cases);
+        writer.WriteNumber("ingress_tool", arm.IngressTool);
+        writer.WriteNumber("ingress_tool_right", arm.IngressToolRight);
+        writer.WriteNumber("tool", arm.Tool);
+        writer.WriteNumber("tool_right", arm.ToolRight);
+        writer.WriteNumber("done", arm.Done);
+        writer.WriteNumber("done_right", arm.DoneRight);
+        Number(writer, "ingress_tool_rate", arm.IngressToolRate);
+        Number(writer, "tool_rate", arm.ToolRate);
+        Number(writer, "done_rate", arm.DoneRate);
+        writer.WriteNumber("tool_acted", arm.ToolActed);
+        writer.WriteNumber("tool_acted_right", arm.ToolActedRight);
+        writer.WriteNumber("done_acted", arm.DoneActed);
+        writer.WriteNumber("done_acted_right", arm.DoneActedRight);
+        writer.WriteNumber("fallbacks", arm.Fallbacks);
+        writer.WriteNumber("shortlist_hits", arm.ShortlistHits);
+        writer.WriteNumber("shortlist_of", arm.ShortlistOf);
+        writer.WriteNumber("ingress_tool_on_hits", arm.IngressToolOnHits);
+        writer.WriteNumber("ingress_tool_right_on_hits", arm.IngressToolRightOnHits);
+        writer.WriteNumber("compacted", arm.Compacted);
+        Dist(writer, "decider_ingress_ms", arm.IngressMs);
+        Dist(writer, "decider_step_ms", arm.StepMs);
+        Dist(writer, "state_tokens_chars_over_4", arm.StateTokens);
+        Dist(writer, "recent_items", arm.RecentItems);
+        writer.WriteEndObject();
+    }
+
+    private static void Interval(Utf8JsonWriter writer, string name, (double Low, double High) interval)
+    {
+        writer.WriteStartArray(name);
+        foreach (var bound in new[] { interval.Low, interval.High })
+            if (double.IsFinite(bound))
+                writer.WriteNumberValue(Math.Round(bound, 1));
+            else
+                writer.WriteNullValue();
+        writer.WriteEndArray();
+    }
+
+    private static void WriteKev(Utf8JsonWriter writer, KevDecisionScore kev)
+    {
+        writer.WriteStartObject("kev");
+        if (kev.ShortlistHit is { } hit)
+            writer.WriteBoolean("shortlist_hit", hit);
+        writer.WriteNumber("fallbacks", kev.Fallbacks);
+        writer.WriteBoolean("compacted", kev.Compacted);
+        writer.WriteStartArray("decisions");
+        foreach (var decision in kev.Decisions)
+        {
+            writer.WriteStartObject();
+            writer.WriteString("question", decision.Question);
+            if (decision.Ingress)
+                writer.WriteBoolean("ingress", true);
+            writer.WriteString("expected", decision.Expected);
+            writer.WriteString("answer", decision.Answer);
+            if (decision.Probability is { } probability)
+                writer.WriteNumber("p", Math.Round(probability, 4));
+            writer.WriteBoolean("right", decision.Right);
+            writer.WriteBoolean("acted", decision.Acted);
+            writer.WriteBoolean("calibrated", decision.Calibrated);
+            if (decision.StateTokens is { } tokens)
+                writer.WriteNumber("state_tokens", tokens);
+            if (decision.RecentItems is { } recent)
+                writer.WriteNumber("recent_items", recent);
+            writer.WriteEndObject();
+        }
+        writer.WriteEndArray();
+        writer.WriteEndObject();
     }
 
     private void WriteHeader(Utf8JsonWriter writer)
@@ -388,6 +711,10 @@ public sealed class ToolCallingReport
         writer.WriteEndArray();
         writer.WriteString("text", score.Text);
         writer.WriteString("error", score.Error);
+        if (score.Cue is { } cue)
+            writer.WriteNumber("cue", cue);
+        if (score.Kev is { } kev)
+            WriteKev(writer, kev);
         writer.WriteEndObject();
     }
 
@@ -450,6 +777,8 @@ public sealed class ToolCallingReport
             md.AppendLine();
             md.AppendLine("Plan §18, restated by the maintainer (C-037): strict scoring is primary; (c) passes if it matches or beats (a) on strict tool AND strict argument accuracy and its turn p50 is no worse than (a)'s. Lenient rates and escalation are reported, not gating. An escalation counts as a miss.");
             md.AppendLine();
+            md.AppendLine(CultureInfo.InvariantCulture, $"Over the {headline.Cases} single-turn case(s) of the run; S4's `history` cases are left out (C-038).");
+            md.AppendLine();
             md.AppendLine("| Measure | (c) − (a), all cases | (c) − (a), non-escalated cases |");
             md.AppendLine("| --- | --- | --- |");
             md.AppendLine(CultureInfo.InvariantCulture, $"| Tool choice | {Points(headline.ToolPoints)} | {Points(headline.ToolPointsNonEscalated)} |");
@@ -458,6 +787,9 @@ public sealed class ToolCallingReport
             md.AppendLine(CultureInfo.InvariantCulture, $"Turn p50, (c) − (a): {headline.TurnP50DeltaMs:+0;-0;0} ms. Escalation rate of (c): {headline.EscalationRate:0.0}% (not gating). **{(headline.Pass ? "Pass" : "Fail")}.**");
             md.AppendLine();
         }
+
+        if (S4 is { } s4)
+            AppendS4(md, s4);
 
         md.AppendLine("## Outcomes");
         md.AppendLine();
@@ -520,6 +852,37 @@ public sealed class ToolCallingReport
         }
         return md.ToString();
     }
+
+    private static void AppendS4(StringBuilder md, S4Comparison s4)
+    {
+        md.AppendLine("## S4: 600-token state against a transcript-sized state");
+        md.AppendLine();
+        md.AppendLine(CultureInfo.InvariantCulture,
+            $"Plan §18, read by C-038: on the `history` cases, `{S4Comparison.ShortConfiguration}` (TurnState 600 tokens, 8 recent events) is at most 3 points below `{S4Comparison.WideConfiguration}` (2,000 tokens, every event one-liner) on Kev's calibrated `tool` decisions AND on its `done` decisions. Kev's answer is the argmax for `tool` and P(yes) ≥ 0.5 for `done`; acted means at or above the floor. Only ingress `tool` is paired (one per case in each arm); later `tool` and `done` decisions follow each arm's own trajectory.");
+        md.AppendLine();
+        md.AppendLine("| Measure (history cases) | 600 | Transcript | 600 − transcript |");
+        md.AppendLine("| --- | --- | --- | --- |");
+        md.AppendLine(CultureInfo.InvariantCulture, $"| `tool`, all decisions | {Share(s4.Short.ToolRight, s4.Short.Tool)} | {Share(s4.Wide.ToolRight, s4.Wide.Tool)} | {Points(s4.ToolPoints)} |");
+        md.AppendLine(CultureInfo.InvariantCulture, $"| `done` | {Share(s4.Short.DoneRight, s4.Short.Done)} | {Share(s4.Wide.DoneRight, s4.Wide.Done)} | {Points(s4.DonePoints)} |");
+        md.AppendLine(CultureInfo.InvariantCulture, $"| `tool` at ingress (paired) | {Share(s4.Short.IngressToolRight, s4.Short.IngressTool)} {Range(s4.ShortIngressInterval)} | {Share(s4.Wide.IngressToolRight, s4.Wide.IngressTool)} {Range(s4.WideIngressInterval)} | {Points(s4.IngressToolPoints)} |");
+        md.AppendLine();
+        md.AppendLine(CultureInfo.InvariantCulture,
+            $"Ingress `tool` on {s4.PairedCases} paired cases: both right {s4.BothRight}, only 600 right {s4.ShortOnlyRight}, only transcript right {s4.WideOnlyRight}, both wrong {s4.BothWrong} (Wilson 95% intervals in brackets). **{(s4.Inconclusive ? "Inconclusive (a fallback or a compaction in an arm)" : s4.Pass ? "Pass" : "Fail")}.**");
+        md.AppendLine();
+        md.AppendLine("| Slice | Arm | n | `tool` ingress | `tool` all | `done` | `tool` acted (right) | `done` acted (right) | Fallbacks | Shortlist hits | Ingress on hits | Compacted | Decider ingress ms p50 (p90) | Decider step ms p50 (p90) | State chars/4 p50 (max) | `recent` items p50 (max) |");
+        md.AppendLine("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+        foreach (var slice in s4.Slices)
+            foreach (var arm in new[] { slice.Short, slice.Wide })
+                md.AppendLine(CultureInfo.InvariantCulture,
+                    $"| {slice.Name} | {(arm == slice.Short ? "600" : "transcript")} | {arm.Cases} | {Share(arm.IngressToolRight, arm.IngressTool)} | {Share(arm.ToolRight, arm.Tool)} | {Share(arm.DoneRight, arm.Done)} | {arm.ToolActed} ({arm.ToolActedRight}) | {arm.DoneActed} ({arm.DoneActedRight}) | {arm.Fallbacks} | {arm.ShortlistHits}/{arm.ShortlistOf} | {Share(arm.IngressToolRightOnHits, arm.IngressToolOnHits)} | {arm.Compacted} | {D(arm.IngressMs)} | {D(arm.StepMs)} | {Max(arm.StateTokens)} | {Max(arm.RecentItems)} |");
+        md.AppendLine();
+    }
+
+    private static string Range((double Low, double High) interval) =>
+        double.IsFinite(interval.Low) ? string.Create(CultureInfo.InvariantCulture, $"[{interval.Low:0}–{interval.High:0}%]") : "";
+
+    private static string Max(Distribution distribution) =>
+        distribution.N == 0 ? "–" : string.Create(CultureInfo.InvariantCulture, $"{distribution.P50:0} ({distribution.Max:0})");
 
     private static string Describe(CaseScore score)
     {

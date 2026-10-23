@@ -8,12 +8,12 @@
   "required": ["id", "prompt", "tags"],
   "properties": {
     "id": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$" },
-    "prompt": { "type": "string", "minLength": 1, "description": "The user message, sent as the turn's only message." },
+    "prompt": { "type": "string", "minLength": 1, "description": "The user message, sent as the turn's message (after the history, when there is one)." },
     "tags": {
       "type": "array",
       "uniqueItems": true,
       "minItems": 1,
-      "items": { "enum": ["direct", "near_miss", "no_tool", "required", "tempting", "multi_step", "s5"] }
+      "items": { "enum": ["direct", "near_miss", "no_tool", "required", "tempting", "multi_step", "s5", "history", "history_far"] }
     },
     "expect": { "$ref": "#/$defs/expect" },
     "args": { "$ref": "#/$defs/args" },
@@ -33,7 +33,33 @@
       "description": "Canned result text by tool name; a tool without one returns {\"ok\":true}.",
       "additionalProperties": { "type": "string" }
     },
-    "note": { "type": "string", "description": "Provenance or why the label is what it is." }
+    "note": { "type": "string", "description": "Provenance or why the label is what it is." },
+    "history": {
+      "type": "array",
+      "minItems": 15,
+      "maxItems": 40,
+      "description": "S4 (C-038): the session before this turn, oldest first, seeded into the event log before the turn runs. A case with a history is tagged history. Tools are in the catalogue and their arguments are declared by them.",
+      "items": {
+        "oneOf": [
+          { "type": "object", "additionalProperties": false, "required": ["user"], "properties": { "user": { "type": "string", "minLength": 1 } } },
+          { "type": "object", "additionalProperties": false, "required": ["assistant"], "properties": { "assistant": { "type": "string", "minLength": 1 } } },
+          {
+            "type": "object", "additionalProperties": false, "required": ["tool", "args", "result"],
+            "properties": {
+              "tool": { "type": "string" },
+              "args": { "type": "object" },
+              "result": { "type": "string", "description": "The result text; JSON when it parses as JSON." },
+              "error": { "type": "boolean", "description": "The call failed." }
+            }
+          }
+        ]
+      }
+    },
+    "cue": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The index of the history entry the answer depends on; inside the history. A history_far case names one, earlier than the 600-token state's recent window."
+    }
   },
   "oneOf": [
     { "required": ["expect"], "not": { "required": ["steps"] } },

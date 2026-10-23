@@ -1,5 +1,5 @@
 {
-  "version": "2026-10-22.1",
+  "version": "2026-10-23.1",
   "description": "The S2 tool-calling golden set's tools (C-034). Built-ins are a snapshot of the generated descriptors and BuiltinTools.Examples, kept equal by tests/Corvid.Tools.Builtin.Tests/CatalogueSnapshotTests. Extras are MCP-like tools named server__tool, as Corvid.Mcp registers them, with no examples; nine are spike S5's non-built-in tools (starlinghq/starling spike/s5-llguidance at 638506b, ai-dotnet/tools/Starlings.Qwen35.GuidanceSpike/fixtures/tools.json) with description and parameters verbatim.",
   "tools": [
     {

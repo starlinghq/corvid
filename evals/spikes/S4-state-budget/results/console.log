@@ -1,0 +1,149 @@
+Running 41 case(s) × 2 configuration(s) of set 2026-10-23.1; warm-up first.
+[1/82] hist-same-weather-porto shortlist-kev: no_call 1148 ms
+[2/82] hist-same-weather-porto shortlist-kev-transcript: no_call 1136 ms
+[3/82] hist-task-same-way shortlist-kev: escalated 3459 ms
+[4/82] hist-task-same-way shortlist-kev-transcript: escalated 3676 ms
+[5/82] hist-reminder-same-pharmacy shortlist-kev: correct 3768 ms
+[6/82] hist-reminder-same-pharmacy shortlist-kev-transcript: correct 4005 ms
+[7/82] hist-agenda-to-priya shortlist-kev: no_call 2038 ms
+[8/82] hist-agenda-to-priya shortlist-kev-transcript: correct 4506 ms
+[9/82] hist-hotels-there shortlist-kev: correct 4669 ms
+[10/82] hist-hotels-there shortlist-kev-transcript: correct 5311 ms
+[11/82] hist-patch-that-file shortlist-kev: correct 3837 ms
+[12/82] hist-patch-that-file shortlist-kev-transcript: correct 5948 ms
+[13/82] hist-sister-weather shortlist-kev: correct 11987 ms
+[14/82] hist-sister-weather shortlist-kev-transcript: correct 10079 ms
+[15/82] hist-packing-to-sam shortlist-kev: correct (args miss) 12107 ms
+[16/82] hist-packing-to-sam shortlist-kev-transcript: correct (args miss) 8155 ms
+[17/82] hist-same-berlin-text-sam shortlist-kev: no_call 80588 ms
+[18/82] hist-same-berlin-text-sam shortlist-kev-transcript: no_call 85549 ms
+[19/82] hist-plant-reminder-done shortlist-kev: correct 3963 ms
+[20/82] hist-plant-reminder-done shortlist-kev-transcript: correct 6327 ms
+[21/82] hist-dana-email-done shortlist-kev: correct 1639 ms
+[22/82] hist-dana-email-done shortlist-kev-transcript: correct 2798 ms
+[23/82] hist-note-saved-done shortlist-kev: correct 5562 ms
+[24/82] hist-note-saved-done shortlist-kev-transcript: correct 2398 ms
+[25/82] hist-timer-done shortlist-kev: correct 2243 ms
+[26/82] hist-timer-done shortlist-kev-transcript: correct 1806 ms
+[27/82] hist-lunch-event-done shortlist-kev: called_on_no_tool 4688 ms
+[28/82] hist-lunch-event-done shortlist-kev-transcript: called_on_no_tool 4054 ms
+[29/82] hist-task-done shortlist-kev: correct 2729 ms
+[30/82] hist-task-done shortlist-kev-transcript: correct 1935 ms
+[31/82] hist-allergy-done shortlist-kev: correct 1325 ms
+[32/82] hist-allergy-done shortlist-kev-transcript: correct 1764 ms
+[33/82] hist-sam-text-done shortlist-kev: called_on_no_tool 6449 ms
+[34/82] hist-sam-text-done shortlist-kev-transcript: called_on_no_tool 5386 ms
+[35/82] hist-todo-into-note shortlist-kev: correct 3985 ms
+[36/82] hist-todo-into-note shortlist-kev-transcript: correct 3603 ms
+[37/82] hist-umbrella-reminder shortlist-kev: correct 4194 ms
+[38/82] hist-umbrella-reminder shortlist-kev-transcript: correct 10063 ms
+[39/82] hist-locker-to-ana shortlist-kev: correct (args miss) 13338 ms
+[40/82] hist-locker-to-ana shortlist-kev-transcript: correct (args miss) 8822 ms
+[41/82] hist-ramen-dinner shortlist-kev: correct 8174 ms
+[42/82] hist-ramen-dinner shortlist-kev-transcript: correct 6262 ms
+[43/82] hist-dentist-reminder shortlist-kev: correct 8450 ms
+[44/82] hist-dentist-reminder shortlist-kev-transcript: correct 8110 ms
+[45/82] hist-todo-note-and-text shortlist-kev: wrong_tool 2783 ms
+[46/82] hist-todo-note-and-text shortlist-kev-transcript: wrong_tool 2850 ms
+[47/82] hist-port-patch shortlist-kev: wrong_tool 5444 ms
+[48/82] hist-port-patch shortlist-kev-transcript: wrong_tool 5879 ms
+[49/82] hist-lists-in-notes shortlist-kev: correct 3594 ms
+[50/82] hist-lists-in-notes shortlist-kev-transcript: correct 4226 ms
+[51/82] hist-reminders-not-cron shortlist-kev: correct 5209 ms
+[52/82] hist-reminders-not-cron shortlist-kev-transcript: correct 5428 ms
+[53/82] hist-dana-by-email shortlist-kev: wrong_tool 3784 ms
+[54/82] hist-dana-by-email shortlist-kev-transcript: wrong_tool 4176 ms
+[55/82] hist-drafts-folder shortlist-kev: correct (args miss) 4928 ms
+[56/82] hist-drafts-folder shortlist-kev-transcript: correct (args miss) 10285 ms
+[57/82] hist-todos-to-tasks shortlist-kev: no_call 3549 ms
+[58/82] hist-todos-to-tasks shortlist-kev-transcript: no_call 3494 ms
+[59/82] hist-ana-by-text shortlist-kev: correct 7639 ms
+[60/82] hist-ana-by-text shortlist-kev-transcript: correct 7883 ms
+[61/82] hist-weather-also-note shortlist-kev: wrong_tool 4688 ms
+[62/82] hist-weather-also-note shortlist-kev-transcript: wrong_tool 8426 ms
+[63/82] hist-no-web-unless-asked shortlist-kev: correct 2102 ms
+[64/82] hist-no-web-unless-asked shortlist-kev-transcript: correct 2561 ms
+[65/82] hist-ctl-weather-rome shortlist-kev: correct 7019 ms
+[66/82] hist-ctl-weather-rome shortlist-kev-transcript: correct 8830 ms
+[67/82] hist-ctl-read-readme shortlist-kev: correct 4923 ms
+[68/82] hist-ctl-read-readme shortlist-kev-transcript: correct 5118 ms
+[69/82] hist-ctl-hi-again shortlist-kev: correct 1201 ms
+[70/82] hist-ctl-hi-again shortlist-kev-transcript: correct 1223 ms
+[71/82] hist-ctl-nobel-search shortlist-kev: correct 9846 ms
+[72/82] hist-ctl-nobel-search shortlist-kev-transcript: correct 10277 ms
+[73/82] hist-ctl-read-and-email shortlist-kev: wrong_tool 16672 ms
+[74/82] hist-ctl-read-and-email shortlist-kev-transcript: wrong_tool 8028 ms
+[75/82] hist-ctl-timer shortlist-kev: correct 2600 ms
+[76/82] hist-ctl-timer shortlist-kev-transcript: correct 2659 ms
+[77/82] hist-ctl-thanks shortlist-kev: correct 1143 ms
+[78/82] hist-ctl-thanks shortlist-kev-transcript: correct 1214 ms
+[79/82] hist-ctl-invoice-search shortlist-kev: correct 5837 ms
+[80/82] hist-ctl-invoice-search shortlist-kev-transcript: correct 14735 ms
+[81/82] hist-ctl-oslo-note shortlist-kev: wrong_tool 6602 ms
+[82/82] hist-ctl-oslo-note shortlist-kev-transcript: wrong_tool 7100 ms
+
+# S2 tool-calling report
+
+Set `2026-10-23.1` (30 tools, catalogue `6692c33be360`, cases `f064c27b3b7c`), floors `2026-10-21.1`, Corvid `446b62a`, 2026-10-23 05:11–05:22 UTC.
+
+- embeddinggemma-2: embeddinggemma-2@cpu, cpu, embeddinggemma-2/onnx-fp32-cpu, google/embeddinggemma-2@914f7f89, Starlings 0.3.0
+- generator profile: qwen3.5-0.8b@cpu
+- gliner2-base-v1: gliner2-base-v1@cpu, cpu, gliner2-base-v1/onnx-fp32-cpu, fastino/gliner2-base-v1@f9634218, Starlings 0.3.0
+- kev-0.8b: kev-0.8b@cuda:0 (KevDecider.Create, C-029); calibrated temperature, jaredpalmer/kev-0.8b@9a45d25e, Starlings 0.3.0
+- qwen3.5-0.8b: cuda:0 (GenAI CUDA provider, spike-only); Qwen35ChatClientOptions defaults: greedy, thinking off, Qwen/Qwen3.5-0.8B@2fc06364, Starlings 0.3.0
+- cases: 41 scored of 41 selected of 259, tags history
+- configurations: shortlist-kev, shortlist-kev-transcript
+- escalation: generator slot escalates to a stub that answers with fixed text
+- extractor: gliner2-base-v1@cpu
+- history: a history case's entries are seeded into its fresh session before the turn; only the turn's own events are scored
+- kev outcomes appended: shortlist-kev: tool: 39 accepted, 45 corrected (first tool decision of a turn: 23 accepted, 18 corrected; later: 16 accepted, 27 corrected); done: 28 accepted, 15 corrected; shortlist-kev-transcript: tool: 35 accepted, 52 corrected (first tool decision of a turn: 21 accepted, 20 corrected; later: 14 accepted, 32 corrected); done: 33 accepted, 13 corrected
+- shortlist: qwen-all: 30 (every tool, no embedder); others: 5, built-in examples
+- state budget: production (600 tokens, 8 recent events, 300 at a tool-and-skill ingress); shortlist-kev-transcript: 2000 tokens (recent 1800, hard stop 4000), 64 recent events, no dual-shortlist budget
+- turn options: production defaults (MaxOutputTokens 1024, approval mode smart), MaxSteps = expected steps + 1
+- warm-up: one untimed case per configuration: What's the weather like in Paris today?
+- CUDA_VISIBLE_DEVICES: GPU-9e21a72e-3a6f-e082-3d74-4b8d361de70c
+- load average after: 85.63 50.56 30.09
+- load average before: 7.49 5.45 11.27
+- os: Omarchy
+- processors: 12
+- runtime: .NET 10.0.12
+
+## S4: 600-token state against a transcript-sized state
+
+Plan §18, read by C-038: on the `history` cases, `shortlist-kev` (TurnState 600 tokens, 8 recent events) is at most 3 points below `shortlist-kev-transcript` (2,000 tokens, every event one-liner) on Kev's calibrated `tool` decisions AND on its `done` decisions. Kev's answer is the argmax for `tool` and P(yes) ≥ 0.5 for `done`; acted means at or above the floor. Only ingress `tool` is paired (one per case in each arm); later `tool` and `done` decisions follow each arm's own trajectory.
+
+| Measure (history cases) | 600 | Transcript | 600 − transcript |
+| --- | --- | --- | --- |
+| `tool`, all decisions | 39 (46.4%) | 35 (40.2%) | +6.2 points |
+| `done` | 28 (65.1%) | 33 (71.7%) | −6.6 points |
+| `tool` at ingress (paired) | 23 (56.1%) [41–70%] | 21 (51.2%) [36–66%] | +4.9 points |
+
+Ingress `tool` on 41 paired cases: both right 18, only 600 right 5, only transcript right 3, both wrong 15 (Wilson 95% intervals in brackets). **Fail.**
+
+| Slice | Arm | n | `tool` ingress | `tool` all | `done` | `tool` acted (right) | `done` acted (right) | Fallbacks | Shortlist hits | Ingress on hits | Compacted | Decider ingress ms p50 (p90) | Decider step ms p50 (p90) | State chars/4 p50 (max) | `recent` items p50 (max) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| history | 600 | 41 | 23 (56.1%) | 39 (46.4%) | 28 (65.1%) | 16 (9) | 16 (13) | 0 | 27/30 | 13 (48.1%) | 0 | 222 (503) | 231 (465) | 125 (146) | 8 (8) |
+| history | transcript | 41 | 21 (51.2%) | 35 (40.2%) | 33 (71.7%) | 19 (9) | 13 (11) | 0 | 27/30 | 13 (48.1%) | 0 | 281 (567) | 362 (708) | 311 (456) | 29 (47) |
+| history_far | 600 | 24 | 11 (45.8%) | 20 (42.6%) | 13 (56.5%) | 6 (3) | 7 (6) | 0 | 16/18 | 6 (37.5%) | 0 | 187 (449) | 228 (465) | 124 (142) | 8 (8) |
+| history_far | transcript | 24 | 12 (50.0%) | 20 (40.8%) | 17 (68.0%) | 5 (3) | 5 (4) | 0 | 16/18 | 7 (43.8%) | 0 | 272 (519) | 363 (708) | 336 (456) | 32 (47) |
+| history, cue near | 600 | 8 | 6 (75.0%) | 9 (50.0%) | 10 (100.0%) | 1 (0) | 3 (3) | 0 | 5/5 | 3 (60.0%) | 0 | 197 (560) | 177 (292) | 130 (146) | 8 (8) |
+| history, cue near | transcript | 8 | 3 (37.5%) | 5 (27.8%) | 10 (100.0%) | 2 (1) | 2 (2) | 0 | 5/5 | 2 (40.0%) | 0 | 243 (607) | 239 (570) | 241 (286) | 21 (25) |
+| history, no cue (controls) | 600 | 9 | 6 (66.7%) | 10 (52.6%) | 5 (50.0%) | 9 (6) | 6 (4) | 0 | 6/7 | 4 (66.7%) | 0 | 283 (714) | 331 (447) | 125 (143) | 8 (8) |
+| history, no cue (controls) | transcript | 9 | 6 (66.7%) | 10 (50.0%) | 6 (54.5%) | 12 (5) | 6 (5) | 0 | 6/7 | 4 (66.7%) | 0 | 324 (1237) | 375 (691) | 311 (433) | 30 (46) |
+| history, multi_step | 600 | 5 | 3 (60.0%) | 3 (27.3%) | 0 (0.0%) | 4 (3) | 3 (0) | 0 | 4/5 | 3 (75.0%) | 0 | 295 (578) | 228 (758) | 126 (143) | 8 (8) |
+| history, multi_step | transcript | 5 | 3 (60.0%) | 3 (25.0%) | 0 (0.0%) | 8 (3) | 2 (0) | 0 | 4/5 | 3 (75.0%) | 0 | 259 (519) | 375 (691) | 351 (406) | 34 (40) |
+| history, no_tool | 600 | 11 | 10 (90.9%) | 18 (85.7%) | 4 (40.0%) | 1 (1) | 2 (2) | 0 | 0/0 | – | 0 | 304 (449) | 144 (374) | 123 (146) | 8 (8) |
+| history, no_tool | transcript | 11 | 8 (72.7%) | 15 (71.4%) | 8 (80.0%) | 1 (1) | 1 (1) | 0 | 0/0 | – | 0 | 319 (456) | 230 (462) | 260 (456) | 24 (47) |
+| all cases | 600 | 41 | 23 (56.1%) | 39 (46.4%) | 28 (65.1%) | 16 (9) | 16 (13) | 0 | 27/30 | 13 (48.1%) | 0 | 222 (503) | 231 (465) | 125 (146) | 8 (8) |
+| all cases | transcript | 41 | 21 (51.2%) | 35 (40.2%) | 33 (71.7%) | 19 (9) | 13 (11) | 0 | 27/30 | 13 (48.1%) | 0 | 281 (567) | 362 (708) | 311 (456) | 29 (47) |
+
+## Outcomes
+
+Correct tool and args match are strict: a case whose expected steps all ran and then another tool ran is over-called, a miss. The two lenient columns count it as correct.
+
+| Configuration | n | Correct tool | Args match | Over-called | Correct tool, lenient | Args match, lenient | Wrong tool | Invalid name | Malformed | No call | Called on no-tool | Clarified | Escalated | Failed | Correct, non-escalated | Args valid (first offered call) | First response correct | Repaired | Nudged | MCP descriptions flagged |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| shortlist-kev | 41 | 28 (68.3%) | 25 (61.0%) | 0 | 28 (68.3%) | 25 (61.0%) | 6 | 0 | 0 | 4 of 30 | 2 | 0 | 1 (repair 1) | 0 | 28 (70.0%) | 27/27 | 25 | 0 | 1 | 0 |
+| shortlist-kev-transcript | 41 | 29 (70.7%) | 26 (63.4%) | 0 | 29 (70.7%) | 26 (63.4%) | 6 | 0 | 0 | 3 of 30 | 2 | 0 | 1 (repair 1) | 0 | 29 (72.5%) | 28/28 | 26 | 0 | 1 | 0 |
+
+Wrote /tmp/corvid-s4-c038/history/report.json and report.md.

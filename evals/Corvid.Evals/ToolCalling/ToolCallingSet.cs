@@ -111,6 +111,29 @@ public sealed record ArgumentConstraint(ConstraintKind Kind, ImmutableArray<Json
 /// <summary>One expected call: the tool and the constraints on its arguments.</summary>
 public sealed record ExpectedStep(Expectation Expect, ImmutableSortedDictionary<string, ArgumentConstraint> Args);
 
+/// <summary>Who wrote a history entry: the user, the assistant, or a tool call with its result.</summary>
+public enum HistoryKind
+{
+    User,
+    Assistant,
+    Tool,
+}
+
+/// <summary>
+/// One entry of a case's earlier session (S4, C-038), seeded into the log before the turn: a user or assistant message, or a
+/// tool call with its result. <c>TurnRunner</c> renders a message as one line (<c>user: …</c>) and a tool entry as two
+/// (<c>called X</c>, <c>X returned</c> or <c>failed</c>).
+/// </summary>
+/// <param name="Text">The message, or the tool's result text (JSON when it parses as JSON, as the canned results).</param>
+/// <param name="Tool">The tool a <see cref="HistoryKind.Tool"/> entry called; null otherwise.</param>
+/// <param name="Arguments">The call's arguments, an object; null for a message.</param>
+/// <param name="Error">The call failed (its result is an error).</param>
+public sealed record HistoryEntry(HistoryKind Kind, string Text, string? Tool = null, JsonElement? Arguments = null, bool Error = false)
+{
+    /// <summary>The one-liners <c>TurnRunner</c>'s <c>recent</c> renders for it.</summary>
+    public int RenderedLines => Kind == HistoryKind.Tool ? 2 : 1;
+}
+
 /// <summary>One golden case. A single-step case has one step; a multi-step case expects its steps' calls in order.</summary>
 public sealed record ToolCallingCase(
     string Id,
@@ -121,6 +144,12 @@ public sealed record ToolCallingCase(
     ImmutableSortedDictionary<string, string> Results,
     string? Note)
 {
+    /// <summary>The session before this turn, oldest first (S4, C-038); empty for a single-turn case.</summary>
+    public ImmutableArray<HistoryEntry> History { get; init; } = [];
+
+    /// <summary>The index in <see cref="History"/> of the entry the answer depends on; null when the current message decides.</summary>
+    public int? Cue { get; init; }
+
     public bool ExpectsNoTool => !MultiStep && Steps[0].Expect.None;
 
     public bool HasTag(string tag) => Tags.Contains(tag, StringComparer.Ordinal);
@@ -137,7 +166,13 @@ public sealed record ToolCallingCase(
 /// </summary>
 public sealed class ToolCallingSet
 {
-    public static readonly ImmutableArray<string> KnownTags = ["direct", "near_miss", "no_tool", "required", "tempting", "multi_step", "s5"];
+    public static readonly ImmutableArray<string> KnownTags =
+        ["direct", "near_miss", "no_tool", "required", "tempting", "multi_step", "s5", "history", "history_far"];
+
+    /// <summary>The bounds on a case's history (S4, C-038): long enough to leave the 600-token state's eight recent lines.</summary>
+    public const int MinHistory = 15;
+
+    public const int MaxHistory = 40;
 
     private static readonly Regex IdPattern = new("^[a-z0-9]+(-[a-z0-9]+)*$", RegexOptions.CultureInvariant);
     private static readonly Regex ServerTool = new("^([A-Za-z0-9_-]+?)__[A-Za-z0-9_-]+$", RegexOptions.CultureInvariant);
@@ -275,7 +310,7 @@ public sealed class ToolCallingSet
     private static ToolCallingCase ParseCase(JsonElement item, Dictionary<string, CatalogueEntry> tools, out string? id)
     {
         id = null;
-        Fields(item, "case", ["id", "prompt", "tags", "expect", "args", "steps", "results", "note"], ["id", "prompt", "tags"]);
+        Fields(item, "case", ["id", "prompt", "tags", "expect", "args", "steps", "results", "note", "history", "cue"], ["id", "prompt", "tags"]);
         id = String(item, "id", "case");
         if (!IdPattern.IsMatch(id))
             throw new InvalidDataException($"id '{id}' must be lower-case words joined by '-'");
@@ -348,7 +383,69 @@ public sealed class ToolCallingSet
             }
         }
         string? note = item.TryGetProperty("note", out _) ? String(item, "note", "case") : null;
-        return new ToolCallingCase(id, prompt, tags.ToImmutable(), steps, hasSteps, results.ToImmutable(), note);
+        var history = item.TryGetProperty("history", out var historyElement) ? ParseHistory(historyElement, tools) : [];
+        int? cue = null;
+        if (item.TryGetProperty("cue", out var cueElement))
+        {
+            if (cueElement.ValueKind != JsonValueKind.Number || !cueElement.TryGetInt32(out var index))
+                throw new InvalidDataException("cue must be an integer");
+            if (index < 0 || index >= history.Length)
+                throw new InvalidDataException(string.Create(CultureInfo.InvariantCulture,
+                    $"cue {index} is out of range: the history has {history.Length} entries"));
+            cue = index;
+        }
+        if (history.IsEmpty == tags.Contains("history"))
+            throw new InvalidDataException("a history and the history tag go together");
+        if (tags.Contains("history_far") && cue is null)
+            throw new InvalidDataException("a history_far case has a history and names its cue");
+        return new ToolCallingCase(id, prompt, tags.ToImmutable(), steps, hasSteps, results.ToImmutable(), note) { History = history, Cue = cue };
+    }
+
+    private static ImmutableArray<HistoryEntry> ParseHistory(JsonElement history, Dictionary<string, CatalogueEntry> tools)
+    {
+        if (history.ValueKind != JsonValueKind.Array)
+            throw new InvalidDataException("history must be an array");
+        var length = history.GetArrayLength();
+        if (length < MinHistory || length > MaxHistory)
+            throw new InvalidDataException(string.Create(CultureInfo.InvariantCulture,
+                $"history holds {MinHistory} to {MaxHistory} entries, not {length}"));
+        var entries = ImmutableArray.CreateBuilder<HistoryEntry>(length);
+        var n = 0;
+        foreach (var entry in history.EnumerateArray())
+        {
+            var where = string.Create(CultureInfo.InvariantCulture, $"history[{n++}]");
+            if (entry.ValueKind == JsonValueKind.Object && entry.TryGetProperty("tool", out _))
+            {
+                Fields(entry, where, ["tool", "args", "result", "error"], ["tool", "args", "result"]);
+                var tool = Known(entry.GetProperty("tool"), tools, where);
+                var args = entry.GetProperty("args");
+                if (args.ValueKind != JsonValueKind.Object)
+                    throw new InvalidDataException($"{where}: args must be an object");
+                foreach (var parameter in args.EnumerateObject())
+                    if (!tools[tool].Declares(parameter.Name))
+                        throw new InvalidDataException($"{where}: {tool} does not declare '{parameter.Name}'");
+                var error = false;
+                if (entry.TryGetProperty("error", out var flag))
+                    error = flag.ValueKind is JsonValueKind.True or JsonValueKind.False ? flag.GetBoolean()
+                        : throw new InvalidDataException($"{where}: error must be true or false");
+                entries.Add(new HistoryEntry(HistoryKind.Tool, String(entry, "result", where), tool, args.Clone(), error));
+                continue;
+            }
+            if (entry.ValueKind != JsonValueKind.Object || entry.EnumerateObject().Count() != 1)
+                throw new InvalidDataException($"{where} is one of {{\"user\": text}}, {{\"assistant\": text}} or {{\"tool\", \"args\", \"result\"}}");
+            var property = entry.EnumerateObject().First();
+            var kind = property.Name switch
+            {
+                "user" => HistoryKind.User,
+                "assistant" => HistoryKind.Assistant,
+                _ => throw new InvalidDataException($"{where}: unknown field '{property.Name}'"),
+            };
+            var text = String(entry, property.Name, where);
+            if (string.IsNullOrWhiteSpace(text))
+                throw new InvalidDataException($"{where}: the text is empty");
+            entries.Add(new HistoryEntry(kind, text));
+        }
+        return entries.MoveToImmutable();
     }
 
     private static Expectation ParseExpect(JsonElement expect, Dictionary<string, CatalogueEntry> tools, string where)

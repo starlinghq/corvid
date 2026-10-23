@@ -311,7 +311,9 @@ approve it.
 Pre-release and Linux-first.
 
 **Built:** everything above, plus calibration tooling with decision export, the golden-trajectory replay harness, the
-S2 tool-calling golden set and harness, and a prompt-injection exfiltration canary suite. The full list is in
+S2 tool-calling golden set and harness, spike S4's harness comparing Kev's `tool` and `done` answers with the
+600-token state against a transcript-sized one ([S4](docs/spikes/S4-state-budget.md)), and a prompt-injection
+exfiltration canary suite. The full list is in
 [`docs/architecture.md`](docs/architecture.md), one section per work item.
 
 **Next:** the terminal UI redesign in [`docs/plan/tui.md`](docs/plan/tui.md). The mockups above and the rest in
@@ -337,7 +339,7 @@ Evaluation harnesses (replay, calibration, tool-calling) are described in [`eval
 | --- | --- |
 | `docs/plan/` | the agent plan (`corvid-agent.md`), Vault (`vault.md`), and the TUI design (`tui.md`) with its mockups |
 | `docs/architecture.md` | how each built piece works, section by section |
-| `docs/spikes/`, `docs/research/` | measured spikes (S1, S2, S3, S5) and the TUI research notes |
+| `docs/spikes/`, `docs/research/` | measured spikes (S1 to S5) and the TUI research notes |
 | `src/Corvid.Abstractions` | dependency-free contracts: session events, `IEventLog`, `Envelope`, `IDecider`, `IExtractor`, `ITokenCounter` |
 | `src/Corvid.Kernel` | event log and projections, session actors and the turn loop, compaction, durable jobs and the scheduler, checkpoints |
 | `src/Corvid.Fabric` | decision fabric: question catalogue, versioned floors, policy, the degraded decider, the tool shortlist, Kev-4B escalation |
