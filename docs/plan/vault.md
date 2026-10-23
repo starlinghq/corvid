@@ -409,9 +409,12 @@ placeholder substituted for the bound host and scrubbed back; the same placehold
 and inside the tunnel, pass-through with network and still scrubbed; leaves scoped to their SNI host, a mismatched SNI
 failing the handshake, and one sandbox's CA not validating another's leaf; the CA key absent from the open response's
 bytes, from disk and from the presented chain; the protocol refusals above (the host cap through the unit tests); close and expiry removing the socket and
-ending live connections; `ask`, taint and toolset rules still applying. Unit tests cover the CA and leaf extensions, the
-leaf cache and cap, the HTTP/1.1 parser's edge cases and the CONNECT target parser. The Vault suite has 148 tests (59
-before). The Native AOT publish stays warning-free (8.9 MB).
+ending live connections; `ask`, taint and toolset rules still applying; the per-sandbox connection cap refusing a third
+idle connection with 429 and a closed one freeing its slot, the total cap across two sandboxes released by closing one,
+a 16 MB claim cut short never forwarded and releasing its slot, and HEAD (forwarded and refused) on one keep-alive tunnel
+without Content-Length or body. Unit tests cover the CA and leaf extensions, the leaf cache and cap, the HTTP/1.1
+parser's edge cases, a body read in growing steps (no read asks for the announced length), HEAD responses and the
+CONNECT target parser. The Vault suite has 154 tests (59 before). The Native AOT publish stays warning-free (8.9 MB).
 
 Next: V-003b, the launcher side of the sandbox proxy (§13).
 
