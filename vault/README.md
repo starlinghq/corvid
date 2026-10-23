@@ -9,6 +9,7 @@ Status: **M1** plus **M2's Vault side** (V-003a, the sandbox proxy), Linux only,
 ## Use
 
 ```sh
+# install.sh (see the top-level README) puts corvid-vault on PATH. From a source checkout instead:
 dotnet build Corvid.slnx
 alias corvid-vault=vault/Corvid.Vault/bin/Debug/net10.0/corvid-vault   # or publish natively, below
 
