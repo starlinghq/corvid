@@ -367,11 +367,16 @@ public sealed class PrivacyEgress
         return new(decision, redacted, map);
     }
 
-    /// <summary>Maps the session's placeholders in a response back to their values, in text and in tool-call arguments.</summary>
+    /// <summary>
+    /// Maps the session's placeholders in a response back to their values, in text and in tool-call arguments. A credential
+    /// placeholder (<c>&lt;CREDENTIAL_1&gt;</c>) is restored in text but never into tool-call arguments (C-040): a call would
+    /// carry the value off the machine on the cloud model's say-so. The tool receives the placeholder; secrets go through Vault.
+    /// </summary>
     public static ChatResponse Restore(ChatResponse response, RedactionMap map)
     {
         ArgumentNullException.ThrowIfNull(response);
         ArgumentNullException.ThrowIfNull(map);
+        string RestoreArgument(string text) => map.Restore(text, credentials: false);
         foreach (var message in response.Messages)
         {
             for (var i = 0; i < message.Contents.Count; i++)
@@ -380,7 +385,7 @@ public sealed class PrivacyEgress
                 {
                     TextContent text => Copy(text, new TextContent(map.Restore(text.Text ?? ""))),
                     TextReasoningContent reasoning => Copy(reasoning, new TextReasoningContent(map.Restore(reasoning.Text ?? ""))),
-                    FunctionCallContent call => Copy(call, new FunctionCallContent(call.CallId, call.Name, Arguments(call.Arguments, map.Restore))),
+                    FunctionCallContent call => Copy(call, new FunctionCallContent(call.CallId, call.Name, Arguments(call.Arguments, RestoreArgument))),
                     var other => other,
                 };
             }
