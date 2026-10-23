@@ -61,7 +61,7 @@ public sealed record CheckpointReduction(string Reason)
     /// <summary>
     /// Whether the reducer may skip a question on its own initiative: never a gate, never <c>injection</c> at ingress (C-033;
     /// since C-037 its verdict over an outside MCP description withholds nothing, but it is logged as the data a dedicated,
-    /// fitted description question would be built from, so it is still asked). Only step questions are trimmed.
+    /// fitted description question would be built from, and a hub skill's ingress question still acts, so it is still asked). Only step questions are trimmed.
     /// </summary>
     public static bool Skippable(CatalogueQuestion question, Checkpoint checkpoint)
     {
