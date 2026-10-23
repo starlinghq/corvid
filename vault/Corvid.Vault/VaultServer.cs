@@ -23,16 +23,7 @@ internal sealed class VaultServer : IDisposable
     /// <summary>Binds and listens now; returns the accept loop, which ends when <paramref name="cancellationToken"/> fires.</summary>
     public Task Start(CancellationToken cancellationToken)
     {
-        PrivateDirectory.Ensure(Path.GetDirectoryName(_socketPath)!);
-        if (File.Exists(_socketPath))
-        {
-            File.Delete(_socketPath);
-        }
-
-        _listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-        _listener.Bind(new UnixDomainSocketEndPoint(_socketPath));
-        File.SetUnixFileMode(_socketPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        _listener.Listen(64);
+        _listener = Listen(_socketPath, 64);
         cancellationToken.Register(() => _listener.Dispose());
         return AcceptLoopAsync(cancellationToken);
     }
@@ -60,12 +51,8 @@ internal sealed class VaultServer : IDisposable
         using (client)
         await using (var stream = new NetworkStream(client, ownsSocket: false))
         {
-            Native.UCred cred = Native.GetPeerCredentials(client);
-            var peer = new PeerInfo(cred.Pid, cred.Uid);
-            List<uint> allowed = _core.Policy.Current.AllowedUids;
-            if (allowed.Count == 0 ? cred.Uid != _ownUid : !allowed.Contains(cred.Uid))
+            if (CheckPeer(_core, client, _ownUid, sandbox: null) is not { } peer)
             {
-                _core.Audit.Write(new AuditEvent { Time = DateTimeOffset.UtcNow, Op = "connect", Decision = "refused", Code = "peer_rejected", Pid = cred.Pid, Uid = cred.Uid });
                 return;
             }
 
@@ -91,6 +78,52 @@ internal sealed class VaultServer : IDisposable
             {
                 // Malformed frame, client gone, or shutting down: drop the connection.
             }
+        }
+    }
+
+    /// <summary>
+    /// The connecting process's credentials if its uid may talk to Vault: the policy's <c>allowedUids</c>, or Vault's own
+    /// uid when that list is empty. A rejected peer is audited as a refused <c>connect</c> and gets null. Shared by the main
+    /// socket and every sandbox proxy socket.
+    /// </summary>
+    internal static PeerInfo? CheckPeer(VaultCore core, Socket client, uint ownUid, string? sandbox)
+    {
+        Native.UCred cred = Native.GetPeerCredentials(client);
+        List<uint> allowed = core.Policy.Current.AllowedUids;
+        if (allowed.Count == 0 ? cred.Uid != ownUid : !allowed.Contains(cred.Uid))
+        {
+            core.Audit.Write(new AuditEvent
+            {
+                Time = DateTimeOffset.UtcNow, Op = "connect", Decision = "refused", Code = "peer_rejected", Pid = cred.Pid, Uid = cred.Uid,
+                Sandbox = sandbox,
+            });
+            return null;
+        }
+
+        return new PeerInfo(cred.Pid, cred.Uid);
+    }
+
+    /// <summary>Binds a listening Unix socket at <paramref name="path"/>, mode 0600, in a 0700 directory.</summary>
+    internal static Socket Listen(string path, int backlog)
+    {
+        PrivateDirectory.Ensure(Path.GetDirectoryName(path)!);
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+
+        var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        try
+        {
+            listener.Bind(new UnixDomainSocketEndPoint(path));
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            listener.Listen(backlog);
+            return listener;
+        }
+        catch
+        {
+            listener.Dispose();
+            throw;
         }
     }
 

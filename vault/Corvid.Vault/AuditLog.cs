@@ -7,7 +7,11 @@ internal sealed class AuditEvent
 {
     public DateTimeOffset Time { get; set; }
 
-    /// <summary><c>connect</c>, <c>placeholder</c>, <c>forward</c>, <c>scrub</c>, <c>set</c>, <c>remove</c>.</summary>
+    /// <summary>
+    /// <c>connect</c>, <c>placeholder</c>, <c>forward</c>, <c>scrub</c>, <c>set</c>, <c>remove</c>, and for sandbox proxies
+    /// (V-003a) <c>sandbox_open</c>, <c>sandbox_close</c>, <c>sandbox_connect</c> (a CONNECT, allowed or refused) and
+    /// <c>sandbox_forward</c> (a request inside the tunnel).
+    /// </summary>
     public string Op { get; set; } = "";
 
     /// <summary><c>allowed</c>, <c>refused</c> or <c>error</c>.</summary>
@@ -30,6 +34,9 @@ internal sealed class AuditEvent
     public long? Bytes { get; set; }
 
     public int? ScrubHits { get; set; }
+
+    /// <summary>The sandbox proxy the event happened on, if any.</summary>
+    public string? Sandbox { get; set; }
 }
 
 /// <summary>Append-only JSON Lines audit log, mode 0600. Records names and decisions, never values.</summary>

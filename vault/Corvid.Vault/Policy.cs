@@ -29,6 +29,12 @@ internal sealed class PolicyDocument
 
     public int ScrubRequestsPerMinute { get; set; } = 600;
 
+    /// <summary>Upper bound on a sandbox proxy's lifetime (V-003a); a sandbox may ask for less.</summary>
+    public int SandboxLifetimeMinutes { get; set; } = 12 * 60;
+
+    /// <summary>Live sandbox proxies at once; one more is refused with <c>sandbox_limit</c>.</summary>
+    public int MaxSandboxes { get; set; } = 64;
+
     public Dictionary<string, SecretPolicy> Secrets { get; set; } = new(StringComparer.Ordinal);
 }
 

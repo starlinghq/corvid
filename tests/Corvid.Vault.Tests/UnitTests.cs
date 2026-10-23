@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using Corvid.Vault.Contracts;
@@ -301,4 +303,224 @@ public sealed class EntropyTests
     [InlineData("ghp_Q9xv2LmT7rWc4ZpK8sNd3JfYh6BuE1aGo0Ri")]
     [InlineData("xoxb-1234-5678-AbCdEfGhIjKlMnOp")]
     public void Real_tokens_are_accepted(string value) => Assert.Null(Entropy.Problem(Encoding.UTF8.GetBytes(value)));
+}
+
+public sealed class SandboxCertificateTests
+{
+    private static readonly DateTimeOffset Now = DateTimeOffset.UtcNow;
+
+    [Fact]
+    public void The_CA_is_a_public_only_pathlen_0_root_with_a_key_identifier()
+    {
+        using var certificates = new SandboxCertificates("abcdef123456", Now, Now.AddHours(2));
+        X509Certificate2 ca = certificates.Ca;
+
+        Assert.False(ca.HasPrivateKey);
+        Assert.Equal("CN=Corvid Vault sandbox CA abcdef123456", ca.Subject);
+        Assert.Equal(ca.Subject, ca.Issuer);
+        Assert.Equal(16, ca.SerialNumberBytes.Length);
+        Assert.Equal(Now.AddHours(-1).ToUnixTimeSeconds(), new DateTimeOffset(ca.NotBefore).ToUnixTimeSeconds());
+        Assert.Equal(Now.AddHours(3).ToUnixTimeSeconds(), new DateTimeOffset(ca.NotAfter).ToUnixTimeSeconds());
+        var basic = ca.Extensions.OfType<X509BasicConstraintsExtension>().Single();
+        Assert.True(basic.Critical);
+        Assert.True(basic.CertificateAuthority);
+        Assert.True(basic.HasPathLengthConstraint);
+        Assert.Equal(0, basic.PathLengthConstraint);
+        var usage = ca.Extensions.OfType<X509KeyUsageExtension>().Single();
+        Assert.True(usage.Critical);
+        Assert.Equal(X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign, usage.KeyUsages);
+        Assert.NotNull(ca.Extensions.OfType<X509SubjectKeyIdentifierExtension>().Single().SubjectKeyIdentifier);
+        Assert.Contains("BEGIN CERTIFICATE", certificates.CaCertificatePem, StringComparison.Ordinal);
+        Assert.DoesNotContain("PRIVATE", certificates.CaCertificatePem, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_leaf_names_exactly_its_host_and_chains_to_its_CA_only()
+    {
+        using var certificates = new SandboxCertificates("abcdef123456", Now, Now.AddHours(2));
+        using var other = new SandboxCertificates("zzzzzz999999", Now, Now.AddHours(2));
+        X509Certificate2 leaf = certificates.For("api.example.com")!.TargetCertificate;
+
+        Assert.True(leaf.HasPrivateKey);
+        Assert.Equal(["api.example.com"], leaf.Extensions.OfType<X509SubjectAlternativeNameExtension>().Single().EnumerateDnsNames());
+        Assert.Empty(leaf.Extensions.OfType<X509SubjectAlternativeNameExtension>().Single().EnumerateIPAddresses());
+        Assert.Equal(["1.3.6.1.5.5.7.3.1"], leaf.Extensions.OfType<X509EnhancedKeyUsageExtension>().Single().EnhancedKeyUsages.Cast<Oid>().Select(o => o.Value));
+        Assert.False(leaf.Extensions.OfType<X509BasicConstraintsExtension>().Single().CertificateAuthority);
+        var aki = leaf.Extensions.OfType<X509AuthorityKeyIdentifierExtension>().Single();
+        Assert.Equal(
+            Convert.FromHexString(certificates.Ca.Extensions.OfType<X509SubjectKeyIdentifierExtension>().Single().SubjectKeyIdentifier!),
+            aki.KeyIdentifier!.Value.ToArray());
+        Assert.Equal(certificates.Ca.NotBefore, leaf.NotBefore);
+        Assert.Equal(certificates.Ca.NotAfter, leaf.NotAfter);
+        using X509Certificate2 publicLeaf = X509CertificateLoader.LoadCertificate(leaf.RawData);
+        Assert.True(Trust.Chains(publicLeaf, certificates.Ca));
+        Assert.False(Trust.Chains(publicLeaf, other.Ca));
+    }
+
+    [Fact]
+    public void Leaves_are_cached_per_host_capped_and_gone_after_dispose()
+    {
+        var certificates = new SandboxCertificates("abcdef123456", Now, Now.AddHours(2));
+
+        var first = certificates.For("a.example");
+        Assert.Same(first, certificates.For("a.example"));
+        Assert.NotSame(first, certificates.For("b.example"));
+        for (int i = 2; i < SandboxCertificates.MaxHosts; i++)
+        {
+            Assert.NotNull(certificates.For($"h{i}.example"));
+        }
+
+        Assert.Null(certificates.For("one-too-many.example"));
+        Assert.NotNull(certificates.For("a.example"));
+
+        certificates.Dispose();
+        Assert.Null(certificates.For("a.example"));
+        Assert.Null(certificates.Existing("a.example"));
+    }
+}
+
+public sealed class Http1Tests
+{
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    private static Task<Http1Head?> ReadAsync(string text) =>
+        new Http1Connection(new MemoryStream(Encoding.Latin1.GetBytes(text))).ReadHeadAsync(Ct);
+
+    private static Http1Head Head(string text) => Http1Connection.ParseHead(Encoding.Latin1.GetBytes(text));
+
+    private static Http1Exception Refused(Action action) => Assert.Throws<Http1Exception>(action);
+
+    [Fact]
+    public async Task A_well_formed_request_parses_and_keep_alive_reads_the_next_one()
+    {
+        var connection = new Http1Connection(new MemoryStream(Encoding.Latin1.GetBytes(
+            "\r\nPOST /a?b=1 HTTP/1.1\r\nHost: x.test\r\nContent-Length: 3\r\nX-Folded:  v  \r\n\r\nabcGET /next HTTP/1.1\r\nHost: x.test\r\n\r\n")));
+
+        Http1Head first = (await connection.ReadHeadAsync(Ct))!;
+        Http1Framing framing = Http1Connection.Check(first, "x.test", 1024);
+        byte[] body = await connection.ReadBodyAsync(framing.ContentLength, Ct);
+        Http1Head second = (await connection.ReadHeadAsync(Ct))!;
+
+        Assert.Equal(("POST", "/a?b=1"), (first.Method, first.Target));
+        Assert.Equal("v", first.Values("x-folded").Single());
+        Assert.Equal("abc"u8.ToArray(), body);
+        Assert.Equal("/next", second.Target);
+        Assert.Null(await connection.ReadHeadAsync(Ct));
+    }
+
+    [Theory]
+    [InlineData("GET / HTTP/1.1\nHost: x\n\n")]
+    [InlineData("GET / HTTP/1.1\r\nHost: x\nX: y\r\n\r\n")]
+    [InlineData("GET / HTTP/1.1\r\nHost: x\rX: y\r\n\r\n")]
+    [InlineData("GET / HTTP/1.1\r\nHost: x\r\nX: a\r\n folded\r\n\r\n")]
+    [InlineData("GET / HTTP/1.1\r\nBad Name: x\r\n\r\n")]
+    [InlineData("GET / HTTP/1.1\r\nNoColon\r\n\r\n")]
+    [InlineData("GET  / HTTP/1.1\r\n\r\n")]
+    [InlineData("GET / HTTP/1.0\r\n\r\n")]
+    [InlineData("GET / HTTP/1.1\r\nX: a\u0001b\r\n\r\n")]
+    public async Task Malformed_heads_are_refused(string text)
+    {
+        var e = await Assert.ThrowsAsync<Http1Exception>(() => ReadAsync(text));
+
+        Assert.True(e.Status is 400 or 505);
+    }
+
+    [Fact]
+    public async Task An_oversized_header_block_is_refused_with_431()
+    {
+        string text = "GET / HTTP/1.1\r\nX: " + new string('a', Http1Connection.MaxHeaderBytes) + "\r\n\r\n";
+
+        Assert.Equal(431, (await Assert.ThrowsAsync<Http1Exception>(() => ReadAsync(text))).Status);
+    }
+
+    [Fact]
+    public async Task A_connection_closed_inside_a_head_is_refused_and_a_clean_close_is_not()
+    {
+        Assert.Null(await ReadAsync(""));
+        await Assert.ThrowsAsync<Http1Exception>(() => ReadAsync("GET / HTTP/1.1\r\nHost"));
+    }
+
+    [Theory]
+    [InlineData("POST / HTTP/1.1\r\nHost: x.test\r\nTransfer-Encoding: chunked", 411, VaultErrorCodes.BadRequest)]
+    [InlineData("POST / HTTP/1.1\r\nHost: x.test\r\nContent-Length: 3\r\nTransfer-Encoding: chunked", 400, VaultErrorCodes.BadRequest)]
+    [InlineData("POST / HTTP/1.1\r\nHost: x.test\r\nContent-Length: 3\r\nContent-Length: 3", 400, VaultErrorCodes.BadRequest)]
+    [InlineData("POST / HTTP/1.1\r\nHost: x.test\r\nContent-Length: +3", 400, VaultErrorCodes.BadRequest)]
+    [InlineData("POST / HTTP/1.1\r\nHost: x.test\r\nContent-Length: 3, 3", 400, VaultErrorCodes.BadRequest)]
+    [InlineData("POST / HTTP/1.1\r\nHost: x.test\r\nContent-Length: 2048", 413, VaultErrorCodes.BadRequest)]
+    [InlineData("GET / HTTP/1.1\r\nHost: x.test\r\nUpgrade: websocket", 400, VaultErrorCodes.NotProxyable)]
+    [InlineData("GET / HTTP/1.1\r\nHost: y.test", 400, VaultErrorCodes.BadRequest)]
+    [InlineData("GET / HTTP/1.1\r\nHost: x.test:8443", 400, VaultErrorCodes.BadRequest)]
+    [InlineData("GET / HTTP/1.1\r\nHost: x.test\r\nHost: x.test", 400, VaultErrorCodes.BadRequest)]
+    [InlineData("GET / HTTP/1.1", 400, VaultErrorCodes.BadRequest)]
+    [InlineData("GET http://x.test/ HTTP/1.1\r\nHost: x.test", 400, VaultErrorCodes.BadRequest)]
+    [InlineData("OPTIONS * HTTP/1.1\r\nHost: x.test", 400, VaultErrorCodes.BadRequest)]
+    [InlineData("CONNECT x.test:443 HTTP/1.1\r\nHost: x.test", 405, VaultErrorCodes.NotProxyable)]
+    [InlineData("POST / HTTP/1.1\r\nHost: x.test\r\nContent-Length: 1\r\nExpect: something-else", 417, VaultErrorCodes.BadRequest)]
+    public void Ambiguous_or_unsupported_framing_is_refused(string head, int status, string code)
+    {
+        var e = Refused(() => Http1Connection.Check(Head(head), "x.test", 1024));
+
+        Assert.Equal((status, code), (e.Status, e.Code));
+    }
+
+    [Fact]
+    public void Expect_continue_close_and_the_port_form_of_Host_are_understood()
+    {
+        Http1Framing framing = Http1Connection.Check(
+            Head("PUT / HTTP/1.1\r\nHost: X.Test:443\r\nContent-Length: 10\r\nExpect: 100-Continue\r\nConnection: keep-alive, close"), "x.test", 1024);
+
+        Assert.Equal(new Http1Framing(10, ExpectContinue: true, Close: true), framing);
+        Assert.False(Http1Connection.Check(Head("GET / HTTP/1.1\r\nHost: x.test\r\nExpect: 100-continue"), "x.test", 1024).ExpectContinue);
+    }
+
+    [Fact]
+    public async Task Responses_get_a_fresh_Content_Length_and_unsafe_headers_are_dropped()
+    {
+        var output = new MemoryStream();
+        var connection = new Http1Connection(output);
+
+        await connection.WriteResponseAsync(
+            200, "Fine\r\nInjected: yes", [new WireHeader("X-Ok", "1"), new WireHeader("X-Bad", "a\r\nInjected: yes"), new WireHeader("Bad Name", "x")],
+            "body"u8.ToArray(), close: true, Ct);
+
+        Assert.Equal(
+            "HTTP/1.1 200 OK\r\nX-Ok: 1\r\nContent-Length: 4\r\nConnection: close\r\n\r\nbody",
+            Encoding.Latin1.GetString(output.ToArray()));
+    }
+
+    [Theory]
+    [InlineData("api.github.com:443", "api.github.com", 443, false)]
+    [InlineData("API.GitHub.com:443", "api.github.com", 443, false)]
+    [InlineData("localhost:443", "localhost", 443, false)]
+    [InlineData("bound.test:80", "bound.test", 80, false)]
+    [InlineData("127.0.0.1:443", null, 443, true)]
+    [InlineData("[::1]:443", null, 443, true)]
+    [InlineData("127.1:443", null, 443, true)]
+    [InlineData("0x7f.1:443", null, 443, true)]
+    [InlineData("a.0x7f:443", "a.0x7f", 443, false)]
+    [InlineData("a.b.123:443", null, 443, false)]
+    [InlineData("under_score.test:443", null, 443, false)]
+    [InlineData("-lead.test:443", null, 443, false)]
+    [InlineData("a..b:443", null, 443, false)]
+    [InlineData("bücher.de:443", null, 443, false)]
+    public void Connect_targets_parse_to_DNS_names_only(string target, string? host, int port, bool ipLiteral)
+    {
+        Assert.Equal(new SandboxProxy.Authority(host, port, ipLiteral), SandboxProxy.ParseAuthority(target));
+    }
+
+    [Theory]
+    [InlineData("bound.test")]
+    [InlineData("bound.test:")]
+    [InlineData("bound.test:99999x")]
+    [InlineData(":443")]
+    public void Connect_targets_without_a_port_are_refused(string target) => Assert.Null(SandboxProxy.ParseAuthority(target));
+
+    [Theory]
+    [InlineData(VaultErrorCodes.BadRequest, 400)]
+    [InlineData(VaultErrorCodes.UpstreamError, 502)]
+    [InlineData(VaultErrorCodes.ResponseTooLarge, 502)]
+    [InlineData(VaultErrorCodes.HostNotBound, 403)]
+    [InlineData(VaultErrorCodes.ApprovalRequired, 403)]
+    [InlineData(VaultErrorCodes.NetworkNotGranted, 403)]
+    public void Vault_errors_map_to_HTTP_statuses(string code, int status) => Assert.Equal(status, SandboxProxy.StatusFor(code));
 }

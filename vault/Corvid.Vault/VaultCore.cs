@@ -23,6 +23,9 @@ internal sealed class VaultCore : IDisposable
     private readonly Lock _scrubberGate = new();
     private Scrubber _scrubber = Scrubber.Empty;
     private int _scrubberVersion = -1;
+    private readonly string _sandboxDirectory;
+    private readonly Lock _sandboxGate = new();
+    private SandboxProxy? _sandboxes;
 
     public VaultCore(VaultOptions options, TimeProvider? time = null, HttpMessageHandler? upstream = null)
     {
@@ -34,21 +37,40 @@ internal sealed class VaultCore : IDisposable
         Placeholders = new PlaceholderRegistry(_time);
         Audit = new AuditLog(options.AuditPath);
         _budgets = new Budgets(_time);
-        _http = new HttpClient(
-            upstream ?? new SocketsHttpHandler
-            {
-                // A redirect could carry the substituted header to another host; the client sees the 3xx instead.
-                AllowAutoRedirect = false,
-                UseProxy = false,
-                UseCookies = false,
-                // Decompress so scrubbing sees the real bytes; a compressed echo of a token would slip past.
-                AutomaticDecompression = DecompressionMethods.All,
-                ConnectTimeout = TimeSpan.FromSeconds(15),
-            },
-            disposeHandler: true)
+        _sandboxDirectory = Path.Combine(Path.GetDirectoryName(options.SocketPath)!, "sandbox");
+        _http = new HttpClient(upstream ?? CreateUpstreamHandler(), disposeHandler: true)
         {
             Timeout = TimeSpan.FromSeconds(100),
         };
+    }
+
+    /// <summary>
+    /// The handler Vault sends upstream requests with. Tests take it and override only how it connects and which root
+    /// it trusts, so the production settings below are what they exercise.
+    /// </summary>
+    internal static SocketsHttpHandler CreateUpstreamHandler() => new()
+    {
+        // A redirect could carry the substituted header to another host; the client sees the 3xx instead.
+        AllowAutoRedirect = false,
+        UseProxy = false,
+        UseCookies = false,
+        // Decompress so scrubbing sees the real bytes; a compressed echo of a token would slip past.
+        AutomaticDecompression = DecompressionMethods.All,
+        ConnectTimeout = TimeSpan.FromSeconds(15),
+    };
+
+    public TimeProvider Time => _time;
+
+    /// <summary>Sandbox proxies (V-003a). Created on first use, so CLI commands that build a core never bind anything.</summary>
+    internal SandboxProxy Sandboxes
+    {
+        get
+        {
+            lock (_sandboxGate)
+            {
+                return _sandboxes ??= new SandboxProxy(this, _sandboxDirectory);
+            }
+        }
     }
 
     public SecretStore Store { get; }
@@ -84,13 +106,23 @@ internal sealed class VaultCore : IDisposable
             return Error(VaultErrorCodes.BadRequest, "session_id is required.");
         }
 
+        SandboxProxy? sandboxes;
+        lock (_sandboxGate)
+        {
+            sandboxes = _sandboxes;
+        }
+
+        // Expiry is lazy: every call sweeps, and the proxy re-checks at accept and per request.
+        sandboxes?.Sweep();
         return request switch
         {
             CatalogRequest => Catalog(),
             PlaceholderRequest p => Mint(p, peer),
             ScrubRequest s => Scrub(s, peer),
             AuditSummaryRequest => new AuditSummaryResponse { Counts = Audit.Counts },
-            ForwardRequest f => await ForwardAsync(f, peer, cancellationToken).ConfigureAwait(false),
+            ForwardRequest f => await ForwardAsync(f, peer, sandbox: null, cancellationToken).ConfigureAwait(false),
+            SandboxOpenRequest o => Sandboxes.Open(o, peer),
+            SandboxCloseRequest c => Sandboxes.Close(c, peer),
             _ => Error(VaultErrorCodes.BadRequest, "Unknown request."),
         };
     }
@@ -148,11 +180,17 @@ internal sealed class VaultCore : IDisposable
         return new ScrubResponse { Text = text, Hits = hits };
     }
 
-    private async Task<VaultResponse> ForwardAsync(ForwardRequest request, PeerInfo peer, CancellationToken cancellationToken)
+    /// <summary>
+    /// The forward pipeline, for Corvid's own requests (<paramref name="sandbox"/> null) and for requests a sandbox proxy
+    /// read out of a TLS tunnel. Sandbox mode differs only in that a request with no placeholder passes through (still
+    /// policy-free of secrets, HTTPS, upstream-verified and scrubbed) when the sandbox was opened with network, and is
+    /// otherwise refused as <c>network_not_granted</c>; and in that it is audited as <c>sandbox_forward</c>.
+    /// </summary>
+    internal async Task<VaultResponse> ForwardAsync(ForwardRequest request, PeerInfo peer, SandboxSession? sandbox, CancellationToken cancellationToken)
     {
         if (!Uri.TryCreate(request.Url, UriKind.Absolute, out Uri? uri) || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
         {
-            return Refuse(VaultErrorCodes.BadRequest, "The URL must be absolute http(s).", request, peer, null, null);
+            return Refuse(VaultErrorCodes.BadRequest, "The URL must be absolute http(s).", request, peer, null, null, sandbox);
         }
 
         string destination = $"{request.Method} {uri.Scheme}://{uri.IdnHost}{uri.AbsolutePath}";
@@ -166,23 +204,32 @@ internal sealed class VaultCore : IDisposable
             found.AddRange(Contracts.Placeholders.Find(header.Value).Select(m => (m, "header")));
             if (Contracts.Placeholders.Contains(header.Name))
             {
-                return Refuse(VaultErrorCodes.PlaceholderOutsideHeaders, "A placeholder may not appear in a header name.", request, peer, null, destination);
+                return Refuse(VaultErrorCodes.PlaceholderOutsideHeaders, "A placeholder may not appear in a header name.", request, peer, null, destination, sandbox);
             }
         }
 
         if (request.Body is { Length: > 0 } body && Contracts.Placeholders.Contains(Encoding.UTF8.GetString(body)))
         {
-            return Refuse(VaultErrorCodes.PlaceholderOutsideHeaders, "Placeholders are substituted in headers only, not in the body.", request, peer, null, destination);
+            return Refuse(VaultErrorCodes.PlaceholderOutsideHeaders, "Placeholders are substituted in headers only, not in the body.", request, peer, null, destination, sandbox);
         }
 
         if (found.Count == 0)
         {
-            return Refuse(VaultErrorCodes.BadRequest, "The request carries no placeholder; send it directly.", request, peer, null, destination);
+            if (sandbox is null)
+            {
+                return Refuse(VaultErrorCodes.BadRequest, "The request carries no placeholder; send it directly.", request, peer, null, destination, sandbox);
+            }
+
+            if (!sandbox.Network)
+            {
+                return Refuse(
+                    VaultErrorCodes.NetworkNotGranted, "This sandbox has no network; only requests carrying a placeholder are sent.", request, peer, null, destination, sandbox);
+            }
         }
 
         if (found.GroupBy(f => f.Match.Value).Any(g => g.Count() > 1))
         {
-            return Refuse(VaultErrorCodes.PlaceholderRepeated, "Each placeholder may appear once per request.", request, peer, null, destination);
+            return Refuse(VaultErrorCodes.PlaceholderRepeated, "Each placeholder may appear once per request.", request, peer, null, destination, sandbox);
         }
 
         var resolved = new Dictionary<string, string>(StringComparer.Ordinal); // placeholder -> secret
@@ -191,12 +238,12 @@ internal sealed class VaultCore : IDisposable
             string? secret = Placeholders.Resolve(match, request.SessionId, peer.Uid);
             if (secret is null)
             {
-                return Refuse(VaultErrorCodes.BadPlaceholder, "A placeholder is unknown, expired, or belongs to another session.", request, peer, match.SecretName, destination);
+                return Refuse(VaultErrorCodes.BadPlaceholder, "A placeholder is unknown, expired, or belongs to another session.", request, peer, match.SecretName, destination, sandbox);
             }
 
             if (where == "url" && !(policy.Secrets.TryGetValue(secret, out SecretPolicy? sp) && sp.AllowInUrl))
             {
-                return Refuse(VaultErrorCodes.PlaceholderOutsideHeaders, $"'{secret}' is substituted in headers only.", request, peer, secret, destination);
+                return Refuse(VaultErrorCodes.PlaceholderOutsideHeaders, $"'{secret}' is substituted in headers only.", request, peer, secret, destination, sandbox);
             }
 
             resolved[match.Value] = secret;
@@ -207,12 +254,12 @@ internal sealed class VaultCore : IDisposable
             PolicyResult result = PolicyEvaluator.Evaluate(policy, secret, request.Method.ToUpperInvariant(), uri, request);
             if (!result.Allowed)
             {
-                return Refuse(result.Code, result.Message, request, peer, secret, destination);
+                return Refuse(result.Code, result.Message, request, peer, secret, destination, sandbox);
             }
 
             if (!_budgets.TryConsume(secret, policy.Secrets[secret].RequestsPerHour))
             {
-                return Refuse(VaultErrorCodes.BudgetExceeded, $"'{secret}' has used its hourly budget.", request, peer, secret, destination);
+                return Refuse(VaultErrorCodes.BudgetExceeded, $"'{secret}' has used its hourly budget.", request, peer, secret, destination, sandbox);
             }
         }
 
@@ -221,17 +268,18 @@ internal sealed class VaultCore : IDisposable
         {
             if (!Store.TryGet(secret, out StoredSecret stored))
             {
-                return Refuse(VaultErrorCodes.UnknownSecret, $"'{secret}' was removed.", request, peer, secret, destination);
+                return Refuse(VaultErrorCodes.UnknownSecret, $"'{secret}' was removed.", request, peer, secret, destination, sandbox);
             }
 
             values[placeholder] = Encoding.UTF8.GetString(stored.Value);
         }
 
-        string secretNames = string.Join(",", resolved.Values.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
+        // Null only for a sandbox's pass-through request, which uses no secret.
+        string? secretNames = resolved.Count == 0 ? null : string.Join(",", resolved.Values.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
         Uri target = new(Substitute(request.Url, values));
         if (target.Scheme != uri.Scheme || !string.Equals(target.IdnHost, uri.IdnHost, StringComparison.OrdinalIgnoreCase) || target.Port != uri.Port)
         {
-            return Refuse(VaultErrorCodes.BadRequest, "Substitution may not change the scheme, host or port.", request, peer, secretNames, destination);
+            return Refuse(VaultErrorCodes.BadRequest, "Substitution may not change the scheme, host or port.", request, peer, secretNames, destination, sandbox);
         }
 
         using var message = new HttpRequestMessage(new HttpMethod(request.Method), target);
@@ -263,7 +311,7 @@ internal sealed class VaultCore : IDisposable
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException && !cancellationToken.IsCancellationRequested)
         {
-            return Refuse(VaultErrorCodes.UpstreamError, scrubber.Scrub(e.Message).Text, request, peer, secretNames, destination);
+            return Refuse(VaultErrorCodes.UpstreamError, scrubber.Scrub(e.Message).Text, request, peer, secretNames, destination, sandbox);
         }
 
         using (response)
@@ -271,7 +319,7 @@ internal sealed class VaultCore : IDisposable
             byte[]? raw = await ReadLimitedAsync(response.Content, policy.MaxResponseBytes, cancellationToken).ConfigureAwait(false);
             if (raw is null)
             {
-                return Refuse(VaultErrorCodes.ResponseTooLarge, $"The response exceeds {policy.MaxResponseBytes} bytes.", request, peer, secretNames, destination);
+                return Refuse(VaultErrorCodes.ResponseTooLarge, $"The response exceeds {policy.MaxResponseBytes} bytes.", request, peer, secretNames, destination, sandbox);
             }
 
             int hits = 0;
@@ -295,9 +343,9 @@ internal sealed class VaultCore : IDisposable
             hits += bodyHits;
             Audit.Write(new AuditEvent
             {
-                Time = _time.GetUtcNow(), Op = "forward", Decision = "allowed", Secret = secretNames, Session = request.SessionId,
+                Time = _time.GetUtcNow(), Op = ForwardOp(sandbox), Decision = "allowed", Secret = secretNames, Session = request.SessionId,
                 Pid = peer.Pid, Uid = peer.Uid, Destination = destination, Status = (int)response.StatusCode,
-                Bytes = raw.LongLength, ScrubHits = hits,
+                Bytes = raw.LongLength, ScrubHits = hits, Sandbox = sandbox?.Id,
             });
             return new ForwardResponse
             {
@@ -363,15 +411,18 @@ internal sealed class VaultCore : IDisposable
         }
     }
 
-    private ErrorResponse Refuse(string code, string message, VaultRequest request, PeerInfo peer, string? secret, string? destination)
+    private ErrorResponse Refuse(
+        string code, string message, VaultRequest request, PeerInfo peer, string? secret, string? destination, SandboxSession? sandbox)
     {
         Audit.Write(new AuditEvent
         {
-            Time = _time.GetUtcNow(), Op = "forward", Decision = "refused", Code = code, Secret = secret,
-            Session = request.SessionId, Pid = peer.Pid, Uid = peer.Uid, Destination = destination,
+            Time = _time.GetUtcNow(), Op = ForwardOp(sandbox), Decision = "refused", Code = code, Secret = secret,
+            Session = request.SessionId, Pid = peer.Pid, Uid = peer.Uid, Destination = destination, Sandbox = sandbox?.Id,
         });
         return Error(code, message);
     }
+
+    private static string ForwardOp(SandboxSession? sandbox) => sandbox is null ? "forward" : "sandbox_forward";
 
     private void AuditRefusal(string op, string code, VaultRequest request, PeerInfo peer, string? secret) =>
         Audit.Write(new AuditEvent
@@ -382,5 +433,15 @@ internal sealed class VaultCore : IDisposable
 
     private static ErrorResponse Error(string code, string message) => new() { Code = code, Message = message };
 
-    public void Dispose() => _http.Dispose();
+    public void Dispose()
+    {
+        SandboxProxy? sandboxes;
+        lock (_sandboxGate)
+        {
+            sandboxes = _sandboxes;
+        }
+
+        sandboxes?.Dispose();
+        _http.Dispose();
+    }
 }
