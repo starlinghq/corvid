@@ -384,7 +384,7 @@ internal sealed class TlsEchoServer : IDisposable
                 Received.Enqueue(head);
                 string? auth = head.Values("Authorization").FirstOrDefault();
                 byte[] body = Encoding.UTF8.GetBytes($"you sent: {auth}{Extra}");
-                await http.WriteResponseAsync(200, "OK", [new WireHeader("X-Echo", auth ?? "")], body, close: true, _stop.Token);
+                await http.WriteResponseAsync(200, "OK", [new WireHeader("X-Echo", auth ?? "")], body, close: true, toHead: head.Method == "HEAD", _stop.Token);
             }
         }
         catch (Exception e) when (e is IOException or OperationCanceledException or System.Security.Authentication.AuthenticationException

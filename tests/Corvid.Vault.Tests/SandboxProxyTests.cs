@@ -433,6 +433,104 @@ public sealed class SandboxProxyTests : IDisposable
     }
 
     [Fact]
+    public async Task Connections_over_the_per_sandbox_cap_are_refused_and_a_closed_one_frees_its_slot()
+    {
+        _vault.Policy.MaxSandboxConnections = 2;
+        _vault.WritePolicy();
+        SandboxOpenResponse open = await OpenAsync(network: true);
+
+        // Two idle connections hold both slots: counted at accept, before a byte is read.
+        Stream first = await SandboxClients.DialAsync(open.ProxySocketPath, Ct);
+        await using Stream second = await SandboxClients.DialAsync(open.ProxySocketPath, Ct);
+        await WaitForAsync(() => _vault.Core.Sandboxes.LiveConnections == 2);
+
+        await using (Stream third = await SandboxClients.DialAsync(open.ProxySocketPath, Ct))
+        {
+            RawResponse? refused = await SandboxClients.ReadResponseAsync(third, Ct);
+            Assert.Equal(429, refused?.Status);
+            Assert.Equal(VaultErrorCodes.SandboxLimit, refused?.Error);
+            Assert.Null(await SandboxClients.ReadResponseAsync(third, Ct));
+        }
+
+        await WaitForAsync(() => Audited("sandbox_connect.refused") == 1);
+        Assert.Equal(2, _vault.Core.Sandboxes.LiveConnections);
+
+        await first.DisposeAsync();
+        await WaitForAsync(() => _vault.Core.Sandboxes.LiveConnections == 1);
+        await using SslStream tls = await SandboxClients.TunnelAsync(open, Bound, sni: null, Ct);
+        await tls.WriteAsync(Encoding.ASCII.GetBytes($"GET / HTTP/1.1\r\nHost: {Bound}\r\n\r\n"), Ct);
+        Assert.Equal(200, (await SandboxClients.ReadResponseAsync(tls, Ct))?.Status);
+    }
+
+    [Fact]
+    public async Task Connections_over_the_total_cap_are_refused_across_sandboxes_and_closing_a_sandbox_releases_them()
+    {
+        _vault.Policy.MaxSandboxConnectionsTotal = 2;
+        _vault.WritePolicy();
+        SandboxOpenResponse a = await OpenAsync(network: true);
+        SandboxOpenResponse b = await OpenAsync(network: true);
+
+        await using Stream heldA = await SandboxClients.DialAsync(a.ProxySocketPath, Ct);
+        await using Stream heldB = await SandboxClients.DialAsync(b.ProxySocketPath, Ct);
+        await WaitForAsync(() => _vault.Core.Sandboxes.LiveConnections == 2);
+
+        await using (Stream over = await SandboxClients.DialAsync(b.ProxySocketPath, Ct))
+        {
+            RawResponse? refused = await SandboxClients.ReadResponseAsync(over, Ct);
+            Assert.Equal(429, refused?.Status);
+            Assert.Equal(VaultErrorCodes.SandboxLimit, refused?.Error);
+        }
+
+        await _vault.Client().CloseSandboxAsync(a.SandboxId, Ct);
+        await WaitForAsync(() => _vault.Core.Sandboxes.LiveConnections == 1);
+        await using SslStream tls = await SandboxClients.TunnelAsync(b, Bound, sni: null, Ct);
+        await tls.WriteAsync(Encoding.ASCII.GetBytes($"GET / HTTP/1.1\r\nHost: {Bound}\r\n\r\n"), Ct);
+        Assert.Equal(200, (await SandboxClients.ReadResponseAsync(tls, Ct))?.Status);
+    }
+
+    [Fact]
+    public async Task A_large_announced_body_cut_short_is_never_forwarded_and_releases_its_connection()
+    {
+        // The allocation itself is covered by Http1Tests; this is the proxy path around it.
+        SandboxOpenResponse open = await OpenAsync(network: true);
+        await using SslStream tls = await SandboxClients.TunnelAsync(open, Bound, sni: null, Ct);
+
+        // 16 MB claimed, one byte sent, then the client goes away: a 400 for the short body, never a forward.
+        await tls.WriteAsync(Encoding.ASCII.GetBytes($"POST / HTTP/1.1\r\nHost: {Bound}\r\nContent-Length: 16000000\r\n\r\nx"), Ct);
+        await WaitForAsync(() => _vault.Core.Sandboxes.LiveConnections == 1);
+        tls.Close();
+
+        await WaitForAsync(() => _vault.Core.Sandboxes.LiveConnections == 0);
+        Assert.Empty(_echo.Received);
+    }
+
+    [Fact]
+    public async Task HEAD_gets_no_Content_Length_or_body_and_the_tunnel_stays_usable()
+    {
+        SandboxOpenResponse open = await OpenAsync(network: false);
+        string placeholder = await PlaceholderAsync();
+        await using SslStream tls = await SandboxClients.TunnelAsync(open, Bound, sni: null, Ct);
+
+        await tls.WriteAsync(Encoding.ASCII.GetBytes($"HEAD /h HTTP/1.1\r\nHost: {Bound}\r\nAuthorization: Bearer {placeholder}\r\n\r\n"), Ct);
+        RawResponse? head = await SandboxClients.ReadResponseAsync(tls, Ct);
+        Assert.Equal(200, head?.Status);
+        Assert.False(head!.Headers.ContainsKey("Content-Length"));
+        Assert.Equal("HEAD", Assert.Single(_echo.Received).Method);
+
+        // A refused HEAD (no placeholder, no network) also has no body for the client to misread as the next response.
+        await tls.WriteAsync(Encoding.ASCII.GetBytes($"HEAD /h HTTP/1.1\r\nHost: {Bound}\r\n\r\n"), Ct);
+        RawResponse? refused = await SandboxClients.ReadResponseAsync(tls, Ct);
+        Assert.Equal(403, refused?.Status);
+        Assert.Equal(VaultErrorCodes.NetworkNotGranted, refused?.Error);
+        Assert.False(refused!.Headers.ContainsKey("Content-Length"));
+
+        await tls.WriteAsync(Encoding.ASCII.GetBytes($"GET /g HTTP/1.1\r\nHost: {Bound}\r\nAuthorization: Bearer {placeholder}\r\n\r\n"), Ct);
+        RawResponse? get = await SandboxClients.ReadResponseAsync(tls, Ct);
+        Assert.Equal(200, get?.Status);
+        Assert.Equal("you sent: Bearer [secret:test.token]", get?.Body);
+    }
+
+    [Fact]
     public async Task Disposing_Vault_closes_every_sandbox()
     {
         var vault = new TestVault();

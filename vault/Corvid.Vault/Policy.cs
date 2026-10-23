@@ -35,6 +35,19 @@ internal sealed class PolicyDocument
     /// <summary>Live sandbox proxies at once; one more is refused with <c>sandbox_limit</c>.</summary>
     public int MaxSandboxes { get; set; } = 64;
 
+    /// <summary>
+    /// Live connections to one sandbox proxy at once (idle keep-alive tunnels included, until the 30 s head timeout reaps
+    /// them); one more is answered 429 <c>sandbox_limit</c> and closed.
+    /// </summary>
+    public int MaxSandboxConnections { get; set; } = 16;
+
+    /// <summary>
+    /// Live connections to all sandbox proxies together. Each can hold a request body and a buffered upstream response of
+    /// up to <see cref="MaxResponseBytes"/> each, so twice that times this cap bounds the proxy's memory (2 GiB at the
+    /// defaults, and only for bytes a client actually sent or an upstream actually returned).
+    /// </summary>
+    public int MaxSandboxConnectionsTotal { get; set; } = 64;
+
     public Dictionary<string, SecretPolicy> Secrets { get; set; } = new(StringComparer.Ordinal);
 }
 

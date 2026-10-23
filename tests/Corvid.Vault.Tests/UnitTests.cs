@@ -481,11 +481,91 @@ public sealed class Http1Tests
 
         await connection.WriteResponseAsync(
             200, "Fine\r\nInjected: yes", [new WireHeader("X-Ok", "1"), new WireHeader("X-Bad", "a\r\nInjected: yes"), new WireHeader("Bad Name", "x")],
-            "body"u8.ToArray(), close: true, Ct);
+            "body"u8.ToArray(), close: true, toHead: false, Ct);
 
         Assert.Equal(
             "HTTP/1.1 200 OK\r\nX-Ok: 1\r\nContent-Length: 4\r\nConnection: close\r\n\r\nbody",
             Encoding.Latin1.GetString(output.ToArray()));
+    }
+
+    [Fact]
+    public async Task A_response_to_HEAD_has_no_body_and_no_Content_Length()
+    {
+        var output = new MemoryStream();
+        var connection = new Http1Connection(output);
+
+        await connection.WriteResponseAsync(200, "OK", [new WireHeader("X-Ok", "1")], "ignored"u8.ToArray(), close: false, toHead: true, Ct);
+        await connection.WriteRefusalAsync(403, VaultErrorCodes.NetworkNotGranted, "No.", close: false, toHead: true, Ct);
+
+        Assert.Equal(
+            "HTTP/1.1 200 OK\r\nX-Ok: 1\r\n\r\n"
+            + "HTTP/1.1 403 Forbidden\r\nX-Corvid-Vault-Error: network_not_granted\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n",
+            Encoding.Latin1.GetString(output.ToArray()));
+    }
+
+    [Fact]
+    public async Task A_body_is_read_as_it_arrives_and_the_announced_length_is_not_allocated_up_front()
+    {
+        // The body trickles in a few KB per read; the buffer doubles as it fills instead of asking for 300 KB at once.
+        byte[] payload = RandomNumberGenerator.GetBytes(300_000);
+        var stream = new TrickleStream(payload, maxPerRead: 7_000);
+        var connection = new Http1Connection(stream);
+
+        byte[] body = await connection.ReadBodyAsync(payload.Length, Ct);
+
+        Assert.Equal(payload, body);
+        Assert.True(stream.LargestRequest <= Http1Connection.InitialBodyBytes * 2, $"asked for {stream.LargestRequest} bytes in one read");
+
+        // A 16 MB claim with one byte behind it: the first read asks for at most the initial buffer, then the close is a 400.
+        var claim = new TrickleStream([1], maxPerRead: 1);
+        var e = await Assert.ThrowsAsync<Http1Exception>(() => new Http1Connection(claim).ReadBodyAsync(16_000_000, Ct));
+        Assert.Equal(400, e.Status);
+        Assert.True(claim.LargestRequest <= Http1Connection.InitialBodyBytes, $"asked for {claim.LargestRequest} bytes in one read");
+    }
+
+    /// <summary>A read-only stream that hands out at most <c>maxPerRead</c> bytes per read and records the largest read asked for.</summary>
+    private sealed class TrickleStream(byte[] data, int maxPerRead) : Stream
+    {
+        private int _position;
+
+        public int LargestRequest { get; private set; }
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => data.Length;
+
+        public override long Position { get => _position; set => throw new NotSupportedException(); }
+
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+
+        public override int Read(Span<byte> buffer)
+        {
+            LargestRequest = Math.Max(LargestRequest, buffer.Length);
+            int n = Math.Min(Math.Min(buffer.Length, maxPerRead), data.Length - _position);
+            data.AsSpan(_position, n).CopyTo(buffer);
+            _position += n;
+            return n;
+        }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(Read(buffer.Span));
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            Task.FromResult(Read(buffer.AsSpan(offset, count)));
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     [Theory]

@@ -40,6 +40,9 @@ internal sealed class SandboxSession
 
     public ConcurrentDictionary<Socket, byte> Connections { get; } = new();
 
+    /// <summary>Connections counted against <see cref="PolicyDocument.MaxSandboxConnections"/>; changed with Interlocked only.</summary>
+    internal int Live;
+
     public bool IsExpired(DateTimeOffset now) => now >= ExpiresAt;
 }
 
@@ -60,6 +63,7 @@ internal sealed class SandboxProxy : IDisposable
     private readonly uint _ownUid = Native.CurrentUid();
     private readonly ConcurrentDictionary<string, SandboxSession> _sandboxes = new(StringComparer.Ordinal);
     private readonly Lock _gate = new();
+    private int _live;
 
     public SandboxProxy(VaultCore core, string directory)
     {
@@ -68,6 +72,9 @@ internal sealed class SandboxProxy : IDisposable
     }
 
     public int Count => _sandboxes.Count;
+
+    /// <summary>Live connections across every sandbox, counted against <see cref="PolicyDocument.MaxSandboxConnectionsTotal"/>.</summary>
+    public int LiveConnections => Volatile.Read(ref _live);
 
     public SandboxSession? Find(string id) => _sandboxes.GetValueOrDefault(id);
 
@@ -218,11 +225,26 @@ internal sealed class SandboxProxy : IDisposable
                 return;
             }
 
+            // Counted before anything is read, so a flood of idle connections is capped like a flood of large bodies.
+            PolicyDocument policy = _core.Policy.Current;
+            int perSandbox = Interlocked.Increment(ref sandbox.Live);
+            int total = Interlocked.Increment(ref _live);
+            if (perSandbox > policy.MaxSandboxConnections || total > policy.MaxSandboxConnectionsTotal)
+            {
+                Release(sandbox);
+                string message = perSandbox > policy.MaxSandboxConnections
+                    ? $"This sandbox already has {policy.MaxSandboxConnections} connections open."
+                    : $"Sandboxes already have {policy.MaxSandboxConnectionsTotal} connections open.";
+                _ = Task.Run(() => RefuseBusyAsync(sandbox, client, message, stop));
+                continue;
+            }
+
             sandbox.Connections[client] = 0;
             if (stop.IsCancellationRequested)
             {
                 // Closed between accept and registration: Shutdown may have missed this one.
                 sandbox.Connections.TryRemove(client, out _);
+                Release(sandbox);
                 client.Dispose();
                 return;
             }
@@ -278,6 +300,42 @@ internal sealed class SandboxProxy : IDisposable
         finally
         {
             sandbox.Connections.TryRemove(client, out _);
+            Release(sandbox);
+        }
+    }
+
+    private void Release(SandboxSession sandbox)
+    {
+        Interlocked.Decrement(ref sandbox.Live);
+        Interlocked.Decrement(ref _live);
+    }
+
+    /// <summary>
+    /// Answers a connection over a cap with 429 <c>sandbox_limit</c> and closes it, reading nothing from it. The peer is
+    /// checked first, as for any connection; the write is one small response, bounded by <see cref="Http1Connection.HeaderTimeout"/>.
+    /// </summary>
+    private async Task RefuseBusyAsync(SandboxSession sandbox, Socket client, string message, CancellationToken stop)
+    {
+        try
+        {
+            using (client)
+            {
+                if (VaultServer.CheckPeer(_core, client, _ownUid, sandbox.Id) is not { } connecting)
+                {
+                    return;
+                }
+
+                AuditConnect(sandbox, new PeerInfo(connecting.Pid, sandbox.Uid), "refused", VaultErrorCodes.SandboxLimit, null);
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stop);
+                timeout.CancelAfter(Http1Connection.HeaderTimeout);
+                await using var raw = new NetworkStream(client, ownsSocket: false);
+                await new Http1Connection(raw).WriteRefusalAsync(429, VaultErrorCodes.SandboxLimit, message, close: true, toHead: false, timeout.Token)
+                    .ConfigureAwait(false);
+            }
+        }
+        catch (Exception e) when (e is IOException or ObjectDisposedException or OperationCanceledException or SocketException)
+        {
+            // The client went away first.
         }
     }
 
@@ -292,7 +350,7 @@ internal sealed class SandboxProxy : IDisposable
         catch (Http1Exception e)
         {
             AuditConnect(sandbox, peer, "refused", e.Code, null);
-            await outer.WriteRefusalAsync(e.Status, e.Code, e.Message, close: true, stop).ConfigureAwait(false);
+            await outer.WriteRefusalAsync(e.Status, e.Code, e.Message, close: true, toHead: false, stop).ConfigureAwait(false);
             return null;
         }
 
@@ -357,7 +415,7 @@ internal sealed class SandboxProxy : IDisposable
         }
 
         AuditConnect(sandbox, peer, "allowed", null, host);
-        await outer.WriteResponseAsync(200, "Connection established", [], ReadOnlyMemory<byte>.Empty, close: false, stop).ConfigureAwait(false);
+        await outer.WriteResponseAsync(200, "Connection established", [], ReadOnlyMemory<byte>.Empty, close: false, toHead: false, stop).ConfigureAwait(false);
         return host;
     }
 
@@ -365,7 +423,7 @@ internal sealed class SandboxProxy : IDisposable
         SandboxSession sandbox, PeerInfo peer, Http1Connection outer, int status, string code, string message, string destination, CancellationToken stop)
     {
         AuditConnect(sandbox, peer, "refused", code, destination);
-        await outer.WriteRefusalAsync(status, code, message, close: true, stop).ConfigureAwait(false);
+        await outer.WriteRefusalAsync(status, code, message, close: true, toHead: false, stop).ConfigureAwait(false);
         return null;
     }
 
@@ -403,7 +461,7 @@ internal sealed class SandboxProxy : IDisposable
             }
 
             PolicyDocument policy = _core.Policy.Current;
-            Http1Head? head;
+            Http1Head? head = null;
             Http1Framing framing;
             byte[]? body = null;
             try
@@ -433,7 +491,8 @@ internal sealed class SandboxProxy : IDisposable
                     Time = _core.Time.GetUtcNow(), Op = "sandbox_forward", Decision = "refused", Code = e.Code, Session = sandbox.SessionId,
                     Pid = peer.Pid, Uid = peer.Uid, Destination = host, Sandbox = sandbox.Id,
                 });
-                await inner.WriteRefusalAsync(e.Status, e.Code, e.Message, close: true, stop).ConfigureAwait(false);
+                // A refused HEAD still gets no body, or the client would read the text as the next response.
+                await inner.WriteRefusalAsync(e.Status, e.Code, e.Message, close: true, toHead: head?.Method == "HEAD", stop).ConfigureAwait(false);
                 return;
             }
 
@@ -466,16 +525,18 @@ internal sealed class SandboxProxy : IDisposable
                 response = new ErrorResponse { Code = VaultErrorCodes.BadRequest, Message = _core.CurrentScrubber.Scrub(e.Message).Text };
             }
 
+            bool toHead = head.Method == "HEAD";
             switch (response)
             {
                 case ForwardResponse forwarded:
-                    await inner.WriteResponseAsync(forwarded.Status, forwarded.Reason, forwarded.Headers, forwarded.Body, framing.Close, stop).ConfigureAwait(false);
+                    await inner.WriteResponseAsync(forwarded.Status, forwarded.Reason, forwarded.Headers, forwarded.Body, framing.Close, toHead, stop)
+                        .ConfigureAwait(false);
                     break;
                 case ErrorResponse error:
-                    await inner.WriteRefusalAsync(StatusFor(error.Code), error.Code, error.Message, framing.Close, stop).ConfigureAwait(false);
+                    await inner.WriteRefusalAsync(StatusFor(error.Code), error.Code, error.Message, framing.Close, toHead, stop).ConfigureAwait(false);
                     break;
                 default:
-                    await inner.WriteRefusalAsync(502, VaultErrorCodes.UpstreamError, "Unexpected response.", close: true, stop).ConfigureAwait(false);
+                    await inner.WriteRefusalAsync(502, VaultErrorCodes.UpstreamError, "Unexpected response.", close: true, toHead, stop).ConfigureAwait(false);
                     return;
             }
 

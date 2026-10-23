@@ -232,7 +232,7 @@ Tools with `SecretRef` parameters report unavailable through their `check_fn`, a
 | **S7** | Prompt-injection exfiltration suite: fetched pages and emails instructing the agent to send a secret to another host, embed it in a gist, `echo` it, or base64 it into a URL | Vault refuses or scrubs every case; audit shows each attempt. **CI half built (C-024 in `corvid-agent.md`)** in `evals/Corvid.Evals/Injection` and `tests/Corvid.Host.Tests/InjectionCanaryTests.cs`: fetch-to-host, the gist embed, `echo` into the answer and a base64 copy in a request body, scanned in every encoding. The Vault-refuses half waits for V-003; the email surface and a real model are deferred. |
 | V-001 | `corvid-vault` executable: store, socket and peer auth, policy file, audit | — |
 | V-002 | Forward-request proxy, upstream TLS verification, header substitution, response scrub | V-001 |
-| V-003a | **Built:** sandbox proxy mode, Vault side. `sandbox_open`/`sandbox_close` ops; a per-sandbox Unix socket (`<dir of vault.sock>/sandbox/<id>.sock`, 0600 in 0700) speaking HTTP CONNECT to a DNS name on 443; an in-memory ECDSA P-256 CA per sandbox (never exported) minting one leaf per SNI host (cap 128), TLS terminated, strict HTTP/1.1 inside; the forward pipeline shared with V-002 (placeholders bound to the opener's session and uid, policy with `Approved` false, scrubbing); pass-through of placeholder-free requests only when opened with network; expiry, cleanup, audit (`sandbox_open`, `sandbox_close`, `sandbox_connect`, `sandbox_forward`). Deferred: per-request `ask` approval for sandboxed requests, streamed and chunked bodies, ports other than 443, IP literals, plain http, HTTP/2, websockets (§9 `ws_first_frame`), NameConstraints on the CA, a Vault-side ceiling on pass-through and per-sandbox budgets, an outbound exfiltration check, private upstream CAs, Windows and macOS; see "Implementation status" | V-002, C-007 |
+| V-003a | **Built:** sandbox proxy mode, Vault side. `sandbox_open`/`sandbox_close` ops; a per-sandbox Unix socket (`<dir of vault.sock>/sandbox/<id>.sock`, 0600 in 0700) speaking HTTP CONNECT to a DNS name on 443; an in-memory ECDSA P-256 CA per sandbox (never exported) minting one leaf per SNI host (cap 128), TLS terminated, strict HTTP/1.1 inside; the forward pipeline shared with V-002 (placeholders bound to the opener's session and uid, policy with `Approved` false, scrubbing); pass-through of placeholder-free requests only when opened with network; expiry, cleanup, audit (`sandbox_open`, `sandbox_close`, `sandbox_connect`, `sandbox_forward`); request bodies grown as bytes arrive (64 KiB first, never the announced Content-Length up front) and live connections capped per sandbox (`maxSandboxConnections`, 16) and in total (`maxSandboxConnectionsTotal`, 64), one more answered 429 `sandbox_limit`; responses to HEAD carry no body and no Content-Length. Deferred: forwarding the upstream Content-Length on HEAD (it is hop-by-hop in the shared pipeline, and keeping it would change Corvid's `VaultHandler` path too; omitting it is RFC 9110 §9.3.2-correct), per-request `ask` approval for sandboxed requests, streamed and chunked bodies, ports other than 443, IP literals, plain http, HTTP/2, websockets (§9 `ws_first_frame`), NameConstraints on the CA, a Vault-side ceiling on pass-through and per-sandbox budgets, an outbound exfiltration check, private upstream CAs, Windows and macOS; see "Implementation status" | V-002, C-007 |
 | V-003b | Pending: sandbox launcher side. Bind-mount the sandbox socket into the bwrap namespace, an in-namespace loopback TCP-to-Unix bridge for `HTTPS_PROXY`, the CA in the sandbox's trust variables, `sandbox_close` at command end, an end-to-end `curl`/`gh`/`requests` test, S6 extended to sandbox processes | V-003a, C-007a |
 | V-004 | ssh-agent protocol | V-001 |
 | V-005 | Ingress credential interception (GLiNER2 labels + token formats) | C-004 |
@@ -347,7 +347,8 @@ crypto is .NET's own (`CertificateRequest`, `SslStream`).
   the scheme/host/port check, hop-by-hop removal, the response cap, decompression and scrubbing of headers, reason and
   body. Sandbox mode differs in two ways: a request with no placeholder passes through (HTTPS, upstream-verified,
   scrubbed) only when the sandbox has network and is otherwise `network_not_granted`, and the audit op is
-  `sandbox_forward` with the sandbox id. Responses go back as HTTP/1.1 with a fresh Content-Length; refusals are 403 for
+  `sandbox_forward` with the sandbox id. Responses go back as HTTP/1.1 with a fresh Content-Length (none, and no body,
+  for HEAD: the upstream length is hop-by-hop in the pipeline, so `curl -I` sees no length rather than 0); refusals are 403 for
   policy codes, 502 for `upstream_error` and `response_too_large`, 400 for `bad_request`, with the code in
   `X-Corvid-Vault-Error` and a one-line text body.
 - **Lifetime.** `ExpiresAt` is the requested lifetime capped at `sandboxLifetimeMinutes` (default 720); at most
@@ -356,6 +357,13 @@ crypto is .NET's own (`CertificateRequest`, `SslStream`).
   leaves. Expiry is lazy: every Vault call sweeps expired sandboxes, and accept and each request re-check, so an idle
   expired sandbox's socket file can linger until the next Vault call or Vault's exit but accepts nothing. Disposing Vault
   closes them all. The registry is created on first use, so `set`, `list` and the other CLI commands bind nothing.
+- **Memory bounds** (security review of PR #58). A request body is read into a buffer that starts at 64 KiB and doubles
+  as bytes arrive, so a Content-Length is a claim, not an allocation: the review's 40 tunnels each announcing 16 MB and
+  sending one byte now hold 40 × 64 KiB = 2.5 MiB of body buffer (it measured 615 MB of heap before). Live connections are counted at accept, before a byte is read: at most
+  `maxSandboxConnections` (16) per sandbox and `maxSandboxConnectionsTotal` (64) across all; one more gets 429
+  `sandbox_limit` (audited as `sandbox_connect`) and is closed, and an idle keep-alive tunnel holds its slot until the
+  30 s head timeout. Each live connection holds at most a request body and a buffered response of `maxResponseBytes`,
+  so the proxy's worst case is about 2 × 64 × 16 MB = 2 GiB of bytes actually sent or received, not announced.
 
 **Contract for V-003b** (the launcher side builds against exactly this):
 

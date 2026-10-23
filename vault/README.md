@@ -43,6 +43,8 @@ Native build (needs clang): `dotnet publish vault/Corvid.Vault -c Release -r lin
   "scrubRequestsPerMinute": 600,
   "sandboxLifetimeMinutes": 720,       // cap on a sandbox proxy's lifetime
   "maxSandboxes": 64,                  // sandbox proxies open at once
+  "maxSandboxConnections": 16,         // live connections to one sandbox proxy
+  "maxSandboxConnectionsTotal": 64,    // live connections to all sandbox proxies
   "secrets": {
     "github.token": {
       "hosts": ["api.github.com", "uploads.github.com"],   // or "*.example.com"

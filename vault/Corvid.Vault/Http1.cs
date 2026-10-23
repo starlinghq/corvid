@@ -61,6 +61,9 @@ internal sealed class Http1Connection(Stream stream)
 
     public static readonly TimeSpan BodyTimeout = TimeSpan.FromSeconds(100);
 
+    /// <summary>The first allocation for a request body; it doubles as bytes arrive, up to the Content-Length.</summary>
+    public const int InitialBodyBytes = 64 * 1024;
+
     private readonly byte[] _buffer = new byte[MaxHeaderBytes + 4096];
     private int _start;
     private int _end;
@@ -117,24 +120,41 @@ internal sealed class Http1Connection(Stream stream)
         }
     }
 
-    /// <summary>Reads exactly <paramref name="length"/> body bytes, buffered ones first.</summary>
+    /// <summary>
+    /// Reads exactly <paramref name="length"/> body bytes, buffered ones first, within <see cref="BodyTimeout"/>. The
+    /// Content-Length is a claim, not an allocation: the buffer starts at <see cref="InitialBodyBytes"/> and doubles only as
+    /// bytes arrive, so a peer that announces 16 MB and sends one byte costs Vault 64 KiB, not 16 MB.
+    /// </summary>
     public async Task<byte[]> ReadBodyAsync(long length, CancellationToken cancellationToken)
     {
-        byte[] body = new byte[length];
-        int fromBuffer = (int)Math.Min(length, _end - _start);
-        _buffer.AsSpan(_start, fromBuffer).CopyTo(body);
-        _start += fromBuffer;
-        if (fromBuffer < length)
+        if (length is < 0 or > int.MaxValue)
+        {
+            throw new Http1Exception(413, VaultErrorCodes.BadRequest, "The request body is too large.");
+        }
+
+        int buffered = (int)Math.Min(length, _end - _start);
+        byte[] body = new byte[(int)Math.Min(length, Math.Max(InitialBodyBytes, buffered))];
+        _buffer.AsSpan(_start, buffered).CopyTo(body);
+        _start += buffered;
+        int filled = buffered;
+        if (filled < length)
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(BodyTimeout);
-            try
+            while (filled < length)
             {
-                await stream.ReadExactlyAsync(body.AsMemory(fromBuffer), timeout.Token).ConfigureAwait(false);
-            }
-            catch (EndOfStreamException)
-            {
-                throw new Http1Exception(400, VaultErrorCodes.BadRequest, "The connection closed inside a request body.");
+                if (filled == body.Length)
+                {
+                    Array.Resize(ref body, (int)Math.Min(length, (long)body.Length * 2));
+                }
+
+                int read = await stream.ReadAsync(body.AsMemory(filled), timeout.Token).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    throw new Http1Exception(400, VaultErrorCodes.BadRequest, "The connection closed inside a request body.");
+                }
+
+                filled += read;
             }
         }
 
@@ -277,11 +297,15 @@ internal sealed class Http1Connection(Stream stream)
         return new Http1Head(parts[0], parts[1], headers);
     }
 
-    /// <summary>Writes a response with a fresh Content-Length (omitted for 1xx, 204 and 304).</summary>
+    /// <summary>
+    /// Writes a response with a fresh Content-Length (omitted for 1xx, 204 and 304). A response to HEAD
+    /// (<paramref name="toHead"/>) carries no body and no Content-Length: the upstream length is hop-by-hop in the forward
+    /// pipeline, and a fresh one would claim 0 (RFC 9110 §9.3.2 lets a server omit it).
+    /// </summary>
     public async Task WriteResponseAsync(
-        int status, string? reason, IEnumerable<WireHeader> headers, ReadOnlyMemory<byte> body, bool close, CancellationToken cancellationToken)
+        int status, string? reason, IEnumerable<WireHeader> headers, ReadOnlyMemory<byte> body, bool close, bool toHead, CancellationToken cancellationToken)
     {
-        bool bodyless = status is < 200 or 204 or 304;
+        bool bodyless = toHead || status is < 200 or 204 or 304;
         var head = new StringBuilder(256);
         head.Append("HTTP/1.1 ").Append(status.ToString(CultureInfo.InvariantCulture)).Append(' ')
             .Append(reason is { Length: > 0 } r && IsSafeValue(r) ? r : DefaultReason(status)).Append("\r\n");
@@ -315,13 +339,14 @@ internal sealed class Http1Connection(Stream stream)
     }
 
     /// <summary>A refusal: the status, <c>X-Corvid-Vault-Error: code</c> and a one-line text body.</summary>
-    public Task WriteRefusalAsync(int status, string code, string message, bool close, CancellationToken cancellationToken) =>
+    public Task WriteRefusalAsync(int status, string code, string message, bool close, bool toHead, CancellationToken cancellationToken) =>
         WriteResponseAsync(
             status,
             null,
             [new WireHeader("X-Corvid-Vault-Error", code), new WireHeader("Content-Type", "text/plain; charset=utf-8")],
             Encoding.UTF8.GetBytes(OneLine(message) + "\n"),
             close,
+            toHead,
             cancellationToken);
 
     /// <summary>The interim response to <c>Expect: 100-continue</c>.</summary>

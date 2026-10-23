@@ -3618,6 +3618,13 @@ every API used (`CertificateRequest`, `X509*Extension`, `SslStream`, `SslStreamC
   (`upstream_error`, `response_too_large`) or 400, with `X-Corvid-Vault-Error`. `VaultCore.CreateUpstreamHandler()` is
   the production `SocketsHttpHandler`, extracted so tests change only its connect callback and trusted root.
 - Policy and audit. `sandboxLifetimeMinutes` and `maxSandboxes` in `vault.json`; `AuditEvent.Sandbox`.
+- Memory and HEAD (review follow-up). `Http1Connection.ReadBodyAsync` starts at `InitialBodyBytes` (64 KiB) and doubles
+  as bytes arrive, never allocating the announced Content-Length up front. `AcceptLoopAsync` counts each connection with
+  `Interlocked` against `maxSandboxConnections` (16, `SandboxSession.Live`) and `maxSandboxConnectionsTotal` (64,
+  `SandboxProxy.LiveConnections`) before reading a byte, releases it in `ServeAsync`'s `finally` and in the accept loop's
+  early exits, and answers one over either cap with 429 `sandbox_limit` on its own task (peer-checked, audited, bounded
+  by the head timeout). `WriteResponseAsync` and `WriteRefusalAsync` take `toHead`: a response to HEAD, forwarded or a
+  refusal, has no body and no Content-Length, so keep-alive framing holds.
 - Tests (`tests/Corvid.Vault.Tests`): `SandboxProxyTests` against a loopback `TlsEchoServer` with its own CA, through an
   `HttpClient` whose proxy dials the sandbox socket and which trusts only the sandbox CA (the shape V-003b gives curl),
   plus raw-socket protocol cases; `SandboxCertificateTests` and `Http1Tests` for the extensions, the leaf cache and the
