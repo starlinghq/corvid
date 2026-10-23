@@ -17,6 +17,7 @@ using Corvid.Kernel.Events;
 using Corvid.Memory;
 using Corvid.Models;
 using Corvid.Models.Privacy;
+using Corvid.Secrets;
 using Corvid.Tools;
 using Microsoft.Extensions.AI;
 
@@ -801,7 +802,9 @@ public sealed class TurnRunner
                     var result = JsonValues.ToElement(value);
                     await RecordAfterAsync().ConfigureAwait(false);
                     // The result is logged before the lease is released: a model switch refuses an issued call with no result.
-                    Result(call.CallId, result, isError: false, $"{descriptor.Name}: {JsonValues.Text(result)}");
+                    // Kev's last tool result is what the log holds (C-040): the log scrubs the result, and this copy too.
+                    Result(call.CallId, result, isError: false,
+                        CredentialScrub.Scrub($"{descriptor.Name}: {JsonValues.Text(result)}", CredentialDetector.Egress).Text);
                     outcome = CallOutcome.Succeeded;
                 }
                 catch (ToolArgumentException exception)
@@ -1618,7 +1621,12 @@ public sealed class TurnRunner
                 var written = await _services.Memory!.WriteAsync(new MemoryWriteRequest(runner.SessionId, envelope.Text,
                     SourceSequence: source, Surface: envelope.Surface, Generator: Describe(profile), Tainted: runner.Tainted),
                     cancellationToken).ConfigureAwait(false);
-                _memoryWrite = written.Status == MemoryWriteStatus.Staged ? $"staged {written.MemoryId}" : $"{written.Operation} {written.MemoryId}";
+                _memoryWrite = written.Status switch
+                {
+                    MemoryWriteStatus.Staged => $"staged {written.MemoryId}",
+                    MemoryWriteStatus.Refused => "refused: " + written.Reason,
+                    _ => $"{written.Operation} {written.MemoryId}",
+                };
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {

@@ -379,7 +379,7 @@ public sealed class PrivacyEgressTests
         "\n-----END RSA PRIVATE KEY-----";
 
     [Fact]
-    public async Task A_credential_value_is_redacted_under_a_send_policy_at_any_threshold_and_restored_in_the_response()
+    public async Task A_credential_value_is_redacted_under_a_send_policy_at_any_threshold_and_restored_in_the_response_text_only()
     {
         var provider = new ScriptedChatClient(_ => new ChatResponse(new ChatMessage(ChatRole.Assistant,
         [
@@ -394,14 +394,43 @@ public sealed class PrivacyEgressTests
 
         Assert.Equal("Set GITHUB_TOKEN=<CREDENTIAL_1> in CI.", Sent(provider.Calls[0]));
         Assert.Equal($"Cloning with {GitHubToken}.", response.Text);
+        // C-040: never restored into a tool call, which would carry the value off the machine on the cloud model's say-so.
         var call = response.Messages.SelectMany(message => message.Contents).OfType<FunctionCallContent>().Single();
-        Assert.Equal($"GH_TOKEN={GitHubToken}", call.Arguments!["env"]);
+        Assert.Equal("GH_TOKEN=<CREDENTIAL_1>", call.Arguments!["env"]);
 
         var decision = (await egress.PrepareAsync(Cloud, [new(ChatRole.User, $"token {GitHubToken}")], new ModelRequestContext("s2", false), Ct)).Decision;
         Assert.Equal(EgressOutcome.Redacted, decision.Outcome);
         Assert.Equal(EgressAction.Redact, decision.Action);
         Assert.Contains("1 credential value", decision.Reason, StringComparison.Ordinal);
         Assert.DoesNotContain(GitHubToken, decision.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Restore_keeps_a_credential_placeholder_in_tool_call_arguments_and_restores_pii_there_and_both_in_text()
+    {
+        var map = new RedactionMap();
+        var credential = map.PlaceholderFor(PrivacyEgress.CredentialLabel, GitHubToken);
+        var person = map.PlaceholderFor("person", "Alice Smith");
+        using var document = JsonDocument.Parse($$"""{"token":"{{credential}}","owner":"{{person}}"}""");
+        var response = new ChatResponse(new ChatMessage(ChatRole.Assistant,
+        [
+            new TextContent($"Token {credential} for {person}."),
+            new FunctionCallContent("c1", "write_file", new Dictionary<string, object?>
+            {
+                ["content"] = $"GH_TOKEN={credential}\nOWNER={person}",
+                ["json"] = document.RootElement.Clone(),
+            }),
+        ]));
+
+        PrivacyEgress.Restore(response, map);
+
+        Assert.Equal("<CREDENTIAL_1>", credential);
+        Assert.Equal($"Token {GitHubToken} for Alice Smith.", response.Text);
+        var call = response.Messages.SelectMany(message => message.Contents).OfType<FunctionCallContent>().Single();
+        Assert.Equal("GH_TOKEN=<CREDENTIAL_1>\nOWNER=Alice Smith", call.Arguments!["content"]);
+        var json = (JsonElement)call.Arguments["json"]!;
+        Assert.Equal("<CREDENTIAL_1>", json.GetProperty("token").GetString());
+        Assert.Equal("Alice Smith", json.GetProperty("owner").GetString());
     }
 
     [Fact]

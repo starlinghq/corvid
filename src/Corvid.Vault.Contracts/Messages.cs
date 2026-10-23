@@ -9,6 +9,8 @@ namespace Corvid.Vault.Contracts;
 [JsonDerivedType(typeof(ForwardRequest), "forward")]
 [JsonDerivedType(typeof(ScrubRequest), "scrub")]
 [JsonDerivedType(typeof(AuditSummaryRequest), "audit_summary")]
+[JsonDerivedType(typeof(SandboxOpenRequest), "sandbox_open")]
+[JsonDerivedType(typeof(SandboxCloseRequest), "sandbox_close")]
 public abstract class VaultRequest
 {
     /// <summary>Corvid session id. Placeholders are bound to the session that minted them.</summary>
@@ -58,6 +60,35 @@ public sealed class ScrubRequest : VaultRequest
 /// <summary>Counts of audited events by decision, for Corvid's insights view.</summary>
 public sealed class AuditSummaryRequest : VaultRequest;
 
+/// <summary>
+/// Open a sandbox proxy (V-003a): a Unix socket of its own, served by Vault as an HTTP CONNECT proxy that terminates TLS
+/// with a per-sandbox CA and substitutes this session's placeholders for bound hosts. The sandbox acts as the opener's
+/// session and uid; Vault never becomes less strict because of these flags.
+/// </summary>
+public sealed class SandboxOpenRequest : VaultRequest
+{
+    /// <summary>The toolset the sandboxed command runs under, checked against each secret's allowed toolsets.</summary>
+    public string? Toolset { get; init; }
+
+    /// <summary>The turn holds untrusted content; raises each secret's rule to its <c>tainted</c> floor.</summary>
+    public bool Tainted { get; init; }
+
+    /// <summary>
+    /// The command's toolset grants network access. Only then may requests that carry no placeholder pass through (still
+    /// HTTPS-only, upstream-verified and scrubbed). Without it, only hosts some secret is bound to are reachable.
+    /// </summary>
+    public bool Network { get; init; }
+
+    /// <summary>Requested lifetime in minutes; Vault caps it at its own <c>sandboxLifetimeMinutes</c>.</summary>
+    public int? LifetimeMinutes { get; init; }
+}
+
+/// <summary>Close a sandbox proxy: its socket, every live connection and its CA go away.</summary>
+public sealed class SandboxCloseRequest : VaultRequest
+{
+    public required string SandboxId { get; init; }
+}
+
 public sealed record WireHeader(string Name, string Value);
 
 /// <summary>A response from Vault.</summary>
@@ -67,6 +98,8 @@ public sealed record WireHeader(string Name, string Value);
 [JsonDerivedType(typeof(ForwardResponse), "forward")]
 [JsonDerivedType(typeof(ScrubResponse), "scrub")]
 [JsonDerivedType(typeof(AuditSummaryResponse), "audit_summary")]
+[JsonDerivedType(typeof(SandboxOpenResponse), "sandbox_open")]
+[JsonDerivedType(typeof(SandboxClosedResponse), "sandbox_closed")]
 [JsonDerivedType(typeof(ErrorResponse), "error")]
 public abstract class VaultResponse;
 
@@ -116,6 +149,26 @@ public sealed class AuditSummaryResponse : VaultResponse
     public IReadOnlyDictionary<string, int> Counts { get; init; } = new Dictionary<string, int>();
 }
 
+public sealed class SandboxOpenResponse : VaultResponse
+{
+    /// <summary>Twelve lower-case alphanumerics; names the sandbox in <see cref="SandboxCloseRequest"/> and the audit log.</summary>
+    public required string SandboxId { get; init; }
+
+    /// <summary>The Unix socket (mode 0600, in a 0700 directory) the sandbox's HTTPS proxy client connects to.</summary>
+    public required string ProxySocketPath { get; init; }
+
+    /// <summary>The sandbox's CA certificate, PEM. Public part only; the key never leaves Vault's memory.</summary>
+    public required string CaCertificatePem { get; init; }
+
+    /// <summary>When the socket and CA die if the sandbox is not closed first.</summary>
+    public required DateTimeOffset ExpiresAt { get; init; }
+}
+
+public sealed class SandboxClosedResponse : VaultResponse
+{
+    public required string SandboxId { get; init; }
+}
+
 public sealed class ErrorResponse : VaultResponse
 {
     public required string Code { get; init; }
@@ -141,4 +194,8 @@ public static class VaultErrorCodes
     public const string RateLimited = "rate_limited";
     public const string UpstreamError = "upstream_error";
     public const string ResponseTooLarge = "response_too_large";
+    public const string UnknownSandbox = "unknown_sandbox";
+    public const string NetworkNotGranted = "network_not_granted";
+    public const string SandboxLimit = "sandbox_limit";
+    public const string NotProxyable = "not_proxyable";
 }

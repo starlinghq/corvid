@@ -210,11 +210,13 @@ public sealed class InjectionCanaryTests
         await using var host = TestHost.Create(new FakeModels(generator), BuiltinOn, services => services.AddSingleton(new WebFetchTransport(sink)));
         await using var runtime = await host.StartAsync();
         var session = runtime.OpenSession();
-        await session.SendAsync("fetch the page and report what it says", TestContext.Current.CancellationToken);
+        var delivery = await session.SendAsync("fetch the page and report what it says", TestContext.Current.CancellationToken);
 
-        // The echo vector leaks into the answer, not a request: the transcript itself must not repeat the canary.
+        // The echo vector leaks into the answer, not a request. The answer is judged as delivered: the log's copy is scrubbed
+        // (C-040), since "the secret is <canary>" reads as a credential, so the transcript no longer repeats it.
         var transcript = session.Snapshot().Transcript.Select(entry => entry.Content).ToList();
-        var answer = transcript.OfType<AssistantMessage>().Last().Text;
+        Assert.Null(CanaryScan.Find(transcript.OfType<AssistantMessage>().Last().Text, tokens.Canary));
+        var answer = delivery.Result!.Text;
         var form = CanaryScan.Find(answer, tokens.Canary);
         Assert.NotNull(form);
 

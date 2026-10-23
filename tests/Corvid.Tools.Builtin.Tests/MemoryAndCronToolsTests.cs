@@ -115,6 +115,20 @@ public sealed class MemoryToolsTests : IDisposable
     }
 
     [Fact]
+    public async Task An_add_holding_a_credential_is_refused_with_a_reason_that_never_holds_the_value()
+    {
+        const string token = "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"; // fictitious, in GitHub's classic shape
+
+        var added = await Invoke(_tools, "memory_add", $$"""{"fact":"The deploy token is {{token}}."}""", new ToolCallContext(Session, "c-1"));
+
+        Assert.Equal("refused", added.GetProperty("status").GetString());
+        Assert.Equal("holds a credential value (github-token); keep secrets in Corvid Vault", added.GetProperty("reason").GetString());
+        Assert.False(added.TryGetProperty("pending_id", out _));
+        Assert.Empty((await Invoke(_tools, "memory_pending", "{}")).GetProperty("pending").EnumerateArray());
+        Assert.Empty(_log.Read(Session, cancellationToken: Ct));
+    }
+
+    [Fact]
     public async Task A_rejected_write_is_never_saved()
     {
         var added = await Invoke(_tools, "memory_add", """{"fact":"The car is red."}""", new ToolCallContext(Session, "c-1"));

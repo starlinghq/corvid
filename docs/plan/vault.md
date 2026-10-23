@@ -1,6 +1,6 @@
 # Corvid Vault: a secrets broker Corvid cannot read
 
-Version 0.4, 2026-10-22. Companion to [`corvid-agent.md`](corvid-agent.md) (§10.5). Status: M1 built (`vault/`, default tier, Linux), S6 passing, S7's CI half built (C-024), and Corvid's sandbox (C-007a) hides the store from sandboxed commands; see "Implementation status" at the end.
+Version 0.5, 2026-10-22. Companion to [`corvid-agent.md`](corvid-agent.md) (§10.5). Status: M1 built (`vault/`, default tier, Linux), S6 passing, S7's CI half built (C-024), Corvid's sandbox (C-007a) hides the store from sandboxed commands, and M2's Vault side (V-003a, the sandbox proxy) is built; see "Implementation status" at the end.
 
 Vault is a separate, model-free process that holds every secret Corvid's tools need. Corvid sees only secret **names** and **placeholders**. Tools and scripts can still use the secrets:
 
@@ -232,7 +232,8 @@ Tools with `SecretRef` parameters report unavailable through their `check_fn`, a
 | **S7** | Prompt-injection exfiltration suite: fetched pages and emails instructing the agent to send a secret to another host, embed it in a gist, `echo` it, or base64 it into a URL | Vault refuses or scrubs every case; audit shows each attempt. **CI half built (C-024 in `corvid-agent.md`)** in `evals/Corvid.Evals/Injection` and `tests/Corvid.Host.Tests/InjectionCanaryTests.cs`: fetch-to-host, the gist embed, `echo` into the answer and a base64 copy in a request body, scanned in every encoding. The Vault-refuses half waits for V-003; the email surface and a real model are deferred. |
 | V-001 | `corvid-vault` executable: store, socket and peer auth, policy file, audit | — |
 | V-002 | Forward-request proxy, upstream TLS verification, header substitution, response scrub | V-001 |
-| V-003 | Sandbox proxy mode with a per-sandbox CA | V-002, C-007 |
+| V-003a | **Built:** sandbox proxy mode, Vault side. `sandbox_open`/`sandbox_close` ops; a per-sandbox Unix socket (`<dir of vault.sock>/sandbox/<id>.sock`, 0600 in 0700) speaking HTTP CONNECT to a DNS name on 443; an in-memory ECDSA P-256 CA per sandbox (never exported) minting one leaf per SNI host (cap 128), TLS terminated, strict HTTP/1.1 inside; the forward pipeline shared with V-002 (placeholders bound to the opener's session and uid, policy with `Approved` false, scrubbing); pass-through of placeholder-free requests only when opened with network; expiry, cleanup, audit (`sandbox_open`, `sandbox_close`, `sandbox_connect`, `sandbox_forward`); request bodies grown as bytes arrive (64 KiB first, never the announced Content-Length up front) and live connections capped per sandbox (`maxSandboxConnections`, 16) and in total (`maxSandboxConnectionsTotal`, 64), one more answered 429 `sandbox_limit`; responses to HEAD carry no body and no Content-Length. Deferred: forwarding the upstream Content-Length on HEAD (it is hop-by-hop in the shared pipeline, and keeping it would change Corvid's `VaultHandler` path too; omitting it is RFC 9110 §9.3.2-correct), per-request `ask` approval for sandboxed requests, streamed and chunked bodies, ports other than 443, IP literals, plain http, HTTP/2, websockets (§9 `ws_first_frame`), NameConstraints on the CA, a Vault-side ceiling on pass-through and per-sandbox budgets, an outbound exfiltration check, private upstream CAs, Windows and macOS; see "Implementation status" | V-002, C-007 |
+| V-003b | Pending: sandbox launcher side. Bind-mount the sandbox socket into the bwrap namespace, an in-namespace loopback TCP-to-Unix bridge for `HTTPS_PROXY`, the CA in the sandbox's trust variables, `sandbox_close` at command end, an end-to-end `curl`/`gh`/`requests` test, S6 extended to sandbox processes | V-003a, C-007a |
 | V-004 | ssh-agent protocol | V-001 |
 | V-005 | Ingress credential interception (GLiNER2 labels + token formats) | C-004 |
 | V-006 | Out-of-band confirm (D-Bus, ntfy) | V-001 |
@@ -284,6 +285,8 @@ M1 on its own protects against accidental exposure through Corvid's own code pat
 
 **S7, CI half (C-024 in `corvid-agent.md`).** A fresh secret-shaped canary and a sentinel are minted per run (`InjectionTokens`), and `CanaryScan` looks for the canary literally, URL- and JSON-escaped, in base64 and base64url at each byte alignment, and in hex (`evals/Corvid.Evals/Injection`, unit tests in `tests/Corvid.Evals.Tests/InjectionScannerTests.cs`). `tests/Corvid.Host.Tests/InjectionCanaryTests.cs` runs the real `web_fetch` tool against a recording sink (`WebFetchTransport`) with a scripted generator: the fetched page asks for the canary to be sent to another host or embedded in a gist, the tainted turn's approval is denied, and no request carries the canary in any encoding; with the approval granted, a base64 copy in the request is flagged; an answer that echoes the canary is flagged from the transcript. This proves Corvid's taint and approval gate and the scanner, not Vault: the Vault-refuses-or-scrubs half and its audit wait for V-003, and the injected-email surface and a run against a real model are deferred.
 
+**Credential scrub at the log (C-040 in `corvid-agent.md`).** The value-shape half of §5's kernel scrub is built. Every event appended to the session log passes through `EventScrubber`, which replaces each value `CredentialDetector`'s shape and labelled rules find in tool-call arguments, tool results, assistant text, approvals, decision state and queued deliveries with a non-reversible marker (`ghp_[REDACTED:github-token:3fa91c0e]`, `[REDACTED:labelled-value]`). Prompts are rendered from the log, so a credential a tool returned reaches no model, local or cloud, and the episodic index holds only the marker. Memory and skill writes holding a credential are refused, and the egress gate no longer restores `<CREDENTIAL_n>` into tool-call arguments. Placeholders pass unchanged; a value echoed where its placeholder was sent has a credential shape, so the log scrub catches it. What is not built is Vault's exact-value `scrub(text)` for the kernel: `Append` is synchronous under the turn's lock and Kernel has no Vault client, so it needs an async pre-append hook at the tool-result site and a budget for the oracle risk. A secret that matches no shape or label still reaches the log until then. (The S7 echo case above now judges the delivered answer; the logged transcript holds the marker.)
+
 `corvid-sandbox` is also the launcher §3.3's exec path will use (`sandbox/Corvid.Sandbox.Launcher`; no `Corvid.*` dependencies, started by path). Running it as `corvid-exec` and injecting values is not built.
 
 Deviations from the text above:
@@ -305,7 +308,117 @@ for a tainted turn (`approval_required`, which Corvid reports and does not fall 
 sessions sets `"tainted": "auto"`. §6's `role = "model-provider"` key is not implemented. Without Vault, cloud models are
 unavailable (§11). A key for a local server needs an https endpoint, because Vault refuses plain HTTP.
 
-Next: M2 = V-003, the sandbox proxy for scripts.
+**M2, part a (V-003a, 2026-10-22): the sandbox proxy, Vault side.** §3.1's "scripts and CLIs in the sandbox" path, in
+`vault/Corvid.Vault` (`SandboxProxy.cs`, `SandboxCertificates.cs`, `Http1.cs`) with the two ops in
+`src/Corvid.Vault.Contracts` and `VaultClient.OpenSandboxAsync`/`CloseSandboxAsync`. No new project or package; the
+crypto is .NET's own (`CertificateRequest`, `SslStream`).
+
+- **Per-sandbox CA.** Each `sandbox_open` creates an ECDSA P-256 root (`CN=Corvid Vault sandbox CA <id>`, basic
+  constraints CA with path length 0 and key usage keyCertSign|cRLSign, both critical, a subject key identifier, a 16-byte
+  random serial, valid from an hour before opening to an hour after expiry). It is signed with
+  `CertificateRequest.Create` and an `X509SignatureGenerator`, not `CreateSelfSigned`, so no certificate object ever
+  carries the key: the `ECDsa` in Vault's memory is the only copy, never exported, written or serialised, and disposed on
+  close. Only the public certificate's PEM leaves Vault.
+- **Leaves.** Minted at CONNECT for exactly the CONNECT host, which the TLS SNI must equal: an own P-256 key, SAN
+  dNSName = host and nothing else, EKU serverAuth, basic constraints CA false, an authority key identifier from the CA,
+  the CA's validity. Cached per sandbox as an offline `SslStreamCertificateContext` (no AIA or OCSP fetch), at most 128
+  hosts per sandbox (`sandbox_limit` beyond), disposed on close.
+- **Identity.** A sandbox records its opener's session id and uid, toolset, taint and network flag. Every connection on
+  its socket passes the same `SO_PEERCRED` check as `vault.sock` (now a shared helper), and then acts as the opener:
+  placeholders resolve only if minted for that session and uid. `Approved` is always false and `Tainted` comes from
+  open, so Vault only ever becomes stricter from Corvid's flags. `Network` is the one grant, and it governs only traffic
+  that carries no placeholder.
+- **Proxy protocol.** One `CONNECT host:443 HTTP/1.1` per connection. Refused, with `X-Corvid-Vault-Error`, audited as
+  `sandbox_connect`, and closed: any other method including absolute-form plain http (405 `not_proxyable`), another
+  port or an IP literal (403 `not_proxyable`), an invalid host (400 `bad_request`), bytes sent before the 200 (400),
+  an unbound host when the sandbox has no network (403 `network_not_granted`, before any TLS), and a 129th host (429
+  `sandbox_limit`). Otherwise `200 Connection established`, then TLS with the host's leaf, ALPN `http/1.1` only; a
+  missing or different SNI, or anything that is not a ClientHello, fails the handshake (`tls_handshake_failed`), so
+  there are no raw tunnels. TLS is terminated for every accepted CONNECT, bound or not, which is how a placeholder sent
+  to an unbound host is seen, refused as `host_not_bound` and audited, and how pass-through is scrubbed too.
+- **Inside the tunnel** (`Http1Connection`): strict HTTP/1.1, sequential keep-alive requests until the client closes,
+  sends `Connection: close`, or the sandbox ends. A header block of at most 64 KB read within 30 s (431 beyond), CRLF only
+  (a bare CR or LF is 400), no obs-fold, header names must be tokens; origin-form targets only; Host must name the
+  CONNECT host (with or without `:443`); a single Content-Length up to `maxResponseBytes` (413 beyond); Transfer-Encoding
+  is 411 alone and 400 with Content-Length, a duplicate Content-Length is 400, Upgrade is 400 `not_proxyable`;
+  `Expect: 100-continue` gets an interim 100. A malformed request ends the connection after the refusal.
+- **One forward pipeline.** `VaultCore.ForwardAsync` takes an optional sandbox. The proxy builds the request with
+  `Url = https://<CONNECT host><target>` (never from the inner Host header), the parsed headers, the sandbox's session,
+  toolset and taint, and a peer of the connection's pid with the opener's uid. Everything V-002 does then applies
+  unchanged: headers-only and once-per-request placeholders, `Resolve`, `PolicyEvaluator`, budgets, substitution with
+  the scheme/host/port check, hop-by-hop removal, the response cap, decompression and scrubbing of headers, reason and
+  body. Sandbox mode differs in two ways: a request with no placeholder passes through (HTTPS, upstream-verified,
+  scrubbed) only when the sandbox has network and is otherwise `network_not_granted`, and the audit op is
+  `sandbox_forward` with the sandbox id. Responses go back as HTTP/1.1 with a fresh Content-Length (none, and no body,
+  for HEAD: the upstream length is hop-by-hop in the pipeline, so `curl -I` sees no length rather than 0); refusals are 403 for
+  policy codes, 502 for `upstream_error` and `response_too_large`, 400 for `bad_request`, with the code in
+  `X-Corvid-Vault-Error` and a one-line text body.
+- **Lifetime.** `ExpiresAt` is the requested lifetime capped at `sandboxLifetimeMinutes` (default 720); at most
+  `maxSandboxes` (default 64) are open. `sandbox_close` from the same session and uid (otherwise `unknown_sandbox`)
+  cancels the sandbox, closes its listener and every live connection, deletes the socket file and disposes the CA and
+  leaves. Expiry is lazy: every Vault call sweeps expired sandboxes, and accept and each request re-check, so an idle
+  expired sandbox's socket file can linger until the next Vault call or Vault's exit but accepts nothing. Disposing Vault
+  closes them all. The registry is created on first use, so `set`, `list` and the other CLI commands bind nothing.
+- **Memory bounds** (security review of PR #58). A request body is read into a buffer that starts at 64 KiB and doubles
+  as bytes arrive, so a Content-Length is a claim, not an allocation: the review's 40 tunnels each announcing 16 MB and
+  sending one byte now hold 40 × 64 KiB = 2.5 MiB of body buffer (it measured 615 MB of heap before). Live connections are counted at accept, before a byte is read: at most
+  `maxSandboxConnections` (16) per sandbox and `maxSandboxConnectionsTotal` (64) across all; one more gets 429
+  `sandbox_limit` (audited as `sandbox_connect`) and is closed, and an idle keep-alive tunnel holds its slot until the
+  30 s head timeout. Each live connection holds at most a request body and a buffered response of `maxResponseBytes`,
+  so the proxy's worst case is about 2 × 64 × 16 MB = 2 GiB of bytes actually sent or received, not announced.
+
+**Contract for V-003b** (the launcher side builds against exactly this):
+
+1. Corvid sends `SandboxOpenRequest { session_id, toolset, tainted, network, lifetime_minutes? }` (`op: "sandbox_open"`)
+   on `vault.sock` and gets `SandboxOpenResponse { sandbox_id, proxy_socket_path, ca_certificate_pem, expires_at }`, or
+   an error (`sandbox_limit`, `bad_request` when the socket path would exceed 107 bytes or cannot be bound).
+2. A sandbox client connects to `proxy_socket_path` (a Unix socket; V-003b bind-mounts it into the namespace and bridges
+   loopback TCP to it, because `HTTPS_PROXY` must be TCP) and speaks HTTP/1.1. The first request must be
+   `CONNECT <dns-host>:443 HTTP/1.1`.
+3. After the `200`, the client does TLS with SNI equal to that host and verifies against `ca_certificate_pem` only.
+   Inside the tunnel it sends HTTP/1.1 requests whose headers carry placeholders minted for the same session.
+4. Refusals come back as 4xx or 5xx with header `X-Corvid-Vault-Error: <VaultErrorCodes value>`.
+5. Corvid sends `SandboxCloseRequest { session_id, sandbox_id }` (`op: "sandbox_close"`) when the command ends; the
+   socket also dies at `expires_at`.
+
+Deviations and limits, which V-003b's end-to-end tests should expect rather than read as bugs:
+
+- **CONNECT to DNS names on 443 only.** No other ports, no IP literals, no plain-http proxying, no non-TLS tunnels, no
+  HTTP/2 to the client, no websocket upgrade (so §9's `ws_first_frame` is still not built).
+- **Bodies are buffered**, requests and responses, up to `maxResponseBytes`: a large `git clone` or download through
+  pass-through fails with `response_too_large`, and chunked uploads get 411.
+- **No per-request `ask`.** `Approved` is always false in sandbox mode, so under the default policy a script's
+  POST/PATCH/PUT with a secret refuses with `approval_required`, and a tainted sandbox's GET does too. Routing these
+  through Corvid's approval channel is a follow-up.
+- **Pass-through rests on Corvid's `network` flag alone.** There is no Vault-side ceiling (policy switch or host lists for
+  unbound traffic) and no per-sandbox budget yet; pass-through trusts the system roots only, so upstreams with private
+  CAs are unreachable.
+- **No NameConstraints on the sandbox CA** (.NET has no builder, and it would conflict with pass-through hosts); the
+  CA's key never leaving Vault and its lifetime are the containment.
+- **Lifetime is not tied to the opener's connection** (`VaultClient` opens one connection per call): explicit close plus
+  expiry.
+- **No outbound exfiltration check** yet (refusing a sandboxed request whose outgoing bytes match a stored value read from
+  a stray file); it belongs with S7's Vault half.
+- **Default tier exposure.** Any same-uid process that can reach the sandbox socket and holds a placeholder for that
+  session can use it, as with `vault.sock` today; C-007a's runtime-directory hiding and V-008 close it. In the strong
+  tier the sandbox's uid may differ from Corvid's, which needs an ownership story for per-sandbox sockets (V-008).
+- Linux only: on Windows, `SslStream` with ephemeral `CopyWithPrivateKey` keys needs a PFX round trip.
+
+Tests (`tests/Corvid.Vault.Tests/SandboxProxyTests.cs`, with a loopback `TlsEchoServer` that has its own CA; Vault's
+production upstream handler, from `VaultCore.CreateUpstreamHandler()`, changed only to dial it and trust its CA): the
+placeholder substituted for the bound host and scrubbed back; the same placeholder to another host refused
+(`host_not_bound`, audited, nothing sent); a placeholder from another session refused; no network refused at CONNECT
+and inside the tunnel, pass-through with network and still scrubbed; leaves scoped to their SNI host, a mismatched SNI
+failing the handshake, and one sandbox's CA not validating another's leaf; the CA key absent from the open response's
+bytes, from disk and from the presented chain; the protocol refusals above (the host cap through the unit tests); close and expiry removing the socket and
+ending live connections; `ask`, taint and toolset rules still applying; the per-sandbox connection cap refusing a third
+idle connection with 429 and a closed one freeing its slot, the total cap across two sandboxes released by closing one,
+a 16 MB claim cut short never forwarded and releasing its slot, and HEAD (forwarded and refused) on one keep-alive tunnel
+without Content-Length or body. Unit tests cover the CA and leaf extensions, the leaf cache and cap, the HTTP/1.1
+parser's edge cases, a body read in growing steps (no read asks for the announced length), HEAD responses and the
+CONNECT target parser. The Vault suite has 154 tests (59 before). The Native AOT publish stays warning-free (8.9 MB).
+
+Next: V-003b, the launcher side of the sandbox proxy (§13).
 
 ## Changelog
 
@@ -315,3 +428,4 @@ Next: M2 = V-003, the sandbox proxy for scripts.
 | 0.2 | 2026-10-16 | M1 built; deviations recorded under "Implementation status". |
 | 0.3 | 2026-10-18 | Implementation status: Corvid's sandbox (C-007a) hides Vault's directories and socket from sandboxed commands; the strong tier (V-008) remains. |
 | 0.4 | 2026-10-22 | §13 and Implementation status: S7's CI half is built (C-024); the Vault half waits for V-003. |
+| 0.5 | 2026-10-22 | §13: V-003 split into V-003a (built: the Vault side of the sandbox proxy) and V-003b (pending: the launcher side). Implementation status: M2 part a, the V-003b protocol contract and its deviations. |

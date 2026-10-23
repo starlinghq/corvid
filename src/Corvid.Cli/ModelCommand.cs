@@ -131,13 +131,14 @@ internal static class ModelCommand
                 (model.DownloadBytes is { } bytes ? $" ({FormatBytes(bytes)})" : "") + "…");
             try
             {
-                var progress = new Progress<ModelDownloadProgress>();
+                // Synchronous and serialized (C-039): every file line is written before DownloadAsync returns, so the ✓/✗
+                // line is last, and no report writes to the console while another thread does. lastFile is only read under its lock.
                 var lastFile = "";
-                progress.ProgressChanged += (_, item) =>
+                var progress = new SynchronousProgress<ModelDownloadProgress>(item =>
                 {
                     if (item.File != lastFile && item.Bytes == 0)
                         console.MarkupLine($"  [grey]{Markup.Escape(lastFile = item.File)}[/]");
-                };
+                });
                 var result = await catalogue.DownloadAsync(model.Name, progress, cancellationToken).ConfigureAwait(false);
                 console.MarkupLine(result.IsReady ? $"[green]✓[/] {Markup.Escape(result.Detail)}" : $"[red]✗[/] {Markup.Escape(result.Detail)}");
                 failed |= !result.IsReady;

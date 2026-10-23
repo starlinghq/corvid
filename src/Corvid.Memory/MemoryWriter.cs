@@ -2,10 +2,12 @@ using System.Buffers;
 using System.Collections.Immutable;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Corvid.Abstractions.Events;
 using Corvid.Abstractions.Extraction;
 using Corvid.Abstractions.Fabric;
 using Corvid.Fabric;
+using Corvid.Secrets;
 
 namespace Corvid.Memory;
 
@@ -49,6 +51,11 @@ public enum MemoryWriteStatus
     Staged,
     /// <summary>The gate chose noop: the fact is already known. Nothing was written.</summary>
     Noop,
+    /// <summary>
+    /// The text holds a credential value (C-040): nothing was written, staged or asked, so the value is in no store. The
+    /// result's <see cref="MemoryWriteResult.Reason"/> names its kind, never the value.
+    /// </summary>
+    Refused,
 }
 
 /// <param name="Operation">The operation applied, or proposed when staged (null if the decider gave none).</param>
@@ -56,6 +63,7 @@ public enum MemoryWriteStatus
 /// <param name="Decision">The <c>memory_op</c> verdict, absent when the write was staged without asking (a block over its budget).</param>
 /// <param name="Added">The fact written by add or update.</param>
 /// <param name="Closed">The fact ended by update or invalidate.</param>
+/// <param name="Reason">Why a write was <see cref="MemoryWriteStatus.Refused"/>; null otherwise.</param>
 public sealed record MemoryWriteResult(
     MemoryWriteStatus Status,
     string? Operation,
@@ -66,7 +74,8 @@ public sealed record MemoryWriteResult(
     ImmutableArray<EntityRef> Entities,
     Fact? Added = null,
     Fact? Closed = null,
-    CoreBlock? Block = null);
+    CoreBlock? Block = null,
+    string? Reason = null);
 
 public enum MemoryImportStatus
 {
@@ -150,6 +159,11 @@ public sealed class MemoryWriter
         ArgumentException.ThrowIfNullOrWhiteSpace(request.SessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Text);
 
+        // 0. A credential value is refused before anything sees the text: the extractor, the gate (whose Decision would log
+        // it) and the pending store (C-040).
+        if (CredentialRefusal(request.Text) is { } refused)
+            return Refused(refused);
+
         // 1-2. Entities and neighbours.
         var (entities, neighbours) = await ContextAsync(request.Text, request.Labels, cancellationToken);
 
@@ -210,6 +224,8 @@ public sealed class MemoryWriter
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(text);
         ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        if (CredentialRefusal(text) is { } refused)
+            throw new ArgumentException("The entry " + refused + "; nothing was staged.", nameof(text));
         var key = NormalizeText(text);
         if (_pending.List(PendingStatus.Pending).Any(pending => pending.Kind == PendingKind.Fact
                 && pending.Proposal.Text is { } waiting && NormalizeText(waiting) == key))
@@ -240,6 +256,8 @@ public sealed class MemoryWriter
         ArgumentNullException.ThrowIfNull(content);
         if (block == CoreBlockNames.Persona)
             throw new ArgumentException("The persona block is edited only by the user.", nameof(block));
+        if (CredentialRefusal(content) is { } refused)
+            return Refused(refused);
 
         var current = _blocks.Get(block);
         var proposal = new MemoryProposal(MemoryOperations.Update, null, null, [], null, null, [], block, content, current.Revision);
@@ -269,6 +287,31 @@ public sealed class MemoryWriter
         Append(sessionId, new MemoryWritten(BlockId(block), MemoryOperations.Update));
         return new MemoryWriteResult(MemoryWriteStatus.Applied, MemoryOperations.Update, BlockId(block), null, verdict, [], [], Block: applied.Block);
     }
+
+    /// <summary>
+    /// Why <paramref name="text"/> may not be written (C-040), or null: it holds a credential value under the egress rules
+    /// (shapes and labelled values; a fact with its value redacted would be useless, so it is refused, not redacted). A
+    /// detector timeout refuses. The reason names kinds, never a value.
+    /// </summary>
+    internal static string? CredentialRefusal(string text)
+    {
+        ImmutableArray<CredentialMatch> found;
+        try
+        {
+            found = CredentialDetector.Find(text, CredentialDetector.Egress);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return "could not be checked for credential values (the detector timed out)";
+        }
+        if (found.IsEmpty)
+            return null;
+        var kinds = string.Join(", ", found.Select(match => CredentialScrub.KindName(match.Kind)).Distinct(StringComparer.Ordinal));
+        return $"holds a credential value ({kinds}); keep secrets in Corvid Vault";
+    }
+
+    private static MemoryWriteResult Refused(string reason) =>
+        new(MemoryWriteStatus.Refused, null, null, null, null, [], [], Reason: reason);
 
     /// <summary>Staged writes awaiting review, oldest first.</summary>
     public IReadOnlyList<PendingWrite> ListPending() => _pending.List(PendingStatus.Pending);
