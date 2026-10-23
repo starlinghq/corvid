@@ -6,9 +6,10 @@ using Corvid.Kernel.Jobs;
 namespace Corvid.Tools.Builtin;
 
 /// <summary>
-/// Scheduling tools over the durable job store (plan §13): create, list and remove jobs. The scheduler runs them, each run
-/// in a fresh session. Creating and removing are side effects, so the turn loop asks the user first. A job created while
-/// the session holds outside content is marked tainted, and so are its runs.
+/// Scheduling tools over the durable job store (plan §13): create, list, pause, resume and remove jobs. The scheduler runs
+/// them, each run in a fresh session. Every change is a side effect, so the turn loop asks the user first, and an unattended
+/// run is refused; only removal is destructive, because pausing and resuming can be undone (C-041). A job created while the
+/// session holds outside content is marked tainted, and so are its runs, including the runs a resume re-arms.
 /// </summary>
 public sealed partial class CronTools
 {
@@ -84,6 +85,33 @@ public sealed partial class CronTools
         if (!_store.Remove(job_id))
             throw new ToolArgumentException($"There is no active job '{job_id}'; call cron_list for the ids.", nameof(job_id));
         return new JsonObject { ["job_id"] = job_id, ["status"] = "removed" };
+    }
+
+    [Tool("cron_pause", Description = "Pause a scheduled job so it does not run until it is resumed; cron_resume turns it back on.")]
+    [SideEffect(SideEffects.Schedule)]
+    // No [Destructive]: cron_resume undoes it.
+    public JsonNode Pause([Description("The job_id from cron_list.")] string job_id)
+    {
+        if (string.IsNullOrWhiteSpace(job_id))
+            throw new ToolArgumentException("Argument 'job_id' must not be empty.", nameof(job_id));
+        if (!_store.Pause(job_id))
+            throw new ToolArgumentException($"There is no active, unpaused job '{job_id}'; call cron_list for the ids.", nameof(job_id));
+        return new JsonObject { ["job_id"] = job_id, ["status"] = "paused" };
+    }
+
+    [Tool("cron_resume", Description = "Resume a paused scheduled job from now; runs missed while it was paused are not made up.")]
+    [SideEffect(SideEffects.Schedule)]
+    public JsonNode Resume([Description("The job_id from cron_list.")] string job_id)
+    {
+        if (string.IsNullOrWhiteSpace(job_id))
+            throw new ToolArgumentException("Argument 'job_id' must not be empty.", nameof(job_id));
+        var resumed = _store.Resume(job_id)
+            ?? throw new ToolArgumentException($"There is no paused job '{job_id}'; call cron_list for the ids.", nameof(job_id));
+        var described = Describe(resumed);
+        described["status"] = "resumed";
+        if (resumed.NextRunAt is null)
+            described["note"] = "Its schedule has no run left.";
+        return described;
     }
 
     private static JsonObject Describe(ScheduledJob job)

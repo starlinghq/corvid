@@ -93,5 +93,15 @@ public static class BuiltinTools
             "cancel the dentist reminder", "stop the hourly inbox check", "delete that scheduled job", "remove the weekly review reminder",
             "I don't need the morning summary any more",
         ],
+        ["cron_pause"] =
+        [
+            "pause the inbox check", "stop the morning summary for now", "hold the backup job while I'm away", "skip the reminders this week",
+            "put the hourly check on hold",
+        ],
+        ["cron_resume"] =
+        [
+            "turn the weekly review back on", "resume the inbox check", "start the morning summary again", "unpause the backup job",
+            "I'm back, restart my reminders",
+        ],
     }.ToImmutableDictionary(StringComparer.Ordinal);
 }

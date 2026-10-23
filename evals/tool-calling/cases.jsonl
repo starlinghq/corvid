@@ -141,11 +141,17 @@
 {"id": "d-041", "prompt": "Show all scheduled jobs, including finished ones.", "tags": ["direct"], "expect": {"tool": "cron_list"}, "args": {"include_finished": {"equals": true}}}
 {"id": "d-042", "prompt": "Which recurring jobs have you got set up?", "tags": ["direct"], "expect": {"tool": "cron_list"}}
 {"id": "d-043", "prompt": "Remove scheduled job job-12.", "tags": ["direct", "required"], "expect": {"tool": "cron_remove"}, "args": {"job_id": {"equals": "job-12"}}}
-{"id": "d-044", "prompt": "Stop the job with id job-3 from running.", "tags": ["direct"], "expect": {"tool": "cron_remove"}, "args": {"job_id": {"equals": "job-3"}}}
+{"id": "d-044", "prompt": "Stop the job with id job-3 from running.", "tags": ["direct"], "expect": {"any_of": ["cron_remove", "cron_pause"]}, "args": {"job_id": {"equals": "job-3"}}, "note": "stopping a job: cron_pause stops it too, so both count (C-041)"}
 {"id": "d-045", "prompt": "Cancel scheduled job morning-summary.", "tags": ["direct"], "expect": {"tool": "cron_remove"}, "args": {"job_id": {"equals": "morning-summary"}}}
 {"id": "d-046", "prompt": "Delete job job-40, I don't need it any more.", "tags": ["direct"], "expect": {"tool": "cron_remove"}, "args": {"job_id": {"equals": "job-40"}}}
 {"id": "d-047", "prompt": "What's on my calendar on 2026-11-04?", "tags": ["direct"], "expect": {"tool": "calendar__list_events"}, "args": {"date": {"equals": "2026-11-04"}}}
 {"id": "d-048", "prompt": "Show my calendar events.", "tags": ["direct"], "expect": {"tool": "calendar__list_events"}}
+{"id": "d-049", "prompt": "Pause scheduled job job-12.", "tags": ["direct", "required"], "expect": {"tool": "cron_pause"}, "args": {"job_id": {"equals": "job-12"}}}
+{"id": "d-050", "prompt": "Put job inbox-check on hold for now.", "tags": ["direct"], "expect": {"tool": "cron_pause"}, "args": {"job_id": {"equals": "inbox-check"}}}
+{"id": "d-051", "prompt": "Pause job-5 while I'm on holiday; I'll want it back afterwards.", "tags": ["direct"], "expect": {"tool": "cron_pause"}, "args": {"job_id": {"equals": "job-5"}}}
+{"id": "d-052", "prompt": "Resume scheduled job job-12.", "tags": ["direct", "required"], "expect": {"tool": "cron_resume"}, "args": {"job_id": {"equals": "job-12"}}}
+{"id": "d-053", "prompt": "Turn job weekly-review back on.", "tags": ["direct"], "expect": {"tool": "cron_resume"}, "args": {"job_id": {"equals": "weekly-review"}}}
+{"id": "d-054", "prompt": "Unpause job-5, I'm back.", "tags": ["direct"], "expect": {"tool": "cron_resume"}, "args": {"job_id": {"equals": "job-5"}}}
 {"id": "nm-001", "prompt": "Remember that my sister's name is Anna.", "tags": ["near_miss"], "expect": {"tool": "memory_add"}, "args": {"fact": {"contains": ["Anna"]}}, "note": "a fact about the user: memory, not a note or a file"}
 {"id": "nm-002", "prompt": "Remember I'm allergic to peanuts.", "tags": ["near_miss"], "expect": {"tool": "memory_add"}, "args": {"fact": {"contains": ["peanut"]}}}
 {"id": "nm-003", "prompt": "Keep in mind that I prefer meetings after 10am.", "tags": ["near_miss"], "expect": {"tool": "memory_add"}, "args": {"fact": {"contains": ["10"]}}}
@@ -179,6 +185,10 @@
 {"id": "nm-031", "prompt": "Reject pending memory p-32, it's wrong.", "tags": ["near_miss"], "expect": {"tool": "memory_reject"}, "args": {"pending_id": {"equals": "p-32"}}}
 {"id": "nm-032", "prompt": "Which memories are waiting for my review?", "tags": ["near_miss"], "expect": {"tool": "memory_pending"}}
 {"id": "nm-033", "prompt": "Don't keep pending memory p-40.", "tags": ["near_miss"], "expect": {"tool": "memory_reject"}, "args": {"pending_id": {"equals": "p-40"}}}
+{"id": "nm-034", "prompt": "Stop job morning-summary for now, but don't delete it.", "tags": ["near_miss"], "expect": {"tool": "cron_pause"}, "args": {"job_id": {"equals": "morning-summary"}}, "note": "for now and kept: a pause, not cron_remove"}
+{"id": "nm-035", "prompt": "Skip job job-9 until further notice.", "tags": ["near_miss"], "expect": {"tool": "cron_pause"}, "args": {"job_id": {"equals": "job-9"}}, "note": "until further notice: a pause, not cron_remove"}
+{"id": "nm-036", "prompt": "Start job morning-summary running again.", "tags": ["near_miss"], "expect": {"tool": "cron_resume"}, "args": {"job_id": {"equals": "morning-summary"}}, "note": "an existing paused job: cron_resume, not a new cron_create"}
+{"id": "nm-037", "prompt": "Bring back the paused job job-9.", "tags": ["near_miss"], "expect": {"tool": "cron_resume"}, "args": {"job_id": {"equals": "job-9"}}, "note": "an existing paused job: cron_resume, not a new cron_create"}
 {"id": "nt-001", "prompt": "Hi there!", "tags": ["no_tool"], "expect": {"none": true}}
 {"id": "nt-002", "prompt": "Thanks, that's all for now.", "tags": ["no_tool"], "expect": {"none": true}}
 {"id": "nt-003", "prompt": "What is the capital of France?", "tags": ["no_tool"], "expect": {"none": true}}

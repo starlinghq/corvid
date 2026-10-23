@@ -31,6 +31,15 @@ public enum CompactionStatus
 public sealed record CompactionResult(CompactionStatus Status, long From, long Through, long? Sequence = null, int Chunks = 0,
     string? Summarizer = null, string? Detail = null, CompactionSummary? Record = null)
 {
+    /// <summary>
+    /// <c>/compact</c> (C-041): the rendered history's tokens before the compaction, on the generator's counter, with the
+    /// log's cleared results applied and no system prompt, tools or notes. Null where nobody measured it (the turn loop).
+    /// </summary>
+    public int? PromptTokensBefore { get; init; }
+
+    /// <summary>The same figure after a written compaction; null otherwise.</summary>
+    public int? PromptTokensAfter { get; init; }
+
     /// <summary>One line for the user: a turn's compaction notes and <c>/compact</c> both say it this way.</summary>
     public string Describe() => Status switch
     {
@@ -147,10 +156,20 @@ public sealed class ContextCompactor
 
     /// <summary>Compacts <paramref name="range"/> into one record that fits <paramref name="recordTokens"/> of the generator's prompt.</summary>
     /// <param name="counter">The generator's counter: the record's size is measured in the prompt it goes into.</param>
-    public async Task<CompactionResult> CompactAsync(CompactionRange range, ITokenCounter counter, int recordTokens,
+    public Task<CompactionResult> CompactAsync(CompactionRange range, ITokenCounter counter, int recordTokens,
+        CancellationToken cancellationToken = default) =>
+        CompactAsync(range, counter, recordTokens, null, cancellationToken);
+
+    /// <summary>
+    /// As <see cref="CompactAsync(CompactionRange, ITokenCounter, int, CancellationToken)"/>, with what the user asked the
+    /// summary to keep (C-041, <c>/compact &lt;focus&gt;</c>): a line after each map chunk's header, outside the events, with
+    /// the chunks made smaller by its size; <see cref="Instructions"/> stay the same. The <c>Compacted</c> event records it.
+    /// </summary>
+    public async Task<CompactionResult> CompactAsync(CompactionRange range, ITokenCounter counter, int recordTokens, string? focus,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(counter);
+        focus = string.IsNullOrWhiteSpace(focus) ? null : focus.Trim();
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(recordTokens);
         using var activity = KernelTelemetry.Source.StartActivity(ActivityKind.Internal, tags:
         [
@@ -158,7 +177,9 @@ public sealed class ContextCompactor
             new("corvid.compaction.from", range.From),
             new("corvid.compaction.through", range.Through),
         ], name: KernelTelemetry.CompactSpan);
-        var result = await CompactCoreAsync(range, counter, Math.Min(recordTokens, _options.RecordTokens), cancellationToken).ConfigureAwait(false);
+        if (focus is not null)
+            activity?.SetTag("corvid.compaction.focus", true);
+        var result = await CompactCoreAsync(range, counter, Math.Min(recordTokens, _options.RecordTokens), focus, cancellationToken).ConfigureAwait(false);
         activity?.SetTag("corvid.compaction.status", result.Status switch
         {
             CompactionStatus.Compacted => "compacted",
@@ -173,7 +194,7 @@ public sealed class ContextCompactor
         return result;
     }
 
-    private async Task<CompactionResult> CompactCoreAsync(CompactionRange range, ITokenCounter counter, int recordTokens,
+    private async Task<CompactionResult> CompactCoreAsync(CompactionRange range, ITokenCounter counter, int recordTokens, string? focus,
         CancellationToken cancellationToken)
     {
         var snapshot = SessionProjection.Load(_log, SessionId, cancellationToken: cancellationToken);
@@ -188,13 +209,13 @@ public sealed class ContextCompactor
         while (true)
         {
             var profile = _slots.Current(slot).Profile;
-            var attempt = await SummarizeAsync(slot, snapshot, range, cancellationToken).ConfigureAwait(false);
+            var attempt = await SummarizeAsync(slot, snapshot, range, focus, cancellationToken).ConfigureAwait(false);
             if (attempt.Record is { } record)
             {
                 var size = counter.CountTokens(PromptRenderer.Summary(new Compacted(range.From, range.Through, record)));
                 if (size <= recordTokens)
                 {
-                    var compacted = new Compacted(range.From, range.Through, record, profile.Id, attempt.Chunks);
+                    var compacted = new Compacted(range.From, range.Through, record, profile.Id, attempt.Chunks, focus);
                     return Append(compacted, attempt.Chunks, profile.Id);
                 }
                 failures.Add($"{profile.Id}: the merged record is {size} tokens against {recordTokens}");
@@ -219,14 +240,18 @@ public sealed class ContextCompactor
 
     private readonly record struct Attempt(CompactionSummary? Record, int Chunks, string? Failure);
 
-    private async Task<Attempt> SummarizeAsync(string slot, SessionSnapshot snapshot, CompactionRange range, CancellationToken cancellationToken)
+    private async Task<Attempt> SummarizeAsync(string slot, SessionSnapshot snapshot, CompactionRange range, string? focus,
+        CancellationToken cancellationToken)
     {
         var binding = _slots.Current(slot);
         var client = _slots.GetChatClient(slot);
         var counter = client.GetService(typeof(ITokenCounter)) as ITokenCounter ?? CharsPerTokenCounter.Instance;
-        // What one call may read: the summarizer's accepted context less its completion, the reserve, the instructions and framing.
+        var focusLine = FocusLine(focus);
+        // What one call may read: the summarizer's accepted context less its completion, the reserve, the instructions and
+        // framing, and the focus line every chunk repeats (C-041), so a long focus shrinks the chunks and never overflows.
         var room = binding.Profile.AcceptedContext - _options.SummarizerOutputTokens - _contextReserve
-            - counter.CountTokens(Instructions) - counter.CountTokens(Header(range, 99, 99)) - 3 * MessageOverhead;
+            - counter.CountTokens(Instructions) - counter.CountTokens(Header(range, 99, 99)) - counter.CountTokens(focusLine)
+            - 3 * MessageOverhead;
         if (room < MinimumChunkTokens)
             return new(null, 0, $"its window leaves {Math.Max(0, room)} tokens for the range");
 
@@ -266,7 +291,7 @@ public sealed class ContextCompactor
             CompactionSummary? record;
             try
             {
-                record = await AskAsync(client, Header(range, index, total) + (string)part, cancellationToken).ConfigureAwait(false);
+                record = await AskAsync(client, Header(range, index, total) + focusLine + (string)part, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
             {
@@ -299,6 +324,13 @@ public sealed class ContextCompactor
         total > 1
             ? string.Create(CultureInfo.InvariantCulture, $"Events {range.From}–{range.Through}, part {index} of {total}:\n")
             : string.Create(CultureInfo.InvariantCulture, $"Events {range.From}–{range.Through}:\n");
+
+    /// <summary>
+    /// The user's focus as the summarizer reads it (C-041): its own line after the chunk's header and before the events, so
+    /// it reads as the user's request and not as event data. Empty without a focus.
+    /// </summary>
+    internal static string FocusLine(string? focus) =>
+        focus is null ? "" : "The user asked this summary to keep, in full: " + focus + "\n";
 
     private static string? Line(TranscriptEntry entry, Dictionary<string, string> names, IReadOnlyDictionary<string, ResultView> views)
     {

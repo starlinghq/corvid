@@ -100,6 +100,7 @@ public sealed class JobScheduler
     private readonly TurnStateBuilder _states;
     private readonly JobSchedulerOptions _options;
     private readonly TimeProvider _time;
+    private TaskCompletionSource? _woken;
 
     /// <param name="scripts">Runs pre-run scripts; without it a job with a script fails rather than skip the script.</param>
     /// <param name="agent">Runs the agent; without it agent jobs fail.</param>
@@ -122,28 +123,48 @@ public sealed class JobScheduler
     /// <summary>Called after each run is recorded; the gateway's delivery (C-020) will hang off this.</summary>
     public Func<ScheduledJob, JobRun, CancellationToken, Task>? Completed { get; init; }
 
-    /// <summary>Marks runs a previous process left running as interrupted, then runs due jobs until cancelled.</summary>
+    /// <summary>
+    /// Marks runs a previous process left running as interrupted, then runs due jobs until cancelled. Between passes it
+    /// sleeps until the earliest next run, at most <see cref="JobSchedulerOptions.PollInterval"/>, or until woken: by the
+    /// store's <see cref="JobStore.Changed"/> (a job added, paused, resumed or removed in this process) or by <see cref="Wake"/>
+    /// (C-041). The signal is replaced before each pass, so a change made while jobs run wakes the next sleep at once.
+    /// </summary>
     public async Task RunAsync(CancellationToken cancellationToken)
     {
         _store.InterruptStale();
-        while (!cancellationToken.IsCancellationRequested)
+        _store.Changed += Wake;
+        try
         {
-            await RunDueAsync(cancellationToken).ConfigureAwait(false);
-            var now = _time.GetUtcNow();
-            // A paused job has no next run, so an overdue paused job cannot make this wait zero and spin.
-            var next = _store.List().Select(job => job.NextRunAt).Where(at => at is not null).Min();
-            var wait = next is { } at ? at - now : _options.PollInterval;
-            wait = wait < TimeSpan.Zero ? TimeSpan.Zero : wait > _options.PollInterval ? _options.PollInterval : wait;
-            try
+            while (!cancellationToken.IsCancellationRequested)
             {
-                await Task.Delay(wait, _time, cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                return;
+                // Before the pass, not after: a Wake during RunDueAsync completes this signal, and the sleep below sees it.
+                var woken = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                Volatile.Write(ref _woken, woken);
+                await RunDueAsync(cancellationToken).ConfigureAwait(false);
+                var now = _time.GetUtcNow();
+                // A paused job has no next run, so an overdue paused job cannot make this wait zero and spin.
+                var next = _store.List().Select(job => job.NextRunAt).Where(at => at is not null).Min();
+                var wait = next is { } at ? at - now : _options.PollInterval;
+                wait = wait < TimeSpan.Zero ? TimeSpan.Zero : wait > _options.PollInterval ? _options.PollInterval : wait;
+                using var sleep = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                var delay = Task.Delay(wait, _time, sleep.Token);
+                await Task.WhenAny(delay, woken.Task).ConfigureAwait(false);
+                // Stop the timer a wake cut short; the delay's cancellation is observed here and goes no further.
+                await sleep.CancelAsync().ConfigureAwait(false);
+                await delay.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
             }
         }
+        finally
+        {
+            _store.Changed -= Wake;
+        }
     }
+
+    /// <summary>
+    /// Ends the running loop's sleep, so it looks for due jobs and recomputes its wait now (C-041): the runtime calls it when
+    /// a session opens. A no-op when <see cref="RunAsync"/> is not running; harmless when nothing is due.
+    /// </summary>
+    public void Wake() => Volatile.Read(ref _woken)?.TrySetResult();
 
     /// <summary>Claims and runs every job due now, one at a time. Returns the runs as recorded.</summary>
     public async Task<IReadOnlyList<JobRun>> RunDueAsync(CancellationToken cancellationToken = default)

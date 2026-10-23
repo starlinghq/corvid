@@ -153,6 +153,14 @@ public sealed class JobStore
 
     public TimeZoneInfo TimeZone { get; }
 
+    /// <summary>
+    /// Raised after <see cref="Add"/>, <see cref="Pause"/>, <see cref="Resume"/> or <see cref="Remove"/> changed a job, once
+    /// its write committed, so a <see cref="JobScheduler"/> holding this instance recomputes its wait at once (C-041). It is
+    /// in-process only: a scheduler in another process reading the same file sees the change at its next poll. Handlers run
+    /// on the caller's thread inside that call and must not throw.
+    /// </summary>
+    public event Action? Changed;
+
     /// <summary>Schedules a job. Its schedule is parsed now, so a delay counts from this moment.</summary>
     /// <exception cref="FormatException">The schedule is not valid (the message says why, for the model).</exception>
     /// <exception cref="ArgumentException">The job has neither a prompt nor, for a no-agent job, a script.</exception>
@@ -193,6 +201,7 @@ public sealed class JobStore
         command.Parameters.AddWithValue("$next", first.UtcTicks);
         command.Parameters.AddWithValue("$state", StateName(JobState.Active));
         command.ExecuteNonQuery();
+        Changed?.Invoke();
         return created;
     }
 
@@ -228,7 +237,7 @@ public sealed class JobStore
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE jobs SET state = 'removed', next_run_at = NULL WHERE job_id = $id AND state = 'active';";
         command.Parameters.AddWithValue("$id", jobId);
-        return command.ExecuteNonQuery() == 1;
+        return Notify(command.ExecuteNonQuery() == 1);
     }
 
     /// <summary>
@@ -242,7 +251,7 @@ public sealed class JobStore
         using var command = connection.CreateCommand();
         command.CommandText = "UPDATE jobs SET paused = 1, next_run_at = NULL WHERE job_id = $id AND state = 'active' AND paused = 0;";
         command.Parameters.AddWithValue("$id", jobId);
-        return command.ExecuteNonQuery() == 1;
+        return Notify(command.ExecuteNonQuery() == 1);
     }
 
     /// <summary>
@@ -281,6 +290,7 @@ public sealed class JobStore
             update.ExecuteNonQuery();
         }
         transaction.Commit();
+        Changed?.Invoke();
         return job with { NextRunAt = next, Paused = false };
     }
 
@@ -401,6 +411,24 @@ public sealed class JobStore
         return runs;
     }
 
+    /// <summary>
+    /// The newest runs across all jobs, newest first (<c>/cron runs</c>, C-041): ordered as <see cref="Runs"/> orders one
+    /// job's.
+    /// </summary>
+    public IReadOnlyList<JobRun> RecentRuns(int limit = 20)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT {RunColumns} FROM job_runs ORDER BY started_at DESC, run_id DESC LIMIT $limit;";
+        command.Parameters.AddWithValue("$limit", limit);
+        using var reader = command.ExecuteReader();
+        var runs = new List<JobRun>();
+        while (reader.Read())
+            runs.Add(ReadRun(reader));
+        return runs;
+    }
+
     /// <summary>At startup: runs left running by a process that stopped are marked interrupted. Returns how many.</summary>
     public int InterruptStale()
     {
@@ -414,6 +442,13 @@ public sealed class JobStore
     /// <summary>The time zone named by a job, falling back to UTC when this machine does not know it.</summary>
     public static TimeZoneInfo FindZone(string id) =>
         TimeZoneInfo.TryFindSystemTimeZoneById(id, out var zone) ? zone : TimeZoneInfo.Utc;
+
+    private bool Notify(bool changed)
+    {
+        if (changed)
+            Changed?.Invoke();
+        return changed;
+    }
 
     private SqliteConnection Open()
     {
