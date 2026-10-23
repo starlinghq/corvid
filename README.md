@@ -39,7 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/starlinghq/corvid/main/install.sh |
 ```
 
 It puts `corvid` and `corvid-vault` in `~/.local/bin`, with `corvid-sandbox` beside them in
-`~/.local/share/corvid/<version>/`, after checking the download against the release's `SHA256SUMS`. Add
+`~/.local/lib/corvid/<version>/`, after checking the download against the release's `SHA256SUMS`. Add
 `sh -s -- --cuda` for the CUDA variant (Kev on an NVIDIA GPU, about 300 MB more), `--version v0.1.0` for a given
 release, or `--prefix <dir>` to install elsewhere. Running it again upgrades. Shell tools also need bubblewrap
 (`pacman -S bubblewrap`, `apt install bubblewrap`). Then:
