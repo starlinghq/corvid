@@ -65,6 +65,10 @@ public sealed class CorvidRuntime : IAsyncDisposable
     private Task _maintenance = Task.CompletedTask;
     private FileStream? _schedulerLock;
     private Task? _scheduler;
+    // JobCompleted's handlers and the runs completed so far, under one gate (C-039).
+    private readonly Lock _jobGate = new();
+    private readonly Queue<(ScheduledJob Job, JobRun Run)> _completedJobs = new();
+    private Action<ScheduledJob, JobRun>? _jobCompleted;
     private Task? _learning;
     private Task? _lessonLearning;
 
@@ -182,8 +186,53 @@ public sealed class CorvidRuntime : IAsyncDisposable
     /// <summary>Whether this process runs due jobs, and if not, why.</summary>
     public string SchedulerState { get; private set; } = "off (Corvid:Scheduler:Enabled)";
 
-    /// <summary>Raised after each scheduled run is recorded; a surface can say so (delivery to chats is C-020's).</summary>
-    public event Action<ScheduledJob, JobRun>? JobCompleted;
+    /// <summary>
+    /// Raised after each scheduled run is recorded; a surface can say so (delivery to chats is C-020's). The scheduler
+    /// starts with the runtime, so a run can finish before a surface subscribes (C-039): a new handler is replayed the runs
+    /// this runtime completed before it was added (the most recent <see cref="JobCompletedReplay"/>), synchronously on the
+    /// subscribing thread, and hears each later run live on the scheduler's thread; a live run can arrive while the replay
+    /// is still running, so handlers must be thread-safe. Each handler sees each run exactly once. A handler added long
+    /// after start can therefore hear old runs first.
+    /// </summary>
+    public event Action<ScheduledJob, JobRun>? JobCompleted
+    {
+        add
+        {
+            if (value is null)
+                return;
+            (ScheduledJob Job, JobRun Run)[] replay;
+            lock (_jobGate)
+            {
+                replay = [.. _completedJobs];
+                _jobCompleted += value;
+            }
+            foreach (var (job, run) in replay)
+                value(job, run);
+        }
+        remove
+        {
+            lock (_jobGate)
+                _jobCompleted -= value;
+        }
+    }
+
+    /// <summary>How many completed runs <see cref="JobCompleted"/> keeps to replay to a handler added later.</summary>
+    public const int JobCompletedReplay = 32;
+
+    // Records the run for later subscribers and reads the handlers in one step under the gate, so a handler added at the
+    // same moment either replays this run or hears it live, never both and never neither.
+    private void RaiseJobCompleted(ScheduledJob job, JobRun run)
+    {
+        Action<ScheduledJob, JobRun>? handlers;
+        lock (_jobGate)
+        {
+            _completedJobs.Enqueue((job, run));
+            if (_completedJobs.Count > JobCompletedReplay)
+                _completedJobs.Dequeue();
+            handlers = _jobCompleted;
+        }
+        handlers?.Invoke(job, run);
+    }
 
     internal ITokenCounter? Counter { get; }
 
@@ -387,7 +436,7 @@ public sealed class CorvidRuntime : IAsyncDisposable
             Completed = (job, run, _) =>
             {
                 QueueJobResult(job, run);
-                JobCompleted?.Invoke(job, run);
+                RaiseJobCompleted(job, run);
                 return Task.CompletedTask;
             },
         };

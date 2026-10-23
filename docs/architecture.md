@@ -3577,6 +3577,40 @@ package: the scanner and verdict live in `evals/Corvid.Evals/Injection` (model-f
 Not built: the Vault half of S7 (Vault refusing or scrubbing, and its audit, through the sandbox proxy V-003), the
 injected-email surface, a run against a real model, and promoting the suite into the `corvid evals` runner.
 
+## Job completion replay and synchronous download progress (C-039)
+
+Two races behind batch 2's flaky tests (plan §18, C-039), each fixed in production as well as in its test.
+
+- Job completion replay (`CorvidRuntime.JobCompleted`). The scheduler starts in the runtime's constructor, so
+  `CorvidRuntimeFactory.StartAsync` returns with it running, and a surface subscribes only afterwards (chat after
+  opening its session, its feed and its prompter). `JobStore.ClaimDue` claims overdue jobs on the first loop, and
+  terminal runs that reach no model (`failed` without a script runner, `script_refused`, `script_only`, a skipped
+  `wake`) finish in milliseconds, so their notice was lost. The event now has explicit accessors over a private handler
+  field and a queue of the most recent `JobCompletedReplay` (32) runs completed since the runtime started, under one
+  `Lock`. Completion (`RaiseJobCompleted`, after `QueueJobResult`) appends and reads the handlers under the lock and
+  invokes them outside it; `add` copies the queue and attaches under the lock, then replays the copy to the new handler
+  outside it, on the subscribing thread. Each handler hears each run exactly once: a run either is in the copy or
+  completes after the attach. A live run can arrive while a replay is still running, so handlers must be thread-safe
+  (chat's `ChatRenderer.Notice` is). Chat subscribes after its banner, so replayed notices follow it.
+- Synchronous download progress (`SynchronousProgress<T>`, `Corvid.Host.Models`). `Progress<T>` with no
+  synchronization context posts each report to the thread pool: `corvid model download` wrote a file's line on a pool
+  thread while the main thread wrote the `✓`/`✗` line, on Spectre's console, which is not thread-safe, and
+  `StarlingModelProvider.DownloadAsync` added a second such hop relaying Starling's `ModelAssetProgress`.
+  `SynchronousProgress<T>` wraps an `Action<T>` and runs it on the reporting thread under a `Lock` (Starling's docs do
+  not say whether parallel file fetches report from one thread). Both sites use it, so every file line is written
+  before `DownloadAsync` returns and the result line is last. A slow handler slows the download; a throwing one
+  surfaces in `DownloadAsync`, where `ModelCommand` turns it into a `✗` line.
+- Tests. `OneProcessRunsTheSchedulerAndDueJobsRun` subscribes right after the first runtime starts and also checks
+  `JobStore.Runs` for the one finished run with the event's session. `AHandlerAddedAfterARunStillHearsOfIt` waits until
+  the store shows the run finished, subscribes, and checks after disposing the runtime (which waits for the scheduler)
+  that the handler heard that run exactly once. `SynchronousProgressTests` checks the handler runs inline and that
+  concurrent reports never overlap. `DownloadFetchesExplicitly` checks the file line precedes the `✓` line.
+
+Not built: isolating a throwing `JobCompleted` handler (it runs inside the scheduler's `Completed` callback and can end
+`JobScheduler.RunAsync`); a durable "runs since you last looked" beyond this process's 32-entry buffer (C-020 already
+delivers gateway-origin jobs); starting the scheduler only once a surface attaches (it would change every surface and
+the `SchedulerState` contract); a per-byte progress bar for `corvid model download`.
+
 ## Running the check
 
 ```sh
