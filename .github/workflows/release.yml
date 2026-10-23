@@ -33,6 +33,10 @@ jobs:
     name: Build ${{ matrix.asset }}
     runs-on: [self-hosted, omarchy]
     timeout-minutes: 30
+    # The smoke test's doctor probes the GPUs through NVML; pin it to the 3090 as ci.yml's gpu job does.
+    env:
+      CUDA_DEVICE_ORDER: PCI_BUS_ID
+      CUDA_VISIBLE_DEVICES: ${{ vars.CORVID_CUDA_DEVICE || 'GPU-9e21a72e-3a6f-e082-3d74-4b8d361de70c' }}
     strategy:
       fail-fast: true
       matrix:
