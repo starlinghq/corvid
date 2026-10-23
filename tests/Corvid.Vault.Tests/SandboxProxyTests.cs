@@ -396,6 +396,44 @@ public sealed class SandboxProxyTests : IDisposable
     }
 
     [Fact]
+    public async Task A_sweep_that_races_another_shutdown_returns_only_once_the_sandbox_is_closed_and_audited()
+    {
+        // A tunnel's request loop (or the accept loop) can see the expiry and start the shutdown itself; a Vault call's
+        // sweep that comes during it must not return before that shutdown has finished.
+        SandboxOpenResponse open = await OpenAsync(network: true, minutes: 5);
+        using var auditing = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        _vault.Core.Sandboxes.BeforeCloseAudit = _ =>
+        {
+            auditing.Set();
+            release.Wait(TimeSpan.FromSeconds(30));
+        };
+        _time.Now += TimeSpan.FromMinutes(6);
+
+        Task first = Task.Run(() => _vault.Core.Sandboxes.Sweep(), Ct);
+        try
+        {
+            Assert.True(auditing.Wait(TimeSpan.FromSeconds(10), Ct));
+            Task call = _vault.Client().GetCatalogAsync(Ct);
+
+            Assert.NotSame(call, await Task.WhenAny(call, Task.Delay(TimeSpan.FromMilliseconds(500), Ct)));
+            release.Set();
+            await call;
+            await first;
+        }
+        finally
+        {
+            // A failed assertion must not leave the shutdown held, or the fixture's Dispose waits out the hook's timeout.
+            _vault.Core.Sandboxes.BeforeCloseAudit = null;
+            release.Set();
+        }
+
+        Assert.False(File.Exists(open.ProxySocketPath));
+        Assert.Equal(0, _vault.Core.Sandboxes.Count);
+        Assert.Contains("\"code\":\"expired\"", await File.ReadAllTextAsync(_vault.Options.AuditPath, Ct), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task An_expired_sandbox_refuses_a_new_connection_without_any_other_Vault_call()
     {
         SandboxOpenResponse open = await OpenAsync(network: true, minutes: 5);

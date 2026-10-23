@@ -357,8 +357,10 @@ crypto is .NET's own (`CertificateRequest`, `SslStream`).
   `maxSandboxes` (default 64) are open. `sandbox_close` from the same session and uid (otherwise `unknown_sandbox`)
   cancels the sandbox, closes its listener and every live connection, deletes the socket file and disposes the CA and
   leaves. Expiry is lazy: every Vault call sweeps expired sandboxes, and accept and each request re-check, so an idle
-  expired sandbox's socket file can linger until the next Vault call or Vault's exit but accepts nothing. Disposing Vault
-  closes them all. The registry is created on first use, so `set`, `list` and the other CLI commands bind nothing.
+  expired sandbox's socket file can linger until the next Vault call or Vault's exit but accepts nothing. Only the first
+  close or expiry check to reach a sandbox shuts it down and audits; it stays listed until that has finished, and a close
+  or sweep that comes meanwhile waits for it, so a Vault call that returns has seen the sandbox closed and audited.
+  Disposing Vault closes them all. The registry is created on first use, so `set`, `list` and the other CLI commands bind nothing.
 - **Memory bounds** (security review of PR #58). A request body is read into a buffer that starts at 64 KiB and doubles
   as bytes arrive, so a Content-Length is a claim, not an allocation: the review's 40 tunnels each announcing 16 MB and
   sending one byte now hold 40 × 64 KiB = 2.5 MiB of body buffer (it measured 615 MB of heap before). Live connections are counted at accept, before a byte is read: at most
