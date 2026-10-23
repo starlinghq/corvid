@@ -4226,7 +4226,7 @@ exists on `TurnOptions` (`StateBudget`, `RecentEvents`, `DualShortlistStateBudge
 - Run: `evals/spikes/S4-state-budget/run.sh` passes `--configs shortlist-kev,shortlist-kev-transcript` (and
   `--tags history` for the gating run) to S2's CUDA wrapper. Result on 41 history cases: `tool` +6.2 points, `done` −6.6,
   so the plan's rule fails on `done`; neither gap is significant at this n, every decision was Kev's, and the 600 arm's
-  states were 146 tokens at most: the information it loses is the `RecentEvents` = 8 window, not the budget.
+  states were 146 tokens at most: the information it loses is the `RecentEvents` = 8 window, not the budget. A control run over all 259 cases reproduced every history decision and, on the 218 single-turn cases, gave identical decisions and calls in both arms.
 - CI (no model): `ToolCallingSetTests` checks the version, the history minima (≥ 36 `history`, ≥ 15 `history_far`,
   lengths, far and near cues, message length, rendered lines within the wide arm's 64) and malformed histories;
   `ToolCallingScoringTests` runs a 40-entry case with its cue at entry 0 through the real `TurnRunner` in both arms with a

@@ -19,7 +19,7 @@ public sealed class ToolCallingSetTests
 
         Assert.Equal("2026-10-23.1", set.Version);
         Assert.Equal(64, set.CatalogueSha256.Length);
-        // S2's 208 single-turn cases and S4's history cases (C-038).
+        // S2's 218 single-turn cases (208, then C-041's cron cases) and S4's 41 history cases (C-038).
         Assert.InRange(set.Cases.Length, 240, 270);
         Assert.Equal(17, set.Catalogue.Count(tool => tool.IsBuiltin));
         Assert.Equal(13, set.Catalogue.Count(tool => !tool.IsBuiltin));

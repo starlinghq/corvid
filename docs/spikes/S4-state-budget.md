@@ -17,7 +17,11 @@ than 3 points below the transcript-sized arm on Kev's calibrated `tool` decision
 on `done` (65.1% of 43 against 71.7% of 46). The rule fails on `done`. Neither gap is significant: on the one decision that
 is paired per case, ingress `tool`, the arms disagree on 8 cases, 5 for the 600 state and 3 for the transcript
 (56.1% [41–70%] against 51.2% [36–66%], Wilson 95%), and on each case's first `done` decision (38 pairs) they disagree on
-5, 1 for 600 and 4 for the transcript (exact McNemar p ≈ 0.38). Every decision was Kev's (0 fallbacks), no turn compacted.
+5, 1 for 600 and 4 for the transcript (exact McNemar p ≈ 0.38). Every decision was Kev's (0 fallbacks), no turn compacted. The gaps are not run-to-run noise:
+greedy decoding makes the run deterministic, the control run over all 259 cases reproduced every history decision
+exactly, and on the 218 single-turn cases, where `recent` holds only the turn's own lines and the two states are
+identical, the arms made the same 710 `tool` and `done` decisions with the same probabilities and the same calls on every case. They are
+case-sampling uncertainty: a handful of cases decide each rate.
 
 | History cases (41) | 600 (`shortlist-kev`) | Transcript (`shortlist-kev-transcript`) | 600 − transcript |
 | --- | --- | --- | --- |
@@ -69,7 +73,7 @@ Three findings matter more than the sign of the totals:
 
 ## Setup
 
-**Set** (`evals/tool-calling`, version `2026-10-23.1`, the catalogue's 30 tools unchanged). S2's 208 single-turn cases
+**Set** (`evals/tool-calling`, version `2026-10-23.1`, the catalogue's 30 tools unchanged). the set's 218 single-turn cases (S2's 208 and C-041's cron cases)
 plus 41 `history` cases, appended inline: each carries `history`, 15–40 entries of `{"user": …}`, `{"assistant": …}` or
 `{"tool": …, "args": …, "result": …}`, and, unless the current message alone decides, `cue`, the index of the entry the
 answer depends on. 24 are `history_far` (the cue earlier than the last eight entries, so outside the 600 arm's window even
@@ -129,7 +133,9 @@ Kev's calibrated decisions right / scored (ingress `tool`, all `tool`, `done`), 
 | no_tool | 11 | 10 / 8 of 11 | 18 of 21 / 15 of 21 | 4 of 10 / 8 of 10 |
 
 The controls, where the current message decides, are level, so the extra lines did not add noise there. The far slice
-is where the transcript's `done` lead sits (13 of 23 against 17 of 25); the near slice is where its `tool` loses.
+is where the transcript's `done` lead sits (13 of 23 against 17 of 25); these are largely the same decisions as the
+`no_tool` row's, since five of the eight already-handled cases are far, so the two rows show one effect, not two. The near
+slice is where the transcript's `tool` loses.
 
 ### Latency
 
@@ -144,6 +150,16 @@ At ingress Kev's top `tool` answer is `none` on 14 of the 30 tool cases with the
 all but one below the 0.45 floor, so the loop offers the whole shortlist and Qwen decides; it acted on 16 `tool` decisions in all (9 right) with
 the 600 state and 19 (9 right) with the transcript. A wrong `done` acted 3 times in the 600 arm and 2 in the transcript
 arm, each ending a chain after its first step.
+
+### Control: all cases
+
+The second run (`results-all/`, 05:22–06:21 UTC, load 99 at the start and 17 at the end) put every case of the set
+through both arms. On the 218 single-turn cases the two arms are indistinguishable: ingress `tool` 107 of 218, all
+`tool` 215 of 464 and `done` 198 of 246 in each, 173 cases correct in each, every decision and call identical; the wider
+state does no harm where there is no history. The 41 history cases gave the gating run's figures again, decision for
+decision. Over all 259 cases: `tool` 254 of 548 against 250 of 551, `done` 226 of 289 against 231 of 292, 0 fallbacks and
+0 compactions in either arm, states at most 146 tokens (600) and 456 (transcript), chars / 4. Per Kev call, ingress p50
+210 ms against 254 ms and step p50 182 against 199 ms; turn p50 4.9 s in both.
 
 ## Reproduce
 

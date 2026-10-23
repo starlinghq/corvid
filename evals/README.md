@@ -11,7 +11,7 @@ harness are described in [`docs/architecture.md`](../docs/architecture.md).
 | `Corvid.Evals/` | `GoldenTrajectoryFile` (format), `ReplaySession` and `ReplayRunner` (replay), `SnapshotJson` and `JsonDiff` (comparison) |
 | `Corvid.Evals/Calibration/` | `DecisionSet` (decisions joined with outcomes), `FloorFitter`, `CalibrationReport`, `FloorReplay`, `KevTrainingExport`, `ShareGptExport`, `CalibrationCli` |
 | `Corvid.Evals.Calibrate/` | `corvid-evals`, the command-line tool; `corvid evals <command>` (C-013) runs it with `--log` defaulting to the user's event log |
-| `tool-calling/` | the S2 tool-calling golden set (C-034): `case.schema.json` (the case format), `catalogue.json` (15 built-ins snapshotted from the generated descriptors, 13 MCP-like extras) and `cases.jsonl` (249 cases: S2's 208 single-turn cases and 41 S4 `history` cases, C-038), version `2026-10-23.1` |
+| `tool-calling/` | the S2 tool-calling golden set (C-034): `case.schema.json` (the case format), `catalogue.json` (17 built-ins snapshotted from the generated descriptors, 13 MCP-like extras) and `cases.jsonl` (259 cases: 218 single-turn cases and 41 S4 `history` cases, C-038), version `2026-10-23.1` |
 | `Corvid.Evals/ToolCalling/` | `ToolCallingSet` (strict loader), `CatalogueTool`, `AbstainingDecider` and the timed wrappers, `ToolCallingRunner` (configurations over `TurnRunner`), `ToolCallingScorer`, `KevDecisionScorer` (Kev's `tool` and `done` decisions labelled, C-038), `ToolCallingReport`, `ToolCallingCli` |
 | `spikes/S2-tool-calling/` | the local CUDA wrapper for the measured S2 run (not in `Corvid.slnx`) and its results |
 | `spikes/S4-state-budget/` | spike S4's runs (C-038): `run.sh` delegates to S2's wrapper with the two state arms; its results |

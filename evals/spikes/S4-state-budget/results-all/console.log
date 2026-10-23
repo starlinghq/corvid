@@ -1,0 +1,585 @@
+Running 259 case(s) × 2 configuration(s) of set 2026-10-23.1; warm-up first.
+[1/518] s5-001 shortlist-kev: correct 5491 ms
+[2/518] s5-001 shortlist-kev-transcript: correct 5127 ms
+[3/518] s5-002 shortlist-kev: correct 5679 ms
+[4/518] s5-002 shortlist-kev-transcript: correct 5164 ms
+[5/518] s5-003 shortlist-kev: correct 5375 ms
+[6/518] s5-003 shortlist-kev-transcript: correct 4851 ms
+[7/518] s5-004 shortlist-kev: no_call 2915 ms
+[8/518] s5-004 shortlist-kev-transcript: no_call 3049 ms
+[9/518] s5-005 shortlist-kev: correct 4249 ms
+[10/518] s5-005 shortlist-kev-transcript: correct 3758 ms
+[11/518] s5-006 shortlist-kev: correct 5151 ms
+[12/518] s5-006 shortlist-kev-transcript: correct 6335 ms
+[13/518] s5-007 shortlist-kev: correct 5052 ms
+[14/518] s5-007 shortlist-kev-transcript: correct 5318 ms
+[15/518] s5-008 shortlist-kev: correct 7223 ms
+[16/518] s5-008 shortlist-kev-transcript: correct 5749 ms
+[17/518] s5-009 shortlist-kev: correct 3736 ms
+[18/518] s5-009 shortlist-kev-transcript: correct 13939 ms
+[19/518] s5-010 shortlist-kev: correct 93330 ms
+[20/518] s5-010 shortlist-kev-transcript: correct 264809 ms
+[21/518] s5-011 shortlist-kev: correct 37331 ms
+[22/518] s5-011 shortlist-kev-transcript: correct 22350 ms
+[23/518] s5-012 shortlist-kev: correct 6039 ms
+[24/518] s5-012 shortlist-kev-transcript: correct 16556 ms
+[25/518] s5-013 shortlist-kev: correct 30298 ms
+[26/518] s5-013 shortlist-kev-transcript: correct 25840 ms
+[27/518] s5-014 shortlist-kev: correct 12831 ms
+[28/518] s5-014 shortlist-kev-transcript: correct 10563 ms
+[29/518] s5-015 shortlist-kev: correct 5461 ms
+[30/518] s5-015 shortlist-kev-transcript: correct 10490 ms
+[31/518] s5-016 shortlist-kev: correct 10644 ms
+[32/518] s5-016 shortlist-kev-transcript: correct 7508 ms
+[33/518] s5-017 shortlist-kev: correct 4715 ms
+[34/518] s5-017 shortlist-kev-transcript: correct 4426 ms
+[35/518] s5-018 shortlist-kev: correct 5741 ms
+[36/518] s5-018 shortlist-kev-transcript: correct 4487 ms
+[37/518] s5-019 shortlist-kev: correct 2922 ms
+[38/518] s5-019 shortlist-kev-transcript: correct 3981 ms
+[39/518] s5-020 shortlist-kev: correct 4413 ms
+[40/518] s5-020 shortlist-kev-transcript: correct 3854 ms
+[41/518] s5-021 shortlist-kev: correct 12638 ms
+[42/518] s5-021 shortlist-kev-transcript: correct 11591 ms
+[43/518] s5-022 shortlist-kev: no_call 10492 ms
+[44/518] s5-022 shortlist-kev-transcript: no_call 3235 ms
+[45/518] s5-023 shortlist-kev: correct (args miss) 101557 ms
+[46/518] s5-023 shortlist-kev-transcript: correct (args miss) 80632 ms
+[47/518] s5-024 shortlist-kev: correct 5839 ms
+[48/518] s5-024 shortlist-kev-transcript: correct 7378 ms
+[49/518] s5-025 shortlist-kev: no_call 2635 ms
+[50/518] s5-025 shortlist-kev-transcript: no_call 2707 ms
+[51/518] s5-026 shortlist-kev: correct 6075 ms
+[52/518] s5-026 shortlist-kev-transcript: correct 5572 ms
+[53/518] s5-027 shortlist-kev: correct 3489 ms
+[54/518] s5-027 shortlist-kev-transcript: correct 4414 ms
+[55/518] s5-028 shortlist-kev: correct 6463 ms
+[56/518] s5-028 shortlist-kev-transcript: correct 4876 ms
+[57/518] s5-029 shortlist-kev: correct 5214 ms
+[58/518] s5-029 shortlist-kev-transcript: correct 3780 ms
+[59/518] s5-030 shortlist-kev: no_call 2652 ms
+[60/518] s5-030 shortlist-kev-transcript: no_call 2531 ms
+[61/518] s5-031 shortlist-kev: correct 4645 ms
+[62/518] s5-031 shortlist-kev-transcript: correct 7757 ms
+[63/518] s5-032 shortlist-kev: correct 8583 ms
+[64/518] s5-032 shortlist-kev-transcript: correct 5502 ms
+[65/518] s5-033 shortlist-kev: wrong_tool 5694 ms
+[66/518] s5-033 shortlist-kev-transcript: wrong_tool 6347 ms
+[67/518] s5-034 shortlist-kev: wrong_tool 5095 ms
+[68/518] s5-034 shortlist-kev-transcript: wrong_tool 4924 ms
+[69/518] s5-035 shortlist-kev: no_call 4250 ms
+[70/518] s5-035 shortlist-kev-transcript: no_call 4068 ms
+[71/518] s5-036 shortlist-kev: correct 9820 ms
+[72/518] s5-036 shortlist-kev-transcript: correct 10648 ms
+[73/518] s5-037 shortlist-kev: correct 2843 ms
+[74/518] s5-037 shortlist-kev-transcript: correct 1922 ms
+[75/518] s5-038 shortlist-kev: correct 2548 ms
+[76/518] s5-038 shortlist-kev-transcript: correct 5701 ms
+[77/518] s5-039 shortlist-kev: correct 3909 ms
+[78/518] s5-039 shortlist-kev-transcript: correct 3384 ms
+[79/518] s5-040 shortlist-kev: correct 2433 ms
+[80/518] s5-040 shortlist-kev-transcript: correct 2520 ms
+[81/518] s5-041 shortlist-kev: correct 2389 ms
+[82/518] s5-041 shortlist-kev-transcript: correct 2482 ms
+[83/518] s5-042 shortlist-kev: correct 4735 ms
+[84/518] s5-042 shortlist-kev-transcript: correct 4874 ms
+[85/518] s5-043 shortlist-kev: correct 8039 ms
+[86/518] s5-043 shortlist-kev-transcript: correct 9572 ms
+[87/518] s5-044 shortlist-kev: correct 7700 ms
+[88/518] s5-044 shortlist-kev-transcript: correct 7759 ms
+[89/518] s5-045 shortlist-kev: correct 5322 ms
+[90/518] s5-045 shortlist-kev-transcript: correct 4012 ms
+[91/518] s5-046 shortlist-kev: correct 6034 ms
+[92/518] s5-046 shortlist-kev-transcript: correct 7782 ms
+[93/518] s5-047 shortlist-kev: correct 8629 ms
+[94/518] s5-047 shortlist-kev-transcript: correct 10407 ms
+[95/518] s5-048 shortlist-kev: correct 7206 ms
+[96/518] s5-048 shortlist-kev-transcript: correct 7574 ms
+[97/518] s5-049 shortlist-kev: wrong_tool 10663 ms
+[98/518] s5-049 shortlist-kev-transcript: wrong_tool 15052 ms
+[99/518] s5-050 shortlist-kev: correct 11653 ms
+[100/518] s5-050 shortlist-kev-transcript: correct 12028 ms
+[101/518] s5-051 shortlist-kev: correct 9350 ms
+[102/518] s5-051 shortlist-kev-transcript: correct 9946 ms
+[103/518] s5-052 shortlist-kev: correct 9231 ms
+[104/518] s5-052 shortlist-kev-transcript: correct 8387 ms
+[105/518] s5-053 shortlist-kev: wrong_tool 10201 ms
+[106/518] s5-053 shortlist-kev-transcript: wrong_tool 7782 ms
+[107/518] s5-054 shortlist-kev: wrong_tool 9387 ms
+[108/518] s5-054 shortlist-kev-transcript: wrong_tool 8919 ms
+[109/518] s5-055 shortlist-kev: correct 5990 ms
+[110/518] s5-055 shortlist-kev-transcript: correct 5662 ms
+[111/518] s5-056 shortlist-kev: correct 13939 ms
+[112/518] s5-056 shortlist-kev-transcript: correct 13093 ms
+[113/518] s5-057 shortlist-kev: over_called 9121 ms
+[114/518] s5-057 shortlist-kev-transcript: over_called 6963 ms
+[115/518] s5-058 shortlist-kev: wrong_tool 5159 ms
+[116/518] s5-058 shortlist-kev-transcript: wrong_tool 4410 ms
+[117/518] s5-059 shortlist-kev: correct 22608 ms
+[118/518] s5-059 shortlist-kev-transcript: correct 25849 ms
+[119/518] s5-060 shortlist-kev: no_call 4698 ms
+[120/518] s5-060 shortlist-kev-transcript: no_call 4041 ms
+[121/518] s5-061 shortlist-kev: correct (args miss) 5466 ms
+[122/518] s5-061 shortlist-kev-transcript: correct (args miss) 3653 ms
+[123/518] s5-062 shortlist-kev: wrong_tool 8988 ms
+[124/518] s5-062 shortlist-kev-transcript: wrong_tool 8325 ms
+[125/518] s5-063 shortlist-kev: correct 8323 ms
+[126/518] s5-063 shortlist-kev-transcript: correct 7910 ms
+[127/518] s5-064 shortlist-kev: correct 6014 ms
+[128/518] s5-064 shortlist-kev-transcript: correct 6288 ms
+[129/518] s5-065 shortlist-kev: wrong_tool 13667 ms
+[130/518] s5-065 shortlist-kev-transcript: wrong_tool 13643 ms
+[131/518] s5-066 shortlist-kev: correct 12143 ms
+[132/518] s5-066 shortlist-kev-transcript: correct 11335 ms
+[133/518] s5-067 shortlist-kev: wrong_tool 5675 ms
+[134/518] s5-067 shortlist-kev-transcript: wrong_tool 5105 ms
+[135/518] s5-068 shortlist-kev: wrong_tool 5255 ms
+[136/518] s5-068 shortlist-kev-transcript: wrong_tool 4993 ms
+[137/518] s5-069 shortlist-kev: correct 3921 ms
+[138/518] s5-069 shortlist-kev-transcript: correct 4085 ms
+[139/518] s5-070 shortlist-kev: no_call 2406 ms
+[140/518] s5-070 shortlist-kev-transcript: no_call 2084 ms
+[141/518] s5-071 shortlist-kev: correct 4051 ms
+[142/518] s5-071 shortlist-kev-transcript: correct 4203 ms
+[143/518] s5-072 shortlist-kev: correct 4568 ms
+[144/518] s5-072 shortlist-kev-transcript: correct 4631 ms
+[145/518] s5-073 shortlist-kev: correct 5903 ms
+[146/518] s5-073 shortlist-kev-transcript: correct 5584 ms
+[147/518] s5-074 shortlist-kev: correct 4189 ms
+[148/518] s5-074 shortlist-kev-transcript: correct 4956 ms
+[149/518] s5-075 shortlist-kev: correct 6464 ms
+[150/518] s5-075 shortlist-kev-transcript: correct 7671 ms
+[151/518] s5-076 shortlist-kev: correct 6817 ms
+[152/518] s5-076 shortlist-kev-transcript: correct 11422 ms
+[153/518] s5-077 shortlist-kev: correct 9832 ms
+[154/518] s5-077 shortlist-kev-transcript: correct 12162 ms
+[155/518] s5-078 shortlist-kev: correct 10449 ms
+[156/518] s5-078 shortlist-kev-transcript: correct 9437 ms
+[157/518] s5-079 shortlist-kev: correct 3906 ms
+[158/518] s5-079 shortlist-kev-transcript: correct 4081 ms
+[159/518] s5-080 shortlist-kev: correct 5842 ms
+[160/518] s5-080 shortlist-kev-transcript: correct 5168 ms
+[161/518] s5-081 shortlist-kev: correct 7165 ms
+[162/518] s5-081 shortlist-kev-transcript: correct 7580 ms
+[163/518] s5-082 shortlist-kev: correct 8454 ms
+[164/518] s5-082 shortlist-kev-transcript: correct 7582 ms
+[165/518] s5-083 shortlist-kev: no_call 4246 ms
+[166/518] s5-083 shortlist-kev-transcript: no_call 3962 ms
+[167/518] s5-084 shortlist-kev: correct 9357 ms
+[168/518] s5-084 shortlist-kev-transcript: correct 10828 ms
+[169/518] s5-085 shortlist-kev: correct 10033 ms
+[170/518] s5-085 shortlist-kev-transcript: correct 8305 ms
+[171/518] s5-086 shortlist-kev: correct 6726 ms
+[172/518] s5-086 shortlist-kev-transcript: correct 6556 ms
+[173/518] s5-087 shortlist-kev: correct 5731 ms
+[174/518] s5-087 shortlist-kev-transcript: correct 7517 ms
+[175/518] s5-088 shortlist-kev: correct 7364 ms
+[176/518] s5-088 shortlist-kev-transcript: correct 9484 ms
+[177/518] s5-089 shortlist-kev: correct 9921 ms
+[178/518] s5-089 shortlist-kev-transcript: correct 7177 ms
+[179/518] s5-090 shortlist-kev: correct 7585 ms
+[180/518] s5-090 shortlist-kev-transcript: correct 7227 ms
+[181/518] s5-091 shortlist-kev: correct 7790 ms
+[182/518] s5-091 shortlist-kev-transcript: correct 8008 ms
+[183/518] s5-092 shortlist-kev: correct 8595 ms
+[184/518] s5-092 shortlist-kev-transcript: correct 9323 ms
+[185/518] s5-093 shortlist-kev: correct 5753 ms
+[186/518] s5-093 shortlist-kev-transcript: correct 6777 ms
+[187/518] s5-094 shortlist-kev: correct 7022 ms
+[188/518] s5-094 shortlist-kev-transcript: correct 7404 ms
+[189/518] s5-095 shortlist-kev: wrong_tool 8612 ms
+[190/518] s5-095 shortlist-kev-transcript: wrong_tool 9485 ms
+[191/518] s5-096 shortlist-kev: wrong_tool 11747 ms
+[192/518] s5-096 shortlist-kev-transcript: wrong_tool 8351 ms
+[193/518] s5-097 shortlist-kev: correct 17670 ms
+[194/518] s5-097 shortlist-kev-transcript: correct 11770 ms
+[195/518] s5-098 shortlist-kev: correct 5637 ms
+[196/518] s5-098 shortlist-kev-transcript: correct 5487 ms
+[197/518] s5-099 shortlist-kev: correct 4191 ms
+[198/518] s5-099 shortlist-kev-transcript: correct 5609 ms
+[199/518] s5-100 shortlist-kev: correct 9275 ms
+[200/518] s5-100 shortlist-kev-transcript: correct 10760 ms
+[201/518] d-001 shortlist-kev: correct 15596 ms
+[202/518] d-001 shortlist-kev-transcript: correct 10008 ms
+[203/518] d-002 shortlist-kev: correct 4370 ms
+[204/518] d-002 shortlist-kev-transcript: correct 4095 ms
+[205/518] d-003 shortlist-kev: correct (args miss) 5446 ms
+[206/518] d-003 shortlist-kev-transcript: correct (args miss) 13139 ms
+[207/518] d-004 shortlist-kev: clarified 1886 ms
+[208/518] d-004 shortlist-kev-transcript: clarified 1921 ms
+[209/518] d-005 shortlist-kev: correct 51340 ms
+[210/518] d-005 shortlist-kev-transcript: correct 39237 ms
+[211/518] d-006 shortlist-kev: correct 3051 ms
+[212/518] d-006 shortlist-kev-transcript: correct 3281 ms
+[213/518] d-007 shortlist-kev: correct 5100 ms
+[214/518] d-007 shortlist-kev-transcript: correct 5092 ms
+[215/518] d-008 shortlist-kev: correct 5053 ms
+[216/518] d-008 shortlist-kev-transcript: correct 5053 ms
+[217/518] d-009 shortlist-kev: correct (args miss) 5992 ms
+[218/518] d-009 shortlist-kev-transcript: correct (args miss) 6315 ms
+[219/518] d-010 shortlist-kev: correct 6995 ms
+[220/518] d-010 shortlist-kev-transcript: correct 5866 ms
+[221/518] d-011 shortlist-kev: correct (args miss) 4737 ms
+[222/518] d-011 shortlist-kev-transcript: correct (args miss) 5006 ms
+[223/518] d-012 shortlist-kev: no_call 4056 ms
+[224/518] d-012 shortlist-kev-transcript: no_call 3265 ms
+[225/518] d-013 shortlist-kev: no_call 598 ms
+[226/518] d-013 shortlist-kev-transcript: no_call 571 ms
+[227/518] d-014 shortlist-kev: wrong_tool (args miss) 5254 ms
+[228/518] d-014 shortlist-kev-transcript: wrong_tool (args miss) 5763 ms
+[229/518] d-015 shortlist-kev: wrong_tool 5767 ms
+[230/518] d-015 shortlist-kev-transcript: wrong_tool 5766 ms
+[231/518] d-016 shortlist-kev: no_call 5853 ms
+[232/518] d-016 shortlist-kev-transcript: no_call 5653 ms
+[233/518] d-017 shortlist-kev: correct 5013 ms
+[234/518] d-017 shortlist-kev-transcript: correct 4608 ms
+[235/518] d-018 shortlist-kev: no_call 3658 ms
+[236/518] d-018 shortlist-kev-transcript: no_call 3555 ms
+[237/518] d-019 shortlist-kev: correct 7326 ms
+[238/518] d-019 shortlist-kev-transcript: correct 6847 ms
+[239/518] d-020 shortlist-kev: no_call 3533 ms
+[240/518] d-020 shortlist-kev-transcript: no_call 3276 ms
+[241/518] d-021 shortlist-kev: no_call 2679 ms
+[242/518] d-021 shortlist-kev-transcript: no_call 2365 ms
+[243/518] d-022 shortlist-kev: no_call 2617 ms
+[244/518] d-022 shortlist-kev-transcript: no_call 2053 ms
+[245/518] d-023 shortlist-kev: correct 2454 ms
+[246/518] d-023 shortlist-kev-transcript: correct 2783 ms
+[247/518] d-024 shortlist-kev: correct 3019 ms
+[248/518] d-024 shortlist-kev-transcript: correct 2828 ms
+[249/518] d-025 shortlist-kev: correct 3438 ms
+[250/518] d-025 shortlist-kev-transcript: correct 4434 ms
+[251/518] d-026 shortlist-kev: over_called 5448 ms
+[252/518] d-026 shortlist-kev-transcript: over_called 6045 ms
+[253/518] d-027 shortlist-kev: wrong_tool 10128 ms
+[254/518] d-027 shortlist-kev-transcript: wrong_tool 7430 ms
+[255/518] d-028 shortlist-kev: correct 7437 ms
+[256/518] d-028 shortlist-kev-transcript: correct 6903 ms
+[257/518] d-029 shortlist-kev: correct 4693 ms
+[258/518] d-029 shortlist-kev-transcript: correct 3950 ms
+[259/518] d-030 shortlist-kev: correct 3592 ms
+[260/518] d-030 shortlist-kev-transcript: correct 3624 ms
+[261/518] d-031 shortlist-kev: correct 4813 ms
+[262/518] d-031 shortlist-kev-transcript: correct 5187 ms
+[263/518] d-032 shortlist-kev: correct 5428 ms
+[264/518] d-032 shortlist-kev-transcript: correct 5415 ms
+[265/518] d-033 shortlist-kev: correct 5318 ms
+[266/518] d-033 shortlist-kev-transcript: correct 4376 ms
+[267/518] d-034 shortlist-kev: correct 4854 ms
+[268/518] d-034 shortlist-kev-transcript: correct 6120 ms
+[269/518] d-035 shortlist-kev: correct 7802 ms
+[270/518] d-035 shortlist-kev-transcript: correct 8896 ms
+[271/518] d-036 shortlist-kev: correct (args miss) 5820 ms
+[272/518] d-036 shortlist-kev-transcript: correct (args miss) 5894 ms
+[273/518] d-037 shortlist-kev: no_call 6533 ms
+[274/518] d-037 shortlist-kev-transcript: no_call 6387 ms
+[275/518] d-038 shortlist-kev: correct 10276 ms
+[276/518] d-038 shortlist-kev-transcript: correct 7049 ms
+[277/518] d-039 shortlist-kev: correct 9005 ms
+[278/518] d-039 shortlist-kev-transcript: correct 7422 ms
+[279/518] d-040 shortlist-kev: correct 5774 ms
+[280/518] d-040 shortlist-kev-transcript: correct 4638 ms
+[281/518] d-041 shortlist-kev: correct 5306 ms
+[282/518] d-041 shortlist-kev-transcript: correct 6064 ms
+[283/518] d-042 shortlist-kev: correct 6469 ms
+[284/518] d-042 shortlist-kev-transcript: correct 8301 ms
+[285/518] d-043 shortlist-kev: correct 2281 ms
+[286/518] d-043 shortlist-kev-transcript: correct 3260 ms
+[287/518] d-044 shortlist-kev: correct 6735 ms
+[288/518] d-044 shortlist-kev-transcript: correct 5026 ms
+[289/518] d-045 shortlist-kev: correct 2997 ms
+[290/518] d-045 shortlist-kev-transcript: correct 3550 ms
+[291/518] d-046 shortlist-kev: correct 3014 ms
+[292/518] d-046 shortlist-kev-transcript: correct 3196 ms
+[293/518] d-047 shortlist-kev: correct 5329 ms
+[294/518] d-047 shortlist-kev-transcript: correct 5184 ms
+[295/518] d-048 shortlist-kev: correct 2018 ms
+[296/518] d-048 shortlist-kev-transcript: correct 1965 ms
+[297/518] d-049 shortlist-kev: correct 2389 ms
+[298/518] d-049 shortlist-kev-transcript: correct 2161 ms
+[299/518] d-050 shortlist-kev: correct (args miss) 2163 ms
+[300/518] d-050 shortlist-kev-transcript: correct (args miss) 2215 ms
+[301/518] d-051 shortlist-kev: correct 2032 ms
+[302/518] d-051 shortlist-kev-transcript: correct 2018 ms
+[303/518] d-052 shortlist-kev: correct 2029 ms
+[304/518] d-052 shortlist-kev-transcript: correct 1929 ms
+[305/518] d-053 shortlist-kev: correct 2159 ms
+[306/518] d-053 shortlist-kev-transcript: correct 2176 ms
+[307/518] d-054 shortlist-kev: correct 3995 ms
+[308/518] d-054 shortlist-kev-transcript: correct 3806 ms
+[309/518] nm-001 shortlist-kev: correct 2714 ms
+[310/518] nm-001 shortlist-kev-transcript: correct 4171 ms
+[311/518] nm-002 shortlist-kev: correct 3958 ms
+[312/518] nm-002 shortlist-kev-transcript: correct 2764 ms
+[313/518] nm-003 shortlist-kev: no_call 1669 ms
+[314/518] nm-003 shortlist-kev-transcript: no_call 1478 ms
+[315/518] nm-004 shortlist-kev: correct 3955 ms
+[316/518] nm-004 shortlist-kev-transcript: correct 3919 ms
+[317/518] nm-005 shortlist-kev: correct 2442 ms
+[318/518] nm-005 shortlist-kev-transcript: correct 2575 ms
+[319/518] nm-006 shortlist-kev: correct 2698 ms
+[320/518] nm-006 shortlist-kev-transcript: correct 4417 ms
+[321/518] nm-007 shortlist-kev: correct (args miss) 5234 ms
+[322/518] nm-007 shortlist-kev-transcript: correct (args miss) 6786 ms
+[323/518] nm-008 shortlist-kev: correct 5035 ms
+[324/518] nm-008 shortlist-kev-transcript: correct 5086 ms
+[325/518] nm-009 shortlist-kev: correct 3722 ms
+[326/518] nm-009 shortlist-kev-transcript: correct 3323 ms
+[327/518] nm-010 shortlist-kev: correct 5253 ms
+[328/518] nm-010 shortlist-kev-transcript: correct 5060 ms
+[329/518] nm-011 shortlist-kev: wrong_tool 6892 ms
+[330/518] nm-011 shortlist-kev-transcript: wrong_tool 6747 ms
+[331/518] nm-012 shortlist-kev: correct 2573 ms
+[332/518] nm-012 shortlist-kev-transcript: correct 2549 ms
+[333/518] nm-013 shortlist-kev: correct 5416 ms
+[334/518] nm-013 shortlist-kev-transcript: correct 5320 ms
+[335/518] nm-014 shortlist-kev: correct 3175 ms
+[336/518] nm-014 shortlist-kev-transcript: correct 3231 ms
+[337/518] nm-015 shortlist-kev: no_call 1577 ms
+[338/518] nm-015 shortlist-kev-transcript: no_call 1404 ms
+[339/518] nm-016 shortlist-kev: correct 2848 ms
+[340/518] nm-016 shortlist-kev-transcript: correct 2894 ms
+[341/518] nm-017 shortlist-kev: over_called 30564 ms
+[342/518] nm-017 shortlist-kev-transcript: over_called 29574 ms
+[343/518] nm-018 shortlist-kev: no_call 1692 ms
+[344/518] nm-018 shortlist-kev-transcript: no_call 1695 ms
+[345/518] nm-019 shortlist-kev: correct 2541 ms
+[346/518] nm-019 shortlist-kev-transcript: correct 2511 ms
+[347/518] nm-020 shortlist-kev: correct 2281 ms
+[348/518] nm-020 shortlist-kev-transcript: correct 2379 ms
+[349/518] nm-021 shortlist-kev: correct 3085 ms
+[350/518] nm-021 shortlist-kev-transcript: correct 2937 ms
+[351/518] nm-022 shortlist-kev: correct (args miss) 4574 ms
+[352/518] nm-022 shortlist-kev-transcript: correct (args miss) 6199 ms
+[353/518] nm-023 shortlist-kev: over_called 5641 ms
+[354/518] nm-023 shortlist-kev-transcript: over_called 5341 ms
+[355/518] nm-024 shortlist-kev: correct 5611 ms
+[356/518] nm-024 shortlist-kev-transcript: correct 5324 ms
+[357/518] nm-025 shortlist-kev: correct 3525 ms
+[358/518] nm-025 shortlist-kev-transcript: correct 3511 ms
+[359/518] nm-026 shortlist-kev: correct 2490 ms
+[360/518] nm-026 shortlist-kev-transcript: correct 2532 ms
+[361/518] nm-027 shortlist-kev: correct 4644 ms
+[362/518] nm-027 shortlist-kev-transcript: correct 3342 ms
+[363/518] nm-028 shortlist-kev: correct 4413 ms
+[364/518] nm-028 shortlist-kev-transcript: correct 4495 ms
+[365/518] nm-029 shortlist-kev: no_call 1637 ms
+[366/518] nm-029 shortlist-kev-transcript: no_call 1576 ms
+[367/518] nm-030 shortlist-kev: correct 2369 ms
+[368/518] nm-030 shortlist-kev-transcript: correct 2323 ms
+[369/518] nm-031 shortlist-kev: correct 2147 ms
+[370/518] nm-031 shortlist-kev-transcript: correct 2101 ms
+[371/518] nm-032 shortlist-kev: correct 2592 ms
+[372/518] nm-032 shortlist-kev-transcript: correct 2601 ms
+[373/518] nm-033 shortlist-kev: correct 2661 ms
+[374/518] nm-033 shortlist-kev-transcript: correct 2662 ms
+[375/518] nm-034 shortlist-kev: correct 2153 ms
+[376/518] nm-034 shortlist-kev-transcript: correct 2139 ms
+[377/518] nm-035 shortlist-kev: correct 2156 ms
+[378/518] nm-035 shortlist-kev-transcript: correct 2131 ms
+[379/518] nm-036 shortlist-kev: correct 1921 ms
+[380/518] nm-036 shortlist-kev-transcript: correct 1851 ms
+[381/518] nm-037 shortlist-kev: correct 1871 ms
+[382/518] nm-037 shortlist-kev-transcript: correct 1960 ms
+[383/518] nt-001 shortlist-kev: correct 422 ms
+[384/518] nt-001 shortlist-kev-transcript: correct 416 ms
+[385/518] nt-002 shortlist-kev: correct 482 ms
+[386/518] nt-002 shortlist-kev-transcript: correct 511 ms
+[387/518] nt-003 shortlist-kev: correct 331 ms
+[388/518] nt-003 shortlist-kev-transcript: correct 319 ms
+[389/518] nt-004 shortlist-kev: correct 673 ms
+[390/518] nt-004 shortlist-kev-transcript: correct 668 ms
+[391/518] nt-005 shortlist-kev: correct 1000 ms
+[392/518] nt-005 shortlist-kev-transcript: correct 1013 ms
+[393/518] nt-006 shortlist-kev: correct 382 ms
+[394/518] nt-006 shortlist-kev-transcript: correct 387 ms
+[395/518] nt-007 shortlist-kev: correct 825 ms
+[396/518] nt-007 shortlist-kev-transcript: correct 801 ms
+[397/518] nt-008 shortlist-kev: correct 805 ms
+[398/518] nt-008 shortlist-kev-transcript: correct 791 ms
+[399/518] nt-009 shortlist-kev: correct 1411 ms
+[400/518] nt-009 shortlist-kev-transcript: correct 1190 ms
+[401/518] nt-010 shortlist-kev: correct 905 ms
+[402/518] nt-010 shortlist-kev-transcript: correct 895 ms
+[403/518] nt-011 shortlist-kev: correct 458 ms
+[404/518] nt-011 shortlist-kev-transcript: correct 468 ms
+[405/518] nt-012 shortlist-kev: correct 2173 ms
+[406/518] nt-012 shortlist-kev-transcript: correct 2177 ms
+[407/518] nt-013 shortlist-kev: correct 1008 ms
+[408/518] nt-013 shortlist-kev-transcript: correct 1039 ms
+[409/518] nt-014 shortlist-kev: correct 743 ms
+[410/518] nt-014 shortlist-kev-transcript: correct 775 ms
+[411/518] nt-015 shortlist-kev: correct 1362 ms
+[412/518] nt-015 shortlist-kev-transcript: correct 1341 ms
+[413/518] nt-016 shortlist-kev: correct 524 ms
+[414/518] nt-016 shortlist-kev-transcript: correct 482 ms
+[415/518] nt-017 shortlist-kev: correct 1546 ms
+[416/518] nt-017 shortlist-kev-transcript: correct 1905 ms
+[417/518] ms-001 shortlist-kev: wrong_tool 3040 ms
+[418/518] ms-001 shortlist-kev-transcript: wrong_tool 3033 ms
+[419/518] ms-002 shortlist-kev: correct (args miss) 4964 ms
+[420/518] ms-002 shortlist-kev-transcript: correct (args miss) 5640 ms
+[421/518] ms-003 shortlist-kev: wrong_tool 4093 ms
+[422/518] ms-003 shortlist-kev-transcript: wrong_tool 4180 ms
+[423/518] ms-004 shortlist-kev: correct 3408 ms
+[424/518] ms-004 shortlist-kev-transcript: correct 3293 ms
+[425/518] ms-005 shortlist-kev: correct 3290 ms
+[426/518] ms-005 shortlist-kev-transcript: correct 3677 ms
+[427/518] ms-006 shortlist-kev: wrong_tool 2106 ms
+[428/518] ms-006 shortlist-kev-transcript: wrong_tool 2757 ms
+[429/518] ms-007 shortlist-kev: wrong_tool 3609 ms
+[430/518] ms-007 shortlist-kev-transcript: wrong_tool 3977 ms
+[431/518] ms-008 shortlist-kev: correct 6643 ms
+[432/518] ms-008 shortlist-kev-transcript: correct 7136 ms
+[433/518] ms-009 shortlist-kev: correct 9562 ms
+[434/518] ms-009 shortlist-kev-transcript: correct 8692 ms
+[435/518] ms-010 shortlist-kev: correct 9393 ms
+[436/518] ms-010 shortlist-kev-transcript: correct 8551 ms
+[437/518] hist-same-weather-porto shortlist-kev: no_call 1902 ms
+[438/518] hist-same-weather-porto shortlist-kev-transcript: no_call 1864 ms
+[439/518] hist-task-same-way shortlist-kev: escalated 5615 ms
+[440/518] hist-task-same-way shortlist-kev-transcript: escalated 5167 ms
+[441/518] hist-reminder-same-pharmacy shortlist-kev: correct 5832 ms
+[442/518] hist-reminder-same-pharmacy shortlist-kev-transcript: correct 4967 ms
+[443/518] hist-agenda-to-priya shortlist-kev: no_call 2863 ms
+[444/518] hist-agenda-to-priya shortlist-kev-transcript: correct 5688 ms
+[445/518] hist-hotels-there shortlist-kev: correct 7484 ms
+[446/518] hist-hotels-there shortlist-kev-transcript: correct 10422 ms
+[447/518] hist-patch-that-file shortlist-kev: correct 5448 ms
+[448/518] hist-patch-that-file shortlist-kev-transcript: correct 5517 ms
+[449/518] hist-sister-weather shortlist-kev: correct 4136 ms
+[450/518] hist-sister-weather shortlist-kev-transcript: correct 3692 ms
+[451/518] hist-packing-to-sam shortlist-kev: correct (args miss) 4841 ms
+[452/518] hist-packing-to-sam shortlist-kev-transcript: correct (args miss) 4887 ms
+[453/518] hist-same-berlin-text-sam shortlist-kev: no_call 42937 ms
+[454/518] hist-same-berlin-text-sam shortlist-kev-transcript: no_call 49836 ms
+[455/518] hist-plant-reminder-done shortlist-kev: correct 2252 ms
+[456/518] hist-plant-reminder-done shortlist-kev-transcript: correct 2097 ms
+[457/518] hist-dana-email-done shortlist-kev: correct 1795 ms
+[458/518] hist-dana-email-done shortlist-kev-transcript: correct 1647 ms
+[459/518] hist-note-saved-done shortlist-kev: correct 1554 ms
+[460/518] hist-note-saved-done shortlist-kev-transcript: correct 1742 ms
+[461/518] hist-timer-done shortlist-kev: correct 1468 ms
+[462/518] hist-timer-done shortlist-kev-transcript: correct 1673 ms
+[463/518] hist-lunch-event-done shortlist-kev: called_on_no_tool 3866 ms
+[464/518] hist-lunch-event-done shortlist-kev-transcript: called_on_no_tool 2982 ms
+[465/518] hist-task-done shortlist-kev: correct 1850 ms
+[466/518] hist-task-done shortlist-kev-transcript: correct 2350 ms
+[467/518] hist-allergy-done shortlist-kev: correct 1318 ms
+[468/518] hist-allergy-done shortlist-kev-transcript: correct 1510 ms
+[469/518] hist-sam-text-done shortlist-kev: called_on_no_tool 5128 ms
+[470/518] hist-sam-text-done shortlist-kev-transcript: called_on_no_tool 5334 ms
+[471/518] hist-todo-into-note shortlist-kev: correct 4429 ms
+[472/518] hist-todo-into-note shortlist-kev-transcript: correct 4611 ms
+[473/518] hist-umbrella-reminder shortlist-kev: correct 5214 ms
+[474/518] hist-umbrella-reminder shortlist-kev-transcript: correct 4240 ms
+[475/518] hist-locker-to-ana shortlist-kev: correct (args miss) 6663 ms
+[476/518] hist-locker-to-ana shortlist-kev-transcript: correct (args miss) 6888 ms
+[477/518] hist-ramen-dinner shortlist-kev: correct 9570 ms
+[478/518] hist-ramen-dinner shortlist-kev-transcript: correct 9779 ms
+[479/518] hist-dentist-reminder shortlist-kev: correct 11311 ms
+[480/518] hist-dentist-reminder shortlist-kev-transcript: correct 9808 ms
+[481/518] hist-todo-note-and-text shortlist-kev: wrong_tool 3092 ms
+[482/518] hist-todo-note-and-text shortlist-kev-transcript: wrong_tool 3677 ms
+[483/518] hist-port-patch shortlist-kev: wrong_tool 6904 ms
+[484/518] hist-port-patch shortlist-kev-transcript: wrong_tool 6344 ms
+[485/518] hist-lists-in-notes shortlist-kev: correct 3938 ms
+[486/518] hist-lists-in-notes shortlist-kev-transcript: correct 4186 ms
+[487/518] hist-reminders-not-cron shortlist-kev: correct 5868 ms
+[488/518] hist-reminders-not-cron shortlist-kev-transcript: correct 5865 ms
+[489/518] hist-dana-by-email shortlist-kev: wrong_tool 4384 ms
+[490/518] hist-dana-by-email shortlist-kev-transcript: wrong_tool 4388 ms
+[491/518] hist-drafts-folder shortlist-kev: correct (args miss) 2945 ms
+[492/518] hist-drafts-folder shortlist-kev-transcript: correct (args miss) 5487 ms
+[493/518] hist-todos-to-tasks shortlist-kev: no_call 1875 ms
+[494/518] hist-todos-to-tasks shortlist-kev-transcript: no_call 1744 ms
+[495/518] hist-ana-by-text shortlist-kev: correct 3828 ms
+[496/518] hist-ana-by-text shortlist-kev-transcript: correct 3962 ms
+[497/518] hist-weather-also-note shortlist-kev: wrong_tool 2668 ms
+[498/518] hist-weather-also-note shortlist-kev-transcript: wrong_tool 3089 ms
+[499/518] hist-no-web-unless-asked shortlist-kev: correct 1273 ms
+[500/518] hist-no-web-unless-asked shortlist-kev-transcript: correct 1196 ms
+[501/518] hist-ctl-weather-rome shortlist-kev: correct 3004 ms
+[502/518] hist-ctl-weather-rome shortlist-kev-transcript: correct 3363 ms
+[503/518] hist-ctl-read-readme shortlist-kev: correct 2460 ms
+[504/518] hist-ctl-read-readme shortlist-kev-transcript: correct 2745 ms
+[505/518] hist-ctl-hi-again shortlist-kev: correct 737 ms
+[506/518] hist-ctl-hi-again shortlist-kev-transcript: correct 885 ms
+[507/518] hist-ctl-nobel-search shortlist-kev: correct 5709 ms
+[508/518] hist-ctl-nobel-search shortlist-kev-transcript: correct 5452 ms
+[509/518] hist-ctl-read-and-email shortlist-kev: wrong_tool 9180 ms
+[510/518] hist-ctl-read-and-email shortlist-kev-transcript: wrong_tool 8525 ms
+[511/518] hist-ctl-timer shortlist-kev: correct 2627 ms
+[512/518] hist-ctl-timer shortlist-kev-transcript: correct 2872 ms
+[513/518] hist-ctl-thanks shortlist-kev: correct 1220 ms
+[514/518] hist-ctl-thanks shortlist-kev-transcript: correct 1385 ms
+[515/518] hist-ctl-invoice-search shortlist-kev: correct 6144 ms
+[516/518] hist-ctl-invoice-search shortlist-kev-transcript: correct 5811 ms
+[517/518] hist-ctl-oslo-note shortlist-kev: wrong_tool 5873 ms
+[518/518] hist-ctl-oslo-note shortlist-kev-transcript: wrong_tool 4524 ms
+
+# S2 tool-calling report
+
+Set `2026-10-23.1` (30 tools, catalogue `6692c33be360`, cases `f064c27b3b7c`), floors `2026-10-21.1`, Corvid `446b62a`, 2026-10-23 05:22–06:21 UTC.
+
+- embeddinggemma-2: embeddinggemma-2@cpu, cpu, embeddinggemma-2/onnx-fp32-cpu, google/embeddinggemma-2@914f7f89, Starlings 0.3.0
+- generator profile: qwen3.5-0.8b@cpu
+- gliner2-base-v1: gliner2-base-v1@cpu, cpu, gliner2-base-v1/onnx-fp32-cpu, fastino/gliner2-base-v1@f9634218, Starlings 0.3.0
+- kev-0.8b: kev-0.8b@cuda:0 (KevDecider.Create, C-029); calibrated temperature, jaredpalmer/kev-0.8b@9a45d25e, Starlings 0.3.0
+- qwen3.5-0.8b: cuda:0 (GenAI CUDA provider, spike-only); Qwen35ChatClientOptions defaults: greedy, thinking off, Qwen/Qwen3.5-0.8B@2fc06364, Starlings 0.3.0
+- cases: 259 scored of 259 selected of 259
+- configurations: shortlist-kev, shortlist-kev-transcript
+- escalation: generator slot escalates to a stub that answers with fixed text
+- extractor: gliner2-base-v1@cpu
+- history: a history case's entries are seeded into its fresh session before the turn; only the turn's own events are scored
+- kev outcomes appended: shortlist-kev: tool: 254 accepted, 294 corrected (first tool decision of a turn: 130 accepted, 129 corrected; later: 124 accepted, 165 corrected); done: 226 accepted, 63 corrected; shortlist-kev-transcript: tool: 250 accepted, 301 corrected (first tool decision of a turn: 128 accepted, 131 corrected; later: 122 accepted, 170 corrected); done: 231 accepted, 61 corrected
+- shortlist: qwen-all: 30 (every tool, no embedder); others: 5, built-in examples
+- state budget: production (600 tokens, 8 recent events, 300 at a tool-and-skill ingress); shortlist-kev-transcript: 2000 tokens (recent 1800, hard stop 4000), 64 recent events, no dual-shortlist budget
+- turn options: production defaults (MaxOutputTokens 1024, approval mode smart), MaxSteps = expected steps + 1
+- warm-up: one untimed case per configuration: What's the weather like in Paris today?
+- CUDA_VISIBLE_DEVICES: GPU-9e21a72e-3a6f-e082-3d74-4b8d361de70c
+- load average after: 17.30 20.30 34.85
+- load average before: 99.35 58.92 33.88
+- os: Omarchy
+- processors: 12
+- runtime: .NET 10.0.12
+
+## S4: 600-token state against a transcript-sized state
+
+Plan §18, read by C-038: on the `history` cases, `shortlist-kev` (TurnState 600 tokens, 8 recent events) is at most 3 points below `shortlist-kev-transcript` (2,000 tokens, every event one-liner) on Kev's calibrated `tool` decisions AND on its `done` decisions. Kev's answer is the argmax for `tool` and P(yes) ≥ 0.5 for `done`; acted means at or above the floor. Only ingress `tool` is paired (one per case in each arm); later `tool` and `done` decisions follow each arm's own trajectory.
+
+| Measure (history cases) | 600 | Transcript | 600 − transcript |
+| --- | --- | --- | --- |
+| `tool`, all decisions | 39 (46.4%) | 35 (40.2%) | +6.2 points |
+| `done` | 28 (65.1%) | 33 (71.7%) | −6.6 points |
+| `tool` at ingress (paired) | 23 (56.1%) [41–70%] | 21 (51.2%) [36–66%] | +4.9 points |
+
+Ingress `tool` on 41 paired cases: both right 18, only 600 right 5, only transcript right 3, both wrong 15 (Wilson 95% intervals in brackets). **Fail.**
+
+| Slice | Arm | n | `tool` ingress | `tool` all | `done` | `tool` acted (right) | `done` acted (right) | Fallbacks | Shortlist hits | Ingress on hits | Compacted | Decider ingress ms p50 (p90) | Decider step ms p50 (p90) | State chars/4 p50 (max) | `recent` items p50 (max) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| history | 600 | 41 | 23 (56.1%) | 39 (46.4%) | 28 (65.1%) | 16 (9) | 16 (13) | 0 | 27/30 | 13 (48.1%) | 0 | 193 (288) | 225 (359) | 125 (146) | 8 (8) |
+| history | transcript | 41 | 21 (51.2%) | 35 (40.2%) | 33 (71.7%) | 19 (9) | 13 (11) | 0 | 27/30 | 13 (48.1%) | 0 | 273 (331) | 282 (486) | 311 (456) | 29 (47) |
+| history_far | 600 | 24 | 11 (45.8%) | 20 (42.6%) | 13 (56.5%) | 6 (3) | 7 (6) | 0 | 16/18 | 6 (37.5%) | 0 | 179 (262) | 208 (320) | 124 (142) | 8 (8) |
+| history_far | transcript | 24 | 12 (50.0%) | 20 (40.8%) | 17 (68.0%) | 5 (3) | 5 (4) | 0 | 16/18 | 7 (43.8%) | 0 | 273 (326) | 256 (483) | 336 (456) | 32 (47) |
+| history, cue near | 600 | 8 | 6 (75.0%) | 9 (50.0%) | 10 (100.0%) | 1 (0) | 3 (3) | 0 | 5/5 | 3 (60.0%) | 0 | 248 (345) | 232 (288) | 130 (146) | 8 (8) |
+| history, cue near | transcript | 8 | 3 (37.5%) | 5 (27.8%) | 10 (100.0%) | 2 (1) | 2 (2) | 0 | 5/5 | 2 (40.0%) | 0 | 279 (333) | 282 (383) | 241 (286) | 21 (25) |
+| history, no cue (controls) | 600 | 9 | 6 (66.7%) | 10 (52.6%) | 5 (50.0%) | 9 (6) | 6 (4) | 0 | 6/7 | 4 (66.7%) | 0 | 171 (457) | 209 (404) | 125 (143) | 8 (8) |
+| history, no cue (controls) | transcript | 9 | 6 (66.7%) | 10 (50.0%) | 6 (54.5%) | 12 (5) | 6 (5) | 0 | 6/7 | 4 (66.7%) | 0 | 254 (354) | 297 (599) | 311 (433) | 30 (46) |
+| history, multi_step | 600 | 5 | 3 (60.0%) | 3 (27.3%) | 0 (0.0%) | 4 (3) | 3 (0) | 0 | 4/5 | 3 (75.0%) | 0 | 175 (457) | 191 (404) | 126 (143) | 8 (8) |
+| history, multi_step | transcript | 5 | 3 (60.0%) | 3 (25.0%) | 0 (0.0%) | 8 (3) | 2 (0) | 0 | 4/5 | 3 (75.0%) | 0 | 283 (354) | 333 (599) | 351 (406) | 34 (40) |
+| history, no_tool | 600 | 11 | 10 (90.9%) | 18 (85.7%) | 4 (40.0%) | 1 (1) | 2 (2) | 0 | 0/0 | – | 0 | 207 (288) | 124 (280) | 123 (146) | 8 (8) |
+| history, no_tool | transcript | 11 | 8 (72.7%) | 15 (71.4%) | 8 (80.0%) | 1 (1) | 1 (1) | 0 | 0/0 | – | 0 | 254 (295) | 209 (343) | 260 (456) | 24 (47) |
+| all cases | 600 | 259 | 130 (50.2%) | 254 (46.4%) | 226 (78.2%) | 134 (78) | 124 (109) | 0 | 225/231 | 103 (45.8%) | 0 | 210 (468) | 182 (386) | 75 (146) | 2 (8) |
+| all cases | transcript | 259 | 128 (49.4%) | 250 (45.4%) | 231 (79.1%) | 137 (78) | 121 (107) | 0 | 225/231 | 103 (45.8%) | 0 | 254 (497) | 199 (408) | 75 (456) | 2 (47) |
+
+## Outcomes
+
+Correct tool and args match are strict: a case whose expected steps all ran and then another tool ran is over-called, a miss. The two lenient columns count it as correct.
+
+| Configuration | n | Correct tool | Args match | Over-called | Correct tool, lenient | Args match, lenient | Wrong tool | Invalid name | Malformed | No call | Called on no-tool | Clarified | Escalated | Failed | Correct, non-escalated | Args valid (first offered call) | First response correct | Repaired | Nudged | MCP descriptions flagged |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| shortlist-kev | 259 | 201 (77.6%) | 188 (72.6%) | 4 | 205 (79.2%) | 192 (74.1%) | 26 | 0 | 0 | 24 of 231 | 2 | 1 | 1 (repair 1) | 0 | 201 (77.9%) | 207/207 | 187 | 1 | 12 | 0 |
+| shortlist-kev-transcript | 259 | 202 (78.0%) | 189 (73.0%) | 4 | 206 (79.5%) | 193 (74.5%) | 26 | 0 | 0 | 23 of 231 | 2 | 1 | 1 (repair 1) | 0 | 202 (78.3%) | 208/208 | 188 | 1 | 12 | 0 |
+
+Wrote /tmp/corvid-s4-c038/all/report.json and report.md.
