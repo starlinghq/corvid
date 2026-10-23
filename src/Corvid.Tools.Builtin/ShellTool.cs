@@ -100,7 +100,17 @@ public sealed class SandboxedShell
     public Task<SandboxResult> RunAsync(string command, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
-        return _sandbox.RunAsync(Policy, new SandboxCommand(Options.ShellPath, "-c", command), cancellationToken);
+        return SandboxedAsync(Policy, new SandboxCommand(Options.ShellPath, "-c", command), cancellationToken);
+    }
+
+    /// <summary>
+    /// Every command runs through here: Vault's sandbox directory is made to exist first, so the launcher denies it even
+    /// before Vault has opened its first proxy (<see cref="VaultLocations.EnsureSandboxDirectory"/>).
+    /// </summary>
+    private Task<SandboxResult> SandboxedAsync(SandboxPolicy policy, SandboxCommand command, CancellationToken cancellationToken)
+    {
+        Options.Vault?.EnsureSandboxDirectory();
+        return _sandbox.RunAsync(policy, command, cancellationToken);
     }
 
     /// <summary>
@@ -117,14 +127,14 @@ public sealed class SandboxedShell
         ArgumentNullException.ThrowIfNull(egress);
         var shellCommand = new SandboxCommand(Options.ShellPath, "-c", command);
         if (!Options.Network)
-            return new ShellRun(await _sandbox.RunAsync(Policy, shellCommand, cancellationToken).ConfigureAwait(false), null);
+            return new ShellRun(await SandboxedAsync(Policy, shellCommand, cancellationToken).ConfigureAwait(false), null);
 
         using var activity = Corvid.Kernel.KernelTelemetry.Source.StartActivity(ShellTelemetry.EgressSpan);
         activity?.SetTag(ShellTelemetry.Tainted, egress.Tainted);
         if (!egress.MayRoute)
         {
             activity?.SetTag(ShellTelemetry.Route, ShellTelemetry.RouteWithheld);
-            return new ShellRun(await _sandbox.RunAsync(Policy, shellCommand, cancellationToken).ConfigureAwait(false), ShellTelemetry.RouteWithheld);
+            return new ShellRun(await SandboxedAsync(Policy, shellCommand, cancellationToken).ConfigureAwait(false), ShellTelemetry.RouteWithheld);
         }
 
         activity?.SetTag(ShellTelemetry.Route, ShellTelemetry.RouteVault);
@@ -151,7 +161,7 @@ public sealed class SandboxedShell
         try
         {
             var policy = Policy with { Proxy = new SandboxProxy(lease.SocketPath, lease.CaCertificatePem) };
-            return new ShellRun(await _sandbox.RunAsync(policy, shellCommand, cancellationToken).ConfigureAwait(false), ShellTelemetry.RouteVault);
+            return new ShellRun(await SandboxedAsync(policy, shellCommand, cancellationToken).ConfigureAwait(false), ShellTelemetry.RouteVault);
         }
         finally
         {
@@ -215,6 +225,10 @@ public sealed partial class ShellTool(SandboxedShell shell)
 
         var run = await _shell.RunAsync(command, new ShellEgress(context.SessionId, context.Tainted, (ApprovalResult)context.Approval), cancellationToken)
             .ConfigureAwait(false);
+        // HTTPS through Vault's proxy can bring anything back, and the shell is not a [Network] tool: the turn loop taints the
+        // session only because the result says so (plan §10.3). A withheld or network-off command reached nothing outside.
+        if (run.Network == ShellTelemetry.RouteVault)
+            context.MarkResultTainted();
         var result = run.Result;
         var output = new JsonObject
         {

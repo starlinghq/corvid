@@ -3701,7 +3701,11 @@ reaches `Corvid.Vault.Client` through `Corvid.Tools`.
 - Result and spans. The shell tool's result gains `"network": "vault" | "withheld"` (in the session log through
   `ToolCompleted`), and its description now says "no direct network; HTTPS only through Corvid Vault's proxy when
   enabled" (the S2 catalogue snapshot is re-recorded). It gains no `[Network]` and no `SideEffects.Network`: shell
-  calls are assessed as the parsed command. A child span `corvid.sandbox.egress` on `KernelTelemetry.Source` runs
+  calls are assessed as the parsed command. So a `vault`-routed result calls `ToolCallContext.MarkResultTainted()`
+  and the turn loop taints the session after it (plan §10.3): whatever came back through the proxy is outside
+  content, so later commands in the session are tainted (routed only with a person's egress approval), and memory
+  writes, cloud requests and jobs created afterwards carry the taint. `withheld` and network-off results reached
+  nothing outside and leave it as it was; a scheduled script's output already taints the job's turn. A child span `corvid.sandbox.egress` on `KernelTelemetry.Source` runs
   from open to close with `corvid.sandbox.route`, `corvid.vault.sandbox_id`, `corvid.sandbox.passthrough`,
   `corvid.sandbox.tainted`, `corvid.vault.sandbox_expires`, `error.type` on failure (Vault's code) and a
   `sandbox_closed` event; never the PEM or the socket path (`ShellTelemetry`). Per-request detail stays in Vault's
@@ -3709,7 +3713,11 @@ reaches `Corvid.Vault.Client` through `Corvid.Tools`.
 - Other sandboxes' sockets. `VaultLocations.Paths` adds `<dir of the socket>/sandbox`, so every command gets it as a
   denied path and the hardline list gets it too. Vault checks only the peer's uid, so without this a withheld or
   tainted command could ride a concurrently open untainted sandbox's socket when Vault's socket is outside
-  `$XDG_RUNTIME_DIR`.
+  `$XDG_RUNTIME_DIR`. Vault creates that directory lazily, at its first `sandbox_open`, and the launcher skips a denied
+  path that does not exist, so `VaultLocations.EnsureSandboxDirectory()` creates it (0700) before every shell command
+  and before MCP servers start; where this user cannot create it, Vault (the same user) cannot either, so it is best
+  effort. A confinement test starts a command before the directory exists, adds a socket while it runs, and checks
+  the command cannot list it.
 - Host. `Corvid:Tools:ShellNetwork` (`ToolSettings.ShellNetwork`, default false); `CorvidRuntimeFactory` passes it to
   `ShellOptions` and builds `VaultSandboxEgress` from the configured Vault socket. Doctor's `sandbox` area gains
   `network egress`: Info "off" by default; when on, Failed unless the launcher's `--help` advertises `--proxy-socket`

@@ -199,7 +199,9 @@ public sealed class CorvidRuntimeFactory(
 
             // C-018: configured MCP servers start in the background and add their tools as they list them; last, so built-in
             // and DI tools keep their names. A sandboxed server is denied what the shell is denied. C-022: held and accepted
-            // definitions are recorded in the log's mcp-pins session.
+            // definitions are recorded in the log's mcp-pins session. Vault's sandbox directory is made to exist first, so it is
+            // denied to a server started before Vault's first sandbox_open too (V-003b).
+            vault.EnsureSandboxDirectory();
             var mcp = McpComposition.Start(settings, McpDeniedPaths(vault, environment), toolRegistry, log, transports: mcpTransports);
 
             // C-025: the workspace's project, once, with the checkpoints' git and the user's home as discovery's ceiling.

@@ -87,7 +87,7 @@ jobs:
           TMPDIR: ${{ runner.temp }}
         run: |
           tests/Corvid.Tools.Builtin.Tests/bin/Release/net10.0/Corvid.Tools.Builtin.Tests -trait "Category=Confinement" -noColor | tee builtin-sandbox.log
-          grep -q "Total: 6, Errors: 0, Failed: 0, Skipped: 0, Not Run: 0" builtin-sandbox.log
+          grep -q "Total: 7, Errors: 0, Failed: 0, Skipped: 0, Not Run: 0" builtin-sandbox.log
 
   # C-029: the CUDA variant (-p:UseCuda=true) and Kev on the RTX 3090. The CUDA build and the boundary check run every
   # time, so the variant cannot rot; obj/ is restored with UseCuda here, so the checker validates the CUDA graph. The GPU

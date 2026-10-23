@@ -80,6 +80,7 @@ public sealed class ShellEgressTests : IDisposable
         Assert.False(_sandbox.Runs[0].Policy.Network);
         Assert.Empty(_egress.Opened);
         Assert.Null(result["network"]);
+        Assert.False(context.ResultTainted);
         Assert.DoesNotContain(_spans, span => span.ParentId == _parent.Id);
     }
 
@@ -96,6 +97,8 @@ public sealed class ShellEgressTests : IDisposable
         Assert.Equal([(false, true, TimeSpan.FromMinutes(3))], _egress.Opened);
         Assert.Equal(["sb1"], _egress.Closed);
         Assert.Equal("vault", result["network"]!.GetValue<string>());
+        // What came back through the proxy is outside content: the turn loop taints the session after this call.
+        Assert.True(context.ResultTainted);
 
         var span = Span();
         Assert.Equal("vault", span.GetTagItem(ShellTelemetry.Route));
@@ -120,6 +123,7 @@ public sealed class ShellEgressTests : IDisposable
         Assert.Null(Assert.Single(_sandbox.Runs).Policy.Proxy);
         Assert.Empty(_egress.Opened);
         Assert.Equal("withheld", result["network"]!.GetValue<string>());
+        Assert.False(context.ResultTainted); // reached nothing outside (the turn is tainted already)
         Assert.Equal("withheld", Span().GetTagItem(ShellTelemetry.Route));
         Assert.Equal(true, Span().GetTagItem(ShellTelemetry.Tainted));
     }
@@ -152,6 +156,7 @@ public sealed class ShellEgressTests : IDisposable
         Assert.NotNull(Assert.Single(_sandbox.Runs).Policy.Proxy);
         Assert.Equal([(true, true, TimeSpan.FromMinutes(3))], _egress.Opened); // Vault applies its tainted floor too
         Assert.Equal("vault", result["network"]!.GetValue<string>());
+        Assert.True(context.ResultTainted);
         Assert.Equal(true, Span().GetTagItem(ShellTelemetry.Tainted));
     }
 
@@ -234,6 +239,54 @@ public sealed class ShellEgressTests : IDisposable
 
         Assert.Null(Assert.Single(_sandbox.Runs).Policy.Proxy);
         Assert.Empty(_egress.Opened);
+    }
+
+    [Fact]
+    public async Task An_untainted_turn_that_used_the_route_is_tainted_for_the_rest_of_the_session()
+    {
+        // The shell is not [Network], so the turn loop taints only on the result's say-so; a later command in the session
+        // is then tainted, and gets the route only with a person's approval as network egress.
+        var first = await ApprovedAsync("ls", tainted: false);
+        await RunAsync(Shell(), "ls", first);
+        Assert.True(first.ResultTainted);
+
+        var next = await ApprovedAsync("ls", tainted: first.ResultTainted);
+        var result = await RunAsync(Shell(), "ls", next);
+
+        Assert.Equal("withheld", result["network"]!.GetValue<string>());
+        Assert.Single(_egress.Opened);
+    }
+
+    [Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
+    public async Task The_sandbox_socket_directory_exists_before_any_command_runs()
+    {
+        // Vault creates it at its first sandbox_open and the launcher skips a denied path that does not exist, so a command
+        // started earlier would see a later sandbox's socket appear. The shell creates it, 0700, before every command.
+        var vault = new VaultLocations(_tree.Path("vault-data"), _tree.Path("vault.json"), _tree.Path("run", "vault.sock"));
+        var seen = new List<bool>();
+        var sandbox = new RecordingSandbox(_ =>
+        {
+            seen.Add(Directory.Exists(vault.SandboxDirectory));
+            return new SandboxResult { ExitCode = 0, StandardOutput = "", StandardError = "" };
+        });
+        foreach (var network in new[] { false, true })
+        {
+            var shell = new SandboxedShell(sandbox, new ShellOptions { Workspace = Workspace, Network = network, Vault = vault }, _egress);
+            await shell.RunAsync("ls", Ct);
+            Directory.Delete(vault.SandboxDirectory!);
+            await RunAsync(shell, "ls", await ApprovedAsync("ls", tainted: true)); // withheld when the network is on
+            Directory.Delete(vault.SandboxDirectory!);
+        }
+
+        Assert.Equal([true, true, true, true], seen);
+        Assert.All(sandbox.Runs, run => Assert.Contains(vault.SandboxDirectory!, run.Policy.DeniedPaths));
+        vault.EnsureSandboxDirectory();
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, File.GetUnixFileMode(vault.SandboxDirectory!));
+
+        // Where this user cannot create it, Vault (the same user) cannot either: nothing to do, and nothing thrown.
+        new VaultLocations("/srv/vault", "/etc/vault.json", "/proc/corvid-vault/vault.sock").EnsureSandboxDirectory();
+        Assert.False(Directory.Exists("/proc/corvid-vault"));
     }
 
     [Fact]
