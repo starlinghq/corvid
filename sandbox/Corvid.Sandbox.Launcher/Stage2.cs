@@ -15,6 +15,7 @@ internal static class Stage2
     public static int Run(Stage2Request request)
     {
         var layers = new List<string>();
+        int listener = -1;
         try
         {
             foreach (string pair in request.OutsideNamespaces)
@@ -51,6 +52,12 @@ internal static class Stage2
             {
                 throw new RefusedException($"No seccomp filter for {RuntimeInformation.ProcessArchitecture}. Pass --best-effort-layers to run without it.");
             }
+
+            if (request.Relay is not null)
+            {
+                // Bound before "ok", so a failure is a clean refusal and the status stays truthful.
+                listener = Listen();
+            }
         }
         catch (RefusedException e)
         {
@@ -64,6 +71,30 @@ internal static class Stage2
         }
 
         Report(request.ReadyFd, "ok " + string.Join(' ', layers));
+        if (request.Relay is { } socket)
+        {
+            // Re-exec, not fork or a thread: Landlock and seccomp bind per thread, and .NET cannot run managed code after a
+            // bare fork. The new image is single-threaded and confined from its first instruction, and so is every thread
+            // it starts. Its own environment is stage 2's (DOTNET_ROOT at most); the command's goes as arguments.
+            IReadOnlyList<string> self = LauncherLocation.Current().Stage2Command;
+            var relay = new List<string>(self)
+            {
+                Arguments.RelayFlag, "--listen-fd", listener.ToString(System.Globalization.CultureInfo.InvariantCulture), "--socket", socket,
+            };
+            foreach (string pair in request.Environment)
+            {
+                relay.AddRange(["--env", pair]);
+            }
+
+            relay.Add("--");
+            relay.AddRange(request.Command);
+            var own = System.Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>()
+                .Select(e => $"{e.Key}={e.Value}").ToList();
+            int relayErrno = Exec(self[0], relay, own);
+            Console.Error.WriteLine($"corvid-sandbox: cannot start the proxy relay {self[0]}: errno {relayErrno}");
+            return 126;
+        }
+
         string? path = Resolve(request.Command[0], request.Environment);
         if (path is null)
         {
@@ -128,6 +159,37 @@ internal static class Stage2
         }
 
         Native.close(ready);
+    }
+
+    /// <summary>
+    /// A TCP listener on 127.0.0.1:<see cref="Relay.Port"/>, without CLOEXEC so it survives the execve into relay mode.
+    /// The network namespace is new, so nothing else can hold the port.
+    /// </summary>
+    private static unsafe int Listen()
+    {
+        int fd = Native.socket(Native.AfInet, Native.SockStream, 0);
+        if (fd < 0)
+        {
+            throw new RefusedException($"Cannot create the proxy relay's socket (errno {Native.Errno}).");
+        }
+
+        int one = 1;
+        var address = new Native.SockAddrIn
+        {
+            Family = Native.AfInet,
+            Port = System.Buffers.Binary.BinaryPrimitives.ReverseEndianness((ushort)Relay.Port),
+            Address = System.Buffers.Binary.BinaryPrimitives.ReverseEndianness(0x7F000001u),
+        };
+        if (Native.setsockopt(fd, Native.SolSocket, Native.SoReuseaddr, &one, sizeof(int)) != 0
+            || Native.bind(fd, &address, (uint)sizeof(Native.SockAddrIn)) != 0
+            || Native.listen(fd, 64) != 0)
+        {
+            int errno = Native.Errno;
+            Native.close(fd);
+            throw new RefusedException($"Cannot listen on 127.0.0.1:{Relay.Port} for the proxy relay (errno {errno}).");
+        }
+
+        return fd;
     }
 
     /// <summary>Replaces this process. Returns errno only when execve fails.</summary>
