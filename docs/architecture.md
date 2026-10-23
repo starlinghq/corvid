@@ -466,8 +466,8 @@ Plan §10.1 and §3.4, and `vault.md` §3.3 and "Implementation status". Linux o
 - `sandbox/Corvid.Sandbox.Launcher` builds `corvid-sandbox`, a Native AOT executable
   (`IsAotCompatible`, published and smoke-run in CI's aot job) with no package or project
   dependencies. Its command line is the contract (`corvid-sandbox --help`): `--workspace`,
-  `--chdir`, `--ro`, `--deny`, `--env NAME`, `--network`, `--best-effort-layers`, `--bwrap`,
-  `--status-file`, then `-- COMMAND`. Exit status is the command's, or 125 when the sandbox
+  `--chdir`, `--ro`, `--deny`, `--env NAME`, `--network`, `--proxy-socket` and `--proxy-ca` (V-003b, below),
+  `--best-effort-layers`, `--bwrap`, `--status-file`, then `-- COMMAND`. Exit status is the command's, or 125 when the sandbox
   was not set up and nothing ran. The status file (JSON: `started`, `exitCode`, `layers`,
   `error`) tells a refusal from a command that exited 125. It is opened before anything runs,
   with `O_NOFOLLOW`, and refused if it resolves inside the workspace, because the launcher
@@ -536,7 +536,7 @@ of 12, skipping `.git` and `node_modules`.
 
 Not built yet: `*.pem` masking and `.env` files below the top of home, Landlock deny-read,
 graceful termination (SIGTERM to the launcher ends the sandbox with SIGKILL), extra writable
-paths such as tool caches in home, the HTTPS proxy route for sandboxed scripts (V-003), the
+paths such as tool caches in home, the HTTPS proxy route for sandboxed scripts (now built: [V-003b](#sandbox-egress-through-vault-v-003b)), the
 `corvid-exec` user and value injection for Vault's exec path, container and SSH backends,
 macOS and Windows, hiding the other credential stores the approval pipeline protects (`~/.kube`,
 `~/.netrc`, `~/.docker/config.json` and others) and Corvid's own configuration (`~/.config/corvid`; Landlock
@@ -3633,6 +3633,121 @@ every API used (`CertificateRequest`, `X509*Extension`, `SslStream`, `SslStreamC
 
 Not built: everything on the launcher side (V-003b), per-request `ask` for sandboxed requests, streaming, ports other
 than 443, websockets, NameConstraints, a Vault-side ceiling on pass-through, and the outbound exfiltration check.
+
+## Sandbox egress through Vault (V-003b)
+
+The launcher side of `vault.md` §3.1's path for scripts and CLIs (`vault.md` §13, V-003b), built against V-003a's
+"Contract for V-003b". A sandboxed command still has no network of its own: when the shell's network is on, its only
+route out is HTTPS through Vault's per-sandbox proxy, which substitutes placeholders, enforces each secret's policy and
+scrubs responses. No new project, package or checker rule: the launcher stays dependency-free (BCL sockets and libc
+imports), `Corvid.Sandbox` learns one data record, and the Vault calls live in `Corvid.Tools.Builtin`, which already
+reaches `Corvid.Vault.Client` through `Corvid.Tools`.
+
+- Launcher options. `--proxy-socket HOST_PATH` and `--proxy-ca HOST_PATH` go together; either one with `--network`, or
+  without the other, is refused. The network namespace stays unshared (stage 2 still checks it is not in the
+  supervisor's), and no `resolv.conf` is bound: a proxied client resolves nothing itself. `SandboxPlan` checks both paths
+  (absolute, existing; the CA not a symlink, at most 64 KiB, outside the workspace, PEM `CERTIFICATE` blocks only, any
+  `PRIVATE KEY` text refused) and adds two `--ro-bind` mounts after the masks and after `--tmpfs /run`: the socket at
+  `/run/corvid-sandbox/proxy.sock` and the CA at `/run/corvid-sandbox/ca.pem`. Nothing else of Vault's runtime directory
+  is mounted, so `vault.sock` and the other sandboxes' sockets stay out of view.
+- Environment. The plan sets, itself (not by name from the caller, so the secret-name rule does not apply):
+  `https_proxy`, `HTTPS_PROXY`, `http_proxy`, `HTTP_PROXY` = `http://127.0.0.1:3128`; `no_proxy`, `NO_PROXY` =
+  `localhost,127.0.0.1,::1`; `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`,
+  `GIT_SSL_CAINFO`, `PIP_CERT` = `/run/corvid-sandbox/ca.pem`; `SSL_CERT_DIR` = `/run/corvid-sandbox`;
+  `NODE_USE_ENV_PROXY` = `1`. The bundle is the sandbox CA alone, never the host trust store. An `--env` name equal to
+  one of these (ignoring case) is refused with the proxy, never silently shadowed; without the proxy those names pass
+  as before, so a `--network` caller may still forward its own proxy settings. `SandboxPolicy.Validate` refuses the same.
+- Stage 2 and the relay. Stage 2 applies `no_new_privs`, Landlock and seccomp as before; with `--relay` it then binds
+  and listens on 127.0.0.1:3128 (raw `socket`/`bind`/`listen`, so the descriptor has no `CLOEXEC`) before it reports
+  `ok`, so a bind failure is a clean 125 refusal. It then `execve`s the launcher itself
+  (`LauncherLocation.Current().Stage2Command`) as `--relay-run --listen-fd N --socket PATH [--env NAME=VALUE]... --
+  COMMAND`, the command's environment passed as arguments as stage 2 already receives it. Re-exec, not a fork or a
+  thread: Landlock and seccomp bind per thread, .NET cannot run managed code after a bare `fork`, and `execve` gives a
+  single-threaded image confined from its first instruction, whose every later thread inherits both layers. Without
+  `--relay` stage 2 is unchanged: a direct `execve`.
+- Relay mode (`Relay.cs`). It marks the listener `CLOEXEC`, resolves the command as stage 2 does (127 when not found)
+  and starts it with `posix_spawn` with the exact argv and envp, so the command inherits the real fds 0, 1 and 2 as an
+  `execve` would. It then points its own 0, 1 and 2 at `/dev/null`, so `BubblewrapSandbox`'s pumps see end of file when
+  the command closes its output, and accepts on the inherited socket: each connection opens Vault's socket and copies
+  bytes both ways (16 KiB buffers, half-close on end of stream, at most 32 at once; Vault caps a sandbox at 16). It
+  parses nothing. It `waitpid`s the command and exits with its status, or 128 + n for signal n. Being the command's
+  parent, not its child, means a command that reaps with `waitpid(-1)` never blocks on it, and the relay's lifetime is
+  exactly the command's: when it exits bubblewrap's init exits and the PID namespace takes anything left. It never
+  touches `System.Diagnostics.Process`, whose `SIGCHLD` handling could reap the command first. `Native` gains `socket`,
+  `bind`, `listen`, `setsockopt`, `dup2`, `posix_spawn` and `waitpid`.
+- `Corvid.Sandbox`. `SandboxPolicy.Proxy` is a `SandboxProxy(SocketPath, CaCertificatePem)`; `Validate` refuses it with
+  `Network`, a relative socket path, a PEM without a `CERTIFICATE` block or with a key, and the reserved names above
+  (`SandboxPolicy.ProxyEnvironmentNames`, kept equal to the launcher's list by a test). `BubblewrapSandbox.RunAsync`
+  writes the PEM to `ca.pem` (mode 0600) in the 0700 status directory it already creates outside the workspace and
+  deletes after the run, and passes the two options. `Prepare` (MCP stdio servers) refuses a policy with a proxy.
+- Shell wiring (`Corvid.Tools.Builtin`, `SandboxEgress.cs`). `ShellOptions.Network` (default off) and `EgressLifetime`
+  (the sandbox timeout plus a minute). `ISandboxEgress.OpenAsync(tainted, network, lifetime)` returns a
+  `SandboxEgressLease` (id, socket, CA, expiry; disposing closes it once); `VaultSandboxEgress` implements it over one
+  per-process `VaultClient` session (`corvid-shell-<pid>-<rand>`) with toolset `shell` and `network` true, so a secret
+  meant for scripts lists `shell` in its toolsets, or none. `SandboxedShell.RunAsync(command, ShellEgress, ct)` decides
+  the route; the old `RunAsync(string)` stays offline, so skill scripts (`SkillFileTools`) are unchanged.
+- Route decision, with no `ApprovalPipeline` change. Network off: no proxy, no span, and the result has no `network`
+  field. Untainted turn: the Vault route. Tainted turn: the route only when the call's approval was `UserApproved` and
+  its assessment carried `ApprovalReasons.TaintedEgress`, that is, a person saw "reaches the network in a turn holding
+  outside content" (`ShellEgress.MayRoute`); otherwise the command runs with no route and the result says `withheld`.
+  That keeps "tainted egress asks" true for opaque commands such as `python3 x.py`, which the parser does not mark as
+  network: they run, but offline. Scheduled scripts (`SandboxedScriptRunner`) are never `UserApproved`, so a tainted
+  job's script never gets the route. Vault's own tainted floor applies as well, because the taint goes to
+  `sandbox_open`.
+- Fail closed. With the route due, a missing Vault socket or a failed `sandbox_open` throws `SandboxRefusedException`
+  ("the command did not run"): the shell tool reports the error and the scheduler returns `Refused`. Nothing falls back
+  to `--network` or to running offline. The lease is closed in `finally` with no cancellation token, on success,
+  failure and cancellation; a failed close is recorded and left to Vault's expiry.
+- Result and spans. The shell tool's result gains `"network": "vault" | "withheld"` (in the session log through
+  `ToolCompleted`), and its description now says "no direct network; HTTPS only through Corvid Vault's proxy when
+  enabled" (the S2 catalogue snapshot is re-recorded). It gains no `[Network]` and no `SideEffects.Network`: shell
+  calls are assessed as the parsed command. A child span `corvid.sandbox.egress` on `KernelTelemetry.Source` runs
+  from open to close with `corvid.sandbox.route`, `corvid.vault.sandbox_id`, `corvid.sandbox.passthrough`,
+  `corvid.sandbox.tainted`, `corvid.vault.sandbox_expires`, `error.type` on failure (Vault's code) and a
+  `sandbox_closed` event; never the PEM or the socket path (`ShellTelemetry`). Per-request detail stays in Vault's
+  audit (`sandbox_connect`, `sandbox_forward`).
+- Other sandboxes' sockets. `VaultLocations.Paths` adds `<dir of the socket>/sandbox`, so every command gets it as a
+  denied path and the hardline list gets it too. Vault checks only the peer's uid, so without this a withheld or
+  tainted command could ride a concurrently open untainted sandbox's socket when Vault's socket is outside
+  `$XDG_RUNTIME_DIR`.
+- Host. `Corvid:Tools:ShellNetwork` (`ToolSettings.ShellNetwork`, default false); `CorvidRuntimeFactory` passes it to
+  `ShellOptions` and builds `VaultSandboxEgress` from the configured Vault socket. Doctor's `sandbox` area gains
+  `network egress`: Info "off" by default; when on, Failed unless the launcher's `--help` advertises `--proxy-socket`
+  and a `sandbox_open`/`sandbox_close` round trip succeeds (fix: start corvid-vault 0.5 or later, or unset
+  `Corvid:Tools:ShellNetwork`); a Warning off Linux.
+- Tests. `tests/Corvid.Sandbox.Tests/EgressTests.cs` (trait `Category=Confinement`, real bubblewrap, the real launcher
+  and relay, a real Vault in process from the Vault suite's linked harness, whose production upstream handler dials a
+  loopback `TlsEchoServer` for every host; the secret is bound to `bound.test`, a name in that server's certificate):
+  curl with a placeholder minted in the opener's session reaches the bound host, the server sees the real value and
+  the command's output shows it scrubbed; the same with Python's `urllib` (stdlib only, which proves `HTTPS_PROXY` and
+  `SSL_CERT_FILE`); pass-through without a placeholder succeeds and is scrubbed with network, and gets 403
+  `network_not_granted` without; no direct egress (`curl --noproxy '*' https://1.1.1.1` fails, `/dev/tcp` to an external
+  IP says "Network is unreachable", a listener on the host's 127.0.0.1 is unreachable, `/proc/net/dev` lists only
+  loopback, `/run/corvid-sandbox` holds only `ca.pem` and `proxy.sock`, and no Vault socket is reachable at its real
+  path), with the proxy working in the same run as the control; the bundle is byte-equal to the sandbox CA and
+  `/etc/ssl` is unchanged; the relay shows `NoNewPrivs: 1` and `Seccomp: 2`, its child is Landlocked, exit codes
+  (including 128 + signal) and stdin pass through; and the launcher refuses the proxy with `--network`, half the pair,
+  a symlinked CA, a CA with a key, a CA in the workspace and a colliding `--env`. The same tests pass against the
+  Native AOT launcher (`CORVID_SANDBOX`). `EgressUnitTests` cover parsing, the usage text, the mount order and the
+  variables. `tests/Corvid.Tools.Builtin.Tests/ShellEgressTests.cs` covers the route matrix, closing on success,
+  failure and cancellation, a failed close, fail-closed opening (shell tool and scheduler), the result field and the
+  span tags; the shell confinement test now plants another sandbox's socket that no command can see. Doctor and
+  configuration tests in `tests/Corvid.Host.Tests`. CI's "Sandbox confinement ran and passed" now expects 33.
+
+Deviations: `/sys/class/net` lists the host's interfaces inside the sandbox, because bubblewrap binds the host's sysfs
+read-only and cannot mount a fresh one; the tests read `/proc/net/dev`, which follows the network namespace. The relay
+gets the command's environment as `--env` arguments rather than as its own environment, so the relay's runtime is not
+started with the command's variables. With the network off the result has no `network` field.
+
+Not built: a way for the model to put a placeholder into a shell command (no `SecretRef` parameter; §3.1's
+`GITHUB_TOKEN=<placeholder>` is refused by the secret-name rule and needs its own option), so in v1 substitution works
+only for placeholders the caller already holds and the usual use is pass-through; per-toolset grants and a bound-hosts
+mode (`sandbox_open` with network false); the route for MCP stdio servers, skill scripts and tainted scheduled scripts;
+S6 extended to sandboxed processes; per-request `ask` through Corvid's approval channel; Landlock ABI 4 TCP rules;
+clients beyond curl and Python's `urllib` (gh, git over https, Node, pip, cargo, Java trust stores, Go, .NET,
+`AWS_CA_BUNDLE`); SSH and GPG agents; websockets, HTTP/2, other ports, plain http and streamed bodies (V-003a's limits);
+tying the Vault sandbox's lifetime to the launcher process (explicit close plus expiry for now); a Kernel event type for
+sandbox egress; macOS and Windows.
 
 ## Running the check
 

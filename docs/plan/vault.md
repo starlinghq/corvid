@@ -1,6 +1,6 @@
 # Corvid Vault: a secrets broker Corvid cannot read
 
-Version 0.5, 2026-10-22. Companion to [`corvid-agent.md`](corvid-agent.md) (§10.5). Status: M1 built (`vault/`, default tier, Linux), S6 passing, S7's CI half built (C-024), Corvid's sandbox (C-007a) hides the store from sandboxed commands, and M2's Vault side (V-003a, the sandbox proxy) is built; see "Implementation status" at the end.
+Version 0.6, 2026-10-22. Companion to [`corvid-agent.md`](corvid-agent.md) (§10.5). Status: M1 built (`vault/`, default tier, Linux), S6 passing, S7's CI half built (C-024), Corvid's sandbox (C-007a) hides the store from sandboxed commands, and M2's sandbox proxy is built on both sides (V-003a in Vault, V-003b in the launcher and Corvid's shell); see "Implementation status" at the end.
 
 Vault is a separate, model-free process that holds every secret Corvid's tools need. Corvid sees only secret **names** and **placeholders**. Tools and scripts can still use the secrets:
 
@@ -233,7 +233,7 @@ Tools with `SecretRef` parameters report unavailable through their `check_fn`, a
 | V-001 | `corvid-vault` executable: store, socket and peer auth, policy file, audit | — |
 | V-002 | Forward-request proxy, upstream TLS verification, header substitution, response scrub | V-001 |
 | V-003a | **Built:** sandbox proxy mode, Vault side. `sandbox_open`/`sandbox_close` ops; a per-sandbox Unix socket (`<dir of vault.sock>/sandbox/<id>.sock`, 0600 in 0700) speaking HTTP CONNECT to a DNS name on 443; an in-memory ECDSA P-256 CA per sandbox (never exported) minting one leaf per SNI host (cap 128), TLS terminated, strict HTTP/1.1 inside; the forward pipeline shared with V-002 (placeholders bound to the opener's session and uid, policy with `Approved` false, scrubbing); pass-through of placeholder-free requests only when opened with network; expiry, cleanup, audit (`sandbox_open`, `sandbox_close`, `sandbox_connect`, `sandbox_forward`); request bodies grown as bytes arrive (64 KiB first, never the announced Content-Length up front) and live connections capped per sandbox (`maxSandboxConnections`, 16) and in total (`maxSandboxConnectionsTotal`, 64), one more answered 429 `sandbox_limit`; responses to HEAD carry no body and no Content-Length. Deferred: forwarding the upstream Content-Length on HEAD (it is hop-by-hop in the shared pipeline, and keeping it would change Corvid's `VaultHandler` path too; omitting it is RFC 9110 §9.3.2-correct), per-request `ask` approval for sandboxed requests, streamed and chunked bodies, ports other than 443, IP literals, plain http, HTTP/2, websockets (§9 `ws_first_frame`), NameConstraints on the CA, a Vault-side ceiling on pass-through and per-sandbox budgets, an outbound exfiltration check, private upstream CAs, Windows and macOS; see "Implementation status" | V-002, C-007 |
-| V-003b | Pending: sandbox launcher side. Bind-mount the sandbox socket into the bwrap namespace, an in-namespace loopback TCP-to-Unix bridge for `HTTPS_PROXY`, the CA in the sandbox's trust variables, `sandbox_close` at command end, an end-to-end `curl`/`gh`/`requests` test, S6 extended to sandbox processes | V-003a, C-007a |
+| V-003b | **Built:** sandbox proxy mode, launcher side. `corvid-sandbox --proxy-socket --proxy-ca`: the network namespace stays private, the per-sandbox socket and CA bind-mounted under `/run/corvid-sandbox` (nothing else of Vault's), a relay that stage 2 re-executes into after Landlock and seccomp (the command's parent, 127.0.0.1:3128 bridged to the socket), `HTTPS_PROXY` and the trust variables naming the sandbox CA alone; Corvid's shell opens and closes a sandbox per command under `Corvid:Tools:ShellNetwork` (off by default; in a tainted turn only for a command a person approved as network egress; fail closed without Vault), other sandboxes' sockets denied, a span, a doctor check; end-to-end curl and Python `urllib` tests with real bubblewrap and Vault, and a no-direct-egress test. Deferred: a placeholder path into shell commands, per-toolset grants and a bound-hosts mode, the route for MCP stdio servers, skill scripts and tainted scheduled scripts, S6 extended to sandbox processes, per-request `ask`, Landlock TCP rules, clients beyond curl and `urllib` (`gh`, git, Node, pip, Java, Go, .NET), tying the sandbox's lifetime to the launcher, macOS and Windows; see "Implementation status" | V-003a, C-007a |
 | V-004 | ssh-agent protocol | V-001 |
 | V-005 | Ingress credential interception (GLiNER2 labels + token formats) | C-004 |
 | V-006 | Out-of-band confirm (D-Bus, ntfy) | V-001 |
@@ -416,7 +416,46 @@ without Content-Length or body. Unit tests cover the CA and leaf extensions, the
 parser's edge cases, a body read in growing steps (no read asks for the announced length), HEAD responses and the
 CONNECT target parser. The Vault suite has 154 tests (59 before). The Native AOT publish stays warning-free (8.9 MB).
 
-Next: V-003b, the launcher side of the sandbox proxy (§13).
+**M2, part b (V-003b, 2026-10-22): the sandbox proxy, launcher side.** With it, §3.1's path for scripts and CLIs is
+built end to end: a sandboxed command reaches HTTPS only through its own sandbox proxy, and never has a network of its
+own. The launcher (`corvid-sandbox`) takes `--proxy-socket` and `--proxy-ca`, keeps the network namespace private,
+bind-mounts the socket and the CA (and nothing else of Vault's runtime directory) under `/run/corvid-sandbox`, and runs
+the command under a relay: stage 2, after Landlock and seccomp, binds 127.0.0.1:3128 and re-executes itself as the
+command's parent, bridging each loopback connection to the socket byte for byte. `HTTPS_PROXY` and friends point at the
+relay; `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `GIT_SSL_CAINFO` and `PIP_CERT` name
+the sandbox CA alone. Corvid's shell opens a sandbox per command when `Corvid:Tools:ShellNetwork` is on (toolset
+`shell`, network true, the turn's taint) and closes it when the command ends, expiry as the backstop; a tainted turn's
+command gets the route only when a person approved it as network egress, and a scheduled script from a tainted job
+never does. When the route is due and Vault cannot open it, the command does not run. Details in
+[architecture](../architecture.md#sandbox-egress-through-vault-v-003b).
+
+As the contract above expects:
+
+- `SO_PEERCRED` through bubblewrap's user and PID namespaces maps to the real uid and the global pid, so the relay's
+  connections pass Vault's peer check as the opener; the end-to-end tests prove it rather than assume it.
+- The tests bind the secret to `bound.test` and reach a loopback `TlsEchoServer` through Vault's production upstream
+  handler: curl and Python's `urllib` with a placeholder are substituted and scrubbed; pass-through needs network and is
+  scrubbed; without network an unbound host is 403 `network_not_granted`; there is no direct egress at all.
+- A secret meant for scripts lists `shell` in its `toolsets`, or none.
+
+Deviations and limits:
+
+- No way yet for the model to put a placeholder into a shell command: the shell has no `SecretRef` parameter, and §3.1's
+  `GITHUB_TOKEN=<placeholder>` environment form is refused by the sandbox's secret-name rule and needs its own launcher
+  option. Substitution works only for placeholders the caller already holds; in practice v1 is pass-through, scrubbed.
+- One global switch and the constant toolset `shell`: per-toolset grants and a bound-hosts-only mode (`network` false)
+  wait for toolset objects.
+- MCP stdio servers (`Prepare` refuses a proxy), skill scripts and tainted scheduled scripts get no route.
+- S6 is not yet extended to the relay and the command (the value never enters the sandbox by design, unproven by a
+  memory scan); per-request `ask` is still absent (`approval_required` for a POST with a secret).
+- Clients beyond curl and Python's `urllib` are untested (gh, git over https, Node with `NODE_USE_ENV_PROXY`, pip,
+  cargo, Java trust stores, Go, .NET, an `AWS_CA_BUNDLE` equivalent); those that ignore the variables fail closed.
+- The sandbox's lifetime is not tied to the launcher process: a crashed Corvid leaves the socket until expiry.
+- `/sys/class/net` inside the sandbox shows the host's interfaces (the host's sysfs is bound read-only); `/proc/net/dev`
+  shows loopback only, and that is what the tests check.
+
+Next: S6 for sandboxed processes, per-request `ask` through Corvid's approval channel, and a placeholder path into
+shell commands (§13).
 
 ## Changelog
 
@@ -427,3 +466,4 @@ Next: V-003b, the launcher side of the sandbox proxy (§13).
 | 0.3 | 2026-10-18 | Implementation status: Corvid's sandbox (C-007a) hides Vault's directories and socket from sandboxed commands; the strong tier (V-008) remains. |
 | 0.4 | 2026-10-22 | §13 and Implementation status: S7's CI half is built (C-024); the Vault half waits for V-003. |
 | 0.5 | 2026-10-22 | §13: V-003 split into V-003a (built: the Vault side of the sandbox proxy) and V-003b (pending: the launcher side). Implementation status: M2 part a, the V-003b protocol contract and its deviations. |
+| 0.6 | 2026-10-22 | §13 and Implementation status: V-003b built (the launcher side and Corvid's shell route), M2 part b and its deviations. |
