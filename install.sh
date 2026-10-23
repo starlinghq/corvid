@@ -128,7 +128,7 @@ for old in "$prefix/share/corvid"/*/; do
     [ -d "$old" ] && [ ! -L "${old%/}" ] || continue
     # shellcheck disable=SC2012 # compared against four fixed names, so ls is exact enough here.
     [ "$(ls -A "$old" | LC_ALL=C sort | tr '\n' ' ')" = "VERSION corvid corvid-sandbox corvid-vault " ] || continue
-    rm -rf "$old"
+    if ! rm -rf "$old"; then printf 'Could not remove the old install in %s; remove it by hand\n' "${old%/}" >&2; continue; fi
     printf 'Removed the old install in %s\n' "${old%/}"
 done
 
