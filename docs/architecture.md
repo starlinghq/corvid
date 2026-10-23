@@ -4178,6 +4178,68 @@ unscrubbed, as it does `UserMessage`, the goal and compaction summaries, so a cr
 written). C-035's other deferrals stand: compacting the latest turn, editing jobs, per-job
 toolsets, `corvid evals golden`, `corvid-evals` in the publish, and Hermes `-p/--profile` and profiles.
 
+## State budget comparison (spike S4, C-038)
+
+Spike S4 asks whether Kev's `tool` and `done` answers hold with the 600-token TurnState (§5.1) against one that carries
+the whole session. C-038 builds it on S2's harness (C-034) and runs it; the result is in
+[the write-up](spikes/S4-state-budget.md). Only `evals/` and the docs change: `Corvid.Kernel`, `Corvid.Fabric` and
+`Corvid.Models.Starling` do not, so there is no new project, package, event type or checker rule. Every lever already
+exists on `TurnOptions` (`StateBudget`, `RecentEvents`, `DualShortlistStateBudget`).
+
+- Golden set (`ToolCallingSet`, `case.schema.json`, version `2026-10-23.1`, catalogue unchanged): an optional `history`,
+  15–40 ordered entries (`{"user": text}`, `{"assistant": text}`, or `{"tool", "args", "result", "error"?}` with the tool in
+  the catalogue and every argument declared by it), and an optional `cue`, the index of the entry the answer depends on,
+  checked in range. A case has a history exactly when it is tagged `history`; `history_far` needs a cue (the test also
+  requires it to be earlier than the last `TurnOptions.Default.RecentEvents` entries). `HistoryEntry` (`Kind`, `Text`,
+  `Tool`, `Arguments`, `Error`, `RenderedLines`) goes on `ToolCallingCase.History`, with `Cue`, both init-only so existing
+  callers are unchanged. 41 cases are appended inline to `cases.jsonl` (one loader, one schema, one version).
+- Seeding (`ToolCallingRunner.Seed`): before `TurnRunner.RunAsync`, the history is appended to the case's fresh session as
+  the loop logs it (`UserMessage`, `AssistantMessage`, and per tool entry `ToolCallIssued` with call id `h-<n>` and no
+  round, then its `ToolResult`, the text stored as JSON when it parses). `CaseRun.SeedHead` records the head after the
+  seed and `CaseRun.Events` holds only later events, so `ToolCallingScorer` and the Kev labelling never count a seeded call
+  as one the turn made or as a step that ran. The generator sees the seeded conversation in every arm.
+- The wide arm, `shortlist-kev-transcript` (opt-in, not in `Default`): `shortlist-kev`'s bindings, with
+  `StateBudget = ToolCallingRunner.TranscriptStateBudget` (Total 2,000, HardStop 4,000, `recent` 1,800, other fields
+  production), `RecentEvents = 64` and `DualShortlistStateBudget = null`, carried on the runner's `Setup` and applied in
+  `RunOneAsync`'s `TurnOptions`. Raising the budget alone would change nothing, since `TurnRunner.Recent` keeps only the
+  last `RecentEvents` one-liners before any budget applies. Both arms render the same one-liners (messages cut at 80
+  characters, `called X`, `X returned`), so "transcript-sized" never means raw messages or tool-result text (§5.1); history
+  messages are held to 80 characters, so the wide arm is lossless for them. `KevDecider` accepts states up to 8,192
+  tokens apart from its row budget, so the wide state is answered by Kev, and the report counts fallbacks.
+- Scoring (`KevDecisionScorer.Score(CaseRun)`): every `tool` and `done` `Decision` of the turn, labelled by the walk
+  `AppendKevOutcomes` used for `tool` (the first step not yet matched by a call that ran; none once all have or on a
+  no-tool case). Kev's answer is the argmax for `tool` and P(yes) ≥ 0.5 for `done`; `done` expects yes exactly when every
+  step has run or the case needs no tool. Each `KevDecision` records the expectation, answer, probability, right, acted,
+  calibrated, the state's size (JSON characters / 4) and its `recent` count; a `tool` or `done` decision not answered by
+  Kev is a fallback. The turn's first `tool` decision is its ingress decision, the one paired across arms. The result is
+  `CaseScore.Kev` (init-only, null outside a Kev configuration), beside `CaseScore.Cue`.
+- Floor-fitting outcomes: `AppendKevOutcomes` reuses the scorer, labels `done` decisions accepted/corrected as well as
+  `tool`, and the CLI runs it for every Kev configuration, so both arms' event logs are `corvid-evals calibrate` input.
+- Report (`corvid-tool-calling-report/4`): `S4Comparison`, when `shortlist-kev` and `shortlist-kev-transcript` both ran
+  on `history` cases. Per arm (`S4Arm`): ingress `tool`, all `tool` and `done` accuracy over calibrated answers, acted
+  counts, fallbacks, compactions, shortlist hits (an expected first-step tool among the ingress `tool` options) and ingress
+  accuracy on those, decider ms for the first call (ingress) and the rest (steps), state size and `recent` items. Slices:
+  `history` (gating), `history_far`, near cue, controls, `multi_step`, `no_tool`, all cases. `Pass` is
+  `600 tool ≥ transcript tool − 3 AND 600 done ≥ transcript done − 3` on the gating slice, NaN failing; the paired ingress
+  discordance and Wilson 95% intervals are reported, not gating. `report.json` gains `s4` (with
+  `pass_condition: "c-038: …"`) and a `kev` block per case; `report.md` an S4 section. S2's headline is unchanged.
+- Run: `evals/spikes/S4-state-budget/run.sh` passes `--configs shortlist-kev,shortlist-kev-transcript` (and
+  `--tags history` for the gating run) to S2's CUDA wrapper. Result on 41 history cases: `tool` +6.2 points, `done` −6.6,
+  so the plan's rule fails on `done`; neither gap is significant at this n, every decision was Kev's, and the 600 arm's
+  states were 146 tokens at most: the information it loses is the `RecentEvents` = 8 window, not the budget.
+- CI (no model): `ToolCallingSetTests` checks the version, the history minima (≥ 36 `history`, ≥ 15 `history_far`,
+  lengths, far and near cues, message length, rendered lines within the wide arm's 64) and malformed histories;
+  `ToolCallingScoringTests` runs a 40-entry case with its cue at entry 0 through the real `TurnRunner` in both arms with a
+  scripted generator (now keyed on the turn's own message and the results after it) and a Kev that reads the state: the
+  600 state's `recent` holds at most 8 items and not the cue, the wide one every seeded one-liner, no `h-*` call is
+  scored, `tool` and `done` labels, accuracies and outcomes land as scripted, and `S4Comparison.Passes` follows the
+  3-point rule.
+- Not built: tool results or raw messages in Kev's state, a `TurnOptions` knob for the 80-character cut, any change to
+  production's `RecentEvents`, `recent` budget or Total (a maintainer decision), a paired probe on fixed trajectories,
+  floors fitted from these logs, history cases in an S2 re-run, further arms (Kev-4B, CPU Kev, the 300-token ingress),
+  compaction inside a history, and a CI gate on the condition. Adding cases changes `cases_sha256`; S2's committed
+  reports name the older versions, and an S2 re-run on this version includes history cases unless filtered by tag.
+
 ## Running the check
 
 ```sh
