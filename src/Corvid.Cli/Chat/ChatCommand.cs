@@ -1,3 +1,4 @@
+using System.Globalization;
 using Corvid.Host.Commands;
 using Corvid.Host.Composition;
 using Corvid.Kernel.Jobs;
@@ -27,7 +28,8 @@ internal static class ChatCommand
         try
         {
             runtime = console.Profile.Capabilities.Interactive
-                ? await console.Status().StartAsync("Loading models…", _ => factory.StartAsync(cancellationToken)).ConfigureAwait(false)
+                ? await console.Status().StartAsync("Starting Corvid…", status => factory.StartAsync(new StartupReport(console, status), cancellationToken))
+                    .ConfigureAwait(false)
                 : await factory.StartAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (ModelsUnavailableException exception)
@@ -124,5 +126,21 @@ internal static class ChatCommand
             await runtime.MaintenanceIdleAsync().ConfigureAwait(false);
         }
         return ExitCodes.Success;
+    }
+
+    /// <summary>
+    /// The start, step by step: the spinner names the step under way (loading a model takes seconds), and each finished step
+    /// leaves a line with its time in the scrollback, so a slow start says where the time went.
+    /// </summary>
+    internal sealed class StartupReport(IAnsiConsole console, StatusContext status) : IProgress<StartupStep>
+    {
+        public void Report(StartupStep value)
+        {
+            if (value.Elapsed is { } elapsed)
+                console.MarkupLine(string.Create(CultureInfo.InvariantCulture,
+                    $"[green]✓[/] {Markup.Escape(value.Description)} [grey]({elapsed.TotalSeconds:0.0}s)[/]"));
+            else
+                status.Status = $"{Markup.Escape(value.Description)}…";
+        }
     }
 }

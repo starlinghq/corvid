@@ -53,6 +53,9 @@ public sealed class ModelComposer : IDisposable
         _feed = feed;
     }
 
+    /// <summary>Told each model load as it begins and ends, while set (by <see cref="CorvidRuntimeFactory"/> during a start).</summary>
+    public IProgress<StartupStep>? Progress { get; set; }
+
     /// <summary>Every model the configuration names, by slot: default first, then escalation, then fallbacks.</summary>
     public IReadOnlyList<(string Slot, string Model)> ConfiguredModels =>
         [.. _slots.SelectMany(pair => new[] { pair.Value.Model! }.Concat(pair.Value.Escalation).Concat(pair.Value.Fallbacks)
@@ -279,7 +282,8 @@ public sealed class ModelComposer : IDisposable
                 : TaskScheduler.Default;
             // A placement fallback (C-029: Kev configured on CUDA, loaded on the CPU) is reported with the decider's notices;
             // the binding's own profile then says cpu, and Wrap schedules by it.
-            raw = _catalogue.Load(descriptor.Name, new ModelLoadContext(slot, scheduler) { Notice = Notice });
+            raw = StartupStep.Run(Progress, $"Loading {descriptor.Name} for {slot} on {placement}",
+                () => _catalogue.Load(descriptor.Name, new ModelLoadContext(slot, scheduler) { Notice = Notice }));
             _raw[descriptor.Name] = raw;
             return raw;
         }
