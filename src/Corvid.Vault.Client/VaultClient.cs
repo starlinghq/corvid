@@ -54,6 +54,20 @@ public sealed class VaultClient
     public Task<ForwardResponse> ForwardAsync(ForwardRequest request, CancellationToken cancellationToken = default) =>
         SendAsync<ForwardResponse>(request, cancellationToken);
 
+    /// <summary>
+    /// Opens a sandbox proxy for this session (V-003a): a socket the sandbox's HTTPS proxy client connects to, and the CA
+    /// certificate it must trust. Close it with <see cref="CloseSandboxAsync"/> when the command ends.
+    /// </summary>
+    public Task<SandboxOpenResponse> OpenSandboxAsync(
+        string? toolset, bool tainted, bool network, int? lifetimeMinutes = null, CancellationToken cancellationToken = default) =>
+        SendAsync<SandboxOpenResponse>(
+            new SandboxOpenRequest { SessionId = SessionId, Toolset = toolset, Tainted = tainted, Network = network, LifetimeMinutes = lifetimeMinutes },
+            cancellationToken);
+
+    /// <summary>Closes a sandbox proxy this session opened: its socket, live connections and CA go away.</summary>
+    public Task<SandboxClosedResponse> CloseSandboxAsync(string sandboxId, CancellationToken cancellationToken = default) =>
+        SendAsync<SandboxClosedResponse>(new SandboxCloseRequest { SessionId = SessionId, SandboxId = sandboxId }, cancellationToken);
+
     /// <summary>Sends one request. An <see cref="ErrorResponse"/> becomes a <see cref="VaultException"/>.</summary>
     public async Task<TResponse> SendAsync<TResponse>(VaultRequest request, CancellationToken cancellationToken = default)
         where TResponse : VaultResponse

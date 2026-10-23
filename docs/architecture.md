@@ -3615,6 +3615,63 @@ Not built: isolating a throwing `JobCompleted` handler (it runs inside the sched
 delivers gateway-origin jobs); starting the scheduler only once a surface attaches (it would change every surface and
 the `SchedulerState` contract); a per-byte progress bar for `corvid model download`.
 
+## Vault sandbox proxy (V-003a)
+
+The Vault side of `vault.md` §3.1's path for scripts and CLIs in the sandbox (`vault.md` §13, V-003a; the launcher side
+is V-003b). No new project, package or checker rule: `corvid-vault` still references only `Corvid.Vault.Contracts`, and
+every API used (`CertificateRequest`, `X509*Extension`, `SslStream`, `SslStreamCertificateContext`,
+`SocketsHttpHandler`) is in the shared framework and AOT-clean (the Native AOT publish stays warning-free).
+
+- Contracts (`Messages.cs`). Two ops on the existing polymorphic types: `SandboxOpenRequest` (`sandbox_open`: toolset,
+  tainted, network, optional lifetime) answered by `SandboxOpenResponse` (sandbox id, proxy socket path, CA certificate
+  PEM, expiry), and `SandboxCloseRequest` (`sandbox_close`) answered by `SandboxClosedResponse`. New codes
+  `unknown_sandbox`, `network_not_granted`, `sandbox_limit`, `not_proxyable`. `VaultClient` gains `OpenSandboxAsync` and
+  `CloseSandboxAsync`, thin wrappers over `SendAsync`.
+- Registry (`SandboxProxy`, owned by `VaultCore`, created on first use so CLI commands bind nothing). Open mints a
+  12-character id, binds `<dir of vault.sock>/sandbox/<id>.sock` (0700 directory, 0600 socket, through the bind helper
+  `VaultServer.Listen` now shares), records the opener's session, uid, toolset, taint and network flag, sets the expiry
+  to the requested lifetime capped by `sandboxLifetimeMinutes` (720), caps live sandboxes at `maxSandboxes` (64) and
+  audits `sandbox_open`. Close needs the same session and uid (`unknown_sandbox` otherwise) and cancels the sandbox,
+  closes its listener and live connections, deletes the socket and disposes its certificates; expiry does the same,
+  checked on every `HandleAsync`, at accept and per request against `TimeProvider`. `VaultCore.Dispose` closes all.
+- CA and leaves (`SandboxCertificates`). An ECDSA P-256 root per sandbox, signed through `X509SignatureGenerator` so the
+  certificate object is public-only and the in-memory `ECDsa` is the key's only copy (never exported). One leaf per
+  CONNECT host, minted before the `200`: its own P-256 key, SAN exactly the host, serverAuth, CA false, authority key id
+  from the root, the root's validity; cached as an offline `SslStreamCertificateContext`, 128 per sandbox.
+- Connections. Each accepted connection passes `VaultServer.CheckPeer` (the `SO_PEERCRED` rule extracted from the main
+  socket, audited as `connect` with the sandbox id) and then acts as the opener (the connection's pid, the opener's
+  uid). One CONNECT to a DNS name on 443; refusals before TLS (other methods 405, other ports and IP literals 403
+  `not_proxyable`, bad hosts and early bytes 400, no network and no bound secret 403 `network_not_granted`, host cap 429)
+  are audited as `sandbox_connect`. Then TLS through a `ServerOptionsSelectionCallback` that refuses an SNI other than
+  the CONNECT host and offers ALPN `http/1.1` only.
+- HTTP/1.1 (`Http1Connection`). A strict reader and writer: 64 KB head in 30 s, CRLF only, no obs-fold, token names,
+  origin-form targets, Host equal to the CONNECT host, one Content-Length up to `maxResponseBytes`, Transfer-Encoding 411
+  (400 with Content-Length), Upgrade 400, `Expect: 100-continue` answered; keep-alive until close; responses get a fresh
+  Content-Length and lose any header that could split them.
+- Forwarding. `VaultCore.ForwardAsync` is one internal method with an optional `SandboxSession`; Corvid's path passes
+  null and is unchanged (the M1 end-to-end tests run as before). The proxy builds the URL from the CONNECT host and the
+  target, sets the sandbox's session, toolset and taint, and `Approved` false. Sandbox mode lets a placeholder-free
+  request pass through only with network (else `network_not_granted`) and audits as `sandbox_forward` with the sandbox
+  id; substitution, policy, budgets and scrubbing are V-002's. Error responses map to 403 (policy), 502
+  (`upstream_error`, `response_too_large`) or 400, with `X-Corvid-Vault-Error`. `VaultCore.CreateUpstreamHandler()` is
+  the production `SocketsHttpHandler`, extracted so tests change only its connect callback and trusted root.
+- Policy and audit. `sandboxLifetimeMinutes` and `maxSandboxes` in `vault.json`; `AuditEvent.Sandbox`.
+- Memory and HEAD (review follow-up). `Http1Connection.ReadBodyAsync` starts at `InitialBodyBytes` (64 KiB) and doubles
+  as bytes arrive, never allocating the announced Content-Length up front. `AcceptLoopAsync` counts each connection with
+  `Interlocked` against `maxSandboxConnections` (16, `SandboxSession.Live`) and `maxSandboxConnectionsTotal` (64,
+  `SandboxProxy.LiveConnections`) before reading a byte, releases it in `ServeAsync`'s `finally` and in the accept loop's
+  early exits, and answers one over either cap with 429 `sandbox_limit` on its own task (peer-checked, audited, bounded
+  by the head timeout). `WriteResponseAsync` and `WriteRefusalAsync` take `toHead`: a response to HEAD, forwarded or a
+  refusal, has no body and no Content-Length, so keep-alive framing holds.
+- Tests (`tests/Corvid.Vault.Tests`): `SandboxProxyTests` against a loopback `TlsEchoServer` with its own CA, through an
+  `HttpClient` whose proxy dials the sandbox socket and which trusts only the sandbox CA (the shape V-003b gives curl),
+  plus raw-socket protocol cases; `SandboxCertificateTests` and `Http1Tests` for the extensions, the leaf cache and the
+  parser. The V-003b contract and the deviations (CONNECT on 443 only, buffered bodies, no per-request `ask`,
+  pass-through only with network) are in `vault.md`, "Implementation status".
+
+Not built: everything on the launcher side (V-003b), per-request `ask` for sandboxed requests, streaming, ports other
+than 443, websockets, NameConstraints, a Vault-side ceiling on pass-through, and the outbound exfiltration check.
+
 ## Running the check
 
 ```sh
