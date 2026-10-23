@@ -3585,10 +3585,11 @@ Two races behind batch 2's flaky tests (plan §18, C-039), each fixed in product
   `CorvidRuntimeFactory.StartAsync` returns with it running, and a surface subscribes only afterwards (chat after
   opening its session, its feed and its prompter). `JobStore.ClaimDue` claims overdue jobs on the first loop, and
   terminal runs that reach no model (`failed` without a script runner, `script_refused`, `script_only`, a skipped
-  `wake`) finish in milliseconds, so their notice was lost. The event now has explicit accessors over a private handler
-  field and a queue of the most recent `JobCompletedReplay` (32) runs completed since the runtime started, under one
-  `Lock`. Completion (`RaiseJobCompleted`, after `QueueJobResult`) appends and reads the handlers under the lock and
-  invokes them outside it; `add` copies the queue and attaches under the lock, then replays the copy to the new handler
+  `wake`) finish in milliseconds, so their notice was lost. The event's explicit accessors delegate to an internal
+  `ReplayingEvent<T1, T2>` (`Corvid.Host.Composition`) holding the handlers and a queue of the most recent
+  `JobCompletedReplay` (32) runs completed since the runtime started, under one `Lock`. Completion (`Raise`, after
+  `QueueJobResult`) appends, evicts the oldest past the cap, and reads the handlers under the lock and invokes them
+  outside it; `add` copies the queue and attaches under the lock, then replays the copy to the new handler
   outside it, on the subscribing thread. Each handler hears each run exactly once: a run either is in the copy or
   completes after the attach. A live run can arrive while a replay is still running, so handlers must be thread-safe
   (chat's `ChatRenderer.Notice` is). Chat subscribes after its banner, so replayed notices follow it.
@@ -3603,7 +3604,10 @@ Two races behind batch 2's flaky tests (plan §18, C-039), each fixed in product
 - Tests. `OneProcessRunsTheSchedulerAndDueJobsRun` subscribes right after the first runtime starts and also checks
   `JobStore.Runs` for the one finished run with the event's session. `AHandlerAddedAfterARunStillHearsOfIt` waits until
   the store shows the run finished, subscribes, and checks after disposing the runtime (which waits for the scheduler)
-  that the handler heard that run exactly once. `SynchronousProgressTests` checks the handler runs inline and that
+  that the handler heard that run exactly once. `ReplayingEventTests` covers the replay without a scheduler or model:
+  33 raises replay the 32 most recent in order, a removed handler hears nothing more, and 2,000 rounds of a handler
+  added while another thread raises 16 runs hear each exactly once (it fails when the attach is moved out of the lock).
+  `SynchronousProgressTests` checks the handler runs inline and that
   concurrent reports never overlap. `DownloadFetchesExplicitly` checks the file line precedes the `✓` line.
 
 Not built: isolating a throwing `JobCompleted` handler (it runs inside the scheduler's `Completed` callback and can end
