@@ -290,6 +290,7 @@ public sealed class SandboxProxyTests : IDisposable
     [InlineData("CONNECT [::1]:443 HTTP/1.1\r\nHost: [::1]:443\r\n\r\n", 403, VaultErrorCodes.NotProxyable)]
     [InlineData("CONNECT bad_host!:443 HTTP/1.1\r\nHost: x\r\n\r\n", 400, VaultErrorCodes.BadRequest)]
     [InlineData("CONNECT bound.test:443 HTTP/1.1\nHost: bound.test\n\n", 400, VaultErrorCodes.BadRequest)]
+    [InlineData("CONNECT bound.test:443 HTTP/1.1\r\nHost: bound.test:443\r\n\r\n\u0016\u0003\u0001", 400, VaultErrorCodes.BadRequest)]
     public async Task Anything_but_CONNECT_to_a_DNS_name_on_443_is_refused(string request, int status, string code)
     {
         SandboxOpenResponse open = await OpenAsync(network: true);
