@@ -107,6 +107,7 @@ public sealed class CoreCommandTests
             var output = await Run(runtime, session, commands, "/mod");
             Assert.Equal(OutputTone.Error, output.Tone);
             Assert.Contains("Did you mean /model?", output.Lines[0], StringComparison.Ordinal);
+            Assert.Contains("Did you mean /quit?", (await Run(runtime, session, commands, "/qu")).Lines[0], StringComparison.Ordinal);
         }
     }
 

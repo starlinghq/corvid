@@ -180,9 +180,12 @@ public sealed partial class SlashCommandRegistry
         var invocation = Parse(line);
         if (!TryGet(invocation.Name, out var command))
         {
-            // Each command once, by its name: /mod suggests /model, not /model and its alias /models.
+            // Each command once, by its name when that matched (/mod suggests /model, not also /models), else by the alias that did (/qu: /quit).
             var near = _byName.Where(pair => pair.Key.StartsWith(invocation.Name.Length > 2 ? invocation.Name[..2] : invocation.Name,
-                StringComparison.OrdinalIgnoreCase)).Select(pair => pair.Value.Name).Distinct().Order(StringComparer.Ordinal).ToArray();
+                    StringComparison.OrdinalIgnoreCase))
+                .GroupBy(pair => pair.Value)
+                .Select(group => group.Any(pair => pair.Key == group.Key.Name) ? group.Key.Name : group.First().Key)
+                .Order(StringComparer.Ordinal).ToArray();
             return CommandOutput.Error($"Unknown command /{invocation.Name}." +
                 (near.Length > 0 ? $" Did you mean {string.Join(", ", near.Select(name => "/" + name))}?" : "") + " /help lists them.");
         }
