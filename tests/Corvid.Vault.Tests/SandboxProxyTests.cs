@@ -411,13 +411,22 @@ public sealed class SandboxProxyTests : IDisposable
         _time.Now += TimeSpan.FromMinutes(6);
 
         Task first = Task.Run(() => _vault.Core.Sandboxes.Sweep(), Ct);
-        Assert.True(auditing.Wait(TimeSpan.FromSeconds(10), Ct));
-        Task call = _vault.Client().GetCatalogAsync(Ct);
+        try
+        {
+            Assert.True(auditing.Wait(TimeSpan.FromSeconds(10), Ct));
+            Task call = _vault.Client().GetCatalogAsync(Ct);
 
-        Assert.NotSame(call, await Task.WhenAny(call, Task.Delay(TimeSpan.FromMilliseconds(500), Ct)));
-        release.Set();
-        await call;
-        await first;
+            Assert.NotSame(call, await Task.WhenAny(call, Task.Delay(TimeSpan.FromMilliseconds(500), Ct)));
+            release.Set();
+            await call;
+            await first;
+        }
+        finally
+        {
+            // A failed assertion must not leave the shutdown held, or the fixture's Dispose waits out the hook's timeout.
+            _vault.Core.Sandboxes.BeforeCloseAudit = null;
+            release.Set();
+        }
 
         Assert.False(File.Exists(open.ProxySocketPath));
         Assert.Equal(0, _vault.Core.Sandboxes.Count);
