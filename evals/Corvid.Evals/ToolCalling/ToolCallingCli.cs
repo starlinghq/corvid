@@ -54,7 +54,8 @@ public static class ToolCallingCli
           --catalogue <file>   catalogue.json, overriding --set
           --cases <file>       cases.jsonl, overriding --set
           --configs <a,b>      qwen-all, shortlist, shortlist-kev, and the opt-in     [qwen-all,shortlist,shortlist-kev]
-                               shortlist-kev-no-desc (no C-033 description check) and degraded
+                               shortlist-kev-no-desc (no C-033 description check), degraded and
+                               shortlist-kev-transcript (S4: Kev's state holds every event)
           --tags <a,b>         only cases with any of these tags
           --limit <n>          only the first n cases (after --tags)
           --no-extractor       leave GLiNER2 out of every configuration
@@ -172,6 +173,9 @@ public static class ToolCallingCli
                         (tags.IsEmpty ? "" : $", tags {string.Join(",", tags)}") + (limit is null ? "" : string.Create(CultureInfo.InvariantCulture, $", limit {limit}")),
                     ["extractor"] = bindings.Extractor is null ? "off" : bindings.Extractor.Profile.Id,
                     ["turn options"] = "production defaults (MaxOutputTokens 1024, approval mode smart), MaxSteps = expected steps + 1",
+                    ["state budget"] = string.Create(CultureInfo.InvariantCulture,
+                        $"production (600 tokens, 8 recent events, 300 at a tool-and-skill ingress); shortlist-kev-transcript: {ToolCallingRunner.TranscriptStateBudget.Total} tokens (recent {ToolCallingRunner.TranscriptStateBudget.Recent}, hard stop {ToolCallingRunner.TranscriptStateBudget.HardStop}), {ToolCallingRunner.TranscriptRecentEvents} recent events, no dual-shortlist budget"),
+                    ["history"] = "a history case's entries are seeded into its fresh session before the turn; only the turn's own events are scored",
                     ["shortlist"] = string.Create(CultureInfo.InvariantCulture, $"qwen-all: {set.Catalogue.Length} (every tool, no embedder); others: 5, built-in examples"),
                     ["escalation"] = "generator slot escalates to a stub that answers with fixed text",
                     ["warm-up"] = "one untimed case per configuration: " + WarmUp.Prompt,
@@ -203,10 +207,11 @@ public static class ToolCallingCli
             WriteReport();
         }, cancellationToken).ConfigureAwait(false);
 
-        kevOutcomes = runner.Configurations.Contains(ToolCallingConfiguration.ShortlistKev)
-            ? ToolCallingReport.AppendKevOutcomes(runner.Log(ToolCallingConfiguration.ShortlistKev),
-                runs.Where(run => run.Configuration == ToolCallingConfiguration.ShortlistKev)).ToString()
-            : "none (shortlist-kev did not run)";
+        var kevConfigurations = runner.Configurations.Where(ToolCallingConfigurations.NeedsKev).ToList();
+        kevOutcomes = kevConfigurations.Count == 0
+            ? "none (no Kev configuration ran)"
+            : string.Join("; ", kevConfigurations.Select(configuration => ToolCallingConfigurations.Name(configuration) + ": "
+                + ToolCallingReport.AppendKevOutcomes(runner.Log(configuration), runs.Where(run => run.Configuration == configuration))));
         var markdown = WriteReport();
         output.WriteLine();
         output.WriteLine(markdown[..Math.Max(0, markdown.IndexOf("## By tag", StringComparison.Ordinal))].TrimEnd());

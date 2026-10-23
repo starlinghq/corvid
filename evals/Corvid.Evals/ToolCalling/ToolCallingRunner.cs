@@ -1,5 +1,7 @@
+using System.Buffers;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Text.Json;
 using Corvid.Abstractions.Events;
 using Corvid.Abstractions.Fabric;
 using Corvid.Abstractions.Sessions;
@@ -29,6 +31,12 @@ public enum ToolCallingConfiguration
     ShortlistKevNoDescriptions,
     /// <summary>Optional: production without Kev (<see cref="DegradedDecider"/>; embedding-margin tool pick, generator yes/no). §5.6's A/B baseline.</summary>
     Degraded,
+    /// <summary>
+    /// Optional, spike S4 (C-038): (c) with a transcript-sized TurnState. The same bindings; Kev's state keeps every event
+    /// one-liner (<c>RecentEvents</c> 64) under <see cref="ToolCallingRunner.TranscriptStateBudget"/> instead of the last eight
+    /// under the 600-token budget, and the 300-token dual-shortlist ingress budget is off. Not production.
+    /// </summary>
+    ShortlistKevTranscriptState,
 }
 
 public static class ToolCallingConfigurations
@@ -44,6 +52,7 @@ public static class ToolCallingConfigurations
         ToolCallingConfiguration.ShortlistKev => "shortlist-kev",
         ToolCallingConfiguration.ShortlistKevNoDescriptions => "shortlist-kev-no-desc",
         ToolCallingConfiguration.Degraded => "degraded",
+        ToolCallingConfiguration.ShortlistKevTranscriptState => "shortlist-kev-transcript",
         _ => throw new ArgumentOutOfRangeException(nameof(configuration)),
     };
 
@@ -62,7 +71,8 @@ public static class ToolCallingConfigurations
     public static bool NeedsEmbedder(ToolCallingConfiguration configuration) => configuration != ToolCallingConfiguration.QwenAll;
 
     public static bool NeedsKev(ToolCallingConfiguration configuration) =>
-        configuration is ToolCallingConfiguration.ShortlistKev or ToolCallingConfiguration.ShortlistKevNoDescriptions;
+        configuration is ToolCallingConfiguration.ShortlistKev or ToolCallingConfiguration.ShortlistKevNoDescriptions
+            or ToolCallingConfiguration.ShortlistKevTranscriptState;
 }
 
 /// <summary>The models a run binds, loaded once. The generator's service is an <see cref="IChatClient"/> bound as the host binds it.</summary>
@@ -72,6 +82,8 @@ public static class ToolCallingConfigurations
 public sealed record ToolCallingBindings(ModelBinding Generator, ModelBinding? Embedder, ModelBinding? Extractor, IDecider? Kev);
 
 /// <summary>One case run in one configuration: the turn's result (or its exception), its events and what it spent.</summary>
+/// <param name="Events">The turn's own events: those after the seeded history (<see cref="SeedHead"/>), so a seeded call is
+/// never scored as one the turn made.</param>
 public sealed record CaseRun(
     ToolCallingCase Case,
     ToolCallingConfiguration Configuration,
@@ -82,7 +94,11 @@ public sealed record CaseRun(
     ImmutableArray<GeneratorCallRecord> GeneratorCalls,
     ImmutableArray<double> DeciderMs,
     ImmutableArray<double> EmbedMs,
-    ImmutableArray<SessionEvent> Events);
+    ImmutableArray<SessionEvent> Events)
+{
+    /// <summary>The log's head after the case's history was seeded (S4, C-038); 0 for a case without history.</summary>
+    public long SeedHead { get; init; }
+}
 
 /// <summary>
 /// Runs golden cases through <see cref="TurnRunner"/> in each configuration (C-034). Per case the configurations run
@@ -131,8 +147,21 @@ public sealed class ToolCallingRunner
     /// <summary>Policy floors in force (the fabric's), for the report header.</summary>
     public static string FloorsVersion => DecisionPolicy.Default.Floors.Version;
 
+    /// <summary>
+    /// S4's wide arm (C-038): room for every event one-liner of a 40-entry history and the turn's own (<c>recent</c> 1,800
+    /// tokens), under Kev's 8,192-token state limit with margin, and a hard stop well above it so the state is answered by Kev,
+    /// not the fallback. The other fields keep the production budgets.
+    /// </summary>
+    public static TurnStateBudget TranscriptStateBudget { get; } = new(Total: 2_000, HardStop: 4_000, Recent: 1_800);
+
+    /// <summary>The wide arm's <c>RecentEvents</c>: more than a 40-entry history and a four-step turn render.</summary>
+    public const int TranscriptRecentEvents = 64;
+
+    /// <param name="StateBudget">TurnOptions.StateBudget; null is production's 600 tokens.</param>
+    /// <param name="DualShortlistStateBudget">TurnOptions.DualShortlistStateBudget; production's 300 unless the arm turns it off.</param>
     private sealed record Setup(ToolCallingConfiguration Configuration, string LogPath, SqliteEventLog Log, ModelSlotRegistry Registry,
-        DecisionFabric Fabric, ToolShortlist Shortlist, Corvid.Tools.ToolRegistry Tools);
+        DecisionFabric Fabric, ToolShortlist Shortlist, Corvid.Tools.ToolRegistry Tools, TurnStateBudget? StateBudget, int RecentEvents,
+        TurnStateBudget? DualShortlistStateBudget);
 
     private Setup Configure(ToolCallingConfiguration configuration, ToolCallingBindings bindings, string outputDirectory)
     {
@@ -169,8 +198,12 @@ public sealed class ToolCallingRunner
         var shortlist = configuration == ToolCallingConfiguration.QwenAll
             ? new ToolShortlist(new ShortlistOptions(Size: _set.Catalogue.Length))
             : new ToolShortlist();
+        var transcript = configuration == ToolCallingConfiguration.ShortlistKevTranscriptState;
         return new Setup(configuration, path, log, registry, fabric, shortlist,
-            configuration == ToolCallingConfiguration.ShortlistKevNoDescriptions ? _toolsWithoutOrigins : _tools);
+            configuration == ToolCallingConfiguration.ShortlistKevNoDescriptions ? _toolsWithoutOrigins : _tools,
+            transcript ? TranscriptStateBudget : TurnOptions.Default.StateBudget,
+            transcript ? TranscriptRecentEvents : TurnOptions.Default.RecentEvents,
+            transcript ? null : TurnOptions.Default.DualShortlistStateBudget);
     }
 
     /// <param name="warmup">Run once in every configuration before the first case, untimed and unscored (S5's warm-up).</param>
@@ -197,6 +230,7 @@ public sealed class ToolCallingRunner
     {
         _results.Begin(item);
         _meter.Reset();
+        var seedHead = Seed(setup.Log, sessionId, item.History);
         var services = new TurnServices
         {
             Log = setup.Log,
@@ -209,6 +243,9 @@ public sealed class ToolCallingRunner
                 MaxSteps = item.Steps.Length + 1,
                 // As the host sets them: the built-ins' example requests; MCP tools have none.
                 ToolExamples = _examples,
+                StateBudget = setup.StateBudget,
+                RecentEvents = setup.RecentEvents,
+                DualShortlistStateBudget = setup.DualShortlistStateBudget,
             },
         };
         TurnResult? result = null;
@@ -224,15 +261,68 @@ public sealed class ToolCallingRunner
             error = exception.GetType().Name + ": " + exception.Message;
         }
         var ms = watch.Elapsed.TotalMilliseconds;
-        var events = ReadAll(setup.Log, sessionId);
+        var events = ReadAll(setup.Log, sessionId, seedHead);
         return new CaseRun(item, setup.Configuration, sessionId, result, error, ms, _meter.GeneratorCalls, _meter.DeciderCalls, _meter.EmbedCalls,
-            [.. events.Select(stored => stored.Payload)]);
+            [.. events.Select(stored => stored.Payload)]) { SeedHead = seedHead };
     }
 
-    internal static List<StoredEvent> ReadAll(IEventLog log, string sessionId)
+    /// <summary>The prefix of seeded history call ids: <c>h-1</c>, <c>h-2</c>, in history order.</summary>
+    public const string SeededCallPrefix = "h-";
+
+    /// <summary>
+    /// Writes a case's history into its fresh session before the turn (S4, C-038), as the turn loop would have logged it: a
+    /// <see cref="UserMessage"/> or <see cref="AssistantMessage"/> per message, and a <see cref="ToolCallIssued"/> (call id
+    /// <c>h-&lt;n&gt;</c>, no round) followed by its <see cref="ToolResult"/> per tool entry. A result's text is stored as JSON
+    /// when it parses, as <see cref="CatalogueTool"/> returns canned results. Returns the head after the seed (0 without history).
+    /// </summary>
+    public static long Seed(IEventLog log, string sessionId, ImmutableArray<HistoryEntry> history)
+    {
+        ArgumentNullException.ThrowIfNull(log);
+        if (history.IsDefaultOrEmpty)
+            return log.GetHead(sessionId);
+        var events = new List<EventData>(history.Length * 2);
+        var n = 0;
+        foreach (var entry in history)
+            switch (entry.Kind)
+            {
+                case HistoryKind.User:
+                    events.Add(EventData.Create(new UserMessage(entry.Text)));
+                    break;
+                case HistoryKind.Assistant:
+                    events.Add(EventData.Create(new AssistantMessage(entry.Text)));
+                    break;
+                default:
+                    var id = SeededCallPrefix + (++n).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    events.Add(EventData.Create(new ToolCallIssued(id, entry.Tool!, entry.Arguments ?? EmptyObject)));
+                    events.Add(EventData.Create(new ToolResult(id, ResultJson(entry.Text), entry.Error)));
+                    break;
+            }
+        var stored = log.Append(sessionId, log.GetHead(sessionId), events);
+        return stored[^1].Sequence;
+    }
+
+    private static readonly JsonElement EmptyObject = JsonDocument.Parse("{}").RootElement.Clone();
+
+    private static JsonElement ResultJson(string text)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(text);
+            return document.RootElement.Clone();
+        }
+        catch (JsonException)
+        {
+            var buffer = new ArrayBufferWriter<byte>();
+            using (var writer = new Utf8JsonWriter(buffer))
+                writer.WriteStringValue(text);
+            using var document = JsonDocument.Parse(buffer.WrittenMemory);
+            return document.RootElement.Clone();
+        }
+    }
+
+    internal static List<StoredEvent> ReadAll(IEventLog log, string sessionId, long after = 0)
     {
         var events = new List<StoredEvent>();
-        long after = 0;
         while (true)
         {
             var page = log.Read(sessionId, after, limit: 4096);
