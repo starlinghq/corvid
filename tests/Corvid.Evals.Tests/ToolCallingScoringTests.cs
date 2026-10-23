@@ -209,6 +209,34 @@ public sealed class ToolCallingScoringTests : IDisposable
         using var json = JsonDocument.Parse(report.ToJson());
         Assert.Equal(18, json.RootElement.GetProperty("cases").GetArrayLength());
         Assert.Equal("test.1", json.RootElement.GetProperty("header").GetProperty("set_version").GetString());
+        Assert.Equal(9, headline.Cases);
+        Assert.Equal(9, json.RootElement.GetProperty("headline").GetProperty("cases").GetInt32());
+    }
+
+    [Fact]
+    public void S2s_headline_leaves_the_history_cases_out()
+    {
+        var (_, _, _, scores) = Run();
+        var header = new ToolCallingHeader("test.1", new string('a', 64), new string('b', 64), 4, "floors", "abc1234",
+            ImmutableSortedDictionary<string, string>.Empty, ImmutableSortedDictionary<string, string>.Empty,
+            ImmutableSortedDictionary<string, string>.Empty, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch);
+        var singleTurn = ToolCallingReport.Build(header, scores).Headline!;
+        // The same run plus history cases where (c) is right and (a) wrong on everything: they would move the gate if counted.
+        var history = scores.Select(score => score with
+        {
+            Id = "hist-" + score.Id,
+            Tags = [.. score.Tags, S4Comparison.GatingTag],
+            Outcome = score.Configuration == "qwen-all" ? CaseOutcome.WrongTool : CaseOutcome.Correct,
+        });
+
+        var report = ToolCallingReport.Build(header, [.. scores, .. history]);
+
+        Assert.Equal(18, report.Summaries.Single(summary => summary.Configuration == "qwen-all").Cases);
+        Assert.Equal(singleTurn, report.Headline);
+        Assert.Equal(9, report.Headline!.Cases);
+        Assert.Contains("Over the 9 single-turn case(s) of the run", report.ToMarkdown(), StringComparison.Ordinal);
+        // A history-only run has no S2 headline.
+        Assert.Null(ToolCallingReport.Build(header, [.. history]).Headline);
     }
 
     [Fact]
@@ -420,6 +448,8 @@ public sealed class ToolCallingScoringTests : IDisposable
         using var json = JsonDocument.Parse(report.ToJson());
         Assert.Equal("corvid-tool-calling-report/4", json.RootElement.GetProperty("format").GetString());
         Assert.False(json.RootElement.GetProperty("s4").GetProperty("pass").GetBoolean());
+        Assert.False(s4.Inconclusive);
+        Assert.False(json.RootElement.GetProperty("s4").GetProperty("inconclusive").GetBoolean());
         Assert.StartsWith("c-038", json.RootElement.GetProperty("s4").GetProperty("pass_condition").GetString(), StringComparison.Ordinal);
 
         // Both arms' logs label tool and done for calibration, never a seeded call.
@@ -446,6 +476,13 @@ public sealed class ToolCallingScoringTests : IDisposable
         // No decisions in an arm is no evidence: it fails.
         Assert.False(S4Comparison.Passes(new S4Arm("x", 40, 0, 0, 0, 0, 100, 80), Arm(73, 83)));
         Assert.False(S4Comparison.Passes(Arm(70, 80), new S4Arm("x", 40, 40, 30, 100, 73, 0, 0)));
+        // A fallback or a compaction in either arm leaves calibrated decisions out of a rate unseen: inconclusive, not a pass.
+        Assert.False(S4Comparison.IsInconclusive(Arm(90, 90), Arm(73, 83)));
+        Assert.False(S4Comparison.Passes(Arm(90, 90), Arm(73, 83) with { Fallbacks = 1 }));
+        Assert.False(S4Comparison.Passes(Arm(90, 90) with { Fallbacks = 2 }, Arm(73, 83)));
+        Assert.False(S4Comparison.Passes(Arm(90, 90), Arm(73, 83) with { Compacted = 1 }));
+        Assert.False(S4Comparison.Passes(Arm(90, 90) with { Compacted = 1 }, Arm(73, 83)));
+        Assert.True(S4Comparison.IsInconclusive(Arm(90, 90), Arm(73, 83) with { Fallbacks = 1 }));
         var (low, high) = S4Comparison.Wilson(30, 40);
         Assert.Equal(59.8, low, 1);
         Assert.Equal(85.8, high, 1);

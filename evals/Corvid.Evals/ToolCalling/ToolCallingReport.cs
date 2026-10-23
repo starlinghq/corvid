@@ -73,11 +73,15 @@ public sealed record ConfigurationSummary(
 /// strict correct-tool and strict argument-match rates each match or beat (a)'s and its turn p50 is no worse than (a)'s.
 /// <paramref name="TurnP50DeltaMs"/> is (c)'s turn p50 minus (a)'s. The non-escalated deltas, the lenient rates and
 /// (c)'s escalation rate are reported, not gating. Reports written before C-037 computed <c>pass</c> under the plan's
-/// original rule (≥ 25 points on both, escalation under 30%).
+/// original rule (≥ 25 points on both, escalation under 30%). Since C-038 it is computed over the single-turn cases only:
+/// the S4 <c>history</c> cases in a run are left out of it, so S2's gate reads the same set whatever <c>--tags</c> selects.
 /// </summary>
 public sealed record Headline(double ToolPoints, double ArgsPoints, double ToolPointsNonEscalated, double ArgsPointsNonEscalated,
     double EscalationRate, double TurnP50DeltaMs, bool Pass)
 {
+    /// <summary>The cases (c) was scored on: the selected single-turn cases.</summary>
+    public int Cases { get; init; }
+
     /// <summary>(c) against (a) under the restated condition.</summary>
     public static Headline For(ConfigurationSummary a, ConfigurationSummary c)
     {
@@ -92,7 +96,10 @@ public sealed record Headline(double ToolPoints, double ArgsPoints, double ToolP
             && (long)c.ArgsCorrect * a.Cases >= (long)a.ArgsCorrect * c.Cases
             && latency <= 0;
         return new Headline(tool, args, Pct(c.ToolCorrectNonEscalated, c.NonEscalated) - Pct(a.ToolCorrectNonEscalated, a.NonEscalated),
-            Pct(c.ArgsCorrectNonEscalated, c.NonEscalated) - Pct(a.ArgsCorrectNonEscalated, a.NonEscalated), c.Rate(c.Escalated), latency, pass);
+            Pct(c.ArgsCorrectNonEscalated, c.NonEscalated) - Pct(a.ArgsCorrectNonEscalated, a.NonEscalated), c.Rate(c.Escalated), latency, pass)
+        {
+            Cases = c.Cases,
+        };
     }
 
     private static double Pct(int count, int of) => of == 0 ? double.NaN : 100.0 * count / of;
@@ -216,15 +223,32 @@ public sealed record S4Comparison(S4Arm Short, S4Arm Wide, double ToolPoints, do
     /// <summary>The plan's tolerance, in points.</summary>
     public const double Tolerance = 3.0;
 
-    /// <summary>The 600 arm is at most <see cref="Tolerance"/> points below the wide arm on <c>tool</c> and on <c>done</c>; no
-    /// decisions (a NaN rate) fails.</summary>
+    /// <summary>
+    /// The 600 arm is at most <see cref="Tolerance"/> points below the wide arm on <c>tool</c> and on <c>done</c>; no
+    /// decisions (a NaN rate) fails, and so does an <see cref="IsInconclusive"/> pair: the rates count calibrated answers
+    /// only, so a fallback would leave the arm's denominator silently.
+    /// </summary>
     public static bool Passes(S4Arm shortArm, S4Arm wideArm)
     {
         ArgumentNullException.ThrowIfNull(shortArm);
         ArgumentNullException.ThrowIfNull(wideArm);
+        if (IsInconclusive(shortArm, wideArm))
+            return false;
         // A small epsilon so a delta of exactly −3 points passes despite rounding.
         return shortArm.ToolRate >= wideArm.ToolRate - Tolerance - 1e-9 && shortArm.DoneRate >= wideArm.DoneRate - Tolerance - 1e-9;
     }
+
+    /// <summary>Either arm has a <c>tool</c> or <c>done</c> decision Kev did not answer (a fallback) or a compacted turn: the
+    /// comparison is not the one S4 measures, and <see cref="Pass"/> is false.</summary>
+    public static bool IsInconclusive(S4Arm shortArm, S4Arm wideArm)
+    {
+        ArgumentNullException.ThrowIfNull(shortArm);
+        ArgumentNullException.ThrowIfNull(wideArm);
+        return shortArm.Fallbacks > 0 || wideArm.Fallbacks > 0 || shortArm.Compacted > 0 || wideArm.Compacted > 0;
+    }
+
+    /// <summary>See <see cref="IsInconclusive"/>.</summary>
+    public bool Inconclusive => IsInconclusive(Short, Wide);
 
     /// <summary>Null unless both arms ran on some <c>history</c> case.</summary>
     public static S4Comparison? For(IReadOnlyList<CaseScore> scores)
@@ -323,9 +347,12 @@ public sealed class ToolCallingReport
         var all = scores.ToImmutableArray();
         var order = all.Select(score => score.Configuration).Distinct(StringComparer.Ordinal).ToList();
         var summaries = order.Select(name => Summarize(name, all.Where(score => score.Configuration == name).ToList())).ToImmutableArray();
-        var a = summaries.FirstOrDefault(summary => summary.Configuration == "qwen-all");
-        var c = summaries.FirstOrDefault(summary => summary.Configuration == "shortlist-kev");
-        var headline = a is not null && c is not null ? Headline.For(a, c) : null;
+        // S2's headline reads the single-turn cases only (C-038): the S4 history cases never move its gate.
+        List<CaseScore> SingleTurn(string name) =>
+            [.. all.Where(score => score.Configuration == name && !score.Tags.Contains(S4Comparison.GatingTag))];
+        var a = SingleTurn("qwen-all");
+        var c = SingleTurn("shortlist-kev");
+        var headline = a.Count > 0 && c.Count > 0 ? Headline.For(Summarize("qwen-all", a), Summarize("shortlist-kev", c)) : null;
         return new ToolCallingReport(header, all, summaries, headline, S4Comparison.For(all));
     }
 
@@ -432,7 +459,8 @@ public sealed class ToolCallingReport
                 Number(writer, "args_points_non_escalated", headline.ArgsPointsNonEscalated);
                 Number(writer, "escalation_rate", headline.EscalationRate);
                 Number(writer, "turn_p50_delta_ms", headline.TurnP50DeltaMs);
-                writer.WriteString("pass_condition", "c-037");
+                writer.WriteNumber("cases", headline.Cases);
+                writer.WriteString("pass_condition", "c-037, single-turn cases (history cases excluded since c-038)");
                 writer.WriteBoolean("pass", headline.Pass);
                 writer.WriteEndObject();
             }
@@ -476,7 +504,8 @@ public sealed class ToolCallingReport
         Interval(writer, "short_wilson95", s4.ShortIngressInterval);
         Interval(writer, "wide_wilson95", s4.WideIngressInterval);
         writer.WriteEndObject();
-        writer.WriteString("pass_condition", "c-038: 600 tool >= transcript tool - 3 AND 600 done >= transcript done - 3, history cases");
+        writer.WriteString("pass_condition", "c-038: 600 tool >= transcript tool - 3 AND 600 done >= transcript done - 3, history cases; inconclusive (not a pass) with any fallback or compaction in either arm");
+        writer.WriteBoolean("inconclusive", s4.Inconclusive);
         writer.WriteBoolean("pass", s4.Pass);
         writer.WriteStartArray("slices");
         foreach (var slice in s4.Slices)
@@ -748,6 +777,8 @@ public sealed class ToolCallingReport
             md.AppendLine();
             md.AppendLine("Plan §18, restated by the maintainer (C-037): strict scoring is primary; (c) passes if it matches or beats (a) on strict tool AND strict argument accuracy and its turn p50 is no worse than (a)'s. Lenient rates and escalation are reported, not gating. An escalation counts as a miss.");
             md.AppendLine();
+            md.AppendLine(CultureInfo.InvariantCulture, $"Over the {headline.Cases} single-turn case(s) of the run; S4's `history` cases are left out (C-038).");
+            md.AppendLine();
             md.AppendLine("| Measure | (c) − (a), all cases | (c) − (a), non-escalated cases |");
             md.AppendLine("| --- | --- | --- |");
             md.AppendLine(CultureInfo.InvariantCulture, $"| Tool choice | {Points(headline.ToolPoints)} | {Points(headline.ToolPointsNonEscalated)} |");
@@ -836,7 +867,7 @@ public sealed class ToolCallingReport
         md.AppendLine(CultureInfo.InvariantCulture, $"| `tool` at ingress (paired) | {Share(s4.Short.IngressToolRight, s4.Short.IngressTool)} {Range(s4.ShortIngressInterval)} | {Share(s4.Wide.IngressToolRight, s4.Wide.IngressTool)} {Range(s4.WideIngressInterval)} | {Points(s4.IngressToolPoints)} |");
         md.AppendLine();
         md.AppendLine(CultureInfo.InvariantCulture,
-            $"Ingress `tool` on {s4.PairedCases} paired cases: both right {s4.BothRight}, only 600 right {s4.ShortOnlyRight}, only transcript right {s4.WideOnlyRight}, both wrong {s4.BothWrong} (Wilson 95% intervals in brackets). **{(s4.Pass ? "Pass" : "Fail")}.**");
+            $"Ingress `tool` on {s4.PairedCases} paired cases: both right {s4.BothRight}, only 600 right {s4.ShortOnlyRight}, only transcript right {s4.WideOnlyRight}, both wrong {s4.BothWrong} (Wilson 95% intervals in brackets). **{(s4.Inconclusive ? "Inconclusive (a fallback or a compaction in an arm)" : s4.Pass ? "Pass" : "Fail")}.**");
         md.AppendLine();
         md.AppendLine("| Slice | Arm | n | `tool` ingress | `tool` all | `done` | `tool` acted (right) | `done` acted (right) | Fallbacks | Shortlist hits | Ingress on hits | Compacted | Decider ingress ms p50 (p90) | Decider step ms p50 (p90) | State chars/4 p50 (max) | `recent` items p50 (max) |");
         md.AppendLine("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");

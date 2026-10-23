@@ -4221,8 +4221,12 @@ exists on `TurnOptions` (`StateBudget`, `RecentEvents`, `DualShortlistStateBudge
   accuracy on those, decider ms for the first call (ingress) and the rest (steps), state size and `recent` items. Slices:
   `history` (gating), `history_far`, near cue, controls, `multi_step`, `no_tool`, all cases. `Pass` is
   `600 tool ≥ transcript tool − 3 AND 600 done ≥ transcript done − 3` on the gating slice, NaN failing; the paired ingress
-  discordance and Wilson 95% intervals are reported, not gating. `report.json` gains `s4` (with
-  `pass_condition: "c-038: …"`) and a `kev` block per case; `report.md` an S4 section. S2's headline is unchanged.
+  discordance and Wilson 95% intervals are reported, not gating. The rates count calibrated answers only, so a fallback
+  or a compaction in either arm makes the comparison `Inconclusive` and `Pass` false (`report.md` says Inconclusive), never
+  a pass with decisions silently left out. `report.json` gains `s4` (with `pass_condition: "c-038: …"` and `inconclusive`)
+  and a `kev` block per case; `report.md` an S4 section. S2's headline keeps C-037's rule but reads only the run's
+  single-turn cases (`history` ones left out, `headline.cases` says how many), so an unfiltered S2 re-run gates on the
+  same 218 cases as before.
 - Run: `evals/spikes/S4-state-budget/run.sh` passes `--configs shortlist-kev,shortlist-kev-transcript` (and
   `--tags history` for the gating run) to S2's CUDA wrapper. Result on 41 history cases: `tool` +6.2 points, `done` −6.6,
   so the plan's rule fails on `done`; neither gap is significant at this n, every decision was Kev's, and the 600 arm's
@@ -4233,12 +4237,13 @@ exists on `TurnOptions` (`StateBudget`, `RecentEvents`, `DualShortlistStateBudge
   scripted generator (now keyed on the turn's own message and the results after it) and a Kev that reads the state: the
   600 state's `recent` holds at most 8 items and not the cue, the wide one every seeded one-liner, no `h-*` call is
   scored, `tool` and `done` labels, accuracies and outcomes land as scripted, and `S4Comparison.Passes` follows the
-  3-point rule.
+  3-point rule and fails on any fallback or compaction; adding history cases to a run leaves S2's headline unchanged.
 - Not built: tool results or raw messages in Kev's state, a `TurnOptions` knob for the 80-character cut, any change to
   production's `RecentEvents`, `recent` budget or Total (a maintainer decision), a paired probe on fixed trajectories,
   floors fitted from these logs, history cases in an S2 re-run, further arms (Kev-4B, CPU Kev, the 300-token ingress),
   compaction inside a history, and a CI gate on the condition. Adding cases changes `cases_sha256`; S2's committed
-  reports name the older versions, and an S2 re-run on this version includes history cases unless filtered by tag.
+  reports name the older versions, and an S2 re-run on this version includes history cases in its summaries (not its
+  headline) unless filtered by tag.
 
 ## Running the check
 

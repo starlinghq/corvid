@@ -46,9 +46,11 @@ Three findings matter more than the sign of the totals:
 - **What the narrow state loses is "this was already done".** The `done` gap is the already-handled cases (category 2): on
   `history`, `no_tool` the 600 arm's `done` is 4 of 10 right against 8 of 10. Asked "Is the note saved?" 20 events after
   `notes__create_note` ran, Kev with the full transcript sees `called notes__create_note` and answers done; with eight
-  recent lines it does not (`hist-note-saved-done`, `hist-task-done`, `hist-allergy-done`, `hist-ctl-thanks`). Of the
-  five cases where only one arm's first `done` is right, the transcript's four are these no-tool turns with nothing left
-  to do; the 600 arm's one is a standing instruction (`hist-lists-in-notes`).
+  recent lines it does not (`hist-note-saved-done`, `hist-task-done`, `hist-allergy-done`). Of the five cases where only
+  one arm's first `done` is right, the transcript's four are those three already-handled turns plus one control
+  (`hist-ctl-thanks`, "Thanks, that's everything.", where only the current message should decide): three are history
+  effects, and the control is a disagreement history should not cause, which fits the noise reading. The 600 arm's one is
+  a standing instruction (`hist-lists-in-notes`).
 - **More history also misleads `tool`.** On the near already-handled cases the transcript arm re-picks the tool that just
   ran (`email__send_email` for "Did the email to Dana go out?", `notes__create_note`, `calendar__create_event`; none acted),
   and its no-tool ingress accuracy is 8 of 11 against 10 of 11. That is most of the 600 arm's `tool` lead. On the
@@ -182,4 +184,7 @@ on Kev's `tool` and `done` decisions, so either is `corvid-evals calibrate --log
 - `evals/spikes/S4-state-budget/`: `run.sh` and `results/` (`report.md`, `report.json` with every decision, `console.log`)
   of the gating run, and `results-all/` of the control run. The event logs are not committed.
 - The set's new version changes `cases_sha256`; S2's committed reports name `2026-10-21.1` and `2026-10-22.1`. An S2
-  re-run on this version includes the history cases unless it filters by tag.
+  re-run on this version includes the history cases in its summaries unless it filters by tag; since the review
+  follow-up the S2 headline (C-037's gate) is computed over the single-turn cases only, so they never move it.
+- The committed reports predate two review follow-ups: `s4.inconclusive` (a fallback or compaction in either arm makes
+  `pass` false; both arms had none, so `pass` is unchanged) and the headline's `cases`.
