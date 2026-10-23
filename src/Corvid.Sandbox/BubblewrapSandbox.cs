@@ -36,6 +36,16 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
         try
         {
             string statusFile = Path.Combine(statusDirectory.FullName, "status.json");
+            string? caFile = null;
+            if (policy.Proxy is { } proxy)
+            {
+                // Outside the workspace, in a directory only this user can enter, deleted after the run.
+                caFile = Path.Combine(statusDirectory.FullName, "ca.pem");
+                await File.WriteAllTextAsync(caFile, "", cancellationToken).ConfigureAwait(false);
+                File.SetUnixFileMode(caFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                await File.WriteAllTextAsync(caFile, proxy.CaCertificatePem, cancellationToken).ConfigureAwait(false);
+            }
+
             var start = new ProcessStartInfo(launcher)
             {
                 UseShellExecute = false,
@@ -43,7 +53,7 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             };
-            foreach (string argument in Arguments(policy, command, statusFile, _options))
+            foreach (string argument in Arguments(policy, command, statusFile, _options, caFile))
             {
                 start.ArgumentList.Add(argument);
             }
@@ -154,6 +164,8 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
         policy.Validate();
         if (command.StandardInput is not null)
             throw new ArgumentException("A prepared launch owns its standard input; StandardInput must be null.", nameof(command));
+        if (policy.Proxy is not null)
+            throw new ArgumentException("A prepared launch cannot use the Vault proxy route yet (V-003b covers run-to-completion commands only).", nameof(policy));
         var environment = new Dictionary<string, string>(StringComparer.Ordinal);
         IReadOnlyDictionary<string, string> source = _options.Environment ?? CurrentEnvironment();
         foreach (string name in policy.Environment.Concat(LauncherEnvironment).Distinct(StringComparer.Ordinal))
@@ -169,7 +181,8 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
     public const int RefusedExitCode = NotStarted;
 
     /// <summary>The launcher's command line for a policy; the launcher's usage text is the contract.</summary>
-    internal static List<string> Arguments(SandboxPolicy policy, SandboxCommand command, string? statusFile, SandboxOptions options)
+    /// <param name="proxyCaFile">Where <see cref="SandboxPolicy.Proxy"/>'s CA was written; required with a proxy.</param>
+    internal static List<string> Arguments(SandboxPolicy policy, SandboxCommand command, string? statusFile, SandboxOptions options, string? proxyCaFile = null)
     {
         var a = new List<string> { "--workspace", policy.Workspace };
         if (command.WorkingDirectory is not null)
@@ -195,6 +208,12 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
         if (policy.Network)
         {
             a.Add("--network");
+        }
+
+        if (policy.Proxy is { } proxy)
+        {
+            a.AddRange(["--proxy-socket", proxy.SocketPath,
+                "--proxy-ca", proxyCaFile ?? throw new ArgumentException("A proxy needs its CA written to a file.", nameof(proxyCaFile))]);
         }
 
         if (!options.RequireKernelLayers)

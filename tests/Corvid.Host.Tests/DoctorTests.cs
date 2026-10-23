@@ -2,6 +2,7 @@ using Corvid.Host.Configuration;
 using Corvid.Host.Diagnostics;
 using Corvid.Models;
 using Microsoft.Extensions.DependencyInjection;
+using FakeVault = Corvid.Models.Remote.Tests.FakeVault;
 
 namespace Corvid.Host.Tests;
 
@@ -152,5 +153,98 @@ public sealed class DoctorTests
         Assert.Equal(CheckStatus.Ok, check.Status);
         Assert.Equal(CheckStatus.Failed,
             Doctor.PlacedModel("kev-0.8b", "cuda:0", 0, PlacementFallback.Fail, problems: 1, visibleCount: null, null, CheckStatus.Failed).Status);
+    }
+
+    /// <summary>V-003b: the shell's network egress, off by default; when on, the launcher and Vault must both support it.</summary>
+    [Fact]
+    public async Task NetworkEgressIsOffByDefault()
+    {
+        await using var host = TestHost.Create();
+        var checks = await host.Services.GetRequiredService<Doctor>().RunAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        var egress = Assert.Single(checks, check => check is { Area: "sandbox", Name: "network egress" });
+        Assert.Equal(CheckStatus.Info, egress.Status);
+        Assert.StartsWith("off", egress.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task NetworkEgressNeedsALauncherWithTheProxyOptionsAndAVaultThatOpensSandboxes()
+    {
+        if (OperatingSystem.IsLinux())
+            await EgressChecksAsync();
+        else
+            Assert.Skip("The sandbox is Linux only.");
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
+    private static async Task EgressChecksAsync()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var directory = Corvid.Tests.ShortTemp.Create("cd-");
+        try
+        {
+            var current = Path.Combine(directory, "corvid-sandbox");
+            await File.WriteAllTextAsync(current, "#!/bin/sh\necho '  --proxy-socket PATH     Corvid Vault per-sandbox proxy socket.' >&2\n", ct);
+            var old = Path.Combine(directory, "old-corvid-sandbox");
+            await File.WriteAllTextAsync(old, "#!/bin/sh\necho '  --network               Share the host network.' >&2\n", ct);
+            foreach (var script in (string[])[current, old])
+                File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+            await using var vault = new FakeVault(_ => FakeVault.Json("{}"));
+
+            async Task<DoctorCheck> EgressAsync(string launcher, string socket)
+            {
+                await using var host = TestHost.Create(settings: new Dictionary<string, string?>
+                {
+                    ["Corvid:Tools:ShellNetwork"] = "true",
+                    ["Corvid:Sandbox:LauncherPath"] = launcher,
+                    ["Corvid:Vault:SocketPath"] = socket,
+                });
+                var checks = await host.Services.GetRequiredService<Doctor>().RunAsync(cancellationToken: ct);
+                return Assert.Single(checks, check => check is { Area: "sandbox", Name: "network egress" });
+            }
+
+            var ok = await EgressAsync(current, vault.SocketPath);
+            Assert.Equal(CheckStatus.Ok, ok.Status);
+            Assert.Single(vault.SandboxesOpened);
+            Assert.Equal(vault.SandboxesOpened, vault.SandboxesClosed); // the probe closes what it opened
+
+            var oldLauncher = await EgressAsync(old, vault.SocketPath);
+            Assert.Equal(CheckStatus.Failed, oldLauncher.Status);
+            Assert.Contains("--proxy-socket", oldLauncher.Detail, StringComparison.Ordinal);
+
+            var noVault = await EgressAsync(current, Path.Combine(directory, "absent.sock"));
+            Assert.Equal(CheckStatus.Failed, noVault.Status);
+            Assert.Equal("Start corvid-vault 0.5 or later, or unset Corvid:Tools:ShellNetwork.", noVault.Fix);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ShellNetworkBindsAndReachesTheShell()
+    {
+        await using (var host = TestHost.Create(settings: new Dictionary<string, string?> { ["Corvid:Tools:Builtin"] = "true" }))
+        await using (var runtime = await host.StartAsync())
+        {
+            Assert.False(host.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<CorvidOptions>>().Value.Tools.ShellNetwork);
+            Assert.False(runtime.Builtin.Shell.Options.Network);
+        }
+
+        await using (var host = TestHost.Create(settings: new Dictionary<string, string?>
+        {
+            ["Corvid:Tools:Builtin"] = "true",
+            ["Corvid:Tools:ShellNetwork"] = "true",
+            ["Corvid:Vault:SocketPath"] = "/srv/run/vault.sock",
+        }))
+        await using (var runtime = await host.StartAsync())
+        {
+            Assert.True(host.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<CorvidOptions>>().Value.Tools.ShellNetwork);
+            Assert.True(runtime.Builtin.Shell.Options.Network);
+            // Other sandboxes' proxy sockets are hidden from every command and on the hardline list.
+            Assert.Contains("/srv/run/sandbox", runtime.Builtin.Shell.Policy.DeniedPaths);
+            Assert.Contains("/srv/run/sandbox", runtime.Builtin.Environment.Protected.Vault);
+        }
     }
 }

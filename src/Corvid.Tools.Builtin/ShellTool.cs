@@ -9,9 +9,19 @@ using Corvid.Sandbox;
 
 namespace Corvid.Tools.Builtin;
 
-/// <summary>How the shell runs commands. Network is off: per-toolset network and Vault's proxy route (V-003) come later.</summary>
+/// <summary>How the shell runs commands. No direct network ever; HTTPS through Corvid Vault's proxy when <see cref="Network"/> is on (V-003b).</summary>
 public sealed record ShellOptions
 {
+    /// <summary>
+    /// Give commands HTTPS through Corvid Vault's per-sandbox proxy (V-003b), the only route out. Off by default. In a
+    /// tainted turn a command gets the route only when a person approved it as network egress; otherwise it runs without.
+    /// When on and Vault cannot open a proxy, the command does not run.
+    /// </summary>
+    public bool Network { get; init; }
+
+    /// <summary>How long Vault keeps a command's proxy if Corvid never closes it: the sandbox's timeout plus a minute.</summary>
+    public TimeSpan EgressLifetime { get; init; } = new SandboxOptions().Timeout + TimeSpan.FromMinutes(1);
+
     /// <summary>The directory commands start in and the only one they can write. Absolute.</summary>
     public required string Workspace { get; init; }
 
@@ -42,7 +52,7 @@ public sealed record ShellOptions
 
 /// <summary>
 /// Runs a command line under the sandbox (C-007a) with Corvid's policy: the workspace writable, Vault's configured
-/// locations and any extra denied paths hidden, no network. It does not ask anyone: callers authorize first, through the
+/// locations and any extra denied paths hidden, no direct network (HTTPS through Vault's proxy when allowed, V-003b). It does not ask anyone: callers authorize first, through the
 /// approval pipeline (the shell tool by the turn loop's pre-execute checkpoint, the scheduler's scripts non-interactively).
 /// </summary>
 public sealed class SandboxedShell
@@ -56,8 +66,10 @@ public sealed class SandboxedShell
         StringComparer.Ordinal);
 
     private readonly ISandbox _sandbox;
+    private readonly ISandboxEgress? _egress;
 
-    public SandboxedShell(ISandbox sandbox, ShellOptions options)
+    /// <param name="egress">Opens Vault's sandbox proxy; needed when <see cref="ShellOptions.Network"/> is on.</param>
+    public SandboxedShell(ISandbox sandbox, ShellOptions options, ISandboxEgress? egress = null)
     {
         ArgumentNullException.ThrowIfNull(sandbox);
         ArgumentNullException.ThrowIfNull(options);
@@ -65,6 +77,7 @@ public sealed class SandboxedShell
         if (options.Environment.FirstOrDefault(UnparsedBehaviour.Contains) is { } unparsed)
             throw new ArgumentException($"{unparsed} would change what bash runs beyond the approved command line, so it is not passed to commands.", nameof(options));
         _sandbox = sandbox;
+        _egress = egress;
         Options = options;
         Policy = new SandboxPolicy
         {
@@ -79,14 +92,93 @@ public sealed class SandboxedShell
 
     public ShellOptions Options { get; }
 
-    /// <summary>The policy every command runs under.</summary>
+    /// <summary>The policy every command runs under; a command with the Vault route adds <see cref="SandboxPolicy.Proxy"/>.</summary>
     public SandboxPolicy Policy { get; }
 
+    /// <summary>Runs a command with no network at all, whatever <see cref="ShellOptions.Network"/> says (skill scripts).</summary>
     /// <exception cref="SandboxRefusedException">The sandbox could not be set up; nothing ran.</exception>
     public Task<SandboxResult> RunAsync(string command, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
-        return _sandbox.RunAsync(Policy, new SandboxCommand(Options.ShellPath, "-c", command), cancellationToken);
+        return SandboxedAsync(Policy, new SandboxCommand(Options.ShellPath, "-c", command), cancellationToken);
+    }
+
+    /// <summary>
+    /// Every command runs through here: Vault's sandbox directory is made to exist first, so the launcher denies it even
+    /// before Vault has opened its first proxy (<see cref="VaultLocations.EnsureSandboxDirectory"/>).
+    /// </summary>
+    private Task<SandboxResult> SandboxedAsync(SandboxPolicy policy, SandboxCommand command, CancellationToken cancellationToken)
+    {
+        Options.Vault?.EnsureSandboxDirectory();
+        return _sandbox.RunAsync(policy, command, cancellationToken);
+    }
+
+    /// <summary>
+    /// Runs a command with the network route its turn allows (V-003b): none when <see cref="ShellOptions.Network"/> is
+    /// off; Vault's proxy in an untainted turn, or in a tainted one when a person approved the command as network egress
+    /// (<see cref="ShellEgress.MayRoute"/>); otherwise none, reported as withheld. The proxy is opened with the turn's
+    /// taint, so Vault's own tainted rules apply too, and closed when the command ends.
+    /// </summary>
+    /// <exception cref="SandboxRefusedException">The sandbox could not be set up, or the route was due and Vault could not
+    /// open it; nothing ran. There is no fallback to the host network or to running offline.</exception>
+    public async Task<ShellRun> RunAsync(string command, ShellEgress egress, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(command);
+        ArgumentNullException.ThrowIfNull(egress);
+        var shellCommand = new SandboxCommand(Options.ShellPath, "-c", command);
+        if (!Options.Network)
+            return new ShellRun(await SandboxedAsync(Policy, shellCommand, cancellationToken).ConfigureAwait(false), null);
+
+        using var activity = Corvid.Kernel.KernelTelemetry.Source.StartActivity(ShellTelemetry.EgressSpan);
+        activity?.SetTag(ShellTelemetry.Tainted, egress.Tainted);
+        if (!egress.MayRoute)
+        {
+            activity?.SetTag(ShellTelemetry.Route, ShellTelemetry.RouteWithheld);
+            return new ShellRun(await SandboxedAsync(Policy, shellCommand, cancellationToken).ConfigureAwait(false), ShellTelemetry.RouteWithheld);
+        }
+
+        activity?.SetTag(ShellTelemetry.Route, ShellTelemetry.RouteVault);
+        activity?.SetTag(ShellTelemetry.Passthrough, true);
+        SandboxEgressLease lease;
+        try
+        {
+            if (_egress is null)
+                throw new InvalidOperationException("no Vault socket is configured");
+            lease = await _egress.OpenAsync(egress.Tainted, network: true, Options.EgressLifetime, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            var code = exception is Corvid.Vault.Client.VaultException vault ? vault.Code : exception.GetType().Name;
+            activity?.SetTag(ShellTelemetry.Error, code);
+            activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, code);
+            throw new SandboxRefusedException(
+                $"The shell's network is on (Corvid:Tools:ShellNetwork) but Corvid Vault could not open a sandbox proxy ({exception.Message}); " +
+                "the command did not run. Start corvid-vault 0.5 or later, or turn the shell's network off.", exception);
+        }
+
+        activity?.SetTag(ShellTelemetry.SandboxId, lease.Id);
+        activity?.SetTag(ShellTelemetry.Expires, lease.ExpiresAt.ToString("O", CultureInfo.InvariantCulture));
+        try
+        {
+            var policy = Policy with { Proxy = new SandboxProxy(lease.SocketPath, lease.CaCertificatePem) };
+            return new ShellRun(await SandboxedAsync(policy, shellCommand, cancellationToken).ConfigureAwait(false), ShellTelemetry.RouteVault);
+        }
+        finally
+        {
+            // Not cancellable: a cancelled command still closes its proxy. A failed close leaves expiry as the backstop.
+            var closed = true;
+            try
+            {
+                await lease.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                closed = false;
+            }
+
+            activity?.AddEvent(new System.Diagnostics.ActivityEvent(ShellTelemetry.ClosedEvent,
+                tags: new System.Diagnostics.ActivityTagsCollection { ["closed"] = closed }));
+        }
     }
 
     /// <summary>Keeps the start and, mostly, the end of long output, where errors usually are.</summary>
@@ -117,7 +209,7 @@ public sealed partial class ShellTool(SandboxedShell shell)
     private readonly SandboxedShell _shell = shell ?? throw new ArgumentNullException(nameof(shell));
 
     [Tool(ToolName, Description = "Run a shell command line (bash) in the workspace and return its exit code and output. " +
-        "It runs sandboxed: no network, writes only inside the workspace, secrets hidden. Prefer the file tools for reading and editing files.")]
+        "It runs sandboxed: no direct network; HTTPS only through Corvid Vault's proxy when enabled; writes only inside the workspace, secrets hidden. Prefer the file tools for reading and editing files.")]
     [SideEffect(SideEffects.Process | SideEffects.Filesystem)]
     [Destructive]
     public async Task<JsonNode> RunAsync(
@@ -131,13 +223,23 @@ public sealed partial class ShellTool(SandboxedShell shell)
         if (context.Approval is not ApprovalResult { Allowed: true, Assessment.Analysis: { Kind: "shell" } analysis } || analysis.Text != command)
             throw new InvalidOperationException("The shell runs a command only after the approval pipeline has allowed exactly that command line.");
 
-        var result = await _shell.RunAsync(command, cancellationToken).ConfigureAwait(false);
+        var run = await _shell.RunAsync(command, new ShellEgress(context.SessionId, context.Tainted, (ApprovalResult)context.Approval), cancellationToken)
+            .ConfigureAwait(false);
+        // HTTPS through Vault's proxy can bring anything back, and the shell is not a [Network] tool: the turn loop taints the
+        // session only because the result says so (plan §10.3). A withheld or network-off command reached nothing outside.
+        if (run.Network == ShellTelemetry.RouteVault)
+            context.MarkResultTainted();
+        var result = run.Result;
         var output = new JsonObject
         {
             ["exit_code"] = result.ExitCode,
             ["stdout"] = _shell.Trim(result.StandardOutput),
             ["stderr"] = _shell.Trim(result.StandardError),
         };
+        // With the shell's network on: "vault" (HTTPS through Vault's proxy) or "withheld" (a tainted turn's command no
+        // person approved as network egress ran with no route). Recorded in the session log with the result.
+        if (run.Network is { } network)
+            output["network"] = network;
         if (result.TimedOut)
             output["timed_out"] = true;
         if (result.StandardOutputTruncated || result.StandardErrorTruncated)
@@ -179,7 +281,9 @@ public sealed class SandboxedScriptRunner : IJobScriptRunner
         SandboxResult result;
         try
         {
-            result = await _shell.RunAsync(request.Script, cancellationToken).ConfigureAwait(false);
+            // Unattended: nobody approved anything as network egress, so a tainted job's script never gets the route.
+            result = (await _shell.RunAsync(request.Script, new ShellEgress(request.SessionId, request.Tainted, approval), cancellationToken)
+                .ConfigureAwait(false)).Result;
         }
         catch (SandboxRefusedException exception)
         {

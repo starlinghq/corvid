@@ -19,6 +19,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Corvid.Vault.Tests" />
+    <!-- V-003b's egress tests run this Vault in process behind the real sandbox launcher. -->
+    <InternalsVisibleTo Include="Corvid.Sandbox.Tests" />
   </ItemGroup>
 
 </Project>

@@ -126,4 +126,43 @@ internal static unsafe partial class Native
 
     [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     public static partial int execve(string path, nint* argv, nint* envp);
+
+    public const int FdCloexec = 1;
+    public const int ORdwr = 0x2;
+    public const int AfInet = 2;
+    public const int SockStream = 1;
+    public const int SolSocket = 1;
+    public const int SoReuseaddr = 2;
+
+    /// <summary>struct sockaddr_in: family, port and address in network byte order, eight bytes of padding.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct SockAddrIn
+    {
+        public ushort Family;
+        public ushort Port;
+        public uint Address;
+        public ulong Zero;
+    }
+
+    [LibraryImport("libc", SetLastError = true)]
+    public static partial int socket(int domain, int type, int protocol);
+
+    [LibraryImport("libc", SetLastError = true)]
+    public static partial int bind(int fd, SockAddrIn* address, uint length);
+
+    [LibraryImport("libc", SetLastError = true)]
+    public static partial int listen(int fd, int backlog);
+
+    [LibraryImport("libc", SetLastError = true)]
+    public static partial int setsockopt(int fd, int level, int name, int* value, uint length);
+
+    [LibraryImport("libc", SetLastError = true)]
+    public static partial int dup2(int fd, int target);
+
+    /// <summary>Returns 0 or an error number (it does not set errno). File actions and attributes are null: the child inherits as execve would.</summary>
+    [LibraryImport("libc", StringMarshalling = StringMarshalling.Utf8)]
+    public static partial int posix_spawn(int* pid, string path, nint fileActions, nint attributes, nint* argv, nint* envp);
+
+    [LibraryImport("libc", SetLastError = true)]
+    public static partial int waitpid(int pid, int* status, int options);
 }
