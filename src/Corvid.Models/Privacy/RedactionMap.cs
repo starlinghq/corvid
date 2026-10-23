@@ -103,17 +103,25 @@ public sealed partial class RedactionMap
     }
 
     // A union holding a credential is named as one, so the reason and the placeholder say what it holds.
-    private static bool IsCredential(string placeholder) => placeholder.StartsWith("<" + Tag(PrivacyEgress.CredentialLabel) + "_", StringComparison.Ordinal);
+    internal static bool IsCredential(string placeholder) => placeholder.StartsWith("<" + Tag(PrivacyEgress.CredentialLabel) + "_", StringComparison.Ordinal);
 
     private static string TagOf(string placeholder) => placeholder[1..placeholder.LastIndexOf('_')];
 
     /// <summary>Maps this session's placeholders in <paramref name="text"/> back to their values; unknown ones stay as written.</summary>
-    public string Restore(string text)
+    public string Restore(string text) => Restore(text, credentials: true);
+
+    /// <summary>
+    /// As <see cref="Restore(string)"/>, except that with <paramref name="credentials"/> false a credential placeholder
+    /// (<c>&lt;CREDENTIAL_1&gt;</c>) stays as written: for tool-call arguments, where a restored credential would leave the
+    /// machine through the tool (C-040).
+    /// </summary>
+    public string Restore(string text, bool credentials)
     {
         ArgumentNullException.ThrowIfNull(text);
         if (text.IndexOf('<', StringComparison.Ordinal) < 0)
             return text;
-        return PlaceholderPattern().Replace(text, match => TryResolve(match.Value, out var value) ? value : match.Value);
+        return PlaceholderPattern().Replace(text, match =>
+            (credentials || !IsCredential(match.Value)) && TryResolve(match.Value, out var value) ? value : match.Value);
     }
 
     /// <summary><c>account number</c> becomes <c>ACCOUNT_NUMBER</c>.</summary>

@@ -228,7 +228,10 @@ public sealed class EgressTurnTests : IDisposable
         Assert.Equal(1, readPage.Invocations);
         var afterTool = cloudProvider.Calls[1].AllText;
         Assert.DoesNotContain(token, afterTool, StringComparison.Ordinal);
-        Assert.Contains("export GH_TOKEN=<CREDENTIAL_1>", afterTool, StringComparison.Ordinal);
+        // C-040: the log scrubbed the result before the prompt was rendered from it, so the cloud sees the scrub's marker and
+        // the egress gate has no credential left to redact (and so nothing a response could restore).
+        Assert.Contains("export GH_TOKEN=ghp_[REDACTED:github-token:", afterTool, StringComparison.Ordinal);
+        Assert.DoesNotContain("<CREDENTIAL_", afterTool, StringComparison.Ordinal);
     }
 
     private (SessionModelSlots Slots, ModelBinding Cloud) Escalating(PrivacyEgress egress)

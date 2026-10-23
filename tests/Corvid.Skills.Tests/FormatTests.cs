@@ -181,4 +181,57 @@ public sealed class ScannerTests
     [Fact]
     public void LeavesOrdinaryInstructionsAlone() =>
         Assert.Empty(SkillScanner.Scan("SKILL.md", "1. Run `git status`.\n2. Read the README with read_file.\n3. Summarize the changes for the user."));
+
+    // Fictitious, in GitHub's classic shape.
+    private const string Token = "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8";
+
+    [Fact]
+    public void A_credential_value_is_a_finding_whose_excerpt_is_the_marker_never_the_line()
+    {
+        var finding = Assert.Single(SkillScanner.Scan("SKILL.md", $"# Deploy\n1. Run `GH_TOKEN={Token} gh release create`."));
+
+        Assert.Equal(("SKILL.md", 2, SkillScanner.CredentialValueRule), (finding.File, finding.Line, finding.Rule));
+        Assert.StartsWith("ghp_[REDACTED:github-token:", finding.Excerpt, StringComparison.Ordinal);
+        Assert.DoesNotContain(Token, finding.Excerpt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_private_key_across_lines_is_one_finding_on_its_first_line()
+    {
+        const string pem = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n-----END OPENSSH PRIVATE KEY-----";
+
+        var finding = Assert.Single(SkillScanner.Scan("scripts/key.txt", "use this key:\n" + pem));
+
+        Assert.Equal((2, SkillScanner.CredentialValueRule), (finding.Line, finding.Rule));
+        Assert.StartsWith("[REDACTED:private-key:", finding.Excerpt, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("Run `gh auth login --with-token < $GH_TOKEN_FILE`.")]
+    [InlineData("Set `api_key: <YOUR_API_KEY>` in the config.")]
+    [InlineData("Set `token: {0}` in the config.")]
+    public void A_vault_placeholder_or_a_reference_is_not_flagged(string line)
+    {
+        var text = string.Format(System.Globalization.CultureInfo.InvariantCulture, line,
+            Corvid.Vault.Contracts.Placeholders.Format("github-token", "Ab3dEf6hIj9kLm2nOp5qRs8t"));
+
+        Assert.DoesNotContain(SkillScanner.Scan("SKILL.md", text), finding => finding.Rule == SkillScanner.CredentialValueRule);
+    }
+
+    // Review of #59 (C-040), finding 5: a documentation placeholder is no credential, a real value beside one still is.
+    [Theory]
+    [InlineData("export OPENAI_API_KEY=your_api_key_here")]
+    [InlineData("GITHUB_TOKEN=YOUR_TOKEN gh pr list")]
+    [InlineData("API_KEY=\"replace-me\"")]
+    [InlineData("password: changeme")]
+    [InlineData("db_password = example-password")]
+    public void A_documentation_placeholder_is_not_flagged(string line) =>
+        Assert.DoesNotContain(SkillScanner.Scan("SKILL.md", "## Setup\n" + line), finding => finding.Rule == SkillScanner.CredentialValueRule);
+
+    [Theory]
+    [InlineData("export OPENAI_API_KEY=k7Qx9ZpL2mV4")]
+    [InlineData("export OPENAI_API_KEY=sk-proj-A1b2C3d4E5f6G7h8I9j0K1l2")]
+    [InlineData("API_KEY=\"your-key-2Xk9vQ\"")]
+    public void A_value_that_is_not_a_placeholder_is_still_flagged(string line) =>
+        Assert.Contains(SkillScanner.Scan("SKILL.md", "## Setup\n" + line), finding => finding.Rule == SkillScanner.CredentialValueRule);
 }

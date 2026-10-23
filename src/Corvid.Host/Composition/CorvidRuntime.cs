@@ -65,6 +65,8 @@ public sealed class CorvidRuntime : IAsyncDisposable
     private Task _maintenance = Task.CompletedTask;
     private FileStream? _schedulerLock;
     private Task? _scheduler;
+    // JobCompleted's handlers and the runs completed so far, under one gate (C-039).
+    private readonly ReplayingEvent<ScheduledJob, JobRun> _jobCompleted = new(JobCompletedReplay);
     private Task? _learning;
     private Task? _lessonLearning;
 
@@ -182,8 +184,22 @@ public sealed class CorvidRuntime : IAsyncDisposable
     /// <summary>Whether this process runs due jobs, and if not, why.</summary>
     public string SchedulerState { get; private set; } = "off (Corvid:Scheduler:Enabled)";
 
-    /// <summary>Raised after each scheduled run is recorded; a surface can say so (delivery to chats is C-020's).</summary>
-    public event Action<ScheduledJob, JobRun>? JobCompleted;
+    /// <summary>
+    /// Raised after each scheduled run is recorded; a surface can say so (delivery to chats is C-020's). The scheduler
+    /// starts with the runtime, so a run can finish before a surface subscribes (C-039): a new handler is replayed the runs
+    /// this runtime completed before it was added (the most recent <see cref="JobCompletedReplay"/>), synchronously on the
+    /// subscribing thread, and hears each later run live on the scheduler's thread; a live run can arrive while the replay
+    /// is still running, so handlers must be thread-safe. Each handler sees each run exactly once. A handler added long
+    /// after start can therefore hear old runs first.
+    /// </summary>
+    public event Action<ScheduledJob, JobRun>? JobCompleted
+    {
+        add => _jobCompleted.Add(value);
+        remove => _jobCompleted.Remove(value);
+    }
+
+    /// <summary>How many completed runs <see cref="JobCompleted"/> keeps to replay to a handler added later.</summary>
+    public const int JobCompletedReplay = 32;
 
     internal ITokenCounter? Counter { get; }
 
@@ -387,7 +403,7 @@ public sealed class CorvidRuntime : IAsyncDisposable
             Completed = (job, run, _) =>
             {
                 QueueJobResult(job, run);
-                JobCompleted?.Invoke(job, run);
+                _jobCompleted.Raise(job, run);
                 return Task.CompletedTask;
             },
         };

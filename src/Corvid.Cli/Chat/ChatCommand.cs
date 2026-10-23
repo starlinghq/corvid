@@ -45,12 +45,13 @@ internal static class ChatCommand
             // Scheduled runs happen in their own sessions; until the gateway delivers them (C-020), the chat says that they ran.
             void OnJob(ScheduledJob job, JobRun run) =>
                 renderer.Notice($"[grey]⏰ job {Markup.Escape(job.Name)}: {Markup.Escape(run.Status)} (session {Markup.Escape(run.SessionId)})[/]");
-            runtime.JobCompleted += OnJob;
             renderer.Banner(session.Id, session.Slots.Current(ModelSlots.Generator).Profile.Id, runtime.Tools.List().Count);
             foreach (var notice in runtime.DeciderNotices)
                 renderer.Notice($"[yellow]{Markup.Escape(notice)}[/]");
             if (session.Snapshot().Head > 0)
                 renderer.Notice($"[grey]Resumed: {session.Snapshot().Transcript.Length} entries in this session's log.[/]");
+            // After the banner: runs that finished since the runtime started are replayed here (C-039), then later ones live.
+            runtime.JobCompleted += OnJob;
 
             using var leave = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             Task<Delivery>? running = null;

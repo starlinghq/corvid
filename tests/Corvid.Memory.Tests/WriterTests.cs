@@ -233,4 +233,81 @@ public sealed class WriterTests
         Assert.Equal(PendingStatus.Pending, Writer(store).GetPending(staged.Pending!.PendingId)!.Status);
         Assert.Equal(PendingStatus.Rejected, Writer(store).Reject(staged.Pending.PendingId, cancellationToken: Ct).Status);
     }
+
+    // Fictitious, in GitHub's classic shape.
+    private const string Token = "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8";
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_fact_holding_a_credential_is_refused_before_the_extractor_the_gate_or_the_pending_store(bool tainted)
+    {
+        using var store = new TempStore();
+        var requests = Extractor.Requests.Count;
+
+        var result = await Writer(store, FakeCalibratedDecider.MemoryOp("add")).WriteAsync(
+            new MemoryWriteRequest(Session, $"The deploy token is {Token}", Tainted: tainted), Ct);
+
+        Assert.Equal(MemoryWriteStatus.Refused, result.Status);
+        Assert.Equal("holds a credential value (github-token); keep secrets in Corvid Vault", result.Reason);
+        Assert.Equal((null, null, null, null), (result.Operation, result.MemoryId, result.Pending, result.Decision));
+        Assert.Equal(requests, Extractor.Requests.Count);
+        Assert.Empty(store.Facts.AsOf(store.Time.GetUtcNow()));
+        Assert.Empty(Writer(store).ListPending());
+        Assert.Empty(Events(store));
+    }
+
+    [Fact]
+    public async Task A_labelled_value_is_refused_and_the_reason_never_holds_it()
+    {
+        using var store = new TempStore();
+
+        var result = await Writer(store).WriteAsync(new MemoryWriteRequest(Session, "The wifi password is pinecone-lake-2024"), Ct);
+
+        Assert.Equal(MemoryWriteStatus.Refused, result.Status);
+        Assert.DoesNotContain("pinecone", result.Reason!, StringComparison.Ordinal);
+        Assert.Contains("prose-value", result.Reason!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_block_edit_holding_a_credential_is_refused_and_the_block_is_unchanged()
+    {
+        using var store = new TempStore();
+        store.Blocks.Set("agent", "Use metric.");
+
+        var result = await Writer(store, FakeCalibratedDecider.MemoryOp("update")).EditBlockAsync(Session, "agent",
+            $"Use metric. Deploy with GH_TOKEN={Token}.", cancellationToken: Ct);
+
+        Assert.Equal(MemoryWriteStatus.Refused, result.Status);
+        Assert.Contains("github-token", result.Reason!, StringComparison.Ordinal);
+        Assert.Equal("Use metric.", store.Blocks.Get("agent").Content);
+        Assert.Empty(Writer(store).ListPending());
+        Assert.Empty(Events(store));
+    }
+
+    [Fact]
+    public async Task An_imported_entry_holding_a_credential_throws_without_the_value_and_stages_nothing()
+    {
+        using var store = new TempStore();
+        var writer = Writer(store);
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() =>
+            writer.StageImportAsync(Session, $"CI uses GH_TOKEN={Token}", "import:hermes MEMORY.md", Ct));
+
+        Assert.DoesNotContain(Token, error.Message, StringComparison.Ordinal);
+        Assert.Contains("github-token", error.Message, StringComparison.Ordinal);
+        Assert.Empty(writer.ListPending());
+        Assert.Empty(Events(store));
+    }
+
+    [Fact]
+    public async Task A_vault_placeholder_is_not_a_credential_and_is_remembered_as_usual()
+    {
+        using var store = new TempStore();
+        var placeholder = Corvid.Vault.Contracts.Placeholders.Format("github-token", "Ab3dEf6hIj9kLm2nOp5qRs8t");
+
+        var result = await Writer(store).WriteAsync(new MemoryWriteRequest(Session, $"CI reads GITHUB_TOKEN={placeholder}"), Ct);
+
+        Assert.Equal(MemoryWriteStatus.Staged, result.Status);
+    }
 }

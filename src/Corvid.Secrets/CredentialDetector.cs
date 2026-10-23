@@ -96,7 +96,8 @@ public readonly record struct CredentialMatch(CredentialKind Kind, int Start, in
 /// Never a credential, under every rule, when it is the whole value: a Vault placeholder (<see cref="Placeholders"/>;
 /// session-bound and meaningless off the machine), an egress placeholder (<c>&lt;CREDENTIAL_1&gt;</c>) or another name in angle
 /// brackets (<c>&lt;YOUR_API_KEY&gt;</c>), <c>[REDACTED]</c> alone or after a kept prefix (<c>ghp_[REDACTED]</c>, so
-/// <see cref="Redact"/> is idempotent), a variable reference (<c>$VAR</c>, <c>${VAR}</c>, <c>$(cmd)</c>, <c>%VAR%</c>,
+/// <see cref="Redact"/> is idempotent), a scrub marker (<c>[REDACTED:labelled-value]</c>,
+/// <c>ghp_[REDACTED:github-token:3fa91c0e]</c>, so <see cref="CredentialScrub"/> is idempotent too), a variable reference (<c>$VAR</c>, <c>${VAR}</c>, <c>$(cmd)</c>, <c>%VAR%</c>,
 /// <c>{{ ... }}</c>), a mask (<c>***</c>, <c>xxxx</c>), the JSON literals, a bare Authorization scheme, and a number of at most
 /// six digits. A value that only contains one of these is not exempt.
 /// </para>
@@ -161,7 +162,24 @@ public static partial class CredentialDetector
         if (rules.HasFlag(CredentialRules.KeyHeader))
             foreach (var match in PrivateKeyHeader().EnumerateMatches(text))
                 found.Add(new(CredentialKind.PrivateKeyHeader, match.Index, match.Length, 0, CredentialStrength.Shape));
+        DropInsideMarkers(text, found);
         return Merge(found);
+    }
+
+    // A redaction's or scrub's own output is never a credential, and neither is a part of it: "github-token:3fa91c0e" inside
+    // ghp_[REDACTED:github-token:3fa91c0e] reads as a labelled assignment, and "[REDACTED:prose-value]." after "the password
+    // is" as a prose value. Candidates that lie wholly inside one are dropped, so Redact and CredentialScrub are idempotent. A
+    // candidate that runs on past a marker's end ("the password is [REDACTED]CorrectHorseBattery", admin:[REDACTED]S3cretPw@)
+    // holds text the marker does not cover and is kept whole, as before markers were recognised (C-040 review).
+    private static void DropInsideMarkers(string text, List<CredentialMatch> found)
+    {
+        if (found.Count == 0 || !text.Contains("[REDACTED", StringComparison.Ordinal))
+            return;
+        var markers = new List<(int Start, int End)>();
+        foreach (var match in Marker().EnumerateMatches(text))
+            markers.Add((match.Index, match.Index + match.Length));
+        if (markers.Count > 0)
+            found.RemoveAll(candidate => markers.Exists(marker => candidate.Start >= marker.Start && candidate.End <= marker.End));
     }
 
     /// <summary>Whether <paramref name="text"/> holds a credential. A timeout counts as yes.</summary>
@@ -288,6 +306,9 @@ public static partial class CredentialDetector
             // PWD=/home/me is the shell's working directory, not a password.
             if (match.Groups["label"].ValueSpan.EndsWith("pwd", StringComparison.OrdinalIgnoreCase) && IsPathOrUrl(value))
                 continue;
+            // nextPageToken=..., page_token=...: a pagination cursor, which a model needs back to fetch the next page.
+            if (CursorLabel().IsMatch(match.Groups["label"].ValueSpan))
+                continue;
             found.Add(new(CredentialKind.LabelledValue, start, length, 0, CredentialStrength.Labelled));
         }
 
@@ -364,7 +385,8 @@ public static partial class CredentialDetector
         // A prose value keeps its "]" until the sentence's punctuation is trimmed.
         if (RedactionOutput().IsMatch(text.AsSpan(start, length)))
             return true;
-        if (end < text.Length && text[end] == ']' && text.AsSpan(start, length).EndsWith(Redacted.AsSpan(0, Redacted.Length - 1), StringComparison.Ordinal))
+        // The scrub's markers (ghp_[REDACTED:github-token:3fa91c0e], C-040) arrive cut before their "]" the same way.
+        if (end < text.Length && text[end] == ']' && length > 0 && text[start + length - 1] != ']')
             return RedactionOutput().IsMatch(text.AsSpan(start, length + 1));
         if (length == 0 || text[start] is not ('$' or '{'))
             return false;
@@ -446,6 +468,17 @@ public static partial class CredentialDetector
     {
         ArgumentNullException.ThrowIfNull(value);
         return IsExcluded(value);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="name"/>, as a whole, is a label whose value the labelled rule reports (<c>password</c>,
+    /// <c>GITHUB_TOKEN</c>, <c>api_key</c>, <c>db_pass</c>): for a caller that walks JSON and sees a key apart from its value.
+    /// A pagination cursor (<c>nextPageToken</c>, <c>page_token</c>, <c>NextContinuationToken</c>) is not one.
+    /// </summary>
+    public static bool IsSecretLabel(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return name.Length is > 0 and <= 128 && SecretLabel().IsMatch(name) && !CursorLabel().IsMatch(name);
     }
 
     /// <summary>The values no rule ever reports (see the class remarks).</summary>
@@ -606,16 +639,41 @@ public static partial class CredentialDetector
         IgnoreCase, TimeoutMilliseconds)]
     private static partial Regex LabelledValue();
 
+    // LabelledValue's label, whole.
+    [GeneratedRegex(
+        """\A(?:[A-Za-z0-9_.-]*(?:api[_-]?key|access[_-]?key|secret[_-]?key|secret|token|password|passwd|passphrase|private[_-]?key|client[_-]?secret)|(?:[A-Za-z0-9_.-]*[_.-])?(?:pass|pwd))\z""",
+        IgnoreCase, TimeoutMilliseconds)]
+    private static partial Regex SecretLabel();
+
+    // A pagination cursor's label, whole: nextPageToken, page_token, next_token, NextContinuationToken, cursor_token. Not
+    // csrf_token, which authenticates a form beside its session cookie, nor sync_token or resume_token, which some services
+    // issue as credentials.
+    [GeneratedRegex(@"\A[A-Za-z0-9_.-]*?(?:page|next|prev|previous|continuation|cursor)[_.-]?token\z", IgnoreCase, TimeoutMilliseconds)]
+    private static partial Regex CursorLabel();
+
     // curl -u user:PASSWORD, --user user:PASSWORD, --user='user:PASSWORD'.
     [GeneratedRegex(
         """(?:\A|\s)(?:-u|--user|--proxy-user)(?:[ \t]+|=)(?:"[^":\s]+:(?<value>(?:[^"\\\r\n]|\\[^\r\n])+)"|'[^':\s]+:(?<value>[^'\r\n]+)'|[^\s:"'@]+:(?<value>[^\s"'@]+))""",
         Options, TimeoutMilliseconds)]
     private static partial Regex UserOption();
 
-    // [REDACTED], alone or after a public prefix this detector keeps: what Redact writes.
-    [GeneratedRegex(@"\A(?:gh[pousr]_|github_pat_|xox[abeposr]-|xapp-|sk-|[sr]k_live_|glpat-|AIza|hf_|eyJ|AKIA|ASIA|ABIA|ACCA)?\[REDACTED\]\z",
+    // The scrub's kind names (CredentialScrub.KindName, plus its fallback and Unscannable), enumerated: an open kind pattern
+    // would make [REDACTED:sk-abcdefghijklmnopqrst] a marker and hide the key inside it from every rule.
+    private const string MarkerKinds =
+        "(?:private-key-header|private-key|authorization|aws-access-key|github-token|slack-token|sk-key|stripe-key|gitlab-token"
+        + "|google-api-key|huggingface-token|jwt|labelled-value|url-password|prose-value|encoded-hex|encoded-base64|user-password"
+        + "|credential|unscannable)";
+
+    // [REDACTED], alone or after a public prefix this detector keeps: what Redact writes. Also the scrub's markers (C-040):
+    // [REDACTED:labelled-value], ghp_[REDACTED:github-token:3fa91c0e].
+    [GeneratedRegex(@"\A(?:gh[pousr]_|github_pat_|xox[abeposr]-|xapp-|sk-|[sr]k_live_|glpat-|AIza|hf_|eyJ|AKIA|ASIA|ABIA|ACCA)?\[REDACTED(?::" + MarkerKinds + @"(?::[0-9a-f]{8})?)?\]\z",
         Options, TimeoutMilliseconds)]
     private static partial Regex RedactionOutput();
+
+    // RedactionOutput anywhere in a text.
+    [GeneratedRegex(@"(?:\bgh[pousr]_|\bgithub_pat_|\bxox[abeposr]-|\bxapp-|\bsk-|\b[sr]k_live_|\bglpat-|\bAIza|\bhf_|\beyJ|\bAKIA|\bASIA|\bABIA|\bACCA)?\[REDACTED(?::" + MarkerKinds + @"(?::[0-9a-f]{8})?)?\]",
+        Options, TimeoutMilliseconds)]
+    private static partial Regex Marker();
 
     // A whole value that is a reference or a placeholder: $VAR, ${VAR}, $(cmd), %VAR%, {{ ... }}, <NAME>, ‹NAME›.
     [GeneratedRegex(

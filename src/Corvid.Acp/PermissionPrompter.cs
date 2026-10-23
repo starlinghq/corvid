@@ -27,8 +27,11 @@ internal sealed class PermissionPrompter(AcpConnectionContext context, AcpSessio
         var tools = context.Tools;
         var callId = prompt.CallId ?? "approval-" + prompt.ApprovalId;
         var call = prompt.CallId is { } id ? reporter.Call(id) : null;
-        var arguments = call?.Arguments;
-        var toolName = call?.ToolName ?? "approval";
+        // The diff, locations and raw input show what runs: the prompt's in-memory action, not the logged call, whose
+        // arguments are credential-scrubbed (C-040). The logged call is the fallback for a bare shell action.
+        var action = prompt.Action as ToolAction;
+        var arguments = action?.Arguments ?? call?.Arguments;
+        var toolName = action?.Tool.Name ?? call?.ToolName ?? "approval";
         // The call is announced before the request names it, and everything the turn queued before it is sent first.
         await reporter.AnnounceAsync(callId, prompt.Analysis.Text, tools?.Kind(toolName) ?? ToolKinds.Other).ConfigureAwait(false);
 
