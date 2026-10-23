@@ -645,14 +645,21 @@ public static partial class CredentialDetector
         Options, TimeoutMilliseconds)]
     private static partial Regex UserOption();
 
+    // The scrub's kind names (CredentialScrub.KindName, plus its fallback and Unscannable), enumerated: an open kind pattern
+    // would make [REDACTED:sk-abcdefghijklmnopqrst] a marker and hide the key inside it from every rule.
+    private const string MarkerKinds =
+        "(?:private-key-header|private-key|authorization|aws-access-key|github-token|slack-token|sk-key|stripe-key|gitlab-token"
+        + "|google-api-key|huggingface-token|jwt|labelled-value|url-password|prose-value|encoded-hex|encoded-base64|user-password"
+        + "|credential|unscannable)";
+
     // [REDACTED], alone or after a public prefix this detector keeps: what Redact writes. Also the scrub's markers (C-040):
     // [REDACTED:labelled-value], ghp_[REDACTED:github-token:3fa91c0e].
-    [GeneratedRegex(@"\A(?:gh[pousr]_|github_pat_|xox[abeposr]-|xapp-|sk-|[sr]k_live_|glpat-|AIza|hf_|eyJ|AKIA|ASIA|ABIA|ACCA)?\[REDACTED(?::[a-z][a-z0-9-]*(?::[0-9a-f]{8})?)?\]\z",
+    [GeneratedRegex(@"\A(?:gh[pousr]_|github_pat_|xox[abeposr]-|xapp-|sk-|[sr]k_live_|glpat-|AIza|hf_|eyJ|AKIA|ASIA|ABIA|ACCA)?\[REDACTED(?::" + MarkerKinds + @"(?::[0-9a-f]{8})?)?\]\z",
         Options, TimeoutMilliseconds)]
     private static partial Regex RedactionOutput();
 
     // RedactionOutput anywhere in a text.
-    [GeneratedRegex(@"(?:\bgh[pousr]_|\bgithub_pat_|\bxox[abeposr]-|\bxapp-|\bsk-|\b[sr]k_live_|\bglpat-|\bAIza|\bhf_|\beyJ|\bAKIA|\bASIA|\bABIA|\bACCA)?\[REDACTED(?::[a-z][a-z0-9-]*(?::[0-9a-f]{8})?)?\]",
+    [GeneratedRegex(@"(?:\bgh[pousr]_|\bgithub_pat_|\bxox[abeposr]-|\bxapp-|\bsk-|\b[sr]k_live_|\bglpat-|\bAIza|\bhf_|\beyJ|\bAKIA|\bASIA|\bABIA|\bACCA)?\[REDACTED(?::" + MarkerKinds + @"(?::[0-9a-f]{8})?)?\]",
         Options, TimeoutMilliseconds)]
     private static partial Regex Marker();
 

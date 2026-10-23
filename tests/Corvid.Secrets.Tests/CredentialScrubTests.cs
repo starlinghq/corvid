@@ -87,6 +87,25 @@ public sealed class CredentialScrubTests
     [InlineData("[REDACTED]")]
     public void A_marker_is_exempt(string marker) => Assert.True(CredentialDetector.IsExempt(marker));
 
+    [Fact]
+    public void Every_kind_name_makes_an_exempt_marker()
+    {
+        foreach (var kind in Enum.GetValues<CredentialKind>())
+        {
+            Assert.True(CredentialDetector.IsExempt($"[REDACTED:{CredentialScrub.KindName(kind)}]"), kind.ToString());
+            Assert.True(CredentialDetector.IsExempt($"[REDACTED:{CredentialScrub.KindName(kind)}:0123abcd]"), kind.ToString());
+        }
+    }
+
+    [Theory]
+    [InlineData("[REDACTED:sk-abcdefghijklmnopqrst]", "sk-abcdefghijklmnopqrst")]
+    [InlineData("[REDACTED:glpat-abcdefghijklmnopqrstuv]", "glpat-abcdefghijklmnopqrstuv")]
+    public void A_key_dressed_as_a_marker_kind_is_still_found(string text, string key)
+    {
+        Assert.False(CredentialDetector.IsExempt(text));
+        Assert.Contains(key, CredentialDetector.Find(text, CredentialDetector.Egress).Select(match => match.ValueIn(text)));
+    }
+
     [Theory]
     [InlineData("[REDACTED:Labelled]")]
     [InlineData("ghp_[REDACTED:github-token:3FA91C0E]")]

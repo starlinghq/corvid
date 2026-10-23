@@ -3684,7 +3684,9 @@ Deferred:
   `VaultClient.ScrubAsync` is an async, rate-limited, audited RPC, and Kernel has no reference to `Corvid.Vault.Client`. It
   needs an async pre-append hook at the tool-result site and a budget for the oracle risk.
 - Scrubbing `UserMessage`: a user who deliberately hands the agent a key would lose it from the prompt. The intended route is
-  Vault (`corvid-vault set`, or a chat ingest that does not exist yet).
+  Vault (`corvid-vault set`, or a chat ingest that does not exist yet). A consequence: `Compacted` summaries, `GoalSet` and
+  `TodosSet` are not scrubbed (models write them, and for a tool-sourced value they only ever saw the marker), so a
+  credential the user pasted can be carried into one and indexed into `memory.db` with it.
 - A retroactive scrub of existing `events.db` and `memory.db`: the log is append-only (UPDATE and DELETE triggers), so it
   needs an offline `corvid scrub` rewrite or a migration, and a rebuild of the episodic index.
 - A keyed (per-install HMAC) marker hash, so labelled values could carry a correlator too.
