@@ -117,4 +117,65 @@ public sealed class CompactNowTests
         Assert.Equal(new ModelRequestContext(TurnHarness.Session, Tainted: true), context);
         Assert.Null(ModelRequestContext.Current);
     }
+
+    [Fact]
+    public async Task A_focus_reaches_every_chunk_and_the_event_and_the_history_shrinks()
+    {
+        // A small summarizer window, so the range is map-reduced in several chunks (as in CompactionTests).
+        var summarizer = new FakeSummarizer();
+        using var harness = new TurnHarness(new FakeGenerator(), options: NoTools, summarizer: summarizer, summarizerContext: 1_600);
+        var answer = string.Join(" ", Enumerable.Repeat("The quarterly report needs the revenue table, the churn chart and the hiring plan.", 25));
+        harness.Seed(
+            new UserMessage("draft section one"), new AssistantMessage(answer),     // 1-2
+            new UserMessage("draft section two"), new AssistantMessage(answer),     // 3-4
+            new UserMessage("draft section three"), new AssistantMessage("ok"));    // 5-6
+
+        var result = await harness.Runner().CompactNowAsync("  the revenue figures for Q3  ", Ct);
+
+        Assert.Equal(CompactionStatus.Compacted, result.Status);
+        var contents = summarizer.Contents.ToList();
+        Assert.True(contents.Count >= 2, $"{contents.Count} calls");
+        // The focus is its own line after each chunk's header, before the events, and the system prompt is unchanged.
+        Assert.All(contents, content =>
+        {
+            var lines = content.Split('\n');
+            Assert.StartsWith("Events 1–4", lines[0], StringComparison.Ordinal);
+            Assert.Equal("The user asked this summary to keep, in full: the revenue figures for Q3", lines[1]);
+            Assert.Single(lines, line => line.StartsWith("The user asked", StringComparison.Ordinal));
+        });
+        Assert.All(summarizer.Calls, call => Assert.Equal(ContextCompactor.Instructions, call.Messages[0].Text));
+        var compacted = Assert.IsType<Compacted>(harness.Payloads().OfType<Compacted>().Single());
+        Assert.Equal("the revenue figures for Q3", compacted.Focus);
+        Assert.Equal(contents.Count, compacted.Chunks);
+
+        Assert.NotNull(result.PromptTokensBefore);
+        Assert.NotNull(result.PromptTokensAfter);
+        Assert.True(result.PromptTokensBefore > result.PromptTokensAfter, $"{result.PromptTokensBefore} → {result.PromptTokensAfter}");
+        // Describe() feeds the turn loop's notes and the golden trajectories, so it does not change.
+        Assert.Equal($"compacted events 1–4 by summarizer in {contents.Count} chunk(s)", result.Describe());
+    }
+
+    [Fact]
+    public async Task Without_a_focus_the_event_has_none_and_nothing_to_compact_carries_only_the_before_figure()
+    {
+        var summarizer = new FakeSummarizer();
+        using var harness = Harness(summarizer);
+        harness.Seed(new UserMessage("hello"), new AssistantMessage("hi"));
+        var runner = harness.Runner();
+
+        var nothing = await runner.CompactNowAsync("keep the greeting", Ct);
+        Assert.Equal(CompactionStatus.NothingToCompact, nothing.Status);
+        Assert.True(nothing.PromptTokensBefore > 0);
+        Assert.Null(nothing.PromptTokensAfter);
+        Assert.Empty(summarizer.Calls);
+
+        harness.Seed(new UserMessage("again"), new AssistantMessage("hi again"));
+        var written = await runner.CompactNowAsync(Ct);
+        Assert.Equal(CompactionStatus.Compacted, written.Status);
+        Assert.Null(Assert.Single(harness.Payloads().OfType<Compacted>()).Focus);
+        Assert.DoesNotContain("The user asked", Assert.Single(summarizer.Contents), StringComparison.Ordinal);
+        // An unfocused event keeps C-016's persisted form: no "focus" property.
+        var stored = harness.Log.Read(TurnHarness.Session, cancellationToken: Ct).Single(item => item.Payload is Compacted);
+        Assert.DoesNotContain("\"focus\"", EventJson.Serialize(stored.Payload), StringComparison.Ordinal);
+    }
 }

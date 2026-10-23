@@ -38,8 +38,9 @@ public static class CoreCommands
             .Add(new SlashCommand("mcp", "Configured MCP servers: state, trust and the tools each one added.", McpCommands.Usage, McpCommands.RunAsync))
             .Add(new SlashCommand("todos", "The session's todo list.", "", Todos))
             .Add(new SlashCommand("undo", "Revert the last turn's file changes and take it out of the conversation.", "", UndoAsync))
-            .Add(new SlashCommand("compact", "Compact the conversation before the latest turn now.", "", CompactAsync))
-            .Add(new SlashCommand("cron", "Scheduled jobs: list, pause, resume or remove one.", CronCommands.Usage, CronCommands.RunAsync))
+            .Add(new SlashCommand("compact", "Compact the conversation before the latest turn now, keeping what you name in full.",
+                "[<what to keep>]", CompactAsync))
+            .Add(new SlashCommand("cron", "Scheduled jobs: list, run history, pause, resume or remove one.", CronCommands.Usage, CronCommands.RunAsync))
             .Add(new SlashCommand("rollback", "List checkpoints, or go back to before the Nth latest one (files and conversation).",
                 "[N]", RollbackAsync))
             .Add(new SlashCommand("cancel", "Cancel the running turn.", "", Cancel))
@@ -468,30 +469,55 @@ public static class CoreCommands
 
     // ---- /compact (C-035) ----
 
+    /// <summary>The longest focus <c>/compact</c> takes (C-041); every map chunk repeats it, so it costs summarizer room.</summary>
+    public const int MaxCompactFocusChars = 500;
+
     /// <summary>
     /// Compacts everything before the latest turn now, by the turn loop's own rule and budget; the user acting directly, so
-    /// there is no approval step.
+    /// there is no approval step. The rest of the line, when there is one, is what the summary must keep (C-041). The output
+    /// ends with the rendered history's tokens before and after, on the generator's counter.
     /// </summary>
     private static async ValueTask<CommandOutput> CompactAsync(SlashCommandContext context, SlashInvocation invocation, CancellationToken cancellationToken)
     {
-        if (!invocation.Arguments.IsEmpty)
-            return CommandOutput.Error("Usage: /compact (it takes no arguments).");
-        var result = await context.Session.CompactAsync(cancellationToken).ConfigureAwait(false);
+        var focus = invocation.Text.Trim();
+        if (focus.Length > MaxCompactFocusChars)
+            return CommandOutput.Error(string.Create(CultureInfo.InvariantCulture,
+                $"Usage: /compact [<what to keep>], at most {MaxCompactFocusChars} characters (this one has {focus.Length})."));
+        var result = await context.Session.CompactAsync(focus.Length == 0 ? null : focus, cancellationToken).ConfigureAwait(false);
         switch (result.Status)
         {
             case Kernel.Context.CompactionStatus.Compacted:
                 var lines = new List<string> { result.Describe() + "." };
+                if (focus.Length > 0)
+                    lines.Add("kept in full: " + focus);
                 if (result.Record?.Goal is { Length: > 0 } goal)
                     lines.Add("goal: " + goal);
                 if (result.Record?.NextStep is { Length: > 0 } next)
                     lines.Add("next step: " + next);
+                if (Figures(result) is { } figures)
+                    lines.Add(figures);
                 return new CommandOutput { Lines = [.. lines], Tone = OutputTone.Success };
             case Kernel.Context.CompactionStatus.NothingToCompact:
-                return CommandOutput.Text("Nothing before the latest turn needs compacting.");
+                return new CommandOutput
+                {
+                    Lines = Figures(result) is { } history
+                        ? ["Nothing before the latest turn needs compacting.", history]
+                        : ["Nothing before the latest turn needs compacting."],
+                };
             default:
                 return CommandOutput.Warning(result.Describe() + ".");
         }
     }
+
+    // History only: the system prompt, the offered tools and the memory and skill notes are chosen per turn.
+    private const string FiguresNote = " tokens (generator's counter; system prompt, tools and notes not counted).";
+
+    internal static string? Figures(Kernel.Context.CompactionResult result) => (result.PromptTokensBefore, result.PromptTokensAfter) switch
+    {
+        ({ } before, { } after) => string.Create(CultureInfo.InvariantCulture, $"history {before:N0} → {after:N0}") + FiguresNote,
+        ({ } before, null) => string.Create(CultureInfo.InvariantCulture, $"history {before:N0}") + FiguresNote,
+        _ => null,
+    };
 
     // ---- /undo, /rollback (C-014) ----
 
