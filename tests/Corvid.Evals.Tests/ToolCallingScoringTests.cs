@@ -270,21 +270,35 @@ public sealed class ToolCallingScoringTests : IDisposable
         var production = Get(scores, "correct", "shortlist-kev");
         Assert.DoesNotContain(runs.Single(run => run.Configuration == ToolCallingConfiguration.ShortlistKev).Events.OfType<Decision>(),
             decision => decision.QuestionId.StartsWith("injection/", StringComparison.Ordinal));
-        Assert.False(production.WithheldDescriptions);
+        Assert.False(production.DescriptionFlagged);
         Assert.Contains("weather__get_weather", production.Offered);
         Assert.Equal(CaseOutcome.Correct, production.Outcome);
 
         var ablation = Get(scores, "correct", "shortlist-kev-no-desc");
         Assert.DoesNotContain(runs.Single(run => run.Configuration == ToolCallingConfiguration.ShortlistKevNoDescriptions).Events.OfType<Decision>(),
             decision => decision.QuestionId.StartsWith("injection/", StringComparison.Ordinal));
-        Assert.False(ablation.WithheldDescriptions);
+        Assert.False(ablation.DescriptionFlagged);
         Assert.Equal(CaseOutcome.Correct, ablation.Outcome);
 
         var report = ToolCallingReport.Build(new ToolCallingHeader("test.1", new string('a', 64), new string('b', 64), 4, "floors", "abc1234",
             ImmutableSortedDictionary<string, string>.Empty, ImmutableSortedDictionary<string, string>.Empty,
             ImmutableSortedDictionary<string, string>.Empty, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch), scores);
-        Assert.Equal(0, report.Summaries.Single(summary => summary.Configuration == "shortlist-kev").DescriptionsWithheld);
-        Assert.Equal(0, report.Summaries.Single(summary => summary.Configuration == "shortlist-kev-no-desc").DescriptionsWithheld);
+        Assert.Equal(0, report.Summaries.Single(summary => summary.Configuration == "shortlist-kev").DescriptionsFlagged);
+        Assert.Equal(0, report.Summaries.Single(summary => summary.Configuration == "shortlist-kev-no-desc").DescriptionsFlagged);
+
+        // Review of #63, finding 3: an acted outside-description verdict is counted as flagged, not withheld; the tool is
+        // still offered in that turn, and the report names the count so.
+        var flagged = production with { Acted = ["injection/mcp:weather=mark_tainted"] };
+        Assert.True(flagged.DescriptionFlagged);
+        Assert.Contains("weather__get_weather", flagged.Offered);
+        var flaggedReport = ToolCallingReport.Build(report.Header, [flagged]);
+        Assert.Equal(1, flaggedReport.Summaries.Single().DescriptionsFlagged);
+        Assert.Contains("| MCP descriptions flagged |", flaggedReport.ToMarkdown(), StringComparison.Ordinal);
+        Assert.DoesNotContain("withheld", flaggedReport.ToMarkdown(), StringComparison.OrdinalIgnoreCase);
+        using var json = JsonDocument.Parse(flaggedReport.ToJson());
+        var summaryJson = json.RootElement.GetProperty("summaries")[0];
+        Assert.Equal(1, summaryJson.GetProperty("descriptions_flagged").GetInt32());
+        Assert.False(summaryJson.TryGetProperty("descriptions_withheld", out _));
     }
 
     private const string OverCallCases = """

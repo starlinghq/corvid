@@ -3568,12 +3568,22 @@ or checker rule.
   new or changed), `ChangedAfterWithhold`, and the review verbs. Holds written under C-033 stay held at every start until the
   user runs `/mcp diff` and `/mcp allow <server> <tool> --hash <hex>` (or `corvid mcp allow`); they are never released
   silently, and an allowed tool is registered as an untrusted server's (asks on every call, taints). Per S2 most such holds are
-  false positives; a one-shot release verb is deferred.
+  false positives; a one-shot release verb is deferred. Review of #63, finding 2 (persisted holds come from the generic
+  verdict this item stops acting on): kept as the conservative choice pending the maintainer's decision; releasing them at
+  listing would register, unreviewed, tools that were taken away on an `injection` verdict, and whether a benign trusted
+  tool should stay an untrusted server's once allowed is C-033's deferred trust-restoring verb (review of #47, finding 3).
 - Untrusted servers: as before, minus withholding. Their descriptions taint the generator request that carries them
-  (`ToolRisk.OutsideDescription`), their chunks are asked at ingress, and their tools are not read-only, so every call asks
-  through `pre-execute`. This is less conservative than C-033 in one respect: a confident generic yes on an untrusted
-  description used to withhold the tool, and now only taints and logs. The plan's spec asks for this; per-call approval and
-  taint are the controls that remain, and the logged verdicts are the data a dedicated question would be fitted from.
+  (`ToolRisk.OutsideDescription`), their chunks are asked at ingress, and their tools are not read-only (annotations are
+  ignored), so a call asks through `pre-execute`, with one exception: a tool the user lists in the server's `ReadOnlyTools`
+  is read-only (`McpToolMapping.Risk` honours the declaration), and on a server without `ReachesNetwork` it has no network
+  effect either, so it runs without asking, tainted or not (`RunCallsAsync` asks a read-only tool only for `Network`, and
+  the pipeline auto-runs a read-only tool with no forced reason). This is less conservative than C-033 in one respect: a
+  confident generic yes on an untrusted description used to withhold the tool, and now only taints and logs; for that
+  declared read-only, offline tool the yes changes nothing it may do, and taint gates only egress. The plan's spec asks for
+  this; per-call approval (outside that exception) and taint are the controls that remain, and the logged verdicts are the
+  data a dedicated question would be fitted from. Forcing an ask for an acted chunk's tools (review of #63, finding 1) is
+  deferred: `ValidCall.Ask` alone does not ask, since `ApprovalPipeline.DecideAsync` auto-runs a read-only tool without a
+  forced reason, so it needs a new forced reason carried through `ApprovalContext` into `Corvid.Approvals`, with its tests.
 - Trusted servers: the pattern scan and pins at listing only; no generic question about their descriptions.
 - Why `description_injection` is deferred: a question row with its own floor (floors-file version bump, the C-025/C-026
   pattern) needs a labelled set of benign and poisoned MCP descriptions to fit and validate the floor with C-021's
@@ -3586,6 +3596,11 @@ or checker rule.
   `report.json` writes `turn_p50_delta_ms` and `pass_condition: "c-037"`); reports in `results/` were computed under the old
   rule and are left as they are. The re-run is in [the write-up's addendum](spikes/S2-tool-calling.md#addendum-c-037-2026-10-23-b85c940):
   **pass**: (c) − (a) = +7.2 points on strict tool choice (78.4% against 71.2%) and +5.8 on strict argument match (75.0% against 69.2%), turn p50 3.7 s against 13.2 s under heavy machine load; (c) and the ablation made identical calls on all 208 cases and (c) asked no description question.
+- Review of #63, finding 3: the scorer's `WithheldDescriptions` counted acted `injection/mcp:*` verdicts, which withhold
+  nothing since C-037, so it is `CaseScore.DescriptionFlagged`, the report column "MCP descriptions flagged" and
+  `descriptions_flagged` in `report.json`, whose format is `corvid-tool-calling-report/3` for the renamed key. The reports in
+  `results/` and `results-c037/` were written before the rename (format `/2`, `descriptions_withheld`) and are left as they
+  are; in `results-c037/` the count is 0 in every configuration.
 - Tests: `tests/Corvid.Kernel.Tests` (`DescriptionTaintTests`: a confident calibrated yes on an outside chunk is asked, logs
   `mark_tainted`, taints and withholds nothing, the tool stays in the `tool` options, the generator call and the registry, and
   its call asks once and runs; a trusted server's descriptions produce no `injection/mcp:*` decision and do not taint; outside
@@ -3600,7 +3615,8 @@ or checker rule.
   offered tools and the server receives no call; a hold persisted by C-033's `Withhold` is held at the next start, shown by
   `/mcp diff` with its decision, refused by `accept` and allowed with `--hash` as an untrusted tool).
   `tests/Corvid.Evals.Tests` (`ToolCallingScoringTests`: the restated condition gates on strict tool, strict args and turn
-  p50 only; a confident `injection/mcp:weather` script withholds nothing and (c) asks no trusted description question).
+  p50 only; a confident `injection/mcp:weather` script withholds nothing and (c) asks no trusted description question; an
+  acted `injection/mcp:*` verdict on a case whose tool was offered counts as flagged, under `descriptions_flagged`).
 - Not built: the dedicated `description_injection` question and floor and withholding on it; asking about trusted
   descriptions again (only with that question); asking descriptions at listing time rather than at ingress (would take the
   outside-chunk questions off the ingress batch's latency); releasing or migrating persisted `injection` holds (an optional

@@ -53,7 +53,7 @@ public sealed record ConfigurationSummary(
     int ToolCases,
     int NoCall,
     int Nudged,
-    int DescriptionsWithheld,
+    int DescriptionsFlagged,
     int FirstResponseCorrect,
     int RepairedToCorrect,
     int ArgsValid,
@@ -161,7 +161,7 @@ public sealed class ToolCallingReport
                 .ToImmutableSortedDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal),
             scores.Count(score => score.Outcome == CaseOutcome.Clarified),
             toolCases.Count, toolCases.Count(score => score.Outcome == CaseOutcome.NoCall),
-            scores.Count(score => score.Nudged), scores.Count(score => score.WithheldDescriptions),
+            scores.Count(score => score.Nudged), scores.Count(score => score.DescriptionFlagged),
             scores.Count(score => score.FirstResponseCorrect), scores.Count(score => score.RepairedToCorrect),
             offeredCalls.Count(score => score.ArgsValid == true), offeredCalls.Count,
             Distribution.Of(scores.Select(score => score.TurnMs)), Distribution.Of(scores.Select(score => score.GeneratorMs)),
@@ -237,7 +237,7 @@ public sealed class ToolCallingReport
         using (var writer = new Utf8JsonWriter(stream, Indented))
         {
             writer.WriteStartObject();
-            writer.WriteString("format", "corvid-tool-calling-report/2");
+            writer.WriteString("format", "corvid-tool-calling-report/3");
             WriteHeader(writer);
             writer.WritePropertyName("headline");
             if (Headline is { } headline)
@@ -312,7 +312,7 @@ public sealed class ToolCallingReport
         writer.WriteNumber("tool_cases", summary.ToolCases);
         writer.WriteNumber("no_call", summary.NoCall);
         writer.WriteNumber("nudged", summary.Nudged);
-        writer.WriteNumber("descriptions_withheld", summary.DescriptionsWithheld);
+        writer.WriteNumber("descriptions_flagged", summary.DescriptionsFlagged);
         writer.WriteNumber("first_response_correct", summary.FirstResponseCorrect);
         writer.WriteNumber("repaired_to_correct", summary.RepairedToCorrect);
         writer.WriteNumber("args_valid", summary.ArgsValid);
@@ -463,13 +463,13 @@ public sealed class ToolCallingReport
         md.AppendLine();
         md.AppendLine("Correct tool and args match are strict: a case whose expected steps all ran and then another tool ran is over-called, a miss. The two lenient columns count it as correct.");
         md.AppendLine();
-        md.AppendLine("| Configuration | n | Correct tool | Args match | Over-called | Correct tool, lenient | Args match, lenient | Wrong tool | Invalid name | Malformed | No call | Called on no-tool | Clarified | Escalated | Failed | Correct, non-escalated | Args valid (first offered call) | First response correct | Repaired | Nudged | MCP tools withheld |");
+        md.AppendLine("| Configuration | n | Correct tool | Args match | Over-called | Correct tool, lenient | Args match, lenient | Wrong tool | Invalid name | Malformed | No call | Called on no-tool | Clarified | Escalated | Failed | Correct, non-escalated | Args valid (first offered call) | First response correct | Repaired | Nudged | MCP descriptions flagged |");
         md.AppendLine("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
         foreach (var s in Summaries)
         {
             int O(CaseOutcome outcome) => s.Outcomes[ToolCallingScorer.Name(outcome)];
             md.AppendLine(CultureInfo.InvariantCulture,
-                $"| {s.Configuration} | {s.Cases} | {Share(s.ToolCorrect, s.Cases)} | {Share(s.ArgsCorrect, s.Cases)} | {O(CaseOutcome.OverCalled)} | {Share(s.ToolCorrectOrOverCalled, s.Cases)} | {Share(s.ArgsCorrectOrOverCalled, s.Cases)} | {O(CaseOutcome.WrongTool)} | {O(CaseOutcome.InvalidName)} | {O(CaseOutcome.Malformed)} | {O(CaseOutcome.NoCall)} of {s.ToolCases} | {O(CaseOutcome.CalledOnNoTool)} | {s.Clarified} | {s.Escalated}{Reasons(s)} | {O(CaseOutcome.Failed)} | {Share(s.ToolCorrectNonEscalated, s.NonEscalated)} | {s.ArgsValid}/{s.ArgsValidOf} | {s.FirstResponseCorrect} | {s.RepairedToCorrect} | {s.Nudged} | {s.DescriptionsWithheld} |");
+                $"| {s.Configuration} | {s.Cases} | {Share(s.ToolCorrect, s.Cases)} | {Share(s.ArgsCorrect, s.Cases)} | {O(CaseOutcome.OverCalled)} | {Share(s.ToolCorrectOrOverCalled, s.Cases)} | {Share(s.ArgsCorrectOrOverCalled, s.Cases)} | {O(CaseOutcome.WrongTool)} | {O(CaseOutcome.InvalidName)} | {O(CaseOutcome.Malformed)} | {O(CaseOutcome.NoCall)} of {s.ToolCases} | {O(CaseOutcome.CalledOnNoTool)} | {s.Clarified} | {s.Escalated}{Reasons(s)} | {O(CaseOutcome.Failed)} | {Share(s.ToolCorrectNonEscalated, s.NonEscalated)} | {s.ArgsValid}/{s.ArgsValidOf} | {s.FirstResponseCorrect} | {s.RepairedToCorrect} | {s.Nudged} | {s.DescriptionsFlagged} |");
         }
         md.AppendLine();
 

@@ -86,10 +86,11 @@ public sealed record CaseScore(
     public bool ArgumentsCorrectOrOverCalled => ToolCorrectOrOverCalled && ArgsMatch != false;
 
     /// <summary>
-    /// C-033's ingress description check acted, which withheld some shortlisted MCP tools from the turn. Since C-037 an acted
-    /// verdict withholds nothing and only outside descriptions are asked, so with the set's trusted extras this stays false.
+    /// An ingress <c>injection/mcp:*</c> verdict about shortlisted MCP descriptions acted. Since C-037 that flags the chunk
+    /// (logged, the turn tainted) and withholds nothing; only outside descriptions are asked, so with the set's trusted extras
+    /// this stays false. Under C-033 (reports in <c>results/</c>) the same count was the turns that withheld tools.
     /// </summary>
-    public bool WithheldDescriptions => Acted.Any(acted => acted.StartsWith("injection/mcp:", StringComparison.Ordinal));
+    public bool DescriptionFlagged => Acted.Any(acted => acted.StartsWith("injection/mcp:", StringComparison.Ordinal));
 }
 
 /// <summary>
