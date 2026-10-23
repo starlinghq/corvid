@@ -88,6 +88,12 @@ public sealed record ApprovalPrompt(
 {
     /// <summary>The tool call waiting on the prompt (<see cref="ApprovalContext.CallId"/>), so a surface can show the two together.</summary>
     public string? CallId { get; init; }
+
+    /// <summary>
+    /// The action as it runs, with its in-memory arguments. The logged <see cref="ToolCallIssued"/> holds them credential-scrubbed
+    /// (C-040), so a surface that shows what runs or what is written (a diff, the raw input) builds it from this.
+    /// </summary>
+    public ProposedAction? Action { get; init; }
 }
 
 /// <param name="Scope">Session or always stores a structural rule (allow or deny) for each side-effecting command.</param>
@@ -312,6 +318,7 @@ public sealed class ApprovalPipeline
         var prompt = new ApprovalPrompt(approvalId, context.SessionId, assessment.Analysis, assessment.Reasons, assessment.Offered, deadline)
         {
             CallId = context.CallId,
+            Action = action,
         };
         ApprovalAnswer answer;
         using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))

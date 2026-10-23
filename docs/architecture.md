@@ -3672,6 +3672,173 @@ every API used (`CertificateRequest`, `X509*Extension`, `SslStream`, `SslStreamC
 Not built: everything on the launcher side (V-003b), per-request `ask` for sandboxed requests, streaming, ports other
 than 443, websockets, NameConstraints, a Vault-side ceiling on pass-through, and the outbound exfiltration check.
 
+## Credential scrub at the event log and memory (C-040)
+
+C-032 kept credential values out of what leaves the machine, but not out of what Corvid stores: a token a tool printed was
+written to `events.db` as it was, indexed into `memory.db`, rendered into every later prompt, and could be remembered as a
+fact. C-040 scrubs credential values at the stores' write points, refuses them in memory and skills, and stops the egress
+gate's restore from putting a credential into a tool call.
+
+- Marker. `CredentialScrub` in `Corvid.Secrets` (beside `CredentialDetector`, still a leaf) replaces each match with a
+  non-reversible marker. A `Shape` match keeps its public prefix and gets its kind and the first 8 hex digits of the SHA-256
+  of the whole matched value: `ghp_[REDACTED:github-token:3fa91c0e]`. The hash is a correlator (the same token in two events
+  has the same marker), not protection, and is only given to shapes, whose entropy makes 32 bits useless as a guess oracle.
+  A labelled, URL-password, `curl -u` or prose match is a value a person chose, where an unkeyed hash would confirm a
+  dictionary guess, so it gets its kind only: `[REDACTED:labelled-value]`. Kind names are fixed kebab-case
+  (`CredentialScrub.KindName`), since they are persisted. Each rule family is scanned on its own and overlapping spans are
+  replaced as one, named by the earliest span, a shape before a labelled value at the same start, so `GH_TOKEN=ghp_…?` keeps
+  `ghp_` and the token's hash.
+- Rules: `CredentialDetector.Egress` only (shapes and labelled values), never `Encoded` or `KeyHeader`, so commit SHAs,
+  `CheckpointTaken.Revision` and digests in shell output survive.
+- JSON. `ScrubJson(element, rules)` uses the egress gate's technique: it scans the element's JSON text, so `"password": "…"`
+  keeps the key that labels it, JSON-unescapes each value found that way, and replaces it in the leaves (a value under 8
+  characters only in a leaf that is that value, so `ab` under a label never rewrites `about`). It also scans every string
+  leaf and property name on its own, and treats a direct string or number value of a key that is a secret label as a
+  labelled value (`CredentialDetector.IsSecretLabel`, the labelled rule's label, whole; a labelled number becomes a marker
+  string). An object under such a key is structure, not a value: the JSON-text match that starts with `{` is skipped and the
+  object's own keys decide. The element is rebuilt with `Utf8JsonWriter` (no reflection, AOT-safe); one with nothing to scrub
+  is returned as given, so its persisted form is unchanged.
+- Fail closed: a `RegexMatchTimeoutException`, or a value found in JSON text that does not decode, replaces the whole text or
+  element with `[REDACTED:unscannable]`. A large tool result that times out is lost to the model; nothing else is.
+- Idempotence and the other screens. The marker forms count as exempt in `IsExempt` (the `RedactionOutput` pattern takes an
+  optional `:kind` and `:hex8`), a bare value cut before a marker's `]` is read whole, and any candidate that lies wholly
+  inside a marker is dropped (`github-token:3fa91c0e` inside one reads as a labelled assignment, `[REDACTED:prose-value].`
+  after "the password is" as a prose value); one that runs on past the marker's end is kept whole, as before markers were
+  recognised. So the scrub, `Redact`, `SecretRedactor`, the lesson validator and the egress gate
+  leave markers alone, and a scrubbed text scrubs to itself. Markers hold no `<` or `>`, so `RedactionMap.PlaceholderPattern`
+  and `Neutralize` never touch one. Text that only resembles a marker (upper-case hex, a value before `[REDACTED:…]`) is not
+  exempt.
+- The event log. `SqliteEventLog.Append` passes every event through `EventScrubber.Scrub` (Kernel/Events, pure) in its
+  existing prepare step, before `EventJson.Serialize` and outside the writer lock. Always on. Scrubbed fields:
+  `ToolCallIssued.Arguments`, `ToolResult.Result`, `AssistantMessage.Text`, `ApprovalRequested.Action` and `.Reason`,
+  `Decision.State` and `Decision.Question.Instructions` (pre_execute and memory_op questions carry arguments and text), and
+  `DeliveryQueued.Text`. Not scrubbed: `UserMessage` (what the user said is a recorded decision; a key the user hands over
+  belongs in Vault), and ids, sequences, revisions and paths. An event with nothing to scrub keeps its instance. The returned
+  `StoredEvent`s are deserialized from the scrubbed JSON, so callers see what was stored. A decorator over `IEventLog` was
+  rejected: `CorvidRuntime.Log` is typed `SqliteEventLog` and five other sites construct one directly (the gateway ledger, MCP
+  pins, `SkillReplay`'s temporary log, and the read-only scan and trace commands); in `Append` every writer is covered with no
+  wiring: the turn loop, the fabric's decisions, `MemoryWriter`'s `MemoryWritten`, `SessionFork`, the gateway ledger, MCP pins
+  and skill replay. Hand-built `StoredEvent` fixtures (`BeaconExportTests`) never pass through it.
+- The turn. The prompt is rendered from the log (`PromptRenderer.Render` over `SessionProjection.Load`), so after a tool
+  returns a credential no model, local or cloud, sees the value, only the marker. This is the value-shape half of vault.md
+  §5's "before the event log and before any model", the kernel-wide scrub of every tool result, and it falls out of this
+  choke point. For tool-sourced credentials it also removes the `<CREDENTIAL_n>` restore path: nothing reaches the egress
+  gate unredacted, so the gate finds no credential (the marker is exempt) and has nothing to restore. `EgressTurnTests`'
+  token now reaches the cloud as `ghp_[REDACTED:github-token:…]`, not `<CREDENTIAL_1>`; it still never reaches it as the
+  token. Kev's last tool result (`_lastToolResult`, the TurnState field) is scrubbed where it is set, so Kev sees what the
+  log holds and the logged `Decision.State` is not the only line of defence. Tools still run with the in-memory
+  `call.Arguments`, never the logged ones, so execution, checkpoints and `/undo` are unchanged; skill replay matches tool
+  names and replays recorded results, and the recovery scan compares names and order. Side effects: the local model cannot
+  act on a token it read from a file (secrets go through Vault), and a false positive (`token: abc123` in config output)
+  becomes a marker in the prompt that the model may write back into a file it edits.
+- Memory: refuse, not redact (a fact with its value redacted is useless, and `LessonValidator` already refuses).
+  `MemoryWriter.WriteAsync`, `EditBlockAsync` and `StageImportAsync` run `CredentialDetector.Find(text, Egress)` first,
+  before the extractor, the tainted-session staging, `DecideAsync` (whose `Decision` would log the text) and any pending row.
+  `WriteAsync` and `EditBlockAsync` return the new `MemoryWriteStatus.Refused` with `MemoryWriteResult.Reason` (`holds a
+  credential value (github-token); keep secrets in Corvid Vault`, kinds only, never the value), and append no event.
+  `StageImportAsync` throws `ArgumentException`, which the Hermes import already counts as refused. `memory_add` returns
+  status `refused` with the reason; the turn's `remember` note reads `refused: …`. A detector timeout refuses. Only
+  `MemoryWriter` writes facts and blocks. The episodic index is derived from the scrubbed log, so it needs no code.
+- Skills: `SkillScanner.Scan` adds a `credential_value` rule, one `Find` pass over the whole text (a PEM block across lines is
+  one finding, on its first line) whose `ScanFinding.Excerpt` is the marker, never the line; a timeout is a finding. A
+  finding already refuses a learned draft and, through `ScanFolder`, an imported hub skill. `Corvid.Skills` references
+  `Corvid.Secrets` directly (it was transitive through Kernel; the boundary checker has no rule for it).
+- Placeholders. `vsec_` Vault placeholders are safe tokens by design, already exempt as a whole value, and pass the scrub
+  unchanged (`Authorization: Bearer vsec_…`, `{"token":"vsec_…"}`, a placeholder in a tool result). A Vault value that comes
+  back where its placeholder was sent (an echo the Vault response scrubber missed) has a credential shape, so the log scrub
+  catches it in the tool result. The restore vector that survives the log scrub is the egress `<CREDENTIAL_n>`: a credential
+  the user pasted (not scrubbed) is redacted for the cloud, and `PrivacyEgress.Restore` would map it back into a
+  `FunctionCallContent`'s arguments. Now `Restore` leaves credential placeholders (`RedactionMap.IsCredential`, through
+  `RedactionMap.Restore(text, credentials: false)`) unrestored in tool-call arguments; text and reasoning restore, and PII
+  restore into arguments, are unchanged. The kept placeholder is visible in the logged call and in the tool's failure. "Here
+  is my token, put it in .env" on a cloud generator now writes the literal `<CREDENTIAL_1>`, by design: use Vault.
+- Proof (`CredentialScrubTurnTests`): a `TurnRunner` with a tool returning `export GH_TOKEN=ghp_…` on an on-disk log, the
+  episodic index caught up into an on-disk `memory.db`, and a refused memory write of the same token; after
+  `PRAGMA wal_checkpoint(TRUNCATE)` and `SqliteConnection.ClearAllPools()`, the raw bytes of `events.db`, `memory.db` and
+  any remaining WAL hold no token and both databases hold the marker. The generator's second round holds the marker and
+  no decision holds the token. A `write_file` whose content holds a token runs with the real value (the file holds it by
+  design), logs the marker, takes its before and after checkpoints, and `/undo` restores the file.
+- Tests: `CredentialScrubTests` (marker per strength, prefix kept, hash only for shapes and over the whole value, shape
+  naming a merged span, idempotence through labelled, prose, URL, `curl -u` and Authorization forms, exempt markers and
+  lookalikes, no angle brackets, `vsec_` unchanged in text, JSON and a tool result, git SHAs and digests untouched, a JSON
+  key labelling its value, a JSON-escaped value, nested leaves and property names, the short-value rule, an Authorization
+  value through its key, a labelled number, an object under a secret label, unchanged JSON returned as given, timeout and
+  undecodable fail-closed through the internal finder seam, `IsSecretLabel`); `EventScrubberTests` (each scrubbed event
+  type, kept ids and scores, `UserMessage`, checkpoints and memory events untouched, unchanged events keep their instance,
+  the log returns what it stored); `WriterTests` (`WriteAsync` refused tainted or not, with no extractor request, fact,
+  pending row or event; a prose password refused without its value; `EditBlockAsync` refused with the block unchanged;
+  `StageImportAsync` throws without the value; a `vsec_` placeholder is remembered as usual); `ScannerTests` (the finding and
+  its marker excerpt, a PEM block across lines, placeholders and references not flagged); `PrivacyEgressTests` (`Restore`
+  keeps `<CREDENTIAL_1>` in tool-call arguments, string and JSON, restores it in text, and still restores `<PERSON_1>` in
+  arguments); `MemoryAndCronToolsTests` (`memory_add` refused). `InjectionCanaryTests`' echo case now judges the delivered
+  answer: "the secret is <canary>" reads as a prose credential, so the logged transcript holds the marker. `GoldenTurnTests`
+  and `BeaconExportTests` run unchanged.
+
+After PR #59's review:
+- Detection evidence. C-023's rules correlate on the stored command text (`derived.command`), inline over the log's latest
+  events and post-hoc in `corvid scan`, so the scrub must never remove a command's evidence. It did:
+  `export API_TOKEN="$(cat ~/.aws/credentials)-v2"` was stored as `export API_TOKEN="[REDACTED:labelled-value]"`, the
+  credential read was gone, and `secret-read-then-egress` (enforce) let a following `web_fetch` run unasked. Now a
+  labelled-strength span holding a substitution keeps it: `$(...)`, `` `...` `` and `${NAME}` stay, and only each literal run
+  around them with a letter or digit, not exempt, becomes a marker (`"$(cat ~/.aws/credentials)[REDACTED:labelled-value]"`;
+  an unclosed `$(` from a bare value cut at whitespace runs to the value's end). `${NAME:-default}` holds a literal and is
+  judged as text. A shape inside a substitution is its own span and still replaced; a literal under no rule inside one
+  (`$(echo hunter2)`) is kept with it, the price of the evidence. The scrub stays idempotent (the marker run is exempt).
+  Any future widening of the scrub must keep paths, commands and substitutions in command text.
+- `DropInsideMarkers` drops only a candidate wholly inside a marker. Dropping every candidate that started inside one made
+  the shared detector, and so the C-032 egress gate, less conservative than on main:
+  `the password is [REDACTED]CorrectHorseBattery` and `https://admin:[REDACTED]S3cretPw@db.example/x` found nothing.
+- `ScrubJson`: a raw value under 8 characters replaces a leaf only on the labelled path, so `{"password":"admin",
+  "user":"admin"}` keeps the user. Pagination cursors are not credentials: the labelled rule skips, and `IsSecretLabel`
+  refuses, a label that is a page, next, previous, continuation or cursor token, whole (`nextPageToken`, `page_token`,
+  `next_token`, `NextContinuationToken`), so models get the cursor back; this applies to the egress gate too. `csrf_token`
+  (it authenticates a form beside its session cookie), `sync_token` and `resume_token` (some services issue those as
+  credentials) stay scrubbed. A `value` key is labelled by a secret-labelled parent (`{"password":{"value":…}}`) or by a
+  sibling `name` or `key` that is a secret label (the k8s and CI env shape `{"name":"DB_PASSWORD","value":…}`; a
+  `${{ secrets.X }}` value is still exempt).
+- `SkillScanner`: a labelled-strength match whose value is a documentation placeholder, whole (`your_api_key_here`,
+  `YOUR_TOKEN`, `replace-me`, `changeme`, `example-…`, `…_here`, `todo`; letters and separators only, no digit), is not a
+  `credential_value` finding, so hub imports and learned drafts with setup sections pass; a provider shape is refused
+  whatever it says. Scoped to the scanner; the detector and the gate are unchanged.
+- ACP: `ApprovalPrompt.Action` carries the action as it runs, set by `AuthorizeAsync`. `PermissionPrompter` builds the
+  request's `rawInput`, locations and proposed diff from its in-memory `ToolAction` arguments, not from the logged
+  (scrubbed) `ToolCallIssued`, which stays the fallback for a bare shell action; the finished update still shows the log.
+- Tests: `DetectionNetworkReadTests` (the review's repro through the turn: the stored command keeps the substitution, the
+  fetch asks with `secret-read-then-egress` and the match is recorded), `CredentialScrubTests` (substitution forms, a shape
+  inside a substitution, a JSON shell command, short values, cursors in JSON and a URL, nested and sibling `value` keys,
+  cursor labels), `CredentialDetectorTests` (values running past a marker found, values inside one not), `ScannerTests`
+  (placeholders pass, real values beside them still refused), `AcpTests` (the permission request shows the written content
+  while the log holds the marker).
+
+Deferred:
+- Vault exact-value scrub in the kernel (vault.md §5 `scrub(text)`). It does not fall out of this choke point:
+  `IEventLog.Append` is synchronous and the turn appends under its lock (never across an await), while
+  `VaultClient.ScrubAsync` is an async, rate-limited, audited RPC, and Kernel has no reference to `Corvid.Vault.Client`. It
+  needs an async pre-append hook at the tool-result site and a budget for the oracle risk.
+- Scrubbing `UserMessage`: a user who deliberately hands the agent a key would lose it from the prompt. The intended route is
+  Vault (`corvid-vault set`, or a chat ingest that does not exist yet). A consequence: `Compacted` summaries, `GoalSet` and
+  `TodosSet` are not scrubbed (models write them, and for a tool-sourced value they only ever saw the marker), so a
+  credential the user pasted can be carried into one and indexed into `memory.db` with it.
+- A retroactive scrub of existing `events.db` and `memory.db`: the log is append-only (UPDATE and DELETE triggers), so it
+  needs an offline `corvid scrub` rewrite or a migration, and a rebuild of the episodic index.
+- A keyed (per-install HMAC) marker hash, so labelled values could carry a correlator too.
+- Shadow-store checkpoints (C-014) holding a credential-bearing workspace file: scrubbing them would break restore.
+- OpenTelemetry span attributes and the gateway's live (non-ledger) sends, outside the stores named here; trace export already
+  redacts (C-027).
+- A C-023 detection rule over markers in `tool_call_issued`: the inline path builds the pending `ToolCallIssued` from raw
+  in-memory arguments but reads earlier calls from the scrubbed log, so a rule would see the value in one and the marker in
+  the other; it needs a design first.
+- Folding `PrivacyEgress`'s JSON credential search onto `ScrubJson` (duplicated to avoid churn in `Corvid.Models`).
+- Surfacing an unrestored credential placeholder in a tool call as a structured approval reason or tool error, instead of a
+  literal `<CREDENTIAL_n>` argument.
+- C-032's remaining deferrals, unchanged: a per-profile credential action, a gitleaks-scale catalogue and base64-wrapped
+  credentials, a value-oriented GLiNER2 label, S3's address gap, the evaluation in CI, separators inside bare values and YAML
+  block scalars. The scrub inherits the separator cut: `DB_PASSWORD=Ab1x,Z9q-pw77` stores `,Z9q-pw77`.
+- From PR #59's review: a literal under no rule inside a kept substitution (`TOKEN="$(echo hunter2)"`) is stored; telling a
+  credential-read substitution from an echoed literal needs the shell analyser in `Corvid.Secrets`, which is a leaf.
+  Other JSON shapes that label a value from elsewhere (`{"key":"password","val":…}`, arrays of pairs) are not followed.
+  Exempting placeholders for the egress gate and the memory refusal too (scoped to the skill scanner here).
+
 ## Running the check
 
 ```sh

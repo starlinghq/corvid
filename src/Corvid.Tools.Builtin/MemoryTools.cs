@@ -69,9 +69,13 @@ public sealed partial class MemoryTools
             {
                 MemoryWriteStatus.Applied => "saved",
                 MemoryWriteStatus.Staged => "pending_review",
+                MemoryWriteStatus.Refused => "refused",
                 _ => "already_known",
             },
         };
+        // C-040: a credential value is never remembered; the reason names its kind, never the value.
+        if (written.Status == MemoryWriteStatus.Refused)
+            result["reason"] = written.Reason;
         if (written.Operation is { } operation)
             result["operation"] = operation;
         if (written.Pending is { } pending)

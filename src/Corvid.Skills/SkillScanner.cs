@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.RegularExpressions;
+using Corvid.Secrets;
 
 namespace Corvid.Skills;
 
@@ -9,7 +10,7 @@ public sealed record ScanFinding(string File, int Line, string Rule, string Exce
 /// <summary>
 /// A static scan of a skill's text (plan §10.6), in the spirit of Hermes' skills guard: instructions aimed at the agent
 /// rather than the task, piping downloads into a shell, reading credential stores or Corvid's own secrets, reverse
-/// shells, and invisible characters that hide text from a reviewer. A finding refuses an import or a draft; it is a
+/// shells, invisible characters that hide text from a reviewer, and credential values themselves (C-040). A finding refuses an import or a draft; it is a
 /// screen, not a proof of safety. Taint (§10.3) applies to hub skills whatever the scan says, and scripts only ever run
 /// in the sandbox.
 /// </summary>
@@ -49,7 +50,37 @@ public static partial class SkillScanner
                 if (pattern.Match(line) is { Success: true } match)
                     findings.Add(new ScanFinding(file, i + 1, rule, Excerpt(line, match.Index)));
         }
+        CredentialValues(file, text, findings);
         return findings.ToImmutable();
+    }
+
+    /// <summary>The rule name for a credential value in a skill's text (C-040).</summary>
+    public const string CredentialValueRule = "credential_value";
+
+    // A skill never carries a credential value (C-040): a learned draft would store one in the skill store, a hub skill would
+    // hand one to the agent. One pass over the whole text, so a PEM block across lines is seen; each finding's excerpt is the
+    // scrub's marker, never the line. Vault placeholders and markers are not credentials. A timeout is a finding.
+    private static void CredentialValues(string file, string text, ImmutableArray<ScanFinding>.Builder findings)
+    {
+        ImmutableArray<CredentialMatch> matches;
+        try
+        {
+            matches = CredentialDetector.Find(text, CredentialDetector.Egress);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            findings.Add(new ScanFinding(file, 0, CredentialValueRule, CredentialScrub.Unscannable));
+            return;
+        }
+        foreach (var match in matches)
+        {
+            // OPENAI_API_KEY=your_api_key_here in a setup section is documentation, not a key. Only an assigned or prose value
+            // is judged so; a provider shape (sk-..., ghp_...) is refused whatever it says.
+            if (match.Strength == CredentialStrength.Labelled && Placeholder().IsMatch(match.ValueIn(text)))
+                continue;
+            var line = 1 + text.AsSpan(0, match.Start).Count('\n');
+            findings.Add(new ScanFinding(file, line, CredentialValueRule, CredentialScrub.Marker(text, match)));
+        }
     }
 
     /// <summary>Largest file the scanner reads; a larger one is a finding, since what is not read cannot be screened.</summary>
@@ -118,4 +149,9 @@ public static partial class SkillScanner
 
     [GeneratedRegex(@"\bbase64\s+(-d|--decode)\b[^\n]{0,80}\|\s*(ba)?sh\b|\beval\s*\(\s*(atob|base64)", RegexOptions.IgnoreCase | RegexOptions.NonBacktracking)]
     private static partial Regex EncodedPattern();
+
+    // A documentation placeholder, whole: letters and separators only, saying so (your_api_key_here, YOUR_TOKEN, replace-me,
+    // changeme, <placeholder>-style words, example-key, dummy). A digit makes it a value.
+    [GeneratedRegex(@"\A(?:your[A-Za-z_.-]*|[A-Za-z_.-]*[_.-]here|(?:replace|change|fill|set)[_.-]?(?:me|this|it)|(?:insert|put|add|enter|paste)[_.-][A-Za-z_.-]*|[A-Za-z_.-]*(?:placeholder|example|dummy|redacted)[A-Za-z_.-]*|todo|tbd|fixme|\.\.\.|…)\z", RegexOptions.IgnoreCase | RegexOptions.NonBacktracking)]
+    private static partial Regex Placeholder();
 }

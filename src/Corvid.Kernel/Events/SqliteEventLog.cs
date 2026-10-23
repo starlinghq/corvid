@@ -4,7 +4,10 @@ using Microsoft.Data.Sqlite;
 
 namespace Corvid.Kernel.Events;
 
-/// <summary>A dedicated on-disk event database. Each operation owns its connection; instances can share a file.</summary>
+/// <summary>
+/// A dedicated on-disk event database. Each operation owns its connection; instances can share a file. Every appended event
+/// passes through <see cref="EventScrubber"/> first (C-040), so no credential value a detector rule finds is stored.
+/// </summary>
 public sealed class SqliteEventLog : IEventLog
 {
     private readonly string connectionString;
@@ -81,14 +84,15 @@ public sealed class SqliteEventLog : IEventLog
             throw new ArgumentException("An append batch must not be empty.", nameof(events));
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Serialize before acquiring the writer lock, and detach JsonElements from caller-owned documents.
+        // Scrub credential values (C-040) and serialize before acquiring the writer lock, and detach JsonElements from
+        // caller-owned documents. The returned events are read back from the scrubbed JSON, so callers see what was stored.
         var prepared = events.Select(item =>
         {
             ArgumentNullException.ThrowIfNull(item);
             ArgumentNullException.ThrowIfNull(item.Payload);
             if (item.EventId == Guid.Empty)
                 throw new ArgumentException("An event ID must not be empty.", nameof(events));
-            return (item.EventId, Json: EventJson.Serialize(item.Payload));
+            return (item.EventId, Json: EventJson.Serialize(EventScrubber.Scrub(item.Payload)));
         }).ToArray();
 
         using var connection = Open();
