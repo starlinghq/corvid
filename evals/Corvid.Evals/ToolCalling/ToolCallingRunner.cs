@@ -24,6 +24,7 @@ public enum ToolCallingConfiguration
     /// <summary>
     /// Optional ablation of (c): the same bindings, but the extras are registered without their <c>mcp:</c> origin, so
     /// C-033's ingress <c>injection</c> question about MCP descriptions is never asked and never withholds them. Not production.
+    /// Since C-037 the extras (trusted) are not asked about in (c) either, so the two differ only in the tools' origin.
     /// </summary>
     ShortlistKevNoDescriptions,
     /// <summary>Optional: production without Kev (<see cref="DegradedDecider"/>; embedding-margin tool pick, generator yes/no). §5.6's A/B baseline.</summary>
