@@ -4,7 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/starlinghq/corvid/main/install.sh | sh
 #   curl -fsSL https://raw.githubusercontent.com/starlinghq/corvid/main/install.sh | sh -s -- --cuda --version v0.1.0
 #
-# Each version goes in <prefix>/share/corvid/<version>/, and <prefix>/bin/corvid and corvid-vault link to it. corvid
+# Each version goes in <prefix>/lib/corvid/<version>/, and <prefix>/bin/corvid and corvid-vault link to it. corvid
 # finds corvid-sandbox next to its real path, so the sandbox is not linked. Nothing outside <prefix> is touched, and no
 # models are downloaded: run `corvid doctor` afterwards.
 set -eu
@@ -21,7 +21,7 @@ Usage: install.sh [options]
 
   --version <tag>   a release tag such as v0.1.0 (default: the latest release)
   --cuda            the CUDA variant, for Kev on an NVIDIA GPU (needs the CUDA 13 runtime)
-  --prefix <dir>    install under <dir>/share/corvid and link into <dir>/bin (default: ~/.local, or $CORVID_PREFIX)
+  --prefix <dir>    install under <dir>/lib/corvid and link into <dir>/bin (default: ~/.local, or $CORVID_PREFIX)
   --from <tarball>  install a local corvid-linux-x64[-cuda].tar.gz instead of downloading; no checksum is checked
   -h, --help        this text
 EOF
@@ -101,7 +101,7 @@ installed="$(cat "$work/x/VERSION" 2>/dev/null || true)"
 [ -n "$installed" ] || die "$asset has no VERSION"
 case "$installed" in */*|.*) die "$asset has an unusable VERSION: $installed" ;; esac
 
-dest="$prefix/share/corvid/$installed$variant"
+dest="$prefix/lib/corvid/$installed$variant"
 bindir="$prefix/bin"
 # A corvid that is not one of our links (a hand-copied build, say) is left alone, before anything is installed.
 for bin in corvid corvid-vault; do
@@ -109,7 +109,7 @@ for bin in corvid corvid-vault; do
         die "$bindir/$bin exists and is not a link; move it aside and run again"
     fi
 done
-mkdir -p "$prefix/share/corvid" "$bindir"
+mkdir -p "$prefix/lib/corvid" "$bindir"
 # Replace a previous install of the same version whole, so no stale file survives.
 rm -rf "$dest.new"
 mv "$work/x" "$dest.new"
@@ -119,6 +119,17 @@ chmod 0755 "$dest/corvid" "$dest/corvid-vault" "$dest/corvid-sandbox"
 
 for bin in corvid corvid-vault; do
     ln -sfn "$dest/$bin" "$bindir/$bin"
+done
+
+# v0.1.0's installer put versions in <prefix>/share/corvid/<version>/, which is also Corvid's data directory. Remove those
+# old installs, now that nothing links to them. A directory goes only if it holds exactly the four files a release
+# tarball unpacks to, so Corvid's own data (checkpoints, the event log) is never touched.
+for old in "$prefix/share/corvid"/*/; do
+    [ -d "$old" ] && [ ! -L "${old%/}" ] || continue
+    # shellcheck disable=SC2012 # compared against four fixed names, so ls is exact enough here.
+    [ "$(ls -A "$old" | LC_ALL=C sort | tr '\n' ' ')" = "VERSION corvid corvid-sandbox corvid-vault " ] || continue
+    if ! rm -rf "$old"; then printf 'Could not remove the old install in %s; remove it by hand\n' "${old%/}" >&2; continue; fi
+    printf 'Removed the old install in %s\n' "${old%/}"
 done
 
 printf 'Installed Corvid %s%s in %s\n' "$installed" "$variant" "$dest"

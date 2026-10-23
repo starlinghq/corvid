@@ -88,7 +88,7 @@ jobs:
           "$prefix/bin/corvid" --version | tee version.log
           grep -q "corvid $VERSION" version.log
           "$prefix/bin/corvid-vault" --help
-          find "$prefix/share/corvid" -name corvid-sandbox -exec {} --version \;
+          find "$prefix/lib/corvid" -name corvid-sandbox -exec {} --version \;
           "$prefix/bin/corvid" doctor | tee doctor.log || true
           grep -q "corvid model download qwen3.5-0.8b" doctor.log
           # The sandbox is found next to corvid's real path, through the link.
