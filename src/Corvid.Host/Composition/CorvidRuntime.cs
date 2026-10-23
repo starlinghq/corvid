@@ -190,6 +190,9 @@ public sealed class CorvidRuntime : IAsyncDisposable
     /// </summary>
     public string SchedulerState { get; private set; } = "off (Corvid:Scheduler:Enabled)";
 
+    // The state of a runtime that lost jobs.db.lock to another process; the only one a session open retries (C-041).
+    private const string SchedulerElsewhere = "run by another corvid process";
+
     /// <summary>
     /// Raised after each scheduled run is recorded; a surface can say so (delivery to chats is C-020's). The scheduler
     /// starts with the runtime, so a run can finish before a surface subscribes (C-039): a new handler is replayed the runs
@@ -401,11 +404,13 @@ public sealed class CorvidRuntime : IAsyncDisposable
         if (!Options.Scheduler.Enabled)
             return;
         JobScheduler? held;
+        bool lost;
         lock (_schedulerGate)
-            held = _jobScheduler;
+            (held, lost) = (_jobScheduler, SchedulerState == SchedulerElsewhere);
         if (held is not null)
             held.Wake();
-        else
+        // Only a lost lock is retried: an unwritable lock file ("off: …") stays off until a restart.
+        else if (lost)
             TryStartScheduler();
     }
 
@@ -430,7 +435,7 @@ public sealed class CorvidRuntime : IAsyncDisposable
         }
         catch (IOException)
         {
-            SchedulerState = "run by another corvid process";
+            SchedulerState = SchedulerElsewhere;
             return;
         }
         catch (UnauthorizedAccessException exception)

@@ -3893,8 +3893,8 @@ Five of C-035's deferrals (plan §18, C-041), with no new project, package or ch
   next time it opens a session, and its first pass runs what became due meanwhile; `SchedulerState` can now change from
   "run by another corvid process" to "running in this process" mid-life. The gateway opens each chat's session once per
   process (`GatewayHost` caches the open), so a message in a chat it already opened does not retry; a new chat, an ACP
-  `session/new`, `session/load` or `session/resume`, a fork or a `corvid chat` start does. With
-  `Corvid:Scheduler:Enabled` off it does nothing.
+  `session/new`, `session/load` or `session/resume`, a fork or a `corvid chat` start does. Only that state is retried:
+  an unwritable lock file (`off: …`) stays off until a restart. With `Corvid:Scheduler:Enabled` off it does nothing.
 - Catch-up policy, as the code behaves (C-012's semantics, written down; nothing new). When a scheduler starts, wakes or
   takes over, each overdue active job runs once: missed ticks collapse in `ClaimDue`, the run's `scheduled_for` is the
   earliest missed tick, and the next run is the next natural tick after now. A one-shot past due runs once and completes.
@@ -3956,7 +3956,9 @@ last looked" notice on chat resume (still C-039's deferral; `/cron runs` is the 
 and opening a run's session from `/cron`; a sticky focus that later automatic compactions or a re-compaction after an
 expansion re-apply; rendering the focus in the summary note, and a summarizer that revises earlier records toward a new
 focus (C-016's deferral); full prompt figures with the system prompt, tool schemas and notes; and an S2 re-run on the
-3090 against catalogue `2026-10-22.1`. C-035's other deferrals stand: compacting the latest turn, editing jobs, per-job
+3090 against catalogue `2026-10-22.1`; scrubbing `Compacted.Focus` (C-040's `EventScrubber` leaves the user's own text
+unscrubbed, as it does `UserMessage`, the goal and compaction summaries, so a credential pasted into a focus is logged as
+written). C-035's other deferrals stand: compacting the latest turn, editing jobs, per-job
 toolsets, `corvid evals golden`, `corvid-evals` in the publish, and Hermes `-p/--profile` and profiles.
 
 ## Running the check
