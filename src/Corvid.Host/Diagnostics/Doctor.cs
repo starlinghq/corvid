@@ -23,7 +23,8 @@ public sealed record DoctorCheck(string Area, string Name, CheckStatus Status, s
 /// <summary>
 /// <c>corvid doctor</c>: what Corvid needs and whether it is there, without loading a model or touching the network.
 /// Configuration, the Starling model cache, bubblewrap and <c>corvid-sandbox</c>, the Vault socket, and the glibc setting
-/// GLiNER2 needs.
+/// GLiNER2 needs. With the shell's network on (V-003b) it also runs <c>corvid-sandbox --help</c> and opens and closes one
+/// Vault sandbox proxy.
 /// </summary>
 public sealed class Doctor(IConfiguration configuration, ModelCatalogue catalogue, IValidateOptions<CorvidOptions> validator,
     CorvidConfigFile? configFile = null)
