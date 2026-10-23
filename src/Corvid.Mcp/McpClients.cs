@@ -35,9 +35,11 @@ public sealed record McpAcceptResult(bool Accepted, string Message, string? Name
 /// whose text matches a poisoning pattern is held even on the first listing until the user allows it.
 /// </para>
 /// <para>
-/// C-033: as the turn loop's <see cref="IToolDescriptionReview"/>, a registered tool whose description the fabric's
-/// <c>injection</c> question judged confidently is removed from the registry and held as <c>injection</c>, persistently,
-/// until the user allows it.
+/// C-033: as an <see cref="IToolDescriptionReview"/>, a registered tool whose description the fabric's <c>injection</c>
+/// question judged confidently is removed from the registry and held as <c>injection</c>, persistently, until the user
+/// allows it. C-037: the turn loop no longer reports verdicts here (the generic question is not fitted for descriptions); a
+/// hold C-033 already persisted is still honoured at listing, and the seam stays for a dedicated, fitted question. Every
+/// withholding is therefore decided here, at listing, before a turn reads the registry and picks a tool.
 /// </para>
 /// </summary>
 public sealed class McpClients : IToolDescriptionReview, IAsyncDisposable
@@ -249,7 +251,8 @@ public sealed class McpClients : IToolDescriptionReview, IAsyncDisposable
     }
 
     /// <summary>
-    /// C-033: withholds the named tools after a confident <c>injection</c> verdict over their descriptions. Each one this
+    /// C-033: withholds the named tools after a confident <c>injection</c> verdict over their descriptions (C-037: no caller
+    /// in the turn loop since; kept for a dedicated <c>description_injection</c> question, deferred). Each one this
     /// process registered from the origin's server is removed from the registry, its instance refuses further calls, and it
     /// is held as <c>injection</c> with the definition it was listed with; the pin records the withheld hash and the decision,
     /// so the hold survives a restart and another process sees it. A definition the user allowed (<c>/mcp allow</c>) is left

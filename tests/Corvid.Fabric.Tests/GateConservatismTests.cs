@@ -32,7 +32,7 @@ public sealed class GateConservatismTests
             "apply_skill_change" => 1,
             _ => throw new ArgumentException($"unknown skill_write_safe action '{action}'"),
         },
-        // An acted verdict marks the content tainted and, for MCP descriptions, withholds the tools (C-033).
+        // An acted verdict marks the content tainted; for MCP descriptions it is only logged and withholds nothing (C-037).
         ["injection"] = action => action switch
         {
             "mark_tainted" => 0,
