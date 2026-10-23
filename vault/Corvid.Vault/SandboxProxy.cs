@@ -173,6 +173,9 @@ internal sealed class SandboxProxy : IDisposable
     /// disposed. Idempotent; only the first call audits. The sandbox stays listed until that call has finished, and a
     /// call that loses the race waits for it, so a close or sweep that returns means the sandbox is closed and audited
     /// (the expiry checks of the accept loop and of a tunnel's request loop race the sweep of any Vault call).
+    /// Because a loser blocks until the winner finishes, nothing the winner runs synchronously may call Shutdown for the
+    /// same sandbox: no callback registered on <see cref="SandboxSession.Stop"/>, and nothing under the audit or
+    /// certificate locks. The winner must also never need a lock a loser can hold while it waits (Open sweeps under _gate).
     /// </summary>
     private void Shutdown(SandboxSession sandbox, string reason)
     {
