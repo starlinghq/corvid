@@ -151,9 +151,13 @@ public sealed class CorvidRuntimeFactory(
             var memory = settings.Memory.Enabled ? BuildMemory(settings, composer, registry, fabric, log, counter) : null;
 
             var launcher = settings.Sandbox.LauncherPath is { Length: > 0 } path ? CorvidPaths.ExpandHome(path) : null;
+            var sandboxOptions = new SandboxOptions { LauncherPath = launcher };
             ISandbox sandbox = OperatingSystem.IsLinux()
-                ? new BubblewrapSandbox(new SandboxOptions { LauncherPath = launcher })
+                ? new BubblewrapSandbox(sandboxOptions)
                 : new NoSandbox();
+            // V-003b: with the shell's network on, commands reach HTTPS through Vault's per-sandbox proxy only; without a
+            // Vault socket the egress is absent and such a command refuses rather than run another way.
+            var egress = settings.Tools.ShellNetwork && vault.SocketPath is { } vaultSocket ? new VaultSandboxEgress(vaultSocket) : null;
             // The sandbox leaves everything outside the workspace read-only, but a workspace can contain Corvid's own state.
             var shell = new SandboxedShell(sandbox, new ShellOptions
             {
@@ -161,7 +165,9 @@ public sealed class CorvidRuntimeFactory(
                 Vault = vault,
                 DeniedPaths = environment.Protected.SafetyConfiguration,
                 ReadOnlyPaths = skillsGuard.ReadOnly,
-            });
+                Network = settings.Tools.ShellNetwork,
+                EgressLifetime = sandboxOptions.Timeout + TimeSpan.FromMinutes(1),
+            }, egress);
             var jobs = new JobStore(CorvidPaths.JobStore(settings));
             var builtin = new BuiltinServices(environment, shell, jobs, settings.Tools.Builtin ? new WebFetchTool(webTransport?.Handler) : null);
 

@@ -71,6 +71,7 @@ public sealed class Doctor(IConfiguration configuration, ModelCatalogue catalogu
 
         checks.Add(Bubblewrap());
         checks.Add(SandboxLauncher(options));
+        checks.Add(await NetworkEgressAsync(options, cancellationToken).ConfigureAwait(false));
         checks.Add(Git(options));
         checks.Add(await VaultAsync(options, cancellationToken).ConfigureAwait(false));
         checks.Add(SkillsGit(options));
@@ -280,12 +281,100 @@ public sealed class Doctor(IConfiguration configuration, ModelCatalogue catalogu
             : new DoctorCheck("sandbox", "bubblewrap", CheckStatus.Ok, path);
     }
 
-    private static DoctorCheck SandboxLauncher(CorvidOptions options)
-    {
-        // The same resolution Corvid.Sandbox uses: configuration, then $CORVID_SANDBOX, then next to the executable.
-        var path = options.Sandbox.LauncherPath is { Length: > 0 } configured ? CorvidPaths.ExpandHome(configured)
+    // The same resolution Corvid.Sandbox uses: configuration, then $CORVID_SANDBOX, then next to the executable.
+    private static string LauncherPath(CorvidOptions options) =>
+        options.Sandbox.LauncherPath is { Length: > 0 } configured ? CorvidPaths.ExpandHome(configured)
             : Environment.GetEnvironmentVariable("CORVID_SANDBOX") is { Length: > 0 } variable ? variable
             : Path.Combine(AppContext.BaseDirectory, "corvid-sandbox");
+
+    private const string EgressFix = "Start corvid-vault 0.5 or later, or unset Corvid:Tools:ShellNetwork.";
+
+    /// <summary>
+    /// V-003b: with <c>Corvid:Tools:ShellNetwork</c> on, every shell command needs the launcher's proxy options and a Vault
+    /// that opens sandbox proxies; without them a command refuses to run. Checked by the launcher's own usage text and a
+    /// <c>sandbox_open</c>/<c>sandbox_close</c> round trip (no network, no command run).
+    /// </summary>
+    private static async Task<DoctorCheck> NetworkEgressAsync(CorvidOptions options, CancellationToken cancellationToken)
+    {
+        const string name = "network egress";
+        if (!options.Tools.ShellNetwork)
+            return new DoctorCheck("sandbox", name, CheckStatus.Info, "off: shell commands have no network (Corvid:Tools:ShellNetwork)");
+        if (!OperatingSystem.IsLinux())
+            return new DoctorCheck("sandbox", name, CheckStatus.Warning, "on, but the sandbox is Linux only; shell commands will refuse to run");
+
+        var launcher = LauncherPath(options);
+        if (await LauncherUsageAsync(launcher, cancellationToken).ConfigureAwait(false) is not { } usage || !usage.Contains("--proxy-socket", StringComparison.Ordinal))
+            return new DoctorCheck("sandbox", name, CheckStatus.Failed,
+                $"on, but {launcher} does not offer --proxy-socket; shell commands will refuse to run.",
+                "Publish corvid-sandbox from this version next to corvid, or unset Corvid:Tools:ShellNetwork.");
+
+        string socket;
+        try
+        {
+            socket = options.Vault.SocketPath is { Length: > 0 } configured ? CorvidPaths.ExpandHome(configured) : VaultClient.DefaultSocketPath();
+        }
+        catch (InvalidOperationException exception)
+        {
+            return new DoctorCheck("sandbox", name, CheckStatus.Failed, $"on, but {exception.Message}", EgressFix);
+        }
+
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(5));
+            var client = new VaultClient($"corvid-doctor-{Environment.ProcessId}", socket);
+            var open = await client.OpenSandboxAsync("shell", tainted: false, network: false, lifetimeMinutes: 1, timeout.Token).ConfigureAwait(false);
+            await client.CloseSandboxAsync(open.SandboxId, timeout.Token).ConfigureAwait(false);
+            return new DoctorCheck("sandbox", name, CheckStatus.Ok, $"on: HTTPS through Vault's sandbox proxy ({socket})");
+        }
+        catch (Exception exception) when (exception is VaultException or SocketException or IOException
+            or System.Text.Json.JsonException or OperationCanceledException && !cancellationToken.IsCancellationRequested)
+        {
+            return new DoctorCheck("sandbox", name, CheckStatus.Failed,
+                $"on, but Vault at {socket} did not open a sandbox proxy ({exception.Message}); shell commands will refuse to run.", EgressFix);
+        }
+    }
+
+    /// <summary>The launcher's --help text (printed on standard error), or null when it does not run.</summary>
+    private static async Task<string?> LauncherUsageAsync(string launcher, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(launcher))
+            return null;
+        try
+        {
+            var start = new System.Diagnostics.ProcessStartInfo(launcher, "--help")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            using var process = System.Diagnostics.Process.Start(start);
+            if (process is null)
+                return null;
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(5));
+            var stdout = process.StandardOutput.ReadToEndAsync(timeout.Token);
+            var stderr = process.StandardError.ReadToEndAsync(timeout.Token);
+            try
+            {
+                await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                process.Kill(entireProcessTree: true);
+                return null;
+            }
+            return await stdout.ConfigureAwait(false) + await stderr.ConfigureAwait(false);
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return null;
+        }
+    }
+
+    private static DoctorCheck SandboxLauncher(CorvidOptions options)
+    {
+        var path = LauncherPath(options);
         return File.Exists(path)
             ? new DoctorCheck("sandbox", "corvid-sandbox", CheckStatus.Ok, path)
             : new DoctorCheck("sandbox", "corvid-sandbox", CheckStatus.Failed, $"not found at {path}; sandboxed tools refuse to run without it.",
