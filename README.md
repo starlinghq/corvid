@@ -17,7 +17,7 @@ placeholders for real values only on the way out to the host each secret is boun
 <p align="center">
   <img src="docs/plan/tui-mockups/png/04-fabric.png" alt="Mockup of a Corvid chat turn: Kev answers the ingress questions, web_fetch taints the session, a step question escalates to claude-opus-5-5, the privacy gate redacts two values, and a memory fact is staged for review" width="820">
   <br>
-  <sub><i>Design mockup of the planned terminal UI (<a href="docs/plan/tui.md"><code>docs/plan/tui.md</code></a>). Every behaviour in the frame is built; today's <code>corvid chat</code> draws it with the simpler Spectre.Console renderer.</i></sub>
+  <sub><i>Design mockup of the planned terminal UI (<a href="docs/plan/tui.md"><code>docs/plan/tui.md</code></a>). The agent behaviour shown is built: Kev's decisions, taint, escalation, the privacy gate, staged memory and cron runs. The renderer, the <code>@</code> and <code>!</code> shortcuts and the palette are the design; today's <code>corvid chat</code> uses a simpler Spectre.Console renderer.</i></sub>
 </p>
 
 ## Contents
@@ -75,10 +75,11 @@ wrappers such as `sudo`, `env` and `xargs` unwrapped), extracts every target, an
 deny list before any model is asked. In **Smart** mode a call runs unasked only when Kev rates it low risk and it stays in
 the workspace, with no network, elevation or destructive tool. **Manual** mode asks for everything.
 
-- **Taint.** Once outside content (a web page, an MCP result, a guest's message) enters the session, network and
-  side-effect calls ask until you reply.
-- **Sandbox.** Shell commands and stdio MCP servers run under `corvid-sandbox` with a private workspace and no network
-  unless you allow it. Their HTTPS goes through Vault's per-sandbox proxy, so a script can use a token it never sees.
+- **Taint.** Once outside content (a web page, an MCP result, a guest's message) enters the session, even network
+  reads go through approval, and any network egress or send to a new recipient always asks, offering only "once".
+- **Sandbox.** Shell commands run under `corvid-sandbox`: the workspace is writable, the rest of the system is
+  read-only, credential stores are hidden, and there is no network unless allowed. Stdio MCP servers get a private
+  workspace of their own. Allowed HTTPS goes through Vault's per-sandbox proxy, so a script can use a token it never sees.
 - **Detection rules.** A built-in pack of twelve rules watches the session event log before every approval. Examples:
   a credential read followed by network egress, the environment or a credential file sent out, base64 in a request URL, a command you just denied
   proposed again. A match on an enforce rule always asks, whatever the mode or remembered approvals say.
@@ -110,7 +111,7 @@ conflict stops the restore so your edit is never overwritten. Checkpoints need `
 
 → [Memory store](docs/architecture.md#memory-store-c-008) · [Lessons](docs/architecture.md#lessons-and-project-scope-c-025) · [Skills](docs/architecture.md#skills-c-017) · [Compaction](docs/architecture.md#compaction-c-016)
 
-### Keeps secrets out of everything
+### Keeps secrets out of the agent
 
 - **Vault-only keys.** Cloud model keys, MCP tokens and bot tokens are Vault secrets, each bound to its host. Corvid
   never reads keys from the environment, and without Vault cloud models are unavailable.
