@@ -20,6 +20,9 @@ public sealed record CommandTable(ImmutableArray<string> Columns, ImmutableArray
         new([.. columns], [.. rows.Select(row => row.ToImmutableArray())]);
 }
 
+/// <summary>An option a command offers: typing <see cref="Key"/> (its number in the output) runs <see cref="Command"/>, a full command line.</summary>
+public sealed record CommandChoice(string Key, string Label, string Command);
+
 /// <summary>
 /// What a command returns, independent of the surface (plan §12: one registry shared by the CLI and the gateway). Plain
 /// lines, an optional table, a tone, and whether the surface should end the session.
@@ -33,6 +36,15 @@ public sealed record CommandOutput
     public CommandTable? Table { get; init; }
 
     public OutputTone Tone { get; init; }
+
+    /// <summary>
+    /// Numbered options, in the order the output numbers them (<c>/model</c>'s models). The chat asks for a number and
+    /// runs the pick; other surfaces show the output, whose numbers work as the command's arguments.
+    /// </summary>
+    public ImmutableArray<CommandChoice> Choices { get; init; } = [];
+
+    /// <summary>The question the chat asks before reading a pick: <c>Switch generator to</c>.</summary>
+    public string? ChoicePrompt { get; init; }
 
     /// <summary>The surface should leave the session (<c>/exit</c>).</summary>
     public bool Exit { get; init; }
@@ -168,8 +180,9 @@ public sealed partial class SlashCommandRegistry
         var invocation = Parse(line);
         if (!TryGet(invocation.Name, out var command))
         {
-            var near = _byName.Keys.Where(name => name.StartsWith(invocation.Name.Length > 2 ? invocation.Name[..2] : invocation.Name,
-                StringComparison.OrdinalIgnoreCase)).Order(StringComparer.Ordinal).ToArray();
+            // Each command once, by its name: /mod suggests /model, not /model and its alias /models.
+            var near = _byName.Where(pair => pair.Key.StartsWith(invocation.Name.Length > 2 ? invocation.Name[..2] : invocation.Name,
+                StringComparison.OrdinalIgnoreCase)).Select(pair => pair.Value.Name).Distinct().Order(StringComparer.Ordinal).ToArray();
             return CommandOutput.Error($"Unknown command /{invocation.Name}." +
                 (near.Length > 0 ? $" Did you mean {string.Join(", ", near.Select(name => "/" + name))}?" : "") + " /help lists them.");
         }

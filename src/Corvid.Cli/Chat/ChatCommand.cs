@@ -68,31 +68,64 @@ internal static class ChatCommand
                     leave.Cancel();
                 }
             }
+            // The next line, echoed when the terminal did not show it; null at the end of input or when Ctrl-C leaves.
+            async Task<string?> ReadAsync()
+            {
+                string? line;
+                try
+                {
+                    line = await context.Input.ReadLineAsync(cancellationToken: leave.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (leave.IsCancellationRequested)
+                {
+                    return null;
+                }
+                if (line is not null && !context.Input.Echoes)
+                    renderer.Echo(line);
+                return line;
+            }
             context.Interrupts.Interrupted += OnInterrupt;
             try
             {
+                // A line typed at a pick prompt that is not a pick is handled as if typed at the ordinary prompt.
+                string? next = null;
                 while (true)
                 {
-                    renderer.Prompt();
                     string? line;
-                    try
+                    if (next is not null)
                     {
-                        line = await context.Input.ReadLineAsync(cancellationToken: leave.Token).ConfigureAwait(false);
+                        (line, next) = (next, null);
                     }
-                    catch (OperationCanceledException) when (leave.IsCancellationRequested)
+                    else
                     {
-                        break;
+                        renderer.Prompt();
+                        line = await ReadAsync().ConfigureAwait(false);
+                        if (line is null)
+                            break;
                     }
-                    if (line is null)
-                        break;
-                    if (!context.Input.Echoes)
-                        renderer.Echo(line);
                     if (string.IsNullOrWhiteSpace(line))
                         continue;
 
                     if (SlashCommandRegistry.IsCommand(line))
                     {
                         var output = await commands.ExecuteAsync(line, new SlashCommandContext(runtime, session, commands), leave.Token)
+                            .ConfigureAwait(false);
+                        renderer.Output(output);
+                        if (output.Exit)
+                            break;
+                        if (output.Choices.IsEmpty)
+                            continue;
+                        // A numbered list (/model) asks for a number: Enter keeps things as they are.
+                        renderer.Choose(output);
+                        var answer = await ReadAsync().ConfigureAwait(false);
+                        if (answer is null)
+                            break;
+                        if (output.Choices.FirstOrDefault(choice => choice.Key == answer.Trim()) is not { } chosen)
+                        {
+                            next = answer;
+                            continue;
+                        }
+                        output = await commands.ExecuteAsync(chosen.Command, new SlashCommandContext(runtime, session, commands), leave.Token)
                             .ConfigureAwait(false);
                         renderer.Output(output);
                         if (output.Exit)

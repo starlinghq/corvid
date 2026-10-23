@@ -6,6 +6,7 @@ using Corvid.Kernel.Checkpoints;
 using Corvid.Fabric;
 using Corvid.Host.Composition;
 using Corvid.Host.Configuration;
+using Corvid.Host.Models;
 using Corvid.Memory;
 using Corvid.Models;
 using Corvid.Mcp;
@@ -26,8 +27,8 @@ public static class CoreCommands
         ArgumentNullException.ThrowIfNull(registry);
         return registry
             .Add(new SlashCommand("help", "List the commands.", "", Help))
-            .Add(new SlashCommand("model", "List the model slots, or switch one for this session.",
-                "[slot] <model> [--pin] | unpin <slot>", ModelAsync))
+            .Add(new SlashCommand("model", "Pick a model: lists a slot's models numbered, or switches one for this session.",
+                ModelUsage, ModelAsync) { Aliases = ["models"] })
             .Add(new SlashCommand("status", "Slots with their device, queue depth and median latency; the session's state.", "", Status))
             .Add(new SlashCommand("goal", "Show, set or clear the standing goal.", "[text | clear]", Goal))
             .Add(new SlashCommand("approvals", "Pending approvals and the remembered approval rules.", "", Approvals))
@@ -69,12 +70,14 @@ public static class CoreCommands
 
     // ---- /model ----
 
+    internal const string ModelUsage = "[slot] [<model> | <number>] [--pin] | unpin <slot>";
+
     private static async ValueTask<CommandOutput> ModelAsync(SlashCommandContext context, SlashInvocation invocation, CancellationToken cancellationToken)
     {
         var arguments = invocation.Arguments.Where(argument => argument != "--pin").ToArray();
         var pin = invocation.Arguments.Contains("--pin");
         if (arguments.Length == 0)
-            return ListModels(context);
+            return ModelPicker(context, ModelSlots.Generator);
         if (arguments is ["unpin", var unpinned])
         {
             ModelSlots.ContractOf(unpinned);
@@ -85,20 +88,31 @@ public static class CoreCommands
         string slot, name;
         if (arguments is [var only])
         {
-            // A model alone switches the generator when it can generate, else the slot it serves.
-            var model = context.Runtime.Catalogue.Find(only);
-            slot = model.Serves(ModelSlots.Generator) ? ModelSlots.Generator : model.Slots[0];
-            name = model.Name;
+            // A slot alone lists that slot's models; a number picks from the generator's list.
+            if (ModelSlots.All.Contains(only, StringComparer.Ordinal))
+                return ModelPicker(context, only);
+            if (IsPickNumber(only))
+            {
+                slot = ModelSlots.Generator;
+                name = PickModel(context, slot, only);
+            }
+            else
+            {
+                // A model alone switches the generator when it can generate, else the slot it serves.
+                var model = context.Runtime.Catalogue.Find(only);
+                slot = model.Serves(ModelSlots.Generator) ? ModelSlots.Generator : model.Slots[0];
+                name = model.Name;
+            }
         }
         else if (arguments is [var slotName, var modelName])
         {
             ModelSlots.ContractOf(slotName);
             slot = slotName;
-            name = context.Runtime.Catalogue.Find(modelName).Name;
+            name = IsPickNumber(modelName) ? PickModel(context, slot, modelName) : context.Runtime.Catalogue.Find(modelName).Name;
         }
         else
         {
-            return CommandOutput.Error("Usage: /model [slot] <model> [--pin], or /model unpin <slot>.");
+            return CommandOutput.Error($"Usage: /model {ModelUsage}. /model alone lists the models to pick from.");
         }
 
         // The fabric, approvals and memory share one decider across sessions, so a per-session switch would not reach them.
@@ -124,31 +138,76 @@ public static class CoreCommands
         };
     }
 
-    private static CommandOutput ListModels(SlashCommandContext context)
+    private static bool IsPickNumber(string argument) => argument.Length is > 0 and < 4 && argument.All(char.IsAsciiDigit);
+
+    /// <summary>The model a number names in a slot's list. The list is ordered by name, so the numbers are stable.</summary>
+    private static string PickModel(SlashCommandContext context, string slot, string number)
     {
+        var models = context.Runtime.Catalogue.ForSlot(slot);
+        if (models.Count == 0)
+            throw new ArgumentException($"No model can serve {slot}.");
+        var pick = int.Parse(number, NumberStyles.None, CultureInfo.InvariantCulture);
+        if (pick < 1 || pick > models.Count)
+            throw new ArgumentException($"{slot} has {models.Count} model(s), numbered 1 to {models.Count}; /model {slot} lists them.");
+        return models[pick - 1].Name;
+    }
+
+    /// <summary>
+    /// One slot's models, numbered, with the current one marked and whether each can be used now, and the other slots on a
+    /// line under it. Each model a switch would accept is a choice, so the chat can ask for a number.
+    /// </summary>
+    private static CommandOutput ModelPicker(SlashCommandContext context, string slot)
+    {
+        var runtime = context.Runtime;
+        var slots = context.Session.Slots;
+        var bound = slots.TryCurrent(slot, out var current);
+        var configured = runtime.Registry.TryGet(slot, out var configuration);
+        var models = runtime.Catalogue.ForSlot(slot);
+
         var rows = new List<string[]>();
-        foreach (var slot in ModelSlots.All)
+        var choices = ImmutableArray.CreateBuilder<CommandChoice>();
+        for (var i = 0; i < models.Count; i++)
         {
-            var bound = context.Session.Slots.TryCurrent(slot, out var binding);
-            var configured = context.Runtime.Registry.TryGet(slot, out var configuration);
-            var models = context.Runtime.Catalogue.ForSlot(slot).Select(model => model.Name).ToArray();
-            // The decider is shown even unbound: it is the degraded tier, which is worth saying.
-            if (!bound && models.Length == 0 && slot != ModelSlots.Decider)
-                continue;
-            rows.Add([
-                slot,
-                bound ? binding!.Profile.Id + (context.Session.Slots.IsPinned(slot) ? " (pinned)" : "") : slot == ModelSlots.Decider ? "degraded tier" : "unbound",
-                configured ? configuration!.Default.Profile.Id : "",
-                configured ? string.Join(", ", configuration!.Escalation.Select(item => item.Profile.Id)) : "",
-                string.Join(", ", models),
-            ]);
+            var model = models[i];
+            var isCurrent = bound && Names(current!.Profile.Id, model);
+            var availability = runtime.Catalogue.Check(model.Name);
+            var status = isCurrent ? "● current" + (slots.IsPinned(slot) ? " (pinned)" : "")
+                : availability.IsReady ? "ready"
+                : availability.Readiness.ToString().ToLowerInvariant() + (availability.Acquire is { } acquire ? $": {acquire}" : "");
+            // Memory embeds only with the models configured at start; another one needs a configuration change and a restart.
+            var restart = slot == ModelSlots.TextEmbedder && !runtime.IsConfigured(slot, model.Name);
+            var role = restart ? "needs restart"
+                : !configured ? ""
+                : Names(configuration!.Default.Profile.Id, model) ? "default"
+                : configuration.Escalation.Any(item => Names(item.Profile.Id, model)) ? "escalation" : "";
+            rows.Add([(i + 1).ToString(CultureInfo.InvariantCulture), model.Name, model.Profile.Privacy.ToString().ToLowerInvariant(), status, role]);
+            // The decider is shared by every session, so it is listed but never offered.
+            if (slot != ModelSlots.Decider && !isCurrent && !restart && availability.IsReady)
+                choices.Add(new CommandChoice(rows[^1][0], model.Name, slot == ModelSlots.Generator ? $"/model {i + 1}" : $"/model {slot} {i + 1}"));
         }
+
+        var others = ModelSlots.All.Where(other => other != slot)
+            .Select(other => slots.TryCurrent(other, out var binding) ? $"{other} {binding.Profile.Id}"
+                : other == ModelSlots.Decider ? $"{other} degraded tier" : null)
+            .OfType<string>();
+        var prefix = slot == ModelSlots.Generator ? "/model" : $"/model {slot}";
+        string[] lines = models.Count == 0 ? [$"No model can serve {slot}."]
+            : slot == ModelSlots.Decider ? [$"decider: {runtime.DeciderState}.",
+                $"The decider is shared by every session: change it with `corvid model switch {slot} <model>` and restart."]
+            : [$"Switch with {prefix} <number> or {prefix} <name>; add --pin to keep it past escalation."];
         return new CommandOutput
         {
-            Title = "Model slots",
-            Table = CommandTable.Of(["slot", "current", "default", "escalation", "models"], rows),
-            Lines = ["Switch with /model [slot] <model> [--pin].", $"decider: {context.Runtime.DeciderState}."],
+            Title = $"{slot}: {(bound ? current!.Profile.Id : slot == ModelSlots.Decider ? "degraded tier" : "unbound")}",
+            Table = models.Count == 0 ? null : CommandTable.Of(["#", "model", "runs", "status", "role"], rows),
+            Lines = [.. lines, "Other slots: " + string.Join(" · ", others) + ". /model <slot> lists one."],
+            Choices = choices.ToImmutable(),
+            ChoicePrompt = $"Switch {slot} to",
         };
+
+        // A binding's id carries its device (qwen3.5-0.8b@cuda0), which can differ from the catalogue's after a fallback.
+        static bool Names(string id, ModelDescriptor model) =>
+            string.Equals(id, model.Profile.Id, StringComparison.OrdinalIgnoreCase) || string.Equals(id, model.Name, StringComparison.OrdinalIgnoreCase)
+            || id.StartsWith(model.Name + "@", StringComparison.OrdinalIgnoreCase);
     }
 
     // ---- /status ----
