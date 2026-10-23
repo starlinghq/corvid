@@ -126,6 +126,29 @@ public sealed class AcpTests
         Exchanges.Verify("write-with-permission", client);
     }
 
+    // Review of #59 (C-040), finding 6: the log holds the call's arguments credential-scrubbed; the permission request shows
+    // what is written, from the prompt's in-memory action.
+    [Fact]
+    public async Task APermissionRequestShowsTheArgumentsThatRunNotTheScrubbedLog()
+    {
+        var models = WithFileEmbedder(new FakeModels(new FakeGenerator(
+            Reply.Call("write_file", """{"path":"config.txt","content":"DB_PASSWORD=hunter2x9\n"}"""), Reply.Say("Wrote it."))));
+        await using var client = AcpClient.Start(TestHost.Create(models, FileTools));
+        await client.RequestAsync("initialize", Initialize());
+        var session = await client.NewSessionAsync();
+
+        await client.RequestAsync("session/prompt", Prompt(session, "write the config file config.txt"));
+
+        var call = Assert.Single(client.PermissionRequests)["params"]!["toolCall"]!;
+        Assert.Equal("DB_PASSWORD=hunter2x9\n", call["rawInput"]!["content"]!.GetValue<string>());
+        var proposed = call["content"]!.AsArray().Single(item => item!["type"]!.GetValue<string>() == "diff")!;
+        Assert.Equal("DB_PASSWORD=hunter2x9\n", proposed["newText"]!.GetValue<string>());
+        var runtime = await client.Runtime;
+        var logged = runtime.Log.Read(session, 0, long.MaxValue, 4096, TestContext.Current.CancellationToken)
+            .Select(stored => stored.Payload).OfType<Corvid.Abstractions.Events.ToolCallIssued>().Single();
+        Assert.Equal("DB_PASSWORD=[REDACTED:labelled-value]\n", logged.Arguments.GetProperty("content").GetString());
+    }
+
     [Fact]
     public async Task AnEditOfAnExistingFileShowsBothSides()
     {

@@ -74,6 +74,10 @@ public static partial class SkillScanner
         }
         foreach (var match in matches)
         {
+            // OPENAI_API_KEY=your_api_key_here in a setup section is documentation, not a key. Only an assigned or prose value
+            // is judged so; a provider shape (sk-..., ghp_...) is refused whatever it says.
+            if (match.Strength == CredentialStrength.Labelled && Placeholder().IsMatch(match.ValueIn(text)))
+                continue;
             var line = 1 + text.AsSpan(0, match.Start).Count('\n');
             findings.Add(new ScanFinding(file, line, CredentialValueRule, CredentialScrub.Marker(text, match)));
         }
@@ -145,4 +149,9 @@ public static partial class SkillScanner
 
     [GeneratedRegex(@"\bbase64\s+(-d|--decode)\b[^\n]{0,80}\|\s*(ba)?sh\b|\beval\s*\(\s*(atob|base64)", RegexOptions.IgnoreCase | RegexOptions.NonBacktracking)]
     private static partial Regex EncodedPattern();
+
+    // A documentation placeholder, whole: letters and separators only, saying so (your_api_key_here, YOUR_TOKEN, replace-me,
+    // changeme, <placeholder>-style words, example-key, dummy). A digit makes it a value.
+    [GeneratedRegex(@"\A(?:your[A-Za-z_.-]*|[A-Za-z_.-]*[_.-]here|(?:replace|change|fill|set)[_.-]?(?:me|this|it)|(?:insert|put|add|enter|paste)[_.-][A-Za-z_.-]*|[A-Za-z_.-]*(?:placeholder|example|dummy|redacted)[A-Za-z_.-]*|todo|tbd|fixme|\.\.\.|…)\z", RegexOptions.IgnoreCase | RegexOptions.NonBacktracking)]
+    private static partial Regex Placeholder();
 }

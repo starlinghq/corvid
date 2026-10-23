@@ -168,7 +168,9 @@ public static partial class CredentialDetector
 
     // A redaction's or scrub's own output is never a credential, and neither is a part of it: "github-token:3fa91c0e" inside
     // ghp_[REDACTED:github-token:3fa91c0e] reads as a labelled assignment, and "[REDACTED:prose-value]." after "the password
-    // is" as a prose value. Candidates that start inside one are dropped, so Redact and CredentialScrub are idempotent.
+    // is" as a prose value. Candidates that lie wholly inside one are dropped, so Redact and CredentialScrub are idempotent. A
+    // candidate that runs on past a marker's end ("the password is [REDACTED]CorrectHorseBattery", admin:[REDACTED]S3cretPw@)
+    // holds text the marker does not cover and is kept whole, as before markers were recognised (C-040 review).
     private static void DropInsideMarkers(string text, List<CredentialMatch> found)
     {
         if (found.Count == 0 || !text.Contains("[REDACTED", StringComparison.Ordinal))
@@ -177,7 +179,7 @@ public static partial class CredentialDetector
         foreach (var match in Marker().EnumerateMatches(text))
             markers.Add((match.Index, match.Index + match.Length));
         if (markers.Count > 0)
-            found.RemoveAll(candidate => markers.Exists(marker => candidate.Start >= marker.Start && candidate.Start < marker.End));
+            found.RemoveAll(candidate => markers.Exists(marker => candidate.Start >= marker.Start && candidate.End <= marker.End));
     }
 
     /// <summary>Whether <paramref name="text"/> holds a credential. A timeout counts as yes.</summary>
@@ -303,6 +305,9 @@ public static partial class CredentialDetector
                 continue;
             // PWD=/home/me is the shell's working directory, not a password.
             if (match.Groups["label"].ValueSpan.EndsWith("pwd", StringComparison.OrdinalIgnoreCase) && IsPathOrUrl(value))
+                continue;
+            // nextPageToken=..., page_token=...: a pagination cursor, which a model needs back to fetch the next page.
+            if (CursorLabel().IsMatch(match.Groups["label"].ValueSpan))
                 continue;
             found.Add(new(CredentialKind.LabelledValue, start, length, 0, CredentialStrength.Labelled));
         }
@@ -468,11 +473,12 @@ public static partial class CredentialDetector
     /// <summary>
     /// Whether <paramref name="name"/>, as a whole, is a label whose value the labelled rule reports (<c>password</c>,
     /// <c>GITHUB_TOKEN</c>, <c>api_key</c>, <c>db_pass</c>): for a caller that walks JSON and sees a key apart from its value.
+    /// A pagination cursor (<c>nextPageToken</c>, <c>page_token</c>, <c>NextContinuationToken</c>) is not one.
     /// </summary>
     public static bool IsSecretLabel(string name)
     {
         ArgumentNullException.ThrowIfNull(name);
-        return name.Length is > 0 and <= 128 && SecretLabel().IsMatch(name);
+        return name.Length is > 0 and <= 128 && SecretLabel().IsMatch(name) && !CursorLabel().IsMatch(name);
     }
 
     /// <summary>The values no rule ever reports (see the class remarks).</summary>
@@ -638,6 +644,12 @@ public static partial class CredentialDetector
         """\A(?:[A-Za-z0-9_.-]*(?:api[_-]?key|access[_-]?key|secret[_-]?key|secret|token|password|passwd|passphrase|private[_-]?key|client[_-]?secret)|(?:[A-Za-z0-9_.-]*[_.-])?(?:pass|pwd))\z""",
         IgnoreCase, TimeoutMilliseconds)]
     private static partial Regex SecretLabel();
+
+    // A pagination cursor's label, whole: nextPageToken, page_token, next_token, NextContinuationToken, cursor_token. Not
+    // csrf_token, which authenticates a form beside its session cookie, nor sync_token or resume_token, which some services
+    // issue as credentials.
+    [GeneratedRegex(@"\A[A-Za-z0-9_.-]*?(?:page|next|prev|previous|continuation|cursor)[_.-]?token\z", IgnoreCase, TimeoutMilliseconds)]
+    private static partial Regex CursorLabel();
 
     // curl -u user:PASSWORD, --user user:PASSWORD, --user='user:PASSWORD'.
     [GeneratedRegex(

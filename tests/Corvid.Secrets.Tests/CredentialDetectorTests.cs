@@ -270,6 +270,22 @@ public sealed class CredentialDetectorTests
         Assert.Empty(Values("password: '[REDACTED]'"));
     }
 
+    // Review of #59 (C-040), finding 2: a candidate that starts inside a marker but runs on past it is kept, as on main, so the
+    // egress gate is no less conservative for the scrub's markers; one wholly inside a marker is still dropped.
+    [Theory]
+    [InlineData("the password is [REDACTED]CorrectHorseBattery", "[REDACTED]CorrectHorseBattery")]
+    [InlineData("https://admin:[REDACTED]S3cretPw@db.example/x", "[REDACTED]S3cretPw")]
+    [InlineData("the password is [REDACTED:prose-value]CorrectHorseBattery", "[REDACTED:prose-value]CorrectHorseBattery")]
+    public void A_value_running_on_past_a_marker_is_found(string text, string value) =>
+        Assert.Equal([value], Values(text));
+
+    [Theory]
+    [InlineData("the password is [REDACTED:prose-value].")]
+    [InlineData("GH_TOKEN=ghp_[REDACTED:github-token:3fa91c0e]")]
+    [InlineData("https://admin:[REDACTED:url-password]@db.example/x")]
+    public void A_value_wholly_inside_a_marker_is_not_found(string text) =>
+        Assert.Empty(Values(text));
+
     // Finding 5: a $, % or angle bracket alone does not make a value a reference.
     [Theory]
     [InlineData("password=$ecretP4ss!word", "$ecretP4ss!word")]

@@ -257,6 +257,78 @@ public sealed class CredentialScrubTests
     [InlineData("compass", false)]
     [InlineData("max_tokens", false)]
     [InlineData("passenger", false)]
+    [InlineData("nextPageToken", false)]
+    [InlineData("page_token", false)]
+    [InlineData("NextContinuationToken", false)]
+    [InlineData("csrf_token", true)]
+    [InlineData("refresh_token", true)]
     public void Secret_labels_are_recognized_whole(string name, bool expected) =>
         Assert.Equal(expected, CredentialDetector.IsSecretLabel(name));
+
+    // Review of #59, finding 1: detection rules correlate on the command text, so a substitution in a labelled value stays.
+    [Theory]
+    [InlineData("export API_TOKEN=\"$(cat ~/.aws/credentials)-v2\"", "export API_TOKEN=\"$(cat ~/.aws/credentials)[REDACTED:labelled-value]\"")]
+    [InlineData("export API_TOKEN=\"$(cat ~/.aws/credentials)\"", "export API_TOKEN=\"$(cat ~/.aws/credentials)\"")]
+    [InlineData("export API_TOKEN=$(cat ~/.netrc)", "export API_TOKEN=$(cat ~/.netrc)")]
+    [InlineData("TOKEN=\"pre`cat .env`post\"", "TOKEN=\"[REDACTED:labelled-value]`cat .env`[REDACTED:labelled-value]\"")]
+    [InlineData("PASSWORD=\"${DB_PASSWORD}x9Kq\"", "PASSWORD=\"${DB_PASSWORD}[REDACTED:labelled-value]\"")]
+    [InlineData("curl -u admin:\"$(cat ~/.netrc)\" https://x.example", "curl -u admin:\"$(cat ~/.netrc)\" https://x.example")]
+    [InlineData("password: '${DB_PASS:-hunter2}'", "password: '[REDACTED:labelled-value]'")]
+    public void A_substitution_in_a_labelled_value_is_kept_and_only_the_literal_text_replaced(string text, string expected)
+    {
+        Assert.Equal(expected, Scrub(text));
+        Assert.Equal(expected, Scrub(expected));
+    }
+
+    [Fact]
+    public void A_shape_inside_a_kept_substitution_is_still_replaced()
+    {
+        var scrubbed = Scrub($"TOKEN=\"$(echo {Token})\"");
+
+        Assert.Equal($"TOKEN=\"$(echo ghp_[REDACTED:github-token:{Hash8(Token)}])\"", scrubbed);
+    }
+
+    [Fact]
+    public void A_substitution_in_a_json_shell_command_is_kept()
+    {
+        var scrubbed = ScrubJson("""{"command":"export API_TOKEN=\"$(cat ~/.aws/credentials)-v2\""}""");
+
+        Assert.Equal("""{"command":"export API_TOKEN=\"$(cat ~/.aws/credentials)[REDACTED:labelled-value]\""}""", scrubbed);
+    }
+
+    // Finding 3: a short raw value rewrote every equal leaf, and pagination cursors were lost.
+    [Fact]
+    public void A_short_labelled_value_does_not_rewrite_equal_leaves_under_other_keys()
+    {
+        Assert.Equal("""{"password":"[REDACTED:labelled-value]","user":"admin","note":"admin"}""",
+            ScrubJson("""{"password":"admin","user":"admin","note":"admin"}"""));
+    }
+
+    [Theory]
+    [InlineData("""{"items":[],"nextPageToken":"CgkIARIFCOgHEAE"}""")]
+    [InlineData("""{"page_token":"eyJvZmZzZXQiOjUwfQ","next_token":"AAAABBBBCCCCDDDD1234"}""")]
+    [InlineData("""{"NextContinuationToken":"1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM="}""")]
+    public void A_pagination_cursor_survives(string json) => Assert.Equal(json, ScrubJson(json));
+
+    [Fact]
+    public void A_pagination_cursor_in_a_url_survives_and_a_token_beside_it_does_not()
+    {
+        Assert.Equal("https://api.example/v1/items?page_token=CgkIARIFCOgHEAE&api_key=[REDACTED:labelled-value]",
+            Scrub("https://api.example/v1/items?page_token=CgkIARIFCOgHEAE&api_key=k7Qx9ZpL2mV4"));
+    }
+
+    // Finding 4: a value labelled by its parent key or by a sibling name.
+    [Fact]
+    public void A_value_key_under_a_secret_label_is_labelled()
+    {
+        Assert.Equal("""{"password":{"value":"[REDACTED:labelled-value]","rotated":"2026-01-01"}}""",
+            ScrubJson("""{"password":{"value":"hunter2","rotated":"2026-01-01"}}"""));
+    }
+
+    [Fact]
+    public void A_value_named_by_a_sibling_secret_name_is_labelled()
+    {
+        Assert.Equal("""{"env":[{"name":"DB_PASSWORD","value":"[REDACTED:labelled-value]"},{"name":"DB_HOST","value":"db.local"},{"name":"API_TOKEN","value":"${{ secrets.API_TOKEN }}"}]}""",
+            ScrubJson("""{"env":[{"name":"DB_PASSWORD","value":"s3cr3t"},{"name":"DB_HOST","value":"db.local"},{"name":"API_TOKEN","value":"${{ secrets.API_TOKEN }}"}]}"""));
+    }
 }

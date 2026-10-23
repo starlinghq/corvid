@@ -217,4 +217,21 @@ public sealed class ScannerTests
 
         Assert.DoesNotContain(SkillScanner.Scan("SKILL.md", text), finding => finding.Rule == SkillScanner.CredentialValueRule);
     }
+
+    // Review of #59 (C-040), finding 5: a documentation placeholder is no credential, a real value beside one still is.
+    [Theory]
+    [InlineData("export OPENAI_API_KEY=your_api_key_here")]
+    [InlineData("GITHUB_TOKEN=YOUR_TOKEN gh pr list")]
+    [InlineData("API_KEY=\"replace-me\"")]
+    [InlineData("password: changeme")]
+    [InlineData("db_password = example-password")]
+    public void A_documentation_placeholder_is_not_flagged(string line) =>
+        Assert.DoesNotContain(SkillScanner.Scan("SKILL.md", "## Setup\n" + line), finding => finding.Rule == SkillScanner.CredentialValueRule);
+
+    [Theory]
+    [InlineData("export OPENAI_API_KEY=k7Qx9ZpL2mV4")]
+    [InlineData("export OPENAI_API_KEY=sk-proj-A1b2C3d4E5f6G7h8I9j0K1l2")]
+    [InlineData("API_KEY=\"your-key-2Xk9vQ\"")]
+    public void A_value_that_is_not_a_placeholder_is_still_flagged(string line) =>
+        Assert.Contains(SkillScanner.Scan("SKILL.md", "## Setup\n" + line), finding => finding.Rule == SkillScanner.CredentialValueRule);
 }

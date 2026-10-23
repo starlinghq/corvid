@@ -120,8 +120,99 @@ public static class CredentialScrub
         foreach (var family in Families)
             if ((rules & family) != 0)
                 foreach (var match in find(text, family))
-                    spans.Add(new(match.Start, match.Length, match.Kind, match.PrefixLength, match.Strength));
+                    Add(text, new(match.Start, match.Length, match.Kind, match.PrefixLength, match.Strength), spans);
         return spans;
+    }
+
+    // A labelled value that holds a shell substitution (API_TOKEN="$(cat ~/.aws/credentials)-v2") is computed when the command
+    // runs: the substitution is the command's evidence, which detection rules (C-023) correlate on in the stored event and
+    // corvid scan reads back, and it holds no value. Only the literal text around it is replaced, each run on its own; a run
+    // with no letter or digit, or that is exempt (a marker, so the scrub stays idempotent), is kept. Kept: $(...), `...` and
+    // ${NAME}; ${NAME:-default} holds a literal and is text. A shape inside a substitution ($(echo ghp_...)) is its own span
+    // and is still replaced; a literal under no rule inside one ($(echo hunter2)) is kept with it, the price of the evidence.
+    private static void Add(string text, Span span, List<Span> spans)
+    {
+        if (span.Strength != CredentialStrength.Labelled || !HasSubstitution(text.AsSpan(span.Start, span.Length)))
+        {
+            spans.Add(span);
+            return;
+        }
+        var literal = span.Start;
+        for (var i = span.Start; i < span.End;)
+        {
+            var close = SubstitutionEnd(text, i, span.End);
+            if (close < 0)
+            {
+                i++;
+                continue;
+            }
+            AddLiteral(text, literal, i, span, spans);
+            i = literal = close;
+        }
+        AddLiteral(text, literal, span.End, span, spans);
+    }
+
+    private static bool HasSubstitution(ReadOnlySpan<char> value) =>
+        value.Contains("$(", StringComparison.Ordinal) || value.Contains("${", StringComparison.Ordinal) || value.Contains('`');
+
+    // The end of the $(...), ${...} or `...` that starts at i, or -1. One left open runs to the value's end: a bare value is
+    // cut at whitespace, so TOKEN=$(cat ~/.netrc) arrives as "$(cat".
+    private static int SubstitutionEnd(string text, int i, int end)
+    {
+        if (text[i] == '`')
+        {
+            var close = text.IndexOf('`', i + 1, end - i - 1);
+            return close < 0 ? end : close + 1;
+        }
+        if (text[i] != '$' || i + 1 >= end)
+            return -1;
+        // ${NAME} only: ${DB_PASS:-hunter2} holds a literal default, so it is judged as text.
+        if (text[i + 1] == '{')
+        {
+            var close = text.IndexOf('}', i + 2, end - i - 2);
+            return close > i + 2 && IsName(text.AsSpan(i + 2, close - i - 2)) ? close + 1 : -1;
+        }
+        if (text[i + 1] != '(')
+            return -1;
+        var depth = 0;
+        for (var j = i + 1; j < end; j++)
+        {
+            if (text[j] == '(')
+                depth++;
+            else if (text[j] == ')' && --depth == 0)
+                return j + 1;
+        }
+        return end;
+    }
+
+    private static void AddLiteral(string text, int start, int end, Span span, List<Span> spans)
+    {
+        while (start < end && char.IsWhiteSpace(text[start]))
+            start++;
+        while (end > start && char.IsWhiteSpace(text[end - 1]))
+            end--;
+        var run = text.AsSpan(start, end - start);
+        if (!HasLetterOrDigit(run) || CredentialDetector.IsExempt(run.ToString()))
+            return;
+        spans.Add(span with { Start = start, Length = end - start, PrefixLength = 0 });
+    }
+
+    private static bool IsName(ReadOnlySpan<char> name)
+    {
+        if (!char.IsAsciiLetter(name[0]) && name[0] != '_')
+            return false;
+        foreach (var c in name)
+            if (!char.IsAsciiLetterOrDigit(c) && c != '_')
+                return false;
+        return true;
+    }
+
+    private static bool HasLetterOrDigit(ReadOnlySpan<char> run)
+    {
+        foreach (var c in run)
+            if (char.IsLetterOrDigit(c))
+                return true;
+        return false;
     }
 
     private static readonly CredentialRules[] Families =
@@ -131,7 +222,9 @@ public static class CredentialScrub
     /// <paramref name="element"/> with every credential value replaced by its marker, in string leaves and property names,
     /// keeping its structure. The element's JSON text is scanned too, so a key labels its value (<c>{"password": "..."}</c>),
     /// and a direct string or number value of a secret-labelled key (<see cref="CredentialDetector.IsSecretLabel"/>) is a
-    /// labelled value. An object or array under such a key is structure, not a value; its own keys are judged on their names.
+    /// labelled value. An object or array under such a key is structure, not a value; its own keys are judged on their names,
+    /// and its <c>value</c> key is labelled, as is one beside a <c>name</c> or <c>key</c> that is a secret label
+    /// (<c>{"name": "DB_PASSWORD", "value": "..."}</c>).
     /// </summary>
     public static ScrubbedJson ScrubJson(JsonElement element, CredentialRules rules) => ScrubJson(element, rules, CredentialDetector.Find);
 
@@ -241,10 +334,14 @@ public static class CredentialScrub
             {
                 case JsonValueKind.Object:
                     writer.WriteStartObject();
+                    // {"password": {"value": ...}}, and the k8s and CI env shape {"name": "DB_PASSWORD", "value": ...}: a
+                    // "value" key is labelled by its parent's key or by its sibling name.
+                    var valueLabelled = labelled || NamesSecret(element);
                     foreach (var property in element.EnumerateObject())
                     {
                         writer.WritePropertyName(Leaf(property.Name, labelled: false));
-                        Write(writer, property.Value, CredentialDetector.IsSecretLabel(property.Name));
+                        Write(writer, property.Value, CredentialDetector.IsSecretLabel(property.Name)
+                            || (valueLabelled && property.Name.Equals("value", StringComparison.OrdinalIgnoreCase)));
                     }
                     writer.WriteEndObject();
                     break;
@@ -271,6 +368,15 @@ public static class CredentialScrub
             }
         }
 
+        private static bool NamesSecret(JsonElement element)
+        {
+            foreach (var property in element.EnumerateObject())
+                if ((property.Name.Equals("name", StringComparison.OrdinalIgnoreCase) || property.Name.Equals("key", StringComparison.OrdinalIgnoreCase))
+                    && property.Value.ValueKind == JsonValueKind.String && CredentialDetector.IsSecretLabel(property.Value.GetString()!))
+                    return true;
+            return false;
+        }
+
         // The leaf's own matches; a raw value the leaf is, or holds when it is long enough not to rewrite unrelated text
         // (an Authorization value after a scheme the leaf alone does not label); and the whole leaf when its key is a secret
         // label.
@@ -282,8 +388,11 @@ public static class CredentialScrub
             foreach (var (value, match) in raw)
             {
                 var prefix = Math.Min(match.PrefixLength, value.Length);
+                // A short one only on the labelled path: "admin" as a password must not rewrite a user or a note that is "admin".
                 if (value.Length < MinRawSubstring)
                 {
+                    if (!labelled)
+                        continue;
                     var trimmed = text.AsSpan().Trim();
                     if (trimmed.SequenceEqual(value))
                         spans.Add(new(text.IndexOf(value, StringComparison.Ordinal), value.Length, match.Kind, prefix, match.Strength));
