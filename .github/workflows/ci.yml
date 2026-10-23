@@ -3,9 +3,10 @@ name: ci
 # Build, test and publish checks. No secrets are used or exposed here.
 #
 # Jobs run on the org's self-hosted runner (labels self-hosted, omarchy): an Arch Linux workstation where the runner
-# is the unprivileged system user gh-runner with no sudo. The repository is private, so only members' branches run
-# here. Steps must not need root, must not install system packages, and must keep files they plant (fake secrets,
-# homes, caches) under $RUNNER_TEMP, which the runner clears after each job.
+# is the unprivileged system user gh-runner with no sudo. The repository is public, so every job skips a pull request
+# from a fork: only members' branches and main run here, never code from outside. Steps must not need root, must not
+# install system packages, and must keep files they plant (fake secrets, homes, caches) under $RUNNER_TEMP, which the
+# runner clears after each job.
 on:
   pull_request:
   push:
@@ -28,6 +29,7 @@ jobs:
   test:
     name: Build and test (Linux)
     runs-on: [self-hosted, omarchy]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -98,6 +100,7 @@ jobs:
   gpu:
     name: CUDA build and GPU tests (RTX 3090)
     runs-on: [self-hosted, omarchy]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 20
     env:
       CUDA_DEVICE_ORDER: PCI_BUS_ID
@@ -152,6 +155,7 @@ jobs:
   cli:
     name: Single-file publish (corvid)
     runs-on: [self-hosted, omarchy]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -187,6 +191,7 @@ jobs:
   aot:
     name: Native AOT publish (corvid-vault, corvid-sandbox)
     runs-on: [self-hosted, omarchy]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5

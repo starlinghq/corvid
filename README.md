@@ -32,23 +32,39 @@ placeholders for real values only on the way out to the host each secret is boun
 
 ## Quick start
 
+Install the latest release (Linux x86_64; no .NET SDK needed):
+
 ```sh
-dotnet run --project src/Corvid.Cli -- doctor                # what is missing, and how to fix it
-dotnet run --project src/Corvid.Cli -- model download qwen3.5-0.8b gliner2-base-v1 embeddinggemma-2 kev-0.8b
-                                                             # the default models (about 10 GB); nothing downloads implicitly
-dotnet run --project src/Corvid.Cli -- chat
+curl -fsSL https://raw.githubusercontent.com/starlinghq/corvid/main/install.sh | sh
 ```
 
-Optional extras:
+It puts `corvid` and `corvid-vault` in `~/.local/bin`, with `corvid-sandbox` beside them in
+`~/.local/share/corvid/<version>/`, after checking the download against the release's `SHA256SUMS`. Add
+`sh -s -- --cuda` for the CUDA variant (Kev on an NVIDIA GPU, about 300 MB more), `--version v0.1.0` for a given
+release, or `--prefix <dir>` to install elsewhere. Running it again upgrades. Shell tools also need bubblewrap
+(`pacman -S bubblewrap`, `apt install bubblewrap`). Then:
 
 ```sh
-dotnet run --project src/Corvid.Cli -- model download kev-4b # second decision tier for gates (about 17 GB, 18 GB of RAM)
+corvid doctor                # what is missing, and how to fix it
+corvid model download qwen3.5-0.8b gliner2-base-v1 embeddinggemma-2 kev-0.8b
+                             # the default models (about 10 GB); nothing downloads implicitly
+corvid chat
+```
+
+Optional: `corvid model download kev-4b`, a second decision tier for gates (about 17 GB, 18 GB of RAM). Without Kev
+downloaded, decisions run on the degraded tier and `corvid chat` says so.
+
+From a source checkout, use `dotnet run --project src/Corvid.Cli -- <command>` in place of `corvid`, or build the
+binaries yourself:
+
+```sh
 dotnet publish src/Corvid.Cli -c Release -r linux-x64        # a single-file `corvid`
 dotnet publish src/Corvid.Cli -c Release -r linux-x64 -p:UseCuda=true -o out-cli-cuda
-                                                             # the CUDA variant, for Kev on an NVIDIA GPU (about 300 MB more)
+                                                             # the CUDA variant, for Kev on an NVIDIA GPU
 ```
 
-Without Kev downloaded, decisions run on the degraded tier and `corvid chat` says so.
+Releases are cut by pushing a `v*` tag; [`release.yml`](.github/workflows/release.yml) builds both tarballs, installs
+each with `install.sh` as a smoke test, and publishes them.
 
 ## What Corvid does
 

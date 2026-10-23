@@ -1,0 +1,138 @@
+name: release
+
+# Builds the release tarballs that install.sh downloads, and on a v* tag publishes them as a GitHub release.
+#
+#   corvid-linux-x64.tar.gz        corvid (CPU), corvid-vault, corvid-sandbox, VERSION
+#   corvid-linux-x64-cuda.tar.gz   the same with the CUDA corvid (C-029)
+#   SHA256SUMS, install.sh
+#
+# Asset names carry no version, so releases/latest/download/<asset> always names the newest. A manual run builds and
+# smoke-tests the tarballs and keeps them as workflow artifacts; it never creates a release.
+#
+# The build jobs use the self-hosted runner (clang for Native AOT, the CUDA runtime); see ci.yml for its constraints.
+# Only members can push tags or dispatch, so no fork code reaches it from here.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  CI: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset }}
+    runs-on: [self-hosted, omarchy]
+    timeout-minutes: 30
+    # The smoke test's doctor probes the GPUs through NVML; pin it to the 3090 as ci.yml's gpu job does.
+    env:
+      CUDA_DEVICE_ORDER: PCI_BUS_ID
+      CUDA_VISIBLE_DEVICES: ${{ vars.CORVID_CUDA_DEVICE || 'GPU-9e21a72e-3a6f-e082-3d74-4b8d361de70c' }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - asset: corvid-linux-x64
+            cuda: false
+          - asset: corvid-linux-x64-cuda
+            cuda: true
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
+        with:
+          global-json-file: global.json
+
+      # v0.1.0 becomes 0.1.0; a manual run gets a dev version that no tag can collide with.
+      - name: Version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then version="${GITHUB_REF_NAME#v}"; else version="0.0.0-dev.$GITHUB_RUN_NUMBER"; fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "$version"
+
+      # Each variant is its own job, so the CPU and CUDA restores never share obj/ (Directory.Build.targets).
+      - name: Publish
+        run: |
+          out="$RUNNER_TEMP/pub"
+          dotnet publish src/Corvid.Cli/Corvid.Cli.csproj -c Release -r linux-x64 -p:UseCuda=${{ matrix.cuda }} -p:Version="$VERSION" -o "$out/cli"
+          dotnet publish vault/Corvid.Vault/Corvid.Vault.csproj -c Release -r linux-x64 -p:PublishAot=true -p:Version="$VERSION" -o "$out/vault"
+          dotnet publish sandbox/Corvid.Sandbox.Launcher/Corvid.Sandbox.Launcher.csproj -c Release -r linux-x64 -p:PublishAot=true -p:Version="$VERSION" -o "$out/sandbox"
+          # Only the three binaries ship; the .pdb and .dbg files stay behind.
+          mkdir "$out/stage"
+          cp "$out/cli/corvid" "$out/vault/corvid-vault" "$out/sandbox/corvid-sandbox" "$out/stage/"
+          echo "$VERSION" > "$out/stage/VERSION"
+          tar -czf "${{ matrix.asset }}.tar.gz" -C "$out/stage" corvid corvid-vault corvid-sandbox VERSION
+          ls -l "${{ matrix.asset }}.tar.gz"
+
+      # Install the tarball with install.sh exactly as a user would, then run the binaries from the installed links. As in
+      # ci.yml's cli job: no models, an empty model cache, and doctor and chat report what to download instead of fetching.
+      - name: Install and smoke test
+        env:
+          STARLING_MODELS: ${{ runner.temp }}/empty-model-cache
+          CORVID__DataDirectory: ${{ runner.temp }}/corvid-data
+        run: |
+          set -o pipefail
+          prefix="$RUNNER_TEMP/prefix"
+          variant=""; if [ "${{ matrix.cuda }}" = true ]; then variant="--cuda"; fi
+          sh install.sh --from "${{ matrix.asset }}.tar.gz" --prefix "$prefix" $variant
+          "$prefix/bin/corvid" --version | tee version.log
+          grep -q "corvid $VERSION" version.log
+          "$prefix/bin/corvid-vault" --help
+          find "$prefix/share/corvid" -name corvid-sandbox -exec {} --version \;
+          "$prefix/bin/corvid" doctor | tee doctor.log || true
+          grep -q "corvid model download qwen3.5-0.8b" doctor.log
+          # The sandbox is found next to corvid's real path, through the link.
+          grep -q "corvid-sandbox" doctor.log
+          if [ "${{ matrix.cuda }}" != true ]; then
+            status=0; echo hello | "$prefix/bin/corvid" chat | tee chat.log || status=$?
+            test "$status" -eq 3
+          fi
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish the release
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cp install.sh dist/
+          cd dist
+          sha256sum corvid-linux-x64.tar.gz corvid-linux-x64-cuda.tar.gz install.sh > SHA256SUMS
+          cat SHA256SUMS
+
+      # A tag with a hyphen (v0.2.0-rc.1) is a prerelease, which releases/latest never points at.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=""; case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "Corvid $GITHUB_REF_NAME" \
+            --generate-notes --verify-tag $prerelease \
+            dist/corvid-linux-x64.tar.gz dist/corvid-linux-x64-cuda.tar.gz dist/install.sh dist/SHA256SUMS

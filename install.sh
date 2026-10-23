@@ -1,0 +1,142 @@
+#!/bin/sh
+# Installs Corvid from a GitHub release: corvid, corvid-vault and corvid-sandbox, side by side.
+#
+#   curl -fsSL https://raw.githubusercontent.com/starlinghq/corvid/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/starlinghq/corvid/main/install.sh | sh -s -- --cuda --version v0.1.0
+#
+# Each version goes in <prefix>/share/corvid/<version>/, and <prefix>/bin/corvid and corvid-vault link to it. corvid
+# finds corvid-sandbox next to its real path, so the sandbox is not linked. Nothing outside <prefix> is touched, and no
+# models are downloaded: run `corvid doctor` afterwards.
+set -eu
+
+repo="starlinghq/corvid"
+version="latest"
+variant=""
+prefix="${CORVID_PREFIX:-$HOME/.local}"
+from=""
+
+usage() {
+    cat <<'EOF'
+Usage: install.sh [options]
+
+  --version <tag>   a release tag such as v0.1.0 (default: the latest release)
+  --cuda            the CUDA variant, for Kev on an NVIDIA GPU (needs the CUDA 13 runtime)
+  --prefix <dir>    install under <dir>/share/corvid and link into <dir>/bin (default: ~/.local, or $CORVID_PREFIX)
+  --from <tarball>  install a local corvid-linux-x64[-cuda].tar.gz instead of downloading; no checksum is checked
+  -h, --help        this text
+EOF
+}
+
+die() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --version) [ $# -ge 2 ] || die "--version needs a tag"; version="$2"; shift 2 ;;
+        --cuda) variant="-cuda"; shift ;;
+        --prefix) [ $# -ge 2 ] || die "--prefix needs a directory"; prefix="$2"; shift 2 ;;
+        --from) [ $# -ge 2 ] || die "--from needs a file"; from="$2"; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) usage >&2; die "unknown option: $1" ;;
+    esac
+done
+
+# Corvid is Linux-first: the sandbox is bubblewrap, Landlock and seccomp, and Vault's master key is systemd-creds.
+[ "$(uname -s)" = "Linux" ] || die "Corvid releases are Linux only for now; build from source elsewhere."
+case "$(uname -m)" in
+    x86_64|amd64) ;;
+    *) die "Corvid releases are x86_64 only for now (this machine is $(uname -m)); build from source." ;;
+esac
+
+for tool in tar mktemp; do
+    command -v "$tool" >/dev/null 2>&1 || die "$tool is required"
+done
+
+if command -v curl >/dev/null 2>&1; then
+    fetch() { curl -fsSL --retry 3 -o "$2" "$1"; }
+elif command -v wget >/dev/null 2>&1; then
+    fetch() { wget -q -O "$2" "$1"; }
+else
+    fetch() { die "curl or wget is required"; }
+fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+    sha256() { sha256sum "$1" | cut -d' ' -f1; }
+elif command -v shasum >/dev/null 2>&1; then
+    sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
+else
+    sha256() { die "sha256sum or shasum is required to verify the download"; }
+fi
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT INT TERM
+
+asset="corvid-linux-x64${variant}.tar.gz"
+if [ -n "$from" ]; then
+    [ -f "$from" ] || die "no such file: $from"
+    cp "$from" "$work/$asset"
+else
+    # CORVID_RELEASE_URL points at a mirror, or a local directory (file://) for testing, holding the release's assets.
+    if [ -n "${CORVID_RELEASE_URL:-}" ]; then
+        base="$CORVID_RELEASE_URL"
+    elif [ "$version" = "latest" ]; then
+        base="https://github.com/$repo/releases/latest/download"
+    else
+        base="https://github.com/$repo/releases/download/$version"
+    fi
+    printf 'Downloading %s (%s)\n' "$asset" "$version"
+    fetch "$base/$asset" "$work/$asset" || die "could not download $base/$asset"
+    fetch "$base/SHA256SUMS" "$work/SHA256SUMS" || die "could not download $base/SHA256SUMS"
+    expected="$(awk -v a="$asset" '$2 == a || $2 == "*" a { print $1 }' "$work/SHA256SUMS")"
+    [ -n "$expected" ] || die "SHA256SUMS has no entry for $asset"
+    actual="$(sha256 "$work/$asset")"
+    [ "$expected" = "$actual" ] || die "checksum mismatch for $asset (expected $expected, got $actual)"
+fi
+
+mkdir "$work/x"
+tar -xzf "$work/$asset" -C "$work/x"
+for bin in corvid corvid-vault corvid-sandbox; do
+    [ -f "$work/x/$bin" ] || die "$asset has no $bin"
+done
+installed="$(cat "$work/x/VERSION" 2>/dev/null || true)"
+[ -n "$installed" ] || die "$asset has no VERSION"
+case "$installed" in */*|.*) die "$asset has an unusable VERSION: $installed" ;; esac
+
+dest="$prefix/share/corvid/$installed$variant"
+bindir="$prefix/bin"
+# A corvid that is not one of our links (a hand-copied build, say) is left alone, before anything is installed.
+for bin in corvid corvid-vault; do
+    if [ -e "$bindir/$bin" ] && [ ! -L "$bindir/$bin" ]; then
+        die "$bindir/$bin exists and is not a link; move it aside and run again"
+    fi
+done
+mkdir -p "$prefix/share/corvid" "$bindir"
+# Replace a previous install of the same version whole, so no stale file survives.
+rm -rf "$dest.new"
+mv "$work/x" "$dest.new"
+rm -rf "$dest"
+mv "$dest.new" "$dest"
+chmod 0755 "$dest/corvid" "$dest/corvid-vault" "$dest/corvid-sandbox"
+
+for bin in corvid corvid-vault; do
+    ln -sfn "$dest/$bin" "$bindir/$bin"
+done
+
+printf 'Installed Corvid %s%s in %s\n' "$installed" "$variant" "$dest"
+# The first run extracts the bundled ONNX Runtime natives, so it takes a moment.
+"$bindir/corvid" --version
+
+# shellcheck disable=SC2016 # $PATH is printed for the user to paste, not expanded here.
+case ":$PATH:" in
+    *":$bindir:"*) ;;
+    *) printf '\n%s is not on PATH. Add it, for example:\n  export PATH="%s:$PATH"\n' "$bindir" "$bindir" ;;
+esac
+
+command -v bwrap >/dev/null 2>&1 || printf '\nbubblewrap (bwrap) is not installed; shell tools refuse to run without it.\n'
+
+cat <<'EOF'
+
+Next:
+  corvid doctor                     # what is missing, and how to fix it
+  corvid model download qwen3.5-0.8b gliner2-base-v1 embeddinggemma-2 kev-0.8b
+  corvid chat
+EOF
