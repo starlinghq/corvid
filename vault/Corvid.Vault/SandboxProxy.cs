@@ -123,7 +123,6 @@ internal sealed class SandboxProxy : IDisposable
             _core.Audit.Write(new AuditEvent
             {
                 Time = now, Op = "sandbox_open", Decision = "allowed", Session = request.SessionId, Pid = peer.Pid, Uid = peer.Uid, Sandbox = id,
-                Destination = request.Network ? "network" : null,
             });
             return new SandboxOpenResponse { SandboxId = id, ProxySocketPath = path, CaCertificatePem = certificates.CaCertificatePem, ExpiresAt = expires };
         }
