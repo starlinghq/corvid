@@ -178,7 +178,7 @@
     {
       "name": "shell",
       "origin": "builtin",
-      "description": "Run a shell command line (bash) in the workspace and return its exit code and output. It runs sandboxed: no network, writes only inside the workspace, secrets hidden. Prefer the file tools for reading and editing files.",
+      "description": "Run a shell command line (bash) in the workspace and return its exit code and output. It runs sandboxed: no direct network; HTTPS only through Corvid Vault's proxy when enabled; writes only inside the workspace, secrets hidden. Prefer the file tools for reading and editing files.",
       "parameters": {
         "type": "object",
         "properties": {

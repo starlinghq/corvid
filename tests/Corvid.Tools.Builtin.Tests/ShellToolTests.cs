@@ -59,7 +59,7 @@ public sealed class ShellToolTests : IDisposable
         var (policy, command) = Assert.Single(_sandbox.Runs);
         Assert.Equal(Workspace, policy.Workspace);
         Assert.False(policy.Network);
-        Assert.Equal(["/srv/vault", "/etc/vault.json", "/run/vault.sock", "/home/user/private"], policy.DeniedPaths);
+        Assert.Equal(["/srv/vault", "/etc/vault.json", "/run/vault.sock", "/run/sandbox", "/home/user/private"], policy.DeniedPaths);
         Assert.Equal(new SandboxCommand("/bin/bash", "-c", "ls -la").Arguments, command.Arguments);
         Assert.Equal(3, result.GetProperty("exit_code").GetInt32());
         var stdout = result.GetProperty("stdout").GetString()!;
@@ -138,7 +138,7 @@ public sealed class ShellToolTests : IDisposable
             "XDG_CONFIG_HOME" => "relative/ignored",
             _ => null,
         });
-        Assert.Equal(["/data/corvid-vault", "/home/user/.config/corvid-vault/vault.json", "/run/user/1000/corvid-vault/vault.sock"], defaults.Paths);
+        Assert.Equal(["/data/corvid-vault", "/home/user/.config/corvid-vault/vault.json", "/run/user/1000/corvid-vault/vault.sock", "/run/user/1000/corvid-vault/sandbox"], defaults.Paths);
         Assert.Null(VaultLocations.Default("/home/user", _ => null).SocketPath);
 
         var custom = new VaultLocations("/srv/vault", "/etc/vault.json");
@@ -175,6 +175,8 @@ public sealed class ShellConfinementTests : IDisposable
         Secret(Path.Combine(_vault.DataDirectory, "store.bin"));
         Secret(_vault.ConfigPath);
         Secret(_vault.SocketPath!);
+        // Another sandbox's proxy socket (V-003b): Vault checks only the uid, so a command must not see it.
+        Secret(Path.Combine(_vault.SandboxDirectory!, "othersandbox.sock"));
         Secret(Path.Combine(_home, ".ssh", "id_ed25519"));
         _tree.Write("home/notes.txt", "visible-note");
         _tree.Write("home/project/README.md", "readme");
@@ -216,7 +218,7 @@ public sealed class ShellConfinementTests : IDisposable
         // The reads are in a script file the approval pipeline cannot see into (the hardline list would refuse them as a
         // command line), approved by a person as the turn loop would get it: the sandbox alone must stop them.
         var script = "cat ../notes.txt\necho made > made.txt\necho\n" + string.Join("\n", _secrets.Keys.Select(path => $"cat '{path}'"))
-            + $"\nls -la '{_vault.DataDirectory}'\necho x >> ../notes.txt\necho done\n";
+            + $"\nls -la '{_vault.DataDirectory}'\nls -la '{_vault.SandboxDirectory}'\necho x >> ../notes.txt\necho done\n";
         _tree.Write("home/project/probe.sh", script);
         var context = await Approved(Pipeline(new Answering(approve: true)), "bash probe.sh");
         Assert.True(((ApprovalResult)context.Approval!).Allowed);
@@ -235,6 +237,7 @@ public sealed class ShellConfinementTests : IDisposable
         }
 
         Assert.DoesNotContain("store.bin", stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("othersandbox", stdout, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -20,9 +20,15 @@ public sealed record VaultLocations(string DataDirectory, string ConfigPath, str
 
     public string? SocketPath { get; } = SocketPath is null ? null : Absolute(SocketPath, nameof(SocketPath));
 
-    /// <summary>Every location, normalized: the data directory, the policy file and the socket.</summary>
+    /// <summary>
+    /// The directory beside the socket where Vault puts per-sandbox proxy sockets (V-003a). Hidden from every command: Vault
+    /// checks only the peer's uid, so a command that could reach another sandbox's socket could ride its route (V-003b).
+    /// </summary>
+    public string? SandboxDirectory => SocketPath is null ? null : Path.Combine(Path.GetDirectoryName(SocketPath) ?? "/", "sandbox");
+
+    /// <summary>Every location, normalized: the data directory, the policy file, the socket and the sandbox sockets' directory.</summary>
     public ImmutableArray<string> Paths =>
-        [.. new[] { DataDirectory, ConfigPath, SocketPath }.OfType<string>().Distinct(StringComparer.Ordinal)];
+        [.. new[] { DataDirectory, ConfigPath, SocketPath, SandboxDirectory }.OfType<string>().Distinct(StringComparer.Ordinal)];
 
     /// <summary>
     /// Vault's defaults (as <c>corvid-vault</c> computes them): <c>$XDG_DATA_HOME/corvid-vault</c>,
