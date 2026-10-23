@@ -44,8 +44,15 @@ public sealed class EgressTests : IDisposable
 
     private Task<SandboxOpenResponse> OpenAsync(bool network = false) => Client.OpenSandboxAsync("shell", tainted: false, network, 5, Ct);
 
-    private SandboxPolicy Proxied(SandboxOpenResponse open) =>
-        _layout.Policy with { Proxy = new SandboxProxy(open.ProxySocketPath, open.CaCertificatePem) };
+    /// <summary>
+    /// As the shell builds it: Vault's socket and its sandbox directory denied (VaultLocations.Paths), which matters when
+    /// TMPDIR (and so Vault's socket here) is outside /tmp, as on CI, where the sandbox's empty /tmp would not hide them.
+    /// </summary>
+    private SandboxPolicy Proxied(SandboxOpenResponse open) => _layout.Policy with
+    {
+        Proxy = new SandboxProxy(open.ProxySocketPath, open.CaCertificatePem),
+        DeniedPaths = [_vault.Options.SocketPath, Path.Combine(Path.GetDirectoryName(_vault.Options.SocketPath)!, "sandbox")],
+    };
 
     private Task<SandboxResult> RunAsync(SandboxOpenResponse open, string script, string? stdin = null) =>
         _layout.Sandbox().RunAsync(Proxied(open), SandboxCommand.Shell(script) with { StandardInput = stdin }, Ct);
@@ -130,7 +137,9 @@ public sealed class EgressTests : IDisposable
             (exec 3<>/dev/tcp/127.0.0.1/{port}) 2> /dev/null; echo "host-loopback=$?"
             echo "interfaces=$(grep -c : /proc/net/dev)"
             echo "run=$(ls -A /run/corvid-sandbox | tr '\n' ' ')"
-            echo "vault-sockets=$(ls '{vaultRun}' '{vaultRun}/sandbox' 2> /dev/null | grep -c sock)"
+            echo "vault-sockets=$(for f in '{vaultRun}'/* '{vaultRun}'/sandbox/*; do [ -S "$f" ] && echo "$f"; done | wc -l)"
+            echo "sandbox-dir=$(ls -A '{vaultRun}/sandbox' 2>&1 | grep -c '\.sock$')"
+            [ -S /run/corvid-sandbox/proxy.sock ] && echo proxy-is-a-socket
             curl -sS -o /dev/null -w '{WriteOut}' https://{Other}/
             """;
 
@@ -146,7 +155,11 @@ public sealed class EgressTests : IDisposable
         // Loopback only, from /proc/net/dev: /sys/class/net shows the host's sysfs, which bubblewrap binds read-only.
         Assert.Contains("interfaces=1\n", output, StringComparison.Ordinal);
         Assert.Contains("run=ca.pem proxy.sock \n", output, StringComparison.Ordinal);
-        Assert.Contains("vault-sockets=0\n", output, StringComparison.Ordinal); // Vault's own socket and the sandbox directory
+        // No socket of Vault's is reachable at its real path (vault.sock is /dev/null there, or under the empty /tmp), and the
+        // sandbox directory lists no socket, not even this sandbox's own.
+        Assert.True(output.Contains("vault-sockets=0\n", StringComparison.Ordinal), output);
+        Assert.Contains("sandbox-dir=0\n", output, StringComparison.Ordinal);
+        Assert.Contains("proxy-is-a-socket\n", output, StringComparison.Ordinal); // the check above can see a socket
         Assert.EndsWith("proxied=200\n", output, StringComparison.Ordinal); // the control: the proxy works in the same run
     }
 
