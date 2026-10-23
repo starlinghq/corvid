@@ -1,5 +1,5 @@
 {
-  "version": "2026-10-21.1",
+  "version": "2026-10-22.1",
   "description": "The S2 tool-calling golden set's tools (C-034). Built-ins are a snapshot of the generated descriptors and BuiltinTools.Examples, kept equal by tests/Corvid.Tools.Builtin.Tests/CatalogueSnapshotTests. Extras are MCP-like tools named server__tool, as Corvid.Mcp registers them, with no examples; nine are spike S5's non-built-in tools (starlinghq/starling spike/s5-llguidance at 638506b, ai-dotnet/tools/Starlings.Qwen35.GuidanceSpike/fixtures/tools.json) with description and parameters verbatim.",
   "tools": [
     {
@@ -178,7 +178,7 @@
     {
       "name": "shell",
       "origin": "builtin",
-      "description": "Run a shell command line (bash) in the workspace and return its exit code and output. It runs sandboxed: no network, writes only inside the workspace, secrets hidden. Prefer the file tools for reading and editing files.",
+      "description": "Run a shell command line (bash) in the workspace and return its exit code and output. It runs sandboxed: no direct network; HTTPS only through Corvid Vault's proxy when enabled; writes only inside the workspace, secrets hidden. Prefer the file tools for reading and editing files.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -432,6 +432,30 @@
       ]
     },
     {
+      "name": "cron_pause",
+      "origin": "builtin",
+      "description": "Pause a scheduled job so it does not run until it is resumed; cron_resume turns it back on.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "description": "The job_id from cron_list.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id"
+        ]
+      },
+      "examples": [
+        "pause the inbox check",
+        "stop the morning summary for now",
+        "hold the backup job while I'm away",
+        "skip the reminders this week",
+        "put the hourly check on hold"
+      ]
+    },
+    {
       "name": "cron_remove",
       "origin": "builtin",
       "description": "Remove a scheduled job so it never runs again.",
@@ -453,6 +477,30 @@
         "delete that scheduled job",
         "remove the weekly review reminder",
         "I don't need the morning summary any more"
+      ]
+    },
+    {
+      "name": "cron_resume",
+      "origin": "builtin",
+      "description": "Resume a paused scheduled job from now; runs missed while it was paused are not made up.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "description": "The job_id from cron_list.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id"
+        ]
+      },
+      "examples": [
+        "turn the weekly review back on",
+        "resume the inbox check",
+        "start the morning summary again",
+        "unpause the backup job",
+        "I'm back, restart my reminders"
       ]
     },
     {

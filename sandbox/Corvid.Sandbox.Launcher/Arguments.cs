@@ -19,6 +19,12 @@ internal sealed record LaunchRequest
 
     public bool Network { get; init; }
 
+    /// <summary>Corvid Vault's per-sandbox proxy socket (V-003b), bridged to 127.0.0.1:3128 inside. Given with <see cref="ProxyCa"/>.</summary>
+    public string? ProxySocket { get; init; }
+
+    /// <summary>The sandbox CA's PEM, the only certificate the command's trust variables name.</summary>
+    public string? ProxyCa { get; init; }
+
     /// <summary>Run even when Landlock or seccomp is unavailable. bubblewrap is never optional.</summary>
     public bool BestEffortLayers { get; init; }
 
@@ -44,12 +50,32 @@ internal sealed record Stage2Request
     /// <summary>The supervisor's namespaces, as /proc/self/ns links (NAME=pid:[…]); stage 2 must be in none of them.</summary>
     public IReadOnlyList<string> OutsideNamespaces { get; init; } = [];
 
+    /// <summary>The proxy socket's path inside the sandbox: stage 2 listens on 127.0.0.1:3128 and runs the command under the relay.</summary>
+    public string? Relay { get; init; }
+
+    public required IReadOnlyList<string> Command { get; init; }
+}
+
+/// <summary>Relay mode (V-003b): stage 2 re-executed, confined, as the command's parent and its loopback-to-Vault bridge.</summary>
+internal sealed record RelayRequest
+{
+    /// <summary>The listening TCP socket stage 2 bound on 127.0.0.1:3128, inherited across execve.</summary>
+    public required int ListenFd { get; init; }
+
+    /// <summary>Vault's proxy socket, as mounted inside the sandbox.</summary>
+    public required string Socket { get; init; }
+
+    /// <summary>The command's whole environment, as NAME=VALUE.</summary>
+    public IReadOnlyList<string> Environment { get; init; } = [];
+
     public required IReadOnlyList<string> Command { get; init; }
 }
 
 internal static class Arguments
 {
     public const string Stage2Flag = "--stage2";
+
+    public const string RelayFlag = "--relay-run";
 
     public const string Usage = """
         corvid-sandbox: runs one command under bubblewrap, Landlock and seccomp.
@@ -69,6 +95,11 @@ internal static class Arguments
           --deny PATH             Also hide PATH. Repeatable. The built-in denials cannot be removed.
           --env NAME              Pass NAME from this process's environment. Repeatable. Secret-like names are refused.
           --network               Share the host network. Off by default.
+          --proxy-socket PATH     Corvid Vault's per-sandbox proxy socket. The network stays private (loopback only); inside,
+                                  127.0.0.1:3128 relays to this socket, HTTPS_PROXY and HTTP_PROXY point there, and the trust
+                                  variables (SSL_CERT_FILE and others) name the CA alone. Needs --proxy-ca; not with --network.
+          --proxy-ca PATH         The sandbox CA certificate (PEM, certificates only, at most 64 KiB, not a symlink, outside
+                                  the workspace). Needs --proxy-socket. An --env name the proxy sets is refused.
           --best-effort-layers    Run without Landlock or seccomp when the kernel lacks them (never without bubblewrap).
           --bwrap PATH            bubblewrap to use (default: the first bwrap on PATH, then /usr/bin/bwrap).
           --status-file PATH      Write a JSON status: whether the command started, its exit code, the layers applied.
@@ -79,7 +110,7 @@ internal static class Arguments
 
     public static LaunchRequest ParseLaunch(IReadOnlyList<string> args)
     {
-        string? workspace = null, chdir = null, bwrap = null, status = null;
+        string? workspace = null, chdir = null, bwrap = null, status = null, proxySocket = null, proxyCa = null;
         bool network = false, bestEffort = false;
         var ro = new List<string>();
         var deny = new List<string>();
@@ -95,11 +126,23 @@ internal static class Arguments
                 case "--deny": deny.Add(Value(args, ref i)); break;
                 case "--env": env.Add(Value(args, ref i)); break;
                 case "--network": network = true; break;
+                case "--proxy-socket": proxySocket = Value(args, ref i); break;
+                case "--proxy-ca": proxyCa = Value(args, ref i); break;
                 case "--best-effort-layers": bestEffort = true; break;
                 case "--bwrap": bwrap = Value(args, ref i); break;
                 case "--status-file": status = Value(args, ref i); break;
                 default: throw new RefusedException($"Unknown option {args[i]}. Run corvid-sandbox --help.");
             }
+        }
+
+        if ((proxySocket is null) != (proxyCa is null))
+        {
+            throw new RefusedException("--proxy-socket and --proxy-ca go together: give both or neither.");
+        }
+
+        if (proxySocket is not null && network)
+        {
+            throw new RefusedException("--proxy-socket cannot be combined with --network: the proxy is the only route out.");
         }
 
         return new LaunchRequest
@@ -110,6 +153,8 @@ internal static class Arguments
             DeniedPaths = deny,
             Environment = env,
             Network = network,
+            ProxySocket = proxySocket,
+            ProxyCa = proxyCa,
             BestEffortLayers = bestEffort,
             BubblewrapPath = bwrap,
             StatusFile = status,
@@ -120,6 +165,7 @@ internal static class Arguments
     public static Stage2Request ParseStage2(IReadOnlyList<string> args)
     {
         int? ready = null;
+        string? relay = null;
         bool bestEffort = false;
         var rw = new List<string>();
         var env = new List<string>();
@@ -143,11 +189,52 @@ internal static class Arguments
                 case "--env": env.Add(Value(args, ref i)); break;
                 case "--not-in": outside.Add(Value(args, ref i)); break;
                 case "--best-effort-layers": bestEffort = true; break;
+                case "--relay": relay = Value(args, ref i); break;
                 default: throw new RefusedException($"Unknown stage-2 option {args[i]}.");
             }
         }
 
-        return new Stage2Request { ReadyFd = ready, WritablePaths = rw, Environment = env, OutsideNamespaces = outside, BestEffortLayers = bestEffort, Command = Command(args, i) };
+        return new Stage2Request
+        {
+            ReadyFd = ready, WritablePaths = rw, Environment = env, OutsideNamespaces = outside, BestEffortLayers = bestEffort, Relay = relay,
+            Command = Command(args, i),
+        };
+    }
+
+    /// <summary><c>--relay-run --listen-fd N --socket PATH [--env NAME=VALUE]... -- COMMAND [ARG]...</c>, from stage 2 only.</summary>
+    public static RelayRequest ParseRelay(IReadOnlyList<string> args)
+    {
+        int? listen = null;
+        string? socket = null;
+        var env = new List<string>();
+        int i = 0;
+        if (i < args.Count && args[i] == RelayFlag)
+        {
+            i++;
+        }
+
+        for (; i < args.Count && args[i] != "--"; i++)
+        {
+            switch (args[i])
+            {
+                case "--listen-fd":
+                    listen = int.TryParse(Value(args, ref i), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int fd) && fd > 2
+                        ? fd
+                        : throw new RefusedException("--listen-fd needs a descriptor number above 2.");
+                    break;
+                case "--socket": socket = Value(args, ref i); break;
+                case "--env": env.Add(Value(args, ref i)); break;
+                default: throw new RefusedException($"Unknown relay option {args[i]}.");
+            }
+        }
+
+        return new RelayRequest
+        {
+            ListenFd = listen ?? throw new RefusedException("--listen-fd is required."),
+            Socket = socket ?? throw new RefusedException("--socket is required."),
+            Environment = env,
+            Command = Command(args, i),
+        };
     }
 
     private static string Value(IReadOnlyList<string> args, ref int i) =>

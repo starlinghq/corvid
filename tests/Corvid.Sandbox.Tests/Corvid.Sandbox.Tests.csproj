@@ -16,6 +16,12 @@
     <!-- For its internals (plan, seccomp program), and so corvid-sandbox is built next to the tests, where
          BubblewrapSandbox looks for it by default. Production code never references the launcher. -->
     <ProjectReference Include="../../sandbox/Corvid.Sandbox.Launcher/Corvid.Sandbox.Launcher.csproj" />
+    <!-- V-003b: a real Vault in process (its internals, as the Vault suite uses them) for the egress tests, with the
+         Vault suite's harness (TestVault, TlsEchoServer) linked rather than copied. -->
+    <ProjectReference Include="../../vault/Corvid.Vault/Corvid.Vault.csproj" />
+    <ProjectReference Include="../../src/Corvid.Vault.Client/Corvid.Vault.Client.csproj" />
+    <Compile Include="../Corvid.Vault.Tests/Infrastructure.cs" Link="VaultHarness.cs" />
+    <Compile Include="../Shared/ShortTemp.cs" Link="ShortTemp.cs" />
   </ItemGroup>
 
 </Project>

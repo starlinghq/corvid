@@ -20,9 +20,35 @@ public sealed record VaultLocations(string DataDirectory, string ConfigPath, str
 
     public string? SocketPath { get; } = SocketPath is null ? null : Absolute(SocketPath, nameof(SocketPath));
 
-    /// <summary>Every location, normalized: the data directory, the policy file and the socket.</summary>
+    /// <summary>
+    /// The directory beside the socket where Vault puts per-sandbox proxy sockets (V-003a). Hidden from every command: Vault
+    /// checks only the peer's uid, so a command that could reach another sandbox's socket could ride its route (V-003b).
+    /// </summary>
+    public string? SandboxDirectory => SocketPath is null ? null : Path.Combine(Path.GetDirectoryName(SocketPath) ?? "/", "sandbox");
+
+    /// <summary>
+    /// Creates <see cref="SandboxDirectory"/> (mode 0700) when it is missing, so a command started before Vault's first
+    /// <c>sandbox_open</c> has a directory to be denied: the launcher skips a denied path that does not exist, and Vault
+    /// creates this one lazily, so a later proxy socket would otherwise appear in the command's view (V-003b). Best effort:
+    /// where this process cannot create it, Vault, running as the same user, cannot either. Vault tightens it to 0700 anyway.
+    /// </summary>
+    public void EnsureSandboxDirectory()
+    {
+        if (SandboxDirectory is not { } directory || OperatingSystem.IsWindows())
+            return;
+        try
+        {
+            Directory.CreateDirectory(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Not creatable by this user, so not by Vault either; nothing can appear there.
+        }
+    }
+
+    /// <summary>Every location, normalized: the data directory, the policy file, the socket and the sandbox sockets' directory.</summary>
     public ImmutableArray<string> Paths =>
-        [.. new[] { DataDirectory, ConfigPath, SocketPath }.OfType<string>().Distinct(StringComparer.Ordinal)];
+        [.. new[] { DataDirectory, ConfigPath, SocketPath, SandboxDirectory }.OfType<string>().Distinct(StringComparer.Ordinal)];
 
     /// <summary>
     /// Vault's defaults (as <c>corvid-vault</c> computes them): <c>$XDG_DATA_HOME/corvid-vault</c>,

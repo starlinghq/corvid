@@ -1,6 +1,7 @@
 using Corvid.Host.Commands;
 using Corvid.Host.Composition;
 using Corvid.Kernel.Jobs;
+using Corvid.Tools.Builtin;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Corvid.Host.Tests;
@@ -68,5 +69,61 @@ public sealed class CronCommandTests
         var row = (await Run(host, runtime, session, "/cron --all")).Table!.Rows.Single(item => item[0] == job.JobId);
         Assert.Equal("completed", row[3]);
         Assert.EndsWith(" ran", row[5], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Runs_lists_recent_runs_across_jobs_or_for_one()
+    {
+        await using var host = TestHost.Create();
+        await using var runtime = await host.StartAsync();
+        var session = runtime.OpenSession();
+        var jobs = runtime.Builtin.Jobs;
+
+        Assert.Equal("No job has run yet.", (await Run(host, runtime, session, "/cron runs")).Lines[0]);
+        var inbox = jobs.Add(new NewJob("inbox", "check the inbox", "every 30m"));
+        var disk = jobs.Add(new NewJob("disk", "", "every 2 hours", Script: "df -h", NoAgent: true));
+        Assert.Equal($"{inbox.JobId} (inbox) has not run yet.", (await Run(host, runtime, session, $"/cron runs {inbox.JobId}")).Lines[0]);
+
+        var now = DateTimeOffset.UtcNow;
+        var first = jobs.ClaimDue(now.AddHours(2));
+        Assert.Equal(2, first.Count);
+        foreach (var claimed in first)
+        {
+            jobs.Finish(claimed.Run.RunId, claimed.Job.NoAgent ? JobRunStatus.ScriptOnly : JobRunStatus.Ran, claimed.Run.StartedAt.AddSeconds(42),
+                output: claimed.Job.NoAgent ? "Filesystem Size Used\n/dev/sda1 100G 42G" : null,
+                detail: claimed.Job.NoAgent ? null : "answered: " + new string('a', 100));
+        }
+        // A later run of the inbox job, still running.
+        var later = Assert.Single(jobs.ClaimDue(now.AddHours(2).AddMinutes(31)));
+
+        var all = await Run(host, runtime, session, "/cron runs");
+        Assert.Equal("Recent job runs", all.Title);
+        Assert.Equal(["run", "job", "scheduled for", "started", "took", "status", "detail", "session"], all.Table!.Columns);
+        Assert.Equal(3, all.Table.Rows.Length);
+        Assert.Equal((later.Run.RunId, "inbox", "-", JobRunStatus.Running, "-", later.Run.SessionId),
+            (all.Table.Rows[0][0], all.Table.Rows[0][1], all.Table.Rows[0][4], all.Table.Rows[0][5], all.Table.Rows[0][6], all.Table.Rows[0][7]));
+        Assert.Equal(CronTools.Local(later.Run.StartedAt, inbox), all.Table.Rows[0][3]);
+        var script = all.Table.Rows.Single(item => item[1] == "disk");
+        Assert.Equal(("42s", JobRunStatus.ScriptOnly, "Filesystem Size Used /dev/sda1 100G 42G"), (script[4], script[5], script[6]));
+        var answered = all.Table.Rows.Single(item => item[1] == "inbox" && item[5] == JobRunStatus.Ran);
+        Assert.Equal(60, answered[6].Length);
+        Assert.EndsWith("…", answered[6], StringComparison.Ordinal);
+
+        var one = await Run(host, runtime, session, $"/cron runs {inbox.JobId}");
+        Assert.Equal($"Runs of {inbox.JobId} (inbox)", one.Title);
+        Assert.Equal(["run", "scheduled for", "started", "took", "status", "detail", "session"], one.Table!.Columns);
+        Assert.Equal(2, one.Table.Rows.Length);
+        Assert.Equal(later.Run.RunId, one.Table.Rows[0][0]);
+        Assert.DoesNotContain(one.Table.Rows, item => item[0] == script[0]);
+
+        // A removed job's runs stay listed; an unknown id is an error; a stray argument is a usage error.
+        Assert.True(jobs.Remove(disk.JobId));
+        Assert.Single((await Run(host, runtime, session, $"/cron runs {disk.JobId}")).Table!.Rows);
+        Assert.Equal(OutputTone.Error, (await Run(host, runtime, session, "/cron runs job-none")).Tone);
+        var usage = await Run(host, runtime, session, "/cron runs a b");
+        Assert.Equal(OutputTone.Error, usage.Tone);
+        Assert.Equal("Usage: /cron " + CronCommands.Usage, usage.Lines[0]);
+        Assert.Equal("[list] [--all] | runs [<id>] | pause <id> | resume <id> | remove <id>", CronCommands.Usage);
+        Assert.Contains("/cron runs", (await Run(host, runtime, session, "/cron")).Lines[0], StringComparison.Ordinal);
     }
 }

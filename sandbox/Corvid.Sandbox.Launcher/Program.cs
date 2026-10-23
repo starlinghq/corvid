@@ -7,6 +7,11 @@ try
         return Stage2.Run(Arguments.ParseStage2(args));
     }
 
+    if (args.Length > 0 && args[0] == Arguments.RelayFlag)
+    {
+        return Relay.Run(Arguments.ParseRelay(args));
+    }
+
     if (args.Length == 0 || args[0] is "-h" or "--help")
     {
         Console.Error.WriteLine(Arguments.Usage);

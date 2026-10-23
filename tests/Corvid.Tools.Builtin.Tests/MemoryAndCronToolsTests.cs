@@ -175,6 +175,44 @@ public sealed class CronToolsTests : IDisposable
         Assert.Equal(new ToolRisk(SideEffects.Schedule, false, false), risks["cron_create"]);
         Assert.Equal(new ToolRisk(SideEffects.Schedule, false, true), risks["cron_remove"]);
         Assert.True(risks["cron_list"].ReadOnly);
+        // C-041: pausing and resuming are side effects (asked, refused unattended) but not destructive: each undoes the other.
+        Assert.Equal(new ToolRisk(SideEffects.Schedule, false, false), risks["cron_pause"]);
+        Assert.Equal(new ToolRisk(SideEffects.Schedule, false, false), risks["cron_resume"]);
+    }
+
+    [Fact]
+    public async Task Jobs_are_paused_and_resumed_by_the_model()
+    {
+        var job = _store.Add(new NewJob("inbox", "check the inbox", "every 30m"));
+
+        var paused = await Invoke(_tools, "cron_pause", $$"""{"job_id":"{{job.JobId}}"}""");
+        Assert.Equal((job.JobId, "paused"), (paused.GetProperty("job_id").GetString(), paused.GetProperty("status").GetString()));
+        Assert.True(_store.Get(job.JobId)!.Paused);
+        var again = await Assert.ThrowsAsync<ToolArgumentException>(() => Invoke(_tools, "cron_pause", $$"""{"job_id":"{{job.JobId}}"}"""));
+        Assert.Contains("cron_list", again.Message, StringComparison.Ordinal);
+
+        var resumed = await Invoke(_tools, "cron_resume", $$"""{"job_id":"{{job.JobId}}"}""");
+        Assert.Equal("resumed", resumed.GetProperty("status").GetString());
+        Assert.Equal(job.JobId, resumed.GetProperty("job_id").GetString());
+        Assert.Equal("every 30m", resumed.GetProperty("schedule").GetString());
+        Assert.True(resumed.TryGetProperty("next_run", out _));
+        Assert.False(resumed.TryGetProperty("paused", out _));
+        Assert.False(resumed.TryGetProperty("note", out _));
+        Assert.False(_store.Get(job.JobId)!.Paused);
+        var listed = Assert.Single((await Invoke(_tools, "cron_list", "{}")).GetProperty("jobs").EnumerateArray());
+        Assert.False(listed.TryGetProperty("paused", out _));
+
+        // An unpaused job has nothing to resume; unknown, removed and completed jobs can be neither paused nor resumed.
+        var error = await Assert.ThrowsAsync<ToolArgumentException>(() => Invoke(_tools, "cron_resume", $$"""{"job_id":"{{job.JobId}}"}"""));
+        Assert.Equal("job_id", error.ParamName);
+        Assert.Contains("cron_list", error.Message, StringComparison.Ordinal);
+        Assert.True(_store.Remove(job.JobId));
+        await Assert.ThrowsAsync<ToolArgumentException>(() => Invoke(_tools, "cron_pause", $$"""{"job_id":"{{job.JobId}}"}"""));
+        await Assert.ThrowsAsync<ToolArgumentException>(() => Invoke(_tools, "cron_resume", """{"job_id":"job-none"}"""));
+        await Assert.ThrowsAsync<ToolArgumentException>(() => Invoke(_tools, "cron_pause", """{"job_id":" "}"""));
+        var once = _store.Add(new NewJob("once", "say hi", "in 1m"));
+        Assert.Single(_store.ClaimDue(DateTimeOffset.UtcNow.AddMinutes(2)));
+        await Assert.ThrowsAsync<ToolArgumentException>(() => Invoke(_tools, "cron_pause", $$"""{"job_id":"{{once.JobId}}"}"""));
     }
 
     [Fact]
@@ -258,7 +296,7 @@ public sealed class BuiltinToolsTests
         registry.Add(new CronTools(new JobStore(tree.Path("jobs.db"))));
 
         var names = registry.List().Select(tool => tool.Name).ToList();
-        Assert.Equal(15, names.Count);
+        Assert.Equal(17, names.Count);
         Assert.Equal(names.Order(StringComparer.Ordinal), BuiltinTools.Examples.Keys.Order(StringComparer.Ordinal));
         Assert.All(BuiltinTools.Examples.Values, examples => Assert.InRange(examples.Length, 5, 10));
         Assert.Equal(ShellTool.CommandParameter, BuiltinTools.ShellToolMapping[ShellTool.ToolName]);

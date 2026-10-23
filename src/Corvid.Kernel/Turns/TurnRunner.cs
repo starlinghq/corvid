@@ -107,26 +107,45 @@ public sealed class TurnRunner
     /// </summary>
     /// <remarks>Not thread-safe, like <see cref="RunAsync"/>: run it on the session actor between turns.</remarks>
     /// <returns>The compaction's result, or <see cref="CompactionStatus.NothingToCompact"/> when there is no earlier turn.</returns>
-    public async Task<CompactionResult> CompactNowAsync(CancellationToken cancellationToken = default)
+    public Task<CompactionResult> CompactNowAsync(CancellationToken cancellationToken = default) => CompactNowAsync(null, cancellationToken);
+
+    /// <summary>
+    /// <c>/compact &lt;focus&gt;</c> (C-041): as <see cref="CompactNowAsync(CancellationToken)"/>, with what the user asked the
+    /// summary to keep passed to every map chunk (<see cref="ContextCompactor"/>) and recorded on the <c>Compacted</c> event.
+    /// The focus is one-shot: later automatic compactions do not reuse it. The result carries the rendered history's tokens
+    /// before (always) and after (when the compaction was written), on the generator's counter
+    /// (<see cref="CompactionResult.PromptTokensBefore"/>).
+    /// </summary>
+    public async Task<CompactionResult> CompactNowAsync(string? focus, CancellationToken cancellationToken = default)
     {
         var snapshot = Snapshot();
+        var generator = _services.Slots.GetChatClient(ModelSlots.Generator);
+        var counter = Counter(generator);
+        var before = HistoryTokens(snapshot, counter);
         var latest = snapshot.Transcript.LastOrDefault(entry => entry.Content is UserMessage)?.FromSequence;
         if (latest is not { } turnStart || ContextCompactor.Ranges(snapshot, turnStart, keepFrom: null) is not [var range, ..])
-            return new CompactionResult(CompactionStatus.NothingToCompact, 1, Math.Max(0, (latest ?? 1) - 1));
+            return new CompactionResult(CompactionStatus.NothingToCompact, 1, Math.Max(0, (latest ?? 1) - 1)) { PromptTokensBefore = before };
 
-        var generator = _services.Slots.GetChatClient(ModelSlots.Generator);
         var profile = _services.Slots.Current(ModelSlots.Generator).Profile;
         var budget = profile.AcceptedContext - _options.MaxOutputTokens - _options.ContextReserve;
         // The summarizer may be a cloud binding: its gate and Vault need the session and its taint, as in a turn.
         using var scope = new ModelRequestContext(SessionId, Tainted).Enter();
-        var result = await _compactor.CompactAsync(range, Counter(generator), Math.Max(1, budget / 4), cancellationToken).ConfigureAwait(false);
+        var result = await _compactor.CompactAsync(range, counter, Math.Max(1, budget / 4), focus, cancellationToken).ConfigureAwait(false);
         // Only a compaction that was written drops a pending expansion: an unfit summary or a cancelled command compacted
         // nothing, so the next call still expands for the larger window (review of PR #46, finding 1). The record is appended
         // after any switch that arrived meanwhile, so the explicit compaction is the later act and wins.
         if (result.Status == CompactionStatus.Compacted)
+        {
             Volatile.Write(ref _expansionDue, 0);
-        return result;
+            return result with { PromptTokensBefore = before, PromptTokensAfter = HistoryTokens(Snapshot(), counter) };
+        }
+        return result with { PromptTokensBefore = before };
     }
+
+    // The history as the generator would read it, with no system prompt and no budget pressure: nothing is stubbed beyond
+    // the log's own clear_results decisions.
+    private static int HistoryTokens(SessionSnapshot snapshot, ITokenCounter counter) =>
+        PromptRenderer.Render(snapshot, "", counter, int.MaxValue).Tokens;
 
     private static ITokenCounter Counter(IChatClient generator) =>
         generator.GetService(typeof(ITokenCounter)) as ITokenCounter ?? CharsPerTokenCounter.Instance;

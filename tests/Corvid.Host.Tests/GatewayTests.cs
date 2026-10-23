@@ -132,7 +132,7 @@ public sealed class GatewayTests
         await using (runtime)
         await using (gateway)
         {
-            adapter.Write(Message("owner", "how many files are there?", "1"));
+            adapter.Write(Message("owner", "list the files: how many are there?", "1"));
             await Wait.Until(() => adapter.Sent.Count == 1, "the owner's answer");
             Assert.Contains(runtime.Log.Read("gateway:fake:c1", limit: 4096, cancellationToken: TestContext.Current.CancellationToken),
                 stored => stored.Payload is ToolResult { IsError: false } result && result.Result.GetRawText().Contains("180k", StringComparison.Ordinal));
@@ -145,7 +145,7 @@ public sealed class GatewayTests
             Assert.DoesNotContain(prompt, message => message.Text.Contains("180k", StringComparison.Ordinal));
             // What was said in the chat is still the guest's context.
             Assert.Contains(prompt, message => message.Role == ChatRole.Assistant && message.Text == "There is one file.");
-            Assert.Contains(prompt, message => message.Role == ChatRole.User && message.Text == "how many files are there?");
+            Assert.Contains(prompt, message => message.Role == ChatRole.User && message.Text == "list the files: how many are there?");
         }
     }
 

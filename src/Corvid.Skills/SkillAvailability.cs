@@ -16,7 +16,7 @@ public static class SkillAvailability
         ["file"] = ["read_file", "list_files", "search_files", "write_file", "patch_file"],
         ["web"] = ["web_fetch"],
         ["memory"] = ["memory_search", "memory_add"],
-        ["cronjob"] = ["cron_create", "cron_list", "cron_remove"],
+        ["cronjob"] = ["cron_create", "cron_list", "cron_pause", "cron_resume", "cron_remove"],
         ["skills"] = ["skill_read"],
     }.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
 

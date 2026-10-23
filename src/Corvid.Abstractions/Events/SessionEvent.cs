@@ -72,10 +72,12 @@ public sealed record ApprovalResolved(string ApprovalId, bool Approved, string R
 // Profiles are snapshots, not mutable registry references; the slot implementation follows in C-006.
 public sealed record ModelSwitched(string Slot, JsonElement OldProfile, JsonElement NewProfile, string Reason) : SessionEvent;
 // Summarizer (the profile that wrote the record) and Chunks (how many map calls it took, 1 when the range fit one call) were
-// added by C-016. Both are omitted when null, so events written before them keep their persisted form.
+// added by C-016. Both are omitted when null, so events written before them keep their persisted form. Focus (C-041) is
+// what the user asked `/compact <focus>` to keep, recorded for audit and trace and not rendered; omitted when null too.
 public sealed record Compacted(long FromSequence, long ThroughSequence, CompactionSummary Summary,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Summarizer = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Chunks = null) : SessionEvent;
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Chunks = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Focus = null) : SessionEvent;
 // C-016: the compaction recorded at CompactedSequence is shown expanded from here on (a switch to a larger window, plan
 // §4.2 step 4). Its raw range, or the compactions nested inside it, return to the projection; the summary stays in the log.
 public sealed record CompactionExpanded(long CompactedSequence) : SessionEvent;

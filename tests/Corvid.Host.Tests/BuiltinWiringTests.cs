@@ -23,7 +23,8 @@ public sealed class BuiltinWiringTests
         string[] builtin =
         [
             "read_file", "list_files", "search_files", "write_file", "patch_file", "shell", "web_fetch",
-            "memory_search", "memory_add", "memory_pending", "memory_approve", "memory_reject", "cron_create", "cron_list", "cron_remove",
+            "memory_search", "memory_add", "memory_pending", "memory_approve", "memory_reject", "cron_create", "cron_list", "cron_pause",
+            "cron_resume", "cron_remove",
         ];
         var names = runtime.Tools.List().Select(tool => tool.Name).ToHashSet(StringComparer.Ordinal);
         Assert.All(builtin, name => Assert.Contains(name, names));
@@ -96,7 +97,9 @@ public sealed class BuiltinWiringTests
         await using var runtime = await host.StartAsync();
         var session = runtime.OpenSession();
 
-        var delivery = await session.SendAsync("what files are in this folder", TestContext.Current.CancellationToken);
+        // "list" is one of the fake embedder's keywords: a message with none ties every tool, and the shortlist then takes the
+        // first five by name, which since C-041's cron_pause and cron_resume are all cron tools.
+        var delivery = await session.SendAsync("list the files in this folder", TestContext.Current.CancellationToken);
 
         Assert.Equal(TurnStatus.Answered, delivery.Result!.Status);
         var result = Assert.Single(session.Snapshot().Transcript.Select(entry => entry.Content).OfType<ToolResult>());
@@ -169,6 +172,86 @@ public sealed class BuiltinWiringTests
         var only = Assert.Single(heard);
         Assert.Equal(Assert.Single(store.Runs(job.JobId)).RunId, only.RunId);
         Assert.Equal(job.JobId, only.JobId);
+    }
+
+    private static readonly Dictionary<string, string?> SchedulerOn = new() { ["Corvid:Scheduler:Enabled"] = "true" };
+
+    private static string InSeconds(int seconds) =>
+        DateTimeOffset.Now.AddSeconds(seconds).ToString("yyyy-MM-ddTHH:mm:sszzz", CultureInfo.InvariantCulture);
+
+    [Fact]
+    public async Task AJobOverdueBeforeStartRunsWithoutWaitingAPollInterval()
+    {
+        // C-041's catch-up policy at start: a job that fell due while no corvid process ran runs on the scheduler's first
+        // pass, before its first sleep, and chat hears of it through C-039's replay.
+        await using var host = TestHost.Create(settings: SchedulerOn);
+        var store = new JobStore(Path.Combine(host.Root, "data", "jobs.db"));
+        var job = store.Add(new NewJob("missed", "say hello", InSeconds(1)));
+        await Task.Delay(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+        await using var runtime = await host.StartAsync();
+        var ran = new TaskCompletionSource<JobRun>(TaskCreationOptions.RunContinuationsAsynchronously);
+        runtime.JobCompleted += (_, run) => ran.TrySetResult(run);
+
+        // Well inside the 30 s poll interval.
+        var run = await ran.Task.WaitAsync(TimeSpan.FromSeconds(25), TestContext.Current.CancellationToken);
+        Assert.Equal(job.JobId, run.JobId);
+        Assert.Equal(job.NextRunAt, run.ScheduledFor);
+    }
+
+    [Fact]
+    public async Task AJobCreatedThroughTheRuntimeWakesItsScheduler()
+    {
+        await using var host = TestHost.Create(settings: SchedulerOn);
+        await using var runtime = await host.StartAsync();
+        var ran = new TaskCompletionSource<JobRun>(TaskCreationOptions.RunContinuationsAsynchronously);
+        runtime.JobCompleted += (_, run) => ran.TrySetResult(run);
+        // Let the first pass find nothing and sleep its whole poll interval (30 s).
+        await Task.Delay(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+
+        // The store cron_create, /cron and the scheduler share: Add raises Changed, and the scheduler recomputes its wait.
+        var job = runtime.Builtin.Jobs.Add(new NewJob("soon", "say hello", InSeconds(2)));
+
+        var run = await ran.Task.WaitAsync(TimeSpan.FromSeconds(25), TestContext.Current.CancellationToken);
+        Assert.Equal(job.JobId, run.JobId);
+    }
+
+    [Fact]
+    public async Task ASessionOpenTakesTheSchedulerOverOnceItsHolderHasExited()
+    {
+        await using var host = TestHost.Create(settings: SchedulerOn);
+        var first = await host.StartAsync();
+        var factory = host.Services.GetRequiredService<CorvidRuntimeFactory>();
+        await using var second = await factory.StartAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            Assert.Equal("running in this process", first.SchedulerState);
+            Assert.Equal("run by another corvid process", second.SchedulerState);
+            // While the first holds the lock, a session open in the second changes nothing.
+            second.OpenSession();
+            Assert.Equal("run by another corvid process", second.SchedulerState);
+        }
+        finally
+        {
+            // The chat that held the scheduler exits, releasing the lock.
+            await first.DisposeAsync();
+        }
+
+        var store = new JobStore(Path.Combine(host.Root, "data", "jobs.db"));
+        var job = store.Add(new NewJob("missed", "say hello", InSeconds(1)));
+        await Task.Delay(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+        var ran = new TaskCompletionSource<JobRun>(TaskCreationOptions.RunContinuationsAsynchronously);
+        second.JobCompleted += (_, run) => ran.TrySetResult(run);
+
+        // A long-lived process (the gateway, ACP) opens a session for the next message: it takes the scheduler over.
+        second.OpenSession();
+        Assert.Equal("running in this process", second.SchedulerState);
+
+        var run = await ran.Task.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
+        Assert.Equal(job.JobId, run.JobId);
+        Assert.Equal(JobRunStatus.Ran, run.Status);
+        // A later open only wakes the scheduler it now holds.
+        second.OpenSession();
+        Assert.Equal("running in this process", second.SchedulerState);
     }
 
     [Fact]

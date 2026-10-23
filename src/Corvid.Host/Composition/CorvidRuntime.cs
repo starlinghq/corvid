@@ -65,6 +65,9 @@ public sealed class CorvidRuntime : IAsyncDisposable
     private Task _maintenance = Task.CompletedTask;
     private FileStream? _schedulerLock;
     private Task? _scheduler;
+    private JobScheduler? _jobScheduler;
+    // Starting the scheduler (C-041: again on a session open after losing the lock) and disposal's lock release, one at a time.
+    private readonly Lock _schedulerGate = new();
     // JobCompleted's handlers and the runs completed so far, under one gate (C-039).
     private readonly ReplayingEvent<ScheduledJob, JobRun> _jobCompleted = new(JobCompletedReplay);
     private Task? _learning;
@@ -100,7 +103,7 @@ public sealed class CorvidRuntime : IAsyncDisposable
             // The configured embedder changed since the store was written (or the store is new): §4.3's swap, in the background.
             _swap!.Start(embedder.Default.Profile.Id);
         if (options.Scheduler.Enabled)
-            StartScheduler();
+            TryStartScheduler();
         // The learning loop (plan §11): queued opportunities are drafted and replay-tested in the background.
         if (Skills.Learner is { } learner)
             _learning = Task.Run(() => learner.RunAsync(_lifetime.Token));
@@ -181,8 +184,14 @@ public sealed class CorvidRuntime : IAsyncDisposable
     /// <summary>The privacy egress gate (plan §10.4) every gated binding and every session's switches share.</summary>
     public PrivacyEgress Egress => _composer.Egress;
 
-    /// <summary>Whether this process runs due jobs, and if not, why.</summary>
+    /// <summary>
+    /// Whether this process runs due jobs, and if not, why. "run by another corvid process" can become "running in this
+    /// process" when a session opens after that process exited (C-041, <see cref="OpenSession"/>).
+    /// </summary>
     public string SchedulerState { get; private set; } = "off (Corvid:Scheduler:Enabled)";
+
+    // The state of a runtime that lost jobs.db.lock to another process; the only one a session open retries (C-041).
+    private const string SchedulerElsewhere = "run by another corvid process";
 
     /// <summary>
     /// Raised after each scheduled run is recorded; a surface can say so (delivery to chats is C-020's). The scheduler
@@ -203,7 +212,10 @@ public sealed class CorvidRuntime : IAsyncDisposable
 
     internal ITokenCounter? Counter { get; }
 
-    /// <summary>A new session, or an earlier one by id: its transcript is in the log, so the next turn sees it.</summary>
+    /// <summary>
+    /// A new session, or an earlier one by id: its transcript is in the log, so the next turn sees it. It also wakes the
+    /// scheduler, or takes it over when the process that held it has exited (C-041, <c>WakeScheduler</c>).
+    /// </summary>
     /// <param name="settings">How the session's turns run; applied when this process first opens the session.</param>
     public CorvidSession OpenSession(string? sessionId = null, string surface = "cli", SessionSettings? settings = null)
     {
@@ -214,6 +226,7 @@ public sealed class CorvidRuntime : IAsyncDisposable
         _settings.TryRemove(id, out _);
         var session = _sessions[id];
         session.Surface = surface;
+        WakeScheduler();
         return session;
     }
 
@@ -257,13 +270,17 @@ public sealed class CorvidRuntime : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await _lifetime.CancelAsync().ConfigureAwait(false);
-        if (_scheduler is not null)
-            await _scheduler.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        Task? scheduler;
+        lock (_schedulerGate)
+            scheduler = _scheduler;
+        if (scheduler is not null)
+            await scheduler.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         if (_learning is not null)
             await _learning.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         if (_lessonLearning is not null)
             await _lessonLearning.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
-        _schedulerLock?.Dispose();
+        lock (_schedulerGate)
+            _schedulerLock?.Dispose();
         await Sessions.DisposeAsync().ConfigureAwait(false);
         // After the sessions, so no turn is still calling a server; this stops every server process.
         if (Mcp is not null)
@@ -374,9 +391,41 @@ public sealed class CorvidRuntime : IAsyncDisposable
         };
     }
 
+    /// <summary>
+    /// C-041: a session opened or resumed. The scheduler this runtime holds wakes and looks for due jobs now. A runtime that
+    /// lost the lock at start (<see cref="SchedulerState"/> "run by another corvid process") tries it again, so a long-lived
+    /// gateway or ACP process takes the scheduler over once the chat that held it has exited, and its first pass runs what
+    /// became due meanwhile (missed ticks collapse into one run, as in C-012). Nothing happens after disposal starts.
+    /// </summary>
+    internal void WakeScheduler()
+    {
+        if (!Options.Scheduler.Enabled)
+            return;
+        JobScheduler? held;
+        bool lost;
+        lock (_schedulerGate)
+            (held, lost) = (_jobScheduler, SchedulerState == SchedulerElsewhere);
+        if (held is not null)
+            held.Wake();
+        // Only a lost lock is retried: an unwritable lock file ("off: …") stays off until a restart.
+        else if (lost)
+            TryStartScheduler();
+    }
+
     // C-012's scheduler (plan §13). JobScheduler.RunAsync marks runs another process left running as interrupted, so only
-    // one process may run it: an exclusive lock beside the job store decides which, and the others leave it alone.
-    private void StartScheduler()
+    // one process may run it: an exclusive lock beside the job store decides which, and the others leave it alone. C-041:
+    // idempotent and gated, because a session open retries it after the lock was lost; never after disposal starts.
+    private void TryStartScheduler()
+    {
+        lock (_schedulerGate)
+        {
+            if (_scheduler is not null || _lifetime.IsCancellationRequested)
+                return;
+            StartSchedulerLocked();
+        }
+    }
+
+    private void StartSchedulerLocked()
     {
         try
         {
@@ -384,7 +433,7 @@ public sealed class CorvidRuntime : IAsyncDisposable
         }
         catch (IOException)
         {
-            SchedulerState = "run by another corvid process";
+            SchedulerState = SchedulerElsewhere;
             return;
         }
         catch (UnauthorizedAccessException exception)
@@ -406,7 +455,9 @@ public sealed class CorvidRuntime : IAsyncDisposable
             },
         };
         SchedulerState = "running in this process";
-        _scheduler = Task.Run(() => scheduler.RunAsync(_lifetime.Token));
+        _jobScheduler = scheduler;
+        var lifetime = _lifetime.Token;
+        _scheduler = Task.Run(() => scheduler.RunAsync(lifetime));
     }
 
     /// <summary>
@@ -568,11 +619,14 @@ public sealed class CorvidSession
         RestoreAsync(snapshot => CheckpointService.PlanUndo(snapshot, ChangesFiles), cancellationToken);
 
     /// <summary>
-    /// <c>/compact</c> (C-035): compacts the conversation before the latest turn now (<see cref="TurnRunner.CompactNowAsync"/>).
+    /// <c>/compact</c> (C-035): compacts the conversation before the latest turn now (<see cref="TurnRunner.CompactNowAsync(CancellationToken)"/>).
     /// On the actor, like <see cref="UndoAsync"/>: it waits for a running turn and goes ahead of queued messages.
     /// </summary>
-    public Task<CompactionResult> CompactAsync(CancellationToken cancellationToken = default) =>
-        Actor.RunExclusiveAsync(token => Runner.CompactNowAsync(token), cancellationToken);
+    public Task<CompactionResult> CompactAsync(CancellationToken cancellationToken = default) => CompactAsync(null, cancellationToken);
+
+    /// <summary><c>/compact &lt;focus&gt;</c> (C-041): as <see cref="CompactAsync(CancellationToken)"/>, keeping what the user named.</summary>
+    public Task<CompactionResult> CompactAsync(string? focus, CancellationToken cancellationToken = default) =>
+        Actor.RunExclusiveAsync(token => Runner.CompactNowAsync(focus, token), cancellationToken);
 
     /// <summary><c>/rollback N</c>: back to before the Nth latest checkpoint's call. Null when there are fewer checkpoints.</summary>
     public Task<RestoreResult?> RollbackAsync(int number, CancellationToken cancellationToken = default) =>

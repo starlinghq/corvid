@@ -16,10 +16,10 @@ public sealed class ToolCallingSetTests
     {
         var set = Committed();
 
-        Assert.Equal("2026-10-21.1", set.Version);
+        Assert.Equal("2026-10-22.1", set.Version);
         Assert.Equal(64, set.CatalogueSha256.Length);
         Assert.InRange(set.Cases.Length, 190, 220);
-        Assert.Equal(15, set.Catalogue.Count(tool => tool.IsBuiltin));
+        Assert.Equal(17, set.Catalogue.Count(tool => tool.IsBuiltin));
         Assert.Equal(13, set.Catalogue.Count(tool => !tool.IsBuiltin));
         // MCP-like extras carry no examples (as production MCP tools), built-ins carry BuiltinTools.Examples.
         Assert.All(set.Catalogue, tool => Assert.Equal(tool.IsBuiltin, !tool.Examples.IsEmpty));

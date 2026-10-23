@@ -87,9 +87,36 @@ internal sealed class FakeVault : IAsyncDisposable
             PlaceholderRequest mint => Mint(mint),
             CatalogRequest => new CatalogResponse { Secrets = [.. Catalogue] },
             ForwardRequest forward => Relay(forward),
+            // V-003b's doctor check opens and closes a sandbox proxy; nothing listens on the returned socket.
+            SandboxOpenRequest open => OpenSandbox(open),
+            SandboxCloseRequest close => CloseSandbox(close),
             _ => new ErrorResponse { Code = VaultErrorCodes.BadRequest, Message = "unexpected request" },
         };
         await VaultWire.WriteResponseAsync(stream, response, _stop.Token);
+    }
+
+    /// <summary>Sandbox proxies opened and closed (V-003b), by id.</summary>
+    public ConcurrentQueue<string> SandboxesOpened { get; } = new();
+
+    public ConcurrentQueue<string> SandboxesClosed { get; } = new();
+
+    private SandboxOpenResponse OpenSandbox(SandboxOpenRequest request)
+    {
+        var id = "fakesandbox" + SandboxesOpened.Count.ToString("D2", System.Globalization.CultureInfo.InvariantCulture);
+        SandboxesOpened.Enqueue(id);
+        return new SandboxOpenResponse
+        {
+            SandboxId = id,
+            ProxySocketPath = Path.Combine(_root, "sandbox", id + ".sock"),
+            CaCertificatePem = "-----BEGIN CERTIFICATE-----\nMIIBfake\n-----END CERTIFICATE-----\n",
+            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(request.LifetimeMinutes ?? 1),
+        };
+    }
+
+    private SandboxClosedResponse CloseSandbox(SandboxCloseRequest request)
+    {
+        SandboxesClosed.Enqueue(request.SandboxId);
+        return new SandboxClosedResponse { SandboxId = request.SandboxId };
     }
 
     private PlaceholderResponse Mint(PlaceholderRequest request)
