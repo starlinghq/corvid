@@ -137,7 +137,8 @@ public sealed record DeliveryResolved(string DeliveryId, string Status,
 // Accepted: the user pinned the definition the process held (/mcp accept), or allowed a flagged one (/mcp allow, Flagged), so
 // it is registered; an allowed flagged tool is treated as an untrusted server's, whatever the server's trust.
 // C-033: Held with Reason "injection" (Detail the decision id) for a tool withheld after a confident injection verdict over its
-// description; Accepted with Flagged for one the user then allowed. Forgotten: /mcp forget or corvid mcp forget dropped the
+// description; Accepted with Flagged for one the user then allowed. C-037: no new injection holds come from the turn loop;
+// persisted ones are still Held at listing until allowed. Forgotten: /mcp forget or corvid mcp forget dropped the
 // server's entry (Tools pins), so its next listing is trusted on first use again.
 public sealed record McpToolHeld(string Server, string Tool, string Reason, string Hash,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PinnedHash = null,

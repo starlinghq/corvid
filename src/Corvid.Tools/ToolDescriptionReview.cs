@@ -11,9 +11,11 @@ namespace Corvid.Tools;
 public sealed record ToolWithholding(string Origin, ImmutableArray<string> Tools, string DecisionId);
 
 /// <summary>
-/// Where the turn loop reports a confident <c>injection</c> verdict over tool descriptions (C-033). The source of the tools
-/// (the MCP clients) stops offering them until the user reviews them; the kernel only drops them from its own turn. It sits in
-/// <c>Corvid.Tools</c> beside <see cref="ToolDescriptor.Origin"/> so the kernel never references a surface project.
+/// Where a confident verdict over tool descriptions is reported (C-033), so the source of the tools (the MCP clients) stops
+/// offering them until the user reviews them. C-037: the turn loop no longer reports the generic <c>injection</c> verdict
+/// here (spike S2: it answers yes on benign descriptions); the seam stays for a dedicated <c>description_injection</c>
+/// question with its own fitted floor, which would decide before the turn reads its tools. It sits in <c>Corvid.Tools</c>
+/// beside <see cref="ToolDescriptor.Origin"/> so the kernel never references a surface project.
 /// </summary>
 public interface IToolDescriptionReview
 {

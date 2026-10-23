@@ -1,6 +1,7 @@
 using Corvid.Abstractions.Events;
 using Corvid.Abstractions.Fabric;
 using Corvid.Abstractions.Sessions;
+using Corvid.Fabric;
 using Corvid.Kernel.Turns;
 using Corvid.Models.Privacy;
 using Corvid.Tools;
@@ -31,16 +32,8 @@ public sealed class DescriptionTaintTests
         Assert.Equal(outside, result.Tainted);
         // The very request that carries the description says so, for the egress gate and Vault.
         Assert.Equal(outside, (bool)call.Options!.AdditionalProperties![ModelRequestKeys.Tainted]!);
-        // C-033: a trusted server's descriptions are asked about too; asking them goes to the decider and does not taint.
-        Assert.Single(harness.Decisions("injection/mcp:notes"));
-    }
-
-    /// <summary>C-033: records what the turn withheld.</summary>
-    private sealed class Review : IToolDescriptionReview
-    {
-        public List<ToolWithholding> Requests { get; } = [];
-
-        public void Withhold(ToolWithholding request) => Requests.Add(request);
+        // C-037: only an outside description is asked about; a trusted server's gets C-022's pattern scan and pins at listing.
+        Assert.Equal(outside ? 1 : 0, harness.Decisions("injection/mcp:notes").Count);
     }
 
     private static TestTool Weather(string name, int length = 0, bool outside = false)
@@ -54,10 +47,78 @@ public sealed class DescriptionTaintTests
     // Only the server's tools are shortlisted, so the shortlist and the chunks are the test's.
     private static TurnOptions McpOnly => new() { ToolFilter = descriptor => descriptor.Origin is not null };
 
-    private static TurnRunner Runner(TurnHarness harness, Review review)
+    private static double[] Pick(DecisionQuestion question, string name) =>
+        [.. question.Options.Select(option => option.Name == name ? 0.9 : 0.1 / (question.Options.Length - 1))];
+
+    private static IReadOnlyList<string> DescriptionKeys(TurnHarness harness) =>
+        [.. harness.Decisions().Select(decision => decision.QuestionId).Where(id => id.StartsWith("injection/", StringComparison.Ordinal))];
+
+    [Fact]
+    public async Task A_confident_injection_verdict_on_an_outside_description_taints_and_withholds_nothing()
     {
+        // C-037: the generic question answers yes on benign descriptions (spike S2), so its verdict is logged, not acted on.
+        var kev = new ScriptedDecider((key, question) => key switch
+        {
+            "injection/mcp:notes" => [0.9, 0.1],
+            "tool" => Pick(question, "weather_a"),
+            _ => null,
+        });
+        var tool = Weather("weather_a", outside: true);
+        var generator = new FakeGenerator(Reply.Call("weather_a"), Reply.Say("Sunny."));
+        var prompter = FakePrompter.Always(approve: true);
+        using var harness = new TurnHarness(generator, calibrated: kev, prompter: prompter, options: McpOnly, tools: tools => tools.Add(tool));
+
+        var result = await harness.RunAsync("weather report");
+
+        var decision = Assert.Single(harness.Decisions("injection/mcp:notes"));
+        Assert.Equal("mark_tainted", decision.Action);
+        Assert.True(result.Tainted);
+        // Still in the tool question's options, still offered to the generator, and still in the registry.
+        Assert.Contains(harness.Decisions("tool")[0].Question!.Options, option => option.Name == "weather_a");
+        Assert.Contains("weather_a", generator.Calls[0].ToolNames);
+        Assert.True(harness.Tools.TryGet("weather_a", out _));
+        // An untrusted server's tool is not read-only: its call is asked about (every call), then runs.
+        Assert.Single(prompter.Prompts);
+        Assert.Contains(harness.Payloads(), payload => payload is ApprovalRequested);
+        Assert.Equal(1, tool.Invocations);
+    }
+
+    [Fact]
+    public async Task A_trusted_servers_descriptions_are_not_asked_about_and_do_not_taint()
+    {
+        var kev = new ScriptedDecider((key, _) => key.StartsWith("injection/", StringComparison.Ordinal) ? [0.9, 0.1] : null);
+        var generator = new FakeGenerator(Reply.Say("Done."));
+        using var harness = new TurnHarness(generator, calibrated: kev, options: McpOnly, tools: tools =>
+        {
+            tools.Add(ServerTool(outside: false, "alpha_a", "Read alpha.", "mcp:alpha"));
+            tools.Add(Weather("weather_a"));
+        });
+
+        var result = await harness.RunAsync("read everything");
+
+        Assert.Empty(DescriptionKeys(harness));
+        Assert.False(result.Tainted);
+        Assert.Equal(["alpha_a", "weather_a"], Assert.Single(generator.Calls).ToolNames.Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task Outside_chunks_are_whole_lines_asked_beyond_any_cap_and_once_per_session()
+    {
+        // Five 700-character lines: one per chunk. A 1,500-character line is cut and still alone in its chunk. Three more
+        // origins with an outside description, and one trusted origin that is never asked.
+        var generator = new FakeGenerator(Reply.Say("One."), Reply.Say("Two."));
+        using var harness = new TurnHarness(generator, options: McpOnly, tools: tools =>
+        {
+            tools.Add(Weather("weather_a", 1_500, outside: true));
+            foreach (var name in (string[])["weather_b", "weather_c", "weather_d", "weather_e"])
+                tools.Add(Weather(name, 700, outside: true));
+            foreach (var origin in (string[])["a", "b", "c"])
+                tools.Add(ServerTool(outside: true, origin + "_read", "Read " + origin + ".", "mcp:" + origin));
+            tools.Add(ServerTool(outside: false, "t_read", "Read t.", "mcp:t"));
+        });
         var services = harness.Services();
-        return new TurnRunner(TurnHarness.Session, new TurnServices
+        // A shortlist that holds every tool, so every chunk is in the turn.
+        var runner = new TurnRunner(TurnHarness.Session, new TurnServices
         {
             Log = services.Log,
             Slots = services.Slots,
@@ -65,86 +126,14 @@ public sealed class DescriptionTaintTests
             Tools = services.Tools,
             Approvals = services.Approvals,
             Options = services.Options,
-            DescriptionReview = review,
+            Shortlist = new ToolShortlist(new ShortlistOptions(Size: 16)),
         });
-    }
-
-    private static double[] Pick(DecisionQuestion question, string name) =>
-        [.. question.Options.Select(option => option.Name == name ? 0.9 : 0.1 / (question.Options.Length - 1))];
-
-    [Fact]
-    public async Task A_confident_injection_verdict_withholds_exactly_its_chunks_tools_from_the_generator_and_the_pick()
-    {
-        // 500-character descriptions: two lines fit a 1,200-character chunk, so the third tool is alone in chunk #2.
-        var kev = new ScriptedDecider((key, question) => key switch
-        {
-            "injection/mcp:notes#2" => [0.9, 0.1],
-            "injection/mcp:notes" => [0.1, 0.9],
-            "tool" => Pick(question, "weather_c"),
-            _ => null,
-        });
-        var generator = new FakeGenerator(Reply.Say("Sunny."));
-        using var harness = new TurnHarness(generator, calibrated: kev, options: McpOnly, tools: tools =>
-        {
-            tools.Add(Weather("weather_a", 500));
-            tools.Add(Weather("weather_b", 500));
-            tools.Add(Weather("weather_c", 500));
-        });
-        var review = new Review();
-
-        var result = await harness.RunAsync(Runner(harness, review), "weather report");
-
-        var first = Assert.Single(harness.Decisions("injection/mcp:notes")).Question!.Instructions.GetString()!;
-        Assert.Contains("- weather_a: ", first, StringComparison.Ordinal);
-        Assert.Contains("- weather_b: ", first, StringComparison.Ordinal);
-        Assert.DoesNotContain("weather_c", first, StringComparison.Ordinal);
-        var second = Assert.Single(harness.Decisions("injection/mcp:notes#2"));
-        Assert.Contains("- weather_c: ", second.Question!.Instructions.GetString()!, StringComparison.Ordinal);
-        // The pick of the withheld tool falls back to the shortlist without it; no generator call of the turn offers it.
-        Assert.Equal(["weather_a", "weather_b"], Assert.Single(generator.Calls).ToolNames.Order(StringComparer.Ordinal));
-        var request = Assert.Single(review.Requests);
-        Assert.Equal(("mcp:notes", "weather_c", second.DecisionId), (request.Origin, Assert.Single(request.Tools), request.DecisionId));
-        // Trusted descriptions, and the withheld one was never shown to the generator.
-        Assert.False(result.Tainted);
-    }
-
-    [Theory]
-    [InlineData(0.3, true)]
-    [InlineData(0.9, false)]
-    public async Task An_answer_below_the_floor_or_uncalibrated_withholds_nothing(double yes, bool calibrated)
-    {
-        var kev = new ScriptedDecider((key, _) => key.StartsWith("injection/", StringComparison.Ordinal) ? [yes, 1 - yes] : null)
-        {
-            Calibrated = calibrated,
-        };
-        var generator = new FakeGenerator(Reply.Say("Sunny."));
-        using var harness = new TurnHarness(generator, calibrated: kev, options: McpOnly, tools: tools => tools.Add(Weather("weather_a")));
-        var review = new Review();
-
-        await harness.RunAsync(Runner(harness, review), "weather report");
-
-        Assert.Single(harness.Decisions("injection/mcp:notes"));
-        Assert.Contains("weather_a", Assert.Single(generator.Calls).ToolNames);
-        Assert.Empty(review.Requests);
-    }
-
-    [Fact]
-    public async Task Chunks_are_whole_lines_asked_at_most_two_per_batch_and_the_rest_in_later_turns()
-    {
-        // Five 700-character lines: one per chunk. A 1,500-character line is cut and still alone in its chunk.
-        var generator = new FakeGenerator(Reply.Say("One."), Reply.Say("Two."), Reply.Say("Three."), Reply.Say("Four."));
-        using var harness = new TurnHarness(generator, options: McpOnly, tools: tools =>
-        {
-            tools.Add(Weather("weather_a", 1_500, outside: true));
-            foreach (var name in (string[])["weather_b", "weather_c", "weather_d", "weather_e"])
-                tools.Add(Weather(name, 700));
-        });
-        var runner = harness.Runner();
-        IReadOnlyList<string> Asked() => [.. harness.Decisions().Select(decision => decision.QuestionId).Where(id => id.StartsWith("injection/", StringComparison.Ordinal))];
 
         var first = await harness.RunAsync(runner, "weather report");
-        Assert.Equal(["injection/mcp:notes", "injection/mcp:notes#2"], Asked());
-        // weather_a is an outside description: its chunk taints; the trusted chunks do not.
+
+        Assert.Equal(["injection/mcp:a", "injection/mcp:b", "injection/mcp:c", "injection/mcp:notes", "injection/mcp:notes#2",
+                "injection/mcp:notes#3", "injection/mcp:notes#4", "injection/mcp:notes#5"],
+            DescriptionKeys(harness).Order(StringComparer.Ordinal));
         Assert.True(first.Tainted);
         var cut = harness.Decisions("injection/mcp:notes")[0].Question!.Instructions.GetString()!;
         Assert.Contains("- weather_a: ", cut, StringComparison.Ordinal);
@@ -153,84 +142,41 @@ public sealed class DescriptionTaintTests
         Assert.True(cut[(cut.IndexOf("- weather_a", StringComparison.Ordinal))..].Length <= 1_200);
 
         await harness.RunAsync(runner, "weather report");
-        Assert.Equal(["injection/mcp:notes", "injection/mcp:notes#2", "injection/mcp:notes#3", "injection/mcp:notes#4"], Asked());
-        await harness.RunAsync(runner, "weather report");
-        Assert.Equal(5, Asked().Count);
-        Assert.Equal("injection/mcp:notes#5", Asked()[^1]);
-        await harness.RunAsync(runner, "weather report");
-        Assert.Equal(5, Asked().Count);
+        Assert.Equal(8, DescriptionKeys(harness).Count);
     }
 
-    private static IReadOnlyList<string> DescriptionKeys(TurnHarness harness) =>
-        [.. harness.Decisions().Select(decision => decision.QuestionId).Where(id => id.StartsWith("injection/", StringComparison.Ordinal))];
-
     [Fact]
-    public async Task Trusted_origins_that_sort_first_never_starve_an_untrusted_origins_descriptions()
+    public async Task A_tool_held_before_the_turn_can_never_be_picked_or_called_in_it()
     {
-        // Review of #47, finding 1: alpha, beta and gamma (trusted) sort before zeta (untrusted), yet zeta is asked in the
-        // first batch, and a confident yes keeps zeta_a from the generator.
-        var kev = new ScriptedDecider((key, _) => key.StartsWith("injection/", StringComparison.Ordinal)
-            ? key == "injection/mcp:zeta" ? [0.9, 0.1] : [0.1, 0.9]
-            : null);
-        var generator = new FakeGenerator(Reply.Say("Done."));
+        // C-037: every withholding is decided by the tools' source before the turn reads the registry (BuildShortlistAsync
+        // snapshots it once into the catalogue, and nothing after ingress removes from the catalogue or the shortlist). Here
+        // the hold is McpClients' (Withhold or a pin mismatch): the tool leaves the registry before the turn. Kev is scripted
+        // to pick it and the generator to call it anyway.
+        var held = Weather("weather_b", outside: true);
+        var kev = new ScriptedDecider((key, question) => key switch
+        {
+            "tool" => Pick(question, "weather_b"),
+            _ => null,
+        });
+        var generator = new FakeGenerator(Reply.Call("weather_b"), Reply.Say("Sunny."));
         using var harness = new TurnHarness(generator, calibrated: kev, options: McpOnly, tools: tools =>
         {
-            tools.Add(ServerTool(outside: false, "alpha_a", "Read alpha.", "mcp:alpha"));
-            tools.Add(ServerTool(outside: false, "beta_a", "Read beta.", "mcp:beta"));
-            tools.Add(ServerTool(outside: false, "gamma_a", "Read gamma.", "mcp:gamma"));
-            tools.Add(ServerTool(outside: true, "zeta_a", "Read zeta.", "mcp:zeta"));
+            tools.Add(Weather("weather_a"));
+            tools.Add(held);
         });
-        var review = new Review();
+        harness.Tools.Remove("weather_b");
 
-        var result = await harness.RunAsync(Runner(harness, review), "read everything");
+        await harness.RunAsync("weather report");
 
-        // The outside chunk first, then trusted ones up to 2 description questions in all; beta and gamma wait for later turns.
-        Assert.Equal(["injection/mcp:alpha", "injection/mcp:zeta"], DescriptionKeys(harness).Order(StringComparer.Ordinal));
-        Assert.DoesNotContain("zeta_a", Assert.Single(generator.Calls).ToolNames);
-        var request = Assert.Single(review.Requests);
-        Assert.Equal(("mcp:zeta", "zeta_a"), (request.Origin, Assert.Single(request.Tools)));
-        Assert.True(result.Tainted);
-    }
-
-    [Fact]
-    public async Task Chunks_with_an_outside_description_are_asked_beyond_the_cap()
-    {
-        var generator = new FakeGenerator(Reply.Say("Done."));
-        using var harness = new TurnHarness(generator, options: McpOnly, tools: tools =>
-        {
-            foreach (var origin in (string[])["a", "b", "c"])
-                tools.Add(ServerTool(outside: true, origin + "_read", "Read " + origin + ".", "mcp:" + origin));
-            tools.Add(ServerTool(outside: false, "t_read", "Read t.", "mcp:t"));
-        });
-
-        await harness.RunAsync("read everything");
-
-        Assert.Equal(["injection/mcp:a", "injection/mcp:b", "injection/mcp:c"], DescriptionKeys(harness).Order(StringComparer.Ordinal));
-    }
-
-    [Fact]
-    public async Task A_guests_turn_withholds_from_that_turn_only_and_the_owners_next_turn_asks_again()
-    {
-        // Review of #47, finding 4: a guest's words are in the state the question sees, so its verdict holds nothing for good.
-        var kev = new ScriptedDecider((key, _) => key.StartsWith("injection/", StringComparison.Ordinal) ? [0.9, 0.1] : null);
-        var generator = new FakeGenerator(Reply.Say("Guest answer."), Reply.Say("Owner answer."));
-        using var harness = new TurnHarness(generator, calibrated: kev, options: McpOnly, tools: tools => tools.Add(Weather("weather_a")));
-        var review = new Review();
-        var runner = Runner(harness, review);
-
-        await runner.RunAsync(new Envelope(TurnHarness.Session, "gateway", "weather report", EnvelopeOrigin.External)
-        {
-            Guest = new GuestScope(["weather_a"]),
-        }, TestContext.Current.CancellationToken);
-
-        Assert.Single(harness.Decisions("injection/mcp:notes"));
-        Assert.DoesNotContain("weather_a", Assert.Single(generator.Calls).ToolNames);
-        Assert.Empty(review.Requests);
-
-        await harness.RunAsync(runner, "weather report");
-
-        Assert.Equal(2, harness.Decisions("injection/mcp:notes").Count);
-        Assert.Equal("weather_a", Assert.Single(Assert.Single(review.Requests).Tools));
+        Assert.DoesNotContain(Assert.Single(harness.Decisions("tool")).Question!.Options, option => option.Name == "weather_b");
+        Assert.All(generator.Calls, call => Assert.DoesNotContain("weather_b", call.ToolNames));
+        // The call is refused as naming no offered tool, and the held tool never ran.
+        var issued = Assert.Single(harness.Payloads().OfType<ToolCallIssued>(), call => call.ToolName == "weather_b");
+        Assert.Null(issued.ReadOnly);
+        var refused = Assert.Single(harness.Payloads().OfType<ToolResult>(), result => result.CallId == issued.CallId);
+        Assert.True(refused.IsError);
+        Assert.Contains("is not one of the tools offered", refused.Result.GetRawText(), StringComparison.Ordinal);
+        Assert.Equal(0, held.Invocations);
     }
 
     [Fact]

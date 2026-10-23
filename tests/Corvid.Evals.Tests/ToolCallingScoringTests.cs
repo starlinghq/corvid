@@ -197,7 +197,9 @@ public sealed class ToolCallingScoringTests : IDisposable
         var headline = report.Headline!;
         Assert.Equal(100.0 / 9, headline.ToolPoints, 6);
         Assert.Equal(100.0 / 9, headline.EscalationRate, 6);
-        Assert.False(headline.Pass);
+        // C-037's restated condition: strict tool and args each at least (a)'s, and turn p50 no worse; escalation does not gate.
+        Assert.Equal(c.TurnMs.P50 - a.TurnMs.P50, headline.TurnP50DeltaMs, 6);
+        Assert.Equal(headline.ToolPoints >= 0 && headline.ArgsPoints >= 0 && headline.TurnP50DeltaMs <= 0, headline.Pass);
 
         var markdown = report.ToMarkdown();
         Assert.Contains("| qwen-all | 9 | 4 (44.4%) |", markdown, StringComparison.Ordinal);
@@ -229,10 +231,33 @@ public sealed class ToolCallingScoringTests : IDisposable
     }
 
     [Fact]
-    public async Task A_confident_description_verdict_withholds_the_tool_and_the_ablation_never_asks()
+    public void The_restated_condition_gates_on_strict_tool_and_args_and_turn_p50_only()
+    {
+        var a = Summary(tool: 70, args: 60, p50: 8_000, escalated: 0, lenient: 90);
+        Assert.True(Headline.For(a, Summary(tool: 70, args: 60, p50: 8_000, escalated: 50, lenient: 10)).Pass);
+        Assert.True(Headline.For(a, Summary(tool: 80, args: 75, p50: 2_300, escalated: 0, lenient: 80)).Pass);
+        Assert.False(Headline.For(a, Summary(tool: 69, args: 75, p50: 2_300, escalated: 0, lenient: 100)).Pass);
+        Assert.False(Headline.For(a, Summary(tool: 80, args: 59, p50: 2_300, escalated: 0, lenient: 100)).Pass);
+        var slower = Headline.For(a, Summary(tool: 80, args: 75, p50: 8_001, escalated: 0, lenient: 100));
+        Assert.False(slower.Pass);
+        Assert.Equal(1, slower.TurnP50DeltaMs, 6);
+        Assert.False(Headline.For(a, Summary(tool: 80, args: 75, p50: double.NaN, escalated: 0, lenient: 100)).Pass);
+    }
+
+    private static ConfigurationSummary Summary(int tool, int args, double p50, int escalated, int lenient)
+    {
+        var empty = Distribution.Of([]);
+        var empties = ImmutableSortedDictionary<string, int>.Empty;
+        return new ConfigurationSummary("x", 100, empties, tool, args, lenient, lenient, 100 - escalated, tool, args, escalated, empties,
+            0, 100, 0, 0, 0, 0, 0, 0, 0, new Distribution(100, p50, p50, p50, p50), empty, empty, empty, empty, empty);
+    }
+
+    [Fact]
+    public async Task A_confident_description_verdict_withholds_nothing_and_c_asks_no_trusted_description_question()
     {
         var set = ToolCallingSet.Parse(Catalogue, Cases);
-        // Kev says the weather server's description instructs the agent, as Kev-0.8B did for most benign extras in the S2 run.
+        // Kev says the weather server's description instructs the agent, as Kev-0.8B did for most benign extras in the S2 run;
+        // C-037: the set's extras are trusted, so (c) never asks about them and the verdict could not withhold anything.
         var bindings = new ToolCallingBindings(
             new ModelBinding(Profile("fake-qwen", ToolCallSupport.TemplateRendered, 8_192), new ScriptedGenerator(Script)),
             new ModelBinding(Profile("keywords", ToolCallSupport.None, 512), new KeywordEmbedder("weather", "note", "file", "web", "online")),
@@ -242,23 +267,38 @@ public sealed class ToolCallingScoringTests : IDisposable
         var runs = await runner.RunAsync([.. set.Cases.Where(item => item.Id == "correct")], cancellationToken: Ct);
         var scores = runs.Select(run => ToolCallingScorer.Score(run, set)).ToList();
 
-        var withheld = Get(scores, "correct", "shortlist-kev");
-        Assert.Contains("injection/mcp:weather=mark_tainted", withheld.Acted);
-        Assert.True(withheld.WithheldDescriptions);
-        Assert.DoesNotContain("weather__get_weather", withheld.Offered);
-        Assert.Equal(CaseOutcome.InvalidName, withheld.Outcome);
+        var production = Get(scores, "correct", "shortlist-kev");
+        Assert.DoesNotContain(runs.Single(run => run.Configuration == ToolCallingConfiguration.ShortlistKev).Events.OfType<Decision>(),
+            decision => decision.QuestionId.StartsWith("injection/", StringComparison.Ordinal));
+        Assert.False(production.DescriptionFlagged);
+        Assert.Contains("weather__get_weather", production.Offered);
+        Assert.Equal(CaseOutcome.Correct, production.Outcome);
 
         var ablation = Get(scores, "correct", "shortlist-kev-no-desc");
         Assert.DoesNotContain(runs.Single(run => run.Configuration == ToolCallingConfiguration.ShortlistKevNoDescriptions).Events.OfType<Decision>(),
             decision => decision.QuestionId.StartsWith("injection/", StringComparison.Ordinal));
-        Assert.False(ablation.WithheldDescriptions);
+        Assert.False(ablation.DescriptionFlagged);
         Assert.Equal(CaseOutcome.Correct, ablation.Outcome);
 
         var report = ToolCallingReport.Build(new ToolCallingHeader("test.1", new string('a', 64), new string('b', 64), 4, "floors", "abc1234",
             ImmutableSortedDictionary<string, string>.Empty, ImmutableSortedDictionary<string, string>.Empty,
             ImmutableSortedDictionary<string, string>.Empty, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch), scores);
-        Assert.Equal(1, report.Summaries.Single(summary => summary.Configuration == "shortlist-kev").DescriptionsWithheld);
-        Assert.Equal(0, report.Summaries.Single(summary => summary.Configuration == "shortlist-kev-no-desc").DescriptionsWithheld);
+        Assert.Equal(0, report.Summaries.Single(summary => summary.Configuration == "shortlist-kev").DescriptionsFlagged);
+        Assert.Equal(0, report.Summaries.Single(summary => summary.Configuration == "shortlist-kev-no-desc").DescriptionsFlagged);
+
+        // Review of #63, finding 3: an acted outside-description verdict is counted as flagged, not withheld; the tool is
+        // still offered in that turn, and the report names the count so.
+        var flagged = production with { Acted = ["injection/mcp:weather=mark_tainted"] };
+        Assert.True(flagged.DescriptionFlagged);
+        Assert.Contains("weather__get_weather", flagged.Offered);
+        var flaggedReport = ToolCallingReport.Build(report.Header, [flagged]);
+        Assert.Equal(1, flaggedReport.Summaries.Single().DescriptionsFlagged);
+        Assert.Contains("| MCP descriptions flagged |", flaggedReport.ToMarkdown(), StringComparison.Ordinal);
+        Assert.DoesNotContain("withheld", flaggedReport.ToMarkdown(), StringComparison.OrdinalIgnoreCase);
+        using var json = JsonDocument.Parse(flaggedReport.ToJson());
+        var summaryJson = json.RootElement.GetProperty("summaries")[0];
+        Assert.Equal(1, summaryJson.GetProperty("descriptions_flagged").GetInt32());
+        Assert.False(summaryJson.TryGetProperty("descriptions_withheld", out _));
     }
 
     private const string OverCallCases = """

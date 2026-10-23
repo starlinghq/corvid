@@ -85,8 +85,12 @@ public sealed record CaseScore(
     /// <summary>The lenient argument match: <see cref="ToolCorrectOrOverCalled"/>, and every constraint on the matched calls holds.</summary>
     public bool ArgumentsCorrectOrOverCalled => ToolCorrectOrOverCalled && ArgsMatch != false;
 
-    /// <summary>C-033's ingress description check acted: some shortlisted MCP tools were withheld from this turn.</summary>
-    public bool WithheldDescriptions => Acted.Any(acted => acted.StartsWith("injection/mcp:", StringComparison.Ordinal));
+    /// <summary>
+    /// An ingress <c>injection/mcp:*</c> verdict about shortlisted MCP descriptions acted. Since C-037 that flags the chunk
+    /// (logged, the turn tainted) and withholds nothing; only outside descriptions are asked, so with the set's trusted extras
+    /// this stays false. Under C-033 (reports in <c>results/</c>) the same count was the turns that withheld tools.
+    /// </summary>
+    public bool DescriptionFlagged => Acted.Any(acted => acted.StartsWith("injection/mcp:", StringComparison.Ordinal));
 }
 
 /// <summary>
@@ -226,7 +230,7 @@ public static class ToolCallingScorer
         "difficulty" => decision.Action == "escalate_generator",
         "done" => decision.Action == "stop",
         "stuck" => decision.Action == "change_strategy",
-        // C-033: a description question that acted withholds that chunk's MCP tools from the turn.
+        // A description question that acted (C-033 withheld that chunk's MCP tools; since C-037 it is only logged).
         _ when decision.QuestionId.StartsWith("injection/mcp:", StringComparison.Ordinal) => decision.Action == "mark_tainted",
         _ => false,
     };

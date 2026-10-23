@@ -11,8 +11,8 @@ namespace Corvid.Kernel.Tests;
 /// <summary>
 /// C-030 in a turn: with reduced checkpoints each step asks Kev at most two questions, yet old results are still stubbed
 /// from the skipped <c>clear_results</c> decisions, a skipped <c>injection</c> still leaves the session tainted (and network
-/// egress still asks), a hub skill's injection question costs no request, and an MCP description chunk Kev flags is still
-/// withheld (C-033).
+/// egress still asks), a hub skill's injection question costs no request, and an outside MCP description chunk is still
+/// asked and taints, though since C-037 a flag withholds nothing.
 /// </summary>
 public sealed class ReducedCheckpointTurnTests
 {
@@ -154,45 +154,26 @@ public sealed class ReducedCheckpointTurnTests
         Assert.Contains(kev.Requests, request => request.Questions.ContainsKey("injection/skill:weather-report"));
     }
 
-    private sealed class Review : IToolDescriptionReview
-    {
-        public List<ToolWithholding> Requests { get; } = [];
-
-        public void Withhold(ToolWithholding request) => Requests.Add(request);
-    }
-
     private static TestTool McpTool(string name) =>
         new(new ToolDescriptor(name, "Report the weather for a city.", """{"type":"object","properties":{}}""",
-            new ToolRisk(SideEffects.Remote, Network: false, Destructive: true), [])
+            new ToolRisk(SideEffects.Remote, Network: false, Destructive: true, OutsideDescription: true), [])
         { Origin = "mcp:notes" }, (_, _) => ValueTask.FromResult<object?>("[]"));
 
     [Fact]
-    public async Task A_flagged_mcp_description_chunk_is_still_withheld()
+    public async Task A_flagged_outside_mcp_description_chunk_is_still_asked_taints_and_withholds_nothing()
     {
         var kev = new ScriptedDecider((key, _) => key == "injection/mcp:notes" ? [0.9, 0.1] : null);
         var generator = new FakeGenerator(Reply.Say("Sunny."));
         using var harness = new TurnHarness(generator, calibrated: kev, reduction: Cpu,
             options: new TurnOptions { ToolFilter = descriptor => descriptor.Origin is not null },
             tools: tools => tools.Add(McpTool("weather_a")));
-        var review = new Review();
-        var services = harness.Services();
-        var runner = new TurnRunner(TurnHarness.Session, new TurnServices
-        {
-            Log = services.Log,
-            Slots = services.Slots,
-            Fabric = services.Fabric,
-            Tools = services.Tools,
-            Approvals = services.Approvals,
-            Options = services.Options,
-            DescriptionReview = review,
-        });
 
-        await harness.RunAsync(runner, "weather report");
+        var result = await harness.RunAsync("weather report");
 
         var decision = Assert.Single(harness.Decisions("injection/mcp:notes"));
         Assert.False(IsSkipped(decision));
         Assert.Equal("mark_tainted", decision.Action);
-        Assert.Equal("weather_a", Assert.Single(Assert.Single(review.Requests).Tools));
-        Assert.DoesNotContain("weather_a", Assert.Single(generator.Calls).ToolNames);
+        Assert.True(result.Tainted);
+        Assert.Contains("weather_a", Assert.Single(generator.Calls).ToolNames);
     }
 }

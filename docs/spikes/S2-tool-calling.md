@@ -192,3 +192,46 @@ are opened offline; a missing one exits 1 naming `corvid model download`.
 - `evals/Corvid.Evals/ToolCalling/`: the harness; `evals/Corvid.Evals.Calibrate` dispatches `tool-calling`.
 - `evals/spikes/S2-tool-calling/`: the CUDA wrapper (not in `Corvid.slnx`) and `results/`: `report.md`, `report.json`
   (every case and configuration) and `console.log` of the run above. The event logs (13 MB) are not committed.
+
+## Addendum: C-037 (2026-10-23, `b85c940`)
+
+C-037 acts on decisions 1 and 2 above. Withholding no longer acts on the generic `injection` verdict: only chunks with an
+outside description (untrusted servers, allowed flagged tools) are asked, the verdict is logged and taints, and every
+withholding (C-022's pattern scan, pin mismatches, holds C-033 persisted) is decided in `McpClients` at listing, before the
+turn reads its tools, so the shortlist and the `tool` pick only ever see offered tools. The set's extras are trusted, so (c)
+now asks no description question at all. The maintainer restated the pass condition (plan §18, S2 row).
+
+**Restated pass condition.** Strict scoring is primary. (c) passes if it matches or beats (a) on strict correct tool AND
+strict argument match, and its turn p50 is no worse than (a)'s. Lenient rates and escalation are reported, not gating.
+`ToolCallingReport`'s headline computes this since C-037 (`pass_condition: "c-037"` in `report.json`); `results/` above was
+computed under the original rule and is left unchanged.
+
+**Result: pass.** (c) − (a) = +7.2 points on strict tool choice and +5.8 on strict argument match; turn p50 9.5 s faster.
+
+| Configuration | Correct tool | Args match | Over-called | Correct tool, lenient | Args match, lenient | Wrong tool | No call (of 191) | MCP tools withheld | Turn p50 (p90), ms | Decider p50, ms | First prompt tokens p50 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| (a) `qwen-all` | 148 (71.2%) | 144 (69.2%) | 31 | 179 (86.1%) | 168 (80.8%) | 22 | 5 | 0 | 13,170 (28,444) | – | 3,334 |
+| (b) `shortlist` | 155 (74.5%) | 150 (72.1%) | 14 | 169 (81.3%) | 164 (78.8%) | 22 | 17 | 0 | 3,653 (9,405) | – | 834 |
+| (c) `shortlist-kev` | 163 (78.4%) | 156 (75.0%) | 5 | 168 (80.8%) | 161 (77.4%) | 19 | 20 | 0 | 3,668 (11,461) | 342 | 801 |
+| `shortlist-kev-no-desc` (ablation) | 163 (78.4%) | 156 (75.0%) | 5 | 168 (80.8%) | 161 (77.4%) | 19 | 20 | 0 | 3,625 (8,646) | 335 | 801 |
+
+- (c) and the ablation made identical calls (same tools, same arguments, in order) on all 208 of 208 cases, and (c)'s
+  event log holds no `injection/mcp:*` decision: with trusted extras the two configurations now differ only in the
+  extras' origin, which nothing in the turn reads once no description question is asked. Their decider totals differ by
+  under 10 ms at the median. The ablation can be retired (deferred in the plan).
+- Every configuration's outcome counts equal the first run's ((a) 148 / 144, (b) 155 / 150, the ablation 163 / 156, all
+  outcome columns): greedy decoding, and only (c) changed. (c) went from 53.4% / 50.5% to 78.4% / 75.0%.
+- Leniently (a) is still ahead (86.1% / 80.8% against 80.8% / 77.4%) because it over-calls 31 times against (c)'s 5; under
+  the restated condition that is reported, not gating. Escalation 0% everywhere.
+- Decision 3 (Kev's confident `done` and `tool = none` on chains and `shell`) is unchanged by C-037. The run appended
+  outcomes to 447 calibrated `tool` decisions in (c)'s log (211 accepted, 236 corrected) for C-021; that log is not committed.
+
+**Load.** One process, 832 turns interleaved per case after an untimed warm-up, 02:19–04:08 UTC, under far heavier load
+than the first run: other jobs on the workstation (a set of `yes` processes and an unrelated engine process, none of them this run) kept the 1-minute load
+average between 20 and 133 (sampled every 3 minutes; median about 50), against 5–7 for the first run. Absolute latencies are
+therefore 1.6–1.7× the first run's ((a) 13.2 s against 8.1 s at the median; the shortlisted configurations 3.6–3.7 s against
+2.2–2.3 s) and the p90s are wider. The interleaving puts every configuration under the same load case by case, so the p50
+comparison stands; the margin (13.2 s against 3.7 s) is far wider than the load effect. A rerun on a quiet machine should
+reproduce the outcome counts exactly and the first run's latencies.
+
+Files: `evals/spikes/S2-tool-calling/results-c037/` (`report.md`, `report.json`, `console.log`), commands as in Reproduce.

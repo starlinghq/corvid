@@ -2110,6 +2110,13 @@ waits for the dedicated question's fitted floor, which bounds how often a truste
 <server>` is the only route. Conditioning description questions on a state without the turn's outside text (review of #47,
 finding 4, for the owner's turns) goes with the dedicated question.
 
+Superseded by C-037 ([below](#description-withholding-before-the-pick-c-037)): asking about trusted servers' descriptions
+(and the cap of 2), the in-turn withholding on the generic `injection` verdict (`WithholdDescriptions`,
+`TurnServices.DescriptionReview`) and the guest-turn path. Spike S2 measured Kev-0.8B answering yes on benign descriptions
+and withholding tools in 113 of 208 turns, after the ingress `tool` pick had already been asked over them. The holding side
+above (`McpClients.Withhold`, the `withheld` pin fields, restarts, review, `ChangedAfterWithhold`) is unchanged and still
+honours every hold this section's turns wrote; nothing in the turn loop calls it now.
+
 ## ACP and OpenAI-compatible HTTP (C-019)
 
 Plan §12 (ACP; OpenAI-compatible HTTP), §17 row 1.1, R11 (agentclientprotocol.com). Two front ends on the composition root,
@@ -3531,6 +3538,92 @@ withholds benign MCP tools on Kev's yes, 78.4% (80.8%) without it).
   Qwen on CUDA in production (C-029 places only Kev), multi-turn cases and recency effects, untrusted MCP servers (their `injection`
   questions and taint), approvals and `pre-execute`, generated examples for MCP tools, time to first token (the loop does
   not stream), and fitting floors from the eval log (the outcomes are written; C-021's workflow fits them).
+
+## Description withholding before the pick (C-037)
+
+Spike S2 ([write-up](spikes/S2-tool-calling.md)) measured a regression from C-033: Kev-0.8B's answer to the generic
+`injection` question is yes on benign MCP descriptions (P(yes) = 0.85 on "Current weather and forecast for a city."), so
+C-033's in-turn withholding took trusted tools out of 113 of 208 turns and (c) fell to 53.4% strict tool accuracy against
+71.2% for Qwen alone (78.4% with the check ablated). The withholding also ran after the ingress batch had asked `tool` over
+the full shortlist, so a confident pick of a just-withheld tool fell back to the reduced shortlist (16 of 41 confident picks
+ended correct). C-037 removes the verdict-driven withholding rather than reordering it. No new project, package, event type
+or checker rule.
+
+- Kernel (`TurnRunner`): `WithholdDescriptions`, the per-turn `_described` map, the guest-turn unmarking and
+  `MaxDescriptionQuestions` are gone, and so is `TurnServices.DescriptionReview` (and its wiring in `CorvidRuntime.Services`).
+  `DescriptionQuestions` is C-022's rule over C-033's chunks: only a chunk that holds an `OutsideDescription` tool (an
+  untrusted server's, or an allowed flagged or withheld one) is asked, keyed `injection/mcp:<server>` then `#2` and on
+  (`DescriptionChunks`, 1,200 characters of whole lines, unchanged), always and uncapped, once per session per chunk text;
+  asking taints, and the verdict (`mark_tainted` when it acts) is only logged. Chunks of only trusted text are not asked at
+  all, which also takes up to 2 questions off S1's ingress bound. A hub skill's `injection/skill:*` question still acts.
+- Where withholding is decided: only in `McpClients`, at listing and registration, before any turn. That covers C-022's
+  `McpDescriptionScan` pattern hits (`flagged`, trusted and untrusted servers alike), a new or changed definition against
+  `mcp-pins.json`, and an `injection` hold C-033 already persisted. A held tool is never registered (or was removed), so the
+  turn never sees it: `BuildShortlistAsync` reads `ToolRegistry.GetFunctions` once into `_catalogue`, and nothing after
+  ingress removes from `_catalogue` or `_shortlist` (their only writers are in `BuildShortlistAsync`, noted at the field).
+  The shortlist, the `tool` question's options (`ToolQuestion`), `OfferFrom`, the no-op re-ask and `RunCallsAsync` therefore
+  only see offered tools, and a call that names a held tool is refused as "is not one of the tools offered" without running.
+- Kept: `IToolDescriptionReview`, `ToolWithholding` and `McpClients.Withhold` (no caller in the turn loop; the seam for a
+  dedicated question), the `withheld`/`withheld_decision` pin fields, `Register`'s precedence (flagged, then injection, then
+  new or changed), `ChangedAfterWithhold`, and the review verbs. Holds written under C-033 stay held at every start until the
+  user runs `/mcp diff` and `/mcp allow <server> <tool> --hash <hex>` (or `corvid mcp allow`); they are never released
+  silently, and an allowed tool is registered as an untrusted server's (asks on every call, taints). Per S2 most such holds are
+  false positives; a one-shot release verb is deferred. Review of #63, finding 2 (persisted holds come from the generic
+  verdict this item stops acting on): kept as the conservative choice pending the maintainer's decision; releasing them at
+  listing would register, unreviewed, tools that were taken away on an `injection` verdict, and whether a benign trusted
+  tool should stay an untrusted server's once allowed is C-033's deferred trust-restoring verb (review of #47, finding 3).
+- Untrusted servers: as before, minus withholding. Their descriptions taint the generator request that carries them
+  (`ToolRisk.OutsideDescription`), their chunks are asked at ingress, and their tools are not read-only (annotations are
+  ignored), so a call asks through `pre-execute`, with one exception: a tool the user lists in the server's `ReadOnlyTools`
+  is read-only (`McpToolMapping.Risk` honours the declaration), and on a server without `ReachesNetwork` it has no network
+  effect either, so it runs without asking, tainted or not (`RunCallsAsync` asks a read-only tool only for `Network`, and
+  the pipeline auto-runs a read-only tool with no forced reason). This is less conservative than C-033 in one respect: a
+  confident generic yes on an untrusted description used to withhold the tool, and now only taints and logs; for that
+  declared read-only, offline tool the yes changes nothing it may do, and taint gates only egress. The plan's spec asks for
+  this; per-call approval (outside that exception) and taint are the controls that remain, and the logged verdicts are the
+  data a dedicated question would be fitted from. Forcing an ask for an acted chunk's tools (review of #63, finding 1) is
+  deferred: `ValidCall.Ask` alone does not ask, since `ApprovalPipeline.DecideAsync` auto-runs a read-only tool without a
+  forced reason, so it needs a new forced reason carried through `ApprovalContext` into `Corvid.Approvals`, with its tests.
+- Trusted servers: the pattern scan and pins at listing only; no generic question about their descriptions.
+- Why `description_injection` is deferred: a question row with its own floor (floors-file version bump, the C-025/C-026
+  pattern) needs a labelled set of benign and poisoned MCP descriptions to fit and validate the floor with C-021's
+  `corvid-evals calibrate`. Adding the row without that evidence would repeat C-033's regression, since the generic question
+  is not conditioned for descriptions. Withholding on it would go through the kept `IToolDescriptionReview` seam, decided
+  before the turn reads its tools (at listing, or before the shortlist), never after the `tool` pick.
+- S2's pass condition, restated by the maintainer (plan §18, the S2 row): strict scoring is primary; (c) passes when its strict
+  correct-tool and strict argument-match rates each match or beat (a)'s and its turn p50 is no worse than (a)'s; lenient rates
+  and escalation are reported, not gating. `Headline.For` in `ToolCallingReport` computes it (`TurnP50DeltaMs` added,
+  `report.json` writes `turn_p50_delta_ms` and `pass_condition: "c-037"`); reports in `results/` were computed under the old
+  rule and are left as they are. The re-run is in [the write-up's addendum](spikes/S2-tool-calling.md#addendum-c-037-2026-10-23-b85c940):
+  **pass**: (c) − (a) = +7.2 points on strict tool choice (78.4% against 71.2%) and +5.8 on strict argument match (75.0% against 69.2%), turn p50 3.7 s against 13.2 s under heavy machine load; (c) and the ablation made identical calls on all 208 cases and (c) asked no description question.
+- Review of #63, finding 3: the scorer's `WithheldDescriptions` counted acted `injection/mcp:*` verdicts, which withhold
+  nothing since C-037, so it is `CaseScore.DescriptionFlagged`, the report column "MCP descriptions flagged" and
+  `descriptions_flagged` in `report.json`, whose format is `corvid-tool-calling-report/3` for the renamed key. The reports in
+  `results/` and `results-c037/` were written before the rename (format `/2`, `descriptions_withheld`) and are left as they
+  are; in `results-c037/` the count is 0 in every configuration.
+- Tests: `tests/Corvid.Kernel.Tests` (`DescriptionTaintTests`: a confident calibrated yes on an outside chunk is asked, logs
+  `mark_tainted`, taints and withholds nothing, the tool stays in the `tool` options, the generator call and the registry, and
+  its call asks once and runs; a trusted server's descriptions produce no `injection/mcp:*` decision and do not taint; outside
+  chunks are asked beyond any cap, whole lines with a long line cut and alone, once per session; a tool held before the turn,
+  with Kev scripted to pick it and the generator to call it, is never in the `tool` options or any generator call and its call
+  is refused as not offered with 0 invocations. `ReducedCheckpointTurnTests`: an outside chunk is still asked, not skipped,
+  under the CPU reduction, taints and withholds nothing). `tests/Corvid.Mcp.Tests` (`McpPinningTests`: a pattern hit and a pin
+  mismatch are held at listing for trusted and untrusted servers alike and never registered; `McpWithholdTests` unchanged, as
+  coverage for persisted holds). `tests/Corvid.Host.Tests` (`McpHostTests`: a trusted server with Kev scripted 0.9 on every
+  `injection/*` key gets no description decision, its tool stays registered and offered, nothing held; end to end, a poisoned
+  description is held before the first turn, Kev picks it and the generator calls it, and it is never in the `tool` options or
+  offered tools and the server receives no call; a hold persisted by C-033's `Withhold` is held at the next start, shown by
+  `/mcp diff` with its decision, refused by `accept` and allowed with `--hash` as an untrusted tool).
+  `tests/Corvid.Evals.Tests` (`ToolCallingScoringTests`: the restated condition gates on strict tool, strict args and turn
+  p50 only; a confident `injection/mcp:weather` script withholds nothing and (c) asks no trusted description question; an
+  acted `injection/mcp:*` verdict on a case whose tool was offered counts as flagged, under `descriptions_flagged`).
+- Not built: the dedicated `description_injection` question and floor and withholding on it; asking about trusted
+  descriptions again (only with that question); asking descriptions at listing time rather than at ingress (would take the
+  outside-chunk questions off the ingress batch's latency); releasing or migrating persisted `injection` holds (an optional
+  `/mcp release-injection-holds`); removing the kept seam and pin fields if the dedicated question is dropped for good; Kev's
+  confident `done` and `tool = none` costs (S2 decision 3) and fitting floors from the re-run's outcomes; retiring the
+  `shortlist-kev-no-desc` ablation; a CI gate on the S2 condition (GPU-only, about an hour); untrusted servers and approvals
+  in the golden set.
 
 ## Prompt-injection exfiltration canary (C-024)
 

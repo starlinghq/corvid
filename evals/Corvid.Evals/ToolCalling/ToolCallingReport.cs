@@ -53,7 +53,7 @@ public sealed record ConfigurationSummary(
     int ToolCases,
     int NoCall,
     int Nudged,
-    int DescriptionsWithheld,
+    int DescriptionsFlagged,
     int FirstResponseCorrect,
     int RepairedToCorrect,
     int ArgsValid,
@@ -68,9 +68,35 @@ public sealed record ConfigurationSummary(
     public double Rate(int count) => Cases == 0 ? double.NaN : 100.0 * count / Cases;
 }
 
-/// <summary>Plan §18's pass condition: (c) beats (a) by 25 points on tool choice and on argument match, (c) escalates under 30%.</summary>
+/// <summary>
+/// S2's pass condition as restated by the maintainer (plan §18, C-037): strict scoring is primary, and (c) passes when its
+/// strict correct-tool and strict argument-match rates each match or beat (a)'s and its turn p50 is no worse than (a)'s.
+/// <paramref name="TurnP50DeltaMs"/> is (c)'s turn p50 minus (a)'s. The non-escalated deltas, the lenient rates and
+/// (c)'s escalation rate are reported, not gating. Reports written before C-037 computed <c>pass</c> under the plan's
+/// original rule (≥ 25 points on both, escalation under 30%).
+/// </summary>
 public sealed record Headline(double ToolPoints, double ArgsPoints, double ToolPointsNonEscalated, double ArgsPointsNonEscalated,
-    double EscalationRate, bool Pass);
+    double EscalationRate, double TurnP50DeltaMs, bool Pass)
+{
+    /// <summary>(c) against (a) under the restated condition.</summary>
+    public static Headline For(ConfigurationSummary a, ConfigurationSummary c)
+    {
+        ArgumentNullException.ThrowIfNull(a);
+        ArgumentNullException.ThrowIfNull(c);
+        var tool = c.Rate(c.ToolCorrect) - a.Rate(a.ToolCorrect);
+        var args = c.Rate(c.ArgsCorrect) - a.Rate(a.ArgsCorrect);
+        var latency = c.TurnMs.P50 - a.TurnMs.P50;
+        // Compared on counts per case so equal rates are equal; a NaN (no cases, no timings) fails.
+        var pass = c.Cases > 0 && a.Cases > 0
+            && (long)c.ToolCorrect * a.Cases >= (long)a.ToolCorrect * c.Cases
+            && (long)c.ArgsCorrect * a.Cases >= (long)a.ArgsCorrect * c.Cases
+            && latency <= 0;
+        return new Headline(tool, args, Pct(c.ToolCorrectNonEscalated, c.NonEscalated) - Pct(a.ToolCorrectNonEscalated, a.NonEscalated),
+            Pct(c.ArgsCorrectNonEscalated, c.NonEscalated) - Pct(a.ArgsCorrectNonEscalated, a.NonEscalated), c.Rate(c.Escalated), latency, pass);
+    }
+
+    private static double Pct(int count, int of) => of == 0 ? double.NaN : 100.0 * count / of;
+}
 
 /// <summary>Outcomes appended to Kev's <c>tool</c> decisions: each turn's first (ingress) and the later ones.</summary>
 public sealed record KevOutcomes(int FirstAccepted, int FirstCorrected, int LaterAccepted, int LaterCorrected)
@@ -115,20 +141,9 @@ public sealed class ToolCallingReport
         var summaries = order.Select(name => Summarize(name, all.Where(score => score.Configuration == name).ToList())).ToImmutableArray();
         var a = summaries.FirstOrDefault(summary => summary.Configuration == "qwen-all");
         var c = summaries.FirstOrDefault(summary => summary.Configuration == "shortlist-kev");
-        Headline? headline = null;
-        if (a is not null && c is not null)
-        {
-            var tool = c.Rate(c.ToolCorrect) - a.Rate(a.ToolCorrect);
-            var args = c.Rate(c.ArgsCorrect) - a.Rate(a.ArgsCorrect);
-            var escalation = c.Rate(c.Escalated);
-            headline = new Headline(tool, args, Pct(c.ToolCorrectNonEscalated, c.NonEscalated) - Pct(a.ToolCorrectNonEscalated, a.NonEscalated),
-                Pct(c.ArgsCorrectNonEscalated, c.NonEscalated) - Pct(a.ArgsCorrectNonEscalated, a.NonEscalated), escalation,
-                tool >= 25 && args >= 25 && escalation < 30);
-        }
+        var headline = a is not null && c is not null ? Headline.For(a, c) : null;
         return new ToolCallingReport(header, all, summaries, headline);
     }
-
-    private static double Pct(int count, int of) => of == 0 ? double.NaN : 100.0 * count / of;
 
     private static ConfigurationSummary Summarize(string name, List<CaseScore> scores)
     {
@@ -146,7 +161,7 @@ public sealed class ToolCallingReport
                 .ToImmutableSortedDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal),
             scores.Count(score => score.Outcome == CaseOutcome.Clarified),
             toolCases.Count, toolCases.Count(score => score.Outcome == CaseOutcome.NoCall),
-            scores.Count(score => score.Nudged), scores.Count(score => score.WithheldDescriptions),
+            scores.Count(score => score.Nudged), scores.Count(score => score.DescriptionFlagged),
             scores.Count(score => score.FirstResponseCorrect), scores.Count(score => score.RepairedToCorrect),
             offeredCalls.Count(score => score.ArgsValid == true), offeredCalls.Count,
             Distribution.Of(scores.Select(score => score.TurnMs)), Distribution.Of(scores.Select(score => score.GeneratorMs)),
@@ -222,7 +237,7 @@ public sealed class ToolCallingReport
         using (var writer = new Utf8JsonWriter(stream, Indented))
         {
             writer.WriteStartObject();
-            writer.WriteString("format", "corvid-tool-calling-report/2");
+            writer.WriteString("format", "corvid-tool-calling-report/3");
             WriteHeader(writer);
             writer.WritePropertyName("headline");
             if (Headline is { } headline)
@@ -233,6 +248,8 @@ public sealed class ToolCallingReport
                 Number(writer, "tool_points_non_escalated", headline.ToolPointsNonEscalated);
                 Number(writer, "args_points_non_escalated", headline.ArgsPointsNonEscalated);
                 Number(writer, "escalation_rate", headline.EscalationRate);
+                Number(writer, "turn_p50_delta_ms", headline.TurnP50DeltaMs);
+                writer.WriteString("pass_condition", "c-037");
                 writer.WriteBoolean("pass", headline.Pass);
                 writer.WriteEndObject();
             }
@@ -295,7 +312,7 @@ public sealed class ToolCallingReport
         writer.WriteNumber("tool_cases", summary.ToolCases);
         writer.WriteNumber("no_call", summary.NoCall);
         writer.WriteNumber("nudged", summary.Nudged);
-        writer.WriteNumber("descriptions_withheld", summary.DescriptionsWithheld);
+        writer.WriteNumber("descriptions_flagged", summary.DescriptionsFlagged);
         writer.WriteNumber("first_response_correct", summary.FirstResponseCorrect);
         writer.WriteNumber("repaired_to_correct", summary.RepairedToCorrect);
         writer.WriteNumber("args_valid", summary.ArgsValid);
@@ -431,14 +448,14 @@ public sealed class ToolCallingReport
         {
             md.AppendLine("## Headline");
             md.AppendLine();
-            md.AppendLine("Plan §18: (c) beats (a) by ≥ 25 points on tool choice and argument match; (c)'s escalation rate below 30%. An escalation counts as a miss.");
+            md.AppendLine("Plan §18, restated by the maintainer (C-037): strict scoring is primary; (c) passes if it matches or beats (a) on strict tool AND strict argument accuracy and its turn p50 is no worse than (a)'s. Lenient rates and escalation are reported, not gating. An escalation counts as a miss.");
             md.AppendLine();
             md.AppendLine("| Measure | (c) − (a), all cases | (c) − (a), non-escalated cases |");
             md.AppendLine("| --- | --- | --- |");
             md.AppendLine(CultureInfo.InvariantCulture, $"| Tool choice | {Points(headline.ToolPoints)} | {Points(headline.ToolPointsNonEscalated)} |");
             md.AppendLine(CultureInfo.InvariantCulture, $"| Argument match | {Points(headline.ArgsPoints)} | {Points(headline.ArgsPointsNonEscalated)} |");
             md.AppendLine();
-            md.AppendLine(CultureInfo.InvariantCulture, $"Escalation rate of (c): {headline.EscalationRate:0.0}%. **{(headline.Pass ? "Pass" : "Fail")}.**");
+            md.AppendLine(CultureInfo.InvariantCulture, $"Turn p50, (c) − (a): {headline.TurnP50DeltaMs:+0;-0;0} ms. Escalation rate of (c): {headline.EscalationRate:0.0}% (not gating). **{(headline.Pass ? "Pass" : "Fail")}.**");
             md.AppendLine();
         }
 
@@ -446,13 +463,13 @@ public sealed class ToolCallingReport
         md.AppendLine();
         md.AppendLine("Correct tool and args match are strict: a case whose expected steps all ran and then another tool ran is over-called, a miss. The two lenient columns count it as correct.");
         md.AppendLine();
-        md.AppendLine("| Configuration | n | Correct tool | Args match | Over-called | Correct tool, lenient | Args match, lenient | Wrong tool | Invalid name | Malformed | No call | Called on no-tool | Clarified | Escalated | Failed | Correct, non-escalated | Args valid (first offered call) | First response correct | Repaired | Nudged | MCP tools withheld |");
+        md.AppendLine("| Configuration | n | Correct tool | Args match | Over-called | Correct tool, lenient | Args match, lenient | Wrong tool | Invalid name | Malformed | No call | Called on no-tool | Clarified | Escalated | Failed | Correct, non-escalated | Args valid (first offered call) | First response correct | Repaired | Nudged | MCP descriptions flagged |");
         md.AppendLine("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
         foreach (var s in Summaries)
         {
             int O(CaseOutcome outcome) => s.Outcomes[ToolCallingScorer.Name(outcome)];
             md.AppendLine(CultureInfo.InvariantCulture,
-                $"| {s.Configuration} | {s.Cases} | {Share(s.ToolCorrect, s.Cases)} | {Share(s.ArgsCorrect, s.Cases)} | {O(CaseOutcome.OverCalled)} | {Share(s.ToolCorrectOrOverCalled, s.Cases)} | {Share(s.ArgsCorrectOrOverCalled, s.Cases)} | {O(CaseOutcome.WrongTool)} | {O(CaseOutcome.InvalidName)} | {O(CaseOutcome.Malformed)} | {O(CaseOutcome.NoCall)} of {s.ToolCases} | {O(CaseOutcome.CalledOnNoTool)} | {s.Clarified} | {s.Escalated}{Reasons(s)} | {O(CaseOutcome.Failed)} | {Share(s.ToolCorrectNonEscalated, s.NonEscalated)} | {s.ArgsValid}/{s.ArgsValidOf} | {s.FirstResponseCorrect} | {s.RepairedToCorrect} | {s.Nudged} | {s.DescriptionsWithheld} |");
+                $"| {s.Configuration} | {s.Cases} | {Share(s.ToolCorrect, s.Cases)} | {Share(s.ArgsCorrect, s.Cases)} | {O(CaseOutcome.OverCalled)} | {Share(s.ToolCorrectOrOverCalled, s.Cases)} | {Share(s.ArgsCorrectOrOverCalled, s.Cases)} | {O(CaseOutcome.WrongTool)} | {O(CaseOutcome.InvalidName)} | {O(CaseOutcome.Malformed)} | {O(CaseOutcome.NoCall)} of {s.ToolCases} | {O(CaseOutcome.CalledOnNoTool)} | {s.Clarified} | {s.Escalated}{Reasons(s)} | {O(CaseOutcome.Failed)} | {Share(s.ToolCorrectNonEscalated, s.NonEscalated)} | {s.ArgsValid}/{s.ArgsValidOf} | {s.FirstResponseCorrect} | {s.RepairedToCorrect} | {s.Nudged} | {s.DescriptionsFlagged} |");
         }
         md.AppendLine();
 
