@@ -38,10 +38,16 @@ internal sealed class SandboxSession
 
     public CancellationTokenSource Stop { get; } = new();
 
+    /// <summary>Set once a shutdown has finished, audit included; a shutdown that lost the race waits on it.</summary>
+    public ManualResetEventSlim Closed { get; } = new();
+
     public ConcurrentDictionary<Socket, byte> Connections { get; } = new();
 
     /// <summary>Connections counted against <see cref="PolicyDocument.MaxSandboxConnections"/>; changed with Interlocked only.</summary>
     internal int Live;
+
+    /// <summary>1 once a shutdown has claimed this sandbox; changed with Interlocked only.</summary>
+    internal int ShutdownClaimed;
 
     public bool IsExpired(DateTimeOffset now) => now >= ExpiresAt;
 }
@@ -159,17 +165,36 @@ internal sealed class SandboxProxy : IDisposable
         }
     }
 
+    /// <summary>Test hook: runs inside the first shutdown of a sandbox, after teardown and before its audit entry.</summary>
+    internal Action<SandboxSession>? BeforeCloseAudit { get; set; }
+
     /// <summary>
     /// Ends a sandbox: no new connections, every live one closed, the socket file removed, the CA key and leaves
-    /// disposed. Idempotent; only the first call audits.
+    /// disposed. Idempotent; only the first call audits. The sandbox stays listed until that call has finished, and a
+    /// call that loses the race waits for it, so a close or sweep that returns means the sandbox is closed and audited
+    /// (the expiry checks of the accept loop and of a tunnel's request loop race the sweep of any Vault call).
     /// </summary>
     private void Shutdown(SandboxSession sandbox, string reason)
     {
-        if (!_sandboxes.TryRemove(new KeyValuePair<string, SandboxSession>(sandbox.Id, sandbox)))
+        if (Interlocked.Exchange(ref sandbox.ShutdownClaimed, 1) == 1)
         {
+            sandbox.Closed.Wait();
             return;
         }
 
+        try
+        {
+            ShutdownCore(sandbox, reason);
+        }
+        finally
+        {
+            _sandboxes.TryRemove(new KeyValuePair<string, SandboxSession>(sandbox.Id, sandbox));
+            sandbox.Closed.Set();
+        }
+    }
+
+    private void ShutdownCore(SandboxSession sandbox, string reason)
+    {
         sandbox.Stop.Cancel();
         sandbox.Listener.Dispose();
         foreach (Socket connection in sandbox.Connections.Keys)
@@ -196,6 +221,7 @@ internal sealed class SandboxProxy : IDisposable
         }
 
         sandbox.Certificates.Dispose();
+        BeforeCloseAudit?.Invoke(sandbox);
         _core.Audit.Write(new AuditEvent
         {
             Time = _core.Time.GetUtcNow(), Op = "sandbox_close", Decision = "allowed", Code = reason, Session = sandbox.SessionId, Uid = sandbox.Uid,
