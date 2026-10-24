@@ -40,6 +40,9 @@ public sealed class EngineSessionTests
         await using var fixture = await EngineFixture.StartAsync(NotesTurn());
         var (_, live) = await RunTurnAsync(fixture);
         var updates = Shared(live);
+        // A new session's first message titles it, as the rail shows it (until K-9 titles are events).
+        Assert.Equal(Prompt, Assert.IsType<TitleChanged>(updates[0]).Title);
+        updates.RemoveAt(0);
 
         // The prompt opens turn 1 on the generator; the call is announced running, then finished with its input and output.
         var kinds = string.Join(" ", updates.Select(update => update.GetType().Name).Where((name, i) =>

@@ -365,6 +365,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             lock (channel.Gate)
                 (channel.Feed, channel.Prompter) = (feed, prompter);
             var started = _time.GetTimestamp();
+            // A session's first message is its title until K-9 titles and G-6 renames are events, as the rail shows it.
+            if (Line(text) is { Length: > 0 } title)
+                Publish(channel, _ => channel.View is { Title.Length: > 0 } ? [] : [new TitleChanged(title) { At = _time.GetUtcNow() }]);
             // Returns once the session's actor has the message; the turn runs on, and its end is tracked below.
             var delivery = await session.PostAsync(text, EnvelopeOrigin.User, cancellationToken).ConfigureAwait(false);
             Track(FinishTurnAsync(channel, reporter, delivery, feed, prompter, started));
@@ -565,6 +568,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 updates.AddRange(channel.Translator.Translate(update));
             updates.AddRange(channel.Translator.EndReplay(running: channel.Running));
             updates.Add(changes);
+            // The rail's title (the first message, until K-9 titles and G-6 renames are events) heads the session too.
+            if (summary.Turns > 0 && summary.Title != id)
+                updates.Add(new TitleChanged(summary.Title) { At = at });
             // What the session is beside its transcript: where it was forked from (this window's forks only), its goal,
             // its approval mode, whether outside content is in its context, and the commands the composer offers.
             if (_forks.TryGetValue(id, out var fork))
