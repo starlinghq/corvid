@@ -25,8 +25,8 @@ using Microsoft.Extensions.Hosting;
 namespace Corvid.App.Engine.Tests;
 
 /// <summary>
-/// The composition's seam: demo mode builds the demo's services, engine mode the engine's (and refusals for the areas
-/// still to come, never demo data), and disposing the composition disposes the services and their source.
+/// The composition's seam: demo mode builds the demo's services, engine mode the engine's for every area (never demo
+/// data), and disposing the composition disposes the services and their source.
 /// </summary>
 public sealed class SeamTests
 {
@@ -66,7 +66,7 @@ public sealed class SeamTests
     }
 
     [Fact]
-    public async Task EngineModeBuildsTheEnginesSessionsAndRefusesTheAreasStillToCome()
+    public async Task EngineModeBuildsEveryAreaOnTheEngine()
     {
         await using var fixture = await EngineFixture.StartAsync();
         var source = new Tracking(new EngineAppServices(fixture.Engine));
@@ -94,16 +94,29 @@ public sealed class SeamTests
         Assert.IsType<Corvid.App.Engine.Gateway.EngineGatewayService>(composition.GatewayService);
         Assert.IsType<Corvid.App.Engine.Secrets.EngineSecretsService>(composition.SecretsService);
 
-        // Every other area opens on a refusal that names the group that brings it.
-        (object Service, string Group)[] areas =
+        // A3 integration's, over the areas' own services.
+        Assert.IsType<Corvid.App.Engine.Board.EngineBoardService>(composition.BoardService);
+        Assert.IsType<Corvid.App.Engine.PromptHistory.EnginePromptHistory>(composition.PromptHistory);
+
+        // No area is left refusing as one still to come: a load answers, or fails for a reason of its own (no such session).
+        object[] areas =
         [
-            (composition.BoardService, "integration"), (composition.PromptHistory, "integration"),
+            composition.ReviewService, composition.RewindService, composition.AuditService, composition.ModelService,
+            composition.FirstRunService, composition.SettingsService, composition.MemoryService, composition.SkillsService,
+            composition.SafetyService, composition.JobsService, composition.McpService, composition.GatewayService,
+            composition.SecretsService, composition.BoardService, composition.PromptHistory,
         ];
-        foreach (var (service, group) in areas)
+        foreach (var service in areas)
         {
-            Assert.Equal(typeof(Unavailable), service.GetType().DeclaringType);
-            var refusal = await Assert.ThrowsAsync<ServiceUnavailableException>(() => Load(service));
-            Assert.StartsWith($"This comes with A3 {group}:", refusal.Message, StringComparison.Ordinal);
+            Assert.NotEqual(typeof(Unavailable), service.GetType().DeclaringType);
+            try
+            {
+                await Load(service);
+            }
+            catch (Exception exception) when (exception is not Xunit.Sdk.XunitException)
+            {
+                Assert.DoesNotContain("This comes with A3", exception.Message, StringComparison.Ordinal);
+            }
         }
 
         composition.Dispose();
