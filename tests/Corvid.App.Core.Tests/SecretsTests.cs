@@ -214,6 +214,153 @@ public sealed class SecretsTests
         Assert.Equal(0, time.ActiveTimers);
     }
 
+    private static SecretsSnapshot Snapshot(params string[] names) =>
+        new(new VaultStatus(VaultState.Running) { Version = "1", Socket = "/run/vault.sock" },
+            [.. names.Select(name => new SecretInfo(name) { Hosts = ["api.example.org"] })],
+            [new SecretConsumer("model:x", ConsumerKind.Model, "x", "generator", "x.key", "api.example.org")]);
+
+    [Fact]
+    public async Task CheckAgainAfterAFailedReadKeepsTheRedNotice()
+    {
+        var service = new ScriptedService();
+        service.Next(Snapshot("a.key"));
+        using var secrets = ViewModel(service);
+        await secrets.Loaded;
+
+        service.NextFailure("socket closed");
+        await secrets.RefreshCommand.ExecuteAsync();
+
+        Assert.Equal(Tone.Red, secrets.NoticeTone);
+        Assert.Equal("Vault could not be read: socket closed", Text(secrets.Notice));
+    }
+
+    [Fact]
+    public async Task CheckAgainWaitsForTheReadInFlightAndComparesWithWhatVaultSaysNow()
+    {
+        var service = new ScriptedService();
+        service.Next(Snapshot("a.key"));
+        using var secrets = ViewModel(service);
+        await secrets.Loaded;
+
+        // A change starts a read that has not answered yet; Check again comes while it runs.
+        var held = service.NextHeld(Snapshot("a.key"));
+        service.Raise();
+        service.Next(Snapshot("a.key", "x.key"));
+        var check = secrets.RefreshCommand.ExecuteAsync();
+        Assert.False(check.IsCompleted);
+
+        held.SetResult();
+        await check;
+
+        Assert.Equal(Tone.Green, secrets.NoticeTone);
+        Assert.Equal("x.key is in Vault now: model x can use it. Corvid never saw its value.", Text(secrets.Notice));
+        Assert.Contains(secrets.Secrets, row => row.Name == "x.key");
+    }
+
+    [Fact]
+    public async Task AChangeHeardDuringAFailedReadIsStillRead()
+    {
+        var service = new ScriptedService();
+        service.Next(Snapshot("a.key"));
+        using var secrets = ViewModel(service);
+        await secrets.Loaded;
+
+        var held = service.NextHeldFailure("socket closed");
+        service.Raise();
+        service.Next(Snapshot("a.key", "b.key"));
+        service.Raise();
+        held.SetResult();
+        await SkillsTests.WaitFor(() => secrets.Secrets.Count == 2);
+
+        Assert.Equal(["a.key", "b.key"], secrets.Secrets.Select(row => row.Name));
+    }
+
+    [Fact]
+    public async Task SeveralNewSecretsAreNamedInOneNotice()
+    {
+        var service = new ScriptedService();
+        service.Next(Snapshot("a.key"));
+        using var secrets = ViewModel(service);
+        await secrets.Loaded;
+
+        service.Next(Snapshot("a.key", "b.key", "x.key"));
+        await secrets.RefreshCommand.ExecuteAsync();
+
+        Assert.Equal("b.key is in Vault now. x.key is in Vault now: model x can use it. Corvid never saw their values.", Text(secrets.Notice));
+    }
+
+    [Fact]
+    public async Task TheFeatureListsAndTheBindPickerAreCapped()
+    {
+        var service = new ScriptedService();
+        var count = SecretsViewModel.MaxFeatureRows + 4;
+        service.Next(new SecretsSnapshot(new VaultStatus(VaultState.Running),
+            [.. Enumerable.Range(0, SecretsViewModel.MaxBindChoices + 6).Select(i => new SecretInfo($"s{i:000}.key") { Hosts = ["h"] })],
+            [.. Enumerable.Range(0, count).Select(i => new SecretConsumer($"model:m{i}", ConsumerKind.Model, $"m{i}", "generator", $"missing{i}.key", "h"))]));
+        using var secrets = ViewModel(service);
+        await secrets.Loaded;
+
+        Assert.Equal(SecretsViewModel.MaxFeatureRows, secrets.Needs.Count);
+        Assert.Equal("and 4 more features waiting, not drawn: set or bind these first", secrets.HiddenNeeds);
+        Assert.Equal($"{count} features", secrets.NeedsNote);
+        Assert.Equal(SecretsViewModel.MaxFeatureRows, secrets.Consumers.Count);
+        Assert.Equal("and 4 more features, not drawn", secrets.HiddenConsumers);
+
+        secrets.Needs[0].BindCommand.Execute(null);
+        Assert.Equal(SecretsViewModel.MaxBindChoices, secrets.BindChoices.Count);
+        Assert.Equal("and 6 more names, not listed: those that can serve it come first", secrets.HiddenBindChoices);
+        secrets.ClosePickerCommand.Execute(null);
+        Assert.False(secrets.HasHiddenBindChoices);
+    }
+
+    /// <summary>A Vault the test scripts read by read: an answer, a failure, or one held until the test lets it go.</summary>
+    private sealed class ScriptedService : ISecretsService
+    {
+        private readonly Queue<Func<Task<SecretsSnapshot>>> _reads = new();
+        private SecretsSnapshot? _last;
+
+        public event EventHandler? Changed;
+
+        public void Raise() => Changed?.Invoke(this, EventArgs.Empty);
+
+        public void Next(SecretsSnapshot snapshot) => _reads.Enqueue(() => Task.FromResult(snapshot));
+
+        public void NextFailure(string message) => _reads.Enqueue(() => Task.FromException<SecretsSnapshot>(new IOException(message)));
+
+        public TaskCompletionSource NextHeld(SecretsSnapshot snapshot)
+        {
+            var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _reads.Enqueue(async () =>
+            {
+                await hold.Task;
+                return snapshot;
+            });
+            return hold;
+        }
+
+        public TaskCompletionSource NextHeldFailure(string message)
+        {
+            var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _reads.Enqueue(async () =>
+            {
+                await hold.Task;
+                throw new IOException(message);
+            });
+            return hold;
+        }
+
+        public async Task<SecretsSnapshot> LoadAsync(CancellationToken cancellationToken = default)
+        {
+            if (_reads.Count > 0)
+                _last = await _reads.Dequeue()();
+            return _last ?? throw new IOException("nothing scripted");
+        }
+
+        public Task<SetterLaunch> StartSetAsync(string name, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task BindAsync(string consumerId, string secretName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
+
     private sealed class FailingService : ISecretsService
     {
         public event EventHandler? Changed { add { } remove { } }

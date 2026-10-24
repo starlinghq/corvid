@@ -17,6 +17,12 @@ public sealed class SecretsViewModel : AreaViewModel, IDisposable
     /// <summary>The most secret rows drawn at once.</summary>
     public const int MaxSecretRows = 200;
 
+    /// <summary>The most waiting features, and the most rows of "who uses what", drawn at once.</summary>
+    public const int MaxFeatureRows = 100;
+
+    /// <summary>The most names the bind picker lists, those that can serve the feature first.</summary>
+    public const int MaxBindChoices = 100;
+
     private readonly ISecretsService _service;
     private readonly TimeProvider _time;
     private readonly ObservableCollection<SecretRowView> _secrets = [];
@@ -29,7 +35,8 @@ public sealed class SecretsViewModel : AreaViewModel, IDisposable
     private SecretNeedView? _binding;
     private bool _isSetOpen;
     private SetterLaunch? _launch;
-    private bool _loading;
+    private Task<bool>? _reload;
+    private string _hiddenBindChoices = "";
     private bool _reloadAgain;
     private bool _disposed;
 
@@ -90,8 +97,18 @@ public sealed class SecretsViewModel : AreaViewModel, IDisposable
     /// <summary>"2 features" / "nothing waits".</summary>
     public string NeedsNote { get; private set; } = "";
 
-    /// <summary>Every configured feature with the name it uses and whether it can.</summary>
+    /// <summary>"and 12 more features waiting, not drawn", when the cap hides some.</summary>
+    public string HiddenNeeds { get; private set; } = "";
+
+    public bool HasHiddenNeeds => HiddenNeeds.Length > 0;
+
+    /// <summary>Every configured feature with the name it uses and whether it can, at most <see cref="MaxFeatureRows"/>.</summary>
     public IReadOnlyList<ConsumerRowView> Consumers { get; private set; } = [];
+
+    /// <summary>"and 30 more features, not drawn", when the cap hides some.</summary>
+    public string HiddenConsumers { get; private set; } = "";
+
+    public bool HasHiddenConsumers => HiddenConsumers.Length > 0;
 
     /// <summary>Asks Vault again (Check again): a secret set in a terminal shows, and what waited on it is ready.</summary>
     public AsyncRelayCommand RefreshCommand { get; }
@@ -189,6 +206,19 @@ public sealed class SecretsViewModel : AreaViewModel, IDisposable
 
     public ReadOnlyObservableCollection<BindChoiceView> BindChoices { get; }
 
+    /// <summary>"and 40 more names, not listed", when the picker's cap hides some.</summary>
+    public string HiddenBindChoices
+    {
+        get => _hiddenBindChoices;
+        private set
+        {
+            if (SetProperty(ref _hiddenBindChoices, value))
+                OnPropertyChanged(nameof(HasHiddenBindChoices));
+        }
+    }
+
+    public bool HasHiddenBindChoices => _hiddenBindChoices.Length > 0;
+
     public bool IsPickerOpen => IsSetOpen || IsBindOpen;
 
     /// <summary>Esc or Cancel: closes whichever picker is open.</summary>
@@ -225,6 +255,7 @@ public sealed class SecretsViewModel : AreaViewModel, IDisposable
     {
         Binding = null;
         _bindChoices.Clear();
+        HiddenBindChoices = "";
         SetName = name;
         Launch = null;
         IsSetOpen = true;
@@ -235,6 +266,7 @@ public sealed class SecretsViewModel : AreaViewModel, IDisposable
         IsSetOpen = false;
         Binding = null;
         _bindChoices.Clear();
+        HiddenBindChoices = "";
     }
 
     // ---- loading ----
@@ -242,8 +274,9 @@ public sealed class SecretsViewModel : AreaViewModel, IDisposable
     private async Task CheckAgainAsync(CancellationToken cancellationToken)
     {
         var before = _snapshot?.Secrets.Select(s => s.Name).ToHashSet(StringComparer.Ordinal) ?? [];
-        await ReloadAsync(cancellationToken).ConfigureAwait(true);
-        if (_snapshot is not { } snapshot)
+        // A read already running is waited for (and runs once more), so the comparison is with what Vault says now. A read
+        // that failed leaves its red notice: there is nothing new to compare.
+        if (!await ReloadAsync(cancellationToken).ConfigureAwait(true) || _snapshot is not { } snapshot)
             return;
         var appeared = snapshot.Secrets.Where(s => !before.Contains(s.Name)).ToList();
         if (appeared.Count == 0)
@@ -252,56 +285,70 @@ public sealed class SecretsViewModel : AreaViewModel, IDisposable
             return;
         }
 
-        // The set the picker started is done: it closes, and the notice says what is ready now.
+        // The set the picker started is done: it closes, and the notice says what is ready now, for every new name.
         if (IsSetOpen && appeared.Any(secret => secret.Name == _setName))
             ClosePicker();
-        foreach (var secret in appeared)
+        var lines = new List<string>();
+        foreach (var secret in appeared.Take(5))
         {
             var served = snapshot.Consumers.Where(c => c.Secret == secret.Name && Need(snapshot, c).State == NeedState.Ready)
                 .Select(c => $"{SecretsText.Kind(c.Kind)} {Spans.Escape(SafeText.Clean(c.Name))}").ToList();
             var name = Spans.Escape(SafeText.Clean(secret.Name));
-            SetNotice(Spans.Parse(served.Count == 0
-                ? $"`{name}` is in Vault now. Corvid never saw its value."
-                : $"`{name}` is in Vault now: {string.Join(" and ", served)} can use it. Corvid never saw its value."), Tone.Green);
+            lines.Add(served.Count == 0
+                ? $"`{name}` is in Vault now."
+                : $"`{name}` is in Vault now: {string.Join(" and ", served)} can use it.");
         }
+
+        if (appeared.Count > 5)
+            lines.Add(string.Create(CultureInfo.InvariantCulture, $"And {appeared.Count - 5} more names."));
+        lines.Add(appeared.Count == 1 ? "Corvid never saw its value." : "Corvid never saw their values.");
+        SetNotice(Spans.Parse(string.Join(" ", lines)), Tone.Green);
     }
 
-    /// <summary>Loads the snapshot and rebuilds each list once. A change heard while a load runs loads again after it.</summary>
-    private async Task ReloadAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Loads the snapshot and rebuilds each list once; true when it applied a new snapshot, false when the read failed
+    /// (its red notice shows). A change heard while a load runs loads again after it, a failure included, and a caller
+    /// that asks meanwhile waits for that same read.
+    /// </summary>
+    private Task<bool> ReloadAsync(CancellationToken cancellationToken)
     {
-        if (_loading)
+        if (_reload is { IsCompleted: false } running)
         {
             _reloadAgain = true;
-            return;
+            return running;
         }
 
-        _loading = true;
-        try
+        _reload = LoadLoopAsync(cancellationToken);
+        return _reload;
+    }
+
+    private async Task<bool> LoadLoopAsync(CancellationToken cancellationToken)
+    {
+        var applied = false;
+        do
         {
-            do
+            _reloadAgain = false;
+            SecretsSnapshot snapshot;
+            try
             {
-                _reloadAgain = false;
-                SecretsSnapshot snapshot;
-                try
-                {
-                    snapshot = await _service.LoadAsync(cancellationToken).ConfigureAwait(true);
-                }
-                catch (Exception exception) when (Failed(exception))
-                {
-                    Fail("Vault could not be read", exception);
-                    return;
-                }
-
-                if (_disposed)
-                    return;
-                Apply(snapshot);
+                snapshot = await _service.LoadAsync(cancellationToken).ConfigureAwait(true);
             }
-            while (_reloadAgain && !_disposed);
+            catch (Exception exception) when (Failed(exception))
+            {
+                Fail("Vault could not be read", exception);
+                applied = false;
+                // A change heard during the failed read still gets its read.
+                continue;
+            }
+
+            if (_disposed)
+                return false;
+            Apply(snapshot);
+            applied = true;
         }
-        finally
-        {
-            _loading = false;
-        }
+        while (_reloadAgain && !_disposed);
+
+        return applied;
     }
 
     private void Apply(SecretsSnapshot snapshot)
@@ -337,18 +384,29 @@ public sealed class SecretsViewModel : AreaViewModel, IDisposable
 
         _needs.Clear();
         var consumers = new List<ConsumerRowView>();
+        var waiting = 0;
         foreach (var consumer in snapshot.Consumers)
         {
             var (state, refusal) = Need(snapshot, consumer);
-            consumers.Add(new ConsumerRowView(consumer, state));
-            if (state != NeedState.Ready)
+            if (consumers.Count < MaxFeatureRows)
+                consumers.Add(new ConsumerRowView(consumer, state));
+            if (state == NeedState.Ready)
+                continue;
+            waiting++;
+            if (_needs.Count < MaxFeatureRows)
                 _needs.Add(new SecretNeedView(consumer, state, refusal, StartSetForAsync, OpenBind));
         }
 
         Consumers = consumers;
+        HiddenConsumers = snapshot.Consumers.Length > MaxFeatureRows
+            ? string.Create(CultureInfo.InvariantCulture, $"and {snapshot.Consumers.Length - MaxFeatureRows} more features, not drawn")
+            : "";
+        HiddenNeeds = waiting > MaxFeatureRows
+            ? string.Create(CultureInfo.InvariantCulture, $"and {waiting - MaxFeatureRows} more features waiting, not drawn: set or bind these first")
+            : "";
         SecretsNote = string.Create(CultureInfo.InvariantCulture,
             $"{snapshot.Secrets.Length} {(snapshot.Secrets.Length == 1 ? "secret" : "secrets")}{(snapshot.Secrets.Length > MaxSecretRows ? $", first {MaxSecretRows} shown" : "")} · names only");
-        NeedsNote = _needs.Count switch
+        NeedsNote = waiting switch
         {
             0 => "nothing waits",
             1 => "1 feature",
@@ -375,6 +433,10 @@ public sealed class SecretsViewModel : AreaViewModel, IDisposable
         OnPropertyChanged(nameof(HasNeeds));
         OnPropertyChanged(nameof(HasNoNeeds));
         OnPropertyChanged(nameof(Consumers));
+        OnPropertyChanged(nameof(HiddenConsumers));
+        OnPropertyChanged(nameof(HasHiddenConsumers));
+        OnPropertyChanged(nameof(HiddenNeeds));
+        OnPropertyChanged(nameof(HasHiddenNeeds));
     }
 
     private static (NeedState State, string? Refusal) Need(SecretsSnapshot snapshot, SecretConsumer consumer)
@@ -416,10 +478,14 @@ public sealed class SecretsViewModel : AreaViewModel, IDisposable
     {
         IsSetOpen = false;
         _bindChoices.Clear();
+        HiddenBindChoices = "";
         if (_snapshot is { } snapshot)
         {
-            foreach (var secret in snapshot.Secrets.OrderBy(s => SecretBinding.Refusal(s, need.Consumer) is null ? 0 : 1).ThenBy(s => s.Name, StringComparer.Ordinal))
+            foreach (var secret in snapshot.Secrets.OrderBy(s => SecretBinding.Refusal(s, need.Consumer) is null ? 0 : 1).ThenBy(s => s.Name, StringComparer.Ordinal)
+                         .Take(MaxBindChoices))
                 _bindChoices.Add(new BindChoiceView(secret, need.Consumer, BindAsync));
+            if (snapshot.Secrets.Length > MaxBindChoices)
+                HiddenBindChoices = string.Create(CultureInfo.InvariantCulture, $"and {snapshot.Secrets.Length - MaxBindChoices} more names, not listed: those that can serve it come first");
         }
 
         Binding = need;

@@ -105,6 +105,21 @@ public sealed partial class SafetyPage : Page
     /// <summary>A rule's question opened: its "Remove the rule" takes focus, so Enter removes and Esc keeps.</summary>
     private void OnViewModelChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
+        if (e.PropertyName == nameof(SafetyViewModel.IsAskingRecordOnly))
+        {
+            // Record only… asks: its answer takes focus; closing it puts focus back on the switch.
+            var asking = ViewModel.IsAskingRecordOnly;
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (asking && ViewModel.IsAskingRecordOnly)
+                    RecordOnlyButton.Focus(FocusState.Programmatic);
+                else if (!asking && XamlRoot is { } root && FocusManager.GetFocusedElement(root) is var focused
+                         && (focused is null || ReferenceEquals(focused, RecordOnlyButton) || ReferenceEquals(focused, KeepEnforcingButton)))
+                    EnforceButton.Focus(FocusState.Programmatic);
+            });
+            return;
+        }
+
         if (e.PropertyName != nameof(SafetyViewModel.Confirming))
             return;
         if (ViewModel.Confirming is not { } row)

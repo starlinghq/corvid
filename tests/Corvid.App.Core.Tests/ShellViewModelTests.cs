@@ -27,7 +27,8 @@ public sealed class ShellViewModelTests
         // finished job) and the question waiting in cli-a410: one count on every page, where Main.png's moment drew 3.
         Assert.Equal("5", shell.AttentionText);
         Assert.Equal("Attention: 5 items waiting", shell.AttentionName);
-        Assert.Equal(["2", "", "3", "1", "", "", "", "", "1", "", "", ""], shell.NavItems.Select(item => item.BadgeText));
+        // Skills counts the demo's waiting draft from the start, before its page is visited; Main.png draws no Skills badge.
+        Assert.Equal(["2", "", "3", "1", "1", "", "", "", "1", "", "", ""], shell.NavItems.Select(item => item.BadgeText));
         Assert.Equal(["Pinned", "Recent"], shell.SessionGroups.Select(group => group.Title));
         Assert.Equal(
             ["Fix the flaky sandbox test on CI|Running|12 s", "Draft release notes for v0.2|Running|2 m", "Vault policy for ntfy|Idle|1 h", "nightly-tidy run|Job|09:00"],

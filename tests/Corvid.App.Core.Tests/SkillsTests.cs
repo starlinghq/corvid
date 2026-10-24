@@ -46,7 +46,7 @@ public sealed class SkillsTests
         Assert.Equal(["nightly-tidy-sweep", "dotnet-test-filter", "ci-flaky-triage", "release-notes"], skills.MostUsed.Select(s => s.Name));
         Assert.Equal(["python-venv-setup", "docker-compose-up"], skills.StaleSkills.Select(s => s.Name));
         Assert.Equal("idle 116 days · 2 uses · agent", skills.StaleSkills[0].Detail);
-        Assert.Equal("Archive both", skills.ArchiveAllLabel);
+        Assert.Equal("Archive both…", skills.ArchiveAllLabel);
     }
 
     [Fact]
@@ -215,8 +215,20 @@ public sealed class SkillsTests
     {
         var (skills, _, _, bar) = await Open();
 
-        await skills.ArchiveAllStaleCommand.ExecuteAsync();
+        // Archive all… asks first, naming what moves.
+        skills.ArchiveAllStaleCommand.Execute(null);
+        Assert.True(skills.IsConfirmingArchiveAll);
+        Assert.False(skills.ShowsArchiveAll);
+        Assert.Equal(2, skills.StaleSkills.Count);
+        Assert.Equal("Archive python-venv-setup and docker-compose-up? They move to .archive/; git keeps them.", skills.ArchiveAllQuestion);
+        skills.CancelArchiveAllCommand.Execute(null);
+        Assert.False(skills.IsConfirmingArchiveAll);
+        Assert.Equal(2, skills.StaleSkills.Count);
 
+        skills.ArchiveAllStaleCommand.Execute(null);
+        await skills.ConfirmArchiveAllCommand.ExecuteAsync();
+
+        Assert.False(skills.IsConfirmingArchiveAll);
         Assert.Empty(skills.StaleSkills);
         Assert.True(skills.HasNoStaleSkills);
         Assert.Equal(6, skills.Skills.Count);
@@ -415,14 +427,124 @@ public sealed class SkillsTests
     [Fact]
     public async Task OpenedFromTheCommandLineThePageTakesTheBarAtOnceAndTheCompositionDisposes()
     {
-        using var composition = new AppComposition(Options("--page", "skills"), new InlineDispatcher(), ManualTimeProvider.DemoLocal());
+        var composition = new AppComposition(Options("--page", "skills"), new InlineDispatcher(), ManualTimeProvider.DemoLocal());
+        composition.StatusBar.Engine = "in-process";
 
         var skills = composition.Skills;
         await skills.Loaded;
 
         Assert.Equal("skills", Assert.Single(composition.StatusBar.AreaFields).Label);
+        Assert.Equal("", composition.StatusBar.Engine);
         Assert.Equal(1, composition.Shell.RailItem(Area.Skills).Badge);
         Assert.Same(skills, composition.Skills);
+
+        composition.Dispose();
+
+        // The view model gave the status bar back and no longer follows the shell: showing Skills again takes nothing.
+        Assert.Empty(composition.StatusBar.AreaFields);
+        Assert.Equal("in-process", composition.StatusBar.Engine);
+        composition.Shell.Navigate(Area.Sessions);
+        composition.Shell.Navigate(Area.Skills);
+        Assert.Empty(composition.StatusBar.AreaFields);
+        Assert.Equal("in-process", composition.StatusBar.Engine);
+    }
+
+    [Fact]
+    public async Task TheBadgeCountsTheWaitingDraftFromStartUpBeforeThePageIsVisited()
+    {
+        using var composition = new AppComposition(Options("--page", "sessions"), new InlineDispatcher(), ManualTimeProvider.DemoLocal());
+
+        // composition.Skills is never touched: the service counted the draft as the composition started.
+        await WaitFor(() => composition.Shell.RailItem(Area.Skills).Badge == 1);
+        Assert.Equal(1, composition.Shell.RailItem(Area.Skills).Badge);
+    }
+
+    [Fact]
+    public async Task TheSidePanelsArchiveAsksFirstAsTheDetailPanelsDoes()
+    {
+        var (skills, _, _, _) = await Open();
+        var stale = skills.StaleSkills[0];
+
+        stale.StartArchiveCommand.Execute(null);
+        Assert.True(stale.IsConfirming);
+        Assert.False(stale.IsIdle);
+        Assert.Equal("Archive python-venv-setup? It moves to .archive/; git keeps it.", stale.ConfirmText);
+        Assert.Equal(2, skills.StaleSkills.Count);
+
+        // One question at a time: Archive all… closes the row's.
+        skills.ArchiveAllStaleCommand.Execute(null);
+        Assert.False(stale.IsConfirming);
+        stale.StartArchiveCommand.Execute(null);
+        Assert.False(skills.IsConfirmingArchiveAll);
+        stale.CancelArchiveCommand.Execute(null);
+        Assert.False(stale.IsConfirming);
+        Assert.Equal(2, skills.StaleSkills.Count);
+
+        stale.StartArchiveCommand.Execute(null);
+        await stale.ArchiveCommand.ExecuteAsync();
+
+        Assert.Equal(["docker-compose-up"], skills.StaleSkills.Select(s => s.Name));
+        Assert.Equal("Archived python-venv-setup to .archive/; git keeps it.", skills.Outcome);
+    }
+
+    [Fact]
+    public async Task ImportFieldsHoldingHiddenCharactersAreShownAndNeitherScannedNorImported()
+    {
+        var (skills, service, _, _) = await Open();
+        skills.ImportKinds[1].Choose.Execute(null);
+        skills.ImportFolder = "~/skills";
+        Assert.True(skills.ScanCommand.CanExecute(null));
+
+        // The hub name becomes the author written into git.
+        skills.ImportSource = "te​am";
+        Assert.False(skills.ScanCommand.CanExecute(null));
+        Assert.Equal("The hub name holds hidden characters: “te⟨U+200B⟩am”. Delete them to run the dry run.", skills.ImportProblem);
+        await skills.ScanCommand.ExecuteAsync();
+        Assert.False(skills.HasScan);
+
+        skills.ImportSource = "team";
+        skills.ImportFolder = "~/ski‮lls";
+        Assert.False(skills.ScanCommand.CanExecute(null));
+        Assert.StartsWith("The folder holds hidden characters: “~/ski⟨U+202E⟩lls”.", skills.ImportProblem, StringComparison.Ordinal);
+
+        // The demo store refuses them too.
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.ScanImportAsync(SkillImportKind.Folder, "~/skills", "te​am", TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.ImportAsync(new ImportScan(SkillImportKind.Folder, "~/skills", "hub:te​am", []), [], TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task ChangingTheFolderOrTheSourceAfterADryRunDropsIt()
+    {
+        var (skills, _, _, _) = await Open();
+        skills.ImportKinds[1].Choose.Execute(null);
+        skills.ImportFolder = "~/skills";
+        skills.ImportSource = "team";
+        await skills.ScanCommand.ExecuteAsync();
+        Assert.True(skills.HasScan);
+        Assert.True(skills.ImportCommand.CanExecute(null));
+
+        skills.ImportSource = "other";
+        Assert.False(skills.HasScan);
+        Assert.False(skills.ImportCommand.CanExecute(null));
+
+        await skills.ScanCommand.ExecuteAsync();
+        Assert.Equal("1 would be imported as hub:other, 0 refused. Nothing is imported yet.", skills.ScanSummary);
+        skills.ImportFolder = "~/elsewhere";
+        Assert.False(skills.HasScan);
+    }
+
+    [Fact]
+    public async Task TheDemoStoreRefusesAnEditNamingAnotherSkillAndAHiddenReason()
+    {
+        var (_, service, _, _) = await Open();
+        var draft = (await service.LoadAsync(TestContext.Current.CancellationToken)).Drafts[0];
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ApproveDraftAsync(draft.Id,
+            draft.Content.Replace("name: vault-service-policy", "name: release-notes", StringComparison.Ordinal), TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<ArgumentException>(() => service.RejectDraftAsync(draft.Id, "no‮", TestContext.Current.CancellationToken));
+        Assert.Single((await service.LoadAsync(TestContext.Current.CancellationToken)).Drafts);
     }
 
     private static AppOptions Options(params string[] args)

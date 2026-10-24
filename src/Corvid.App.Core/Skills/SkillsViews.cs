@@ -440,18 +440,60 @@ public sealed class ImportCandidateView(ImportCandidate candidate)
     public string AutomationName => $"{Name}, {Verdict}" + (HasFindings ? ": " + string.Join("; ", Findings) : "");
 }
 
-/// <summary>A stale skill in the Review tab's side panel, with its own Archive.</summary>
-public sealed class StaleSkillView(SkillRowView row, AsyncRelayCommand archive, RelayCommand open)
+/// <summary>
+/// A stale skill in the Review tab's side panel, with its own Archive…, which asks first as the open skill's does: archiving
+/// takes the skill out of the library.
+/// </summary>
+public sealed class StaleSkillView : ObservableObject
 {
-    public SkillRowView Row { get; } = row;
+    private readonly Action<StaleSkillView> _confirming;
+    private bool _isConfirming;
+
+    internal StaleSkillView(SkillRowView row, Func<CancellationToken, Task> archive, Action<StaleSkillView> confirming, RelayCommand open)
+    {
+        Row = row;
+        _confirming = confirming;
+        StartArchiveCommand = new RelayCommand(() => IsConfirming = true);
+        ArchiveCommand = new AsyncRelayCommand(archive);
+        CancelArchiveCommand = new RelayCommand(() => IsConfirming = false);
+        OpenCommand = open;
+    }
+
+    public SkillRowView Row { get; }
 
     public string Name => Row.Name;
 
     public string Detail => $"idle {Row.IdleDays} days · {SkillsText.Uses(Row.Record.Uses)} · {Row.Author}";
 
-    public AsyncRelayCommand ArchiveCommand { get; } = archive;
+    /// <summary>Archive… was pressed: the row asks before it archives.</summary>
+    public bool IsConfirming
+    {
+        get => _isConfirming;
+        set
+        {
+            if (!SetProperty(ref _isConfirming, value))
+                return;
+            OnPropertyChanged(nameof(IsIdle));
+            if (value)
+                _confirming(this);
+        }
+    }
 
-    public RelayCommand OpenCommand { get; } = open;
+    public bool IsIdle => !_isConfirming;
+
+    /// <summary>"Archive python-venv-setup? It moves to .archive/; git keeps it."</summary>
+    public string ConfirmText => $"Archive {Name}? It moves to .archive/; git keeps it.";
+
+    /// <summary>Archive…: asks.</summary>
+    public RelayCommand StartArchiveCommand { get; }
+
+    /// <summary>The question's Archive.</summary>
+    public AsyncRelayCommand ArchiveCommand { get; }
+
+    /// <summary>The question's Back.</summary>
+    public RelayCommand CancelArchiveCommand { get; }
+
+    public RelayCommand OpenCommand { get; }
 
     public string AutomationName => $"{Name}, {Detail}";
 }

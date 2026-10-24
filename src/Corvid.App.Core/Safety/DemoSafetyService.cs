@@ -9,15 +9,30 @@ namespace Corvid.App.Core.Safety;
 /// (<c>DemoAuditService</c>). Session rules, taint and detection rows are read from the sessions themselves, through
 /// <see cref="ISessionWatcher"/>: a rule the approval card writes ("this session" or "always") is listed here as soon as
 /// the session reports it, with the approval and turn that wrote it. Beside them are two always rules already in
-/// corvid.json, the built-in detection pack with its one match so far (<c>secret-read-then-egress</c> in cli-9f2e, events
-/// 1182 and 1189, which forced an ask that was denied), and the hardline list. Nothing is written anywhere: a removal or a
-/// switch changes this object only.
+/// corvid.json, the built-in detection pack with its one match so far (<c>credential-read-then-egress</c> v3 in cli-9f2e,
+/// events 1182 and 1189, which forced an ask that was denied), and the hardline list. Nothing is written anywhere: a
+/// removal or a switch changes this object only.
+/// <para>
+/// The match is the one Audit's demo logs as event 1190, and Safety's Open in Audit lands on it, so the pack names that
+/// rule as Audit's demo does (<c>credential-read-then-egress</c> v3). The real pack calls it <c>secret-read-then-egress</c>
+/// v1 (<see cref="SafetyCatalog"/>); when Corvid.App.Engine reads the pack and the log (A3), both pages take the engine's
+/// name and this renaming goes.
+/// </para>
 /// </summary>
 public sealed class DemoSafetyService : ISafetyService, IDisposable
 {
     public const string BuildRuleId = "config:dotnet-build";
     public const string GhRuleId = "config:gh-pr-list";
     public const string ForcePushRuleId = "config:git-push-force";
+
+    /// <summary>The demo's one detection match's rule, named as Audit's demo names it.</summary>
+    public const string EgressRuleId = "credential-read-then-egress";
+
+    /// <summary>The built-in pack as the demo shows it: the engine's rules, with the egress rule named as Audit's demo does.</summary>
+    private static readonly ImmutableArray<DetectionRule> DemoRules =
+    [
+        .. SafetyCatalog.BuiltInRules.Select(rule => rule.Id == "secret-read-then-egress" ? rule with { Id = EgressRuleId, Version = 3 } : rule),
+    ];
 
     private readonly TimeProvider _time;
     private readonly ISessionService? _sessions;
@@ -57,7 +72,7 @@ public sealed class DemoSafetyService : ISafetyService, IDisposable
         ];
         _seededDetections =
         [
-            new SafetyDetection("secret-read-then-egress", DetectionSeverity.High, DemoSessionService.MainSessionId, Day(0, 14, 3, 49), 1190, [1182, 1189])
+            new SafetyDetection(EgressRuleId, DetectionSeverity.High, DemoSessionService.MainSessionId, Day(0, 14, 3, 49), 1190, [1182, 1189])
             {
                 Enforced = true,
                 Outcome = "forced an ask · denied",
@@ -102,7 +117,7 @@ public sealed class DemoSafetyService : ISafetyService, IDisposable
             await StartAsync(cancellationToken).ConfigureAwait(true);
         var rules = _configRules.Concat(_sessionRules).Where(rule => !_removed.Contains(rule.Id)).ToImmutableArray();
         var enforce = _enforce[SafetyCatalog.BuiltInPack];
-        var packs = ImmutableArray.Create(new DetectionPack(SafetyCatalog.BuiltInPack, enforce, SafetyCatalog.BuiltInRules));
+        var packs = ImmutableArray.Create(new DetectionPack(SafetyCatalog.BuiltInPack, enforce, DemoRules));
         return new SafetySnapshot(rules, packs, Detections(), SafetyCatalog.Hardline, Taint());
     }
 

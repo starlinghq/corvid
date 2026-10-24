@@ -231,6 +231,170 @@ public sealed class SkillsReviewTests
     }
 
     [Fact]
+    public async Task AnEditWithTheTextBoxsBareCarriageReturnsIsApprovableAndWrittenWithLineFeeds()
+    {
+        var service = new ScriptedSkillsService();
+        service.Drafts.Add(Draft("d-6", "tidy", "---\nname: tidy\n---\n\nbody\n"));
+        var skills = await Open(service);
+        var draft = skills.Drafts[0];
+
+        // A text box hands back "\r" where Enter was pressed: neither a hidden character nor, untouched, a change.
+        draft.EditCommand.Execute(null);
+        draft.EditText = draft.Source.Replace("\n", "\r", StringComparison.Ordinal);
+        Assert.False(draft.HasEditProblem);
+        Assert.True(draft.ApproveCommand.CanExecute(null));
+        draft.EditText = draft.Source.Replace("\n", "\r\n", StringComparison.Ordinal) + "\r\rone more line";
+        Assert.False(draft.HasEditProblem);
+        Assert.True(draft.ApproveCommand.CanExecute(null));
+
+        await draft.ApproveCommand.ExecuteAsync();
+
+        var (_, written) = Assert.Single(service.Approved);
+        Assert.Equal("---\nname: tidy\n---\n\nbody\n\none more line\n", written);
+    }
+
+    [Fact]
+    public async Task AnEditorLeftAsItWasWithCarriageReturnsApprovesTheDraftAsStaged()
+    {
+        var service = new ScriptedSkillsService();
+        service.Drafts.Add(Draft("d-7", "tidy", "---\nname: tidy\n---\n\nbody\n"));
+        var skills = await Open(service);
+        var draft = skills.Drafts[0];
+
+        draft.EditCommand.Execute(null);
+        draft.EditText = draft.Source.Replace("\n", "\r", StringComparison.Ordinal);
+        await draft.ApproveCommand.ExecuteAsync();
+
+        // Unchanged: no edited content goes to the store, so it is written as the agent's.
+        var (_, written) = Assert.Single(service.Approved);
+        Assert.Equal("---\nname: tidy\n---\n\nbody\n", written);
+        Assert.Contains("as agent", skills.Outcome, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AnEditCannotPointTheDraftAtAnotherSkill()
+    {
+        var service = new ScriptedSkillsService();
+        service.Drafts.Add(Draft("d-8", "tidy", "---\nname: tidy\n---\n\nbody\n"));
+        var skills = await Open(service);
+        var draft = skills.Drafts[0];
+
+        draft.EditCommand.Execute(null);
+        draft.EditText = draft.Source.Replace("name: tidy", "name: release-notes", StringComparison.Ordinal);
+        Assert.False(draft.ApproveCommand.CanExecute(null));
+        Assert.Equal("The frontmatter's name: is “release-notes”, but this draft writes tidy. Put the name back, or reject the draft.", draft.EditProblem);
+        draft.EditText = draft.Source.Replace("name: tidy\n", "", StringComparison.Ordinal);
+        Assert.False(draft.ApproveCommand.CanExecute(null));
+        Assert.Equal("The frontmatter must keep name: tidy; this draft writes that skill.", draft.EditProblem);
+        draft.EditText = draft.Source + "\nmore";
+        Assert.True(draft.ApproveCommand.CanExecute(null));
+        // A quoted name is the same name, as the engine's frontmatter parser reads it.
+        draft.EditText = draft.Source.Replace("name: tidy", "name: \"tidy\"", StringComparison.Ordinal);
+        Assert.True(draft.ApproveCommand.CanExecute(null));
+        Assert.Equal("tidy", SkillsText.Name("---\nname: 'tidy'\n---\n"));
+    }
+
+    [Fact]
+    public async Task CodesAndControlPicturesAreRefusedOnlyWhereTheDraftHidCharacters()
+    {
+        // A draft with nothing hidden may say "⟨U+202E⟩" or "␛" in its own words.
+        var plain = new ScriptedSkillsService();
+        plain.Drafts.Add(Draft("d-9", "tidy", "---\nname: tidy\n---\n\nbody\n"));
+        var clean = (await Open(plain)).Drafts[0];
+        clean.EditCommand.Execute(null);
+        clean.EditText = clean.Source + "\nThe mark ⟨U+202E⟩ is a right-to-left override; ␛ is the escape key's picture.";
+        Assert.False(clean.HasEditProblem);
+        Assert.True(clean.ApproveCommand.CanExecute(null));
+
+        // A draft that hid an escape opens with its picture, which stays refused until deleted.
+        var hiding = new ScriptedSkillsService();
+        hiding.Drafts.Add(Draft("d-10", "tidy", "---\nname: tidy\n---\n\nbody\u001B[2J done\n"));
+        var draft = (await Open(hiding)).Drafts[0];
+        Assert.Contains("body␛[2J done", draft.Source, StringComparison.Ordinal);
+        Assert.True(draft.HasHiddenText);
+        draft.EditCommand.Execute(null);
+        Assert.True(draft.HasEditProblem);
+        Assert.False(draft.ApproveCommand.CanExecute(null));
+        draft.EditText = draft.EditText.Replace("␛[2J", "", StringComparison.Ordinal);
+        Assert.False(draft.HasEditProblem);
+        Assert.True(draft.ApproveCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task JoinersStayAsTheDiffShowsThemAndDoNotBlockApproval()
+    {
+        var service = new ScriptedSkillsService();
+        // An emoji family (joined by U+200D) and a Persian word with a non-joiner (U+200C): ordinary text.
+        var content = "---\nname: tidy\n---\n\nSay \U0001F468‍\U0001F469‍\U0001F467 and می‌خواهم.\n";
+        service.Drafts.Add(Draft("d-11", "tidy", content));
+        var skills = await Open(service);
+        var draft = skills.Drafts[0];
+
+        Assert.Equal(content.TrimEnd('\n'), draft.Source);
+        Assert.False(draft.HasHiddenText);
+        Assert.True(draft.ApproveCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task AReasonHoldingHiddenCharactersIsShownAndNotStored()
+    {
+        var service = new ScriptedSkillsService();
+        service.Drafts.Add(Draft("d-12", "tidy", "---\nname: tidy\n---\n\nbody\n"));
+        var skills = await Open(service);
+        var draft = skills.Drafts[0];
+
+        draft.StartRejectingCommand.Execute(null);
+        draft.Reason = $"not{Override} needed";
+        Assert.False(draft.ConfirmRejectCommand.CanExecute(null));
+        Assert.Equal("The reason holds hidden characters: “not⟨U+202E⟩ needed”. Delete them to reject.", draft.ReasonProblem);
+        await draft.ConfirmRejectCommand.ExecuteAsync();
+        Assert.Single(skills.Drafts);
+
+        draft.Reason = "not needed";
+        Assert.False(draft.HasReasonProblem);
+        await draft.ConfirmRejectCommand.ExecuteAsync();
+        Assert.Empty(skills.Drafts);
+    }
+
+    [Fact]
+    public async Task DraftsPastTheCapWaitAndTakeTheirTurn()
+    {
+        var service = new ScriptedSkillsService();
+        for (var i = 0; i < SkillsViewModel.DraftCap + 2; i++)
+            service.Drafts.Add(Draft($"d-{i}", $"skill-{i:00}", $"---\nname: skill-{i:00}\n---\n\nbody\n"));
+        var skills = await Open(service);
+
+        Assert.Equal(SkillsViewModel.DraftCap, skills.Drafts.Count);
+        Assert.Equal("2 more drafts wait: each shows here as one above is answered.", skills.MoreDraftsText);
+        Assert.Equal((SkillsViewModel.DraftCap + 2).ToString(System.Globalization.CultureInfo.InvariantCulture), skills.Tabs[(int)SkillsTabKind.Review].BadgeText);
+
+        await skills.Drafts[0].ApproveCommand.ExecuteAsync();
+
+        Assert.Equal(SkillsViewModel.DraftCap, skills.Drafts.Count);
+        Assert.Equal("skill-20", skills.Drafts[^1].Draft.Skill);
+        Assert.Equal("1 more draft waits: it shows here once one above is answered.", skills.MoreDraftsText);
+    }
+
+    [Fact]
+    public async Task TheDryRunDrawsAtMostItsCapAndImportsOnlyWhatItDrew()
+    {
+        var service = new ScriptedSkillsService
+        {
+            Scan = new ImportScan(SkillImportKind.Hermes, "~/.hermes/skills", "hub:hermes",
+                [.. Enumerable.Range(0, SkillsViewModel.CandidateCap + 3).Select(i => new ImportCandidate($"h-{i}", $"s-{i}", $"s-{i}", "ok", []))]),
+        };
+        var skills = await Open(service);
+
+        await skills.ScanCommand.ExecuteAsync();
+
+        Assert.Equal(SkillsViewModel.CandidateCap, skills.Candidates.Count);
+        Assert.Equal("3 more found, not drawn and not imported: import these, then run the dry run again.", skills.MoreCandidatesText);
+        await skills.ImportCommand.ExecuteAsync();
+        Assert.Equal(SkillsViewModel.CandidateCap, service.ImportedIds.Count);
+        Assert.False(skills.HasMoreCandidates);
+    }
+
+    [Fact]
     public void TheBodyOfASkillLeavesItsFrontmatterOut()
     {
         Assert.Equal("# Title\n\ntext\n", SkillsText.Body("---\nname: a\ndescription: b\n---\n\n# Title\n\ntext\n"));
