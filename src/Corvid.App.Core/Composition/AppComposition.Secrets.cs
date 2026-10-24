@@ -4,8 +4,21 @@ namespace Corvid.App.Core.Composition;
 
 public sealed partial class AppComposition
 {
+    private ISecretsService? _secretsService;
     private SecretsViewModel? _secrets;
 
-    /// <summary>The Secrets area: what Vault says about its secrets.</summary>
-    public SecretsViewModel Secrets => _secrets ??= new SecretsViewModel();
+    /// <summary>
+    /// What Vault will say about its secrets, and the features configured to use them. Demo mode (the only mode until
+    /// Corvid.App.Engine exists) starts nothing and writes nothing.
+    /// </summary>
+    public ISecretsService SecretsService => _secretsService ??= new DemoSecretsService(Time);
+
+    /// <summary>The Secrets area: names, policy and what waits on which name. Never a value.</summary>
+    public SecretsViewModel Secrets => _secrets ??= new SecretsViewModel(SecretsService, Time);
+
+    private void DisposeSecrets()
+    {
+        _secrets?.Dispose();
+        (_secretsService as IDisposable)?.Dispose();
+    }
 }

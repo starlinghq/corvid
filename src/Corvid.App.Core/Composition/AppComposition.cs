@@ -60,6 +60,8 @@ public sealed partial class AppComposition : IDisposable
     public void Dispose()
     {
         _board?.Dispose();
+        DisposeSafety();
+        DisposeSecrets();
         (_modelService as IDisposable)?.Dispose();
         SessionHub.Dispose();
         (SessionService as IDisposable)?.Dispose();
