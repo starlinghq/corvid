@@ -371,8 +371,10 @@ public sealed class SecretsViewModel : AreaViewModel, IDisposable
             ];
         AuditFacts =
         [
-            new ModelFact("today", Spans.Parse(string.Create(CultureInfo.InvariantCulture,
-                $"{vault.UsesToday} uses · {vault.AskedToday} asked · {vault.ConfirmedToday} confirmed out of band · {vault.RefusedToday} refused"))),
+            vault.AuditSummary is { } summary
+                ? new ModelFact("audit", Spans.Parse(Spans.Escape(SafeText.Clean(summary))))
+                : new ModelFact("today", Spans.Parse(string.Create(CultureInfo.InvariantCulture,
+                    $"{vault.UsesToday} uses · {vault.AskedToday} asked · {vault.ConfirmedToday} confirmed out of band · {vault.RefusedToday} refused"))),
             new ModelFact("confirm", Spans.Parse(vault.PendingConfirm is { Length: > 0 } pending
                 ? $"Vault is asking you now: {Spans.Escape(SafeText.Clean(pending))}"
                 : "none pending · Vault shows its own dialog; Corvid cannot answer it")),
