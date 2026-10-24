@@ -74,7 +74,8 @@ public sealed class SeamTests
 
         var sessions = Assert.IsType<EngineSessionService>(composition.SessionService);
         Assert.Empty(await sessions.ListAsync(TestContext.Current.CancellationToken));
-        Assert.Null(source.Inner.CreateMemoryStatus(composition));
+        // The runtime is up, so the Memory page's engine line is the runtime's.
+        Assert.StartsWith("fake-gen", source.Inner.CreateMemoryStatus(composition)!.Generator, StringComparison.Ordinal);
 
         // Every other area opens on a refusal that names the group that brings it.
         (object Service, string Group)[] areas =

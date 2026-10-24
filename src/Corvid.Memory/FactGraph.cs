@@ -200,6 +200,32 @@ public sealed class FactGraph
         return ReadFacts(connection, command);
     }
 
+    /// <summary>
+    /// The facts most recently recorded or ended first, current and ended alike (an ended fact is kept for history): what a
+    /// reviewer browses. At most <paramref name="limit"/>.
+    /// </summary>
+    public IReadOnlyList<Fact> Recent(int limit = 200)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+        using var connection = _database.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            SELECT {FactColumns} FROM facts f
+            ORDER BY max(f.recorded_at, coalesce(f.invalidated_at, f.recorded_at)) DESC, f.id DESC LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$limit", limit);
+        return ReadFacts(connection, command);
+    }
+
+    /// <summary>How many facts hold now (not ended).</summary>
+    public int CountCurrent()
+    {
+        using var connection = _database.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT count(*) FROM facts WHERE valid_to IS NULL;";
+        return Convert.ToInt32(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
     /// <summary>Full-text search over current facts, ranked by BM25 (LIKE for short terms only, as in <see cref="EpisodicIndex"/>).</summary>
     public IReadOnlyList<FactHit> Search(string query, int limit = 20)
     {
