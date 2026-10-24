@@ -11,5 +11,9 @@
     <Compile Include="../Corvid.Host.Tests/Fakes.cs" Link="Fakes.cs" />
     <!-- The app core tests' manual clock, so no timer of the composition fires on its own. -->
     <Compile Include="../Corvid.App.Core.Tests/ManualTimeProvider.cs" Link="ManualTimeProvider.cs" />
+    <!-- A3 ops: the in-process MCP server (C-018) and the stand-in Vault on a Unix socket, as the host tests use them. -->
+    <Compile Include="../Corvid.Mcp.Tests/FakeMcpServer.cs" Link="FakeMcpServer.cs" />
+    <Compile Include="../Corvid.Models.Remote.Tests/Infrastructure.cs" Link="FakeVault.cs" />
+    <Compile Include="../Shared/ShortTemp.cs" Link="ShortTemp.cs" />
   </ItemGroup>
 </Project>

@@ -102,6 +102,26 @@ public sealed class CorvidConfigWriter(CorvidConfigFile file, IConfiguration con
         }
     }
 
+    /// <summary>
+    /// The configuration the next start would read: this process's sources in their order, with <c>corvid.json</c> as it is
+    /// on disk now (an environment variable or <c>--set</c> value still wins). The runtime never reloads, so a page that
+    /// shows a setting a person changed (an MCP server's trust, a server added) reads what is pending here, beside what the
+    /// running process has.
+    /// </summary>
+    /// <exception cref="IOException">The file cannot be read.</exception>
+    public IConfiguration NextStart()
+    {
+        Gate.Wait();
+        try
+        {
+            return Candidate(File.Exists(file.Path) ? File.ReadAllText(file.Path) : "{}");
+        }
+        finally
+        {
+            Gate.Release();
+        }
+    }
+
     private ConfigWriteResult Apply(IReadOnlyList<ConfigEdit> edits, bool write)
     {
         ArgumentNullException.ThrowIfNull(edits);

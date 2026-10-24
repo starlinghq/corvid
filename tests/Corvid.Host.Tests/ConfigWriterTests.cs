@@ -105,6 +105,24 @@ public sealed class ConfigWriterTests
         Assert.Empty(again.RestartKeys);
     }
 
+    /// <summary>A3 ops: what a written key changes is read as the next start would see it, the run's overrides still on top.</summary>
+    [Fact]
+    public async Task TheNextStartReadsTheFileAsWrittenUnderThisRunsOverrides()
+    {
+        await using var host = TestHost.Create();
+        var writer = Writer(host);
+        Assert.Null(writer.NextStart()["Corvid:Mcp:Servers:notes:Trust"]);
+
+        Assert.True(writer.Apply(ConfigEdit.Set("Corvid:Mcp:Servers:notes:Command", "notes-mcp"),
+            ConfigEdit.Set("Corvid:Mcp:Servers:notes:Trust", "Trusted"), ConfigEdit.Set("Corvid:Workspace", host.Root)).Written);
+
+        var next = writer.NextStart();
+        Assert.Equal("Trusted", next["Corvid:Mcp:Servers:notes:Trust"]);
+        // The run's own configuration never reloads, and an override still wins over the file.
+        Assert.Null(host.Services.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>()["Corvid:Mcp:Servers:notes:Trust"]);
+        Assert.Equal(Path.Combine(host.Root, "work"), next["Corvid:Workspace"]);
+    }
+
     [Fact]
     public async Task AKeyThisRunOverridesIsWrittenAndSaidToBeShadowed()
     {

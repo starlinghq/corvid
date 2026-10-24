@@ -28,12 +28,14 @@ internal sealed class OpsFixture : IAsyncDisposable
 
     public ManualTimeProvider Time { get; } = ManualTimeProvider.Demo();
 
+    /// <param name="before">Runs on the built host before its runtime starts: state an earlier start left (MCP pins).</param>
     public static async Task<OpsFixture> StartAsync(IReadOnlyDictionary<string, string?>? settings = null, Action<IServiceCollection>? services = null,
-        FakeModels? models = null)
+        FakeModels? models = null, Action<TestHost>? before = null)
     {
         var host = TestHost.Create(models, settings, services);
         try
         {
+            before?.Invoke(host);
             return new OpsFixture(host, await host.StartAsync());
         }
         catch
