@@ -124,13 +124,13 @@
                           <controls:WrapRowPanel Spacing="8" LineSpacing="8" Margin="28,0,0,0" Visibility="{x:Bind ui:Ui.CollapsedIf(IsConfirmingOwner), Mode=OneWay}">
                             <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Primary" Content="Pair as guest" Command="{x:Bind GuestCommand}"
                                                    AutomationProperties.Name="{x:Bind GuestName}"
-                                                   ToolTipService.ToolTip="A guest talks to Corvid with no tools until you widen its allowlist" />
+                                                   AutomationProperties.HelpText="A guest talks to Corvid with no tools until you widen its allowlist" />
                             <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Content="Pair as owner…" Command="{x:Bind AskOwnerCommand}" Click="OnAskOwnerClick"
                                                    AutomationProperties.Name="{x:Bind OwnerName}"
-                                                   ToolTipService.ToolTip="An owner answers approvals from the chat. Asks first." />
+                                                   AutomationProperties.HelpText="An owner answers approvals from the chat. Asks first." />
                             <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Ignore" Foreground="{ThemeResource CorvidRed}"
                                                    Command="{x:Bind IgnoreCommand}" AutomationProperties.Name="{x:Bind IgnoreName}"
-                                                   ToolTipService.ToolTip="Drop the code; the sender stays unpaired" />
+                                                   AutomationProperties.HelpText="Drop the code; the sender stays unpaired" />
                           </controls:WrapRowPanel>
                           <controls:ToneRow Tone="Amber" Margin="28,0,0,0" Visibility="{x:Bind ui:Ui.VisibleIf(IsConfirmingOwner), Mode=OneWay}">
                             <StackPanel Spacing="8">
@@ -201,10 +201,10 @@
                               <StackPanel Grid.Column="4" Margin="0,6,10,6" Orientation="Horizontal" Spacing="6" VerticalAlignment="Top" HorizontalAlignment="Right">
                                 <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Content="Widen…" Command="{x:Bind EditCommand}"
                                                        Visibility="{x:Bind ui:Ui.VisibleIf(IsGuest)}" AutomationProperties.Name="{x:Bind EditName}"
-                                                       ToolTipService.ToolTip="Choose the tools this guest may use" />
+                                                       AutomationProperties.HelpText="Choose the tools this guest may use" />
                                 <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Revoke…" Foreground="{ThemeResource CorvidRed}"
                                                        Command="{x:Bind AskRevokeCommand}" AutomationProperties.Name="{x:Bind RevokeName}"
-                                                       ToolTipService.ToolTip="Unpair: their next message gets a new code. Asks first." />
+                                                       AutomationProperties.HelpText="Unpair: their next message gets a new code. Asks first." />
                               </StackPanel>
                             </Grid>
                             <!-- The allowlist editor, under its row. -->
@@ -219,12 +219,16 @@
                                 </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                   <DataTemplate x:DataType="gateway:GuestToolChoice">
-                                    <CheckBox Style="{StaticResource SetupCheckBox}" IsChecked="{x:Bind IsChecked, Mode=TwoWay}" AutomationProperties.Name="{x:Bind Name}">
+                                    <CheckBox Style="{StaticResource SetupCheckBox}" IsChecked="{x:Bind IsChecked, Mode=TwoWay}" AutomationProperties.Name="{x:Bind Name}"
+                                              IsEnabled="{x:Bind CanToggle, Mode=OneWay}">
                                       <TextBlock Text="{x:Bind Name}" Style="{StaticResource CellMono}" />
                                     </CheckBox>
                                   </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                               </ItemsControl>
+                              <controls:ToneRow Tone="Red" Visibility="{x:Bind ui:Ui.VisibleIf(HasHiddenChoice), Mode=OneWay}">
+                                <TextBlock Text="{x:Bind HiddenWarning, Mode=OneWay}" TextWrapping="Wrap" LineHeight="18.125" LineStackingStrategy="BlockLineHeight" />
+                              </controls:ToneRow>
                               <StackPanel Orientation="Horizontal" Spacing="8">
                                 <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Primary" Content="Save allowlist" Command="{x:Bind SaveCommand}" />
                                 <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Cancel" Command="{x:Bind CancelEditCommand}" />

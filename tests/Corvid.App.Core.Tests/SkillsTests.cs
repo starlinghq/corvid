@@ -398,7 +398,9 @@ public sealed class SkillsTests
 
         shell.Navigate(Area.Skills);
         Assert.Equal(new StatusField("skills", "8 · 1 draft · 2 idle"), Assert.Single(bar.AreaFields));
-        Assert.Equal("", bar.Context);
+        // The session's context and id stay, as on the other pages of the group.
+        Assert.Equal("38%", bar.Context);
+        Assert.Equal("cli-9f2e", bar.SessionId);
         Assert.Equal("idle", bar.Trailing);
 
         await skills.Drafts[0].ApproveCommand.ExecuteAsync();

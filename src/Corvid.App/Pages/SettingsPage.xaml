@@ -137,7 +137,7 @@
     <!-- .page-head: the title, the file, then the tabs; wraps when narrow. -->
     <Border x:Name="Head" Style="{StaticResource CorvidPageHead}" MinHeight="53">
       <controls:WrapRowPanel Spacing="12" LineSpacing="8" VerticalAlignment="Center">
-        <TextBlock Text="{x:Bind ViewModel.Title}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
+        <TextBlock x:Name="PageTitle" Text="{x:Bind ViewModel.Title}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
                    AutomationProperties.HeadingLevel="Level1" />
         <TextBlock Text="{x:Bind ViewModel.Subtitle, Mode=OneWay}" Style="{StaticResource CorvidMutedText}" FontFamily="{StaticResource CorvidMono}" TextWrapping="Wrap"
                    FontSize="12" VerticalAlignment="Center" IsTextSelectionEnabled="True" />

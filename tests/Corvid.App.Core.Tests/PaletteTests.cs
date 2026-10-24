@@ -15,7 +15,7 @@ namespace Corvid.App.Core.Tests;
 /// </summary>
 public sealed class PaletteTests
 {
-    private const string Override = "‮";
+    private const string Override = "\u202E";
     private const string Tag = "\U000E0041";
 
     private static AppComposition Compose(params string[] args)

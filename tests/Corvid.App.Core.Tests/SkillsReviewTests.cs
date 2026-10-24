@@ -9,7 +9,7 @@ namespace Corvid.App.Core.Tests;
 public sealed class SkillsReviewTests
 {
     private const string Tag = "\U000E0041";
-    private const string Override = "‮";
+    private const string Override = "\u202E";
 
     private static readonly DateTimeOffset At = new(2026, 10, 24, 13, 41, 0, TimeSpan.Zero);
 

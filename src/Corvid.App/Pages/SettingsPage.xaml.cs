@@ -57,6 +57,8 @@ public sealed partial class SettingsPage : Page
     private void Arrange()
     {
         var phone = ActualWidth > 0 && ActualWidth < PhoneWidth;
+        // The phone's top bar names the page already.
+        PageTitle.Visibility = phone ? Visibility.Collapsed : Visibility.Visible;
         Body.Padding = phone ? new Thickness(14, 14, 14, 18) : new Thickness(24, 18, 24, 24);
         Head.Padding = phone ? new Thickness(14, 12, 14, 12) : new Thickness(24, 12, 24, 12);
         SaveBar.Padding = phone ? new Thickness(14, 8, 14, 8) : new Thickness(24, 8, 24, 8);

@@ -16,7 +16,7 @@ public sealed class DemoGatewayService : IGatewayService, IDisposable
 {
     public const string DanaRequestId = "pr-telegram-abcd";
 
-    private static readonly string[] GuestToolNames = ["memory_search", "session_list", "web_fetch", "read_file", "notes__read"];
+    private readonly List<string> _guestTools = ["memory_search", "session_list", "web_fetch", "read_file", "notes__read"];
 
     private readonly TimeProvider _time;
     private readonly IBoardService? _board;
@@ -48,18 +48,22 @@ public sealed class DemoGatewayService : IGatewayService, IDisposable
     public Task<GatewaySnapshot> LoadAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(new GatewaySnapshot(_host, [.. _adapters], [.. _requests], [.. _users], [.. _deliveries], [.. _overrides], GuestToolNames));
+        return Task.FromResult(new GatewaySnapshot(_host, [.. _adapters], [.. _requests], [.. _users], [.. _deliveries], [.. _overrides], [.. _guestTools]));
     }
 
     public async Task<PairedUser> PairAsync(string requestId, PairingRole role, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var request = Request(requestId);
-        if (SafeText.HasHidden(request.Handle))
-            throw new InvalidOperationException("The handle holds hidden characters; it cannot be paired. Ignore the request.");
-        var user = Pair(request, role);
+        var user = Pair(Request(requestId), role);
         if (_board is not null && requestId == DanaRequestId)
-            await _board.ResolveAsync(DemoBoardService.PairingItemId, role == PairingRole.Owner ? "owner" : "guest", cancellationToken).ConfigureAwait(true);
+        {
+            // The tray only leads to the owner question, so an owner answered here is told to the Board directly.
+            if (role == PairingRole.Owner && _board is DemoBoardService demo)
+                demo.AnsweredInArea(DemoBoardService.PairingItemId, "owner");
+            else
+                await _board.ResolveAsync(DemoBoardService.PairingItemId, "guest", cancellationToken).ConfigureAwait(true);
+        }
+
         return user;
     }
 
@@ -92,9 +96,11 @@ public sealed class DemoGatewayService : IGatewayService, IDisposable
             throw new InvalidOperationException($"There is no paired user {userId}.");
         if (_users[index].Role != PairingRole.Guest)
             throw new InvalidOperationException("An owner has every tool; the allowlist is for guests.");
-        if (tools.FirstOrDefault(tool => !GuestToolNames.Contains(tool)) is { } unknown)
-            throw new InvalidOperationException($"{unknown} is not a tool guests can be given.");
-        var user = _users[index] with { Allowlist = [.. GuestToolNames.Where(tools.Contains)] };
+        if (tools.FirstOrDefault(SafeText.HasHidden) is { } hidden)
+            throw new InvalidOperationException($"{SafeText.Reveal(hidden)} holds hidden characters; it cannot be given to a guest.");
+        if (tools.FirstOrDefault(tool => !_guestTools.Contains(tool)) is { } unknown)
+            throw new InvalidOperationException($"{SafeText.Reveal(unknown)} is not a tool guests can be given.");
+        var user = _users[index] with { Allowlist = [.. _guestTools.Where(tools.Contains)] };
         _users[index] = user;
         Changed?.Invoke(this, EventArgs.Empty);
         return Task.FromResult(user);
@@ -109,6 +115,14 @@ public sealed class DemoGatewayService : IGatewayService, IDisposable
         return request;
     }
 
+    /// <summary>A tool that guests can be given appears (an MCP server's, say). Tests and scenes call it.</summary>
+    public void OfferGuestTool(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        _guestTools.Add(name);
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -121,8 +135,14 @@ public sealed class DemoGatewayService : IGatewayService, IDisposable
     private PairingRequest Request(string requestId) =>
         _requests.Find(request => request.Id == requestId) ?? throw new InvalidOperationException("That pairing request was already answered.");
 
+    /// <summary>
+    /// Pairs the sender, whichever page answered: a handle that hides a character may not be who it reads as, so it is never
+    /// paired, from here or from the Board's tray.
+    /// </summary>
     private PairedUser Pair(PairingRequest request, PairingRole role)
     {
+        if (SafeText.HasHidden(request.Handle))
+            throw new InvalidOperationException("The handle holds hidden characters; it cannot be paired. Ignore the request.");
         _requests.Remove(request);
         var user = new PairedUser($"u-{_next++}", request.Adapter, request.Handle, role, _time.GetUtcNow());
         _users.Add(user);
@@ -146,9 +166,10 @@ public sealed class DemoGatewayService : IGatewayService, IDisposable
                 _requests.Remove(request);
                 Changed?.Invoke(this, EventArgs.Empty);
             }
-            else
+            else if (action == "guest" && !SafeText.HasHidden(request.Handle))
             {
-                Pair(request, action == "owner" ? PairingRole.Owner : PairingRole.Guest);
+                // The tray pairs only as a guest; an owner is paired on Gateway, after the owner question.
+                Pair(request, PairingRole.Guest);
             }
 
             return;

@@ -217,6 +217,9 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
 
     public bool PreviewOk => _preview?.Valid == true;
 
+    /// <summary>The preview's warning sign: a schedule was typed and does not read. An empty field shows only the hint.</summary>
+    public bool PreviewWarns => !PreviewOk && _draftSchedule.Trim().Length > 0;
+
     /// <summary>A draft field holds hidden characters, shown revealed: creating waits until they are gone.</summary>
     public string DraftWarning { get => _draftWarning; private set { if (SetProperty(ref _draftWarning, value)) OnPropertyChanged(nameof(HasDraftWarning)); } }
 
@@ -526,6 +529,7 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
         _preview = preview;
         PreviewText = Spans.Parse(PreviewMarkup(preview));
         OnPropertyChanged(nameof(PreviewOk));
+        OnPropertyChanged(nameof(PreviewWarns));
         DraftChanged();
     }
 

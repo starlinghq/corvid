@@ -74,10 +74,31 @@ public sealed class GatewayTests
     {
         var rig = Build();
 
-        await rig.Board.ResolveAsync(DemoBoardService.PairingItemId, "owner", TestContext.Current.CancellationToken);
+        await rig.Board.ResolveAsync(DemoBoardService.PairingItemId, "guest", TestContext.Current.CancellationToken);
 
         Assert.Empty(rig.Gateway.Requests);
+        Assert.Equal("guest", rig.Gateway.Users.Single(user => user.Handle == "@dana").RoleText);
+    }
+
+    [Fact]
+    public async Task TheTrayCannotPairAnOwnerItOnlyLeadsToGatewaysQuestion()
+    {
+        var rig = Build();
+        var owner = (await rig.Board.ListAttentionAsync(TestContext.Current.CancellationToken))
+            .Single(item => item.Id == DemoBoardService.PairingItemId).Actions.Single(action => action.Id == "owner");
+        Assert.Equal(AttentionActionKind.Navigate, owner.Kind);
+        Assert.Equal(Area.Gateway, owner.Area);
+
+        await rig.Board.ResolveAsync(DemoBoardService.PairingItemId, "owner", TestContext.Current.CancellationToken);
+        Assert.Single(rig.Gateway.Requests);
+        Assert.DoesNotContain(rig.Gateway.Users, user => user.Handle == "@dana");
+
+        // Answered on Gateway after its question, the tray's item goes too.
+        var card = rig.Gateway.Requests[0];
+        card.AskOwnerCommand.Execute(null);
+        await ((AsyncRelayCommand)card.OwnerCommand).ExecuteAsync();
         Assert.Equal("owner", rig.Gateway.Users.Single(user => user.Handle == "@dana").RoleText);
+        Assert.DoesNotContain(await rig.Board.ListAttentionAsync(TestContext.Current.CancellationToken), item => item.Id == DemoBoardService.PairingItemId);
     }
 
     [Fact]
@@ -112,7 +133,7 @@ public sealed class GatewayTests
     public async Task AHandleHoldingHiddenCharactersIsRevealedAndCanOnlyBeIgnored()
     {
         var rig = Build();
-        var sent = rig.Service.Request("telegram", "@kes‮trel\U000E0041", "WXYZ-1234");
+        var sent = rig.Service.Request("telegram", "@kes\u202Etrel\U000E0041", "WXYZ-1234");
 
         var card = Assert.Single(rig.Gateway.Requests, card => card.Code == "WXYZ-1234");
         Assert.Equal("@kes⟨U+202E⟩trel⟨U+E0041⟩", card.Handle);
@@ -149,6 +170,59 @@ public sealed class GatewayTests
     }
 
     [Fact]
+    public async Task AToolNameHoldingHiddenCharactersIsRevealedAndCannotBeGranted()
+    {
+        var rig = Build();
+        rig.Service.OfferGuestTool("web_fetch‮\U000E0041");
+        var river = rig.Gateway.Users.Single(user => user.Handle == "river#2210");
+
+        river.EditCommand.Execute(null);
+        var hidden = river.Choices.Single(choice => choice.HasHidden);
+        Assert.Equal("web_fetch⟨U+202E⟩⟨U+E0041⟩", hidden.Name);
+        Assert.False(hidden.CanToggle);
+        Assert.True(river.HasHiddenChoice);
+        Assert.Contains("hidden characters", river.HiddenWarning, StringComparison.Ordinal);
+
+        hidden.IsChecked = true;
+        Assert.False(hidden.IsChecked);
+        Assert.True(river.SaveCommand.CanExecute(null));
+        await river.SaveCommand.ExecuteAsync();
+        Assert.Equal("memory_search", rig.Gateway.Users.Single(user => user.Handle == "river#2210").ToolsText);
+
+        // The service refuses it too, whoever asks.
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            rig.Service.SetAllowlistAsync("u-2", ["memory_search", "web_fetch‮\U000E0041"], TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task AHiddenToolAlreadyOnTheAllowlistMustBeUntickedBeforeSaving()
+    {
+        // Stored by another client, or before the check existed: the editor shows it ticked, and will not save it ticked.
+        const string Hidden = "notes‮__read\U000E0041";
+        var time = ManualTimeProvider.Demo();
+        var saved = new List<IReadOnlyList<string>>();
+        var user = new PairedUser("u-9", "discord", "wren#1", PairingRole.Guest, time.GetUtcNow()) { Allowlist = ["memory_search", Hidden] };
+        var row = new PairedUserViewModel(user, time.GetUtcNow(), TimeZoneInfo.Utc, () => ["memory_search", Hidden],
+            (_, tools) => { saved.Add(tools); return Task.CompletedTask; }, _ => Task.CompletedTask, _ => { });
+
+        row.EditCommand.Execute(null);
+        var hidden = row.Choices.Single(choice => choice.HasHidden);
+        Assert.True(hidden.IsChecked);
+        Assert.True(hidden.CanToggle);
+        Assert.False(row.SaveCommand.CanExecute(null));
+        await row.SaveCommand.ExecuteAsync();
+        Assert.Empty(saved);
+
+        hidden.IsChecked = false;
+        Assert.False(hidden.CanToggle);
+        Assert.True(row.SaveCommand.CanExecute(null));
+        hidden.IsChecked = true;
+        Assert.False(hidden.IsChecked);
+        await row.SaveCommand.ExecuteAsync();
+        Assert.Equal(["memory_search"], Assert.Single(saved));
+    }
+
+    [Fact]
     public async Task RevokingTheOnlyOwnerIsRefusedInRed()
     {
         var rig = Build();
@@ -175,5 +249,20 @@ public sealed class GatewayTests
 
         Assert.Single(composition.Gateway.Requests);
         Assert.Equal("telegram up · discord up · slack off", composition.StatusBar.Gateway);
+    }
+
+    [Fact]
+    public async Task TheBellFollowsAPairingAnsweredHereBeforeTheBoardExists()
+    {
+        Assert.True(AppOptions.TryParse(["--page", "gateway"], out var options, out var error), error);
+        using var composition = new AppComposition(options, new InlineDispatcher(), ManualTimeProvider.DemoLocal());
+        var gateway = composition.Gateway;
+        var areaItems = (await composition.BoardService.ListAttentionAsync(TestContext.Current.CancellationToken)).Count;
+        var before = composition.Shell.AttentionCount;
+
+        await ((AsyncRelayCommand)gateway.Requests[0].GuestCommand).ExecuteAsync();
+
+        Assert.Equal(areaItems - 1, (await composition.BoardService.ListAttentionAsync(TestContext.Current.CancellationToken)).Count);
+        Assert.Equal(before - 1, composition.Shell.AttentionCount);
     }
 }

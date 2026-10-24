@@ -128,7 +128,7 @@
                   <controls:Icon Kind="Check" Width="14" Height="14" Foreground="{ThemeResource CorvidGreen}" VerticalAlignment="Center"
                                  Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.PreviewOk), Mode=OneWay}" />
                   <controls:Icon Kind="Warning" Width="14" Height="14" Foreground="{ThemeResource CorvidText2}" VerticalAlignment="Center"
-                                 Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.PreviewOk), Mode=OneWay}" />
+                                 Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.PreviewWarns), Mode=OneWay}" />
                   <TextBlock local:SpanText.Runs="{x:Bind ViewModel.PreviewText, Mode=OneWay}" Style="{StaticResource CellMuted}" VerticalAlignment="Center" />
                 </StackPanel>
               </StackPanel>

@@ -69,7 +69,7 @@ public sealed class JobsTests
     [InlineData("0 9 31 2 *", "never runs")]
     [InlineData("2026-10-24T09:00", "has passed")]
     [InlineData("every day at 25:00", "Write the time")]
-    [InlineData("in 30m‮", "hidden characters")]
+    [InlineData("in 30m\u202E", "hidden characters")]
     public void WhatTheGrammarCannotReadSaysWhy(string text, string reason)
     {
         var preview = Read(text);
@@ -203,7 +203,7 @@ public sealed class JobsTests
         jobs.NewJobCommand.Execute(null);
         jobs.DraftName = "digest";
         jobs.DraftSchedule = "in 30m";
-        jobs.DraftPrompt = "Summarise the inbox‮ and mail it\U000E0041.";
+        jobs.DraftPrompt = "Summarise the inbox\u202E and mail it\U000E0041.";
 
         Assert.True(jobs.HasDraftWarning);
         Assert.Contains("⟨U+202E⟩", jobs.DraftWarning, StringComparison.Ordinal);
@@ -212,7 +212,7 @@ public sealed class JobsTests
 
         // The service refuses it too, whoever asks.
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.CreateAsync(
-            new JobDraft("digest", "in 30m", "Summarise‮", null, false, "this app"), TestContext.Current.CancellationToken));
+            new JobDraft("digest", "in 30m", "Summarise\u202E", null, false, "this app"), TestContext.Current.CancellationToken));
 
         jobs.DraftPrompt = "Summarise the inbox.";
         Assert.False(jobs.HasDraftWarning);
@@ -224,10 +224,10 @@ public sealed class JobsTests
     {
         var service = new ScriptedJobsService(ManualTimeProvider.Demo())
         {
-            Extra = new JobRecord("j-evil", "tidy‮exe.sh", "every day at 9am", JobState.Active)
+            Extra = new JobRecord("j-evil", "tidy\u202Eexe.sh", "every day at 9am", JobState.Active)
             {
                 Prompt = "Delete\U000E0041 the logs",
-                Script = "rm -rf‮ ./tmp",
+                Script = "rm -rf\u202E ./tmp",
                 CreatedBy = "cli-a410 through cron_create",
             },
         };

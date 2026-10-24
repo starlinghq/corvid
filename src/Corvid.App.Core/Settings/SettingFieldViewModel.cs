@@ -24,7 +24,8 @@ public sealed class SettingFieldViewModel : ObservableObject
         _value = value;
         _saved = value;
         RunOverride = runOverride is null ? "" : SafeText.Clean(runOverride);
-        Choices = [.. definition.Choices.Select(choice => new Choice(choice, $"{definition.Label}: {choice}", new RelayCommand(() => Value = choice)))];
+        // Segments read in lower case, as the status bar's mode and Safety's segment do; the value written keeps its case.
+        Choices = [.. definition.Choices.Select(choice => new Choice(choice.ToLowerInvariant(), $"{definition.Label}: {choice}", new RelayCommand(() => Value = choice)))];
         UpdateChoices();
     }
 

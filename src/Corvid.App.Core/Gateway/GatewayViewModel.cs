@@ -145,7 +145,7 @@ public sealed class GatewayViewModel : AreaViewModel, IDisposable
         Sync(Requests, snapshot.Requests.OrderBy(request => request.At).Take(MaxRows).ToList(),
             (card, request) => card.Request == request, request => RequestCard(request, now, zone));
         Sync(Users, snapshot.Users.OrderBy(user => user.Role == PairingRole.Owner ? 0 : 1).ThenBy(user => user.Since).Take(MaxRows).ToList(),
-            (row, user) => row.User == user, user => new PairedUserViewModel(user, now, zone, snapshot.GuestTools, SaveAllowlistAsync, RevokeAsync, ReportFailures));
+            (row, user) => row.User == user, user => new PairedUserViewModel(user, now, zone, () => _snapshot?.GuestTools ?? [], SaveAllowlistAsync, RevokeAsync, ReportFailures));
         OnPropertyChanged(nameof(HasRequests));
         OnPropertyChanged(nameof(HasUsers));
 

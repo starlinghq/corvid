@@ -57,9 +57,11 @@ public sealed class DemoBoardService : IBoardService
                     {
                         Help = "Pair @dana as a guest, with an empty tool allowlist you can widen on Gateway",
                     },
-                    new AttentionAction("owner", "Pair as owner", AttentionActionKind.Resolve)
+                    // An owner answers approvals from the chat, so that is asked on Gateway, never paired from a bare button.
+                    new AttentionAction("owner", "Pair as owner…", AttentionActionKind.Navigate)
                     {
-                        Style = AttentionActionStyle.Ghost, Help = "Pair @dana as an owner, who can answer approvals",
+                        Area = Core.Area.Gateway, Style = AttentionActionStyle.Ghost,
+                        Help = "Open Gateway, which asks before pairing @dana as an owner who can answer approvals",
                     },
                     new AttentionAction("ignore", "Ignore", AttentionActionKind.Resolve)
                     {
@@ -110,10 +112,26 @@ public sealed class DemoBoardService : IBoardService
         var item = _items.FirstOrDefault(candidate => candidate.Id == itemId);
         if (item is null || !item.Actions.Any(action => action.Id == actionId && action.Kind == AttentionActionKind.Resolve))
             return Task.CompletedTask;
+        Answer(item, actionId);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// The item was answered on its own area's page with an answer the tray only leads to (pairing as owner, which Gateway
+    /// asks about first): it goes, as if the tray had answered it.
+    /// </summary>
+    public void AnsweredInArea(string itemId, string answer)
+    {
+        if (_items.FirstOrDefault(candidate => candidate.Id == itemId) is { } item)
+            Answer(item, answer);
+    }
+
+    private void Answer(AttentionItem item, string actionId)
+    {
+        var itemId = item.Id;
         _items.Remove(item);
         _resolved.Add((itemId, actionId));
         AttentionChanged?.Invoke(this, EventArgs.Empty);
-        return Task.CompletedTask;
     }
 
     public Task<BoardStatus> GetStatusAsync(CancellationToken cancellationToken = default) =>

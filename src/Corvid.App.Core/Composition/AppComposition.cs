@@ -59,7 +59,7 @@ public sealed partial class AppComposition : IDisposable
     /// </summary>
     public void Dispose()
     {
-        _board?.Dispose();
+        DisposeBoard();
         DisposeSafety();
         DisposeSecrets();
         (_modelService as IDisposable)?.Dispose();

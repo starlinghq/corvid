@@ -139,9 +139,9 @@ public sealed class SafetyTests
     {
         var service = new FakeSafetyService
         {
-            Rules = [new SafetyRule("r1", RuleDecision.Allow, RuleScope.Session, "`rm -r` under `build/‮txt.sh` and \U000E0041x")
+            Rules = [new SafetyRule("r1", RuleDecision.Allow, RuleScope.Session, "`rm -r` under `build/\u202Etxt.sh` and \U000E0041x")
             {
-                SessionId = "cli-9f2e‮", ApprovalId = "a-1",
+                SessionId = "cli-9f2e\u202E", ApprovalId = "a-1",
             }],
         };
         var bar = new StatusBarViewModel();
@@ -149,9 +149,9 @@ public sealed class SafetyTests
         await safety.Loaded;
 
         var row = Assert.Single(safety.Rules);
-        Assert.DoesNotContain('‮', Text(row.Text));
+        Assert.DoesNotContain('\u202E', Text(row.Text));
         Assert.DoesNotContain("\U000E0041", Text(row.Text), StringComparison.Ordinal);
-        Assert.DoesNotContain('‮', Text(row.Source));
+        Assert.DoesNotContain('\u202E', Text(row.Source));
         Assert.True(row.HasHidden);
         Assert.Contains("⟨U+202E⟩", row.Revealed, StringComparison.Ordinal);
         Assert.Contains("⟨U+E0041⟩", row.Revealed, StringComparison.Ordinal);
@@ -165,7 +165,7 @@ public sealed class SafetyTests
         var service = new FakeSafetyService
         {
             Rules = [new SafetyRule("r1", RuleDecision.Allow, RuleScope.Always, "x") { Origin = "**bold** ~muted~ `code`" }],
-            Detections = [new SafetyDetection("rule`x", DetectionSeverity.High, "cli-1", DateTimeOffset.UnixEpoch, 9, [1, 2]) { Outcome = "ok‮" }],
+            Detections = [new SafetyDetection("rule`x", DetectionSeverity.High, "cli-1", DateTimeOffset.UnixEpoch, 9, [1, 2]) { Outcome = "ok\u202E" }],
         };
         var bar = new StatusBarViewModel();
         using var safety = new SafetyViewModel(service, new FakeSession(), new ShellViewModel(bar), bar, ManualTimeProvider.DemoLocal());

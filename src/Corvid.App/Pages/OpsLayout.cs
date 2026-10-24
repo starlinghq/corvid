@@ -26,6 +26,9 @@ internal static class OpsLayout
         if (body is StackPanel stack)
             stack.Padding = phone ? new Thickness(14, 14, 14, 18) : new Thickness(24, 18, 24, 18);
         headHost.Padding = phone ? new Thickness(14, 12, 14, 12) : new Thickness(24, 12, 24, 12);
+        // The phone's top bar names the page already: the title (the head's first child) goes, its line stays.
+        if (title is Panel { Children.Count: > 1 } head)
+            head.Children[0].Visibility = phone ? Visibility.Collapsed : Visibility.Visible;
 
         var available = width - headHost.Padding.Left - headHost.Padding.Right;
         title.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));

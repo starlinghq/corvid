@@ -10,7 +10,7 @@ namespace Corvid.App.Core.Tests;
 /// </summary>
 public sealed class SettingsTests
 {
-    private const string Override = "‮";
+    private const string Override = "\u202E";
     private const string Tag = "\U000E0041";
 
     private static async Task<(SettingsViewModel Settings, ShellViewModel Shell, KeyMap Keys)> Open(ISettingsService? service = null)
@@ -45,7 +45,7 @@ public sealed class SettingsTests
         Assert.Equal("next turn", steps.AppliesText);
         Assert.Equal("needs a restart", Field(settings, "Devices:CpuThreads").AppliesText);
         Assert.Equal("4", Field(settings, "Devices:CpuThreads").Value);
-        Assert.True(Field(settings, "Approvals:Mode").Choices.Single(choice => choice.Label == "Smart").IsSelected);
+        Assert.True(Field(settings, "Approvals:Mode").Choices.Single(choice => choice.Label == "smart").IsSelected);
         Assert.Equal("No changes", settings.ChangesText);
         Assert.False(settings.CanSave);
         Assert.Contains("\"Corvid\"", settings.JsonText, StringComparison.Ordinal);
@@ -82,7 +82,7 @@ public sealed class SettingsTests
         var (settings, _, _) = await Open();
         var threads = Field(settings, "Devices:CpuThreads");
         threads.Value = "8";
-        Field(settings, "Approvals:Mode").Choices.Single(choice => choice.Label == "Manual").Choose.Execute(null);
+        Field(settings, "Approvals:Mode").Choices.Single(choice => choice.Label == "manual").Choose.Execute(null);
         Assert.Equal("2 changes · 1 needs a restart", settings.ChangesText);
 
         await settings.SaveCommand.ExecuteAsync();

@@ -78,16 +78,42 @@ public sealed class PairingRequestViewModel : ObservableObject
     internal void CloseQuestion() => IsConfirmingOwner = false;
 }
 
-/// <summary>A tool a guest can be given, ticked when it is on the allowlist being edited.</summary>
+/// <summary>
+/// A tool a guest can be given, ticked when it is on the allowlist being edited. Ticking it grants the tool in one click,
+/// and tool names come from MCP servers too, so the name is revealed (⟨U+202E⟩ shows) and a name holding a hidden
+/// character cannot be ticked: it may not be the tool it reads as. One already on the allowlist starts ticked and can only
+/// be unticked.
+/// </summary>
 public sealed class GuestToolChoice(string name, bool isChecked) : ObservableObject
 {
     private bool _isChecked = isChecked;
 
-    public string Name { get; } = SafeText.Clean(name);
+    /// <summary>The name revealed: what ticking it would grant.</summary>
+    public string Name { get; } = SafeText.Reveal(name);
 
     internal string Raw { get; } = name;
 
-    public bool IsChecked { get => _isChecked; set => SetProperty(ref _isChecked, value); }
+    public bool HasHidden { get; } = SafeText.HasHidden(name);
+
+    /// <summary>Whether the box takes a click: always, unless the name hides something and the box is not ticked.</summary>
+    public bool CanToggle => !HasHidden || _isChecked;
+
+    public bool IsChecked
+    {
+        get => _isChecked;
+        set
+        {
+            // A name that hides a character is never granted, whatever the binding sends.
+            if (value && HasHidden)
+            {
+                OnPropertyChanged();
+                return;
+            }
+
+            if (SetProperty(ref _isChecked, value))
+                OnPropertyChanged(nameof(CanToggle));
+        }
+    }
 }
 
 /// <summary>
@@ -100,7 +126,7 @@ public sealed class PairedUserViewModel : ObservableObject
     private bool _confirmingRevoke;
     private IReadOnlyList<GuestToolChoice> _choices = [];
 
-    internal PairedUserViewModel(PairedUser user, DateTimeOffset now, TimeZoneInfo zone, IReadOnlyList<string> guestTools,
+    internal PairedUserViewModel(PairedUser user, DateTimeOffset now, TimeZoneInfo zone, Func<IReadOnlyList<string>> guestTools,
         Func<PairedUserViewModel, IReadOnlyList<string>, Task> save, Func<PairedUserViewModel, Task> revoke, Action<AsyncRelayCommand> report)
     {
         User = user;
@@ -110,14 +136,23 @@ public sealed class PairedUserViewModel : ObservableObject
         _guestTools = guestTools;
         EditCommand = new RelayCommand(() =>
         {
-            Choices = [.. _guestTools.Select(tool => new GuestToolChoice(tool, User.Allowlist.Contains(tool)))];
+            foreach (var old in Choices)
+                old.PropertyChanged -= OnChoiceChanged;
+            Choices = [.. _guestTools().Select(tool => new GuestToolChoice(tool, User.Allowlist.Contains(tool)))];
+            foreach (var choice in Choices)
+                choice.PropertyChanged += OnChoiceChanged;
+            OnPropertyChanged(nameof(HasHiddenChoice));
+            OnPropertyChanged(nameof(HiddenWarning));
+            RefreshSave();
             IsEditing = true;
         }, () => IsGuest);
         SaveCommand = new AsyncRelayCommand(async () =>
         {
+            if (Choices.Any(choice => choice.IsChecked && choice.HasHidden))
+                throw new InvalidOperationException("A ticked tool's name holds hidden characters; untick it before saving.");
             await save(this, [.. Choices.Where(choice => choice.IsChecked).Select(choice => choice.Raw)]).ConfigureAwait(true);
             IsEditing = false;
-        });
+        }, () => !Choices.Any(choice => choice.IsChecked && choice.HasHidden));
         CancelEditCommand = new RelayCommand(() => IsEditing = false);
         AskRevokeCommand = new RelayCommand(() => IsConfirmingRevoke = true);
         RevokeCommand = new AsyncRelayCommand(async () =>
@@ -130,7 +165,8 @@ public sealed class PairedUserViewModel : ObservableObject
         report(RevokeCommand);
     }
 
-    private readonly IReadOnlyList<string> _guestTools;
+    /// <summary>The tools guests can be given now, read when the editor opens (an MCP server can add one meanwhile).</summary>
+    private readonly Func<IReadOnlyList<string>> _guestTools;
 
     public PairedUser User { get; }
 
@@ -162,6 +198,21 @@ public sealed class PairedUserViewModel : ObservableObject
     public bool IsEditing { get => _editing; private set => SetProperty(ref _editing, value); }
 
     public IReadOnlyList<GuestToolChoice> Choices { get => _choices; private set => SetProperty(ref _choices, value); }
+
+    /// <summary>A tool offered in the editor has a name that hides characters: it cannot be ticked.</summary>
+    public bool HasHiddenChoice => _choices.Any(choice => choice.HasHidden);
+
+    public string HiddenWarning => HasHiddenChoice
+        ? "A tool's name holds hidden characters, shown as ⟨U+…⟩: it may not be the tool it reads as, so it cannot be ticked. Untick it if it is on the allowlist."
+        : "";
+
+    private void OnChoiceChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(GuestToolChoice.IsChecked))
+            RefreshSave();
+    }
+
+    private void RefreshSave() => SaveCommand.NotifyCanExecuteChanged();
 
     public RelayCommand AskRevokeCommand { get; }
 

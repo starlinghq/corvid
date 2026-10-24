@@ -16,7 +16,8 @@ public sealed class DemoBoardServiceTests
 
         Assert.Equal([AttentionKind.McpTool, AttentionKind.Pairing, AttentionKind.Memory, AttentionKind.Job], items.Select(item => item.Kind));
         Assert.Equal("Pairing · Telegram · @dana · code ABCD-EFGH", items[1].What);
-        Assert.Equal(["Pair as guest", "Pair as owner", "Ignore"], items[1].Actions.Select(action => action.Label));
+        Assert.Equal(["Pair as guest", "Pair as owner…", "Ignore"], items[1].Actions.Select(action => action.Label));
+        Assert.Equal(AttentionActionKind.Navigate, items[1].Actions[1].Kind);
         Assert.Equal(AttentionActionStyle.Danger, items[1].Actions[2].Style);
         var run = Assert.Single(items[3].Actions);
         Assert.Equal(AttentionActionKind.OpenSession, run.Kind);

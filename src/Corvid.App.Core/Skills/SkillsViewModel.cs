@@ -829,21 +829,19 @@ public sealed class SkillsViewModel : AreaViewModel
 
         // Leaving: what this area wrote and nobody has written since goes back to what it replaced.
         _lease.Release();
-        if (_shell.StatusBar.SessionId.Length == 0)
-            _shell.StatusBar.SessionId = _shell.CurrentSession?.Id ?? "";
     }
 
-    /// <summary>The status bar on this page: the store's size and what waits, no session context.</summary>
+    /// <summary>
+    /// The status bar on this page: the store's size and what waits. The session's context, tags and id stay, as on the
+    /// other pages of this group (Jobs, MCP, Gateway, Safety, Secrets, Settings).
+    /// </summary>
     private void ApplyStatus()
     {
         if (_lease is not { IsHeld: true } lease)
             return;
         lease.Engine = "";
         lease.Gateway = "";
-        lease.Context = "";
         lease.AreaFields = [new StatusField("skills", StatusText)];
-        lease.Tags = [];
-        lease.SessionId = "";
         lease.Trailing = "idle";
     }
 

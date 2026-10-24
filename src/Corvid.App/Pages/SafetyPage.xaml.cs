@@ -64,13 +64,17 @@ public sealed partial class SafetyPage : Page
         if (width <= 0)
             return;
         var phone = width < PhoneWidth;
+        // The phone's top bar names the page already.
+        PageTitle.Visibility = phone ? Visibility.Collapsed : Visibility.Visible;
         Body.Padding = phone ? new Thickness(14, 14, 14, 18) : new Thickness(24, 18, 24, 18);
         HeadHost.Padding = phone ? new Thickness(14, 12, 14, 12) : new Thickness(24, 12, 24, 12);
         LeftColumn.Width = new GridLength(1.4, GridUnitType.Star);
-        RightColumn.Width = phone ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
-        Columns.ColumnSpacing = phone ? 0 : 18;
-        Grid.SetColumn(RightStack, phone ? 0 : 1);
-        Grid.SetRow(RightStack, phone ? 1 : 0);
+        // One breakpoint across the A2 pages (OpsLayout): under it the right column goes under the left.
+        var two = width >= OpsLayout.TwoColumnWidth;
+        RightColumn.Width = two ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
+        Columns.ColumnSpacing = two ? 18 : 0;
+        Grid.SetColumn(RightStack, two ? 1 : 0);
+        Grid.SetRow(RightStack, two ? 0 : 1);
     }
 
     /// <summary>Delete on a rule's Remove… asks; Esc on its question stops asking and puts focus back on Remove….</summary>

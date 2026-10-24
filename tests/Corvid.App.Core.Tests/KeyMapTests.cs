@@ -5,7 +5,7 @@ namespace Corvid.App.Core.Tests;
 /// <summary>The keyboard map: gestures as keybindings.json writes them, the defaults of docs/plan/ui.md §6, remapping and its checks.</summary>
 public sealed class KeyMapTests
 {
-    private const string Override = "‮";
+    private const string Override = "\u202E";
 
     [Theory]
     [InlineData("ctrl+k", "Ctrl+K")]

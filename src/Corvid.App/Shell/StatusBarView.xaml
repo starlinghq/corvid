@@ -5,11 +5,12 @@
              xmlns:coreshell="using:Corvid.App.Core.Shell"
              xmlns:mvvm="using:Corvid.App.Core.Mvvm"
              xmlns:infra="using:Corvid.App.Infrastructure"
+             xmlns:local="using:Corvid.App.Shell"
              Foreground="{ThemeResource CorvidText2}"
              FontSize="12">
   <!--
     .statusbar: 28 px, a line above, bg-2, 0 14px padding, 12 px text-2 with labels in text and weight 500, 14 px gaps,
-    one line that clips at the right like the mockup's overflow:hidden. A label and its value are two text blocks 3.37 px
+    one line that ends at the right like the mockup's overflow:hidden, after the last item that fits whole (FitRowPanel). A label and its value are two text blocks 3.37 px
     apart (Inter's space at 12 px), not two runs: Uno does not repaint a run's theme colour when the theme changes. Items are hidden when empty and keep one order:
     engine, generator, decider, ctx, the area's items, the mode, tags, scheduler, gateway, branch, session, then the
     trailing item at the right. The toggles appear only while the rail or the dock is hidden.
@@ -29,11 +30,11 @@
 
     <Grid Grid.Column="1">
       <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="Auto" />
         <ColumnDefinition Width="*" />
         <ColumnDefinition Width="Auto" />
       </Grid.ColumnDefinitions>
-      <StackPanel Orientation="Horizontal" Spacing="14" VerticalAlignment="Center">
+      <!-- The items that fit whole; the rest are left out rather than cut mid-word. -->
+      <local:FitRowPanel Spacing="14" VerticalAlignment="Center" HorizontalAlignment="Left">
         <StackPanel Orientation="Horizontal" Spacing="3.37" VerticalAlignment="Center"
                     Visibility="{x:Bind infra:Ui.VisibleIfText(Shell.StatusBar.Engine), Mode=OneWay}">
           <TextBlock Text="engine" FontWeight="Medium" Foreground="{ThemeResource CorvidText}" TextWrapping="NoWrap" />
@@ -121,8 +122,8 @@
                    TextWrapping="NoWrap" VerticalAlignment="Center" ToolTipService.ToolTip="The workspace's git branch" />
         <TextBlock Text="{x:Bind Shell.StatusBar.SessionId, Mode=OneWay}" Visibility="{x:Bind infra:Ui.VisibleIfText(Shell.StatusBar.SessionId), Mode=OneWay}"
                    TextWrapping="NoWrap" VerticalAlignment="Center" ToolTipService.ToolTip="The session's id in the event log" />
-      </StackPanel>
-      <TextBlock Grid.Column="2" Text="{x:Bind Shell.StatusBar.Trailing, Mode=OneWay}" Margin="14,0,0,0" TextWrapping="NoWrap" VerticalAlignment="Center"
+      </local:FitRowPanel>
+      <TextBlock Grid.Column="1" Text="{x:Bind Shell.StatusBar.Trailing, Mode=OneWay}" Margin="14,0,0,0" TextWrapping="NoWrap" VerticalAlignment="Center"
                  Visibility="{x:Bind infra:Ui.VisibleIfText(Shell.StatusBar.Trailing), Mode=OneWay}" />
     </Grid>
 

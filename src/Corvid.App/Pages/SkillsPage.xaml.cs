@@ -21,7 +21,7 @@ namespace Corvid.App.Pages;
 public sealed partial class SkillsPage : Page
 {
     /// <summary>Below this width the side panels go under the main column (the phone layout, and a narrow pane).</summary>
-    private const double OneColumnWidth = 640;
+    private const double OneColumnWidth = OpsLayout.TwoColumnWidth;
 
     /// <summary>Below this width the gutters narrow to the phone's 14 px.</summary>
     private const double PhoneWidth = 720;

@@ -128,8 +128,8 @@ public sealed class SecretsTests
     [Fact]
     public async Task ANameWithHiddenCharactersIsCleanedInTheTableRevealedInThePickerAndNeverBound()
     {
-        var hidden = "slack‮.bot-token\U000E0041";
-        var service = new DemoSecretsService(ManualTimeProvider.DemoLocal(), [new SecretInfo(hidden) { Hosts = ["slack.com"], Description = "bot‮" }]);
+        var hidden = "slack\u202E.bot-token\U000E0041";
+        var service = new DemoSecretsService(ManualTimeProvider.DemoLocal(), [new SecretInfo(hidden) { Hosts = ["slack.com"], Description = "bot\u202E" }]);
         using var secrets = ViewModel(service);
         await secrets.Loaded;
 
@@ -158,13 +158,13 @@ public sealed class SecretsTests
         Assert.Equal("corvid-vault set NAME", secrets.SetPreview);
         Assert.False(secrets.StartSetCommand.CanExecute(null));
 
-        secrets.SetName = "gemini‮.key";
+        secrets.SetName = "gemini\u202E.key";
         Assert.False(secrets.SetNameIsValid);
         Assert.False(secrets.StartSetCommand.CanExecute(null));
         Assert.StartsWith("\"gemini⟨U+202E⟩.key\" holds hidden characters.", secrets.SetNameProblem, StringComparison.Ordinal);
         Assert.Equal("corvid-vault set gemini⟨U+202E⟩.key", secrets.SetPreview);
         await Assert.ThrowsAsync<ArgumentException>(() =>
-            new DemoSecretsService(ManualTimeProvider.DemoLocal()).StartSetAsync("gemini‮.key", TestContext.Current.CancellationToken));
+            new DemoSecretsService(ManualTimeProvider.DemoLocal()).StartSetAsync("gemini\u202E.key", TestContext.Current.CancellationToken));
 
         secrets.SetName = "Has Space";
         Assert.Equal(SecretNames.Rule, secrets.SetNameProblem);

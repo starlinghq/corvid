@@ -117,7 +117,7 @@ src/Corvid.App/
                              PhoneTabItem, DockTab, LinkButton, PitchedStackPanel, WrapRowPanel, CorvidButton (.btn),
                              ToneRow (.row), ColumnsPanel, Meter, RichText (runs from the markdown model), MarkdownView,
                              DiffRowsView, HintLine (key caps)
-  Shell/                     ShellPage (the window's content), RailView, StatusBarView, AreaPages, IDockProvider,
+  Shell/                     ShellPage (the window's content), RailView, StatusBarView (+ FitRowPanel), AreaPages, IDockProvider,
                              EqualColumnsPanel, CommandPalette (Ctrl+K, the switcher, history, find, help), KeyGestures
   Pages/                     one <Area>Page.xaml per area; SessionsDock and BoardDock are those areas' dock panels;
                              ModelsStyles.xaml and SpanText are the Models and First run pages' shared parts;
