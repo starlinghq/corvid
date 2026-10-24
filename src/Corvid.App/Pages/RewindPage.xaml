@@ -259,7 +259,7 @@
 
         <!-- The plan (or the preview), then the last restore. -->
         <StackPanel x:Name="Right" Grid.Column="1" Spacing="14">
-          <Border Style="{StaticResource CorvidPanel}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.ShowPlan), Mode=OneWay}">
+          <Border x:Name="PlanPanel" Style="{StaticResource CorvidPanel}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.ShowPlan), Mode=OneWay}">
             <StackPanel>
               <Border Style="{StaticResource PanelHead}">
                 <Grid ColumnSpacing="10" VerticalAlignment="Center">
@@ -357,7 +357,7 @@
           </Border>
 
           <!-- The preview: each file from now to restored, in the shared diff view. -->
-          <Border Style="{StaticResource CorvidPanel}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsPreviewing), Mode=OneWay}">
+          <Border x:Name="PreviewPanel" Style="{StaticResource CorvidPanel}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsPreviewing), Mode=OneWay}">
             <StackPanel>
               <Border Style="{StaticResource PanelHead}">
                 <Grid ColumnSpacing="10" VerticalAlignment="Center">

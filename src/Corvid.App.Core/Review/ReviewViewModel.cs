@@ -260,13 +260,14 @@ public sealed class ReviewViewModel : AreaViewModel
     /// <summary>Loads the list again for the current session and scope, keeping the selection where it can.</summary>
     public void Refresh() => _ = RefreshAsync();
 
-    /// <summary>Selects the next or the previous file (the keyboard's way through the list).</summary>
-    public void MoveSelection(int delta)
+    /// <summary>Selects the next or the previous file (Up and Down on the list); returns the file now selected.</summary>
+    public ReviewFileView? MoveSelection(int delta)
     {
         if (Files.Count == 0)
-            return;
-        var index = _selected is null ? -1 : Files.IndexOf(_selected);
+            return null;
+        var index = _selected is null ? (delta > 0 ? -1 : Files.Count) : Files.IndexOf(_selected);
         Select(Files[Math.Clamp(index + delta, 0, Files.Count - 1)]);
+        return _selected;
     }
 
     private async Task RefreshAsync()

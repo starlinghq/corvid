@@ -50,14 +50,40 @@ public sealed partial class RewindPage : Page
 
     /// <summary>
     /// The button that opened or closed the preview is collapsed with its panel, which would leave focus nowhere and Esc
-    /// unheard: focus moves to the other panel's first button instead.
+    /// unheard: focus moves to the other panel's first button instead. Only then, though: the preview also closes when
+    /// another ledger entry is selected (the arrows, a click), and focus stays on that row rather than land on Restore,
+    /// where Enter would restore.
     /// </summary>
     private void OnViewModelChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName != nameof(RewindViewModel.IsPreviewing))
             return;
+        var collapsed = ViewModel.IsPreviewing ? (FrameworkElement)PlanPanel : PreviewPanel;
+        var focused = Focused();
+        if (focused is not null && !IsWithin(focused, collapsed))
+            return;
         Control target = ViewModel.IsPreviewing ? ClosePreviewButton : RestoreButton;
-        DispatcherQueue.TryEnqueue(() => target.Focus(FocusState.Keyboard));
+        // Decided after the key or click that caused it is done: Up and Down close the preview from inside it (focus is
+        // still on "Back to the plan"), then put focus on the ledger row they selected, which is where it stays.
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (Focused() is { } now && IsWithin(now, Ledger))
+                return;
+            target.Focus(FocusState.Keyboard);
+        });
+    }
+
+    private DependencyObject? Focused() => XamlRoot is { } root ? FocusManager.GetFocusedElement(root) as DependencyObject : null;
+
+    private static bool IsWithin(DependencyObject element, DependencyObject ancestor)
+    {
+        for (var current = element; current is not null; current = VisualTreeHelper.GetParent(current))
+        {
+            if (ReferenceEquals(current, ancestor))
+                return true;
+        }
+
+        return false;
     }
 
     private void OnKeyDown(object sender, KeyRoutedEventArgs e)
