@@ -51,7 +51,9 @@ page: `Enter` sends (queued while a turn runs), `Shift+Enter` breaks the line, `
 `Esc Esc` on an idle empty composer opens Rewind, `Up` takes the last queued message back, `Shift+Tab` cycles the
 approval mode, `Ctrl+S` puts the draft aside; on an open approval card the first `Enter` focuses it, then `1` to `5`
 answer and the arrows move; `Ctrl+1` to `Ctrl+7` pick dock tabs; `Ctrl+O`, `Ctrl+T` and `Ctrl+Shift+D` expand the
-latest output, the thoughts and every checkpoint's chips. The rest of the keyboard map (`docs/plan/ui.md` §6) comes with
+latest output, the thoughts and every checkpoint's chips. On Models: `Alt+P` opens the generator's Switch… picker,
+`Alt+Left` and `Alt+Right` move a focused escalation-ladder step (or drag it by its grip), and `Esc` closes a picker or the
+placement editor. The rest of the keyboard map (`docs/plan/ui.md` §6) comes with
 the screens it drives.
 
 ## The harness check
@@ -100,7 +102,8 @@ src/Corvid.App/
                              DiffRowsView, HintLine (key caps)
   Shell/                     ShellPage (the window's content), RailView, StatusBarView, AreaPages, IDockProvider,
                              EqualColumnsPanel
-  Pages/                     one <Area>Page.xaml per area; SessionsDock and BoardDock are those areas' dock panels
+  Pages/                     one <Area>Page.xaml per area; SessionsDock and BoardDock are those areas' dock panels;
+                             ModelsStyles.xaml and SpanText are the Models and First run pages' shared parts
   Infrastructure/            UiDispatcher (the core's IDispatcher), Ui (x:Bind helpers), AppLogging
 src/Corvid.App.Core/
   Mvvm/                      ObservableObject, RelayCommand(<T>), AsyncRelayCommand, Choice, IDispatcher, InlineDispatcher
