@@ -110,6 +110,8 @@ public sealed partial class SessionsPage : Page, IDockProvider
 
     public static string Prefixed(string prefix, string? text) => string.IsNullOrEmpty(text) ? "" : prefix + text;
 
+    public static string Suffixed(string? text, string suffix) => string.IsNullOrEmpty(text) ? "" : text + suffix;
+
     public static string Dotted(string? text) => string.IsNullOrEmpty(text) ? "" : "· " + text;
 
     public static Tone TaintTone(bool cleared) => cleared ? Tone.Grey : Tone.Amber;
@@ -154,6 +156,29 @@ public sealed partial class SessionsPage : Page, IDockProvider
     /// <summary>The phone's shorter words where it has them ("Approval 1 of 2", "4:12 left").</summary>
     public static string Pick(bool phone, string phoneText, string text) => phone ? phoneText : text;
 
+    /// <summary>The phone's short reasons (Phone.png: "checkpoint c-45 is taken first").</summary>
+    public static IReadOnlyList<MarkdownRun> PickRuns(bool phone, IReadOnlyList<MarkdownRun> phoneRuns, IReadOnlyList<MarkdownRun> runs) =>
+        phone ? phoneRuns : runs;
+
+    /// <summary>The card's head: 8px 12px on the phone, 10px 14px otherwise.</summary>
+    public static Thickness CardHeadPadding(bool phone) => phone ? new Thickness(12, 8, 12, 8) : new Thickness(14, 10, 14, 10);
+
+    /// <summary>The card's body: 10px 12px with 8 between its parts on the phone, 12px 14px with 10 otherwise.</summary>
+    public static Thickness CardBodyPadding(bool phone) => phone ? new Thickness(12, 10, 12, 10) : new Thickness(14, 12, 14, 12);
+
+    public static double CardSpacing(bool phone) => phone ? 8 : 10;
+
+    /// <summary>The card's reasons at 12.5 px on the phone, the body's 13.5 otherwise.</summary>
+    public static double CardTextSize(bool phone) => phone ? 12.5 : 13.5;
+
+    /// <summary>A list shown at one width class only, and only when it has items.</summary>
+    public static Visibility WhenAny(bool phone, bool phoneOnly, System.Collections.IEnumerable? items) =>
+        phone == phoneOnly ? Infrastructure.Ui.VisibleIfAny(items) : Visibility.Collapsed;
+
+    /// <summary>The next prompt in the queue: the long line on a desktop, the short one on the phone.</summary>
+    public static Visibility NextVisible(bool hasNext, bool phone, bool phoneLine) =>
+        hasNext && phone == phoneLine ? Visibility.Visible : Visibility.Collapsed;
+
 
     /// <summary>A command's table as aligned monospace columns.</summary>
     public static string Table(IReadOnlyList<string> columns, IReadOnlyList<IReadOnlyList<string>> rows)
@@ -173,21 +198,56 @@ public sealed partial class SessionsPage : Page, IDockProvider
             ApplyLayout();
     }
 
-    /// <summary>Under 860 px the gutters are 14 px (Main-narrow.png); the phone drops the header and the key hint.</summary>
+    /// <summary>
+    /// Under 860 px the gutters are 14 px (Main-narrow.png). The phone (Phone.png) drops the header and the key hint, keeps
+    /// the turn strip only for a queue, and has a one-line composer with a send button and no bar under it.
+    /// </summary>
     private void ApplyLayout()
     {
         var layout = _composition?.Shell.Layout ?? ShellLayout.Wide;
+        var wasPhone = SessionsLayout.Current.IsPhone;
+        var wasNarrow = SessionsLayout.Current.IsNarrow;
         SessionsLayout.Current.Layout = layout;
         var narrow = SessionsLayout.Current.IsNarrow;
+        var phone = SessionsLayout.Current.IsPhone;
         var side = narrow ? 14 : 24;
         TranscriptBody.Padding = new Thickness(side, narrow ? 12 : 16, side, 8);
         TurnStrip.Padding = new Thickness(side, 6, side, 6);
-        ComposerArea.Padding = new Thickness(side, 10, side, 12);
+        ComposerArea.Padding = phone ? new Thickness(12, 8, 12, 8) : new Thickness(side, 10, side, 12);
         Header.Padding = new Thickness(narrow ? 14 : 20, 10, narrow ? 14 : 20, 10);
         // Set here, not bound: the page's own x:Bind paths do not follow a static source's changes.
-        var phone = SessionsLayout.Current.IsPhone;
         Header.Visibility = phone ? Visibility.Collapsed : Visibility.Visible;
         HintHost.Visibility = phone ? Visibility.Collapsed : Visibility.Visible;
+        ComposerBar.Visibility = phone ? Visibility.Collapsed : Visibility.Visible;
+        PhoneSendButton.Visibility = phone ? Visibility.Visible : Visibility.Collapsed;
+        Composer.MinHeight = phone ? 44 : 60;
+        Composer.MaxHeight = phone ? 120 : 220;
+        Composer.Padding = phone ? new Thickness(12, 11, 12, 11) : new Thickness(12, 10, 12, 10);
+        Composer.PlaceholderText = phone ? PhonePlaceholder : SessionViewModel.ComposerPlaceholder;
+        UpdateTurnStrip();
+
+        // The templates read the width class when they are made: Uno does not re-evaluate their static-rooted x:Bind paths
+        // when it changes (the window starts at one width and is resized), so the transcript is made again, once.
+        if ((phone != wasPhone || narrow != wasNarrow) && Transcript.ItemsSource is { } blocks)
+        {
+            Transcript.ItemsSource = null;
+            Transcript.ItemsSource = blocks;
+            _positioned = false;
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, PositionAtLatest);
+        }
+    }
+
+    /// <summary>Phone.png's composer: the short placeholder, the prefixes being for a keyboard.</summary>
+    private const string PhonePlaceholder = "Ask Corvid…";
+
+    /// <summary>
+    /// The turn strip shows while a turn runs, waits or has a queue; on the phone only for a queue, since the turn head
+    /// already says the step and the strip would take a line from the transcript (Phone.png has none).
+    /// </summary>
+    private void UpdateTurnStrip()
+    {
+        var show = _session is { ShowTurnStrip: true } session && (!SessionsLayout.Current.IsPhone || session.HasQueue);
+        TurnStrip.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
     }
 
     // ---- The session ----
@@ -210,12 +270,14 @@ public sealed partial class SessionsPage : Page, IDockProvider
         if (_session is null)
         {
             UpdateJump();
+            UpdateTurnStrip();
             return;
         }
 
         _session.PropertyChanged += OnSessionChanged;
         _session.FocusRequested += OnFocusRequested;
         _session.Blocks.CollectionChanged += OnBlocksChanged;
+        UpdateTurnStrip();
         UpdateSpinner();
         UpdateJump();
         WatchApproval();
@@ -245,6 +307,8 @@ public sealed partial class SessionsPage : Page, IDockProvider
 
         if (e.PropertyName is nameof(SessionViewModel.CurrentApproval) or null or "")
             WatchApproval();
+        if (e.PropertyName is nameof(SessionViewModel.ShowTurnStrip) or nameof(SessionViewModel.HasQueue) or null or "")
+            UpdateTurnStrip();
     }
 
     private void OnFocusRequested(object? sender, SessionFocusTarget target)

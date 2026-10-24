@@ -187,6 +187,46 @@ public sealed class ShellViewModelTests
     }
 
     [Fact]
+    public void ThePhoneTopBarShowsOneTagAndTheTabsSayWhichIsCurrent()
+    {
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar) { Layout = ShellLayout.Phone, Workspace = "corvid · main" };
+        var changed = new List<string?>();
+        ((INotifyPropertyChanged)shell).PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        bar.Tags = [new StatusTag("tainted", Tone.Amber), new StatusTag("2 approvals", Tone.Amber)];
+
+        // Phone.png: "tainted" beside the title; the bell counts the approvals.
+        Assert.Equal(["tainted"], shell.PhoneTags.Select(tag => tag.Text));
+        Assert.Contains(nameof(ShellViewModel.PhoneTags), changed);
+        Assert.True(shell.ShowPhoneTabs);
+        Assert.Equal("corvid · main", shell.PhoneSubtitle);
+        // The current tab is said in words as well as drawn in the accent.
+        Assert.Equal(["Chat, current", "Changes", "Attention", "More"], shell.PhoneTabs.Select(tab => tab.AutomationName));
+        shell.Navigate(Area.Review);
+        Assert.Equal(["Chat", "Changes, current", "Attention", "More"], shell.PhoneTabs.Select(tab => tab.AutomationName));
+    }
+
+    [Fact]
+    public void TheSetupHasNoBottomBarMenuBellOrWorkspaceOnThePhone()
+    {
+        var shell = new ShellViewModel(new StatusBarViewModel()) { Layout = ShellLayout.Phone, Workspace = "corvid · main" };
+
+        shell.SetupShowing = true;
+
+        Assert.True(shell.ShowPhoneBars);
+        Assert.False(shell.ShowPhoneTabs);
+        Assert.Equal("", shell.PhoneSubtitle);
+
+        shell.SetupShowing = false;
+
+        Assert.True(shell.ShowPhoneTabs);
+        Assert.Equal("corvid · main", shell.PhoneSubtitle);
+        shell.Layout = ShellLayout.Wide;
+        Assert.False(shell.ShowPhoneTabs);
+    }
+
+    [Fact]
     public void TheThemeIsAShellSetting()
     {
         var shell = new ShellViewModel(new StatusBarViewModel());

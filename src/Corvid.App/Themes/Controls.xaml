@@ -398,6 +398,8 @@
                   <VisualState.Setters>
                     <Setter Target="Glyph.Foreground" Value="{ThemeResource CorvidAccent}" />
                     <Setter Target="LabelText.Foreground" Value="{ThemeResource CorvidAccent}" />
+                    <!-- Not by colour alone (ui.md §7): the current tab's label is also heavier. -->
+                    <Setter Target="LabelText.FontWeight" Value="SemiBold" />
                   </VisualState.Setters>
                 </VisualState>
               </VisualStateGroup>

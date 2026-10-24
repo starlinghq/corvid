@@ -605,7 +605,11 @@ public sealed class FirstRunViewModel : AreaViewModel
     }
 
     /// <summary>The page draws its own left column (the steps) in place of the rail, while that column shows.</summary>
-    private void UpdateRail() => _shell.PageDrawsRail = _isSetup && _stepsShown && _shell.CurrentArea == Area.FirstRun;
+    private void UpdateRail()
+    {
+        _shell.PageDrawsRail = _isSetup && _stepsShown && _shell.CurrentArea == Area.FirstRun;
+        _shell.SetupShowing = _isSetup && _shell.CurrentArea == Area.FirstRun;
+    }
 
     private void ApplyStatus()
     {

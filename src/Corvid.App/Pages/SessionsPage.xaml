@@ -127,6 +127,47 @@
       </Setter>
     </Style>
 
+    <!-- The phone's .opt: at least 44 high, the label centred; the same face and states as OptionButton. -->
+    <Style x:Key="PhoneOptionButton" TargetType="Button">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="UseSystemFocusVisuals" Value="False" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Grid x:Name="Root" MinHeight="44">
+              <Border x:Name="Face" CornerRadius="7" BorderThickness="1" BorderBrush="{ThemeResource CorvidLine}" Background="{ThemeResource CorvidBg}" />
+              <Border x:Name="Film" CornerRadius="7" Background="{ThemeResource CorvidText}" Opacity="0.05" Visibility="Collapsed" />
+              <ContentPresenter Content="{TemplateBinding Content}" Padding="10,6" HorizontalAlignment="Center" VerticalAlignment="Center" />
+              <VisualStateManager.VisualStateGroups>
+                <VisualStateGroup x:Name="CommonStates">
+                  <VisualState x:Name="Normal" />
+                  <VisualState x:Name="PointerOver">
+                    <VisualState.Setters>
+                      <Setter Target="Film.Visibility" Value="Visible" />
+                    </VisualState.Setters>
+                  </VisualState>
+                  <VisualState x:Name="Pressed">
+                    <VisualState.Setters>
+                      <Setter Target="Film.Visibility" Value="Visible" />
+                    </VisualState.Setters>
+                  </VisualState>
+                  <VisualState x:Name="Disabled">
+                    <VisualState.Setters>
+                      <Setter Target="Root.Opacity" Value="0.5" />
+                    </VisualState.Setters>
+                  </VisualState>
+                </VisualStateGroup>
+              </VisualStateManager.VisualStateGroups>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
     <!-- The user's message (.msg.user): bg-2, a line border, radius 10, 10px 14px; "you · 14:01" above the text. -->
     <DataTemplate x:Key="UserTemplate" x:DataType="sessions:UserMessageBlock">
       <Border Margin="{x:Bind local:SessionsPage.Gap(StartsTurn)}" Background="{ThemeResource CorvidBg2}" BorderBrush="{ThemeResource CorvidLine}"
@@ -288,7 +329,8 @@
       <Border BorderBrush="{ThemeResource CorvidAmber}" BorderThickness="1" CornerRadius="10" Background="{ThemeResource CorvidBg}"
               KeyDown="OnApprovalKeyDown" AutomationProperties.Name="{x:Bind AutomationName, Mode=OneWay}">
         <StackPanel>
-          <Grid Background="{ThemeResource CorvidAmberBg}" Padding="14,10" ColumnSpacing="10" CornerRadius="9,9,0,0">
+          <Grid Background="{ThemeResource CorvidAmberBg}" Padding="{x:Bind local:SessionsPage.CardHeadPadding(local:SessionsLayout.Current.IsPhone)}"
+                ColumnSpacing="10" CornerRadius="9,9,0,0">
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="Auto" />
               <ColumnDefinition Width="*" />
@@ -301,14 +343,18 @@
             <TextBlock Grid.Column="2" Text="{x:Bind local:SessionsPage.Pick(local:SessionsLayout.Current.IsPhone, ShortDeadline, DeadlineText), Mode=OneWay}"
                        FontWeight="Medium" Foreground="{ThemeResource CorvidAmber}" VerticalAlignment="Center" />
           </Grid>
-          <StackPanel Padding="14,12" Spacing="10">
-            <Border Padding="12,10" CornerRadius="6" Background="{ThemeResource CorvidCodeBg}">
+          <StackPanel Padding="{x:Bind local:SessionsPage.CardBodyPadding(local:SessionsLayout.Current.IsPhone)}"
+                      Spacing="{x:Bind local:SessionsPage.CardSpacing(local:SessionsLayout.Current.IsPhone)}">
+            <!-- The phone leaves the command to the tool card above the approval (Phone.png). -->
+            <Border Padding="12,10" CornerRadius="6" Background="{ThemeResource CorvidCodeBg}"
+                    Visibility="{x:Bind ui:Ui.CollapsedIf(local:SessionsLayout.Current.IsPhone)}">
               <ScrollViewer HorizontalScrollBarVisibility="Auto" HorizontalScrollMode="Auto" VerticalScrollBarVisibility="Disabled" VerticalScrollMode="Disabled">
                 <TextBlock Text="{x:Bind CommandText}" Style="{StaticResource CorvidMonoText}" TextWrapping="NoWrap" IsTextSelectionEnabled="True" />
               </ScrollViewer>
             </Border>
             <TextBlock Text="{x:Bind Unparsed}" Style="{StaticResource CorvidSmallText}" Visibility="{x:Bind ui:Ui.VisibleIfText(Unparsed)}" />
-            <ItemsControl ItemsSource="{x:Bind Commands}" IsTabStop="False" Visibility="{x:Bind ui:Ui.VisibleIfAny(Commands)}">
+            <ItemsControl ItemsSource="{x:Bind Commands}" IsTabStop="False"
+                          Visibility="{x:Bind local:SessionsPage.WhenAny(local:SessionsLayout.Current.IsPhone, false, Commands)}">
               <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate>
                   <controls:ColumnsPanel Columns="{x:Bind local:SessionsPage.ParsedColumns(local:SessionsLayout.Current.IsNarrow), Mode=OneWay}"
@@ -394,6 +440,45 @@
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>
+            <!-- The phone's compact parsed rows (Phone.png): the command and its effects, then each target; no verb or flags. -->
+            <ItemsControl ItemsSource="{x:Bind Commands}" IsTabStop="False"
+                          Visibility="{x:Bind local:SessionsPage.WhenAny(local:SessionsLayout.Current.IsPhone, true, Commands)}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="sessions:ParsedCommandView">
+                  <StackPanel Spacing="6" Margin="0,0,0,6">
+                    <controls:WrapRowPanel Spacing="6" LineSpacing="4">
+                      <TextBlock Text="{x:Bind Text}" Style="{StaticResource MonoSmall}" FontWeight="Medium" TextWrapping="Wrap" />
+                      <controls:TagChip Text="{x:Bind EffectsText}" Tone="{x:Bind EffectsTone}" Visibility="{x:Bind ui:Ui.VisibleIf(HasEffects)}" />
+                    </controls:WrapRowPanel>
+                    <ItemsControl ItemsSource="{x:Bind Targets}" IsTabStop="False">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="sessions:TargetChip">
+                          <Grid ColumnSpacing="8" Margin="0,0,0,4" AutomationProperties.Name="{x:Bind local:SessionsPage.Prefixed('target ', Text)}">
+                            <Grid.ColumnDefinitions>
+                              <ColumnDefinition Width="Auto" />
+                              <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="target" Style="{StaticResource KeyLabel}" />
+                            <Grid Grid.Column="1" HorizontalAlignment="Left">
+                              <Border CornerRadius="5" Background="{ThemeResource CorvidBg3}" Visibility="{x:Bind ui:Ui.CollapsedIf(IsDestructive)}" />
+                              <Border CornerRadius="5" Background="{ThemeResource CorvidRedBg}" Visibility="{x:Bind ui:Ui.VisibleIf(IsDestructive)}" />
+                              <TextBlock Padding="7,2" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center" Foreground="{ThemeResource CorvidText}"
+                                         Visibility="{x:Bind ui:Ui.CollapsedIf(IsDestructive)}"><Run Text="{x:Bind local:SessionsPage.Suffixed(Prefix, ' ')}" /><Run
+                                         Text="{x:Bind Value}" FontFamily="{StaticResource CorvidMono}" FontSize="12.5" /><Run
+                                         Text="{x:Bind local:SessionsPage.Prefixed(' · ', Detail)}" /></TextBlock>
+                              <TextBlock Padding="7,2" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center" Foreground="{ThemeResource CorvidRed}"
+                                         Visibility="{x:Bind ui:Ui.VisibleIf(IsDestructive)}"><Run Text="{x:Bind local:SessionsPage.Suffixed(Prefix, ' ')}" /><Run
+                                         Text="{x:Bind Value}" FontFamily="{StaticResource CorvidMono}" FontSize="12.5" /><Run
+                                         Text="{x:Bind local:SessionsPage.Prefixed(' · ', Detail)}" /></TextBlock>
+                            </Grid>
+                          </Grid>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
             <Border BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1" CornerRadius="8" Visibility="{x:Bind ui:Ui.VisibleIf(HasProposedDiff)}">
               <StackPanel>
                 <Grid Padding="12,8" Background="{ThemeResource CorvidBg2}" ColumnSpacing="10">
@@ -437,26 +522,34 @@
                       <TextBlock Text="{x:Bind Label}" FontFamily="{StaticResource CorvidMono}" FontSize="11" Foreground="{ThemeResource CorvidText2}"
                                  VerticalAlignment="Center" />
                     </Border>
-                    <TextBlock Grid.Column="1" controls:RichText.Runs="{x:Bind Runs}" Style="{StaticResource CorvidBodyText}" />
+                    <TextBlock Grid.Column="1" controls:RichText.Runs="{x:Bind local:SessionsPage.PickRuns(local:SessionsLayout.Current.IsPhone, ShortRuns, Runs)}"
+                               Style="{StaticResource CorvidBodyText}" FontSize="{x:Bind local:SessionsPage.CardTextSize(local:SessionsLayout.Current.IsPhone)}" />
                   </Grid>
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>
-            <!-- The phone's answers (Phone.png): full width, 44 high, their longer labels. -->
+            <!-- The phone's answers (Phone.png): 44 high and full width with their longer labels, the two denials sharing a line. -->
             <ItemsControl ItemsSource="{x:Bind Options}" IsTabStop="False" AutomationProperties.Name="Answer"
                           Visibility="{x:Bind ui:Ui.VisibleIf(local:SessionsLayout.Current.IsPhone), Mode=OneWay}">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                  <local:PhoneAnswersPanel Spacing="6" />
+                </ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
               <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="sessions:ApprovalOptionView">
-                  <Button Command="{x:Bind Choose}" AutomationProperties.Name="{x:Bind AutomationName}" HorizontalAlignment="Stretch"
-                          HorizontalContentAlignment="Stretch" Margin="0,0,0,8" Padding="0" Background="Transparent" BorderThickness="0">
-                    <Grid Height="44">
-                      <Border CornerRadius="7" BorderThickness="1" BorderBrush="{ThemeResource CorvidLine}" Background="{ThemeResource CorvidBg}" />
-                      <TextBlock Text="{x:Bind LongLabel}" FontWeight="Medium" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                 Foreground="{ThemeResource CorvidText}" Visibility="{x:Bind ui:Ui.CollapsedIf(IsDeny)}" />
-                      <TextBlock Text="{x:Bind LongLabel}" FontWeight="Medium" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                 Foreground="{ThemeResource CorvidRed}" Visibility="{x:Bind ui:Ui.VisibleIf(IsDeny)}" />
-                    </Grid>
-                  </Button>
+                  <Grid>
+                    <Border Margin="-3" CornerRadius="10" BorderThickness="2" BorderBrush="{ThemeResource CorvidAccent}"
+                            Visibility="{x:Bind local:SessionsPage.OutlineVisible(IsFocused, IsExpanded), Mode=OneWay}" />
+                    <Button Style="{StaticResource PhoneOptionButton}" Command="{x:Bind Choose}" AutomationProperties.Name="{x:Bind AutomationName}">
+                      <Grid>
+                        <TextBlock Text="{x:Bind LongLabel}" FontWeight="Medium" Foreground="{ThemeResource CorvidText}" TextAlignment="Center"
+                                   TextWrapping="Wrap" Visibility="{x:Bind ui:Ui.CollapsedIf(IsDeny)}" />
+                        <TextBlock Text="{x:Bind LongLabel}" FontWeight="Medium" Foreground="{ThemeResource CorvidRed}" TextAlignment="Center"
+                                   TextWrapping="Wrap" Visibility="{x:Bind ui:Ui.VisibleIf(IsDeny)}" />
+                      </Grid>
+                    </Button>
+                  </Grid>
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>
@@ -491,14 +584,10 @@
               <Border CornerRadius="8" Background="{ThemeResource CorvidAccentBg}" />
               <Rectangle RadiusX="8" RadiusY="8" Stroke="{ThemeResource CorvidAccent}" StrokeThickness="1" StrokeDashArray="3,2" />
               <StackPanel Padding="12,10" Spacing="8">
-                <Grid ColumnSpacing="8">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                  </Grid.ColumnDefinitions>
+                <controls:WrapRowPanel Spacing="8" LineSpacing="2" PushLastRight="True">
                   <TextBlock Text="{x:Bind RulePreview.Header}" FontWeight="SemiBold" VerticalAlignment="Center" TextWrapping="Wrap" />
-                  <TextBlock Grid.Column="1" Text="{x:Bind RulePreview.Source}" Style="{StaticResource CorvidSmallText}" VerticalAlignment="Center" />
-                </Grid>
+                  <TextBlock Text="{x:Bind RulePreview.Source}" Style="{StaticResource CorvidSmallText}" VerticalAlignment="Center" />
+                </controls:WrapRowPanel>
                 <ItemsControl ItemsSource="{x:Bind RulePreview.Rows}" IsTabStop="False">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="sessions:RuleRowView">
@@ -541,7 +630,9 @@
               </StackPanel>
             </StackPanel>
             <TextBlock controls:RichText.Runs="{x:Bind NextText, Mode=OneWay}" Style="{StaticResource CorvidSmallText}"
-                       Visibility="{x:Bind ui:Ui.VisibleIf(HasNext), Mode=OneWay}" />
+                       Visibility="{x:Bind local:SessionsPage.NextVisible(HasNext, local:SessionsLayout.Current.IsPhone, false), Mode=OneWay}" />
+            <TextBlock Text="{x:Bind NextShort, Mode=OneWay}" Style="{StaticResource CorvidSmallText}"
+                       Visibility="{x:Bind local:SessionsPage.NextVisible(HasNext, local:SessionsLayout.Current.IsPhone, true), Mode=OneWay}" />
           </StackPanel>
         </StackPanel>
       </Border>
@@ -813,7 +904,7 @@
 
     <!-- .turnstrip: 6px 24px, a line above, bg-2, 12.5 px: the spinner (or the amber clock while waiting), the step, the queue, the hint. -->
     <Border x:Name="TurnStrip" Grid.Row="2" Padding="24,6" Background="{ThemeResource CorvidBg2}" BorderBrush="{ThemeResource CorvidLine}"
-            BorderThickness="0,1,0,0" MinHeight="37" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.Session.ShowTurnStrip), Mode=OneWay, FallbackValue=Collapsed}">
+            BorderThickness="0,1,0,0" MinHeight="37" Visibility="Collapsed">
       <controls:WrapRowPanel Spacing="10" LineSpacing="8" VerticalAlignment="Center" PushLastRight="True">
         <Grid Width="10" Height="10" VerticalAlignment="Center" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.Session.IsWorking), Mode=OneWay, FallbackValue=Collapsed}">
           <Ellipse Stroke="{ThemeResource CorvidLine}" StrokeThickness="2" />
@@ -866,18 +957,31 @@
       </controls:WrapRowPanel>
     </Border>
 
-    <!-- .composer: 10px 24px 12px, a line above; the text area (min 60, radius 8), then the bar. -->
+    <!-- .composer: 10px 24px 12px, a line above; the text area (min 60, radius 8), then the bar. On the phone (Phone.png) one
+         line, 44 high, with a 44 px send button beside it and no bar. -->
     <Border x:Name="ComposerArea" Grid.Row="3" Padding="24,10,24,12" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,1,0,0">
       <StackPanel Spacing="8">
-        <TextBox x:Name="Composer" Text="{x:Bind ViewModel.Session.Draft, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, FallbackValue=''}"
-                 PlaceholderText="{x:Bind ViewModel.Session.Placeholder, Mode=OneWay, FallbackValue=''}" PlaceholderForeground="{ThemeResource CorvidText2}"
-                 AcceptsReturn="True" TextWrapping="Wrap"
-                 MinHeight="60" MaxHeight="220" Padding="12,10" CornerRadius="8" BorderThickness="1"
-                 BorderBrush="{ThemeResource CorvidLine}" Background="{ThemeResource CorvidBg}" Foreground="{ThemeResource CorvidText}"
-                 ScrollViewer.VerticalScrollBarVisibility="Auto" IsSpellCheckEnabled="False"
-                 IsEnabled="{x:Bind local:SessionsPage.Not(ViewModel.Session.IsReadOnly), Mode=OneWay, FallbackValue=False}"
-                 AutomationProperties.Name="Message to Corvid" />
-        <Grid ColumnSpacing="10">
+        <Grid ColumnSpacing="8">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+          </Grid.ColumnDefinitions>
+          <TextBox x:Name="Composer" Text="{x:Bind ViewModel.Session.Draft, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, FallbackValue=''}"
+                   PlaceholderForeground="{ThemeResource CorvidText2}"
+                   AcceptsReturn="True" TextWrapping="Wrap"
+                   MinHeight="60" MaxHeight="220" Padding="12,10" CornerRadius="8" BorderThickness="1"
+                   BorderBrush="{ThemeResource CorvidLine}" Background="{ThemeResource CorvidBg}" Foreground="{ThemeResource CorvidText}"
+                   ScrollViewer.VerticalScrollBarVisibility="Auto" IsSpellCheckEnabled="False"
+                   IsEnabled="{x:Bind local:SessionsPage.Not(ViewModel.Session.IsReadOnly), Mode=OneWay, FallbackValue=False}"
+                   AutomationProperties.Name="Message to Corvid" />
+          <controls:CorvidButton x:Name="PhoneSendButton" Grid.Column="1" Variant="Primary" Visibility="Collapsed" VerticalAlignment="Bottom"
+                                 Width="44" Height="44" Padding="0" HorizontalContentAlignment="Center"
+                                 Command="{x:Bind ViewModel.Session.SubmitCommand, Mode=OneWay, FallbackValue={x:Null}}"
+                                 AutomationProperties.Name="Send" ToolTipService.ToolTip="Send; queued while a turn runs">
+            <controls:Icon Kind="Send" Foreground="{ThemeResource CorvidOnAccent}" />
+          </controls:CorvidButton>
+        </Grid>
+        <Grid x:Name="ComposerBar" ColumnSpacing="10">
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="Auto" />
             <ColumnDefinition Width="*" />
