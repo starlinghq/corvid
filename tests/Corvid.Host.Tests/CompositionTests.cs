@@ -28,6 +28,45 @@ public sealed class CompositionTests
     }
 
     [Fact]
+    public async Task AStartReportsEachStepAsItBeginsAndEnds()
+    {
+        await using var host = TestHost.Create();
+        await host.Host.StartAsync(TestContext.Current.CancellationToken);
+        var steps = new RecordingProgress();
+
+        await using var runtime = await host.Services.GetRequiredService<CorvidRuntimeFactory>().StartAsync(steps, TestContext.Current.CancellationToken);
+
+        var reported = steps.Snapshot();
+        Assert.Equal("Checking the model cache", reported[0].Description);
+        // Every step that began also ended, with its time. Steps can nest (a model first loaded by memory), so order is not compared.
+        var begun = reported.Where(step => step.Elapsed is null).Select(step => step.Description).ToList();
+        Assert.Equal(begun.Order(StringComparer.Ordinal),
+            reported.Where(step => step.Elapsed is not null).Select(step => step.Description).Order(StringComparer.Ordinal));
+        Assert.Contains("Loading fake-gen for generator on cpu", begun);
+        Assert.Contains("Opening the event log", begun);
+        // One step per model loaded, so a slow start says which model it is on.
+        Assert.Equal(host.Models.Provider.Loaded.Order(StringComparer.Ordinal),
+            begun.Where(step => step.StartsWith("Loading ", StringComparison.Ordinal)).Select(step => step.Split(' ')[1]).Order(StringComparer.Ordinal));
+    }
+
+    private sealed class RecordingProgress : IProgress<StartupStep>
+    {
+        private readonly List<StartupStep> _steps = [];
+
+        public void Report(StartupStep value)
+        {
+            lock (_steps)
+                _steps.Add(value);
+        }
+
+        public List<StartupStep> Snapshot()
+        {
+            lock (_steps)
+                return [.. _steps];
+        }
+    }
+
+    [Fact]
     public async Task MissingModelsAreReportedTogetherBeforeAnythingLoads()
     {
         var models = new FakeModels(generatorReady: false);

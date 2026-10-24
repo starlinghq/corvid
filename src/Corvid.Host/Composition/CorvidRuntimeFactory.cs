@@ -80,13 +80,18 @@ public sealed class CorvidRuntimeFactory(
     public IReadOnlyList<ModelAvailability> CheckOptionalModels() => Check().Optional;
 
     /// <exception cref="ModelsUnavailableException">A configured model is not usable offline; nothing was loaded.</exception>
-    public async Task<CorvidRuntime> StartAsync(CancellationToken cancellationToken = default)
+    public Task<CorvidRuntime> StartAsync(CancellationToken cancellationToken = default) => StartAsync(null, cancellationToken);
+
+    /// <param name="progress">Told each stage as it begins and ends (each model load is one), mostly from a pool thread.</param>
+    /// <param name="cancellationToken">Cancels the start.</param>
+    /// <exception cref="ModelsUnavailableException">A configured model is not usable offline; nothing was loaded.</exception>
+    public async Task<CorvidRuntime> StartAsync(IProgress<StartupStep>? progress, CancellationToken cancellationToken = default)
     {
-        var (required, optional) = Check();
+        var (required, optional) = StartupStep.Run(progress, "Checking the model cache", Check);
         if (required.Count > 0)
             throw new ModelsUnavailableException([.. required]);
         // Loading reads models from disk synchronously (seconds for Qwen); keep it off the caller's thread.
-        return await Task.Run(() => Build(optional), cancellationToken).ConfigureAwait(false);
+        return await Task.Run(() => Build(optional, progress), cancellationToken).ConfigureAwait(false);
     }
 
     private (IReadOnlyList<ModelAvailability> Required, IReadOnlyList<ModelAvailability> Optional) Check()
@@ -98,15 +103,16 @@ public sealed class CorvidRuntimeFactory(
         return ([.. unready.Except(optional)], optional);
     }
 
-    private CorvidRuntime Build(IReadOnlyList<ModelAvailability> unavailable)
+    private CorvidRuntime Build(IReadOnlyList<ModelAvailability> unavailable, IProgress<StartupStep>? progress)
     {
         var settings = options.Value;
         var devices = new DeviceSchedulers(settings.Devices.CpuThreads);
-        var composer = new ModelComposer(catalogue, settings, devices, metrics, feed);
+        // Each model load is a step of its own. The composer stops reporting once the runtime is built, as /model loads later.
+        var composer = new ModelComposer(catalogue, settings, devices, metrics, feed) { Progress = progress };
         try
         {
             var registry = composer.Compose(unavailable.Select(item => item.Model.Name).ToHashSet(StringComparer.OrdinalIgnoreCase));
-            var log = new SqliteEventLog(CorvidPaths.EventLog(settings));
+            var log = StartupStep.Run(progress, "Opening the event log", () => new SqliteEventLog(CorvidPaths.EventLog(settings)));
             // Kev when the decider slot is bound (C-004b), with Kev-4B as the second tier when configured; the degraded tier
             // always, for states over the hard stop and requests Kev refuses.
             IDecider? calibrated = null, escalation = null;
@@ -148,7 +154,9 @@ public sealed class CorvidRuntimeFactory(
                 });
 
             var counter = composer.GeneratorCounter();
-            var memory = settings.Memory.Enabled ? BuildMemory(settings, composer, registry, fabric, log, counter) : null;
+            var memory = settings.Memory.Enabled
+                ? StartupStep.Run(progress, "Opening memory", () => BuildMemory(settings, composer, registry, fabric, log, counter))
+                : null;
 
             var launcher = settings.Sandbox.LauncherPath is { Length: > 0 } path ? CorvidPaths.ExpandHome(path) : null;
             var sandboxOptions = new SandboxOptions { LauncherPath = launcher };
@@ -184,7 +192,8 @@ public sealed class CorvidRuntimeFactory(
                 if (memory?.Writer is { } writer)
                     toolRegistry.Add(new MemoryTools(writer, memory.Retriever));
             }
-            var skills = skillsGuard.Refusal is { } refusal ? new SkillServices(null, null, null, null, refusal) : OpenSkills(settings, log);
+            var skills = skillsGuard.Refusal is { } refusal ? new SkillServices(null, null, null, null, refusal)
+                : StartupStep.Run(progress, "Opening skills", () => OpenSkills(settings, log));
             if (skills.Store is { } store)
                 toolRegistry.Add(new SkillFileTools(store, shell));
             foreach (var provider in toolProviders)
@@ -206,8 +215,9 @@ public sealed class CorvidRuntimeFactory(
 
             // C-025: the workspace's project, once, with the checkpoints' git and the user's home as discovery's ceiling.
             ProjectIdentity? project = memory?.Lessons is null ? null
-                : Kernel.Sessions.ProjectResolver.ResolveAsync(environment.Workspace,
-                    CorvidPaths.ExpandHome(settings.Checkpoints.GitPath), CorvidPaths.Home).GetAwaiter().GetResult();
+                : StartupStep.Run(progress, "Identifying the workspace's project",() => Kernel.Sessions.ProjectResolver.ResolveAsync(
+                    environment.Workspace, CorvidPaths.ExpandHome(settings.Checkpoints.GitPath), CorvidPaths.Home).GetAwaiter().GetResult());
+            composer.Progress = null;
 
             return new CorvidRuntime(settings, catalogue, composer, devices, metrics, feed, log, registry, fabric, approvals, prompters,
                 toolRegistry, memory, counter, builtin, checkpoints, skills, mcp) { UnavailableModels = [.. unavailable], Project = project };
