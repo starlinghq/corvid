@@ -211,7 +211,7 @@ public sealed class SessionViewModelTests
         card.ConfirmRuleCommand.Execute(null);
 
         var shell = service.StateOf(Main).Transcript.OfType<ToolEntry>().Single(tool => tool.CallId == "call-5");
-        Assert.Equal((VerdictKind.ApprovedAlways, "`rm -r` under build/cache and `dotnet test` in the workspace"), (shell.Verdict!.Kind, shell.Verdict.Rule));
+        Assert.Equal((VerdictKind.ApprovedAlways, "`rm -r` under `build/cache` and `dotnet test` in the workspace"), (shell.Verdict!.Kind, shell.Verdict.Rule));
     }
 
     [Fact]

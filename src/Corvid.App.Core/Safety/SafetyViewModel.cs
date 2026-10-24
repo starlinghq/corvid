@@ -28,6 +28,12 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
     /// <summary>The most rule rows drawn at once; the note says how many more there are.</summary>
     public const int MaxRuleRows = 200;
 
+    /// <summary>The most detection matches drawn at once; Audit lists the rest.</summary>
+    public const int MaxMatchRows = 100;
+
+    /// <summary>The most sessions the Taint panel draws at once, tainted ones first.</summary>
+    public const int MaxTaintRows = 50;
+
     private readonly ISafetyService _service;
     private readonly ISafetySession _session;
     private readonly ShellViewModel _shell;
@@ -44,6 +50,7 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
     private string _rulesNote = "";
     private string _hiddenRules = "";
     private bool _enforce = true;
+    private bool _isAskingRecordOnly;
 
     public SafetyViewModel(ISafetyService service, ISafetySession session, ShellViewModel shell, StatusBarViewModel statusBar, TimeProvider time)
         : base(Area.Safety, "Approval modes, session and always rules, the detection rules and their matches, and what Corvid never does.")
@@ -65,8 +72,9 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
             new RelayCommand(() => _session.RequestMode(mode), () => CanChangeMode)))];
         Filters = [.. Enum.GetValues<RuleFilter>().Select(filter => new Choice(FilterLabel(filter), FilterHelp(filter), new RelayCommand(() => Filter = filter)))];
         Filters[0].IsSelected = true;
-        CycleModeCommand = new RelayCommand(CycleMode, () => CanChangeMode);
         ToggleEnforceCommand = new AsyncRelayCommand(ToggleEnforceAsync, () => _snapshot is not null);
+        ConfirmRecordOnlyCommand = new AsyncRelayCommand(ct => SetEnforceAsync(false, ct), () => _isAskingRecordOnly);
+        CancelRecordOnlyCommand = new RelayCommand(() => IsAskingRecordOnly = false);
         RefreshCommand = new AsyncRelayCommand(ct => ReloadAsync(ct));
         DismissNoticeCommand = new RelayCommand(() => SetNotice([], Tone.Green));
         Rules = new ReadOnlyObservableCollection<RuleRowView>(_rules);
@@ -98,9 +106,6 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
     public bool HasModeNote => ModeNote.Length > 0;
 
     public bool CanChangeMode => _session.SessionId is not null && !_session.ReadOnly && _session.Mode is not null;
-
-    /// <summary>Shift+Tab on the page, as in a session: the next mode for the current session.</summary>
-    public RelayCommand CycleModeCommand { get; }
 
     // ---- remembered rules ----
 
@@ -157,9 +162,15 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
 
     public IReadOnlyList<DetectionRuleRowView> DetectionRules { get; private set; } = [];
 
+    /// <summary>The matches, newest first, at most <see cref="MaxMatchRows"/>.</summary>
     public IReadOnlyList<DetectionMatchRowView> Matches { get; private set; } = [];
 
     public bool HasMatches => Matches.Count > 0;
+
+    /// <summary>"and 12 more, not drawn: Audit lists every match", when the cap hides some.</summary>
+    public string HiddenMatches { get; private set; } = "";
+
+    public bool HasHiddenMatches => HiddenMatches.Length > 0;
 
     /// <summary>"built-in pack · 12 rules · 5 enforce".</summary>
     public string PackNote { get; private set; } = "";
@@ -175,6 +186,7 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
                 OnPropertyChanged(nameof(Posture));
                 OnPropertyChanged(nameof(PostureTone));
                 OnPropertyChanged(nameof(EnforceLabel));
+                OnPropertyChanged(nameof(EnforceTooltip));
             }
         }
     }
@@ -184,9 +196,53 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
 
     public Tone PostureTone => _enforce ? Tone.Green : Tone.Amber;
 
-    public string EnforceLabel => _enforce ? "Record only" : "Enforce";
+    public string EnforceLabel => _enforce ? "Record only…" : "Enforce";
 
+    /// <summary>What the switch's button does from here: turning enforcement off asks first; turning it on does not.</summary>
+    public string EnforceTooltip => _enforce
+        ? "Detections:Enforce off: every match is recorded and none forces an ask, in every session. Asks first."
+        : "Detections:Enforce on: a match of an enforcing rule forces an ask again.";
+
+    /// <summary>
+    /// Record only… while enforcing opens a question (it turns every session's forced asks off at once); Enforce while
+    /// recording only turns enforcement back on at once.
+    /// </summary>
     public AsyncRelayCommand ToggleEnforceCommand { get; }
+
+    /// <summary>The question Record only… opened is showing.</summary>
+    public bool IsAskingRecordOnly
+    {
+        get => _isAskingRecordOnly;
+        private set
+        {
+            if (!SetProperty(ref _isAskingRecordOnly, value))
+                return;
+            OnPropertyChanged(nameof(RecordOnlyQuestion));
+            ConfirmRecordOnlyCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    /// <summary>"Record only? These 5 rules stop forcing an ask, in every session: …", naming the enforcing rules.</summary>
+    public string RecordOnlyQuestion
+    {
+        get
+        {
+            var enforcing = _snapshot?.Packs.FirstOrDefault()?.Rules.Where(rule => rule.Enforces).Select(rule => SafeText.Clean(rule.Id)).ToList() ?? [];
+            var which = enforcing.Count switch
+            {
+                0 => "No rule enforces now, so nothing changes until one does",
+                1 => $"This rule stops forcing an ask, in every session: {enforcing[0]}",
+                var n => string.Create(CultureInfo.InvariantCulture, $"These {n} rules stop forcing an ask, in every session: {string.Join(", ", enforcing)}"),
+            };
+            return $"Record only? {which}. Matches are still logged and listed here.";
+        }
+    }
+
+    /// <summary>The question's "Record only": writes <c>Detections:Enforce=false</c>.</summary>
+    public AsyncRelayCommand ConfirmRecordOnlyCommand { get; }
+
+    /// <summary>The question's "Keep enforcing" (and Esc).</summary>
+    public RelayCommand CancelRecordOnlyCommand { get; }
 
     /// <summary>"1 match · 1 forced an ask", "No matches so far.".</summary>
     public string MatchesNote { get; private set; } = "";
@@ -195,7 +251,13 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
 
     public IReadOnlyList<HardlineRowView> Hardline { get; private set; } = [];
 
+    /// <summary>Each session's taint, tainted first, at most <see cref="MaxTaintRows"/>.</summary>
     public IReadOnlyList<TaintRowView> Taint { get; private set; } = [];
+
+    /// <summary>"and 30 more sessions, not drawn", when the cap hides some.</summary>
+    public string HiddenTaint { get; private set; } = "";
+
+    public bool HasHiddenTaint => HiddenTaint.Length > 0;
 
     /// <summary>The taint explainer's facts: what it changes, how it is shown, when it clears.</summary>
     public IReadOnlyList<ModelFact> TaintFacts { get; } =
@@ -230,13 +292,23 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
     /// <summary>The row asking whether to remove its rule, if one is.</summary>
     public RuleRowView? Confirming => _rules.FirstOrDefault(row => row.IsConfirming);
 
-    /// <summary>Esc: a row asking to remove its rule stops asking. False when none was.</summary>
+    /// <summary>Esc: a row asking to remove its rule, or the Record only… question, stops asking. False when none was.</summary>
     public bool CancelConfirm()
     {
-        if (Confirming is not { } row)
-            return false;
-        row.IsConfirming = false;
-        return true;
+        var cancelled = false;
+        if (_isAskingRecordOnly)
+        {
+            IsAskingRecordOnly = false;
+            cancelled = true;
+        }
+
+        if (Confirming is { } row)
+        {
+            row.IsConfirming = false;
+            cancelled = true;
+        }
+
+        return cancelled;
     }
 
     public void Dispose()
@@ -304,7 +376,10 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
         PackNote = pack is null
             ? "no pack loaded"
             : string.Create(CultureInfo.InvariantCulture, $"{SafeText.Clean(pack.Name)} · {pack.Rules.Length} rules · {pack.Rules.Count(r => r.Enforces)} enforce");
-        Matches = [.. snapshot.Detections.Select(match => new DetectionMatchRowView(match, _time, OpenInAudit))];
+        Matches = [.. snapshot.Detections.Take(MaxMatchRows).Select(match => new DetectionMatchRowView(match, _time, OpenInAudit))];
+        HiddenMatches = snapshot.Detections.Length > MaxMatchRows
+            ? string.Create(CultureInfo.InvariantCulture, $"and {snapshot.Detections.Length - MaxMatchRows} older, not drawn: Audit lists every match")
+            : "";
         var forced = snapshot.Detections.Count(d => d.Enforced);
         MatchesNote = snapshot.Detections.Length switch
         {
@@ -313,22 +388,37 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
             var n => string.Create(CultureInfo.InvariantCulture, $"{n} matches · {forced} forced an ask"),
         };
         Hardline = [.. snapshot.Hardline.Select(code => new HardlineRowView(code))];
-        Taint = [.. snapshot.Taint.Select(taint => new TaintRowView(taint, _time))];
+        Taint = [.. snapshot.Taint.OrderByDescending(taint => taint.Tainted).Take(MaxTaintRows).Select(taint => new TaintRowView(taint, _time))];
+        HiddenTaint = snapshot.Taint.Length > MaxTaintRows
+            ? string.Create(CultureInfo.InvariantCulture, $"and {snapshot.Taint.Length - MaxTaintRows} more sessions, not drawn")
+            : "";
+        // The question names what stops forcing an ask; with enforcement already off there is nothing left to ask.
+        if (!_enforce)
+            IsAskingRecordOnly = false;
 
         OnPropertyChanged(nameof(DetectionRules));
         OnPropertyChanged(nameof(PackNote));
         OnPropertyChanged(nameof(Matches));
         OnPropertyChanged(nameof(HasMatches));
+        OnPropertyChanged(nameof(HiddenMatches));
+        OnPropertyChanged(nameof(HasHiddenMatches));
         OnPropertyChanged(nameof(MatchesNote));
         OnPropertyChanged(nameof(Hardline));
         OnPropertyChanged(nameof(Taint));
+        OnPropertyChanged(nameof(HiddenTaint));
+        OnPropertyChanged(nameof(HasHiddenTaint));
+        OnPropertyChanged(nameof(RecordOnlyQuestion));
         ToggleEnforceCommand.NotifyCanExecuteChanged();
         UpdateLease();
     }
 
-    /// <summary>The Rules table for the filter: cleared and filled once, capped.</summary>
+    /// <summary>
+    /// The Rules table for the filter: cleared and filled once, capped. A reload comes with every change the sessions
+    /// report (a rule's uses move while they run), so an open "Remove the rule?" stays open on the rebuilt row.
+    /// </summary>
     private void RebuildRules()
     {
+        var asking = Confirming?.Rule.Id;
         var all = _snapshot?.Rules ?? [];
         var shown = all.Where(rule => _filter switch
         {
@@ -339,7 +429,13 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
 
         _rules.Clear();
         foreach (var rule in shown.Take(MaxRuleRows))
-            _rules.Add(new RuleRowView(rule, _time, RemoveAsync, OnConfirming));
+        {
+            var row = new RuleRowView(rule, _time, RemoveAsync, OnConfirming);
+            _rules.Add(row);
+            if (asking is not null && rule.Id == asking)
+                row.IsConfirming = true;
+        }
+
         HiddenRules = shown.Count > MaxRuleRows
             ? string.Create(CultureInfo.InvariantCulture, $"and {shown.Count - MaxRuleRows} more, not drawn: narrow the list with the filter")
             : "";
@@ -358,6 +454,7 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
     /// <summary>One row asks at a time: another row's question closes.</summary>
     private void OnConfirming(RuleRowView row)
     {
+        IsAskingRecordOnly = false;
         foreach (var other in _rules)
         {
             if (!ReferenceEquals(other, row) && other.IsConfirming)
@@ -388,11 +485,25 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
         await ReloadAsync(cancellationToken).ConfigureAwait(true);
     }
 
-    private async Task ToggleEnforceAsync(CancellationToken cancellationToken)
+    private Task ToggleEnforceAsync(CancellationToken cancellationToken)
     {
         if (_snapshot?.Packs.FirstOrDefault() is not { } pack)
+            return Task.CompletedTask;
+        if (!pack.Enforce)
+            return SetEnforceAsync(true, cancellationToken);
+        // Off turns every session's forced asks off at once: it asks, naming what stops.
+        foreach (var row in _rules)
+            row.IsConfirming = false;
+        IsAskingRecordOnly = true;
+        OnPropertyChanged(nameof(Confirming));
+        return Task.CompletedTask;
+    }
+
+    private async Task SetEnforceAsync(bool next, CancellationToken cancellationToken)
+    {
+        IsAskingRecordOnly = false;
+        if (_snapshot?.Packs.FirstOrDefault() is not { } pack || pack.Enforce == next)
             return;
-        var next = !pack.Enforce;
         try
         {
             await _service.SetEnforceAsync(pack.Name, next, cancellationToken).ConfigureAwait(true);
@@ -413,18 +524,6 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
         // No rule name: Audit lands on the match whose events these are, whatever its demo names the rule.
         _shell.Follow(new AreaLink(Area.Audit, match.SessionId, AreaLinkTarget.Detection) { Events = [.. match.Events] });
 
-    private void CycleMode()
-    {
-        if (!CanChangeMode || _session.Mode is not { } mode)
-            return;
-        _session.RequestMode(mode switch
-        {
-            ApprovalMode.Manual => ApprovalMode.Smart,
-            ApprovalMode.Smart => ApprovalMode.Permissive,
-            _ => ApprovalMode.Manual,
-        });
-    }
-
     // ---- the session and the status bar ----
 
     private void RefreshMode()
@@ -444,7 +543,6 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
         OnPropertyChanged(nameof(ModeNote));
         OnPropertyChanged(nameof(HasModeNote));
         OnPropertyChanged(nameof(CanChangeMode));
-        CycleModeCommand.NotifyCanExecuteChanged();
         foreach (var choice in Modes)
             ((RelayCommand)choice.Choose).NotifyCanExecuteChanged();
     }
@@ -464,8 +562,9 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
     }
 
     /// <summary>
-    /// On Safety the status bar shows the current session's mode, so its segments and Shift+Tab work here as in a session,
-    /// and its tags (tainted), and the detections' posture and matches; another area gets it back as it was.
+    /// On Safety the status bar shows the current session's mode, so its segments work here as in a session (Shift+Tab
+    /// stays focus navigation on this page; the mode panel's segments are the keyboard's way), and its tags (tainted), and
+    /// the detections' posture and matches; another area gets it back as it was.
     /// </summary>
     private void UpdateLease()
     {

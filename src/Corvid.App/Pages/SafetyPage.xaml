@@ -15,7 +15,8 @@
     its line, then two columns (1.4fr and 1fr, 18 apart): Approval mode, Rules and Detection rules on the left; Matches,
     Taint and the hardline list on the right. One column on a phone. Sizes and colours are corvid.css's .page-head,
     .panel, .table, .kv, .tag and .btn, through the Models page's shared styles.
-    Keys: Delete on a rule's Remove… asks to remove it; Esc stops asking. Shift+Tab stays focus navigation here.
+    Keys: Delete on a rule's Remove… asks to remove it; Esc stops asking (that question or Record only…'s). Shift+Tab
+    stays focus navigation here: the mode panel's segments and the status bar's set the mode.
   -->
   <Page.Resources>
     <ResourceDictionary>
@@ -221,11 +222,26 @@
                     <controls:TagChip Text="{x:Bind ViewModel.Posture, Mode=OneWay}" Tone="{x:Bind ViewModel.PostureTone, Mode=OneWay}" VerticalAlignment="Center" />
                     <StackPanel Orientation="Horizontal" Spacing="10">
                       <TextBlock Text="{x:Bind ViewModel.PackNote, Mode=OneWay}" Style="{StaticResource PanelNote}" />
-                      <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Content="{x:Bind ViewModel.EnforceLabel, Mode=OneWay}"
+                      <controls:CorvidButton x:Name="EnforceButton" Style="{StaticResource CorvidSmallButton}" Content="{x:Bind ViewModel.EnforceLabel, Mode=OneWay}"
                                              Command="{x:Bind ViewModel.ToggleEnforceCommand}"
-                                             ToolTipService.ToolTip="Detections:Enforce: off, every match is recorded and none forces an ask" />
+                                             ToolTipService.ToolTip="{x:Bind ViewModel.EnforceTooltip, Mode=OneWay}"
+                                             AutomationProperties.HelpText="{x:Bind ViewModel.EnforceTooltip, Mode=OneWay}" />
                     </StackPanel>
                   </controls:WrapRowPanel>
+                </Border>
+                <!-- Asking before every session's forced asks stop: the enforcing rules named, then Record only and Keep enforcing. -->
+                <Border Margin="10,10,10,4" Padding="12,10" CornerRadius="8" Background="{ThemeResource CorvidAmberBg}"
+                        Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsAskingRecordOnly), Mode=OneWay}" AutomationProperties.LiveSetting="Assertive">
+                  <StackPanel Spacing="8">
+                    <TextBlock Text="{x:Bind ViewModel.RecordOnlyQuestion, Mode=OneWay}" Style="{StaticResource Cell}" FontFamily="{StaticResource CorvidSans}"
+                               IsTextSelectionEnabled="True" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <controls:CorvidButton x:Name="RecordOnlyButton" Style="{StaticResource CorvidSmallButton}" Foreground="{ThemeResource CorvidAmber}"
+                                             Content="Record only" Command="{x:Bind ViewModel.ConfirmRecordOnlyCommand}" />
+                      <controls:CorvidButton x:Name="KeepEnforcingButton" Style="{StaticResource CorvidSmallButton}" Content="Keep enforcing" Command="{x:Bind ViewModel.CancelRecordOnlyCommand}"
+                                             AutomationProperties.HelpText="Esc" />
+                    </StackPanel>
+                  </StackPanel>
                 </Border>
                 <TextBlock Text="rule · posture · matches" Style="{StaticResource TableHead}" />
                 <ItemsControl ItemsSource="{x:Bind ViewModel.DetectionRules, Mode=OneWay}" IsTabStop="False" AutomationProperties.Name="Detection rules">
@@ -290,6 +306,8 @@
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
+                <TextBlock Margin="14,0,14,12" Text="{x:Bind ViewModel.HiddenMatches, Mode=OneWay}" Style="{StaticResource PanelSmall}"
+                           Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasHiddenMatches), Mode=OneWay}" />
                 <TextBlock Margin="14,10,14,12" Text="No matches so far. A match that completes a rule shows here and in the session it happened in."
                            Style="{StaticResource PanelSmall}" Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.HasMatches), Mode=OneWay}" />
               </StackPanel>
@@ -334,6 +352,8 @@
                       </DataTemplate>
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
+                  <TextBlock Text="{x:Bind ViewModel.HiddenTaint, Mode=OneWay}" Style="{StaticResource PanelSmall}"
+                             Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasHiddenTaint), Mode=OneWay}" />
                   <Border Height="1" Background="{ThemeResource CorvidLine}" />
                   <ItemsControl ItemsSource="{x:Bind ViewModel.TaintFacts}" IsTabStop="False" ItemTemplate="{StaticResource FactTemplate}"
                                 AutomationProperties.Name="What taint changes">

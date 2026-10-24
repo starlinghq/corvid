@@ -20,9 +20,10 @@ public sealed class RuleRowView : ObservableObject
         Rule = rule;
         _remove = remove;
         _confirming = confirming;
-        Text = Spans.Parse(rule.Text);
-        Plain = Spans.Plain(rule.Text);
-        Revealed = SafeText.Reveal(rule.Text.Replace("`", "", StringComparison.Ordinal));
+        // The engine's words are data: built from their pieces, so a tilde or a stray backtick draws as itself.
+        Text = SafetyText.Runs(rule.Text);
+        Plain = SafetyText.Plain(rule.Text);
+        Revealed = SafeText.Reveal(SafetyText.Unmarked(rule.Text));
         HasHidden = SafeText.HasHidden(rule.Text);
         Source = Spans.Parse(SourceMarkup(rule));
         Written = WrittenText(rule.WrittenAt, time);
@@ -136,13 +137,13 @@ public sealed class DetectionRuleRowView(DetectionRule rule, bool packEnforces, 
 {
     public DetectionRule Rule { get; } = rule;
 
-    public string Id => Rule.Id;
+    public string Id => SafeText.Clean(Rule.Id);
 
     public string Version => string.Create(CultureInfo.InvariantCulture, $"v{Rule.Version}");
 
     public string Title => SafeText.Clean(Rule.Title);
 
-    public string Category => Rule.Category;
+    public string Category => SafeText.Clean(Rule.Category);
 
     public string Severity => SafetyText.Severity(Rule.Severity);
 
@@ -174,7 +175,7 @@ public sealed class DetectionMatchRowView
         At = local.Date == today
             ? local.ToString("HH:mm:ss", CultureInfo.InvariantCulture)
             : local.ToString("MMM d HH:mm", CultureInfo.InvariantCulture);
-        Summary = Spans.Parse(match.Summary);
+        Summary = SafetyText.Runs(match.Summary);
         Events = "events " + string.Join(", ", match.Events.Select(e => e.ToString(CultureInfo.InvariantCulture)));
         OpenInAuditCommand = new RelayCommand(() => openInAudit(match));
     }
@@ -245,9 +246,9 @@ public sealed class TaintRowView
 /// <summary>One code of the hardline list.</summary>
 public sealed class HardlineRowView(HardlineCode code)
 {
-    public string Code { get; } = code.Code;
+    public string Code { get; } = SafeText.Clean(code.Code);
 
-    public string Sentence { get; } = code.Sentence;
+    public string Sentence { get; } = SafeText.Clean(code.Sentence);
 
     public string AutomationName => $"{Code}: {Sentence}";
 }
@@ -255,6 +256,72 @@ public sealed class HardlineRowView(HardlineCode code)
 /// <summary>Words the Safety page shares between its rows.</summary>
 public static class SafetyText
 {
+    /// <summary>
+    /// A rule's or a match's words, which come from the engine with commands and paths in backticks, as runs: each pair of
+    /// backticks a code run, everything else plain and taken literally (a tilde, two stars, an unpaired backtick), each
+    /// piece cleaned and escaped. A backslash before a backtick or a backslash makes it literal, so a path holding a
+    /// backtick can sit in a code span.
+    /// </summary>
+    public static IReadOnlyList<TextRun> Runs(string? text) =>
+        Spans.Parse(string.Concat(Pieces(text).Select(piece => piece.Code
+            ? $"`{Spans.Escape(SafeText.Clean(piece.Text))}`"
+            : Spans.Escape(SafeText.Clean(piece.Text)))));
+
+    /// <summary>The words without their backticks, cleaned: for a screen reader and the notices.</summary>
+    public static string Plain(string? text) => SafeText.Clean(Unmarked(text));
+
+    /// <summary>The words without their backticks and nothing else changed: what a confirmation reveals.</summary>
+    public static string Unmarked(string? text) => string.Concat(Pieces(text).Select(piece => piece.Text));
+
+    /// <summary>The words split at their backtick pairs; an unpaired backtick stays in the text.</summary>
+    internal static IReadOnlyList<(string Text, bool Code)> Pieces(string? text)
+    {
+        var pieces = new List<(string Text, bool Code)>();
+        if (string.IsNullOrEmpty(text))
+            return pieces;
+        var current = new System.Text.StringBuilder();
+        var code = false;
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (IsEscape(text, i))
+            {
+                current.Append(text[++i]);
+            }
+            else if (c == '`' && (code || ClosingTick(text, i + 1)))
+            {
+                if (current.Length > 0)
+                    pieces.Add((current.ToString(), code));
+                current.Clear();
+                code = !code;
+            }
+            else
+            {
+                current.Append(c);
+            }
+        }
+
+        if (current.Length > 0)
+            pieces.Add((current.ToString(), code));
+        return pieces;
+    }
+
+    private static bool IsEscape(string text, int at) =>
+        text[at] == '\\' && at + 1 < text.Length && text[at + 1] is '`' or '\\';
+
+    private static bool ClosingTick(string text, int from)
+    {
+        for (var i = from; i < text.Length; i++)
+        {
+            if (IsEscape(text, i))
+                i++;
+            else if (text[i] == '`')
+                return true;
+        }
+
+        return false;
+    }
+
     public static string Severity(DetectionSeverity severity) => severity.ToString().ToLowerInvariant();
 
     /// <summary>Red for high and critical, amber for medium, grey for low; the word is always shown beside the colour.</summary>

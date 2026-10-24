@@ -189,20 +189,167 @@ public sealed class SafetyTests
         Assert.Equal(12, safety.DetectionRules.Count);
         Assert.Equal("built-in pack · 12 rules · 5 enforce", safety.PackNote);
         Assert.Equal("enforcing", safety.Posture);
-        var egress = Assert.Single(safety.DetectionRules, rule => rule.Id == "secret-read-then-egress");
+        var egress = Assert.Single(safety.DetectionRules, rule => rule.Id == DemoSafetyService.EgressRuleId);
         Assert.Equal("enforce", egress.Posture);
         Assert.Equal("1 match", egress.Matches);
         Assert.Equal("high", egress.Severity);
         Assert.Equal(Tone.Red, egress.SeverityTone);
+        Assert.Equal("Record only…", safety.EnforceLabel);
+        Assert.StartsWith("Detections:Enforce off", safety.EnforceTooltip, StringComparison.Ordinal);
 
+        // Turning it off stops every session's forced asks at once: it asks first, naming the rules that stop.
         await safety.ToggleEnforceCommand.ExecuteAsync();
 
+        Assert.True(safety.IsAskingRecordOnly);
+        Assert.True(safety.Enforce);
+        Assert.StartsWith("Record only? These 5 rules stop forcing an ask, in every session: ", safety.RecordOnlyQuestion, StringComparison.Ordinal);
+        Assert.All(safety.DetectionRules.Where(rule => rule.Rule.Enforces), rule => Assert.Contains(rule.Id, safety.RecordOnlyQuestion, StringComparison.Ordinal));
+        Assert.DoesNotContain("curl-pipe-to-shell", safety.RecordOnlyQuestion, StringComparison.Ordinal);
+
+        // Esc (or Keep enforcing) leaves it on.
+        Assert.True(safety.CancelConfirm());
+        Assert.False(safety.IsAskingRecordOnly);
+        Assert.True(safety.Enforce);
+
+        await safety.ToggleEnforceCommand.ExecuteAsync();
+        await safety.ConfirmRecordOnlyCommand.ExecuteAsync();
+
+        Assert.False(safety.IsAskingRecordOnly);
         Assert.False(safety.Enforce);
         Assert.Equal("recording only", safety.Posture);
-        Assert.Equal("enforce · recording only", Assert.Single(safety.DetectionRules, rule => rule.Id == "secret-read-then-egress").Posture);
+        Assert.Equal("enforce · recording only", Assert.Single(safety.DetectionRules, rule => rule.Id == DemoSafetyService.EgressRuleId).Posture);
         Assert.All(safety.DetectionRules, rule => Assert.False(rule.ForcesAsk));
         Assert.Contains("Detections:Enforce=false", Text(safety.Notice), StringComparison.Ordinal);
         Assert.Equal("recording only · 1 match", app.StatusBar.AreaFields[0].Value);
+        Assert.Equal("Enforce", safety.EnforceLabel);
+        Assert.StartsWith("Detections:Enforce on", safety.EnforceTooltip, StringComparison.Ordinal);
+
+        // Back on is one click.
+        await safety.ToggleEnforceCommand.ExecuteAsync();
+
+        Assert.False(safety.IsAskingRecordOnly);
+        Assert.True(safety.Enforce);
+        Assert.Contains("Detections:Enforce=true", Text(safety.Notice), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SafetyNamesTheDemosDetectionAsAuditDoes()
+    {
+        using var app = Compose("--page", "safety");
+        await app.Safety.Loaded;
+
+        var match = Assert.Single(app.Safety.Matches);
+        Assert.Equal("credential-read-then-egress", match.RuleId);
+        var rule = Assert.Single(app.Safety.DetectionRules, row => row.Id == match.RuleId);
+        Assert.Equal("v3", rule.Version);
+        Assert.Equal("1 match", rule.Matches);
+        Assert.DoesNotContain(app.Safety.DetectionRules, row => row.Id == "secret-read-then-egress");
+    }
+
+    [Fact]
+    public async Task ARuleWithATildeAndABacktickDrawsItsWordsAsTheyAre()
+    {
+        var service = new FakeSafetyService
+        {
+            Rules =
+            [
+                new SafetyRule("r1", RuleDecision.Allow, RuleScope.Session, "`rm -r` under ~/build and a ` tick, **not** bold") { SessionId = "cli-1" },
+                new SafetyRule("r2", RuleDecision.Allow, RuleScope.Session, "`rm -r` under `~/my\\`dir` only") { SessionId = "cli-1" },
+            ],
+        };
+        var bar = new StatusBarViewModel();
+        using var safety = new SafetyViewModel(service, new FakeSession(), new ShellViewModel(bar), bar, ManualTimeProvider.DemoLocal());
+        await safety.Loaded;
+
+        var tilde = Assert.Single(safety.Rules, row => row.Id == "r1");
+        Assert.Equal("rm -r under ~/build and a ` tick, **not** bold", Text(tilde.Text));
+        Assert.Equal([(true, "rm -r"), (false, " under ~/build and a ` tick, **not** bold")], tilde.Text.Select(run => (run.Code, run.Text)));
+        Assert.All(tilde.Text, run => Assert.False(run.Muted || run.Bold));
+        Assert.Equal("rm -r under ~/build and a ` tick, **not** bold", tilde.Plain);
+        Assert.Contains("\"allow rm -r under ~/build and a ` tick, **not** bold\"", tilde.ConfirmText, StringComparison.Ordinal);
+
+        // An escaped backtick stays inside its code span.
+        var escaped = Assert.Single(safety.Rules, row => row.Id == "r2");
+        Assert.Equal([(true, "rm -r"), (false, " under "), (true, "~/my`dir"), (false, " only")], escaped.Text.Select(run => (run.Code, run.Text)));
+    }
+
+    [Fact]
+    public async Task ANarrowedRuleNamesItsPathsInCodeAndSafetyDrawsThemAsTyped()
+    {
+        using var app = Compose("--scene", "approval", "--page", "safety");
+        var safety = app.Safety;
+        await safety.Loaded;
+
+        await app.SessionService.AnswerApprovalAsync(DemoSessionService.MainSessionId, "a-32",
+            new ApprovalAnswer(ApprovalChoice.Session) { RulePaths = [["~/build"], []] }, TestContext.Current.CancellationToken);
+
+        var written = Assert.Single(safety.Rules, row => row.Rule.ApprovalId == "a-32");
+        Assert.Contains(written.Text, run => run.Code && run.Text == "~/build");
+        Assert.StartsWith("rm -r under ~/build and ", written.Plain, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AnOpenRemoveQuestionSurvivesTheReloadARunningSessionCauses()
+    {
+        var service = new FakeSafetyService
+        {
+            Rules = [new SafetyRule("r1", RuleDecision.Allow, RuleScope.Always, "`ls`"), new SafetyRule("r2", RuleDecision.Allow, RuleScope.Always, "`pwd`")],
+        };
+        var bar = new StatusBarViewModel();
+        using var safety = new SafetyViewModel(service, new FakeSession(), new ShellViewModel(bar), bar, ManualTimeProvider.DemoLocal());
+        await safety.Loaded;
+        var asking = Assert.Single(safety.Rules, row => row.Id == "r2");
+        asking.StartRemoveCommand.Execute(null);
+
+        // A use moves the count while the question is open.
+        service.Rules[1] = service.Rules[1] with { Uses = 3 };
+        service.Raise();
+        await SkillsTests.WaitFor(() => safety.Rules.Single(row => row.Id == "r2").Uses == "3 calls");
+
+        var again = Assert.Single(safety.Rules, row => row.Id == "r2");
+        Assert.NotSame(asking, again);
+        Assert.True(again.IsConfirming);
+        Assert.Same(again, safety.Confirming);
+        Assert.False(safety.Rules.Single(row => row.Id == "r1").IsConfirming);
+    }
+
+    [Fact]
+    public async Task TheMatchesAndTaintListsAreCapped()
+    {
+        var at = ManualTimeProvider.DemoLocal().GetUtcNow();
+        var service = new FakeSafetyService
+        {
+            Detections = [.. Enumerable.Range(0, SafetyViewModel.MaxMatchRows + 7)
+                .Select(i => new SafetyDetection("fork-bomb", DetectionSeverity.High, "cli-1", at.AddSeconds(-i), i, [i]))],
+            Taint = [.. Enumerable.Range(0, SafetyViewModel.MaxTaintRows + 3).Select(i => new SessionTaint($"cli-{i}", "s", i % 2 == 0))],
+        };
+        var bar = new StatusBarViewModel();
+        using var safety = new SafetyViewModel(service, new FakeSession(), new ShellViewModel(bar), bar, ManualTimeProvider.DemoLocal());
+        await safety.Loaded;
+
+        Assert.Equal(SafetyViewModel.MaxMatchRows, safety.Matches.Count);
+        Assert.Equal("and 7 older, not drawn: Audit lists every match", safety.HiddenMatches);
+        Assert.Equal(SafetyViewModel.MaxTaintRows, safety.Taint.Count);
+        Assert.Equal("and 3 more sessions, not drawn", safety.HiddenTaint);
+        Assert.True(safety.Taint[0].IsTainted);
+    }
+
+    [Fact]
+    public async Task OutsideTextInTheDetectionAndHardlineRowsIsCleaned()
+    {
+        var service = new FakeSafetyService
+        {
+            Pack = [new DetectionRule("evil‮rule", 1, "t​itle", DetectionSeverity.Low, false) { Category = "c\u001B[31mat" }],
+            Hardline = [new HardlineCode("co‮de", "sen⁦tence")],
+        };
+        var bar = new StatusBarViewModel();
+        using var safety = new SafetyViewModel(service, new FakeSession(), new ShellViewModel(bar), bar, ManualTimeProvider.DemoLocal());
+        await safety.Loaded;
+
+        var rule = Assert.Single(safety.DetectionRules);
+        Assert.Equal(("evilrule", "title", "cat"), (rule.Id, rule.Title, rule.Category));
+        var code = Assert.Single(safety.Hardline);
+        Assert.Equal(("code", "sentence"), (code.Code, code.Sentence));
     }
 
     [Fact]
@@ -263,9 +410,11 @@ public sealed class SafetyTests
         Assert.True(safety.Modes[0].IsSelected);
         Assert.Equal(ApprovalMode.Manual, app.StatusBar.Mode);
 
-        safety.CycleModeCommand.Execute(null);
-        Assert.Equal(ApprovalMode.Smart, app.SessionHub.Current?.Mode);
-        Assert.Equal(ApprovalMode.Smart, app.StatusBar.Mode);
+        safety.Modes[2].Choose.Execute(null);
+        Assert.Equal(ApprovalMode.Permissive, app.SessionHub.Current?.Mode);
+        Assert.Equal(ApprovalMode.Permissive, app.StatusBar.Mode);
+        Assert.True(safety.Modes[2].IsSelected);
+        Assert.False(safety.Modes[0].IsSelected);
     }
 
     [Fact]
@@ -279,7 +428,7 @@ public sealed class SafetyTests
         Assert.False(safety.CanChangeMode);
         Assert.False(safety.Modes[0].Choose.CanExecute(null));
         Assert.Equal("Another process drives this session: its mode is changed there.", safety.ModeNote);
-        safety.CycleModeCommand.Execute(null);
+        Assert.All(safety.Modes, mode => Assert.False(mode.Choose.CanExecute(null)));
         Assert.Empty(session.Requested);
     }
 
@@ -355,13 +504,22 @@ public sealed class SafetyTests
 
         public List<SafetyDetection> Detections { get; init; } = [];
 
+        public List<SessionTaint> Taint { get; init; } = [];
+
+        public List<DetectionRule> Pack { get; init; } = [.. SafetyCatalog.BuiltInRules];
+
+        public List<HardlineCode> Hardline { get; init; } = [.. SafetyCatalog.Hardline];
+
         public event EventHandler? Changed;
+
+        /// <summary>What a running session's change does: the page reads everything again.</summary>
+        public void Raise() => Changed?.Invoke(this, EventArgs.Empty);
 
         public Task<SafetySnapshot> LoadAsync(CancellationToken cancellationToken = default) =>
             FailLoad
                 ? Task.FromException<SafetySnapshot>(new InvalidOperationException("no answer"))
                 : Task.FromResult(new SafetySnapshot([.. Rules],
-                    [new DetectionPack(SafetyCatalog.BuiltInPack, true, SafetyCatalog.BuiltInRules)], [.. Detections], SafetyCatalog.Hardline, []));
+                    [new DetectionPack(SafetyCatalog.BuiltInPack, true, [.. Pack])], [.. Detections], [.. Hardline], [.. Taint]));
 
         public Task RemoveRuleAsync(string ruleId, CancellationToken cancellationToken = default)
         {
