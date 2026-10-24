@@ -46,7 +46,14 @@ It restores and passes the boundary checker here, but has not been built or run,
 
 `CORVID_APP_RENDERER=software` draws with Skia on the CPU instead of OpenGL (see the harness check below).
 
-Keys so far: `Ctrl+B` the dock, `Ctrl+Shift+B` the rail, `Ctrl+,` Settings, `Esc` closes an overlay. On the Sessions
+The window's own keys come from the key map (`Corvid.App.Core/Keys/KeyMap.cs`, `ui.md` §6) and can be remapped at once
+in Settings › Keybindings: `Ctrl+K` and `Ctrl+P` the command palette, `Ctrl+Tab` the session switcher (again for the
+next, `Ctrl+Shift+Tab` back), `Ctrl+R` prompt history, `Ctrl+F` find in the session, `Ctrl+Shift+F` search across
+sessions, `Alt+P` switch the generator, `F1` and `?` (outside a text field) the shortcuts, `Ctrl+N`, `Ctrl+Shift+N` and
+`Ctrl+;` the surfaces of what comes later, `Ctrl+B` the dock, `Ctrl+Shift+B` the rail, `Ctrl+,` Settings,
+`Ctrl+Shift+C` Review, `Esc` closes the palette or an overlay. A page's own key on the same gesture (Audit's, Memory's
+and Skills' `Ctrl+F`, Models' `Alt+P`) wins while that area shows; a new page key goes into `KeyMap`'s defaults and
+`KeyMap.ContextsOf` so the help and the conflict check know it. On the Sessions
 page: `Enter` sends (queued while a turn runs), `Shift+Enter` breaks the line, `Ctrl+Enter` steers, `Esc` interrupts,
 `Esc Esc` on an idle empty composer opens Rewind, `Up` takes the last queued message back, `Shift+Tab` cycles the
 approval mode, `Ctrl+S` puts the draft aside; on an open approval card the first `Enter` focuses it, then `1` to `5`
@@ -111,7 +118,7 @@ src/Corvid.App/
                              ToneRow (.row), ColumnsPanel, Meter, RichText (runs from the markdown model), MarkdownView,
                              DiffRowsView, HintLine (key caps)
   Shell/                     ShellPage (the window's content), RailView, StatusBarView, AreaPages, IDockProvider,
-                             EqualColumnsPanel
+                             EqualColumnsPanel, CommandPalette (Ctrl+K, the switcher, history, find, help), KeyGestures
   Pages/                     one <Area>Page.xaml per area; SessionsDock and BoardDock are those areas' dock panels;
                              ModelsStyles.xaml and SpanText are the Models and First run pages' shared parts;
                              Jobs, MCP and Gateway also merge ModelsStyles.xaml, and share OpsStyles.xaml (row button,
@@ -120,7 +127,9 @@ src/Corvid.App/
 src/Corvid.App.Core/
   Mvvm/                      ObservableObject, RelayCommand(<T>), AsyncRelayCommand, Choice, IDispatcher, InlineDispatcher
   Shell/                     ShellViewModel, StatusBarViewModel, NavItem, SessionListItem, PhoneTab, ShellLayout, DemoShell
-  Composition/               AppComposition, one partial file per area
+  Composition/               AppComposition, one partial file per area (and AppComposition.Palette)
+  Keys/                      KeyMap (every key with its context, remapping, conflicts), KeyGesture
+  Palette/                   PaletteViewModel (commands, pages, settings, sessions, prompt history, find), FuzzyMatch
   <Area>/                    each area's view model (and, as the area is built, its service, DTOs and demo service)
   Area.cs, AppOptions.cs, IconKind.cs, AppTheme.cs (with Tone), FrozenTimeProvider.cs, AreaViewModel.cs
 ```
@@ -196,6 +205,16 @@ And from the A1 screens:
   focus itself on `Loaded` (`IsTabStop` and a programmatic `Focus`).
 - Closing an inline editor sends focus to the next item's first button, which then looks pressed: focus the page before
   the command runs.
+
+And from A2:
+
+- Uno fires the first matching `KeyboardAccelerator` in registration order, whatever has focus, and stops there even
+  when the handler leaves `args.Handled` false. So the shell leaves unbound a window gesture the showing page also binds
+  (`KeyMap.IsPagesKey`), and a page key that shares a window key's gesture must be in `KeyMap`'s defaults.
+- A `Tapped` that follows the `Click` that opened an overlay lands on the overlay's scrim: use `PointerPressed` on
+  scrims, as `CommandPalette` does. Tab gestures never reach accelerators; the shell handles them in `PreviewKeyDown`.
+- Uno refuses focus to a control that has not been laid out since it became visible; `OpsLayout.FocusWhenShown` waits
+  for its layout.
 
 ## Fonts
 
