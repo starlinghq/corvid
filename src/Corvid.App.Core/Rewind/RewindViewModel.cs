@@ -331,6 +331,10 @@ public sealed class RewindViewModel : AreaViewModel
         foreach (var file in plan?.Files ?? [])
         {
             PlanFiles.Add(new PutBackFileView(file, plan!.CheckpointId));
+            // A conflict the engine cannot tie to a dated edit of the person's still says why it stops the restore.
+            if (file is { Kind: PutBackKind.Conflict, Edit: null, Reason: { } reason })
+                PlanNotes.Add(new RestoreNoteView(SafeText.Reveal(Path.GetFileName(file.Path)),
+                    $"{SafeText.Clean(reason)}. A restore of the files stops here and changes nothing.", Tone.Red));
             if (file.Edit is { } edit)
             {
                 // The file a restore will merge with or stop on: any hidden character in its name is shown.

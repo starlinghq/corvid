@@ -44,6 +44,48 @@ public sealed class HistoryRefusalTests
     }
 
     [Fact]
+    public void APlannedConflictWithNoDatedEditStillSaysWhyItStopsTheRestore()
+    {
+        var composition = Compose("--page", "rewind");
+        var rewind = new RewindViewModel(new OneConflict(), composition.Shell, composition.Time);
+        rewind.Entries[0].Select.Execute(null);
+
+        var note = Assert.Single(rewind.PlanNotes);
+        Assert.Equal(Tone.Red, note.Tone);
+        Assert.Equal("notes⟨U+202E⟩.md", note.FileName);
+        Assert.Equal("changed since write_file created it. A restore of the files stops here and changes nothing.", note.Text);
+    }
+
+    /// <summary>A ledger of one call whose plan stops on a file the person changed, as the engine plans it (no dated edit).</summary>
+    private sealed class OneConflict : IRewindService
+    {
+        private static readonly DateTimeOffset At = new(2026, 10, 24, 14, 0, 0, TimeSpan.Zero);
+
+        public event EventHandler<string>? TimelineChanged { add { } remove { } }
+
+        public Task<RewindTimeline> GetTimelineAsync(string sessionId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new RewindTimeline(sessionId)
+            {
+                Entries = [new LedgerEntry("cp-1", LedgerEntryKind.Call, At, 1) { Tool = "write_file", AfterId = "cp-2" }],
+                Turn = 1,
+            });
+
+        public Task<RestorePlan> PlanAsync(string sessionId, string checkpointId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new RestorePlan(checkpointId, At, 1)
+            {
+                Files = [new PutBackFile("notes‮.md", PutBackKind.Conflict, 1, 0) { Reason = "changed since write_file created it" }],
+                FromTurn = 2,
+                ToTurn = 1,
+            });
+
+        public Task<IReadOnlyList<RestorePreviewFile>> PreviewAsync(string sessionId, string checkpointId, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<RestoreOutcome> RestoreAsync(string sessionId, string checkpointId, RewindScope scope, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+    }
+
+    [Fact]
     public async Task AuditShowsTheLogWhenOnlyTheEgressLedgerIsRefused()
     {
         var time = ManualTimeProvider.Demo();

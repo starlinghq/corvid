@@ -44,7 +44,7 @@ public sealed record CliStreams(Stream Input, Stream Output, TextWriter Error)
 public static class ExitCodes
 {
     public const int Success = 0;
-    public const int Failure = Corvid.Host.Audit.LogScan.FailureExitCode;
+    public const int Failure = 1;
     public const int Usage = 2;
     /// <summary>A configured model is not in the model cache; the message says how to fetch it.</summary>
     public const int ModelsMissing = 3;
