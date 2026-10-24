@@ -36,7 +36,7 @@ public sealed partial class EngineAppServices(AppEngine engine) : UnavailableApp
 
     /// <summary>
     /// Shows the runtime's start on the status bar's engine line until it is up ("in-process · starting: Loading
-    /// qwen3.5-0.8b"), then "in-process", or why it could not start. Called once, as the composition makes its sessions.
+    /// qwen3.5-0.8b"), then "in-process". Called once, as the composition makes its sessions.
     /// </summary>
     private void ShowStartup(AppComposition app)
     {
@@ -54,7 +54,9 @@ public sealed partial class EngineAppServices(AppEngine engine) : UnavailableApp
         _ = Engine.Runtime.ContinueWith(started =>
         {
             Engine.Progress -= OnProgress;
-            Show(started.IsCompletedSuccessfully ? "in-process" : "in-process · not started");
+            // A start that failed is the hub's and First run's to explain (their notices and status); this line only follows a start.
+            if (started.IsCompletedSuccessfully)
+                Show("in-process");
         }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
