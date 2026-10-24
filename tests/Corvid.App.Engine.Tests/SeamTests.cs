@@ -79,11 +79,14 @@ public sealed class SeamTests
         Assert.IsType<Corvid.App.Engine.Review.EngineReviewService>(composition.ReviewService);
         Assert.IsType<Corvid.App.Engine.Rewind.EngineRewindService>(composition.RewindService);
         Assert.IsType<Corvid.App.Engine.Audit.EngineAuditService>(composition.AuditService);
+        // A3 setup's too.
+        Assert.IsType<Corvid.App.Engine.Models.EngineModelService>(composition.ModelService);
+        Assert.IsType<Corvid.App.Engine.FirstRun.EngineFirstRunService>(composition.FirstRunService);
+        Assert.IsType<Corvid.App.Engine.Settings.EngineSettingsService>(composition.SettingsService);
 
         // Every other area opens on a refusal that names the group that brings it.
         (object Service, string Group)[] areas =
         [
-            (composition.ModelService, "setup"), (composition.FirstRunService, "setup"), (composition.SettingsService, "setup"),
             (composition.MemoryService, "knowledge"), (composition.SkillsService, "knowledge"), (composition.SafetyService, "knowledge"),
             (composition.JobsService, "ops"), (composition.McpService, "ops"), (composition.GatewayService, "ops"),
             (composition.SecretsService, "ops"), (composition.BoardService, "integration"), (composition.PromptHistory, "integration"),
@@ -94,11 +97,6 @@ public sealed class SeamTests
             var refusal = await Assert.ThrowsAsync<ServiceUnavailableException>(() => Load(service));
             Assert.StartsWith($"This comes with A3 {group}:", refusal.Message, StringComparison.Ordinal);
         }
-        // A synchronous member answers with nothing rather than failing the page, and the page says why it is empty.
-        Assert.Empty(composition.ModelService.Snapshot.Catalogue);
-        Assert.Empty(composition.SettingsService.Definitions);
-        Assert.True(composition.Models.HasNotice);
-        Assert.Contains("This comes with A3 setup:", string.Concat(composition.Models.Notice.Select(run => run.Text)), StringComparison.Ordinal);
 
         composition.Dispose();
         Assert.True(source.Disposed);

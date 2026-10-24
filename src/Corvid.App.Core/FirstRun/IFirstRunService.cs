@@ -60,4 +60,14 @@ public interface IFirstRunService
 
     /// <summary>Writes the choices to <c>corvid.json</c> (creating it) when the setup finishes or is skipped.</summary>
     Task SaveAsync(SetupChoices choices, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The engine's start as the status bar's engine line says it while the setup shows ("starting · Loading kev-0.8b",
+    /// "not started · 2 models missing"), from K-4's load progress; null when there is nothing to report (the demo, whose
+    /// line is the mockup's).
+    /// </summary>
+    string? EngineStatus => null;
+
+    /// <summary>Raised on the UI thread when <see cref="EngineStatus"/> changes.</summary>
+    event EventHandler? EngineStatusChanged { add { } remove { } }
 }

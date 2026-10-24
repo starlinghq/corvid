@@ -398,6 +398,16 @@ public sealed class Doctor(IConfiguration configuration, ModelCatalogue catalogu
             : new DoctorCheck("checkpoints", "git", CheckStatus.Ok, $"{path}; stores under {CorvidPaths.Checkpoints(options)}");
     }
 
+    /// <summary>The GPU section of <see cref="RunAsync"/> alone (C-029), for a page that shows it beside placement.</summary>
+    public IReadOnlyList<DoctorCheck> GpuChecks() => [.. Gpu()];
+
+    /// <summary>The Vault socket check of <see cref="RunAsync"/> alone: whether something answers at the socket.</summary>
+    public static Task<DoctorCheck> VaultCheckAsync(CorvidOptions options, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return VaultAsync(options, cancellationToken);
+    }
+
     private static async Task<DoctorCheck> VaultAsync(CorvidOptions options, CancellationToken cancellationToken)
     {
         string path;

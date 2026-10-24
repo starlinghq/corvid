@@ -62,6 +62,12 @@ public interface IModelProvider
 
     /// <summary>Fetches a model explicitly. Providers that cannot download throw <see cref="NotSupportedException"/>.</summary>
     Task<ModelAvailability> DownloadAsync(string model, IProgress<ModelDownloadProgress>? progress = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Removes what a cancelled <see cref="DownloadAsync"/> left to resume from, so the cache holds only finished files.
+    /// Returns how many files it removed; a provider that keeps nothing between downloads removes nothing.
+    /// </summary>
+    int RemovePartialDownloads(string model) => 0;
 }
 
 public sealed record ModelDownloadProgress(string File, long Bytes, long? TotalBytes);
@@ -108,6 +114,9 @@ public sealed class ModelCatalogue
 
     public Task<ModelAvailability> DownloadAsync(string name, IProgress<ModelDownloadProgress>? progress = null,
         CancellationToken cancellationToken = default) => Provider(name).DownloadAsync(Find(name).Name, progress, cancellationToken);
+
+    /// <summary>Removes the partial files a cancelled download of the model left (<see cref="IModelProvider.RemovePartialDownloads"/>).</summary>
+    public int RemovePartialDownloads(string name) => Provider(name).RemovePartialDownloads(Find(name).Name);
 
     private IModelProvider Provider(string name) =>
         _models.TryGetValue(name, out var entry) ? entry.Provider : throw new ArgumentException($"No model is named '{name}'.", nameof(name));
