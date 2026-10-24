@@ -232,6 +232,21 @@ public sealed class ShellViewModel : ObservableObject
         UpdateSelection();
     }
 
+    /// <summary>The link last followed into an area (<see cref="Follow"/>); the area it names reads it to land on its target.</summary>
+    public AreaLink? Link { get; private set; }
+
+    /// <summary>
+    /// Follows a link into an area: publishes it as <see cref="Link"/> (raised even when the link is the same or the area
+    /// already shows, so following it again lands again), then shows the area.
+    /// </summary>
+    public void Follow(AreaLink link)
+    {
+        ArgumentNullException.ThrowIfNull(link);
+        Link = link;
+        OnPropertyChanged(nameof(Link));
+        Navigate(link.Area);
+    }
+
     /// <summary>Selects a session by id and shows it; false (and no change) when the rail lists no such session.</summary>
     public bool OpenSession(string id)
     {

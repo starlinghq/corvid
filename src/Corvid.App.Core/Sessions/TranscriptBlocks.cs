@@ -1,6 +1,7 @@
 using System.Globalization;
 using Corvid.App.Core.Markdown;
 using Corvid.App.Core.Mvvm;
+using Corvid.App.Core.Shell;
 
 namespace Corvid.App.Core.Sessions;
 
@@ -252,7 +253,7 @@ public sealed class SwitchBlock : TranscriptBlock
     internal SwitchBlock(SwitchEntry entry, BlockContext context)
         : base(entry)
     {
-        OpenEgressCommand = new RelayCommand(() => context.Session.Navigate(Area.Audit));
+        OpenEgressCommand = new RelayCommand(() => context.Session.Follow(AreaLinkTarget.Egress));
         Apply(entry, context);
     }
 
@@ -511,9 +512,12 @@ public sealed class DetectionBlock : TranscriptBlock
     internal DetectionBlock(DetectionEntry entry, BlockContext context)
         : base(entry)
     {
-        OpenInAuditCommand = new RelayCommand(() => context.Session.Navigate(Area.Audit));
+        OpenInAuditCommand = new RelayCommand(() => context.Session.Follow(AreaLinkTarget.Detection,
+            [.. _detection.Events.Select(match => match.Sequence)], _detection.RuleId));
         Apply(entry, context);
     }
+
+    private DetectionInfo _detection = null!;
 
     public override TranscriptBlockKind Kind => TranscriptBlockKind.Detection;
 
@@ -535,6 +539,7 @@ public sealed class DetectionBlock : TranscriptBlock
     internal override void Apply(TranscriptEntry entry, BlockContext context)
     {
         var detection = ((DetectionEntry)entry).Detection;
+        _detection = detection;
         Title = $"detection: {SafeText.Clean(detection.RuleId)}";
         Detail = DetectionText.Detail(detection);
         Reason = SafeText.Clean(detection.Reason);
