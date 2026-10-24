@@ -106,13 +106,24 @@
                 <RowDefinition Height="Auto" />
               </Grid.RowDefinitions>
               <TextBlock Text="name" Style="{StaticResource OpsLabel}" Margin="0,8,0,0" />
-              <TextBox x:Name="DraftNameBox" Grid.Column="1" Style="{StaticResource OpsField}" PlaceholderText="inbox-digest" MaxWidth="360" HorizontalAlignment="Left"
-                       Width="360" Text="{x:Bind ViewModel.DraftName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="Job name" />
+              <Grid Grid.Column="1">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" MaxWidth="360" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="DraftNameBox" Style="{StaticResource OpsField}" PlaceholderText="inbox-digest"
+                       Text="{x:Bind ViewModel.DraftName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="Job name" />
+              </Grid>
               <TextBlock Grid.Row="1" Text="schedule" Style="{StaticResource OpsLabel}" Margin="0,8,0,0" />
               <StackPanel Grid.Row="1" Grid.Column="1" Spacing="6">
-                <TextBox Style="{StaticResource FieldBox}" PlaceholderText="weekdays at 9am · in 30m · 0 9 * * 1-5 · 2026-10-25T09:00"
-                         MaxWidth="460" HorizontalAlignment="Stretch"
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" MaxWidth="460" />
+                    <ColumnDefinition Width="Auto" />
+                  </Grid.ColumnDefinitions>
+                  <TextBox Style="{StaticResource FieldBox}" PlaceholderText="weekdays at 9am · in 30m · 0 9 * * 1-5 · 2026-10-25T09:00"
                          Text="{x:Bind ViewModel.DraftSchedule, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="Schedule" />
+                </Grid>
                 <StackPanel Orientation="Horizontal" Spacing="6" AutomationProperties.LiveSetting="Polite">
                   <controls:Icon Kind="Check" Width="14" Height="14" Foreground="{ThemeResource CorvidGreen}" VerticalAlignment="Center"
                                  Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.PreviewOk), Mode=OneWay}" />
@@ -128,9 +139,14 @@
                        Text="{x:Bind ViewModel.DraftPrompt, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="Prompt" />
               <TextBlock Grid.Row="3" Text="pre-run" Style="{StaticResource OpsLabel}" Margin="0,8,0,0" />
               <StackPanel Grid.Row="3" Grid.Column="1" Spacing="6">
-                <TextBox Style="{StaticResource FieldBox}" PlaceholderText="scripts/fetch-inbox.sh (optional: its output goes into the prompt)"
-                         MaxWidth="460" HorizontalAlignment="Stretch"
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" MaxWidth="460" />
+                    <ColumnDefinition Width="Auto" />
+                  </Grid.ColumnDefinitions>
+                  <TextBox Style="{StaticResource FieldBox}" PlaceholderText="scripts/fetch-inbox.sh (optional)" ToolTipService.ToolTip="A script run first; its output goes into the prompt"
                          Text="{x:Bind ViewModel.DraftScript, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="Pre-run script" />
+                </Grid>
                 <CheckBox Style="{StaticResource SetupCheckBox}" IsChecked="{x:Bind ViewModel.DraftNoAgent, Mode=TwoWay}"
                           AutomationProperties.Name="No agent: run only the script">
                   <TextBlock Text="no agent: run only the script, with no model turn" Style="{StaticResource Cell}" />

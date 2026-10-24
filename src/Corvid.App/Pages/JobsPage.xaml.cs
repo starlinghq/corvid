@@ -28,8 +28,9 @@ public sealed partial class JobsPage : Page
         if (ViewModel is not null)
             ViewModel.PropertyChanged -= OnViewModelChanged;
         ViewModel = ((AppComposition)e.Parameter).Jobs;
-        ViewModel.PropertyChanged += OnViewModelChanged;
         Bindings.Update();
+        // After the bindings, so a control the change shows is visible when the handler looks for it.
+        ViewModel.PropertyChanged += OnViewModelChanged;
         base.OnNavigatedTo(e);
     }
 
@@ -52,13 +53,26 @@ public sealed partial class JobsPage : Page
             case nameof(JobsViewModel.IsCreating) when ViewModel.IsCreating:
                 // The form opens above the tables: show it and put the caret in its first field.
                 BodyScroll.ChangeView(null, 0, null, disableAnimation: true);
-                DispatcherQueue.TryEnqueue(() => DraftNameBox.Focus(FocusState.Programmatic));
+                FocusSoon(DraftNameBox, FocusState.Programmatic);
                 break;
             case nameof(JobsViewModel.IsConfirmingRemove) when ViewModel.IsConfirmingRemove:
-                DispatcherQueue.TryEnqueue(() => ConfirmRemoveButton.Focus(FocusState.Programmatic));
+                FocusSoon(ConfirmRemoveButton, FocusState.Keyboard);
+                break;
+            case nameof(JobsViewModel.Selected):
+                // A removed job's buttons go with it: focus would fall to the next tab stop (the status bar), so it goes
+                // to the job now selected instead.
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    var focused = XamlRoot is { } root ? FocusManager.GetFocusedElement(root) as DependencyObject : null;
+                    if (!IsInPage(focused))
+                        FocusSelected();
+                });
                 break;
         }
     }
+
+    /// <summary>Focuses a control a change just showed, once it is laid out (Uno refuses focus to one not yet measured).</summary>
+    private static void FocusSoon(Control control, FocusState state) => OpsLayout.FocusWhenShown(control, state);
 
     /// <summary>Up and Down from a job row: the previous or next job, focused and in view.</summary>
     private void OnRowsKeyDown(object sender, KeyRoutedEventArgs e)
@@ -91,6 +105,17 @@ public sealed partial class JobsPage : Page
             button.Focus(FocusState.Keyboard);
             button.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false });
         }
+    }
+
+    private bool IsInPage(DependencyObject? element)
+    {
+        for (var at = element; at is not null; at = VisualTreeHelper.GetParent(at))
+        {
+            if (ReferenceEquals(at, this))
+                return true;
+        }
+
+        return false;
     }
 
     private static Button? Find(DependencyObject parent)

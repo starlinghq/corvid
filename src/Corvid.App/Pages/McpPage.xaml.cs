@@ -33,9 +33,10 @@ public sealed partial class McpPage : Page
     {
         Detach();
         ViewModel = ((AppComposition)e.Parameter).Mcp;
+        Bindings.Update();
+        // After the bindings, so a control the change shows is visible when the handler looks for it.
         ViewModel.PropertyChanged += OnViewModelChanged;
         ViewModel.ReviewRequested += OnReviewRequested;
-        Bindings.Update();
         base.OnNavigatedTo(e);
     }
 
@@ -64,16 +65,19 @@ public sealed partial class McpPage : Page
         {
             case nameof(McpViewModel.IsAdding) when ViewModel.IsAdding:
                 BodyScroll.ChangeView(null, 0, null, disableAnimation: true);
-                DispatcherQueue.TryEnqueue(() => DraftNameBox.Focus(FocusState.Programmatic));
+                FocusSoon(DraftNameBox, FocusState.Programmatic);
                 break;
             case nameof(McpViewModel.Confirm) when ViewModel.IsConfirmingTrust:
-                DispatcherQueue.TryEnqueue(() => ConfirmTrustButton.Focus(FocusState.Programmatic));
+                FocusSoon(ConfirmTrustButton, FocusState.Keyboard);
                 break;
             case nameof(McpViewModel.Confirm) when ViewModel.IsConfirmingForget:
-                DispatcherQueue.TryEnqueue(() => ConfirmForgetButton.Focus(FocusState.Programmatic));
+                FocusSoon(ConfirmForgetButton, FocusState.Keyboard);
                 break;
         }
     }
+
+    /// <summary>Focuses a control a change just showed, once it is laid out (Uno refuses focus to one not yet measured).</summary>
+    private static void FocusSoon(Control control, FocusState state) => OpsLayout.FocusWhenShown(control, state);
 
     private void OnReviewRequested(object? sender, McpHeldViewModel card) => DispatcherQueue.TryEnqueue(() =>
     {

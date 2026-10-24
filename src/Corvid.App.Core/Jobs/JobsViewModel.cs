@@ -622,9 +622,10 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
             SchedulerHost.Elsewhere => "elsewhere",
             _ => "off",
         };
+        var jobs = count == 1 ? "1 job" : $"{count} jobs";
         _lease.Scheduler = SafeText.Clean(next is { NextRun: { } at }
-            ? $"{where} · {count} jobs · next: {next.Name}, {JobsText.When(at, _time.GetUtcNow(), _time.LocalTimeZone)}"
-            : $"{where} · {count} jobs");
+            ? $"{where} · {jobs} · next: {next.Name}, {JobsText.When(at, _time.GetUtcNow(), _time.LocalTimeZone)}"
+            : $"{where} · {jobs}");
     }
 
     private void ReportFailures(AsyncRelayCommand command) => command.PropertyChanged += (_, e) =>

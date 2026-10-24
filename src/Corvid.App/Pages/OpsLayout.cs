@@ -59,4 +59,22 @@ internal static class OpsLayout
                 scroller.Padding = room;
         }
     }
+
+    /// <summary>
+    /// Focuses a control that a change has just shown: now if it takes focus, otherwise after the next layout passes (at
+    /// most a few). Uno refuses focus to a control that has not been laid out since it became visible.
+    /// </summary>
+    public static void FocusWhenShown(Control control, FocusState state)
+    {
+        if (control.Focus(state))
+            return;
+        var tries = 0;
+        EventHandler<object>? handler = null;
+        handler = (_, _) =>
+        {
+            if (control.Focus(state) || ++tries >= 5)
+                control.LayoutUpdated -= handler;
+        };
+        control.LayoutUpdated += handler;
+    }
 }

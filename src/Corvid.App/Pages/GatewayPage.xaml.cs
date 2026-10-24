@@ -50,16 +50,13 @@ public sealed partial class GatewayPage : Page
     {
         if (sender is not FrameworkElement ask)
             return;
-        DependencyObject? card = ask;
-        while (card is not null and not Border { Tag: "request" })
-            card = VisualTreeHelper.GetParent(card);
-        if (card is null)
+        DependencyObject? parent = ask;
+        while (parent is not null and not Border { Tag: "request" })
+            parent = VisualTreeHelper.GetParent(parent);
+        if (parent is not Border card)
             return;
-        DispatcherQueue.TryEnqueue(() =>
-        {
-            if (Find(card, "Pair as owner") is { } answer)
-                answer.Focus(FocusState.Programmatic);
-        });
+        if (Find(card, "Pair as owner") is { } answer)
+            OpsLayout.FocusWhenShown(answer, FocusState.Keyboard);
     }
 
     private static Button? Find(DependencyObject parent, string label)
@@ -67,7 +64,7 @@ public sealed partial class GatewayPage : Page
         for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
         {
             var child = VisualTreeHelper.GetChild(parent, i);
-            if (child is Button { Content: string content, Visibility: Visibility.Visible } button && content == label && button.IsLoaded)
+            if (child is Button { Content: string content } button && content == label)
                 return button;
             if (Find(child, label) is { } found)
                 return found;

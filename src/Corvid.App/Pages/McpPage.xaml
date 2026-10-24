@@ -100,8 +100,14 @@
                 <RowDefinition Height="Auto" />
               </Grid.RowDefinitions>
               <TextBlock Text="name" Style="{StaticResource OpsLabel}" Margin="0,8,0,0" />
-              <TextBox x:Name="DraftNameBox" Grid.Column="1" Style="{StaticResource FieldBox}" PlaceholderText="files" Width="280" HorizontalAlignment="Left"
+              <Grid Grid.Column="1">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" MaxWidth="280" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="DraftNameBox" Style="{StaticResource FieldBox}" PlaceholderText="files"
                        Text="{x:Bind ViewModel.DraftName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="Server name" />
+              </Grid>
               <TextBlock Grid.Row="1" Text="transport" Style="{StaticResource OpsLabel}" Margin="0,4,0,0" />
               <Border Grid.Row="1" Grid.Column="1" Height="24" HorizontalAlignment="Left" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1" CornerRadius="6">
                 <ItemsControl ItemsSource="{x:Bind ViewModel.Transports}" IsTabStop="False" AutomationProperties.Name="Transport">
@@ -119,9 +125,15 @@
                 </ItemsControl>
               </Border>
               <TextBlock Grid.Row="2" Text="{x:Bind ViewModel.TargetLabel, Mode=OneWay}" Style="{StaticResource OpsLabel}" Margin="0,8,0,0" />
-              <TextBox Grid.Row="2" Grid.Column="1" Style="{StaticResource FieldBox}" MaxWidth="520" HorizontalAlignment="Stretch"
+              <Grid Grid.Row="2" Grid.Column="1">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" MaxWidth="520" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBox Style="{StaticResource FieldBox}"
                        PlaceholderText="{x:Bind ViewModel.TargetPlaceholder, Mode=OneWay}"
                        Text="{x:Bind ViewModel.DraftTarget, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="Command or address" />
+              </Grid>
               <TextBlock Grid.Row="3" Text="trust" Style="{StaticResource OpsLabel}" Margin="0,2,0,0" />
               <CheckBox Grid.Row="3" Grid.Column="1" Style="{StaticResource SetupCheckBox}" IsChecked="{x:Bind ViewModel.DraftTrusted, Mode=TwoWay}"
                         AutomationProperties.Name="Trust this server">
