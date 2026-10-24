@@ -38,6 +38,7 @@ What "better than anything on the market" means, measured:
 | Scroll position while streaming | never moved by the renderer; only the terminal's own scroll-on-output setting can move it | Claude Code #826 (690 upvotes, open since April 2025) |
 | Native selection and search | always work in inline mode; Shift bypass in fullscreen | every alternate-screen agent |
 | Key to echo, app side | under 5 ms regardless of transcript length | Hermes (about 1 s for CJK on long transcripts), Claude Code (keystroke lag issues) |
+| Knowing you are in Corvid | the composer, the status line, the window title and the scrollback each say so without reading a word of output | inline agents whose prompt line looks like a shell prompt once the banner scrolls away |
 | Idle cost | zero writes, zero timers when nothing animates | Claude Code (3.5 to 4.6 percent CPU idle), Codex (32 ms spinner redraw) |
 | Time to first paint | under 100 ms; models load after the prompt is usable | Corvid today ("Loading models…" blocks the prompt) |
 | Memory over a day-long session | bounded by a window of rendered lines, not by transcript size | Claude Code (6.9 GB after 14.5 h), Copilot CLI (several leak fixes) |
@@ -286,16 +287,17 @@ inside tmux. Multi-codepoint emoji are kept out of width-critical cells (box cor
 last column), and glyphs that would straddle the last two columns are replaced with an ellipsis.
 
 **Restore.** One idempotent routine, registered before the terminal is touched, run from `ProcessExit`,
-`UnhandledException`, the SIGINT, SIGTERM and SIGHUP handlers, the SIGTSTP handler and the editor hand-off scope:
-end an open synchronized update; pop the kitty stack and, on process exit, also send the clear form `CSI < u` and
-`CSI > 4 ; 0 m`; disable mouse (1000, 1002, 1003, 1006, 1007), focus (1004) and bracketed paste (2004); leave the
-alternate screen; show the cursor and reset its style; apply the saved termios; flush. Cooked mode comes last so the
-shell never sees a half-restored keyboard. The SIGTSTP path restores, then stops the process itself; the SIGCONT path
-re-applies raw mode unconditionally (shells restore their own termios), re-reads the size and repaints. The kitty
-flag for key-release reports (2) is never pushed, which is the source of every documented leak of key fragments
-into the shell. The hand-off scope (`Ctrl+G` editor, `!` in pass-through mode, `/export` to a pager) pauses the input
-thread, restores, runs the child with inherited stdio, re-applies modes, discards query replies the child provoked,
-and repaints.
+`UnhandledException`, the SIGINT, SIGTERM and SIGHUP handlers, the SIGTSTP handler and the editor hand-off scope: end
+an open synchronized update; pop the kitty stack and, on process exit, also send the clear form `CSI < u` and `CSI > 4
+; 0 m`; disable mouse (1000, 1002, 1003, 1006, 1007), focus (1004) and bracketed paste (2004); leave the alternate
+screen; show the cursor and reset its style (`CSI 0 SP q`); pop the window title Corvid pushed (`CSI 23 ; 0 t`); print
+the closing rule of §4.9 when the main screen is still ours; apply the saved termios; flush. Cooked mode comes last so
+the shell never sees a half-restored keyboard. The SIGTSTP path restores, prints `╰─ corvid suspended · fg to return`,
+then stops the process itself; the SIGCONT path re-applies raw mode unconditionally (shells restore their own
+termios), prints `╭─ back in corvid`, re-reads the size and repaints. The kitty flag for key-release reports (2) is
+never pushed, which is the source of every documented leak of key fragments into the shell. The hand-off scope
+(`Ctrl+G` editor, `!` in pass-through mode, `/export` to a pager) pauses the input thread, restores, runs the child
+with inherited stdio, re-applies modes, discards query replies the child provoked, and repaints.
 
 **Sanitization.** Every string from the model, a tool, an MCP server, a file name or a branch name passes one
 function before it becomes a `StyledLine`: C0 controls other than `\n` and `\t` are caret-encoded, C1 bytes and every
@@ -383,6 +385,7 @@ than other agents do about what a call will do.
 
 | Element | Source |
 | --- | --- |
+| Corvid's state, always first: `● ready`, `◐ working`, `◆ needs you`, `○ starting` (shape and colour, so it reads without colour) | session and runtime state |
 | generator slot and model, device, queue depth, median latency; decider tier (Kev-0.8B, Kev-4B escalation, degraded) | `ModelMetrics`, slots, decider notices |
 | context gauge: tokens in the rendered prompt over the accepted window, with the next compaction threshold | token counter, K-5 |
 | cost for cloud slots, when usage is reported | K-5 |
@@ -391,11 +394,11 @@ than other agents do about what a call will do.
 | git branch of the workspace, session id, elapsed time of the running turn | |
 | model loading progress at start ("loading qwen3.5-0.8b 2 of 4") | K-4 |
 
-The status line is one row by default, configurable with `/statusline` (which items, in what order, and an
-external command fed JSON on stdin at most every 300 ms, Claude Code's contract). The terminal title shows the
-state and the project; OSC 7501 program status and OSC 9;4 progress are emitted where supported. Desktop
-notifications (OSC 9, 777 or 99 by terminal, `BEL` otherwise) fire on turn end, a waiting approval or a question,
-only while the terminal is unfocused (focus events) unless configured always. A hook can run a command instead.
+The status line is one row by default, configurable with `/statusline` (which items, in what order, and an external
+command fed JSON on stdin at most every 300 ms, Claude Code's contract). The terminal title follows §4.9; OSC 7501
+program status and OSC 9;4 progress are emitted where supported. Desktop notifications (OSC 9, 777 or 99 by terminal,
+`BEL` otherwise) fire on turn end, a waiting approval or a question, only while the terminal is unfocused (focus
+events) unless configured always. A hook can run a command instead.
 
 ### 4.5 Sessions, rewind and models
 
@@ -414,12 +417,12 @@ only while the terminal is unfocused (focus events) unless configured always. A 
 
 ### 4.6 Jobs, skills, memory, MCP
 
-Corvid has durable scheduled jobs, a reviewed memory tier, git-versioned skills and pinned MCP tools. Each gets a
-view rather than a wall of text: `/cron` (C-035: list, pause, resume, remove) lists jobs with next run and last outcome and opens a run's session;
-`/memory` shows pending writes as a review list with approve, correct and reject on each row; `/skills` lists with
-authorship and drafts awaiting replay; `/mcp` shows servers, trust, held tools and `diff` as a diff card. These are
-slash commands today with table output; the TUI renders their `CommandOutput` as navigable lists and adds the row
-actions.
+Corvid has durable scheduled jobs, a reviewed memory tier, git-versioned skills and pinned MCP tools. Each gets a view
+rather than a wall of text: `/cron` (C-035: list, pause, resume, remove) lists jobs with next run and last outcome and
+opens a run's session; `/memory` shows pending writes as a review list with approve, correct and reject on each row;
+`/skills` lists with authorship and drafts awaiting replay; `/mcp` shows servers, trust, held tools and `diff` as a
+diff card. These are slash commands today with table output; the TUI renders their `CommandOutput` as navigable lists
+and adds the row actions.
 
 ### 4.7 Keybindings
 
@@ -465,7 +468,34 @@ chords with a 3 s timeout, `null` to unbind, validated at load with warnings in 
   inverse-video cursor, which is invisible on light themes.
 - Diffs in linear mode are `+` and `-` lines; tables are `Header: value` lines.
 
-### 4.9 Later
+### 4.9 Presence: knowing you are in Corvid
+
+An inline renderer keeps the terminal's scrollback, selection and search, and pays for it in one way: once the banner
+has scrolled away, a Corvid session looks like a shell with a different prompt. The mockups showed it. A user glancing
+back at the terminal, or scrolling up an hour later, has to read output to tell conversation from command line. The
+cues below fix that without giving up terminal citizenship. Each is something the terminal already supports, each
+survives `NO_COLOR` by carrying a shape or a word as well as a colour, and none of them puts characters into text a
+user selects and copies.
+
+| Cue | What the user sees | How |
+| --- | --- | --- |
+| Composer surface | the input sits on a tinted two-row band with a `corvid ›` label in Corvid's colour; the second row says how to send, interrupt and leave | the band is a 256-colour grey filled with `CSI K` (background colour erase), the label is the 16-colour blue with black text; under `NO_COLOR` the label stays as text in reverse video |
+| Shell mode | `!` turns the label yellow (`corvid !`) and the hint says the command runs in Corvid's sandbox, through approvals, with output going to the model | the same band; `!!` says the output stays local |
+| State chip | the status line starts with `● ready`, `◐ working`, `◆ needs you` or `○ starting` | §4.4 |
+| User turns | each message the user sent sits on a band across the full width, so turns stand out in scrollback from tool output and from anything the shell printed before or after | `CSI K` after setting the background: the terminal paints the rest of the row without the line containing trailing spaces, so a copied turn has no padding (Claude Code's copy complaints came from padding). Terminals without background colour erase (kitty, per notcurses) get no band rather than padding |
+| Session frame in scrollback | the session opens with `╭─ corvid ─── session cli-7f3a2c` and closes with `╰─ left corvid · 14 turns · 23 min ─── corvid chat --session cli-7f3a2c`; Ctrl-Z and `fg` print `╰─ corvid suspended · fg to return` and `╭─ back in corvid` | ordinary lines written once; the closing rule also carries the resume command, which replaces today's "Session … is in the log" line |
+| Window title and tab | `◐ corvid · Rollback refuses Program.cs` while working, `◆ corvid · needs you · …` while an approval or question waits, `● corvid · …` when ready; the shell's own title comes back on exit | push the title with `CSI 22 ; 0 t` at start, set it with `OSC 2` on each state change (at most twice a second), pop it with `CSI 23 ; 0 t` on exit and suspend; the session title is K-9's. Inside tmux this needs `set-titles on`, which `corvid doctor` mentions |
+| Progress in the tab | a busy indicator on the tab or taskbar while a turn runs | OSC 9;4 where §3.7's table allows it, OSC 7501 program status where supported |
+| Prompt marks | the terminal's own jump-to-prompt (iTerm2 Cmd+Shift+Up, Windows Terminal `scrollToMark`, WezTerm `ScrollToPrompt`) moves between Corvid turns | OSC 133 `A` and `B` around each user turn, as the linear renderer already does |
+| Cursor | a steady bar on the composer caret, distinct from the shell's block | `CSI 6 SP q` while the composer has focus, reset by the restore routine |
+| Fullscreen | the header row carries the `corvid` label, session, workspace and branch | already in §3.6 |
+
+The cues are on by default and individually switchable under `Corvid:Tui:Presence` (`band`, `frame`, `title`,
+`marks`, `cursor`), with `Corvid:Tui:Accent` to change the identity colour. The linear renderer keeps its labelled
+lines and sets the title; it draws no bands. The mockups show each cue: the composer and state chip on every screen,
+the window title in the tab above each screenshot, the closing rule in screen 11 and shell mode in screen 12.
+
+### 4.10 Later
 
 Multi-session and agent views (plan §14 subagents come first), remote control, images in the transcript (kitty
 graphics with placeholders under tmux), a daemon that keeps models loaded between sessions with the TUI attaching to
