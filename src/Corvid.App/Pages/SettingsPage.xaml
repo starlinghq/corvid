@@ -3,41 +3,370 @@
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:controls="using:Corvid.App.Controls"
       xmlns:mvvm="using:Corvid.App.Core.Mvvm"
+      xmlns:settings="using:Corvid.App.Core.Settings"
+      xmlns:ui="using:Corvid.App.Infrastructure"
+      xmlns:local="using:Corvid.App.Pages"
       Background="{ThemeResource CorvidBg}"
       Foreground="{ThemeResource CorvidText}"
       FontSize="13.5">
-  <!-- .page: the page head with the area's title, then the body. A placeholder until the area is built. -->
-  <Grid>
+  <!--
+    The Settings area (docs/plan/ui.md F24, §4.15, §7), drawn in the mocked pages' parts: the page head with the title, the
+    file and the tabs (.page-head, the dock's tab buttons); a save bar under it on the tabs that save together; panels
+    (.panel) of rows (.table td) with the key in the code font, tags for what needs a restart and what the command line set for this run,
+    and the validator's message in red under the field; the raw file in a code editor; the keybindings with their caps.
+  -->
+  <Page.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="ms-appx:///Pages/ModelsStyles.xaml" />
+      </ResourceDictionary.MergedDictionaries>
+
+      <!-- One typed setting: the label, key, tags and sentence on the left; the editor and its message on the right. -->
+      <DataTemplate x:Key="FieldTemplate" x:DataType="settings:SettingFieldViewModel">
+        <Border Style="{StaticResource TableRow}" Padding="14,10">
+          <controls:ColumnsPanel Columns="2" Spacing="16" MinColumnWidth="250">
+            <StackPanel Spacing="3">
+              <controls:WrapRowPanel Spacing="6" LineSpacing="4">
+                <TextBlock Text="{x:Bind Label}" FontSize="13.5" FontWeight="Medium" VerticalAlignment="Center" />
+                <controls:TagChip Text="{x:Bind AppliesText, Mode=OneWay}" Tone="{x:Bind AppliesTone}" VerticalAlignment="Center"
+                                  ToolTipService.ToolTip="{x:Bind AppliesDetail, Mode=OneWay}" AutomationProperties.HelpText="{x:Bind AppliesDetail, Mode=OneWay}"
+                                  Visibility="{x:Bind ui:Ui.VisibleIf(HasApplies), Mode=OneWay}" />
+                <controls:TagChip Text="{x:Bind RunOverrideText}" Tone="Blue" VerticalAlignment="Center"
+                                  ToolTipService.ToolTip="{x:Bind RunOverrideDetail}" AutomationProperties.HelpText="{x:Bind RunOverrideDetail}"
+                                  Visibility="{x:Bind ui:Ui.VisibleIf(HasRunOverride)}" />
+                <TextBlock Text="changed" FontSize="12" Foreground="{ThemeResource CorvidAccent}" VerticalAlignment="Center"
+                           Visibility="{x:Bind ui:Ui.VisibleIf(IsChanged), Mode=OneWay}" />
+              </controls:WrapRowPanel>
+              <TextBlock Text="{x:Bind KeyText}" Style="{StaticResource CellMono}" FontSize="11.5" Foreground="{ThemeResource CorvidText2}"
+                         Visibility="{x:Bind ui:Ui.VisibleIfText(KeyText)}" IsTextSelectionEnabled="True" />
+              <TextBlock Text="{x:Bind Description}" Style="{StaticResource CellSmall}" Visibility="{x:Bind ui:Ui.VisibleIf(HasDescription)}" />
+            </StackPanel>
+            <StackPanel Spacing="6" VerticalAlignment="Top">
+              <TextBox Style="{StaticResource FieldBox}" Text="{x:Bind Value, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                       PlaceholderText="{x:Bind Placeholder}" Visibility="{x:Bind ui:Ui.VisibleIf(IsField)}"
+                       AutomationProperties.Name="{x:Bind AutomationName}" />
+              <Border Height="28" HorizontalAlignment="Left" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1" CornerRadius="6"
+                      Visibility="{x:Bind ui:Ui.VisibleIf(IsChoice)}">
+                <ItemsControl ItemsSource="{x:Bind Choices}" IsTabStop="False" AutomationProperties.Name="{x:Bind AutomationName}">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                      <StackPanel Orientation="Horizontal" />
+                    </ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="mvvm:Choice">
+                      <controls:SegmentButton Content="{x:Bind Label}" IsChecked="{x:Bind IsSelected, Mode=OneWay}" Command="{x:Bind Choose}"
+                                              FontSize="12.5" Padding="12,0" AutomationProperties.Name="{x:Bind Description}" />
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </Border>
+              <CheckBox Style="{StaticResource SetupCheckBox}" IsChecked="{x:Bind IsOn, Mode=TwoWay}" Visibility="{x:Bind ui:Ui.VisibleIf(IsToggle)}"
+                        AutomationProperties.Name="{x:Bind AutomationName}">
+                <TextBlock Text="{x:Bind local:SettingsPage.OnOff(IsOn), Mode=OneWay}" Style="{StaticResource PanelText}" />
+              </CheckBox>
+              <TextBlock Text="{x:Bind Problem, Mode=OneWay}" Style="{StaticResource CellSmall}" Foreground="{ThemeResource CorvidRed}"
+                         Visibility="{x:Bind ui:Ui.VisibleIf(HasProblem), Mode=OneWay}" IsTextSelectionEnabled="True"
+                         AutomationProperties.LiveSetting="Polite" />
+            </StackPanel>
+          </controls:ColumnsPanel>
+        </Border>
+      </DataTemplate>
+
+      <!-- A panel of settings: its head, then its rows. -->
+      <DataTemplate x:Key="GroupTemplate" x:DataType="settings:SettingGroupViewModel">
+        <Border Style="{StaticResource CorvidPanel}">
+          <StackPanel>
+            <Border Style="{StaticResource PanelHead}" BorderThickness="0">
+              <TextBlock Text="{x:Bind Title}" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+            </Border>
+            <ItemsControl ItemsSource="{x:Bind Fields}" IsTabStop="False" ItemTemplate="{StaticResource FieldTemplate}" />
+          </StackPanel>
+        </Border>
+      </DataTemplate>
+
+      <!-- One key: what it does (and what it comes with), then the field to change it, or the page's own caps. -->
+      <DataTemplate x:Key="KeyRowTemplate" x:DataType="settings:KeyBindingRowViewModel">
+        <Border Style="{StaticResource TableRow}" Padding="14,8">
+          <controls:ColumnsPanel Columns="2" Spacing="16" MinColumnWidth="220">
+            <StackPanel Spacing="2" VerticalAlignment="Center">
+              <TextBlock Text="{x:Bind Action}" Style="{StaticResource Cell}" FontSize="13" />
+              <TextBlock Text="{x:Bind ComesWith}" Style="{StaticResource CellSmall}" Visibility="{x:Bind ui:Ui.VisibleIf(HasComesWith)}" />
+            </StackPanel>
+            <StackPanel Spacing="4" VerticalAlignment="Center">
+              <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind ui:Ui.VisibleIf(IsRemappable)}">
+                <TextBox Style="{StaticResource FieldBox}" Width="170" Text="{x:Bind EditText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         AutomationProperties.Name="{x:Bind AutomationName, Mode=OneWay}"
+                         ToolTipService.ToolTip="Type a gesture such as Ctrl+Shift+K, then Enter" />
+                <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Content="Set" Command="{x:Bind ApplyCommand}"
+                                       AutomationProperties.Name="{x:Bind local:SettingsPage.Prefixed('Set the key for ', Action)}" />
+                <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Default" Command="{x:Bind ResetCommand}"
+                                       Visibility="{x:Bind ui:Ui.VisibleIf(IsChanged), Mode=OneWay}"
+                                       AutomationProperties.Name="{x:Bind local:SettingsPage.Prefixed('Put back the default key for ', Action)}" />
+              </StackPanel>
+              <controls:HintLine Parts="{x:Bind KeyParts, Mode=OneWay}" HorizontalAlignment="Left" Visibility="{x:Bind ui:Ui.VisibleIf(IsFixed)}" />
+              <TextBlock Text="{x:Bind Problem, Mode=OneWay}" Style="{StaticResource CellSmall}" Foreground="{ThemeResource CorvidRed}"
+                         Visibility="{x:Bind ui:Ui.VisibleIf(HasProblem), Mode=OneWay}" AutomationProperties.LiveSetting="Polite" />
+              <TextBlock Text="{x:Bind ShadowText, Mode=OneWay}" Style="{StaticResource CellSmall}" Foreground="{ThemeResource CorvidAmber}"
+                         Visibility="{x:Bind ui:Ui.VisibleIf(HasShadow), Mode=OneWay}" />
+            </StackPanel>
+          </controls:ColumnsPanel>
+        </Border>
+      </DataTemplate>
+
+      <DataTemplate x:Key="KeyGroupTemplate" x:DataType="settings:KeyGroupViewModel">
+        <Border Style="{StaticResource CorvidPanel}">
+          <StackPanel>
+            <Border Style="{StaticResource PanelHead}" BorderThickness="0">
+              <TextBlock Text="{x:Bind Heading}" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+            </Border>
+            <ItemsControl ItemsSource="{x:Bind Rows}" IsTabStop="False" ItemTemplate="{StaticResource KeyRowTemplate}" />
+          </StackPanel>
+        </Border>
+      </DataTemplate>
+    </ResourceDictionary>
+  </Page.Resources>
+
+  <Grid x:Name="Root">
     <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
       <RowDefinition Height="Auto" />
       <RowDefinition Height="*" />
     </Grid.RowDefinitions>
-    <Border Style="{StaticResource CorvidPageHead}">
-      <TextBlock Text="{x:Bind ViewModel.Title}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
-                 AutomationProperties.HeadingLevel="Level1" />
+
+    <!-- .page-head: the title, the file, then the tabs; wraps when narrow. -->
+    <Border x:Name="Head" Style="{StaticResource CorvidPageHead}" MinHeight="53">
+      <controls:WrapRowPanel Spacing="12" LineSpacing="8" VerticalAlignment="Center">
+        <TextBlock Text="{x:Bind ViewModel.Title}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
+                   AutomationProperties.HeadingLevel="Level1" />
+        <TextBlock Text="{x:Bind ViewModel.Subtitle, Mode=OneWay}" Style="{StaticResource CorvidMutedText}" FontFamily="{StaticResource CorvidMono}" TextWrapping="Wrap"
+                   FontSize="12" VerticalAlignment="Center" IsTextSelectionEnabled="True" />
+        <ItemsControl ItemsSource="{x:Bind ViewModel.Sections}" IsTabStop="False" VerticalAlignment="Center" AutomationProperties.Name="Settings sections">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <controls:WrapRowPanel Spacing="2" LineSpacing="2" />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="mvvm:Choice">
+              <controls:DockTab Label="{x:Bind Label}" IsSelected="{x:Bind IsSelected, Mode=OneWay}" Command="{x:Bind Choose}"
+                                AutomationProperties.Name="{x:Bind Description}" />
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </controls:WrapRowPanel>
     </Border>
-    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-      <StackPanel Padding="24,18,24,18" Spacing="18" MaxWidth="960" HorizontalAlignment="Left">
-        <TextBlock Text="{x:Bind ViewModel.Summary}" Style="{StaticResource CorvidMutedText}" />
-        <StackPanel Spacing="8">
-          <TextBlock Text="Theme" FontWeight="SemiBold" AutomationProperties.HeadingLevel="Level2" />
-          <Border Height="28" HorizontalAlignment="Left" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1" CornerRadius="6">
-            <ItemsControl ItemsSource="{x:Bind ViewModel.Themes}" IsTabStop="False" AutomationProperties.Name="Theme">
-              <ItemsControl.ItemsPanel>
-                <ItemsPanelTemplate>
-                  <StackPanel Orientation="Horizontal" />
-                </ItemsPanelTemplate>
-              </ItemsControl.ItemsPanel>
-              <ItemsControl.ItemTemplate>
-                <DataTemplate x:DataType="mvvm:Choice">
-                  <controls:SegmentButton Content="{x:Bind Label}" IsChecked="{x:Bind IsSelected, Mode=OneWay}" Command="{x:Bind Choose}"
-                                          FontSize="12.5" Padding="12,0" AutomationProperties.HelpText="{x:Bind Description}"
-                                          ToolTipService.ToolTip="{x:Bind Description}" />
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
+
+    <!-- The save bar: what changed, then Revert and Save; on the tabs whose settings save together. Under it, what the last
+         save did or why it failed, which stays in view however far the page is scrolled. -->
+    <StackPanel Grid.Row="1">
+    <Border x:Name="SaveBar" Padding="24,8" Background="{ThemeResource CorvidBg2}" BorderBrush="{ThemeResource CorvidLine}"
+            BorderThickness="0,0,0,1" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.ShowSaveBar), Mode=OneWay}">
+      <Grid ColumnSpacing="12">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <controls:TagChip Text="{x:Bind ViewModel.ChangesText, Mode=OneWay}" Tone="{x:Bind ViewModel.ChangesTone, Mode=OneWay}"
+                            AutomationProperties.LiveSetting="Polite" />
+          <controls:TagChip Text="demo · in memory" Tone="Violet" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsDemo), Mode=OneWay}"
+                            ToolTipService.ToolTip="{x:Bind ViewModel.DemoText}" />
+        </StackPanel>
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+          <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Revert" Command="{x:Bind ViewModel.RevertCommand}"
+                                 ToolTipService.ToolTip="Put back the saved values" />
+          <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Primary" Content="Save" Command="{x:Bind ViewModel.SaveCommand}"
+                                 ToolTipService.ToolTip="Validated first; nothing is saved while a setting has a message" />
+        </StackPanel>
+      </Grid>
+    </Border>
+    <Border x:Name="NoticeHost" Padding="24,12,24,0" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasNotice), Mode=OneWay}">
+      <controls:ToneRow x:Name="NoticeRow" HorizontalAlignment="Left" Tone="{x:Bind ViewModel.NoticeTone, Mode=OneWay}" AutomationProperties.LiveSetting="Polite">
+        <Grid ColumnSpacing="8">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+          </Grid.ColumnDefinitions>
+          <TextBlock Text="{x:Bind ViewModel.Notice, Mode=OneWay}" TextWrapping="Wrap" VerticalAlignment="Center" LineHeight="18.125"
+                     LineStackingStrategy="BlockLineHeight" IsTextSelectionEnabled="True" />
+          <controls:CorvidButton Grid.Column="1" Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Dismiss"
+                                 Foreground="{ThemeResource CorvidText2}" Command="{x:Bind ViewModel.DismissNoticeCommand}" />
+        </Grid>
+      </controls:ToneRow>
+    </Border>
+    </StackPanel>
+
+    <ScrollViewer x:Name="BodyScroll" Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled" HorizontalScrollBarVisibility="Disabled">
+      <StackPanel x:Name="Body" Padding="24,18,24,24" Spacing="18" MaxWidth="980" HorizontalAlignment="Left">
+        <!-- The demo. -->
+        <controls:ToneRow Tone="Violet" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsDemo), Mode=OneWay}">
+          <TextBlock Text="{x:Bind ViewModel.DemoText}" TextWrapping="Wrap" LineHeight="18.125" LineStackingStrategy="BlockLineHeight" />
+        </controls:ToneRow>
+
+        <!-- Configuration: corvid.json, typed. -->
+        <StackPanel Spacing="18" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsConfiguration), Mode=OneWay}">
+          <controls:ToneRow Tone="Red" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasFileProblems), Mode=OneWay}">
+            <ItemsControl ItemsSource="{x:Bind ViewModel.FileProblems, Mode=OneWay}" IsTabStop="False" />
+          </controls:ToneRow>
+          <ItemsControl ItemsSource="{x:Bind ViewModel.Groups, Mode=OneWay}" IsTabStop="False" ItemTemplate="{StaticResource GroupTemplate}">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate>
+                <StackPanel Spacing="18" />
+              </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+          </ItemsControl>
+        </StackPanel>
+
+        <!-- corvid.json, raw. -->
+        <Border Style="{StaticResource CorvidPanel}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsRaw), Mode=OneWay}">
+          <StackPanel>
+            <Border Style="{StaticResource PanelHead}">
+              <controls:WrapRowPanel Spacing="10" LineSpacing="6" PushLastRight="True">
+                <TextBlock Text="corvid.json" Style="{StaticResource PanelTitle}" FontFamily="{StaticResource CorvidMono}" AutomationProperties.HeadingLevel="Level2" />
+                <controls:TagChip Text="{x:Bind ViewModel.JsonStatus, Mode=OneWay}" Tone="{x:Bind ViewModel.JsonTone, Mode=OneWay}" VerticalAlignment="Center"
+                                  AutomationProperties.LiveSetting="Polite" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Revert" Command="{x:Bind ViewModel.RevertJsonCommand}" />
+                  <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Primary" Content="Save the file" Command="{x:Bind ViewModel.ApplyJsonCommand}"
+                                         ToolTipService.ToolTip="Parsed and validated first; nothing is saved while it has a problem" />
+                </StackPanel>
+              </controls:WrapRowPanel>
+            </Border>
+            <StackPanel Padding="14,12" Spacing="10">
+              <TextBlock Text="The whole file, as the host reads it: comments and trailing commas are allowed, and every edit is parsed and checked by the validator as you type."
+                         Style="{StaticResource PanelSmall}" />
+              <!-- A fixed height that scrolls inside, so the validator's messages under it stay in view as you type. -->
+              <TextBox x:Name="JsonBox" Style="{StaticResource FieldBox}" AcceptsReturn="True" TextWrapping="NoWrap" Height="420"
+                       ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                       Background="{ThemeResource CorvidCodeBg}" IsSpellCheckEnabled="False"
+                       Text="{x:Bind ViewModel.JsonText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="corvid.json" />
+              <controls:ToneRow Tone="Red" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasJsonProblems), Mode=OneWay}" AutomationProperties.LiveSetting="Polite">
+                <ItemsControl ItemsSource="{x:Bind ViewModel.JsonProblems, Mode=OneWay}" IsTabStop="False">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="x:String">
+                      <TextBlock Text="{x:Bind}" TextWrapping="Wrap" LineHeight="18.125" LineStackingStrategy="BlockLineHeight" IsTextSelectionEnabled="True" />
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </controls:ToneRow>
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <!-- Keybindings. -->
+        <StackPanel Spacing="18" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsKeys), Mode=OneWay}">
+          <controls:ToneRow Tone="Blue">
+            <Grid ColumnSpacing="8">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+              </Grid.ColumnDefinitions>
+              <TextBlock Text="{x:Bind ViewModel.KeysNote, Mode=OneWay}" TextWrapping="Wrap" VerticalAlignment="Center" LineHeight="18.125"
+                         LineStackingStrategy="BlockLineHeight" />
+              <controls:CorvidButton Grid.Column="1" Style="{StaticResource CorvidSmallButton}" Content="Put back every default"
+                                     Command="{x:Bind ViewModel.ResetKeysCommand}" />
+            </Grid>
+          </controls:ToneRow>
+          <ItemsControl ItemsSource="{x:Bind ViewModel.KeyGroups}" IsTabStop="False" ItemTemplate="{StaticResource KeyGroupTemplate}">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate>
+                <StackPanel Spacing="18" />
+              </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+          </ItemsControl>
+          <Border Style="{StaticResource CorvidPanel}">
+            <StackPanel>
+              <Border Style="{StaticResource PanelHead}">
+                <controls:WrapRowPanel Spacing="10" LineSpacing="2">
+                  <TextBlock Text="keybindings.json" Style="{StaticResource PanelTitle}" FontFamily="{StaticResource CorvidMono}" AutomationProperties.HeadingLevel="Level2" />
+                  <TextBlock Text="the remappings, in the terminal's format" Style="{StaticResource PanelNote}" />
+                </controls:WrapRowPanel>
+              </Border>
+              <Border Margin="14,12" Padding="12,10" CornerRadius="6" Background="{ThemeResource CorvidCodeBg}">
+                <TextBlock Text="{x:Bind ViewModel.KeysJson, Mode=OneWay}" Style="{StaticResource CellMono}" IsTextSelectionEnabled="True" />
+              </Border>
+            </StackPanel>
           </Border>
-          <TextBlock Text="The window switches at once; focus and hover colours follow after a restart. The command line's --theme sets it at start." TextWrapping="Wrap" Style="{StaticResource CorvidSmallText}" />
+        </StackPanel>
+
+        <!-- Appearance: the theme (at once), then the app's own preferences. -->
+        <StackPanel Spacing="18" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsAppearance), Mode=OneWay}">
+          <Border Style="{StaticResource CorvidPanel}">
+            <StackPanel>
+              <Border Style="{StaticResource PanelHead}" BorderThickness="0">
+                <TextBlock Text="Theme" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+              </Border>
+              <Border Style="{StaticResource TableRow}" Padding="14,12">
+                <StackPanel Spacing="8">
+                  <Border Height="28" HorizontalAlignment="Left" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1" CornerRadius="6">
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.Themes}" IsTabStop="False" AutomationProperties.Name="Theme">
+                      <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                          <StackPanel Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                      </ItemsControl.ItemsPanel>
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="mvvm:Choice">
+                          <controls:SegmentButton Content="{x:Bind Label}" IsChecked="{x:Bind IsSelected, Mode=OneWay}" Command="{x:Bind Choose}"
+                                                  FontSize="12.5" Padding="12,0" AutomationProperties.HelpText="{x:Bind Description}"
+                                                  ToolTipService.ToolTip="{x:Bind Description}" />
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </Border>
+                  <TextBlock Text="The window switches at once; focus and hover colours follow after a restart. The command line's --theme sets it at start." TextWrapping="Wrap" Style="{StaticResource CorvidSmallText}" />
+                  <TextBlock Text="High-contrast and daltonized themes, and themes of your own as JSON files beside corvid.json, come with the shared theme files (U-11)."
+                             TextWrapping="Wrap" Style="{StaticResource CorvidSmallText}" />
+                </StackPanel>
+              </Border>
+            </StackPanel>
+          </Border>
+          <Border Style="{StaticResource CorvidPanel}">
+            <StackPanel>
+              <Border Style="{StaticResource PanelHead}" BorderThickness="0">
+                <controls:WrapRowPanel Spacing="10" LineSpacing="2">
+                  <TextBlock Text="Accessibility and density" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                  <TextBlock Text="{x:Bind local:SettingsPage.PreferencesNote}" Style="{StaticResource PanelNote}" />
+                </controls:WrapRowPanel>
+              </Border>
+              <ItemsControl ItemsSource="{x:Bind ViewModel.AppearanceFields, Mode=OneWay}" IsTabStop="False" ItemTemplate="{StaticResource FieldTemplate}" />
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
+        <!-- Notifications. -->
+        <StackPanel Spacing="18" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsNotifications), Mode=OneWay}">
+          <controls:ToneRow Tone="Grey">
+            <TextBlock Text="Native notifications (D-Bus on Linux, toasts on Windows, the notification centre on macOS) come with the platform integration (docs/plan/ui.md §4.16). What you choose here is kept for this run and used when they arrive; a click on one lands on its item."
+                       TextWrapping="Wrap" LineHeight="18.125" LineStackingStrategy="BlockLineHeight" />
+          </controls:ToneRow>
+          <Border Style="{StaticResource CorvidPanel}">
+            <StackPanel>
+              <Border Style="{StaticResource PanelHead}" BorderThickness="0">
+                <controls:WrapRowPanel Spacing="10" LineSpacing="2">
+                  <TextBlock Text="Notify me when" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                  <TextBlock Text="{x:Bind local:SettingsPage.PreferencesNote}" Style="{StaticResource PanelNote}" />
+                </controls:WrapRowPanel>
+              </Border>
+              <ItemsControl ItemsSource="{x:Bind ViewModel.NotificationFields, Mode=OneWay}" IsTabStop="False" ItemTemplate="{StaticResource FieldTemplate}" />
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
+        <!-- Layout. -->
+        <StackPanel Spacing="18" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsLayout), Mode=OneWay}">
+          <Border Style="{StaticResource CorvidPanel}">
+            <StackPanel>
+              <Border Style="{StaticResource PanelHead}" BorderThickness="0">
+                <controls:WrapRowPanel Spacing="10" LineSpacing="2">
+                  <TextBlock Text="Layout" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                  <TextBlock Text="{x:Bind local:SettingsPage.PreferencesNote}" Style="{StaticResource PanelNote}" />
+                </controls:WrapRowPanel>
+              </Border>
+              <ItemsControl ItemsSource="{x:Bind ViewModel.LayoutFields, Mode=OneWay}" IsTabStop="False" ItemTemplate="{StaticResource FieldTemplate}" />
+            </StackPanel>
+          </Border>
         </StackPanel>
       </StackPanel>
     </ScrollViewer>

@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using Corvid.App.Core;
 using Corvid.App.Core.Composition;
+using Corvid.App.Core.Keys;
 using Corvid.App.Core.Shell;
 using Microsoft.UI.Xaml.Input;
 using Windows.System;
@@ -9,12 +10,18 @@ namespace Corvid.App.Shell;
 
 /// <summary>
 /// The window's content: tells the shell's view model the window's width, shows the current area's page in the content
-/// frame, puts the page's dock panels in the column or the overlay, applies the theme, and binds the shell's keys
-/// (Ctrl+B the dock, Ctrl+Shift+B the rail, Ctrl+, Settings, Ctrl+Shift+C the changes in Review, Esc closes an overlay).
+/// frame, puts the page's dock panels in the column or the overlay, applies the theme, hosts the command palette, and
+/// binds the window's keys from the key map (docs/plan/ui.md §6): Ctrl+K and Ctrl+P the palette, Ctrl+Tab the session
+/// switcher, Ctrl+R the prompt history, Ctrl+F find in the session, Ctrl+Shift+F search across sessions, Alt+P the
+/// generator, F1 and ? the shortcuts, Ctrl+N, Ctrl+Shift+N and Ctrl+; the surfaces of what comes later, Ctrl+B the dock,
+/// Ctrl+Shift+B the rail, Ctrl+, Settings, Ctrl+Shift+C the changes in Review; Esc closes an overlay. A remapping in
+/// Settings rebinds them at once. A page's own key on the same gesture (Audit's and Memory's Ctrl+F, Models' Alt+P) wins
+/// while its area shows: the window leaves that gesture unbound there (<see cref="KeyMap.IsPagesKey"/>).
 /// </summary>
 public sealed partial class ShellPage : Page
 {
     private readonly AppComposition _composition;
+    private readonly List<KeyboardAccelerator> _mapped = [];
     private UIElement? _dock;
 
     public ShellPage(AppComposition composition)
@@ -27,13 +34,79 @@ public sealed partial class ShellPage : Page
         ViewModel.PropertyChanged += OnShellChanged;
         SizeChanged += (_, e) => ViewModel.Layout = ShellLayouts.ForWidth(e.NewSize.Width);
         ContentFrame.Navigated += OnNavigated;
-        AddKey(VirtualKey.B, VirtualKeyModifiers.Control, ViewModel.ToggleDockCommand.Execute);
-        AddKey(VirtualKey.B, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, ViewModel.ToggleRailCommand.Execute);
-        AddKey((VirtualKey)188, VirtualKeyModifiers.Control, ViewModel.OpenSettingsCommand.Execute);
-        // Ctrl+Shift+C: Changes, the session's changes in Review (docs/plan/ui.md §6).
-        AddKey(VirtualKey.C, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, _ => ViewModel.Navigate(Area.Review));
         AddKey(VirtualKey.Escape, VirtualKeyModifiers.None, CloseOverlay);
+        // Over everything, so the palette and its surfaces cover the rail, the page, the dock and the overlays.
+        Root.Children.Add(new CommandPalette(composition.Palette));
+        BindKeys();
+        composition.Keys.Changed += (_, _) => BindKeys();
+        // Tab moves focus before any accelerator sees it, so gestures on Tab (Ctrl+Tab, the switcher) are caught first.
+        AddHandler(PreviewKeyDownEvent, new KeyEventHandler(OnPreviewKeyDown), true);
         Show(ViewModel.CurrentArea);
+    }
+
+    private void OnPreviewKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key != VirtualKey.Tab || e.Handled)
+            return;
+        var modifiers = KeyModifiers.None;
+        if (IsDown(VirtualKey.Control))
+            modifiers |= KeyModifiers.Ctrl;
+        if (IsDown(VirtualKey.Shift))
+            modifiers |= KeyModifiers.Shift;
+        if (IsDown(VirtualKey.Menu))
+            modifiers |= KeyModifiers.Alt;
+        if (modifiers == KeyModifiers.None)
+            return;
+        var palette = _composition.Palette;
+        var switcher = _composition.Keys[KeyCommands.SessionSwitcher].Gesture;
+        // The switcher's key with Shift goes back through the list while it is open.
+        if (palette is { IsOpen: true, Mode: Core.Palette.PaletteMode.Sessions } && switcher is { } gesture
+            && modifiers == (gesture.Modifiers | KeyModifiers.Shift) && gesture.Key == "Tab")
+        {
+            palette.MoveSelection(-1);
+            e.Handled = true;
+            return;
+        }
+
+        if (_composition.Keys.Find(new KeyGesture(modifiers, "Tab")) is { } binding)
+        {
+            palette.Execute(binding.Id);
+            e.Handled = true;
+        }
+    }
+
+    private static bool IsDown(VirtualKey key) =>
+        Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(key).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+
+    /// <summary>One accelerator per window binding in the key map, replaced whole when the map changes.</summary>
+    private void BindKeys()
+    {
+        foreach (var accelerator in _mapped)
+            KeyboardAccelerators.Remove(accelerator);
+        _mapped.Clear();
+        var keys = _composition.Keys;
+        foreach (var binding in keys.Bindings.Where(binding => binding.Context == KeyMap.App && binding.Gesture is not null))
+        {
+            // A gesture the showing page binds too is left out while that page shows: Uno stops at the first accelerator
+            // that matches, whether it handles the key or not, and the window's would hide the page's.
+            if (keys.IsPagesKey(binding, ViewModel.CurrentArea))
+                continue;
+            if (!KeyGestures.TryMap(binding.Gesture!, out var key, out var modifiers))
+                continue;
+            var id = binding.Id;
+            var accelerator = new KeyboardAccelerator { Key = key, Modifiers = modifiers };
+            accelerator.Invoked += (_, args) =>
+            {
+                // A bare key ("?") belongs to a text field that has focus: it types there.
+                if ((modifiers & (VirtualKeyModifiers.Control | VirtualKeyModifiers.Menu)) == 0
+                    && XamlRoot is { } root && FocusManager.GetFocusedElement(root) is TextBox or PasswordBox or RichEditBox)
+                    return;
+                _composition.Palette.Execute(id);
+                args.Handled = true;
+            };
+            _mapped.Add(accelerator);
+            KeyboardAccelerators.Add(accelerator);
+        }
     }
 
     public ShellViewModel ViewModel { get; }
@@ -43,6 +116,7 @@ public sealed partial class ShellPage : Page
         switch (e.PropertyName)
         {
             case nameof(ShellViewModel.CurrentArea):
+                BindKeys();
                 Show(ViewModel.CurrentArea);
                 break;
             case nameof(ShellViewModel.Theme):
@@ -94,7 +168,10 @@ public sealed partial class ShellPage : Page
 
     private void CloseOverlay(object? parameter)
     {
-        if (ViewModel.ShowScrim)
+        // The palette first: it sits over every other overlay.
+        if (_composition.Palette.IsOpen)
+            _composition.Palette.Close();
+        else if (ViewModel.ShowScrim)
             ViewModel.CloseOverlaysCommand.Execute(null);
     }
 
@@ -104,7 +181,7 @@ public sealed partial class ShellPage : Page
         accelerator.Invoked += (_, args) =>
         {
             // Esc belongs to whatever has focus unless an overlay is open to close.
-            if (key == VirtualKey.Escape && !ViewModel.ShowScrim)
+            if (key == VirtualKey.Escape && !ViewModel.ShowScrim && !_composition.Palette.IsOpen)
                 return;
             action(null);
             args.Handled = true;

@@ -82,6 +82,7 @@ public sealed partial class SessionsPage : Page, IDockProvider
         ViewModel = _composition.Sessions;
         _dock.ViewModel = ViewModel;
         ViewModel.PropertyChanged += OnViewModelChanged;
+        ViewModel.RevealRequested += OnRevealRequested;
         _composition.Shell.PropertyChanged += OnShellChanged;
         ApplyLayout();
         Bindings.Update();
@@ -92,6 +93,7 @@ public sealed partial class SessionsPage : Page, IDockProvider
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
         ViewModel.PropertyChanged -= OnViewModelChanged;
+        ViewModel.RevealRequested -= OnRevealRequested;
         if (_composition is not null)
             _composition.Shell.PropertyChanged -= OnShellChanged;
         Detach();
@@ -248,7 +250,11 @@ public sealed partial class SessionsPage : Page, IDockProvider
     private void OnFocusRequested(object? sender, SessionFocusTarget target)
     {
         if (target == SessionFocusTarget.Composer)
+        {
             Composer.Focus(FocusState.Programmatic);
+            // With the caret after the draft, so typing goes on from it (a prompt put back from the history).
+            Composer.SelectionStart = Composer.Text.Length;
+        }
         else
             FocusApproval();
     }
@@ -468,8 +474,9 @@ public sealed partial class SessionsPage : Page, IDockProvider
         if (_session is not { } session || _positioned)
             return;
         _positioned = true;
-        var index = -1;
-        for (var i = session.Blocks.Count - 1; i >= 0; i--)
+        // A find (Ctrl+F) that opened the page lands on its block rather than on the latest message.
+        var index = RevealIndex(session);
+        for (var i = session.Blocks.Count - 1; i >= 0 && index < 0; i--)
         {
             if (session.Blocks[i].Kind == TranscriptBlockKind.User)
             {
@@ -487,6 +494,39 @@ public sealed partial class SessionsPage : Page, IDockProvider
         ScrollToBlock(index);
         // The repeater estimates the heights of blocks it has not drawn; once the ones around the target are drawn the
         // estimate can move it, so the position is taken again after that layout.
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            if (_session is not null && index < _session.Blocks.Count)
+                ScrollToBlock(index);
+        });
+    }
+
+    /// <summary>The header's Aside: the same surface as Ctrl+;, which says what asides come with.</summary>
+    private void OnAside(object sender, RoutedEventArgs e) => _composition?.Palette.Execute(Corvid.App.Core.Keys.KeyCommands.Aside);
+
+    /// <summary>The index of the block find-in-session asked for, taken once; -1 when none was asked or it is gone.</summary>
+    private int RevealIndex(SessionViewModel session)
+    {
+        if (ViewModel.TakeReveal() is not { } id)
+            return -1;
+        for (var i = 0; i < session.Blocks.Count; i++)
+        {
+            if (session.Blocks[i].Id == id)
+                return i;
+        }
+
+        return -1;
+    }
+
+    /// <summary>Find chose a block while the page shows: scroll to it now (and once more after the repeater's layout).</summary>
+    private void OnRevealRequested(object? sender, EventArgs e)
+    {
+        if (!_positioned || _session is not { } session)
+            return;
+        var index = RevealIndex(session);
+        if (index < 0)
+            return;
+        ScrollToBlock(index);
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
             if (_session is not null && index < _session.Blocks.Count)
