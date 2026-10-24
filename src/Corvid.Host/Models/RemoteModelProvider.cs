@@ -142,6 +142,16 @@ public sealed class RemoteModelProvider : IModelProvider
 
     private static readonly string[] Kinds = [Anthropic, OpenAI, OpenRouter, Gemini, Compatible];
 
+    /// <summary>
+    /// What is wrong with remote model settings, one line each, as <see cref="Problems"/> words them for the configuration
+    /// this provider was built from: for any other configuration (the file a writer is about to save).
+    /// </summary>
+    public static IEnumerable<string> ProblemsOf(IReadOnlyDictionary<string, RemoteModelSettings> models)
+    {
+        ArgumentNullException.ThrowIfNull(models);
+        return models.OrderBy(pair => pair.Key, StringComparer.Ordinal).SelectMany(pair => Validate(pair.Key, pair.Value)).ToList();
+    }
+
     private static IEnumerable<string> Validate(string name, RemoteModelSettings? settings)
     {
         var key = $"Corvid:Models:Remote:{name}";

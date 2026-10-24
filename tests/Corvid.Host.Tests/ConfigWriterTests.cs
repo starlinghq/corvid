@@ -214,4 +214,19 @@ public sealed class ConfigWriterTests
 
         Assert.Contains(File(host), exception.Message, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task ARemoteModelTheHostDidNotStartWithIsValidatedToo()
+    {
+        await using var host = TestHost.Create();
+        var writer = Writer(host);
+
+        var refused = writer.Apply(ConfigEdit.Set("Corvid:Models:Remote:local:Provider", "nonsense"));
+        Assert.False(refused.Written);
+        Assert.Contains(refused.Failures, failure => failure.StartsWith("Corvid:Models:Remote:local:Provider must be one of", StringComparison.Ordinal));
+        Assert.False(System.IO.File.Exists(File(host)));
+
+        var server = new JsonObject { ["Provider"] = "openai-compatible", ["Endpoint"] = "http://127.0.0.1:11434/v1", ["Model"] = "qwen" };
+        Assert.True(writer.Apply(new ConfigEdit("Corvid:Models:Remote:local", server)).Written);
+    }
 }

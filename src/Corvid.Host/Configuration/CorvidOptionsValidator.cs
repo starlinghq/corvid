@@ -41,9 +41,12 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue, IEnumerable
             if (!slots.ContainsKey(required))
                 errors.Add($"Corvid:Models:Slots:{required} must be bound: the turn loop and the degraded decider need it.");
 
-        // Remote models (C-015) that could not be described are left out of the catalogue; say why.
-        foreach (var remote in (providers ?? []).OfType<RemoteModelProvider>())
-            errors.AddRange(remote.Problems);
+        // Remote models (C-015) that could not be described are left out of the catalogue; say why. The options' own entries
+        // are checked too, so a configuration other than the one the host started with (the file a writer is about to save)
+        // is refused for the same reasons.
+        errors.AddRange((providers ?? []).OfType<RemoteModelProvider>().SelectMany(remote => remote.Problems)
+            .Concat(RemoteModelProvider.ProblemsOf(options.Models.Remote))
+            .Distinct(StringComparer.Ordinal));
         var privacy = options.Privacy;
         if (!Enum.IsDefined(privacy.Cloud) || !Enum.IsDefined(privacy.Tainted) || privacy.LocalServer is { } local && !Enum.IsDefined(local))
             errors.Add("Corvid:Privacy: Cloud, LocalServer and Tainted are Send, Redact or Refuse.");
