@@ -38,7 +38,14 @@ internal sealed partial class SelectableButtonAutomationPeer(Button owner, Func<
     {
         if (FrameworkElementAutomationPeer.FromElement(owner) is SelectableButtonAutomationPeer peer)
         {
-            peer.RaisePropertyChangedEvent(SelectionItemPatternIdentifiers.IsSelectedProperty, !selected, selected);
+            // Uno 6.7 does not implement the property event in the WebAssembly head (Uno0001 there, which fails the
+            // build under TreatWarningsAsErrors); the automation event below still goes out.
+            if (!OperatingSystem.IsBrowser())
+            {
+#pragma warning disable Uno0001
+                peer.RaisePropertyChangedEvent(SelectionItemPatternIdentifiers.IsSelectedProperty, !selected, selected);
+#pragma warning restore Uno0001
+            }
             peer.RaiseAutomationEvent(selected ? AutomationEvents.SelectionItemPatternOnElementSelected : AutomationEvents.PropertyChanged);
         }
     }

@@ -31,7 +31,9 @@ dotnet workload install wasm-tools
 dotnet build src/Corvid.App/Corvid.App.csproj -c Release -f net10.0-browserwasm -p:CorvidAppWasm=true
 ```
 
-It restores and passes the boundary checker here, but has not been built or run, for want of the workload.
+It builds with the workload (A3: `SelectableButtonAutomationPeer` skips the selection property event, which Uno 6.7 does not
+implement in the browser head) but has not been run in a browser yet; it runs on the demo services only, since the engine
+is desktop-only until attached mode (G-1).
 
 ## Command line
 
