@@ -60,7 +60,7 @@ public sealed class BoardPeekViewModel : ObservableObject, IDisposable
             {
                 UserEntry user => new PeekLine("you", Clip(user.Text)),
                 ToolEntry tool => new PeekLine(tool.Tool, BoardText.Join(tool.Target, Status(tool)), IsCode: true),
-                AnswerEntry answer when answer.Text.Length > 0 => new PeekLine("corvid", Clip(answer.Text)),
+                AnswerEntry answer when answer.Text.Length > 0 => new PeekLine("corvid", Clip(answer.Text.Replace("**", "", StringComparison.Ordinal))),
                 ApprovalEntry approval => new PeekLine("approval", BoardText.Join(Clip(approval.Request.Text), $"{approval.Position} of {approval.Count}")),
                 QuestionEntry question => new PeekLine("question", question.Answer is { } given
                     ? $"{Clip(question.Question.Text)} → {given}"

@@ -38,18 +38,15 @@
             <TextBlock Text="{x:Bind Title, Mode=OneWay}" Style="{StaticResource CorvidBodyText}" FontWeight="SemiBold" TextWrapping="NoWrap"
                        TextTrimming="CharacterEllipsis" AutomationProperties.HeadingLevel="Level3" />
             <TextBlock Grid.Row="1" Style="{StaticResource CorvidSmallText}" controls:RichText.Runs="{x:Bind Meta, Mode=OneWay}" />
-            <!-- .state: the dot, the state in bold, and what follows it, 8 apart, 12.5 px. -->
+            <!-- .state: the dot, then the state in bold and what follows it, 12.5 px; a long target wraps under the state. -->
             <Grid Grid.Row="2" ColumnSpacing="8">
               <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
               </Grid.ColumnDefinitions>
-              <local:ToneDot Tone="{x:Bind StateTone, Mode=OneWay}" VerticalAlignment="Center" />
-              <TextBlock Grid.Column="1" Text="{x:Bind StateLabel, Mode=OneWay}" FontSize="12.5" LineHeight="18.1"
-                         LineStackingStrategy="BlockLineHeight" FontWeight="SemiBold" TextWrapping="NoWrap" VerticalAlignment="Center" />
-              <TextBlock Grid.Column="2" FontSize="12.5" LineHeight="18.1" LineStackingStrategy="BlockLineHeight" TextWrapping="Wrap"
-                         VerticalAlignment="Center" controls:RichText.Runs="{x:Bind local:BoardPage.Dotted(StateDetail), Mode=OneWay}" />
+              <local:ToneDot Tone="{x:Bind StateTone, Mode=OneWay}" VerticalAlignment="Top" Margin="0,5,0,0" />
+              <TextBlock Grid.Column="1" FontSize="12.5" LineHeight="18.1" LineStackingStrategy="BlockLineHeight" TextWrapping="Wrap"
+                         controls:RichText.Runs="{x:Bind local:BoardPage.StateRuns(StateLabel, StateDetail), Mode=OneWay}" />
             </Grid>
             <TextBlock Grid.Row="3" Text="{x:Bind Detail, Mode=OneWay}" Style="{StaticResource CorvidSmallText}"
                        Visibility="{x:Bind ui:Ui.VisibleIfText(Detail), Mode=OneWay}" />
@@ -117,10 +114,10 @@
     </Grid.RowDefinitions>
 
     <!-- .page-head: the title, the counts and the filter on one line; the buttons wrap under them as the mockup's do. -->
-    <Border Style="{StaticResource CorvidPageHead}">
+    <Border x:Name="HeadBorder" Style="{StaticResource CorvidPageHead}">
       <controls:WrapRowPanel x:Name="Head" Spacing="12" LineSpacing="12">
         <controls:WrapRowPanel Spacing="12" LineSpacing="6">
-          <TextBlock Text="{x:Bind ViewModel.Title}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
+          <TextBlock x:Name="PageTitle" Text="{x:Bind ViewModel.Title}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
                      AutomationProperties.HeadingLevel="Level1" />
           <TextBlock Text="{x:Bind ViewModel.Counts, Mode=OneWay}" Style="{StaticResource CorvidMutedText}" TextWrapping="NoWrap"
                      VerticalAlignment="Center" />
@@ -152,7 +149,14 @@
 
     <!-- .page-body: 18px 24px; .cards: two equal columns 14 apart, one under 600 px of content. -->
     <ScrollViewer x:Name="Body" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled">
-      <StackPanel Padding="24,18,24,18" Spacing="18">
+      <StackPanel x:Name="BodyPanel" Padding="24,18,24,18" Spacing="18">
+        <!-- On a phone the dock is gone: the tray's items lead the page (the bottom bar's Attention lands here). -->
+        <StackPanel x:Name="PhoneAttention" Visibility="Collapsed" Spacing="8">
+          <TextBlock Text="{x:Bind ViewModel.AttentionHead, Mode=OneWay}" FontWeight="SemiBold" AutomationProperties.HeadingLevel="Level2" />
+          <Border Style="{StaticResource CorvidPanel}" Background="{ThemeResource CorvidBg2}">
+            <local:AttentionList Items="{x:Bind ViewModel.Attention, Mode=OneWay}" Margin="0,0,0,-1" />
+          </Border>
+        </StackPanel>
         <ItemsControl x:Name="CardGrid" ItemsSource="{x:Bind ViewModel.Tiles}" ItemTemplateSelector="{StaticResource TileSelector}"
                       IsTabStop="False" AutomationProperties.Name="Sessions">
           <ItemsControl.ItemsPanel>

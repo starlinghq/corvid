@@ -2,6 +2,7 @@ using System.ComponentModel;
 using Corvid.App.Core.Board;
 using Corvid.App.Core.Composition;
 using Corvid.App.Core.Markdown;
+using Corvid.App.Core.Shell;
 using Corvid.App.Shell;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
@@ -22,13 +23,19 @@ public sealed partial class BoardPage : Page, IDockProvider
     // Made with the page: the frame raises Navigated, where the shell takes the dock, before OnNavigatedTo gives the page
     // its view model, so the dock gets the view model there.
     private readonly BoardDock _dock = new();
+    private AppComposition? _composition;
+    private readonly KeyEventHandler _windowKeyDown;
     private SessionCardViewModel? _peeked;
 
     public BoardPage()
     {
+        _windowKeyDown = OnWindowKeyDown;
         InitializeComponent();
         CardGrid.AddHandler(KeyDownEvent, new KeyEventHandler(OnCardKeyDown), true);
-        Root.KeyDown += OnRootKeyDown;
+        // Esc closes the peek wherever focus is, the tray in the dock included: the window's content hears it, since a key
+        // pressed in the dock never reaches the page and the shell's own Esc accelerator answers first.
+        Loaded += (_, _) => XamlRoot?.Content?.AddHandler(KeyDownEvent, _windowKeyDown, true);
+        Unloaded += (_, _) => XamlRoot?.Content?.RemoveHandler(KeyDownEvent, _windowKeyDown);
     }
 
     public BoardViewModel ViewModel { get; private set; } = null!;
@@ -37,9 +44,12 @@ public sealed partial class BoardPage : Page, IDockProvider
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
-        ViewModel = ((AppComposition)e.Parameter).Board;
+        _composition = (AppComposition)e.Parameter;
+        ViewModel = _composition.Board;
         _dock.ViewModel = ViewModel;
         ViewModel.PropertyChanged += OnViewModelChanged;
+        _composition.Shell.PropertyChanged += OnShellChanged;
+        ApplyLayout();
         Bindings.Update();
         base.OnNavigatedTo(e);
     }
@@ -47,6 +57,8 @@ public sealed partial class BoardPage : Page, IDockProvider
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
         ViewModel.PropertyChanged -= OnViewModelChanged;
+        if (_composition is not null)
+            _composition.Shell.PropertyChanged -= OnShellChanged;
         // A peek belongs to the visit; coming back shows the Board.
         ViewModel.ClosePeekCommand.Execute(null);
         base.OnNavigatedFrom(e);
@@ -54,11 +66,47 @@ public sealed partial class BoardPage : Page, IDockProvider
 
     // ---- x:Bind helpers ----
 
-    /// <summary>What follows a card's state, after the mockup's dot: "· approval 1 of 2 · 4:12 left".</summary>
-    public static IReadOnlyList<MarkdownRun> Dotted(IReadOnlyList<MarkdownRun>? runs) =>
-        runs is null || runs.Count == 0 ? [] : [new MarkdownRun("· "), .. runs];
+    /// <summary>
+    /// A card's state line: the state in bold, then what follows it after the mockup's gap and dot ("<b>waiting on you</b>
+    /// · approval 1 of 2 · 4:12 left"), in one block so a long target wraps under the state rather than beside it.
+    /// </summary>
+    public static IReadOnlyList<MarkdownRun> StateRuns(string? state, IReadOnlyList<MarkdownRun>? detail)
+    {
+        var runs = new List<MarkdownRun> { new(state ?? "", InlineStyle.Bold) };
+        if (detail is { Count: > 0 })
+        {
+            // An en space and a space: the 8 px gap between the mockup's bold state and its dotted detail.
+            runs.Add(new MarkdownRun("\u2002· "));
+            runs.AddRange(detail);
+        }
+
+        return runs;
+    }
 
     public static string PeekState(string? state, string? detail) => BoardText.Join(state, detail);
+
+    // ---- Layout ----
+
+    private void OnShellChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(ShellViewModel.Layout))
+            ApplyLayout();
+    }
+
+    /// <summary>
+    /// On a phone (Phone.png's shell) the top bar names the page, so the head drops its title; the dock is gone, so the
+    /// tray's items lead the body; and the gutters narrow to 14. x:Bind paths on the page do not follow the shell's layout
+    /// here, so this is set in code.
+    /// </summary>
+    private void ApplyLayout()
+    {
+        var layout = _composition?.Shell.Layout ?? ShellLayout.Wide;
+        var phone = layout == ShellLayout.Phone;
+        PageTitle.Visibility = phone ? Visibility.Collapsed : Visibility.Visible;
+        PhoneAttention.Visibility = phone ? Visibility.Visible : Visibility.Collapsed;
+        BodyPanel.Padding = phone ? new Thickness(14, 12, 14, 18) : new Thickness(24, 18, 24, 18);
+        HeadBorder.Padding = phone ? new Thickness(14, 10, 14, 10) : new Thickness(24, 12, 24, 12);
+    }
 
     // ---- Peek ----
 
@@ -91,9 +139,9 @@ public sealed partial class BoardPage : Page, IDockProvider
         }
     }
 
-    private void OnRootKeyDown(object sender, KeyRoutedEventArgs e)
+    private void OnWindowKeyDown(object sender, KeyRoutedEventArgs e)
     {
-        if (e.Key == VirtualKey.Escape && ViewModel.IsPeeking)
+        if (e.Key == VirtualKey.Escape && ViewModel is { IsPeeking: true } && _composition?.Shell.ShowScrim != true)
         {
             ViewModel.ClosePeekCommand.Execute(null);
             e.Handled = true;

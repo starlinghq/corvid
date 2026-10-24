@@ -285,7 +285,7 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         UpdateTicker();
     }
 
-    /// <summary>Moves, inserts and removes only what changed, so a card keeps its element (and its focus) across updates.</summary>
+    /// <summary>Reorders, inserts and removes only what changed, so a card that stays in place keeps its element and focus.</summary>
     private static void Sync<T>(ObservableCollection<T> target, IReadOnlyList<T> wanted) where T : class
     {
         for (var i = 0; i < wanted.Count; i++)
@@ -294,10 +294,11 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
             var at = target.IndexOf(item);
             if (at == i)
                 continue;
-            if (at < 0)
-                target.Insert(i, item);
-            else
-                target.Move(at, i);
+            // A move is a removal and an insertion: Uno re-templates a moved item's container outside the page's theme,
+            // and an inserted one inside it.
+            if (at >= 0)
+                target.RemoveAt(at);
+            target.Insert(i, item);
         }
 
         while (target.Count > wanted.Count)

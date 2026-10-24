@@ -1,4 +1,3 @@
-using Corvid.App.Controls;
 using Corvid.App.Core.Board;
 
 namespace Corvid.App.Pages;
@@ -16,9 +15,4 @@ public sealed partial class BoardDock : UserControl
         get => (BoardViewModel)GetValue(ViewModelProperty);
         set => SetValue(ViewModelProperty, value);
     }
-
-    public static ButtonVariant Variant(bool ghost) => ghost ? ButtonVariant.Ghost : ButtonVariant.Default;
-
-    /// <summary>A link's label is the accent (the mockup's <c>a.btn</c>), a refusal's red (<c>.btn.danger</c>), the rest text.</summary>
-    public static string LabelKey(bool link, bool danger) => danger ? "CorvidRed" : link ? "CorvidAccent" : "CorvidText";
 }
