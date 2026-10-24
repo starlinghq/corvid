@@ -202,7 +202,7 @@ public sealed class SafetyTests
         Assert.Equal("enforce · recording only", Assert.Single(safety.DetectionRules, rule => rule.Id == "secret-read-then-egress").Posture);
         Assert.All(safety.DetectionRules, rule => Assert.False(rule.ForcesAsk));
         Assert.Contains("Detections:Enforce=false", Text(safety.Notice), StringComparison.Ordinal);
-        Assert.Equal("recording only · 1 match", app.StatusBar.AreaFields[1].Value);
+        Assert.Equal("recording only · 1 match", app.StatusBar.AreaFields[0].Value);
     }
 
     [Fact]
@@ -294,11 +294,11 @@ public sealed class SafetyTests
 
         app.Shell.Navigate(Area.Safety);
         Assert.Equal("", app.StatusBar.Engine);
-        Assert.Equal("rules", app.StatusBar.AreaFields[0].Label);
+        Assert.Equal("detections", app.StatusBar.AreaFields[0].Label);
 
         app.Shell.Navigate(Area.Skills);
         Assert.Equal("in-process", app.StatusBar.Engine);
-        Assert.DoesNotContain(app.StatusBar.AreaFields, field => field.Label == "rules");
+        Assert.DoesNotContain(app.StatusBar.AreaFields, field => field.Label == "detections");
     }
 
     [Fact]

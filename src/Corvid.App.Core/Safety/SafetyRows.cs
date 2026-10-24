@@ -155,7 +155,7 @@ public sealed class DetectionRuleRowView(DetectionRule rule, bool packEnforces, 
 
     public string Matches => matches switch
     {
-        0 => "—",
+        0 => "no matches",
         1 => "1 match",
         _ => string.Create(CultureInfo.InvariantCulture, $"{matches} matches"),
     };
@@ -219,7 +219,7 @@ public sealed class TaintRowView
             { Tainted: true, Since: { } since } => $"since {Clock(since)} · {source}",
             { Tainted: true } => source,
             { ClearedAt: { } cleared, Since: { } since } => $"tainted {Clock(since)} by {source} · cleared {Clock(cleared)}",
-            _ => "clean",
+            _ => "",
         });
     }
 
@@ -236,6 +236,8 @@ public sealed class TaintRowView
     public bool IsTainted => Taint.Tainted;
 
     public IReadOnlyList<TextRun> Detail { get; }
+
+    public bool HasDetail => Detail.Count > 0;
 
     public string AutomationName => $"{SessionId}, {Title}, {State}, {string.Concat(Detail.Select(r => r.Text))}";
 }

@@ -252,6 +252,9 @@ public sealed class SecretsViewModel : AreaViewModel, IDisposable
             return;
         }
 
+        // The set the picker started is done: it closes, and the notice says what is ready now.
+        if (IsSetOpen && appeared.Any(secret => secret.Name == _setName))
+            ClosePicker();
         foreach (var secret in appeared)
         {
             var served = snapshot.Consumers.Where(c => c.Secret == secret.Name && Need(snapshot, c).State == NeedState.Ready)

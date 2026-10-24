@@ -1,22 +1,380 @@
 <Page x:Class="Corvid.App.Pages.SafetyPage"
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:controls="using:Corvid.App.Controls"
+      xmlns:safety="using:Corvid.App.Core.Safety"
+      xmlns:models="using:Corvid.App.Core.Models"
+      xmlns:mvvm="using:Corvid.App.Core.Mvvm"
+      xmlns:local="using:Corvid.App.Pages"
+      xmlns:ui="using:Corvid.App.Infrastructure"
       Background="{ThemeResource CorvidBg}"
       Foreground="{ThemeResource CorvidText}"
       FontSize="13.5">
-  <!-- .page: the page head with the area's title, then the body. A placeholder until the area is built. -->
-  <Grid>
+  <!--
+    The Safety area (docs/plan/ui.md §4.4, F9, F10; no mockup: drawn in the Models page's language). The page head with
+    its line, then two columns (1.4fr and 1fr, 18 apart): Approval mode, Rules and Detection rules on the left; Matches,
+    Taint and the hardline list on the right. One column on a phone. Sizes and colours are corvid.css's .page-head,
+    .panel, .table, .kv, .tag and .btn, through the Models page's shared styles.
+    Keys: Delete on a rule's Remove… asks to remove it; Esc stops asking. Shift+Tab stays focus navigation here.
+  -->
+  <Page.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="ms-appx:///Pages/ModelsStyles.xaml" />
+      </ResourceDictionary.MergedDictionaries>
+
+      <DataTemplate x:Key="FactTemplate" x:DataType="models:ModelFact">
+        <controls:WrapRowPanel Spacing="8" LineSpacing="4" AutomationProperties.Name="{x:Bind AutomationName}">
+          <TextBlock Text="{x:Bind Key}" Style="{StaticResource KvKey}" LineHeight="18" />
+          <TextBlock local:SpanText.Runs="{x:Bind Value}" Style="{StaticResource Cell}" LineHeight="18" />
+        </controls:WrapRowPanel>
+      </DataTemplate>
+
+      <!-- A segment of a segmented control (the modes, the rule filter). -->
+      <DataTemplate x:Key="SegmentTemplate" x:DataType="mvvm:Choice">
+        <controls:SegmentButton Content="{x:Bind Label}" IsChecked="{x:Bind IsSelected, Mode=OneWay}" Command="{x:Bind Choose}"
+                                ToolTipService.ToolTip="{x:Bind Description}" AutomationProperties.HelpText="{x:Bind Description}" />
+      </DataTemplate>
+    </ResourceDictionary>
+  </Page.Resources>
+
+  <Grid x:Name="Root">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto" />
       <RowDefinition Height="*" />
     </Grid.RowDefinitions>
-    <Border Style="{StaticResource CorvidPageHead}">
-      <TextBlock Text="{x:Bind ViewModel.Title}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
-                 AutomationProperties.HeadingLevel="Level1" />
+
+    <Border x:Name="HeadHost" Style="{StaticResource CorvidPageHead}">
+      <controls:WrapRowPanel x:Name="HeadTitle" Spacing="12" LineSpacing="6" VerticalAlignment="Center">
+        <TextBlock Text="{x:Bind ViewModel.Title}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
+                   AutomationProperties.HeadingLevel="Level1" />
+        <TextBlock Text="{x:Bind ViewModel.Subtitle}" Style="{StaticResource CorvidMutedText}" VerticalAlignment="Center" TextWrapping="Wrap" />
+      </controls:WrapRowPanel>
     </Border>
-    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-      <StackPanel Padding="24,18,24,18" Spacing="18" MaxWidth="960" HorizontalAlignment="Left">
-        <TextBlock Text="{x:Bind ViewModel.Summary}" Style="{StaticResource CorvidMutedText}" />
+
+    <ScrollViewer x:Name="BodyScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled"
+                  HorizontalScrollBarVisibility="Disabled">
+      <StackPanel x:Name="Body" Padding="24,18,24,18" Spacing="18">
+        <!-- What an action did, or why it failed (.toast). -->
+        <controls:ToneRow Tone="{x:Bind ViewModel.NoticeTone, Mode=OneWay}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasNotice), Mode=OneWay}"
+                          AutomationProperties.LiveSetting="Polite">
+          <Grid ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock local:SpanText.Runs="{x:Bind ViewModel.Notice, Mode=OneWay}" TextWrapping="Wrap" VerticalAlignment="Center"
+                       LineHeight="18.125" LineStackingStrategy="BlockLineHeight" />
+            <controls:CorvidButton Grid.Column="1" Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Dismiss"
+                                   Foreground="{ThemeResource CorvidText2}" Command="{x:Bind ViewModel.DismissNoticeCommand}" />
+          </Grid>
+        </controls:ToneRow>
+
+        <Grid x:Name="Columns" ColumnSpacing="18" RowSpacing="18">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition x:Name="LeftColumn" Width="1.4*" />
+            <ColumnDefinition x:Name="RightColumn" Width="1*" />
+          </Grid.ColumnDefinitions>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+          </Grid.RowDefinitions>
+
+          <StackPanel x:Name="LeftStack" Spacing="18">
+            <!-- Approval mode: the current session's, with what each does. -->
+            <Border Style="{StaticResource CorvidPanel}">
+              <StackPanel>
+                <Border Style="{StaticResource PanelHead}">
+                  <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                    <TextBlock Text="Approval mode" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                    <TextBlock Text="per session · the same control as the status bar's" Style="{StaticResource PanelNote}" />
+                  </controls:WrapRowPanel>
+                </Border>
+                <StackPanel Padding="14,12" Spacing="10">
+                  <controls:WrapRowPanel Spacing="10" LineSpacing="6">
+                    <TextBlock local:SpanText.Runs="{x:Bind ViewModel.ModeSession, Mode=OneWay}" Style="{StaticResource Cell}" VerticalAlignment="Center" />
+                    <Border Height="22" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1" CornerRadius="6" VerticalAlignment="Center"
+                            Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.CanChangeMode), Mode=OneWay}">
+                      <ItemsControl x:Name="ModeSegments" ItemsSource="{x:Bind ViewModel.Modes}" IsTabStop="False"
+                                    ItemTemplate="{StaticResource SegmentTemplate}" AutomationProperties.Name="Approval mode">
+                        <ItemsControl.ItemsPanel>
+                          <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" />
+                          </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                      </ItemsControl>
+                    </Border>
+                  </controls:WrapRowPanel>
+                  <TextBlock Text="{x:Bind ViewModel.ModeNote, Mode=OneWay}" Style="{StaticResource PanelSmall}"
+                             Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasModeNote), Mode=OneWay}" />
+                  <ItemsControl ItemsSource="{x:Bind ViewModel.Modes}" IsTabStop="False" AutomationProperties.Name="What each mode does">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate>
+                        <StackPanel Spacing="6" />
+                      </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="mvvm:Choice">
+                        <Grid ColumnSpacing="10" AutomationProperties.Name="{x:Bind Description}">
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="84" />
+                            <ColumnDefinition Width="*" />
+                          </Grid.ColumnDefinitions>
+                          <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Top">
+                            <TextBlock Text="{x:Bind Label}" Style="{StaticResource Cell}" FontWeight="SemiBold" />
+                            <controls:TagChip Text="now" Tone="Blue" VerticalAlignment="Top" Margin="0,1,0,0"
+                                              Visibility="{x:Bind ui:Ui.VisibleIf(IsSelected), Mode=OneWay}" />
+                          </StackPanel>
+                          <TextBlock Grid.Column="1" Text="{x:Bind Description}" Style="{StaticResource CellMuted}" />
+                        </Grid>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                  <TextBlock Text="The hardline list applies in all three; a detection that enforces asks in all three." Style="{StaticResource PanelSmall}" />
+                </StackPanel>
+              </StackPanel>
+            </Border>
+
+            <!-- Rules: what "this session" and "always" answers remembered, removable here. -->
+            <Border Style="{StaticResource CorvidPanel}">
+              <StackPanel>
+                <Border Style="{StaticResource PanelHead}">
+                  <controls:WrapRowPanel Spacing="10" LineSpacing="6" PushLastRight="True">
+                    <TextBlock Text="Rules" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                    <Border Height="22" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1" CornerRadius="6" VerticalAlignment="Center">
+                      <ItemsControl ItemsSource="{x:Bind ViewModel.Filters}" IsTabStop="False" ItemTemplate="{StaticResource SegmentTemplate}"
+                                    AutomationProperties.Name="Show rules">
+                        <ItemsControl.ItemsPanel>
+                          <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" />
+                          </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                      </ItemsControl>
+                    </Border>
+                    <TextBlock Text="{x:Bind ViewModel.RulesNote, Mode=OneWay}" Style="{StaticResource PanelNote}" />
+                  </controls:WrapRowPanel>
+                </Border>
+                <TextBlock Text="rule · scope, when, where it came from" Style="{StaticResource TableHead}" />
+                <ItemsControl x:Name="RulesList" ItemsSource="{x:Bind ViewModel.Rules}" IsTabStop="False" AutomationProperties.Name="Remembered rules">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="safety:RuleRowView">
+                      <Border Style="{StaticResource TableRow}" AutomationProperties.Name="{x:Bind AutomationName}">
+                        <StackPanel>
+                          <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                              <ColumnDefinition Width="*" />
+                              <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Margin="10,6.5,0,8" Spacing="4">
+                              <controls:WrapRowPanel Spacing="6" LineSpacing="3">
+                                <controls:TagChip Text="{x:Bind Decision}" Tone="{x:Bind DecisionTone}" VerticalAlignment="Top" Margin="0,0.5,0,0" />
+                                <TextBlock local:SpanText.Runs="{x:Bind Text}" Style="{StaticResource Cell}" />
+                              </controls:WrapRowPanel>
+                              <controls:WrapRowPanel Spacing="6" LineSpacing="3">
+                                <controls:TagChip Text="{x:Bind Scope}" Tone="{x:Bind ScopeTone}" VerticalAlignment="Center" />
+                                <TextBlock local:SpanText.Runs="{x:Bind Source}" Style="{StaticResource CellSmall}" VerticalAlignment="Center" />
+                                <TextBlock Text="{x:Bind Written}" Style="{StaticResource CellSmall}" VerticalAlignment="Center" />
+                                <TextBlock Text="{x:Bind Uses}" Style="{StaticResource CellSmall}" VerticalAlignment="Center" />
+                              </controls:WrapRowPanel>
+                            </StackPanel>
+                            <Grid Grid.Column="1" Margin="0,6,10,6" VerticalAlignment="Top">
+                              <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Foreground="{ThemeResource CorvidRed}"
+                                                     Content="Remove…" Command="{x:Bind StartRemoveCommand}" Tag="{x:Bind}" KeyDown="OnRuleKeyDown"
+                                                     Visibility="{x:Bind ui:Ui.VisibleIf(IsIdle), Mode=OneWay}"
+                                                     AutomationProperties.Name="{x:Bind local:SafetyPage.RemoveName(Plain)}"
+                                                     ToolTipService.ToolTip="Remove this rule (Delete); asks first" />
+                            </Grid>
+                          </Grid>
+                          <!-- Asking before removing: the rule revealed, then Remove and Keep. -->
+                          <Border Margin="10,0,10,10" Padding="12,10" CornerRadius="8" Background="{ThemeResource CorvidRedBg}"
+                                  Visibility="{x:Bind ui:Ui.VisibleIf(IsConfirming), Mode=OneWay}" AutomationProperties.LiveSetting="Assertive">
+                            <StackPanel Spacing="8">
+                              <TextBlock Text="{x:Bind ConfirmText}" Style="{StaticResource Cell}" FontFamily="{StaticResource CorvidSans}" IsTextSelectionEnabled="True" />
+                              <StackPanel Orientation="Horizontal" Spacing="8">
+                                <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Primary" Content="Remove the rule"
+                                                       Command="{x:Bind RemoveCommand}" Tag="{x:Bind}" KeyDown="OnRuleKeyDown" />
+                                <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Content="Keep it" Command="{x:Bind CancelRemoveCommand}"
+                                                       Tag="{x:Bind}" KeyDown="OnRuleKeyDown" ToolTipService.ToolTip="Esc" />
+                              </StackPanel>
+                            </StackPanel>
+                          </Border>
+                        </StackPanel>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <Border Style="{StaticResource TableRow}" Padding="10,8" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasNoRules), Mode=OneWay}">
+                  <TextBlock Text="{x:Bind ViewModel.NoRulesText, Mode=OneWay}" Style="{StaticResource CellMuted}" />
+                </Border>
+                <Border Style="{StaticResource TableRow}" Padding="10,8" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasHiddenRules), Mode=OneWay}">
+                  <TextBlock Text="{x:Bind ViewModel.HiddenRules, Mode=OneWay}" Style="{StaticResource CellMuted}" />
+                </Border>
+              </StackPanel>
+            </Border>
+
+            <!-- Detection rules: the pack, its switch, each rule's severity and posture. -->
+            <Border Style="{StaticResource CorvidPanel}">
+              <StackPanel>
+                <Border Style="{StaticResource PanelHead}">
+                  <controls:WrapRowPanel Spacing="10" LineSpacing="6" PushLastRight="True">
+                    <TextBlock Text="Detection rules" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                    <controls:TagChip Text="{x:Bind ViewModel.Posture, Mode=OneWay}" Tone="{x:Bind ViewModel.PostureTone, Mode=OneWay}" VerticalAlignment="Center" />
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                      <TextBlock Text="{x:Bind ViewModel.PackNote, Mode=OneWay}" Style="{StaticResource PanelNote}" />
+                      <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Content="{x:Bind ViewModel.EnforceLabel, Mode=OneWay}"
+                                             Command="{x:Bind ViewModel.ToggleEnforceCommand}"
+                                             ToolTipService.ToolTip="Detections:Enforce: off, every match is recorded and none forces an ask" />
+                    </StackPanel>
+                  </controls:WrapRowPanel>
+                </Border>
+                <TextBlock Text="rule · posture · matches" Style="{StaticResource TableHead}" />
+                <ItemsControl ItemsSource="{x:Bind ViewModel.DetectionRules, Mode=OneWay}" IsTabStop="False" AutomationProperties.Name="Detection rules">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="safety:DetectionRuleRowView">
+                      <Border Style="{StaticResource TableRow}" AutomationProperties.Name="{x:Bind AutomationName}">
+                        <Grid ColumnSpacing="8">
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                          </Grid.ColumnDefinitions>
+                          <StackPanel Margin="10,6.5,0,8" Spacing="1">
+                            <controls:WrapRowPanel Spacing="6">
+                              <TextBlock Text="{x:Bind Id}" Style="{StaticResource CellMono}" />
+                              <TextBlock Text="{x:Bind Version}" Style="{StaticResource CellSmall}" VerticalAlignment="Center" />
+                            </controls:WrapRowPanel>
+                            <TextBlock Text="{x:Bind Title}" Style="{StaticResource CellMuted}" />
+                            <controls:WrapRowPanel Spacing="8">
+                              <TextBlock Text="{x:Bind Posture}" Style="{StaticResource CellSmall}" FontWeight="SemiBold" />
+                              <TextBlock Text="{x:Bind Matches}" Style="{StaticResource CellSmall}" />
+                            </controls:WrapRowPanel>
+                          </StackPanel>
+                          <controls:TagChip Grid.Column="1" Margin="0,7.5,10,7" Text="{x:Bind Severity}" Tone="{x:Bind SeverityTone}"
+                                            VerticalAlignment="Top" HorizontalAlignment="Right" />
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+
+          <StackPanel x:Name="RightStack" Grid.Column="1" Spacing="18">
+            <!-- Matches: every detection match so far, linked into Audit. -->
+            <Border Style="{StaticResource CorvidPanel}">
+              <StackPanel>
+                <Border Style="{StaticResource PanelHead}">
+                  <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                    <TextBlock Text="Matches" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                    <TextBlock Text="{x:Bind ViewModel.MatchesNote, Mode=OneWay}" Style="{StaticResource PanelNote}" />
+                  </controls:WrapRowPanel>
+                </Border>
+                <ItemsControl ItemsSource="{x:Bind ViewModel.Matches, Mode=OneWay}" IsTabStop="False" AutomationProperties.Name="Detection matches">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="safety:DetectionMatchRowView">
+                      <StackPanel Padding="14,10,14,12" Spacing="6" AutomationProperties.Name="{x:Bind AutomationName}">
+                        <controls:WrapRowPanel Spacing="6" LineSpacing="4">
+                          <TextBlock Text="{x:Bind RuleId}" Style="{StaticResource CellMono}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                          <controls:TagChip Text="{x:Bind Severity}" Tone="{x:Bind SeverityTone}" VerticalAlignment="Center" />
+                          <controls:TagChip Text="{x:Bind Outcome}" Tone="{x:Bind OutcomeTone}" VerticalAlignment="Center" />
+                        </controls:WrapRowPanel>
+                        <TextBlock local:SpanText.Runs="{x:Bind Summary}" Style="{StaticResource Cell}" />
+                        <controls:WrapRowPanel Spacing="8" LineSpacing="4">
+                          <TextBlock Text="{x:Bind At}" Style="{StaticResource CellSmall}" VerticalAlignment="Center" />
+                          <TextBlock Text="{x:Bind SessionId}" Style="{StaticResource CellSmall}" FontFamily="{StaticResource CorvidMono}" VerticalAlignment="Center" />
+                          <TextBlock Text="{x:Bind Events}" Style="{StaticResource CellSmall}" VerticalAlignment="Center" />
+                          <controls:LinkButton Text="Open in Audit" Command="{x:Bind OpenInAuditCommand}" VerticalAlignment="Center"
+                                               ToolTipService.ToolTip="Audit, filtered to the events that completed the rule" />
+                        </controls:WrapRowPanel>
+                      </StackPanel>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock Margin="14,10,14,12" Text="No matches so far. A match that completes a rule shows here and in the session it happened in."
+                           Style="{StaticResource PanelSmall}" Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.HasMatches), Mode=OneWay}" />
+              </StackPanel>
+            </Border>
+
+            <!-- Taint: each session's, and what it changes. -->
+            <Border Style="{StaticResource CorvidPanel}">
+              <StackPanel>
+                <Border Style="{StaticResource PanelHead}">
+                  <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                    <TextBlock Text="Taint" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                    <TextBlock Text="outside content in a session" Style="{StaticResource PanelNote}" />
+                  </controls:WrapRowPanel>
+                </Border>
+                <StackPanel Padding="14,12" Spacing="10">
+                  <ItemsControl ItemsSource="{x:Bind ViewModel.Taint, Mode=OneWay}" IsTabStop="False" AutomationProperties.Name="Sessions and their taint">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate>
+                        <StackPanel Spacing="8" />
+                      </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="safety:TaintRowView">
+                        <Grid ColumnSpacing="8" AutomationProperties.Name="{x:Bind AutomationName}">
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                          </Grid.ColumnDefinitions>
+                          <Grid Width="16" Height="18" VerticalAlignment="Top">
+                            <controls:Icon Kind="Warning" Width="14" Height="14" Foreground="{ThemeResource CorvidAmber}" VerticalAlignment="Center"
+                                           Visibility="{x:Bind ui:Ui.VisibleIf(IsTainted)}" />
+                          </Grid>
+                          <StackPanel Grid.Column="1" Spacing="2">
+                            <controls:WrapRowPanel Spacing="6" LineSpacing="2">
+                              <TextBlock Text="{x:Bind SessionId}" Style="{StaticResource CellMono}" VerticalAlignment="Center" />
+                              <controls:TagChip Text="{x:Bind State}" Tone="{x:Bind StateTone}" VerticalAlignment="Center" />
+                              <TextBlock Text="{x:Bind Title}" Style="{StaticResource CellMuted}" VerticalAlignment="Center" />
+                            </controls:WrapRowPanel>
+                            <TextBlock local:SpanText.Runs="{x:Bind Detail}" Style="{StaticResource CellSmall}" Visibility="{x:Bind ui:Ui.VisibleIf(HasDetail)}" />
+                          </StackPanel>
+                        </Grid>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                  <Border Height="1" Background="{ThemeResource CorvidLine}" />
+                  <ItemsControl ItemsSource="{x:Bind ViewModel.TaintFacts}" IsTabStop="False" ItemTemplate="{StaticResource FactTemplate}"
+                                AutomationProperties.Name="What taint changes">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate>
+                        <StackPanel Spacing="6" />
+                      </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                  </ItemsControl>
+                </StackPanel>
+              </StackPanel>
+            </Border>
+
+            <!-- Hardline: what Corvid never does, read-only. -->
+            <Border Style="{StaticResource CorvidPanel}">
+              <StackPanel>
+                <Border Style="{StaticResource PanelHead}">
+                  <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                    <TextBlock Text="What Corvid never does" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                    <TextBlock Text="hardline · every mode · not editable" Style="{StaticResource PanelNote}" />
+                  </controls:WrapRowPanel>
+                </Border>
+                <ItemsControl Padding="14,12" ItemsSource="{x:Bind ViewModel.Hardline, Mode=OneWay}" IsTabStop="False" AutomationProperties.Name="The hardline list">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                      <StackPanel Spacing="8" />
+                    </ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="safety:HardlineRowView">
+                      <StackPanel AutomationProperties.Name="{x:Bind AutomationName}">
+                        <TextBlock Text="{x:Bind Code}" Style="{StaticResource CellMono}" />
+                        <TextBlock Text="{x:Bind Sentence}" Style="{StaticResource CellMuted}" />
+                      </StackPanel>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </Grid>
       </StackPanel>
     </ScrollViewer>
   </Grid>

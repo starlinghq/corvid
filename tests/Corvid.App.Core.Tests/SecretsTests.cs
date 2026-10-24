@@ -77,6 +77,7 @@ public sealed class SecretsTests
 
         await secrets.RefreshCommand.ExecuteAsync();
 
+        Assert.False(secrets.IsSetOpen);
         Assert.Contains(secrets.Secrets, row => row.Name == "gemini.key" && row.UsedBy == "gemini");
         Assert.Equal(["gateway slack"], secrets.Needs.Select(need => need.Feature));
         Assert.Equal(Tone.Green, secrets.NoticeTone);

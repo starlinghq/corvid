@@ -61,7 +61,7 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
 
         Modes = [.. Enum.GetValues<ApprovalMode>().Select(mode => new Choice(
             mode.ToString().ToLowerInvariant(),
-            StatusBarViewModel.Describe(mode),
+            Sentence(StatusBarViewModel.Describe(mode)),
             new RelayCommand(() => _session.RequestMode(mode), () => CanChangeMode)))];
         Filters = [.. Enum.GetValues<RuleFilter>().Select(filter => new Choice(FilterLabel(filter), FilterHelp(filter), new RelayCommand(() => Filter = filter)))];
         Filters[0].IsSelected = true;
@@ -465,7 +465,7 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
 
     /// <summary>
     /// On Safety the status bar shows the current session's mode, so its segments and Shift+Tab work here as in a session,
-    /// and its tags (tainted), and the rules and matches counted; another area gets it back as it was.
+    /// and its tags (tainted), and the detections' posture and matches; another area gets it back as it was.
     /// </summary>
     private void UpdateLease()
     {
@@ -480,11 +480,9 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
         _lease.Mode = _session.Mode;
         _lease.Tags = [.. _session.Tags];
         _lease.SessionId = _session.SessionId ?? "";
-        var rules = _snapshot?.Rules.Length ?? 0;
         var matches = _snapshot?.Detections.Length ?? 0;
         _lease.AreaFields =
         [
-            new StatusField("rules", string.Create(CultureInfo.InvariantCulture, $"{rules}")),
             new StatusField("detections", $"{(_enforce ? "enforcing" : "recording only")} · {matches} {(matches == 1 ? "match" : "matches")}"),
         ];
     }
@@ -500,6 +498,13 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
         SetNotice(Spans.Parse($"{Spans.Escape(what)}: {Spans.Escape(SafeText.Clean(exception.Message))}"), Tone.Red);
 
     private static bool Failed(Exception exception) => exception is not OperationCanceledException and not OutOfMemoryException;
+
+    /// <summary>"Manual: every side effect asks." without its label, which the row already shows.</summary>
+    private static string Sentence(string description)
+    {
+        var colon = description.IndexOf(": ", StringComparison.Ordinal);
+        return colon < 0 ? description : char.ToUpperInvariant(description[colon + 2]) + description[(colon + 3)..];
+    }
 
     private static string FilterLabel(RuleFilter filter) => filter switch
     {
