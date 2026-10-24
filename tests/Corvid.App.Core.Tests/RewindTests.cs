@@ -1,0 +1,189 @@
+using Corvid.App.Core.Composition;
+using Corvid.App.Core.Mvvm;
+using Corvid.App.Core.Rewind;
+using Corvid.App.Core.Sessions;
+
+namespace Corvid.App.Core.Tests;
+
+public sealed class RewindTests
+{
+    private static AppComposition Compose(params string[] args)
+    {
+        Assert.True(AppOptions.TryParse(args, out var options, out var error), error);
+        return new AppComposition(options, new InlineDispatcher());
+    }
+
+    [Fact]
+    public void TheLedgerIsRewindPngsNewestFirst()
+    {
+        var rewind = Compose("--page", "rewind").Rewind;
+
+        Assert.Equal("Fix the flaky sandbox test on CI · 8 ledger entries", rewind.Subtitle);
+        Assert.Equal(["14:04", "14:03", "14:02", "13:59", "13:52", "13:41", "13:30", "13:22"], rewind.Entries.Select(entry => entry.When));
+        Assert.Equal(["shell", "patch_file", "patch_file", "write_file", "patch_file", "", "shell", "write_file"], rewind.Entries.Select(entry => entry.Tool));
+        Assert.Equal("· c-42 → c-43", rewind.Entries[1].Detail);
+        Assert.Equal("dotnet build · c-33 → c-34", rewind.Entries[6].Detail);
+        Assert.Equal(DemoFiles.SeccompTestsPath, rewind.Entries[1].Paths);
+        Assert.Equal(("+9", "−4"), (rewind.Entries[1].AddedText, rewind.Entries[1].RemovedText));
+
+        // Turn 12's shell call is still running: nothing of it to go back from.
+        var running = rewind.Entries[0];
+        Assert.Equal(("running", Tone.Blue, false), (running.ChangeTag, running.ChangeTagTone, running.IsSelectable));
+
+        var restore = rewind.Entries[5];
+        Assert.True(restore.IsRestore);
+        Assert.Equal(("undo of turn 8 · c-35", "2 put back, 1 merged", "restore point"), (restore.Detail, restore.Paths, restore.ChangeNote));
+        Assert.Equal(("no files changed", "0", false), (rewind.Entries[6].Paths, rewind.Entries[6].ChangeNote, rewind.Entries[6].PathsAreFiles));
+
+        Assert.Equal("c-38", rewind.Selected?.CheckpointId);
+        Assert.True(rewind.Entries[3].IsSelected);
+    }
+
+    [Fact]
+    public void ThePlanForC38IsRewindPngs()
+    {
+        var rewind = Compose("--page", "rewind").Rewind;
+
+        Assert.Equal("Go back to before c-38 · turn 10, 13:59", rewind.PlanTitle);
+        Assert.Equal("/rollback 4", rewind.PlanCommand);
+        Assert.Equal("3", rewind.PlanFileCount);
+        Assert.Equal([".github/workflows/ci.yml", DemoFiles.BubblewrapPath, DemoFiles.SeccompTestsPath], rewind.PlanFiles.Select(file => file.Path));
+        Assert.Equal(["to c-38 · −3", "to c-38 · −19 +5", "to c-38 · merge"],
+            rewind.PlanFiles.Select(file => string.Join(' ', new[] { file.Prefix, file.ShowCounts ? file.RemoveText : file.Word, file.ShowCounts ? file.AddText : "" }.Where(part => part.Length > 0))));
+        var note = Assert.Single(rewind.PlanNotes);
+        Assert.Equal(("SeccompTests.cs", Tone.Amber), (note.FileName, note.Tone));
+        Assert.Equal("was edited by you at 14:05, after c-43. The restore merges three ways and stops on a conflict rather than overwrite your edit.", note.Text);
+        Assert.Equal("turns 10 to 12", rewind.ConversationRange);
+        Assert.Equal("Three turns leave the transcript. They stay in the log and in Audit, and the fork tree keeps a branch for them.", rewind.ConversationText);
+        Assert.Equal(["Files and conversation: the workspace and the transcript as they were at c-38",
+            "Conversation only: keep the files, drop turns 10 to 12 from the context",
+            "Files only: put the files back, keep the conversation"], rewind.Options.Select(option => option.AutomationName));
+        Assert.Equal([true, false, false], rewind.Options.Select(option => option.IsSelected));
+    }
+
+    [Fact]
+    public void TheLastRestoreIsTheUndoOfTurn8()
+    {
+        var rewind = Compose("--page", "rewind").Rewind;
+
+        Assert.Equal("Last restore · 13:41 · undo of turn 8", rewind.LastRestoreTitle);
+        Assert.Equal(("done", Tone.Green), (rewind.LastRestoreTag, rewind.LastRestoreTone));
+        Assert.Equal("restored 2 · merged 1 · refused 0 · restore checkpoint c-35", rewind.LastRestoreSummary);
+        Assert.Equal(["src/Corvid.Cli/Chat/ChatRenderer.cs restored", "tests/Corvid.Cli.Tests/RendererTests.cs restored", "README.md merged with your edit"],
+            rewind.LastRestoreFiles.Select(file => $"{file.Path} {file.What}"));
+    }
+
+    [Fact]
+    public async Task RestoringFilesAndConversationRewindsTheSessionAndListsTheResult()
+    {
+        var composition = Compose("--page", "rewind");
+        var rewind = composition.Rewind;
+        var session = composition.SessionHub.Get(DemoSessionService.MainSessionId);
+
+        await rewind.RestoreCommand.ExecuteAsync();
+
+        // Turns 10 to 12 left the transcript; the marker says what went back, exactly as the result lists it.
+        Assert.DoesNotContain(session.State.Transcript, entry => entry.Turn >= 10);
+        Assert.False(session.State.Running);
+        var marker = Assert.IsType<RewindEntry>(session.State.Transcript[^1]).Rewind;
+        Assert.Equal((10, RewindScope.FilesAndConversation, false), (marker.Turn, marker.Scope, marker.Refused));
+        Assert.Equal([".github/workflows/ci.yml", DemoFiles.BubblewrapPath], marker.Restored);
+        Assert.Equal([DemoFiles.SeccompTestsPath], marker.Merged);
+        Assert.Equal("c-49", marker.CheckpointId);
+
+        // The ledger keeps every entry and gains the restore point at the top.
+        Assert.Equal(9, rewind.Entries.Count);
+        Assert.Equal(("14:05", "rollback to before c-38 · c-49", "2 put back, 1 merged"), (rewind.Entries[0].When, rewind.Entries[0].Detail, rewind.Entries[0].Paths));
+        Assert.Equal("Last restore · 14:05 · rollback to before c-38", rewind.LastRestoreTitle);
+        Assert.Equal("restored 2 · merged 1 · refused 0 · restore checkpoint c-49", rewind.LastRestoreSummary);
+        Assert.Null(rewind.Selected);
+        Assert.False(rewind.HasPlan);
+    }
+
+    [Fact]
+    public async Task AConflictRefusesTheRestoreAndChangesNothing()
+    {
+        var composition = Compose("--page", "rewind");
+        var rewind = composition.Rewind;
+        var session = composition.SessionHub.Get(DemoSessionService.MainSessionId);
+        var transcript = session.State.Transcript.Count;
+
+        rewind.Entries[7].Select.Execute(null);
+        Assert.Equal("Go back to before c-31 · turn 8, 13:22", rewind.PlanTitle);
+        Assert.Equal("/rollback 7", rewind.PlanCommand);
+        var conflict = Assert.Single(rewind.PlanNotes, note => note.IsConflict);
+        Assert.Equal("notes.md", conflict.FileName);
+        Assert.Equal("conflict", rewind.PlanFiles.Single(file => file.IsConflict).Word);
+
+        await rewind.RestoreCommand.ExecuteAsync();
+
+        Assert.True(session.State.Running);
+        var marker = Assert.IsType<RewindEntry>(session.State.Transcript[^1]).Rewind;
+        Assert.True(marker.Refused);
+        Assert.Equal(transcript + 1, session.State.Transcript.Count);
+        Assert.Equal(8, rewind.Entries.Count);
+        Assert.Equal(("refused", Tone.Red, true), (rewind.LastRestoreTag, rewind.LastRestoreTone, rewind.LastRestoreRefused));
+        Assert.Equal("refused 1 · nothing was restored or overwritten", rewind.LastRestoreSummary);
+        var file = Assert.Single(rewind.LastRestoreFiles);
+        Assert.Equal("docs/notes.md, refused: you edited it at 13:35, after c-32, and going back to c-31 would delete it", file.AutomationName);
+    }
+
+    [Fact]
+    public async Task ConversationOnlyKeepsTheFiles()
+    {
+        var composition = Compose("--page", "rewind");
+        var rewind = composition.Rewind;
+
+        rewind.Options[1].Choose.Execute(null);
+        Assert.Equal(RewindScope.ConversationOnly, rewind.Scope);
+        Assert.Equal([false, true, false], rewind.Options.Select(option => option.IsSelected));
+        await rewind.RestoreCommand.ExecuteAsync();
+
+        var marker = Assert.IsType<RewindEntry>(composition.SessionHub.Get(DemoSessionService.MainSessionId).State.Transcript[^1]).Rewind;
+        Assert.Equal(RewindScope.ConversationOnly, marker.Scope);
+        Assert.Empty(marker.Restored);
+        Assert.Equal("files kept", rewind.Entries[0].Paths);
+    }
+
+    [Fact]
+    public async Task ThePreviewShowsEachFilesDiffFromNowToRestored()
+    {
+        var rewind = Compose("--page", "rewind").Rewind;
+
+        await rewind.PreviewCommand.ExecuteAsync();
+
+        Assert.True(rewind.IsPreviewing);
+        Assert.False(rewind.ShowPlan);
+        Assert.Equal("Preview · going back to before c-38", rewind.PreviewTitle);
+        Assert.Equal(3, rewind.PreviewFiles.Count);
+        Assert.All(rewind.PreviewFiles, file => Assert.True(file.HasDiff));
+        Assert.Equal("goes back · +0 −3", rewind.PreviewFiles[0].What);
+        Assert.Equal("merges with your edit", rewind.PreviewFiles[2].What);
+
+        rewind.ClosePreviewCommand.Execute(null);
+        Assert.False(rewind.IsPreviewing);
+    }
+
+    [Fact]
+    public void TheKeyboardMovesOverEntriesThatCannotBeSelected()
+    {
+        var rewind = Compose("--page", "rewind").Rewind;
+
+        Assert.Equal("c-40", rewind.MoveSelection(-1)?.CheckpointId);
+        Assert.Equal("c-42", rewind.MoveSelection(-1)?.CheckpointId);
+        // The running call above cannot be selected: the selection stays.
+        Assert.Equal("c-42", rewind.MoveSelection(-1)?.CheckpointId);
+        Assert.Equal("c-40", rewind.MoveSelection(1)?.CheckpointId);
+        Assert.Equal("Go back to before c-40 · turn 11, 14:02", rewind.PlanTitle);
+    }
+
+    [Fact]
+    public void BackToTheSessionGoesToSessions()
+    {
+        var composition = Compose("--page", "rewind");
+
+        composition.Rewind.BackToSessionCommand.Execute(null);
+
+        Assert.Equal(Area.Sessions, composition.Shell.CurrentArea);
+    }
+}
