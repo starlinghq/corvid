@@ -301,6 +301,12 @@ public sealed class SkillsDatabase
             ("$skill", record.Skill), ("$revision", record.Revision), ("$passed", record.Passed), ("$total", record.Total),
             ("$detail", record.Detail), ("$at", record.At.UtcTicks));
 
+    /// <summary>A skill's eval runs, newest first, at most <paramref name="limit"/>.</summary>
+    public IReadOnlyList<EvalRecord> Evals(string skill, int limit = 20) =>
+        Query("SELECT skill, revision, passed, total, detail, at FROM evals WHERE skill = $skill ORDER BY at DESC LIMIT $limit",
+            reader => new EvalRecord(reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.GetInt32(3), reader.GetString(4),
+                At(reader.GetInt64(5))), ("$skill", skill), ("$limit", Math.Clamp(limit, 1, 500)));
+
     public EvalRecord? LastEval(string skill) =>
         Query("SELECT skill, revision, passed, total, detail, at FROM evals WHERE skill = $skill ORDER BY at DESC LIMIT 1",
             reader => new EvalRecord(reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.GetInt32(3), reader.GetString(4),
