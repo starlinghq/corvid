@@ -62,7 +62,7 @@ public sealed class EngineFirstRunTests : IDisposable
         Assert.Contains("Corvid:Turn:MaxSteps must be between 1 and 64.", check.Detail, StringComparison.Ordinal);
         Assert.Null(check.FixCommand);
         // A detail with the page's marks in it (a backtick, a tilde) keeps them as text.
-        var malloc = report.Checks.Single(item => item.Name == Corvid.Host.Diagnostics.Doctor.MallocVariable);
+        var malloc = report.Checks.Single(item => item.Name == "malloc threshold");
         if (malloc.Status != CheckStatus.Ok)
         {
             Assert.Contains("\\`corvid chat\\`", malloc.Detail, StringComparison.Ordinal);

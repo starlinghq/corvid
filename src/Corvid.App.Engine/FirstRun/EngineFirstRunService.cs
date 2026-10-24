@@ -185,7 +185,8 @@ public sealed class EngineFirstRunService : IFirstRunService, IDisposable
         var (section, name) = (check.Area, check.Name) switch
         {
             ("config", var named) => (CheckSections.Configuration, named),
-            ("models", Doctor.MallocVariable) => (CheckSections.Configuration, Doctor.MallocVariable),
+            // The variable's name is in the detail; the row's name is what it is for.
+            ("models", Doctor.MallocVariable) => (CheckSections.Configuration, "malloc threshold"),
             ("models", _) => (null, ""),
             ("checkpoints", var named) => (CheckSections.Configuration, $"checkpoints {named}"),
             ("skills", var named) => (CheckSections.Configuration, $"skills {named}"),

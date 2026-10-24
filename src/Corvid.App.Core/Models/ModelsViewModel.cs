@@ -311,7 +311,8 @@ public sealed class ModelsViewModel : AreaViewModel
         SwitchChoices.Clear();
         foreach (var model in snapshot.Catalogue.Where(model => model.CanServe.Contains(slot.Name)))
         {
-            var reason = model.IsAvailable ? ""
+            // The current model says so; why another could not be picked is for the others.
+            var reason = model.IsAvailable || model.Name == slot.BoundModel ? ""
                 : model.Kind == ModelKind.Local ? (model.State is ModelState.Downloading or ModelState.Queued ? "downloading" : "not downloaded")
                 : model.Secret is { } secret ? $"set {SafeText.Clean(secret)} in Vault" : "unavailable";
             var name = model.Name;
@@ -519,7 +520,14 @@ public sealed class ModelsViewModel : AreaViewModel
             (true, false) => "No extractor is bound, so every cloud request is refused.",
             _ => "The extractor is bound, so cloud slots are available.",
         };
-        PrivacySummary = Spans.Parse($"Requests to cloud models are redacted before they leave: PII and any credential value. {gate}");
+        // What the posture does to a request, as the configuration says it (Corvid:Privacy:Cloud).
+        var posture = privacy.Posture switch
+        {
+            "refuse" => "Requests to cloud models are refused: nothing that holds PII or a credential leaves for a cloud model.",
+            "send" => "Requests to cloud models are sent as they are: nothing is redacted.",
+            _ => "Requests to cloud models are redacted before they leave: PII and any credential value.",
+        };
+        PrivacySummary = Spans.Parse($"{posture} {gate}");
         PrivacyFacts =
         [
             Fact("today", privacy.TodayUnknown is { } unknown

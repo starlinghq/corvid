@@ -520,13 +520,15 @@ public sealed class FirstRunViewModel : AreaViewModel
             HasHermes = hermes is not null;
             HermesText = Spans.Parse(hermes is null
                 ? "No Hermes installation was found. Nothing to import."
-                : $"Found `{Spans.Escape(hermes.Path)}`: {hermes.Memories} memories and {hermes.Skills} skills. Memory previews every entry; nothing is staged until you approve it.");
+                : $"Found `{Spans.Escape(hermes.Path)}`: {Count(hermes.Memories, "memory", "memories")} and {Count(hermes.Skills, "skill", "skills")}. Memory previews every entry; nothing is staged until you approve it.");
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
             Fail($"The checks could not run: {Spans.Escape(exception.Message)}");
         }
     }
+
+    private static string Count(int count, string one, string many) => count == 1 ? $"1 {one}" : $"{count} {many}";
 
     private async Task RunChecksAsync(CancellationToken cancellationToken)
     {

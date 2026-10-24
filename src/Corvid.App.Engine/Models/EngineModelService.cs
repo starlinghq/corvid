@@ -214,7 +214,8 @@ public sealed class EngineModelService : IModelService, IDisposable
             return Refused($"Not written: {E(result.FailureText)}");
         await RefreshAsync(cancellationToken).ConfigureAwait(false);
         var fallback = NextStartOptions().Models.Placement.GetValueOrDefault(descriptor.Name)?.Fallback ?? PlacementFallback.Fail;
-        return Written($"Written to `{E(result.Path)}`: {E(descriptor.Name)} on {E(parsed)}, falling back to {fallback.ToString().ToLowerInvariant()}. " +
+        var then = fallback == PlacementFallback.Cpu ? "falling back to the CPU when it cannot run there" : "with no fallback: it does not load when it cannot run there";
+        return Written($"Written to `{E(result.Path)}`: {E(descriptor.Name)} on {E(parsed)}, {then}. " +
             "Models are placed as they load, so this applies when Corvid next starts.");
     }, cancellationToken);
 
@@ -652,7 +653,8 @@ public sealed class EngineModelService : IModelService, IDisposable
             {
                 var bytes = model.DownloadBytes ?? 0;
                 var device = options.Models.Placement.GetValueOrDefault(model.Name)?.Device ?? HostPlacement.Cpu;
-                var fit = $"{ModelText.Size(bytes)} · runs on {device}";
+                // Where it runs is said only when it is not the CPU, which every model starts on.
+                var fit = device == HostPlacement.Cpu ? ModelText.Size(bytes) : $"{ModelText.Size(bytes)} · placed on {device}";
                 if (availability.Readiness is ModelReadiness.Corrupt or ModelReadiness.Unreadable)
                     fit += $" · {availability.Readiness.ToString().ToLowerInvariant()} in the cache";
                 var where = model.Provider == StarlingModelProvider.ProviderName ? "Starling, in-process" : $"{E(model.Provider)}, in-process";
