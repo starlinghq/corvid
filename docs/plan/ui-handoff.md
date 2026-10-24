@@ -17,7 +17,7 @@ pull request starlinghq/corvid#71.
 | A0.3 Sessions page: transcript, composer, approval card, dock, keyboard | done, flows F2, F3, F6 and F9 driven on the running app (§1.1) | `93d6c02` |
 | A0 verify loop | done: one independent verifier, one fix round (§1.1) | `60e90fd` |
 | A1 the seven other mocked screens: Review and Rewind, Board, Models and First run, Memory, Audit | done, verified on the running app by an independent verifier in two rounds (§1.2) | branch `a1/screens` |
-| A2 the pages without mockups (Skills, Jobs, MCP, Gateway, Safety, Secrets, Settings), the palette, the rest of the keys, the phone screens, an accessibility pass | done, verified on the running app in three rounds (§1.3) | branch `a2/screens` |
+| A2 the pages without mockups (Skills, Jobs, MCP, Gateway, Safety, Secrets, Settings), the palette, the rest of the keys, the phone screens, an accessibility pass | done, verified on the running app in three rounds, PR review fixed (§1.3) | PR #76, branch `a2/screens` |
 | A3 `Corvid.App.Engine`: the real runtime behind the services | not started | |
 
 The build ran as a workflow in a cloud container: one agent per step, each building, launching the app on a virtual
@@ -164,19 +164,30 @@ Accessibility could not be checked with a screen reader here: Uno 6.7's X11 runt
 Linux the app exposes no accessibility tree at all. The pass audited names, headings, tab order, keyboard reach, focus
 visibility and colour-only meaning in the XAML and the running app. Screen-reader checks need Windows or macOS.
 
-Left from the last round:
+The PR review (agent review and security review on #76) found one high defect in each of two areas: the Board tray's
+MCP "Accept" pinned a changed tool definition in one click, and a duplicate key in the raw settings editor threw from a
+binding setter. Three fix agents, one per area, fixed every finding and round 3's nine minor defects. App.Core
+tests are 642. Decisions taken in that round:
 
-- The bell counts every attention item (5) on every page; `Main.png` and `Phone.png` draw 3 (the mockups disagree among
-  themselves).
-- The Board's job link lands on Jobs without selecting the job; "Pair as owner…" from the tray opens Gateway without
-  opening the owner question.
-- Safety and Audit name the same detection differently (demo data).
-- Jobs' Pause and Remove… still show tooltips on keyboard focus over the detail panel.
-- The status bar's last item differs by page while a turn runs, and Secrets and Settings can keep Audit's.
-- Skills' filter box at 390 is 300 px and right-aligned instead of spanning the gutters.
-- At 390, wide tables (Jobs, Gateway's paired users, MCP's servers, Models) scroll sideways with no sign that they do.
-- A read-only job session still draws Aside, Rewind and Compact… enabled.
-- On the phone, non-session pages have two level-1 headings, and the turn strip shows only while there is a queue.
+- The Board tray no longer accepts MCP tools or pairs guests: "Review…" and "Pair as guest…" open the item on its page,
+  where the text is shown revealed. This drops `Board.png`'s Diff and Accept.
+- The bell counts every attention item (5), where `Main.png` and `Phone.png` draw 3: the tray lists all of them.
+- The Skills badge shows from start-up (`Main.png` draws none), since a draft is waiting.
+- The phone's turn strip shows while a turn works or has a queue, since the phone has no status bar.
+- "Record only" asks first, naming the enforcing rules; turning enforcement back on is one click.
+- SKILL.md content uses a joiner-tolerant hidden-character check, as Memory does; names and fields stay strict.
+- Safety's demo names the detection `credential-read-then-egress` v3 as Audit's demo does; the real pack calls it
+  `secret-read-then-egress` v1, so Audit's demo should change when A3 reads the engine.
+- Uno drew no sideways scroll bar at 390, so wide ops tables show a "scroll it sideways" hint.
+
+Left:
+
+- A relative one-off job keeps its due time only in the demo service; the engine's job record needs a due-time field.
+- Models' wide tables at 390 still give no sign that they scroll.
+- After a typed save that kept raw-editor edits, saving the raw file writes its older values for those keys (the
+  notice warns).
+- Not seen on screen, tests only: tainted plus read-only on the phone, a hidden model name under Alt+P, Check again
+  after a failed Vault read, Review past MCP's 12-card cap.
 
 ### What the running app shows today
 
