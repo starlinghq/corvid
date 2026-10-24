@@ -33,6 +33,40 @@ public sealed class SessionStreamTests
     }
 
     [Fact]
+    public async Task ALiveTurnReportsTheGeneratorsReasoningAndItsTokensOnTheStream()
+    {
+        var reasoned = new Microsoft.Extensions.AI.ChatResponse(new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.Assistant,
+            [new Microsoft.Extensions.AI.TextReasoningContent("The user wants a greeting."), new Microsoft.Extensions.AI.TextContent("Hello there.")]));
+        await using var host = TestHost.Create(new FakeModels(new FakeGenerator(_ => reasoned)));
+        var runtime = await host.StartAsync();
+        await using var _ = runtime;
+        var session = runtime.OpenSession(surface: "test");
+        var live = new List<SessionStreamUpdate>();
+        var reporter = new SessionUpdateReporter(runtime, session.Id, new ToolPresentation(runtime), 0, update =>
+        {
+            lock (live)
+                live.Add(update);
+        });
+
+        using (runtime.Feed.Subscribe(session.Id, reporter))
+        {
+            var delivery = await session.SendAsync("say hello", TestContext.Current.CancellationToken);
+            await reporter.FinishAsync(delivery.Result?.Text);
+        }
+
+        // K-1: the reasoning before the answer it led to; K-5: the generator call's tokens as the fake provider reports them.
+        var thought = Assert.Single(live.OfType<ThoughtChunk>());
+        Assert.Equal("The user wants a greeting.", thought.Text);
+        Assert.True(live.IndexOf(thought) < live.FindIndex(update => update is AnswerChunk));
+        Assert.Equal("Hello there.", string.Concat(live.OfType<AnswerChunk>().Select(chunk => chunk.Text)));
+        var usage = Assert.Single(live.OfType<UsageReported>());
+        Assert.Equal((42L, 7L), (usage.InputTokens, usage.OutputTokens));
+        // Neither is in the log, so a replay has none.
+        var replay = await SessionReplay.ReadAsync(runtime, session.Id, new ToolPresentation(runtime), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.DoesNotContain(replay.Updates, update => update is ThoughtChunk or UsageReported);
+    }
+
+    [Fact]
     public async Task ALiveTurnAndItsReplayCarryTheSamePromptCallDiffAndAnswer()
     {
         await using var host = TestHost.Create(FileWrite(), FileTools);

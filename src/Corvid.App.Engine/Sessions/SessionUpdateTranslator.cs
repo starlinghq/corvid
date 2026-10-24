@@ -25,9 +25,27 @@ public sealed class SessionUpdateTranslator(string workspace)
     private bool _answered;
     private DateTimeOffset _turnStarted;
     private DateTimeOffset _last;
+    // The log position of each turn's prompt, in turn order, for a compaction's range in turns.
+    private readonly List<long> _turnStarts = [];
+    private long _turnTokens;
 
     /// <summary>The generator a turn opened from here on starts on ("fake-gen"); empty when unknown (a replay).</summary>
     public string Model { get; set; } = "";
+
+    /// <summary>The step budget a turn opened from here on has (<c>Corvid:Turn:MaxSteps</c>); null when unknown (a replay).</summary>
+    public int? MaxSteps { get; set; }
+
+    /// <summary>The generator's accepted context window now, for the gauge a live call's usage fills; null when unknown.</summary>
+    public int? ContextWindow { get; set; }
+
+    /// <summary>The turn a log position falls in: the latest turn whose prompt is at or before it (0 before the first).</summary>
+    public int TurnAt(long sequence)
+    {
+        var turn = 0;
+        while (turn < _turnStarts.Count && _turnStarts[turn] <= sequence)
+            turn++;
+        return turn;
+    }
 
     /// <summary>The latest turn's number (0 before the first).</summary>
     public int Turn { get; private set; }
@@ -50,14 +68,31 @@ public sealed class SessionUpdateTranslator(string workspace)
                 TurnOpen = true;
                 _answered = false;
                 _turnStarted = at;
+                _turnTokens = 0;
+                _turnStarts.Add(prompt.Sequence);
                 output.Add(new UserMessage(prompt.Text) { Position = prompt.Sequence, At = at });
-                output.Add(new TurnStarted(Turn, Model) { At = at });
+                output.Add(new TurnStarted(Turn, Model) { At = at, MaxSteps = MaxSteps });
                 output.AddRange(_early);
                 _early.Clear();
                 break;
             case AnswerChunk chunk:
                 _answered |= chunk.Text.Length > 0;
                 output.Add(new AgentMessageChunk(chunk.Text) { At = at });
+                break;
+            case ThoughtChunk thought:
+                output.Add(new AgentThoughtChunk(thought.Text) { At = at });
+                break;
+            case UsageReported usage:
+                // K-5 as far as a call reports it: the turn's tokens so far, and the prompt the latest call sent against the
+                // generator's window. Cost and the prompt's breakdown are not reported.
+                _turnTokens += (usage.InputTokens ?? 0) + (usage.OutputTokens ?? 0);
+                output.Add(new UsageUpdate
+                {
+                    At = at,
+                    TurnTokens = (int)Math.Min(int.MaxValue, _turnTokens),
+                    ContextTokens = usage.InputTokens is { } sent ? (int)Math.Min(int.MaxValue, sent) : null,
+                    ContextWindow = ContextWindow,
+                });
                 break;
             case ToolCallStarted started:
                 output.Add(new ToolCall(started.CallId, started.Tool ?? started.Title, Kind(started.Kind, started.Tool), Status(started.Status))
@@ -140,6 +175,8 @@ public sealed class SessionUpdateTranslator(string workspace)
                 At = at,
                 Elapsed = elapsed ?? (at > _turnStarted ? at - _turnStarted : TimeSpan.Zero),
                 Error = error ?? (outcome is null && !_answered ? "The log holds no answer for this turn." : null),
+                // Live only (K-5): a replay knows no usage.
+                Tokens = _turnTokens > 0 ? (int)Math.Min(int.MaxValue, _turnTokens) : null,
             },
         ];
     }
@@ -186,7 +223,7 @@ public sealed class SessionUpdateTranslator(string workspace)
         paths.IsDefaultOrEmpty ? [] : [.. paths.Select(RelativePath)];
 
     /// <summary>A path as the workspace names it ("src/a.cs"); one outside the workspace stays absolute.</summary>
-    private string RelativePath(string path)
+    internal string RelativePath(string path)
     {
         var full = Path.GetFullPath(path);
         if (!full.StartsWith(_workspace + Path.DirectorySeparatorChar, StringComparison.Ordinal))

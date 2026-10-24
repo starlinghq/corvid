@@ -15,6 +15,15 @@ public interface ITurnObserver
     /// <summary>Text the generator has produced so far in this call (a delta).</summary>
     void Text(string delta) { }
 
+    /// <summary>Reasoning the generator streamed in this call (a delta of its <c>TextReasoningContent</c>, K-1).</summary>
+    void Thought(string delta) { }
+
+    /// <summary>
+    /// The generator call finished, with the tokens its provider reported (K-5, as far as the call itself tells): the
+    /// prompt's and the completion's; null when the provider did not say.
+    /// </summary>
+    void Usage(long? inputTokens, long? outputTokens) { }
+
     void ToolStarted(string callId, string tool, bool approval) { }
 
     /// <param name="outcome"><c>succeeded</c>, <c>failed</c>, <c>invalid_arguments</c>, <c>denied</c> or <c>cancelled</c>.</param>

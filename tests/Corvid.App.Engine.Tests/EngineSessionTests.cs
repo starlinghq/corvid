@@ -22,15 +22,16 @@ public sealed class EngineSessionTests
         using var service = fixture.Sessions();
         var recorder = new Recorder();
         using var subscription = await service.OpenAsync(id, recorder.Add, TestContext.Current.CancellationToken);
-        Assert.Empty(subscription.History);
+        // A new session has no transcript yet: only what it is beside one (its approval mode, the commands it offers).
+        Assert.All(subscription.History, update => Assert.True(update is ApprovalModeChanged or AvailableCommandsUpdate, update.GetType().Name));
 
         await service.SendAsync(id, Prompt, TestContext.Current.CancellationToken);
         await service.IdleAsync();
         return (id, recorder.Updates);
     }
 
-    /// <summary>The updates that both a live turn and a replay carry: decisions come from the feed alone.</summary>
-    private static List<SessionUpdate> Shared(IEnumerable<SessionUpdate> updates) => [.. updates.Where(update => update is not CheckpointDecided)];
+    /// <summary>The updates that both a live turn and a replay carry: decisions and usage come from the feed alone.</summary>
+    private static List<SessionUpdate> Shared(IEnumerable<SessionUpdate> updates) => [.. updates.Where(update => update is not (CheckpointDecided or UsageUpdate))];
 
     [Fact]
     public async Task ATurnWithAToolCallStreamsTheContractsUpdatesInOrder()
@@ -110,7 +111,7 @@ public sealed class EngineSessionTests
 
         using var b = await service.OpenAsync(id, _ => { }, TestContext.Current.CancellationToken);
 
-        Assert.Equal(first.Updates, b.History);
+        Assert.Equal([.. a.History, .. first.Updates], b.History);
     }
 
     [Fact]
@@ -132,15 +133,22 @@ public sealed class EngineSessionTests
     }
 
     [Fact]
-    public async Task AnUnknownSessionCannotBeOpenedAndUnbuiltRequestsSayWhichGroupBringsThem()
+    public async Task AnUnknownSessionCannotBeOpenedAndUnbuiltRequestsSayWhatBringsThem()
     {
         await using var fixture = await EngineFixture.StartAsync();
         using var service = fixture.Sessions();
 
         await Assert.ThrowsAsync<KeyNotFoundException>(() => service.OpenAsync("cli-nowhere", _ => { }, TestContext.Current.CancellationToken));
-        var refused = await Assert.ThrowsAsync<ServiceUnavailableException>(() =>
-            service.QueueAsync("cli-nowhere", "later", TestContext.Current.CancellationToken));
-        Assert.StartsWith("This comes with A3 sessions:", refused.Message, StringComparison.Ordinal);
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => service.QueueAsync("cli-nowhere", "later", TestContext.Current.CancellationToken));
+        var steer = await Assert.ThrowsAsync<ServiceUnavailableException>(() =>
+            service.SteerAsync("cli-nowhere", "now", TestContext.Current.CancellationToken));
+        Assert.StartsWith("Steering comes with K-3:", steer.Message, StringComparison.Ordinal);
+        var question = await Assert.ThrowsAsync<ServiceUnavailableException>(() =>
+            service.AnswerQuestionAsync("cli-nowhere", "q-1", "yes", TestContext.Current.CancellationToken));
+        Assert.StartsWith("Clarifying questions come with K-6:", question.Message, StringComparison.Ordinal);
+        var rename = await Assert.ThrowsAsync<ServiceUnavailableException>(() =>
+            service.RenameAsync("cli-nowhere", "a title", TestContext.Current.CancellationToken));
+        Assert.StartsWith("Renaming comes with G-6:", rename.Message, StringComparison.Ordinal);
     }
 
     [Fact]
