@@ -75,11 +75,14 @@ public sealed class SeamTests
         var sessions = Assert.IsType<EngineSessionService>(composition.SessionService);
         Assert.Empty(await sessions.ListAsync(TestContext.Current.CancellationToken));
         Assert.Null(source.Inner.CreateMemoryStatus(composition));
+        // A3 history's areas are the engine's own.
+        Assert.IsType<Corvid.App.Engine.Review.EngineReviewService>(composition.ReviewService);
+        Assert.IsType<Corvid.App.Engine.Rewind.EngineRewindService>(composition.RewindService);
+        Assert.IsType<Corvid.App.Engine.Audit.EngineAuditService>(composition.AuditService);
 
         // Every other area opens on a refusal that names the group that brings it.
         (object Service, string Group)[] areas =
         [
-            (composition.ReviewService, "history"), (composition.RewindService, "history"), (composition.AuditService, "history"),
             (composition.ModelService, "setup"), (composition.FirstRunService, "setup"), (composition.SettingsService, "setup"),
             (composition.MemoryService, "knowledge"), (composition.SkillsService, "knowledge"), (composition.SafetyService, "knowledge"),
             (composition.JobsService, "ops"), (composition.McpService, "ops"), (composition.GatewayService, "ops"),
