@@ -234,12 +234,17 @@
                           <DataTemplate x:DataType="firstrun:CheckRowViewModel">
                             <Border BorderBrush="{ThemeResource CorvidLine}" BorderThickness="{x:Bind local:FirstRunPage.Divider(IsLast)}"
                                     AutomationProperties.Name="{x:Bind AutomationName}">
-                              <Grid>
+                              <!-- Under 480 px (the phone) the detail goes under the name: see OnCheckRowSized. -->
+                              <Grid SizeChanged="OnCheckRowSized">
                                 <Grid.ColumnDefinitions>
                                   <ColumnDefinition Width="110" />
                                   <ColumnDefinition Width="106" />
                                   <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                  <RowDefinition Height="Auto" />
+                                  <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
                                 <controls:TagChip Margin="10,7" VerticalAlignment="Top" HorizontalAlignment="Left" Text="{x:Bind StatusText}"
                                                   Tone="{x:Bind StatusTone}" />
                                 <TextBlock Grid.Column="1" Margin="10,5.5,10,8.5" Text="{x:Bind Name}" Style="{StaticResource Cell}" />

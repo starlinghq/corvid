@@ -95,6 +95,27 @@ public sealed partial class FirstRunPage : Page
         Grid.SetRow(RightStack, phone ? 1 : 0);
     }
 
+    /// <summary>
+    /// A check row on a phone: the status and the name on the first line and the detail, the fix and its copy button
+    /// under the name, so the button is never cut by a 110 px column beside it. Set on the row's own size rather than
+    /// bound, because the row's template is made at the width the window started at.
+    /// </summary>
+    private void OnCheckRowSized(object sender, SizeChangedEventArgs e)
+    {
+        if (sender is not Grid { Children.Count: >= 3 } row || e.NewSize.Width <= 0)
+            return;
+        var narrow = e.NewSize.Width < 480;
+        var detail = (FrameworkElement)row.Children[2];
+        if (Grid.GetRow(detail) == (narrow ? 1 : 0))
+            return;
+        row.ColumnDefinitions[0].Width = new GridLength(narrow ? 86 : 110);
+        row.ColumnDefinitions[1].Width = narrow ? new GridLength(1, GridUnitType.Star) : new GridLength(106);
+        row.ColumnDefinitions[2].Width = narrow ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+        Grid.SetRow(detail, narrow ? 1 : 0);
+        Grid.SetColumn(detail, narrow ? 1 : 2);
+        detail.Margin = narrow ? new Thickness(10, 0, 10, 8.5) : new Thickness(10, 5.5, 10, 8.5);
+    }
+
     private void OnScrollRequested(object? sender, string anchor)
     {
         FrameworkElement? target = anchor switch

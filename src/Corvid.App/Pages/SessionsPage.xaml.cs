@@ -271,12 +271,14 @@ public sealed partial class SessionsPage : Page, IDockProvider
         {
             UpdateJump();
             UpdateTurnStrip();
+            ResetAnnouncements(null);
             return;
         }
 
         _session.PropertyChanged += OnSessionChanged;
         _session.FocusRequested += OnFocusRequested;
         _session.Blocks.CollectionChanged += OnBlocksChanged;
+        ResetAnnouncements(_session);
         UpdateTurnStrip();
         UpdateSpinner();
         UpdateJump();
@@ -309,6 +311,53 @@ public sealed partial class SessionsPage : Page, IDockProvider
             WatchApproval();
         if (e.PropertyName is nameof(SessionViewModel.ShowTurnStrip) or nameof(SessionViewModel.HasQueue) or null or "")
             UpdateTurnStrip();
+        UpdateAnnouncements(e.PropertyName);
+    }
+
+    // ---- Live regions (docs/plan/ui.md §4.15) ----
+
+    private ApprovalCardBlock? _announcedApproval;
+    private QuestionBlock? _announcedQuestion;
+    private bool _wasRunning;
+
+    /// <summary>What a screen reader hears without moving focus: the step as it changes, then an approval, a question or a finished turn.</summary>
+    private void UpdateAnnouncements(string? property)
+    {
+        if (_session is not { } session)
+            return;
+        if (property is nameof(SessionViewModel.TurnStripStatus) or null or "")
+            Raise(StepAnnouncer, session.TurnStripStatus);
+        if (session.CurrentApproval is { } card && !ReferenceEquals(card, _announcedApproval))
+            Announce($"Approval needed. {card.AutomationName}");
+        _announcedApproval = session.CurrentApproval;
+        if (session.PendingQuestion is { } question && !ReferenceEquals(question, _announcedQuestion))
+            Announce($"Corvid asks: {question.Text}");
+        _announcedQuestion = session.PendingQuestion;
+        if (_wasRunning && !session.IsRunning)
+            Announce("The turn finished.");
+        _wasRunning = session.IsRunning;
+    }
+
+    /// <summary>Starts from the session as it is when the page opens: only what happens after is announced.</summary>
+    private void ResetAnnouncements(SessionViewModel? session)
+    {
+        _announcedApproval = session?.CurrentApproval;
+        _announcedQuestion = session?.PendingQuestion;
+        _wasRunning = session?.IsRunning == true;
+        StepAnnouncer.Text = session?.TurnStripStatus ?? "";
+        Announcer.Text = "";
+    }
+
+    private void Announce(string text) => Raise(Announcer, text);
+
+    private static void Raise(TextBlock region, string text)
+    {
+        if (region.Text == text)
+            return;
+        region.Text = text;
+        AutomationProperties.SetName(region, text);
+        Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(region)
+            ?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged);
     }
 
     private void OnFocusRequested(object? sender, SessionFocusTarget target)

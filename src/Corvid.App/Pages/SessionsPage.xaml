@@ -876,6 +876,7 @@
             <TextBlock Text="{x:Bind ViewModel.Session.ReadOnlyNote, Mode=OneWay, FallbackValue=''}" TextWrapping="Wrap" />
           </controls:ToneRow>
           <ItemsRepeater x:Name="Transcript" ItemsSource="{x:Bind ViewModel.Session.Blocks, Mode=OneWay}"
+                         AutomationProperties.Name="Messages and tool calls" AutomationProperties.AccessibilityView="Content"
                          ItemTemplate="{StaticResource BlockTemplates}" SizeChanged="OnTranscriptSizeChanged">
             <ItemsRepeater.Layout>
               <StackLayout Spacing="10" />
@@ -886,6 +887,12 @@
         </StackPanel>
         </Grid>
       </ScrollViewer>
+      <!-- Live regions (docs/plan/ui.md §4.15), drawn nowhere: the turn strip's step without its ticking time, politely; an
+           approval, a question or a finished turn, assertively. They are set from code (OnSessionChanged, Announce). -->
+      <TextBlock x:Name="StepAnnouncer" Width="1" Height="1" Opacity="0" IsHitTestVisible="False" HorizontalAlignment="Left"
+                 VerticalAlignment="Top" AutomationProperties.LiveSetting="Polite" AutomationProperties.Name="Turn progress" />
+      <TextBlock x:Name="Announcer" Width="1" Height="1" Opacity="0" IsHitTestVisible="False" HorizontalAlignment="Left"
+                 VerticalAlignment="Top" AutomationProperties.LiveSetting="Assertive" AutomationProperties.Name="Session announcements" />
       <!-- "jump to bottom · N new", while scrolled up; streaming never moves the scroll position. -->
       <Button x:Name="JumpButton" Visibility="Collapsed" Click="OnJumpToBottom" HorizontalAlignment="Center" VerticalAlignment="Bottom"
               Margin="0,0,0,12" Padding="0" BorderThickness="0" Background="Transparent">
@@ -896,7 +903,7 @@
           </StackPanel>
         </Border>
       </Button>
-      <controls:ToneRow Tone="Red" Margin="24,0,24,8" VerticalAlignment="Bottom"
+      <controls:ToneRow Tone="Red" Margin="24,0,24,8" VerticalAlignment="Bottom" AutomationProperties.LiveSetting="Assertive"
                         Visibility="{x:Bind ui:Ui.VisibleIfText(ViewModel.Session.Error), Mode=OneWay, FallbackValue=Collapsed}">
         <TextBlock Text="{x:Bind ViewModel.Session.Error, Mode=OneWay, FallbackValue=''}" TextWrapping="Wrap" />
       </controls:ToneRow>

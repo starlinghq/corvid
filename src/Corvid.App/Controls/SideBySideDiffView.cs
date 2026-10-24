@@ -414,7 +414,7 @@ public sealed partial class SideBySideDiffView : UserControl
             };
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(Gutter) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            grid.Children.Add(Number(number.ToString(CultureInfo.InvariantCulture)));
+            grid.Children.Add(Number(number.ToString(CultureInfo.InvariantCulture), DiffRowsView.DiffSign(kind)));
             var words = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
             var highlight = kind == DiffRowKind.Removed ? ThemeBrushes.Get(_owner, "CorvidDelWord") : ThemeBrushes.Get(_owner, "CorvidAddWord");
             foreach (var segment in segments)
@@ -616,12 +616,25 @@ public sealed partial class SideBySideDiffView : UserControl
             return block;
         }
 
-        private Border Number(string text) => new()
+        /// <summary>The line number, with the sign ("+", "−") at the gutter's left so a change is not told by colour alone.</summary>
+        private Border Number(string text, string sign = "")
         {
-            BorderBrush = ThemeBrushes.Get(_owner, "CorvidLine"),
-            BorderThickness = new Thickness(0, 0, 1, 0),
-            Padding = new Thickness(0, 0, 8, 0),
-            Child = new TextBlock
+            var numbers = new Grid();
+            if (sign.Length > 0)
+            {
+                numbers.Children.Add(new TextBlock
+                {
+                    Text = sign,
+                    FontFamily = _mono,
+                    FontSize = 12,
+                    Foreground = ThemeBrushes.Get(_owner, "CorvidText2"),
+                    Margin = new Thickness(3, 0, 0, 0),
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    VerticalAlignment = VerticalAlignment.Center,
+                });
+            }
+
+            numbers.Children.Add(new TextBlock
             {
                 Text = text,
                 FontFamily = _mono,
@@ -629,8 +642,15 @@ public sealed partial class SideBySideDiffView : UserControl
                 Foreground = ThemeBrushes.Get(_owner, "CorvidText2"),
                 HorizontalAlignment = HorizontalAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Center,
-            },
-        };
+            });
+            return new Border
+            {
+                BorderBrush = ThemeBrushes.Get(_owner, "CorvidLine"),
+                BorderThickness = new Thickness(0, 0, 1, 0),
+                Padding = new Thickness(0, 0, 8, 0),
+                Child = numbers,
+            };
+        }
 
         private Border Segment(string text, Brush? highlight)
         {

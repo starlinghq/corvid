@@ -19,7 +19,7 @@ public sealed partial class RailNavItem : Button
         nameof(Badge), typeof(string), typeof(RailNavItem), new PropertyMetadata("", (d, _) => ((RailNavItem)d).UpdateStates(true)));
 
     public static readonly DependencyProperty IsSelectedProperty = DependencyProperty.Register(
-        nameof(IsSelected), typeof(bool), typeof(RailNavItem), new PropertyMetadata(false, (d, _) => ((RailNavItem)d).UpdateStates(true)));
+        nameof(IsSelected), typeof(bool), typeof(RailNavItem), new PropertyMetadata(false, (d, e) => ((RailNavItem)d).OnSelectedChanged((bool)e.NewValue)));
 
     public RailNavItem() => DefaultStyleKey = typeof(RailNavItem);
 
@@ -46,6 +46,16 @@ public sealed partial class RailNavItem : Button
     {
         get => (bool)GetValue(IsSelectedProperty);
         set => SetValue(IsSelectedProperty, value);
+    }
+
+    /// <summary>Says which item is current to assistive technology, not only in the accent colour.</summary>
+    protected override Microsoft.UI.Xaml.Automation.Peers.AutomationPeer OnCreateAutomationPeer() =>
+        new SelectableButtonAutomationPeer(this, () => IsSelected);
+
+    private void OnSelectedChanged(bool selected)
+    {
+        UpdateStates(true);
+        SelectableButtonAutomationPeer.Raise(this, selected);
     }
 
     protected override void OnApplyTemplate()
