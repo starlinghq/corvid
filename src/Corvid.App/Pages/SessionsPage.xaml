@@ -145,12 +145,12 @@
 
     <!-- .turn-head: "corvid · turn 12" and its measures, baseline-aligned, gap 10. -->
     <DataTemplate x:Key="TurnHeaderTemplate" x:DataType="sessions:TurnHeaderBlock">
-      <StackPanel Margin="{x:Bind local:SessionsPage.Gap(StartsTurn)}" Orientation="Horizontal" Spacing="10"
-                  AutomationProperties.HeadingLevel="Level2">
+      <controls:WrapRowPanel Margin="{x:Bind local:SessionsPage.Gap(StartsTurn)}" Spacing="10" LineSpacing="2"
+                             AutomationProperties.HeadingLevel="Level2">
         <TextBlock Text="{x:Bind Who, Mode=OneWay}" Style="{StaticResource WhoText}" VerticalAlignment="Bottom" />
         <TextBlock Text="{x:Bind Detail, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource CorvidText2}" VerticalAlignment="Bottom"
                    TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
-      </StackPanel>
+      </controls:WrapRowPanel>
     </DataTemplate>
 
     <!-- .chips: 22 high, 0 8px, radius 6, a line border on bg-2, 12 px; the question bold in the text colour; dashed when unsure. -->
@@ -216,7 +216,8 @@
         <Border Style="{StaticResource Card}" />
         <Border CornerRadius="8" BorderThickness="1" BorderBrush="{ThemeResource CorvidAccent}" Visibility="{x:Bind ui:Ui.VisibleIf(IsRunning), Mode=OneWay}" />
         <StackPanel>
-          <Grid Padding="12,4" MinHeight="36" ColumnSpacing="10">
+          <!-- .card-head: 8px 12px around the 28 px chevron button, 46 high with the border. -->
+          <Grid Padding="12,8" MinHeight="44" ColumnSpacing="10">
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="Auto" />
               <ColumnDefinition Width="*" />
@@ -310,7 +311,8 @@
             <ItemsControl ItemsSource="{x:Bind Commands}" IsTabStop="False" Visibility="{x:Bind ui:Ui.VisibleIfAny(Commands)}">
               <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate>
-                  <controls:ColumnsPanel Columns="2" MinColumnWidth="260" Spacing="10" />
+                  <controls:ColumnsPanel Columns="{x:Bind local:SessionsPage.ParsedColumns(local:SessionsLayout.Current.IsNarrow), Mode=OneWay}"
+                                         MinColumnWidth="260" Spacing="10" />
                 </ItemsPanelTemplate>
               </ItemsControl.ItemsPanel>
               <ItemsControl.ItemTemplate>
@@ -348,20 +350,30 @@
                               <Grid AutomationProperties.Name="{x:Bind Text}">
                                 <Border Height="20" CornerRadius="5" Background="{ThemeResource CorvidBg3}" Visibility="{x:Bind ui:Ui.CollapsedIf(IsDestructive)}" />
                                 <Border Height="20" CornerRadius="5" Background="{ThemeResource CorvidRedBg}" Visibility="{x:Bind ui:Ui.VisibleIf(IsDestructive)}" />
-                                <StackPanel Orientation="Horizontal" Spacing="4" Padding="7,0" VerticalAlignment="Center"
-                                            Visibility="{x:Bind ui:Ui.CollapsedIf(IsDestructive)}">
+                                <Grid ColumnSpacing="4" Padding="7,0" VerticalAlignment="Center" Visibility="{x:Bind ui:Ui.CollapsedIf(IsDestructive)}">
+                                  <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                  </Grid.ColumnDefinitions>
                                   <TextBlock Text="{x:Bind Prefix}" FontSize="12" Visibility="{x:Bind ui:Ui.VisibleIf(HasPrefix)}" Foreground="{ThemeResource CorvidText}" />
-                                  <TextBlock Text="{x:Bind Value}" FontFamily="{StaticResource CorvidMono}" FontSize="12.5" Foreground="{ThemeResource CorvidText}" />
-                                  <TextBlock Text="{x:Bind local:SessionsPage.Dotted(Detail)}" FontSize="12" Visibility="{x:Bind ui:Ui.VisibleIf(HasDetail)}"
+                                  <TextBlock Grid.Column="1" Text="{x:Bind Value}" FontFamily="{StaticResource CorvidMono}" FontSize="12.5"
+                                             TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" Foreground="{ThemeResource CorvidText}" />
+                                  <TextBlock Grid.Column="2" Text="{x:Bind local:SessionsPage.Dotted(Detail)}" FontSize="12" Visibility="{x:Bind ui:Ui.VisibleIf(HasDetail)}"
                                              Foreground="{ThemeResource CorvidText}" />
-                                </StackPanel>
-                                <StackPanel Orientation="Horizontal" Spacing="4" Padding="7,0" VerticalAlignment="Center"
-                                            Visibility="{x:Bind ui:Ui.VisibleIf(IsDestructive)}">
+                                </Grid>
+                                <Grid ColumnSpacing="4" Padding="7,0" VerticalAlignment="Center" Visibility="{x:Bind ui:Ui.VisibleIf(IsDestructive)}">
+                                  <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                  </Grid.ColumnDefinitions>
                                   <TextBlock Text="{x:Bind Prefix}" FontSize="12" Visibility="{x:Bind ui:Ui.VisibleIf(HasPrefix)}" Foreground="{ThemeResource CorvidRed}" />
-                                  <TextBlock Text="{x:Bind Value}" FontFamily="{StaticResource CorvidMono}" FontSize="12.5" Foreground="{ThemeResource CorvidRed}" />
-                                  <TextBlock Text="{x:Bind local:SessionsPage.Dotted(Detail)}" FontSize="12" Visibility="{x:Bind ui:Ui.VisibleIf(HasDetail)}"
+                                  <TextBlock Grid.Column="1" Text="{x:Bind Value}" FontFamily="{StaticResource CorvidMono}" FontSize="12.5"
+                                             TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" Foreground="{ThemeResource CorvidRed}" />
+                                  <TextBlock Grid.Column="2" Text="{x:Bind local:SessionsPage.Dotted(Detail)}" FontSize="12" Visibility="{x:Bind ui:Ui.VisibleIf(HasDetail)}"
                                              Foreground="{ThemeResource CorvidRed}" />
-                                </StackPanel>
+                                </Grid>
                               </Grid>
                             </DataTemplate>
                           </ItemsControl.ItemTemplate>
@@ -460,8 +472,7 @@
                   <Grid>
                     <Border Margin="-3" CornerRadius="10" BorderThickness="2" BorderBrush="{ThemeResource CorvidAccent}"
                             Visibility="{x:Bind local:SessionsPage.OutlineVisible(IsFocused, IsExpanded), Mode=OneWay}" />
-                    <Button Style="{StaticResource OptionButton}" Command="{x:Bind Choose}" AutomationProperties.Name="{x:Bind AutomationName}"
-                            ToolTipService.ToolTip="{x:Bind LongLabel}">
+                    <Button Style="{StaticResource OptionButton}" Command="{x:Bind Choose}" AutomationProperties.Name="{x:Bind AutomationName}">
                       <StackPanel Orientation="Horizontal" Spacing="8">
                         <Border Style="{StaticResource CorvidKeyCap}">
                           <TextBlock Text="{x:Bind Key}" Style="{StaticResource CorvidKeyCapText}" Foreground="{ThemeResource CorvidText}" />
@@ -549,7 +560,8 @@
                 HorizontalAlignment="Left" AutomationProperties.Name="{x:Bind local:SessionsPage.ThoughtName(Label, IsExpanded), Mode=OneWay}" />
         <Border BorderBrush="{ThemeResource CorvidLine}" BorderThickness="2,0,0,0" Padding="10,0,0,0"
                 Visibility="{x:Bind ui:Ui.VisibleIf(IsExpanded), Mode=OneWay}">
-          <TextBlock Text="{x:Bind Text, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" FontSize="12.5" IsTextSelectionEnabled="True" />
+          <TextBlock controls:RichText.Runs="{x:Bind sessions:SessionText.Runs(Text), Mode=OneWay}" Style="{StaticResource CorvidSmallText}"
+                     FontSize="12.5" IsTextSelectionEnabled="True" />
         </Border>
       </StackPanel>
     </DataTemplate>

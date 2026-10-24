@@ -143,6 +143,9 @@ public sealed partial class SessionsPage : Page, IDockProvider
 
     public static bool Not(bool value) => !value;
 
+    /// <summary>The parsed commands side by side, or stacked under 860 px as Approval-narrow.png draws them.</summary>
+    public static int ParsedColumns(bool narrow) => narrow ? 1 : 2;
+
     /// <summary>The phone's shorter words where it has them ("Approval 1 of 2", "4:12 left").</summary>
     public static string Pick(bool phone, string phoneText, string text) => phone ? phoneText : text;
 
@@ -210,6 +213,7 @@ public sealed partial class SessionsPage : Page, IDockProvider
         _session.Blocks.CollectionChanged += OnBlocksChanged;
         UpdateSpinner();
         UpdateJump();
+        WatchApproval();
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, PositionAtLatest);
     }
 
@@ -221,16 +225,20 @@ public sealed partial class SessionsPage : Page, IDockProvider
         _session.FocusRequested -= OnFocusRequested;
         _session.Blocks.CollectionChanged -= OnBlocksChanged;
         _session = null;
+        WatchApproval();
         _spinner.Stop();
     }
 
     private void OnSessionChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(SessionViewModel.IsWorking) or null or "")
+        if (e.PropertyName is nameof(SessionViewModel.IsWorking) or nameof(SessionViewModel.HasApproval) or null or "")
         {
             UpdateSpinner();
             UpdateJump();
         }
+
+        if (e.PropertyName is nameof(SessionViewModel.CurrentApproval) or null or "")
+            WatchApproval();
     }
 
     private void OnFocusRequested(object? sender, SessionFocusTarget target)
@@ -251,16 +259,49 @@ public sealed partial class SessionsPage : Page, IDockProvider
             return;
         var element = Transcript.GetOrCreateElement(index);
         element.UpdateLayout();
-        element.StartBringIntoView();
         FocusOption(element, card);
     }
 
+    /// <summary>Focuses the card's focused answer and scrolls it into view: the answers, not the card's top, are what the keys act on.</summary>
     private static void FocusOption(UIElement cardElement, ApprovalCardBlock card)
     {
         if (card.FocusedOption is not { } option)
             return;
-        var button = Descendants(cardElement).OfType<Button>().FirstOrDefault(b => ReferenceEquals(b.DataContext, option));
-        button?.Focus(FocusState.Keyboard);
+        var button = Descendants(cardElement).OfType<Button>()
+            .FirstOrDefault(b => ReferenceEquals(b.DataContext, option) && b.Visibility == Visibility.Visible && b.ActualHeight > 0);
+        if (button is null)
+            return;
+        button.StartBringIntoView(new BringIntoViewOptions { VerticalAlignmentRatio = 0.5, AnimationDesired = false });
+        button.Focus(FocusState.Keyboard);
+    }
+
+    // ---- The open card's reason field (5: deny and say why) ----
+
+    private ApprovalCardBlock? _watched;
+
+    private void WatchApproval()
+    {
+        if (_watched is not null)
+            _watched.PropertyChanged -= OnApprovalChanged;
+        _watched = _session?.CurrentApproval;
+        if (_watched is not null)
+            _watched.PropertyChanged += OnApprovalChanged;
+    }
+
+    /// <summary>"Deny and say why" opens the reason field and puts the caret in it.</summary>
+    private void OnApprovalChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(ApprovalCardBlock.IsAskingWhy) || sender is not ApprovalCardBlock { IsAskingWhy: true } card || _session is null)
+            return;
+        var index = _session.Blocks.IndexOf(card);
+        if (index < 0)
+            return;
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            var reason = Descendants(Transcript.GetOrCreateElement(index)).OfType<TextBox>()
+                .FirstOrDefault(box => AutomationProperties.GetName(box) == "Reason for the denial");
+            reason?.Focus(FocusState.Keyboard);
+        });
     }
 
     // ---- Keys ----
@@ -439,6 +480,18 @@ public sealed partial class SessionsPage : Page, IDockProvider
             return;
         }
 
+        ScrollToBlock(index);
+        // The repeater estimates the heights of blocks it has not drawn; once the ones around the target are drawn the
+        // estimate can move it, so the position is taken again after that layout.
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            if (_session is not null && index < _session.Blocks.Count)
+                ScrollToBlock(index);
+        });
+    }
+
+    private void ScrollToBlock(int index)
+    {
         var element = Transcript.GetOrCreateElement(index);
         TranscriptBody.UpdateLayout();
         var top = element.TransformToVisual(TranscriptBody).TransformPoint(default).Y - TranscriptBody.Padding.Top;
@@ -485,8 +538,8 @@ public sealed partial class SessionsPage : Page, IDockProvider
 
     private void UpdateJump()
     {
-        // While the turn waits on the user nothing streams, so the pill stays away from the card.
-        var show = _session is not null && !_follow && (_newCount > 0 || _session.IsWorking);
+        // While an approval waits, the pill stays away: it would sit over the card's answers.
+        var show = _session is not null && !_follow && !_session.HasApproval && (_newCount > 0 || _session.IsWorking);
         JumpButton.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
         JumpText.Text = _newCount > 0 ? $"Jump to bottom · {_newCount} new" : "Jump to bottom";
         AutomationProperties.SetName(JumpButton, JumpText.Text);

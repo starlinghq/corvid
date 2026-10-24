@@ -15,7 +15,7 @@ pull request starlinghq/corvid#71.
 | A0.1 Scaffold: projects, checker rules, theme, fonts, icons, the shell with every area, responsive layouts | done, verified on the running app, CI green | `83d77f9` |
 | A0.2 Session core: update contract, fold, demo scenario, view models, markdown and diff | done, tested headless and through the Sessions page | `a143605` |
 | A0.3 Sessions page: transcript, composer, approval card, dock, keyboard | done, flows F2, F3, F6 and F9 driven on the running app (§1.1) | `93d6c02` |
-| A0 verify loop | not started | |
+| A0 verify loop | done: one independent verifier, one fix round (§1.1) | this commit |
 | A1 the seven other mocked screens | not started | |
 | A2 the pages without mockups, the palette, the rest of the keys | not started | |
 | A3 `Corvid.App.Engine`: the real runtime behind the services | not started | |
@@ -53,6 +53,25 @@ workflow, against `Main.png` and `Approval.png`. It matches both at 1440x900 in 
   idle empty composer opens Rewind, digits answer only a focused card.
 - The whole solution builds in Release with no warnings; the checker passes; App.Core 138 of 138 and architecture 267
   of 267 tests pass.
+
+An independent verifier then checked the build, the tests, both mockups in light and dark, the four widths, the four
+flows and the keys. It found no blockers, two major defects and twelve minor ones. The fix round, rechecked on the
+running app:
+
+- The status bar's mode segments now give way under 860 px, so "tainted" and "2 approvals" stay visible (the narrow
+  mockups drop the segments; Shift+Tab still cycles).
+- The jump pill stays away while an approval waits, and focusing a card scrolls its answers, not its top, into view.
+- Tool card heads are 46 px as in `Main.png`; parsed commands stack in one column under 860 px; long target chips and
+  turn heads end in an ellipsis or wrap rather than being clipped; the opening scroll position is taken twice so the
+  repeater's height estimates cannot move it; "Deny and say why" puts the caret in the reason field; the answers lost
+  their tooltips, which covered the reasons on keyboard focus; a thought renders its code spans.
+
+Left for later, from that report: an inline code span wraps as a unit and can leave "(" at a line's end; after Back,
+the focused answer keeps its outline; Esc Esc leaves focus (and its tooltip) on the attention bell; the demo's idle
+session `cli-77b0` shows no files in Changes though its turn edited one (the demo never sends that change), the
+Decisions panel lists earlier turns' groups below this turn's (`Approval.png` shows only this turn's), and with every
+checkpoint's chips shown (Ctrl+Shift+D) a pre-execute group lands after its card: the last two are the fold's, in
+`SessionFold`. The scripted F2 turn says "thought for 0 s". Wheel scrolling could not be driven through the XTest shim.
 
 Decisions and differences that remain:
 

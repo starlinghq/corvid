@@ -76,7 +76,7 @@
 
         <!-- .seg: the approval mode, one segment pressed. -->
         <Border Height="20" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1" CornerRadius="6" VerticalAlignment="Center"
-                Visibility="{x:Bind infra:Ui.VisibleIf(Shell.StatusBar.HasMode), Mode=OneWay}">
+                Visibility="{x:Bind infra:Ui.VisibleIfBoth(Shell.StatusBar.HasMode, Shell.ShowModeControl), Mode=OneWay}">
           <ItemsControl ItemsSource="{x:Bind Shell.StatusBar.Modes}" IsTabStop="False" AutomationProperties.Name="Approval mode">
             <ItemsControl.ItemsPanel>
               <ItemsPanelTemplate>

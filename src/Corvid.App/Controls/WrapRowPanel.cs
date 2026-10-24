@@ -88,10 +88,12 @@ public sealed partial class WrapRowPanel : Panel
                 for (var i = first; i < end; i++)
                 {
                     var size = visible[i].DesiredSize;
+                    // An item wider than the line gets the line, so its own trimming applies rather than a clip.
+                    var itemWidth = double.IsInfinity(width) ? size.Width : Math.Min(size.Width, Math.Max(0, width - x));
                     if (PushLastRight && i == visible.Count - 1 && !double.IsInfinity(width))
-                        x = Math.Max(x, width - size.Width);
-                    visible[i].Arrange(new Rect(x, y, size.Width, height));
-                    x += size.Width + Spacing;
+                        x = Math.Max(x, width - itemWidth);
+                    visible[i].Arrange(new Rect(x, y, itemWidth, height));
+                    x += itemWidth + Spacing;
                 }
             }
 

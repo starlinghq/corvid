@@ -12,6 +12,8 @@ public static class Ui
 
     public static Visibility CollapsedIf(bool value) => value ? Visibility.Collapsed : Visibility.Visible;
 
+    public static Visibility VisibleIfBoth(bool first, bool second) => first && second ? Visibility.Visible : Visibility.Collapsed;
+
     /// <summary>Visible when the text is not empty: status bar items, badges and subtitles that only sometimes exist.</summary>
     public static Visibility VisibleIfText(string? text) => string.IsNullOrEmpty(text) ? Visibility.Collapsed : Visibility.Visible;
 

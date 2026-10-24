@@ -167,6 +167,12 @@ public sealed class ShellViewModel : ObservableObject
 
     public bool ShowStatusBar => _layout != ShellLayout.Phone;
 
+    /// <summary>
+    /// The status bar's approval-mode segments, at 860 px and wider. The narrow mockups drop them so the safety tags
+    /// ("tainted", "2 approvals") keep their place; Shift+Tab still cycles the mode.
+    /// </summary>
+    public bool ShowModeControl => _layout is ShellLayout.Wide or ShellLayout.Medium;
+
     /// <summary>The phone layout's top bar and bottom bar.</summary>
     public bool ShowPhoneBars => _layout == ShellLayout.Phone;
 
@@ -329,6 +335,7 @@ public sealed class ShellViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowDockOverlay));
         OnPropertyChanged(nameof(ShowScrim));
         OnPropertyChanged(nameof(ShowStatusBar));
+        OnPropertyChanged(nameof(ShowModeControl));
         OnPropertyChanged(nameof(ShowPhoneBars));
         OnPropertyChanged(nameof(ShowRailToggle));
         OnPropertyChanged(nameof(ShowDockToggle));

@@ -199,6 +199,18 @@ public sealed class ShellViewModelTests
         Assert.Equal([nameof(ShellViewModel.Theme)], changed);
     }
 
+    [Theory]
+    [InlineData(1440, true)]
+    [InlineData(1024, true)]
+    [InlineData(820, false)]
+    [InlineData(390, false)]
+    public void TheModeSegmentsGiveWayBelow860SoTheSafetyTagsStay(double width, bool shown)
+    {
+        var shell = new ShellViewModel(new StatusBarViewModel()) { Layout = ShellLayouts.ForWidth(width) };
+
+        Assert.Equal(shown, shell.ShowModeControl);
+    }
+
     private static string Selected(ShellViewModel shell) => shell.PhoneTabs.Single(tab => tab.IsSelected).Label;
 
     private static string Shown(ShellViewModel shell) => string.Join(' ', new (bool Shown, string Name)[]
