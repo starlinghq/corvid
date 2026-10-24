@@ -877,6 +877,7 @@
           </controls:ToneRow>
           <ItemsRepeater x:Name="Transcript" ItemsSource="{x:Bind ViewModel.Session.Blocks, Mode=OneWay}"
                          AutomationProperties.Name="Messages and tool calls" AutomationProperties.AccessibilityView="Content"
+                         TabFocusNavigation="Local"
                          ItemTemplate="{StaticResource BlockTemplates}" SizeChanged="OnTranscriptSizeChanged">
             <ItemsRepeater.Layout>
               <StackLayout Spacing="10" />
