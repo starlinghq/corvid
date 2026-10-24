@@ -207,6 +207,8 @@
               <TextBox Text="{x:Bind Reason, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource SkTextBox}"
                        PlaceholderText="Why not? Kept with the draft, so the loop learns from it" AcceptsReturn="False"
                        PreviewKeyDown="OnReasonKeyDown" Loaded="OnEditorLoaded" Unloaded="OnEditorUnloaded" AutomationProperties.Name="Reason for rejecting the draft" />
+              <TextBlock Text="{x:Bind ReasonProblem, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource CorvidRed}" TextWrapping="Wrap"
+                         IsTextSelectionEnabled="True" Visibility="{x:Bind ui:Ui.VisibleIf(HasReasonProblem), Mode=OneWay}" />
               <StackPanel Orientation="Horizontal" Spacing="8">
                 <controls:CorvidButton Content="Reject" Foreground="{ThemeResource CorvidRed}" Style="{StaticResource CorvidSmallButton}"
                                        Command="{x:Bind ConfirmRejectCommand}" />
@@ -348,6 +350,8 @@
               </ItemsPanelTemplate>
             </ItemsControl.ItemsPanel>
           </ItemsControl>
+          <TextBlock Text="{x:Bind ViewModel.MoreDraftsText, Mode=OneWay}" Style="{StaticResource CorvidSmallText}"
+                     Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasMoreDrafts), Mode=OneWay}" />
         </StackPanel>
 
         <!-- Beside the drafts: the most used skills, the idle ones, the import. -->
@@ -392,20 +396,44 @@
                           <ColumnDefinition Width="*" />
                           <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                          <RowDefinition Height="Auto" />
+                          <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
                         <StackPanel Spacing="1">
                           <controls:LinkButton Text="{x:Bind Name}" FontSize="12.5" Command="{x:Bind OpenCommand}" HorizontalAlignment="Left"
                                                ToolTipService.ToolTip="Open it in the library" />
                           <TextBlock Text="{x:Bind Detail}" Style="{StaticResource CorvidSmallText}" />
                         </StackPanel>
-                        <controls:CorvidButton Grid.Column="1" Content="Archive" Style="{StaticResource CorvidSmallButton}" Command="{x:Bind ArchiveCommand}"
-                                               VerticalAlignment="Center" />
+                        <controls:CorvidButton Grid.Column="1" Content="Archive…" Style="{StaticResource CorvidSmallButton}" Command="{x:Bind StartArchiveCommand}"
+                                               VerticalAlignment="Center" Visibility="{x:Bind ui:Ui.VisibleIf(IsIdle), Mode=OneWay}"
+                                               AutomationProperties.HelpText="Asks first" />
+                        <!-- Asking before archiving, as the open skill's Archive… does. -->
+                        <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Margin="0,6,0,0" Spacing="6"
+                                    Visibility="{x:Bind ui:Ui.VisibleIf(IsConfirming), Mode=OneWay}" AutomationProperties.LiveSetting="Assertive">
+                          <TextBlock Text="{x:Bind ConfirmText}" Style="{StaticResource CorvidSmallText}" TextWrapping="Wrap" />
+                          <StackPanel Orientation="Horizontal" Spacing="8">
+                            <controls:CorvidButton Content="Archive" Foreground="{ThemeResource CorvidRed}" Style="{StaticResource CorvidSmallButton}"
+                                                   Command="{x:Bind ArchiveCommand}" />
+                            <controls:CorvidButton Content="Back" Variant="Ghost" Style="{StaticResource CorvidSmallButton}" Command="{x:Bind CancelArchiveCommand}" />
+                          </StackPanel>
+                        </StackPanel>
                       </Grid>
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
                 <controls:CorvidButton Content="{x:Bind ViewModel.ArchiveAllLabel, Mode=OneWay}" Style="{StaticResource CorvidSmallButton}"
                                        Command="{x:Bind ViewModel.ArchiveAllStaleCommand}" HorizontalAlignment="Left"
-                                       Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasStaleSkills), Mode=OneWay}" />
+                                       Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.ShowsArchiveAll), Mode=OneWay}" AutomationProperties.HelpText="Asks first" />
+                <StackPanel Spacing="6" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsConfirmingArchiveAll), Mode=OneWay}"
+                            AutomationProperties.LiveSetting="Assertive">
+                  <TextBlock Text="{x:Bind ViewModel.ArchiveAllQuestion, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" TextWrapping="Wrap" />
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <controls:CorvidButton Content="Archive" Foreground="{ThemeResource CorvidRed}" Style="{StaticResource CorvidSmallButton}"
+                                           Command="{x:Bind ViewModel.ConfirmArchiveAllCommand}" />
+                    <controls:CorvidButton Content="Back" Variant="Ghost" Style="{StaticResource CorvidSmallButton}" Command="{x:Bind ViewModel.CancelArchiveAllCommand}" />
+                  </StackPanel>
+                </StackPanel>
               </StackPanel>
             </StackPanel>
           </Border>
@@ -726,6 +754,8 @@
                            TextWrapping="NoWrap" PlaceholderText="the hub name the skills are authored as; local by default" PreviewKeyDown="OnImportKeyDown"
                            Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsFolderImport), Mode=OneWay}" AutomationProperties.Name="Hub name" />
                 </Grid>
+                <TextBlock Text="{x:Bind ViewModel.ImportProblem, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource CorvidRed}" TextWrapping="Wrap"
+                           IsTextSelectionEnabled="True" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasImportProblem), Mode=OneWay}" />
                 <controls:CorvidButton Content="Dry run" Style="{StaticResource CorvidSmallButton}" Command="{x:Bind ViewModel.ScanCommand}" HorizontalAlignment="Left"
                                        ToolTipService.ToolTip="List and scan every skill; nothing is imported" />
               </StackPanel>
@@ -767,6 +797,8 @@
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
+                <TextBlock Text="{x:Bind ViewModel.MoreCandidatesText, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" TextWrapping="Wrap"
+                           Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasMoreCandidates), Mode=OneWay}" />
                 <StackPanel Orientation="Horizontal" Spacing="8">
                   <controls:CorvidButton Content="{x:Bind ViewModel.ImportLabel, Mode=OneWay}" Variant="Primary" Style="{StaticResource CorvidSmallButton}"
                                          Command="{x:Bind ViewModel.ImportCommand}" />

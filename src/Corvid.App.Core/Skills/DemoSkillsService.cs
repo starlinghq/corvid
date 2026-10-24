@@ -46,8 +46,12 @@ public sealed class DemoSkillsService : ISkillsService
         cancellationToken.ThrowIfCancellationRequested();
         var draft = _drafts.Find(d => d.Id == draftId) ?? throw new InvalidOperationException($"No draft '{draftId}' is waiting for review.");
         var content = editedContent ?? draft.Content;
-        if (SafeText.HasHidden(content))
+        // As the draft shows it: the joiners Persian and emoji need stay; anything else hidden is refused.
+        if (SkillsText.HasHiddenContent(content) || SafeText.HasHidden(draft.Skill))
             throw new InvalidOperationException("The SKILL.md holds hidden characters; the scanner refuses it.");
+        // The draft writes the skill it names; an edit cannot point it at another one.
+        if (!string.Equals(SkillsText.Name(content), draft.Skill, StringComparison.Ordinal))
+            throw new InvalidOperationException($"The SKILL.md's name: is not {draft.Skill}, the skill this draft writes.");
         var edited = editedContent is not null && !string.Equals(editedContent, draft.Content, StringComparison.Ordinal);
         // An edited draft is the user's text: it is written as theirs, which also keeps the curator off it.
         var author = edited ? "user" : "agent";
@@ -74,6 +78,8 @@ public sealed class DemoSkillsService : ISkillsService
     {
         cancellationToken.ThrowIfCancellationRequested();
         var draft = _drafts.Find(d => d.Id == draftId) ?? throw new InvalidOperationException($"No draft '{draftId}' is waiting for review.");
+        if (SafeText.HasHidden(reason))
+            throw new ArgumentException("The reason holds hidden characters; it is not stored.", nameof(reason));
         _drafts.Remove(draft);
         _rejections[draftId] = reason;
         return Task.CompletedTask;
@@ -204,6 +210,11 @@ public sealed class DemoSkillsService : ISkillsService
     public Task<ImportScan> ScanImportAsync(SkillImportKind kind, string? folder, string? source, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        // The folder is what is read and the source the author written into git: neither may hide anything.
+        if (SafeText.HasHidden(folder))
+            throw new ArgumentException("The folder holds hidden characters.", nameof(folder));
+        if (kind == SkillImportKind.Folder && SafeText.HasHidden(source))
+            throw new ArgumentException("The hub name holds hidden characters.", nameof(source));
         if (kind == SkillImportKind.Hermes)
         {
             var location = string.IsNullOrWhiteSpace(folder) ? "~/.hermes" : folder.Trim();
@@ -225,6 +236,8 @@ public sealed class DemoSkillsService : ISkillsService
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(scan);
         ArgumentNullException.ThrowIfNull(candidateIds);
+        if (SafeText.HasHidden(scan.Author) || SafeText.HasHidden(scan.Location))
+            throw new ArgumentException("The dry run's source or folder holds hidden characters; nothing is imported.", nameof(scan));
         var imported = new List<SkillRecord>();
         var refused = new List<string>();
         var files = new List<SkillCommitFile>();

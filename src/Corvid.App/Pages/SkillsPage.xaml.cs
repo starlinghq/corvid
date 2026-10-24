@@ -100,9 +100,9 @@ public sealed partial class SkillsPage : Page
         var inner = width - 2 * gutter;
         SkillsLayout.Current.Narrow = (oneColumn ? inner : (inner - 18) / 2.4 * 1.4) < NarrowTableWidth;
         // The filter is 300 px, as Memory's search; it gives up to 80 px to stay on the title's line, and below that takes
-        // a line of its own, never wider than the head.
-        var left = inner - PageTitle.ActualWidth - TabStrip.ActualWidth - 24;
-        FilterBox.Width = left >= 220 ? Math.Min(300, left) : Math.Min(300, Math.Max(160, inner));
+        // a line of its own, never wider than the head. On a phone it spans the gutters, as the other pages' fields do.
+        var left = inner - (phone ? 0 : PageTitle.ActualWidth) - TabStrip.ActualWidth - 24;
+        FilterBox.Width = phone ? Math.Max(0, inner) : left >= 220 ? Math.Min(300, left) : Math.Min(300, Math.Max(160, inner));
         PadTabs(TabStrip, phone ? new Thickness(6, 0, 6, 0) : new Thickness(9, 0, 9, 0));
     }
 

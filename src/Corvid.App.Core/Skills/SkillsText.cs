@@ -107,4 +107,54 @@ public static class SkillsText
 
         return "";
     }
+
+    /// <summary>The frontmatter's <c>name:</c>, or null when the frontmatter has none (or there is no frontmatter).</summary>
+    public static string? Name(string? content)
+    {
+        var text = Lines(content);
+        if (!text.StartsWith("---\n", StringComparison.Ordinal))
+            return null;
+        var end = text.IndexOf("\n---", 4, StringComparison.Ordinal);
+        foreach (var line in (end < 0 ? text[4..] : text[4..end]).Split('\n'))
+        {
+            if (line.StartsWith("name:", StringComparison.Ordinal))
+                return line["name:".Length..].Trim();
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Line breaks as one <c>\n</c>: a text box hands back <c>\r\n</c> or a bare <c>\r</c> where the person pressed Enter,
+    /// and neither may count as a hidden character or as a change.
+    /// </summary>
+    public static string Lines(string? text) =>
+        string.IsNullOrEmpty(text) ? "" : text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+
+    /// <summary>
+    /// Whether a SKILL.md holds a character a reader cannot see: what <see cref="SafeText.Reveal"/> would mark with the
+    /// joiners and variation selectors left alone, as the draft and its diff show them (ordinary Persian, Indic or emoji
+    /// text reads right only with them). Such a SKILL.md is not written.
+    /// </summary>
+    public static bool HasHiddenContent(string? text) =>
+        !string.IsNullOrEmpty(text) && !string.Equals(SafeText.Reveal(text, keepJoiners: true), text, StringComparison.Ordinal);
+
+    /// <summary>
+    /// What <see cref="SafeText.Reveal"/> writes in place of a hidden character: a <c>⟨U+…⟩</c> code or a control's
+    /// picture (␍, ␛, ␡). An editor opened on a draft that hid characters shows these until they are deleted.
+    /// </summary>
+    public static bool HasRevealedMarks(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return false;
+        if (text.Contains("⟨U+", StringComparison.Ordinal))
+            return true;
+        foreach (var c in text)
+        {
+            if (c is >= '␀' and <= '␡')
+                return true;
+        }
+
+        return false;
+    }
 }

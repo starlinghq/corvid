@@ -11,9 +11,10 @@ namespace Corvid.App.Core.Skills;
 /// use, uses, evals and pins, and each skill's SKILL.md rendered with its eval history; the store's git history with
 /// diffs and revert; the import from Hermes or a folder, with the scanner's findings shown before anything is imported;
 /// and stale skills offered for archiving. It mirrors <c>/skills</c> (src/Corvid.Host/Commands/SkillCommands.cs). The
-/// rail's Skills badge counts the drafts; while the page shows, the status bar is the store's.
+/// rail's Skills badge counts the drafts; while the page shows, the status bar is the store's. Disposing it lets go of the
+/// shell and gives the status bar back.
 /// </summary>
-public sealed class SkillsViewModel : AreaViewModel
+public sealed class SkillsViewModel : AreaViewModel, IDisposable
 {
     /// <summary>The line above the drafts.</summary>
     public const string Intro =
@@ -31,6 +32,12 @@ public sealed class SkillsViewModel : AreaViewModel
 
     /// <summary>Skills the Review tab's side panel lists as most used.</summary>
     public const int MostUsedCount = 4;
+
+    /// <summary>Draft cards drawn at most; the next one shows as one above is answered.</summary>
+    public const int DraftCap = 20;
+
+    /// <summary>Dry-run candidates drawn (and so importable) at most.</summary>
+    public const int CandidateCap = 200;
 
     private readonly ISkillsService _service;
     private readonly TimeProvider _time;
@@ -61,6 +68,10 @@ public sealed class SkillsViewModel : AreaViewModel
     private string _importFolder = "";
     private string _importSource = "";
     private ImportScan? _scan;
+    private readonly List<SkillDraft> _moreDrafts = [];
+    private int _hiddenCandidates;
+    private bool _isConfirmingArchiveAll;
+    private bool _disposed;
 
     public SkillsViewModel(ISkillsService service, TimeProvider time, ShellViewModel? shell = null, StatusBarViewModel? statusBar = null)
         : base(Area.Skills, "Drafts waiting for review with their replay, the library, revisions, evals and the import.")
@@ -87,10 +98,14 @@ public sealed class SkillsViewModel : AreaViewModel
         ClearFilterCommand = new RelayCommand(() => FilterText = "");
         ClearHistoryFilterCommand = new AsyncRelayCommand(ct => LoadHistoryAsync(null, ct));
         CloseDetailCommand = new RelayCommand(CloseDetail);
-        ScanCommand = new AsyncRelayCommand(ScanAsync);
-        ImportCommand = new AsyncRelayCommand(ImportAsync, () => PassedCount > 0);
+        ScanCommand = new AsyncRelayCommand(ScanAsync, () => !HasImportProblem);
+        ImportCommand = new AsyncRelayCommand(ImportAsync, () => PassedCount > 0 && !HasImportProblem && _scan is { } scan
+            && !SafeText.HasHidden(scan.Author) && !SafeText.HasHidden(scan.Location));
         CancelScanCommand = new RelayCommand(() => SetScan(null));
-        ArchiveAllStaleCommand = new AsyncRelayCommand(ct => ArchiveAsync([.. StaleSkills.Select(s => s.Row.Record.Name)], ct), () => StaleSkills.Count > 0);
+        // Archiving moves skills out of the library at once, so it asks first, as the open skill's Archive… does.
+        ArchiveAllStaleCommand = new RelayCommand(() => IsConfirmingArchiveAll = true, () => StaleSkills.Count > 0);
+        ConfirmArchiveAllCommand = new AsyncRelayCommand(ct => ArchiveAsync([.. StaleSkills.Select(s => s.Row.Record.Name)], ct), () => StaleSkills.Count > 0);
+        CancelArchiveAllCommand = new RelayCommand(() => IsConfirmingArchiveAll = false);
         OpenLibraryCommand = new RelayCommand(() => Select(SkillsTabKind.Library));
         OpenImportCommand = new RelayCommand(() => Select(SkillsTabKind.Import));
         DismissOutcomeCommand = new RelayCommand(() => SetOutcome("", Tone.Grey));
@@ -107,6 +122,18 @@ public sealed class SkillsViewModel : AreaViewModel
 
     /// <summary>Completes when the first load has (a failure lands in <see cref="LoadError"/>); tests await it.</summary>
     public Task Loaded { get; }
+
+    /// <summary>Stops following the shell and gives the status bar back, if this page held it.</summary>
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+        _disposed = true;
+        if (_shell is not null && _lease is not null)
+            _shell.PropertyChanged -= OnShellChanged;
+        _lease?.Release();
+        _active = false;
+    }
 
     public string IntroText => Intro;
 
@@ -148,6 +175,16 @@ public sealed class SkillsViewModel : AreaViewModel
 
     public bool HasNoDrafts => Drafts.Count == 0;
 
+    /// <summary>"3 more drafts wait: each shows here as one above is answered.", when more than <see cref="DraftCap"/> wait.</summary>
+    public string MoreDraftsText => _moreDrafts.Count switch
+    {
+        0 => "",
+        1 => "1 more draft waits: it shows here once one above is answered.",
+        var n => $"{n} more drafts wait: each shows here as one above is answered.",
+    };
+
+    public bool HasMoreDrafts => _moreDrafts.Count > 0;
+
     public string EmptyReviewText => "No drafted skill is waiting. After a task succeeds, the agent's drafts land here with their replay.";
 
     public ObservableCollection<SkillRowView> MostUsed { get; } = [];
@@ -167,10 +204,49 @@ public sealed class SkillsViewModel : AreaViewModel
     public string ArchiveAllLabel => StaleSkills.Count switch
     {
         0 => "Archive",
-        1 => "Archive it",
-        2 => "Archive both",
-        var n => $"Archive all {n}",
+        1 => "Archive it…",
+        2 => "Archive both…",
+        var n => $"Archive all {n}…",
     };
+
+    /// <summary>The side panel's Archive all… is asking.</summary>
+    public bool IsConfirmingArchiveAll
+    {
+        get => _isConfirmingArchiveAll;
+        private set
+        {
+            if (!SetProperty(ref _isConfirmingArchiveAll, value))
+                return;
+            OnPropertyChanged(nameof(IsNotConfirmingArchiveAll));
+            OnPropertyChanged(nameof(ShowsArchiveAll));
+            OnPropertyChanged(nameof(ArchiveAllQuestion));
+            if (value)
+            {
+                foreach (var stale in StaleSkills)
+                    stale.IsConfirming = false;
+            }
+        }
+    }
+
+    public bool IsNotConfirmingArchiveAll => !_isConfirmingArchiveAll;
+
+    /// <summary>Archive all… shows while there is something idle and it is not already asking.</summary>
+    public bool ShowsArchiveAll => StaleSkills.Count > 0 && !_isConfirmingArchiveAll;
+
+    /// <summary>"Archive python-venv-setup and docker-compose-up? They move to .archive/; git keeps them."</summary>
+    public string ArchiveAllQuestion
+    {
+        get
+        {
+            var names = StaleSkills.Select(s => s.Name).ToList();
+            return names.Count switch
+            {
+                0 => "",
+                1 => $"Archive {names[0]}? It moves to .archive/; git keeps it.",
+                _ => $"Archive {string.Join(", ", names.Take(names.Count - 1))} and {names[^1]}? They move to .archive/; git keeps them.",
+            };
+        }
+    }
 
     // ---- library ----
 
@@ -257,7 +333,7 @@ public sealed class SkillsViewModel : AreaViewModel
             OnPropertyChanged(nameof(IsFolderImport));
             OnPropertyChanged(nameof(ImportNote));
             OnPropertyChanged(nameof(FolderPlaceholder));
-            SetScan(null);
+            ImportFieldsChanged();
         }
     }
 
@@ -267,21 +343,58 @@ public sealed class SkillsViewModel : AreaViewModel
         ? "Reads ~/.hermes/skills, or the Hermes home given below. Each skill is scanned first; a finding refuses it. Imported skills are outside content: loading one taints the session."
         : "Reads every folder holding a SKILL.md. Each skill is scanned first; a finding refuses it. Imported skills are authored hub:<source> and are outside content.";
 
+    /// <summary>The folder to import from; changing it drops a dry run of another folder.</summary>
     public string ImportFolder
     {
         get => _importFolder;
-        set => SetProperty(ref _importFolder, value ?? "");
+        set
+        {
+            if (SetProperty(ref _importFolder, value ?? ""))
+                ImportFieldsChanged();
+        }
     }
 
+    /// <summary>The hub name imported skills are authored as (hub:&lt;source&gt;, written into git); changing it drops a dry run.</summary>
     public string ImportSource
     {
         get => _importSource;
-        set => SetProperty(ref _importSource, value ?? "");
+        set
+        {
+            if (SetProperty(ref _importSource, value ?? ""))
+                ImportFieldsChanged();
+        }
     }
+
+    /// <summary>
+    /// A folder or hub name holding hidden characters, shown: the hub name becomes the skills' author in git and the folder
+    /// what is read, so neither may hide anything. Dry run and Import stay off until they go.
+    /// </summary>
+    public string ImportProblem
+    {
+        get
+        {
+            var problems = new List<string>();
+            if (SafeText.HasHidden(_importFolder))
+                problems.Add($"The folder holds hidden characters: “{SafeText.Reveal(_importFolder.Trim())}”.");
+            if (_importKind == SkillImportKind.Folder && SafeText.HasHidden(_importSource))
+                problems.Add($"The hub name holds hidden characters: “{SafeText.Reveal(_importSource.Trim())}”.");
+            return problems.Count == 0 ? "" : string.Join(" ", problems) + " Delete them to run the dry run.";
+        }
+    }
+
+    public bool HasImportProblem => ImportProblem.Length > 0;
 
     public string FolderPlaceholder => _importKind == SkillImportKind.Hermes ? "~/.hermes (the default)" : "a folder of skill folders, e.g. ~/skills";
 
+    /// <summary>The dry run's skills, at most <see cref="CandidateCap"/>; Import imports those that passed among them.</summary>
     public ObservableCollection<ImportCandidateView> Candidates { get; } = [];
+
+    /// <summary>"40 more found, not drawn and not imported: import these, then run the dry run again."</summary>
+    public string MoreCandidatesText => _hiddenCandidates == 0
+        ? ""
+        : $"{_hiddenCandidates} more found, not drawn and not imported: import these, then run the dry run again.";
+
+    public bool HasMoreCandidates => _hiddenCandidates > 0;
 
     public bool HasScan => _scan is not null;
 
@@ -323,7 +436,14 @@ public sealed class SkillsViewModel : AreaViewModel
 
     public RelayCommand CancelScanCommand { get; }
 
-    public AsyncRelayCommand ArchiveAllStaleCommand { get; }
+    /// <summary>The side panel's Archive all…: asks first (<see cref="IsConfirmingArchiveAll"/>).</summary>
+    public RelayCommand ArchiveAllStaleCommand { get; }
+
+    /// <summary>The question's Archive: moves every idle skill listed to .archive/.</summary>
+    public AsyncRelayCommand ConfirmArchiveAllCommand { get; }
+
+    /// <summary>The question's Back.</summary>
+    public RelayCommand CancelArchiveAllCommand { get; }
 
     public RelayCommand OpenLibraryCommand { get; }
 
@@ -350,7 +470,9 @@ public sealed class SkillsViewModel : AreaViewModel
         _staleDays = snapshot.StaleDays;
         _issues = [.. snapshot.Issues.Select(i => "not loaded: " + SafeText.Reveal(i))];
         var zone = _time.LocalTimeZone;
-        Reset(Drafts, snapshot.Drafts.Select(d => new SkillDraftView(this, d, zone)));
+        Reset(Drafts, snapshot.Drafts.Take(DraftCap).Select(d => new SkillDraftView(this, d, zone)));
+        _moreDrafts.Clear();
+        _moreDrafts.AddRange(snapshot.Drafts.Skip(DraftCap));
         SetLibrary(snapshot.Skills);
         OnPropertyChanged(nameof(LibraryRoot));
         OnPropertyChanged(nameof(Issues));
@@ -457,7 +579,7 @@ public sealed class SkillsViewModel : AreaViewModel
             return;
         }
 
-        Drafts.Remove(draft);
+        RemoveDraft(draft);
         await ReloadLibraryAsync(cancellationToken).ConfigureAwait(true);
         var name = SafeText.Reveal(written.Name);
         SetOutcome(edited is null
@@ -469,6 +591,9 @@ public sealed class SkillsViewModel : AreaViewModel
 
     internal async Task RejectDraftAsync(SkillDraftView draft, string reason, CancellationToken cancellationToken)
     {
+        // The reason is kept with the draft: nothing hidden is stored.
+        if (SafeText.HasHidden(reason))
+            return;
         try
         {
             await _service.RejectDraftAsync(draft.Id, reason, cancellationToken).ConfigureAwait(true);
@@ -479,7 +604,7 @@ public sealed class SkillsViewModel : AreaViewModel
             return;
         }
 
-        Drafts.Remove(draft);
+        RemoveDraft(draft);
         SetOutcome($"Rejected the draft {draft.Name}: “{SafeText.Clean(reason)}”. The reason is kept with it, so the loop learns from it.", Tone.Grey);
         DraftsChanged();
     }
@@ -585,11 +710,14 @@ public sealed class SkillsViewModel : AreaViewModel
 
     private async Task ScanAsync(CancellationToken cancellationToken)
     {
+        if (HasImportProblem)
+            return;
+        var (kind, folder, source) = (_importKind, _importFolder, _importSource);
         ImportScan scan;
         try
         {
-            scan = await _service.ScanImportAsync(_importKind, _importFolder.Trim().Length == 0 ? null : _importFolder.Trim(),
-                _importSource.Trim().Length == 0 ? null : _importSource.Trim(), cancellationToken).ConfigureAwait(true);
+            scan = await _service.ScanImportAsync(kind, folder.Trim().Length == 0 ? null : folder.Trim(),
+                source.Trim().Length == 0 ? null : source.Trim(), cancellationToken).ConfigureAwait(true);
         }
         catch (Exception exception) when (Failed(exception))
         {
@@ -597,13 +725,16 @@ public sealed class SkillsViewModel : AreaViewModel
             return;
         }
 
+        // The fields changed while it ran: this dry run is of something no longer asked for.
+        if (kind != _importKind || folder != _importFolder || source != _importSource)
+            return;
         SetScan(scan);
     }
 
     /// <summary>Imports exactly what the dry run showed passing, by the candidates' ids.</summary>
     private async Task ImportAsync(CancellationToken cancellationToken)
     {
-        if (_scan is not { } scan)
+        if (_scan is not { } scan || SafeText.HasHidden(scan.Author) || SafeText.HasHidden(scan.Location))
             return;
         IReadOnlyList<string> ids = [.. Candidates.Where(c => !c.IsRefused).Select(c => c.Candidate.Id)];
         SkillImportResult result;
@@ -631,10 +762,22 @@ public sealed class SkillsViewModel : AreaViewModel
             Select(SkillsTabKind.Library);
     }
 
+    private void ImportFieldsChanged()
+    {
+        // A dry run of other fields says nothing about these: it goes, and Import with it.
+        SetScan(null);
+        OnPropertyChanged(nameof(ImportProblem));
+        OnPropertyChanged(nameof(HasImportProblem));
+        ScanCommand.NotifyCanExecuteChanged();
+    }
+
     private void SetScan(ImportScan? scan)
     {
         _scan = scan;
-        Reset(Candidates, scan?.Candidates.Select(c => new ImportCandidateView(c)) ?? []);
+        Reset(Candidates, scan?.Candidates.Take(CandidateCap).Select(c => new ImportCandidateView(c)) ?? []);
+        _hiddenCandidates = scan is null ? 0 : Math.Max(0, scan.Candidates.Count - CandidateCap);
+        OnPropertyChanged(nameof(MoreCandidatesText));
+        OnPropertyChanged(nameof(HasMoreCandidates));
         OnPropertyChanged(nameof(HasScan));
         OnPropertyChanged(nameof(ScanTitle));
         OnPropertyChanged(nameof(ScanSummary));
@@ -667,10 +810,12 @@ public sealed class SkillsViewModel : AreaViewModel
         _rows.Clear();
         _rows.AddRange(skills.OrderBy(s => s.Name, StringComparer.Ordinal).Select(s => new SkillRowView(s, _time, _staleDays, SelectSkill)));
         Reset(MostUsed, _rows.OrderByDescending(r => r.Record.Uses).ThenBy(r => r.Record.Name, StringComparer.Ordinal).Take(MostUsedCount));
-        var archive = ArchiveAllStaleCommand;
         Reset(StaleSkills, _rows.Where(r => r.IsStale).OrderByDescending(r => r.IdleDays).Select(r =>
-            new StaleSkillView(r, new AsyncRelayCommand(ct => ArchiveAsync([r.Record.Name], ct)), new RelayCommand(() => OpenInLibrary(r)))));
-        archive.NotifyCanExecuteChanged();
+            new StaleSkillView(r, ct => ArchiveAsync([r.Record.Name], ct), OnStaleConfirming, new RelayCommand(() => OpenInLibrary(r)))));
+        IsConfirmingArchiveAll = false;
+        ArchiveAllStaleCommand.NotifyCanExecuteChanged();
+        ConfirmArchiveAllCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(ArchiveAllQuestion));
         Tabs[(int)SkillsTabKind.Library].Count = _rows.Count;
         _selectedSkill = null;
         _detail = null;
@@ -680,6 +825,7 @@ public sealed class SkillsViewModel : AreaViewModel
         else
             RaiseDetail();
         OnPropertyChanged(nameof(HasStaleSkills));
+        OnPropertyChanged(nameof(ShowsArchiveAll));
         OnPropertyChanged(nameof(HasNoStaleSkills));
         OnPropertyChanged(nameof(ArchiveAllLabel));
         ApplyStatus();
@@ -797,12 +943,38 @@ public sealed class SkillsViewModel : AreaViewModel
 
     // ---- state ----
 
+    /// <summary>One archive question at a time in the side panel.</summary>
+    private void OnStaleConfirming(StaleSkillView asking)
+    {
+        IsConfirmingArchiveAll = false;
+        foreach (var stale in StaleSkills)
+        {
+            if (!ReferenceEquals(stale, asking))
+                stale.IsConfirming = false;
+        }
+    }
+
+    /// <summary>An answered draft goes; the first draft past the cap takes its place.</summary>
+    private void RemoveDraft(SkillDraftView draft)
+    {
+        Drafts.Remove(draft);
+        if (_moreDrafts.Count == 0)
+            return;
+        Drafts.Add(new SkillDraftView(this, _moreDrafts[0], _time.LocalTimeZone));
+        _moreDrafts.RemoveAt(0);
+    }
+
+    /// <summary>Every draft waiting, drawn or not: the badge, the tab and the status bar count them all.</summary>
+    private int WaitingDrafts => Drafts.Count + _moreDrafts.Count;
+
     private void DraftsChanged()
     {
-        Tabs[(int)SkillsTabKind.Review].Count = Drafts.Count;
-        _shell?.SetBadge(Area.Skills, Drafts.Count);
+        Tabs[(int)SkillsTabKind.Review].Count = WaitingDrafts;
+        _shell?.SetBadge(Area.Skills, WaitingDrafts);
         OnPropertyChanged(nameof(HasDrafts));
         OnPropertyChanged(nameof(HasNoDrafts));
+        OnPropertyChanged(nameof(MoreDraftsText));
+        OnPropertyChanged(nameof(HasMoreDrafts));
         ApplyStatus();
     }
 
@@ -851,8 +1023,8 @@ public sealed class SkillsViewModel : AreaViewModel
         get
         {
             var parts = new List<string> { _rows.Count.ToString(System.Globalization.CultureInfo.InvariantCulture) };
-            if (Drafts.Count > 0)
-                parts.Add(Drafts.Count == 1 ? "1 draft" : $"{Drafts.Count} drafts");
+            if (WaitingDrafts > 0)
+                parts.Add(WaitingDrafts == 1 ? "1 draft" : $"{WaitingDrafts} drafts");
             if (StaleSkills.Count > 0)
                 parts.Add($"{StaleSkills.Count} idle");
             return string.Join(" · ", parts);

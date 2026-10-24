@@ -54,7 +54,8 @@ public sealed class SkillDraftView : ObservableObject
         _owner = owner;
         Draft = draft;
         Name = SafeText.Reveal(draft.Skill);
-        Source = SafeText.Reveal(draft.Content.TrimEnd('\n'));
+        // As the update's diff shows it (FileDiff): every hidden character as its code, the joiners left as they are.
+        Source = SafeText.Reveal(draft.Content.TrimEnd('\n'), keepJoiners: true);
         var origin = $"drafted {SkillsText.Clock(draft.Created, zone)} from {SafeText.Clean(draft.SessionId)}";
         if (draft.Turn is { } turn)
             origin += $", turn {turn}";
@@ -81,7 +82,7 @@ public sealed class SkillDraftView : ObservableObject
         CancelEditCommand = new RelayCommand(() => IsEditing = false);
         StartRejectingCommand = new RelayCommand(() => { IsEditing = false; IsRejecting = true; }, () => !_busy);
         ConfirmRejectCommand = new AsyncRelayCommand(ct => Run(() => _owner.RejectDraftAsync(this, _reason.Trim(), ct)),
-            () => !_busy && _reason.Trim().Length > 0);
+            () => !_busy && _reason.Trim().Length > 0 && !SafeText.HasHidden(_reason));
         BackCommand = new RelayCommand(() => { IsRejecting = false; IsEditing = false; });
         OpenEvidenceCommand = new RelayCommand(() => _owner.OpenSession(draft.SessionId));
     }
@@ -124,7 +125,7 @@ public sealed class SkillDraftView : ObservableObject
     public string Evidence { get; }
 
     /// <summary>The draft as staged holds hidden characters: Approve stays off until an edit takes them out.</summary>
-    public bool HasHiddenText => SafeText.HasHidden(Draft.Content) || SafeText.HasHidden(Draft.Skill);
+    public bool HasHiddenText => SkillsText.HasHiddenContent(Draft.Content) || SafeText.HasHidden(Draft.Skill);
 
     public string HiddenWarning => SafeText.HasHidden(Draft.Skill)
         ? "The skill's name holds hidden characters, shown as codes. It cannot be approved; reject it."
@@ -183,11 +184,23 @@ public sealed class SkillDraftView : ObservableObject
         {
             if (!_isEditing)
                 return "";
-            if (_editText.Trim().Length == 0)
+            // A text box's line breaks (\r\n, or a bare \r) are line breaks, not hidden characters.
+            var text = SkillsText.Lines(_editText);
+            if (text.Trim().Length == 0)
                 return "A SKILL.md cannot be empty.";
-            if (SafeText.HasHidden(_editText) || _editText.Contains("⟨U+", StringComparison.Ordinal))
-                return "Delete the hidden characters (shown as ⟨U+…⟩ codes) before approving.";
-            return SafeText.HasHidden(Draft.Skill) ? HiddenWarning : "";
+            if (SafeText.HasHidden(Draft.Skill))
+                return HiddenWarning;
+            // Nothing hidden is written, nor a code or a control's picture the editor showed in place of a hidden character
+            // (only a draft that hid characters opened with them, so elsewhere "⟨U+" or "␛" is ordinary text).
+            if (SkillsText.HasHiddenContent(text) || (HasHiddenText && SkillsText.HasRevealedMarks(text)))
+                return "Delete the hidden characters (shown as ⟨U+…⟩ codes or control pictures such as ␛) before approving.";
+            // Approving writes the skill this draft names; an edit cannot point it at another skill.
+            var name = SkillsText.Name(text);
+            if (!string.Equals(name, Draft.Skill, StringComparison.Ordinal))
+                return name is null
+                    ? $"The frontmatter must keep name: {Name}; this draft writes that skill."
+                    : $"The frontmatter's name: is “{SafeText.Reveal(name)}”, but this draft writes {Name}. Put the name back, or reject the draft.";
+            return "";
         }
     }
 
@@ -198,21 +211,31 @@ public sealed class SkillDraftView : ObservableObject
         get => _reason;
         set
         {
-            if (SetProperty(ref _reason, value ?? ""))
-                ConfirmRejectCommand.NotifyCanExecuteChanged();
+            if (!SetProperty(ref _reason, value ?? ""))
+                return;
+            OnPropertyChanged(nameof(ReasonProblem));
+            OnPropertyChanged(nameof(HasReasonProblem));
+            ConfirmRejectCommand.NotifyCanExecuteChanged();
         }
     }
 
-    /// <summary>What Approve writes: the edit while editing, the draft otherwise.</summary>
+    /// <summary>A reason holding hidden characters, shown, since it is kept with the draft: Reject stays off until they go.</summary>
+    public string ReasonProblem => SafeText.HasHidden(_reason)
+        ? $"The reason holds hidden characters: “{SafeText.Reveal(_reason.Trim())}”. Delete them to reject."
+        : "";
+
+    public bool HasReasonProblem => ReasonProblem.Length > 0;
+
+    /// <summary>What Approve writes: the edit while editing (with its line breaks as <c>\n</c>), the draft otherwise.</summary>
     internal string? EditedContent
     {
         get
         {
             if (!_isEditing)
                 return null;
-            var text = _editText.Replace("\r\n", "\n", StringComparison.Ordinal).TrimEnd('\n') + "\n";
+            var text = SkillsText.Lines(_editText).TrimEnd('\n') + "\n";
             // Opened and left as it was: the draft as staged, written as the agent's.
-            return string.Equals(text, Draft.Content.TrimEnd('\n') + "\n", StringComparison.Ordinal) ? null : text;
+            return string.Equals(text, SkillsText.Lines(Draft.Content).TrimEnd('\n') + "\n", StringComparison.Ordinal) ? null : text;
         }
     }
 
@@ -236,7 +259,7 @@ public sealed class SkillDraftView : ObservableObject
     {
         if (_busy || _isRejecting || SafeText.HasHidden(Draft.Skill))
             return false;
-        return _isEditing ? !HasEditProblem : !SafeText.HasHidden(Draft.Content);
+        return _isEditing ? !HasEditProblem : !HasHiddenText;
     }
 
     private void StartEditing()
