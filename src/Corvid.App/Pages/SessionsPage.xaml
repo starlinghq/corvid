@@ -790,7 +790,7 @@
               <StackLayout Spacing="10" />
             </ItemsRepeater.Layout>
           </ItemsRepeater>
-          <TextBlock Text="No session is open. Pick one in the rail, or start one with Ctrl+N." Style="{StaticResource CorvidMutedText}"
+          <TextBlock Text="No session is open. Pick one in the rail." Style="{StaticResource CorvidMutedText}"
                      Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.HasSession), Mode=OneWay}" />
         </StackPanel>
         </Grid>

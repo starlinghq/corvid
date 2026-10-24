@@ -49,12 +49,12 @@ public sealed record ParsedCommandView(
         var effects = command.Effects.Where(effect => effect != "read").ToList();
         var dangerous = effects.Any(effect => effect is "delete" or "network" or "elevated" or "system" or "signal" or "configuration");
         return new ParsedCommandView(
-            SafeText.Clean(command.Text),
+            SafeText.Reveal(command.Text),
             string.Join(", ", effects),
             dangerous ? Tone.Red : Tone.Grey,
-            SafeText.Clean(command.Verb),
-            SafeText.Clean(command.Subcommand),
-            string.Join(" ", command.Flags.Select(SafeText.Clean)),
+            SafeText.Reveal(command.Verb),
+            SafeText.Reveal(command.Subcommand),
+            string.Join(" ", command.Flags.Select(flag => SafeText.Reveal(flag))),
             [.. command.Targets.Select(Chip)],
             [.. command.Notes.Select(note => new CommandNoteView(note.Label, SessionText.Runs(note.Text)))]);
     }
@@ -70,7 +70,7 @@ public sealed record ParsedCommandView(
             _ => null,
         };
         var detail = string.Join(" · ", new[] { where, SafeText.Clean(target.Detail) }.Where(part => !string.IsNullOrEmpty(part)));
-        return new TargetChip(target.Implied ? $"{target.Access}s under" : "", SafeText.Clean(target.Value), detail, target.Access == "delete");
+        return new TargetChip(target.Implied ? $"{target.Access}s under" : "", SafeText.Reveal(target.Value), detail, target.Access == "delete");
     }
 }
 
@@ -147,11 +147,20 @@ public sealed class RuleRowView : ObservableObject
     internal RuleRowView(RulePreview rule)
     {
         Decision = rule.Decision;
-        Command = SafeText.Clean(rule.Command);
+        Command = SafeText.Reveal(rule.Command);
         Scope = SafeText.Clean(rule.Scope);
         _original = rule.Paths;
-        _paths = string.Join(" ", rule.Paths.Select(SafeText.Clean));
+        _paths = string.Join(" ", rule.Paths.Select(path => SafeText.Reveal(path)));
+        // A path or command with a character the reader cannot see would be saved as something other than what is
+        // shown, so such a rule is refused outright; "once" and "session" still answer the call.
+        _hidden = SafeText.HasHidden(rule.Command) || rule.Paths.Any(SafeText.HasHidden);
+        if (_hidden)
+            _error = HiddenError;
     }
+
+    private const string HiddenError = "this rule holds characters you cannot see (shown as ⟨U+…⟩), so it cannot be written";
+
+    private readonly bool _hidden;
 
     /// <summary>"allow" (a green tag) or "deny".</summary>
     public string Decision { get; }
@@ -199,10 +208,23 @@ public sealed class RuleRowView : ObservableObject
 
     private void Validate()
     {
+        if (_hidden)
+        {
+            PathsError = HiddenError;
+            return;
+        }
+
         var edited = EditedPaths();
         if (edited.IsEmpty)
         {
             PathsError = "name at least one path";
+            return;
+        }
+
+        // "Under" is checked on the text, so a path that steps up or around (build/../etc) is refused, not compared.
+        if (edited.FirstOrDefault(path => path.Split('/').Any(part => part is ".." or ".")) is { } stepping)
+        {
+            PathsError = $"{stepping} uses . or ..; name the narrower path itself";
             return;
         }
 
@@ -293,7 +315,7 @@ public sealed class ApprovalCardBlock : TranscriptBlock
 
     public string ApprovalId => _request.ApprovalId;
 
-    public string Tool => _request.Tool;
+    public string Tool => SafeText.Reveal(_request.Tool);
 
     /// <summary>"Approval 1 of 2 · shell" (one prompt: "Approval · shell").</summary>
     public string Title { get => _title; private set => SetProperty(ref _title, value); }
@@ -447,7 +469,7 @@ public sealed class ApprovalCardBlock : TranscriptBlock
             Build(card);
         }
 
-        Title = card.Count > 1 ? $"Approval {card.Position} of {card.Count} · {_request.Tool}" : $"Approval · {_request.Tool}";
+        Title = card.Count > 1 ? $"Approval {card.Position} of {card.Count} · {Tool}" : $"Approval · {Tool}";
         PhoneTitle = card.Count > 1 ? $"Approval {card.Position} of {card.Count}" : "Approval";
         if (card.Next is { } next)
         {
@@ -479,7 +501,7 @@ public sealed class ApprovalCardBlock : TranscriptBlock
     private void Build(TranscriptEntry entry)
     {
         var request = ((ApprovalEntry)entry).Request;
-        CommandText = SafeText.Clean(request.Tool == "shell" || request.Text.StartsWith(request.Tool, StringComparison.Ordinal)
+        CommandText = SafeText.Reveal(request.Tool == "shell" || request.Text.StartsWith(request.Tool, StringComparison.Ordinal)
             ? request.Text
             : $"{request.Tool} {request.Text}");
         Unparsed = SafeText.Clean(request.Unparsed);

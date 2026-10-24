@@ -11,13 +11,14 @@ public sealed class CompositionTests
     private static AppComposition Compose(params string[] args)
     {
         Assert.True(AppOptions.TryParse(args, out var options, out var error), error);
-        return new AppComposition(options, new InlineDispatcher());
+        // A manual clock: the demo's running turn would otherwise start real timers that fire on the thread pool.
+        return new AppComposition(options, new InlineDispatcher(), ManualTimeProvider.DemoLocal());
     }
 
     [Fact]
     public void EveryAreaHasAPropertyNamedAfterItThatGivesItsViewModel()
     {
-        var composition = Compose();
+        using var composition = Compose();
         foreach (var area in Enum.GetValues<Area>())
         {
             var property = typeof(AppComposition).GetProperty(area.ToString(), BindingFlags.Public | BindingFlags.Instance);
@@ -34,7 +35,7 @@ public sealed class CompositionTests
     [Fact]
     public void TheCommandLineChoosesThePageTheSessionAndTheTheme()
     {
-        var composition = Compose("--page", "models", "--session", "cli-77b0", "--theme", "dark");
+        using var composition = Compose("--page", "models", "--session", "cli-77b0", "--theme", "dark");
 
         Assert.Equal(Area.Models, composition.Shell.CurrentArea);
         Assert.Equal("cli-77b0", composition.Shell.CurrentSession?.Id);
@@ -45,7 +46,7 @@ public sealed class CompositionTests
     [Fact]
     public void AnUnknownSessionLeavesTheDemoSessionOpen()
     {
-        var composition = Compose("--session", "cli-0000");
+        using var composition = Compose("--session", "cli-0000");
 
         Assert.Equal(Area.Sessions, composition.Shell.CurrentArea);
         Assert.Equal(DemoShell.CurrentSessionId, composition.Shell.CurrentSession?.Id);
@@ -54,7 +55,7 @@ public sealed class CompositionTests
     [Fact]
     public void TheDemoFreezesTheClockAndAppliesARequestedModeAtOnce()
     {
-        var composition = Compose();
+        using var composition = Compose();
 
         Assert.Equal(new DateTime(2026, 10, 24, 14, 5, 0), composition.Time.GetLocalNow().DateTime);
         composition.StatusBar.Modes[2].Choose.Execute(null);
@@ -64,7 +65,7 @@ public sealed class CompositionTests
     [Fact]
     public void SessionsFollowsTheRailAndOpensRewind()
     {
-        var composition = Compose();
+        using var composition = Compose();
         var sessions = composition.Sessions;
 
         Assert.Equal("Fix the flaky sandbox test on CI", sessions.SessionTitle);
@@ -94,7 +95,7 @@ public sealed class CompositionTests
     [Fact]
     public void SettingsSwitchesTheThemeAtOnce()
     {
-        var composition = Compose("--theme", "light");
+        using var composition = Compose("--theme", "light");
         var settings = composition.Settings;
 
         Assert.Equal(["light", "dark", "system"], settings.Themes.Select(theme => theme.Label));

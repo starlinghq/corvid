@@ -36,14 +36,24 @@ public sealed partial class DiffRowsView : UserControl
         set => SetValue(RowsProperty, value);
     }
 
+    /// <summary>Rows drawn at most: each is a few controls, built on the UI thread; the rest are counted in one row.</summary>
+    public const int MaxRows = 400;
+
     private void Rebuild()
     {
         _lines.Children.Clear();
-        foreach (var row in Rows ?? [])
+        var rows = Rows ?? [];
+        foreach (var row in rows.Take(MaxRows))
             _lines.Children.Add(Line(row));
+        if (rows.Count > MaxRows)
+        {
+            var more = rows.Skip(MaxRows).Sum(row => row.Kind == DiffRowKind.Skip ? 0 : 1);
+            _lines.Children.Add(Line(new DiffRow(DiffRowKind.Skip, null, null, []),
+                $"… {more.ToString(System.Globalization.CultureInfo.InvariantCulture)} more lines, not drawn here"));
+        }
     }
 
-    private Grid Line(DiffRow row)
+    private Grid Line(DiffRow row, string? label = null)
     {
         var mono = (FontFamily)Application.Current.Resources["CorvidMono"];
         var line = new Grid { MinHeight = 22 };
@@ -76,7 +86,7 @@ public sealed partial class DiffRowsView : UserControl
         var text = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
         if (row.Kind == DiffRowKind.Skip)
         {
-            text.Children.Add(Segment(row.SkipText, mono, null, ThemeBrushes.Get(this, "CorvidText2")));
+            text.Children.Add(Segment(label ?? row.SkipText, mono, null, ThemeBrushes.Get(this, "CorvidText2")));
         }
         else
         {
@@ -88,7 +98,7 @@ public sealed partial class DiffRowsView : UserControl
         Grid.SetColumn(text, 1);
         line.Children.Add(text);
         var sign = row.Kind switch { DiffRowKind.Added => "added", DiffRowKind.Removed => "removed", _ => "" };
-        AutomationProperties.SetName(line, row.Kind == DiffRowKind.Skip ? row.SkipText : $"{sign} {number} {row.Text}".Trim());
+        AutomationProperties.SetName(line, row.Kind == DiffRowKind.Skip ? label ?? row.SkipText : $"{sign} {number} {row.Text}".Trim());
         return line;
     }
 

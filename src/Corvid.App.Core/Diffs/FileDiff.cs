@@ -52,10 +52,17 @@ public sealed class FileDiff
     /// <summary>Unchanged lines kept around each change in the views (git's default).</summary>
     public const int DefaultContext = 3;
 
+    /// <summary>Old and new lines together beyond which the texts are not compared line by line.</summary>
+    public const int MaxDiffLines = 20_000;
+
+    /// <summary>The word highlights' budget for one diff: the sum, over paired lines, of their lengths multiplied.</summary>
+    public const long MaxWordWork = 4_000_000;
+
     private readonly List<Line> _lines;
 
-    private FileDiff(string path, string? oldText, string newText, List<Line> lines)
+    private FileDiff(string path, string? oldText, string newText, List<Line> lines, bool wholeFile)
     {
+        IsWholeFile = wholeFile;
         Path = path;
         OldText = oldText;
         NewText = newText;
@@ -65,6 +72,12 @@ public sealed class FileDiff
     }
 
     public string Path { get; }
+
+    /// <summary>
+    /// The changed middle (between the equal lines at the start and the end) was too long to compare line by line
+    /// (<see cref="MaxDiffLines"/>): every old line of it shows as removed and every new one as added.
+    /// </summary>
+    public bool IsWholeFile { get; }
 
     /// <summary>The file before; null for a new file.</summary>
     public string? OldText { get; }
@@ -86,8 +99,36 @@ public sealed class FileDiff
         ArgumentNullException.ThrowIfNull(newText);
         var oldLines = SplitLines(oldText);
         var newLines = SplitLines(newText);
-        var (a, b) = LineDiff.Number(oldLines, newLines);
-        var (removed, added) = LineDiff.Compute(a, b);
+        var removed = new bool[oldLines.Count];
+        var added = new bool[newLines.Count];
+        var wholeFile = false;
+        var wordBudget = MaxWordWork;
+        // Equal lines at the start and the end match in one pass; only the middle between them is compared, so a small
+        // edit to a long file stays a small diff.
+        var head = 0;
+        while (head < oldLines.Count && head < newLines.Count && oldLines[head] == newLines[head])
+            head++;
+        var tail = 0;
+        while (tail < oldLines.Count - head && tail < newLines.Count - head
+               && oldLines[oldLines.Count - 1 - tail] == newLines[newLines.Count - 1 - tail])
+            tail++;
+        var oldMiddle = oldLines.Skip(head).Take(oldLines.Count - head - tail).ToList();
+        var newMiddle = newLines.Skip(head).Take(newLines.Count - head - tail).ToList();
+        if (oldMiddle.Count + newMiddle.Count > MaxDiffLines)
+        {
+            // The line diff's time grows with the lines times the changes, and it runs when a card is drawn: past the cap
+            // the changed middle's old lines count as removed and its new lines as added.
+            Array.Fill(removed, true, head, oldMiddle.Count);
+            Array.Fill(added, true, head, newMiddle.Count);
+            wholeFile = true;
+        }
+        else
+        {
+            var (a, b) = LineDiff.Number(oldMiddle, newMiddle);
+            var (middleRemoved, middleAdded) = LineDiff.Compute(a, b);
+            Array.Copy(middleRemoved, 0, removed, head, middleRemoved.Length);
+            Array.Copy(middleAdded, 0, added, head, middleAdded.Length);
+        }
 
         var lines = new List<Line>(Math.Max(oldLines.Count, newLines.Count));
         int i = 0, j = 0;
@@ -102,7 +143,20 @@ public sealed class FileDiff
                     gone.Add(i++);
                 while (j < newLines.Count && added[j])
                     come.Add(j++);
-                var pairs = Math.Min(gone.Count, come.Count);
+                // Past the cap nothing is paired: word highlights would cost as much as the diff saved.
+                var pairs = wholeFile ? 0 : Math.Min(gone.Count, come.Count);
+                // Word highlights cost each pair's lengths multiplied: past a total budget for the whole diff the lines
+                // keep their colours but lose the highlights, so drawing a card stays fast however the edit looks.
+                for (var p = 0; p < pairs; p++)
+                {
+                    wordBudget -= (long)oldLines[gone[p]].Length * newLines[come[p]].Length;
+                    if (wordBudget < 0)
+                    {
+                        pairs = p;
+                        break;
+                    }
+                }
+
                 var oldSegments = new IReadOnlyList<DiffSegment>[gone.Count];
                 var newSegments = new IReadOnlyList<DiffSegment>[come.Count];
                 for (var p = 0; p < pairs; p++)
@@ -124,7 +178,7 @@ public sealed class FileDiff
             }
         }
 
-        return new FileDiff(path, oldText, newText, lines);
+        return new FileDiff(path, oldText, newText, lines, wholeFile);
     }
 
     /// <summary>The unified view: each hunk's context, removed and added lines, with folds between hunks.</summary>
@@ -205,7 +259,8 @@ public sealed class FileDiff
         var count = lines.Length > 0 && lines[^1].Length == 0 ? lines.Length - 1 : lines.Length;
         var result = new string[count];
         for (var i = 0; i < count; i++)
-            result[i] = lines[i].EndsWith('\r') ? lines[i][..^1] : lines[i];
+            // Revealed, not cleaned: a proposed edit is approved as shown, so a hidden character must show (SafeText.Reveal).
+            result[i] = SafeText.Reveal(lines[i].EndsWith('\r') ? lines[i][..^1] : lines[i], keepJoiners: true);
         return result;
     }
 
