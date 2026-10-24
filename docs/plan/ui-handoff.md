@@ -97,28 +97,49 @@ Decisions and differences that remain:
 Built by the workflow `.claude/workflows/corvid-app-a1-screens.js`: five builders in parallel, each in its own worktree
 and headless display (Review and Rewind; Board with its attention tray; Models and First run; Memory; Audit with the
 egress ledger), one integrator merging their branches into `a1/screens` (no conflicts), then an independent verifier
-with a fix round. Round 1 found two major defects: focused controls redrew in the dark theme's brushes under
-`--theme light`, and First run's end state (an empty session, the degraded badge) was not reached. Both were fixed.
-Round 2 passed with ten minor ones. Each area has its core, demo service and tests in `Corvid.App.Core/<Area>/`
-(App.Core tests went from 152 to 250), and each screen was compared with its render at 1440 in light and dark, at 1024, at 820
-against the narrow render, and at 390. Flows F1, F4, F5, F8, F10, F11, F14, F18, F21 and F23 were driven on the running
-app. Shared additions: `SideBySideDiffView` and `PathText` (Review and Rewind), `DemoSessionService.Rewind` (a restore
-on the session's stream), Ctrl+Shift+C for Review.
+with a fix round. Round 1 found two major defects: focused controls redrew in the dark theme's brushes under `--theme
+light`, and First run's end state (an empty session, the degraded badge) was not reached. Both were fixed. Round 2
+passed with ten minor ones. Each area has its core, demo service and tests in `Corvid.App.Core/<Area>/` (App.Core tests
+went from 152 to 250), and each screen was compared with its render at 1440 in light and dark, at 1024, at 820 against
+the narrow render, and at 390. Flows F1, F4, F5, F8, F10, F11, F14, F18, F21 and F23 were driven on the running app.
+Shared additions: `SideBySideDiffView` and `PathText` (Review and Rewind), `DemoSessionService.Rewind` (a restore on the
+session's stream), Ctrl+Shift+C for Review.
 
-Left from the last verification round:
+The pull request (#75) then had an independent code and security review in three parts, and three fix agents, one
+per area, worked through it. What changed because of it:
 
-- After a restore, Review still shows the restored turn's files and counts, and the Sessions dock its old counts: the
-  restore does not reach the session's change lists yet.
-- First run's Finish leaves Sessions with no session open but the header's actions and Send still look enabled.
-- Memory: choosing "update" preselects the nearest fact by score, so approving can replace an unrelated fact. The
-  update target should be chosen, not guessed.
-- Models: the slots table's horizontal scroll bar draws over its last row.
-- Accepting an MCP item on the Board does not clear the rail's MCP badge.
-- "Open in Audit" from the Sessions dock keeps Audit's earlier filter and notice.
-- Rewind's preview stacks the two sides of its diff, so unchanged lines read twice.
-- Board: "Open a workspace…", "New session" and "Take over" draw disabled (the flows come later); Board.png shows them
-  enabled, "New session" as the primary button.
-- First run at 390 shows the session's bottom bar and subtitle.
+- #73's hidden-character rule now runs through A1: memory approvals, the egress "as sent" view, raw event JSON, paths
+  a person acts on, the Board's question options and download names are revealed; a memory fact or rule holding a
+  hidden character cannot be approved until it is corrected; display-only text is cleaned; outside values put into
+  markup are escaped. Only well-formed `[redacted:kind]` markers count, and a count that disagrees with the request's
+  is flagged.
+- A restore reaches the session's change lists (the fold marks the rows it put back and lowers the turn), Review's
+  revert goes through the session's stream so Rewind lists it, and Review's checkpoint comes from the ledger: it reads
+  c-42 where `Review.png` says c-44, a checkpoint that already held the change.
+- The side-by-side diff draws at most 400 rows, rebuilds once per change and no longer leaks across visits; the
+  comment field keeps its focus through rebuilds; Restore takes focus only when the preview it ended had it.
+- Memory shows its failures, guards each card against double answers and picks an update target only above a score
+  of 0.75 (otherwise the person picks); Audit refilters without rebuilding its table and links land on what they name.
+- Areas that write the status bar give back what they replaced (`StatusBarLease`); First run follows a mode picked
+  after Finish; the composition disposes the Board's ticker and the model service's timers.
+- The Memory demo's persona is neutral.
+
+Left:
+
+- The theme chosen in Settings applies to focus and hover colours only after a restart: Uno 6.7 refuses to change
+  `Application.RequestedTheme` while running (`NotSupportedException`). Settings says so.
+- First run at 390 shows the session's bottom bar and subtitle (needs the shell's phone flags).
+- First run's Finish leaves Sessions with no session open but the header's actions and Send look enabled.
+- Rewind's preview stacks the two sides of its diff, so unchanged lines read twice; going back to before a restore
+  point lists its paths but does not un-mark the rows that restore put back; a reverted file stays "reverted to c-NN"
+  until it changes again.
+- Board: "Open a workspace…", "New session", "Take over" and "Notify when unfocused" draw disabled (their flows come
+  later); `Board.png` shows them enabled.
+- After a card is removed by a click, the next card's first button draws a focus ring (the Uno focus quirk in the
+  app README).
+- Seams for the engine: `IMemoryService.ImportForReviewAsync` now takes the dry run's entry ids; Audit's spans and
+  redactions should come as structure from the engine and the gate (G-9), and a trace's "full content" writes only the
+  summary today (documented on `IAuditService.ExportAsync`).
 - The Sessions page opens with the jump pill over the streaming answer (A0's behaviour, by design in `ui.md` §2).
 
 Each builder's own list of differences from its mockup is in the workflow run's report; the verifier judged them
