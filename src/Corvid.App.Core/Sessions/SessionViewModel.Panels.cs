@@ -1,5 +1,6 @@
 using System.Globalization;
 using Corvid.App.Core.Mvvm;
+using Corvid.App.Core.Shell;
 
 namespace Corvid.App.Core.Sessions;
 
@@ -157,7 +158,7 @@ public sealed partial class SessionViewModel
     private void InitializePanels()
     {
         OpenReviewCommand = new RelayCommand(() => Navigate(Area.Review));
-        OpenAuditCommand = new RelayCommand(() => Navigate(Area.Audit));
+        OpenAuditCommand = new RelayCommand(() => Follow(AreaLinkTarget.Session));
     }
 
     private void UpdatePanels(SessionView previous)
