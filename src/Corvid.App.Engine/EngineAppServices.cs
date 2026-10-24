@@ -34,6 +34,35 @@ public sealed partial class EngineAppServices(AppEngine engine) : UnavailableApp
             item.Dispose();
     }
 
+    /// <summary>
+    /// Shows the runtime's start on the status bar's engine line until it is up ("in-process · starting: Loading
+    /// qwen3.5-0.8b"), then "in-process", or why it could not start. Called once, as the composition makes its sessions.
+    /// </summary>
+    private void ShowStartup(AppComposition app)
+    {
+        void Show(string text) => app.Dispatcher.Post(() => app.StatusBar.Engine = text);
+        void OnProgress(Corvid.Host.Composition.StartupStep step)
+        {
+            if (step.Elapsed is null)
+                Show("in-process · starting: " + step.Description);
+        }
+
+        Engine.Progress += OnProgress;
+        Track(new Unsubscribe(() => Engine.Progress -= OnProgress));
+        if (Engine.CurrentStep is { } current)
+            Show("in-process · starting: " + current.Description);
+        _ = Engine.Runtime.ContinueWith(started =>
+        {
+            Engine.Progress -= OnProgress;
+            Show(started.IsCompletedSuccessfully ? "in-process" : "in-process · not started");
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
+
+    private sealed class Unsubscribe(Action action) : IDisposable
+    {
+        public void Dispose() => action();
+    }
+
     /// <summary>Keeps something a factory made that must be disposed with the window (a subscription to a runtime event).</summary>
     private T Track<T>(T item) where T : IDisposable
     {
