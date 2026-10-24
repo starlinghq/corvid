@@ -37,7 +37,7 @@
               </ItemsControl.ItemTemplate>
             </ItemsControl>
           </Border>
-          <TextBlock Text="Applies at once. The command line's --theme sets it at start." Style="{StaticResource CorvidSmallText}" />
+          <TextBlock Text="The window switches at once; focus and hover colours follow after a restart. The command line's --theme sets it at start." TextWrapping="Wrap" Style="{StaticResource CorvidSmallText}" />
         </StackPanel>
       </StackPanel>
     </ScrollViewer>

@@ -61,7 +61,8 @@ public sealed partial class FirstRunPage : Page
 
     private void OnViewModelChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(FirstRunViewModel.IsSetup) or nameof(FirstRunViewModel.Heading) or nameof(FirstRunViewModel.NextLabel))
+        if (e.PropertyName is nameof(FirstRunViewModel.IsSetup) or nameof(FirstRunViewModel.Heading) or nameof(FirstRunViewModel.NextLabel)
+            or nameof(FirstRunViewModel.ShowHeadSkip))
             Arrange();
     }
 
@@ -72,6 +73,8 @@ public sealed partial class FirstRunPage : Page
             return;
         var phone = width < PhoneWidth;
         StepsRail.Visibility = ViewModel.IsSetup && width >= RailWidth ? Visibility.Visible : Visibility.Collapsed;
+        // Without the column the shell's rail toggle comes back, and Skip setup moves into the head.
+        ViewModel.IsStepsColumnShown = width >= RailWidth;
         var content = width - (StepsRail.Visibility == Visibility.Visible ? StepsRail.Width : 0);
         Body.Padding = phone ? new Thickness(14, 14, 14, 18) : new Thickness(24, 18, 24, 18);
         HeadHost.Padding = phone ? new Thickness(14, 12, 14, 12) : new Thickness(24, 12, 24, 12);
@@ -115,17 +118,18 @@ public sealed partial class FirstRunPage : Page
         BodyScroll.ChangeView(null, Math.Max(0, top), null, true);
     }
 
-    private void OnCopyRequested(object? sender, string text)
+    private void OnCopyRequested(object? sender, CopyRequestEventArgs request)
     {
         try
         {
             var package = new DataPackage();
-            package.SetText(text);
+            package.SetText(request.Text);
             Clipboard.SetContent(package);
+            request.Copied = true;
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            // The command stays on screen to copy by hand; a clipboard the platform refuses is not worth a crash.
+            // The command stays on screen to copy by hand, and the notice says the copy failed; not worth a crash.
             System.Diagnostics.Trace.WriteLine($"Copy failed: {exception.Message}");
         }
     }

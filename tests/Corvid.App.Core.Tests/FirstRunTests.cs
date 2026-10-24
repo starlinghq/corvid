@@ -157,13 +157,73 @@ public sealed class FirstRunTests
     {
         var setup = Fresh();
         string? copied = null;
-        setup.FirstRun.CopyRequested += (_, text) => copied = text;
+        setup.FirstRun.CopyRequested += (_, request) =>
+        {
+            copied = request.Text;
+            request.Copied = true;
+        };
 
         setup.FirstRun.Sections[1].Rows[2].CopyCommand.Execute(null);
 
         Assert.Equal("systemctl --user enable --now corvid-vault", copied);
         Assert.True(setup.FirstRun.HasNotice);
+        Assert.Equal(Tone.Green, setup.FirstRun.NoticeTone);
+        Assert.StartsWith("Copied ", string.Concat(setup.FirstRun.Notice.Select(run => run.Text)), StringComparison.Ordinal);
         Assert.False(setup.FirstRun.Sections[0].Rows[0].CopyCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public void AClipboardThatRefusesIsNotReportedAsCopied()
+    {
+        var setup = Fresh();
+        setup.FirstRun.CopyRequested += (_, _) => { };
+
+        setup.FirstRun.Sections[1].Rows[2].CopyCommand.Execute(null);
+
+        Assert.Equal(Tone.Red, setup.FirstRun.NoticeTone);
+        Assert.DoesNotContain("Copied", string.Concat(setup.FirstRun.Notice.Select(run => run.Text)), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AModePickedInTheStatusBarAfterTheSetupStaysWhileDownloadsRun()
+    {
+        var setup = Fresh();
+        setup.FirstRun.Downloads.DownloadCommand.Execute(null);
+        setup.FirstRun.SkipSetupCommand.Execute(null);
+        Assert.Equal(ApprovalMode.Smart, setup.Bar.Mode);
+
+        setup.Bar.RequestModeCommand.Execute(ApprovalMode.Permissive);
+        setup.Time.Advance(DemoModelService.Tick);
+        setup.Time.Advance(DemoModelService.Tick);
+
+        Assert.Equal(ApprovalMode.Permissive, setup.Bar.Mode);
+        Assert.Equal(ApprovalMode.Permissive, setup.FirstRun.Mode);
+        Assert.NotEmpty(setup.Bar.AreaFields);
+    }
+
+    [Fact]
+    public void BelowTheStepsColumnsWidthSkipSetupIsInTheHeadAndTheRailToggleComesBack()
+    {
+        var setup = Fresh();
+        Assert.False(setup.FirstRun.ShowHeadSkip);
+        Assert.True(setup.Shell.PageDrawsRail);
+
+        setup.FirstRun.IsStepsColumnShown = false;
+
+        Assert.True(setup.FirstRun.ShowHeadSkip);
+        Assert.False(setup.Shell.PageDrawsRail);
+    }
+
+    [Fact]
+    public void AFixsHiddenCharactersShowWhileTheClipboardGetsTheCommandAsGiven()
+    {
+        var row = new CheckRowViewModel(
+            new DoctorCheck(CheckSections.Sandbox, "vault‮", CheckStatus.Warning, "no answer", "Fix: `rm -rf ~‮`", "rm -rf ~‮"),
+            _ => { });
+
+        Assert.Equal("vault", row.Name);
+        Assert.Contains(row.Fix, run => run.Code && run.Text == "rm -rf ~⟨U+202E⟩");
+        Assert.Equal("rm -rf ~‮", row.FixCommand);
     }
 
     [Fact]
@@ -190,7 +250,7 @@ public sealed class FirstRunTests
     public void OpenedAsTheDoctorItIsTheChecksWithoutTheSetup()
     {
         Assert.True(AppOptions.TryParse(["--page", "models"], out var options, out var error), error);
-        var composition = new AppComposition(options, new InlineDispatcher());
+        using var composition = new AppComposition(options, new InlineDispatcher(), ManualTimeProvider.DemoLocal());
 
         composition.Shell.OpenDoctorCommand.Execute(null);
         var doctor = composition.FirstRun;
@@ -207,7 +267,7 @@ public sealed class FirstRunTests
     public void OpeningTheWindowOnTheFirstRunIsTheSetup()
     {
         Assert.True(AppOptions.TryParse(["--page", "first-run"], out var options, out var error), error);
-        var composition = new AppComposition(options, new InlineDispatcher());
+        using var composition = new AppComposition(options, new InlineDispatcher(), ManualTimeProvider.DemoLocal());
 
         Assert.True(composition.FirstRun.IsSetup);
         Assert.True(composition.Shell.PageDrawsRail);

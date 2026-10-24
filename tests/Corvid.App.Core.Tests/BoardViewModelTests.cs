@@ -289,10 +289,102 @@ public sealed class BoardViewModelTests
     public void TheBoardLeavesAnotherAreasStatusBarAlone()
     {
         var rig = Start(area: Area.Memory);
+        var before = (rig.Bar.Engine, rig.Bar.Gateway, rig.Bar.Decider, rig.Bar.Scheduler, rig.Bar.Trailing, rig.Bar.Generator, rig.Bar.Branch);
 
         Assert.Equal("", rig.Bar.Engine);
         Assert.Equal("", rig.Bar.Gateway);
         Assert.NotEqual("2 running · 1 waiting", rig.Bar.Trailing);
+
+        // Through the Board to an area that writes no status of its own: what the Board wrote goes again.
+        rig.Shell.Navigate(Area.Board);
+        Assert.Equal("in-process · 2 workspaces", rig.Bar.Engine);
+        rig.Shell.Navigate(Area.Settings);
+        Assert.Equal(before, (rig.Bar.Engine, rig.Bar.Gateway, rig.Bar.Decider, rig.Bar.Scheduler, rig.Bar.Trailing, rig.Bar.Generator, rig.Bar.Branch));
+    }
+
+    [Fact]
+    public void ASessionsWordsAreDrawnWithoutTheirHiddenCharacters()
+    {
+        var summary = new SessionSummary("cli-1", "Fix the ‮tset kaep‬ build")
+        {
+            State = SessionState.Waiting,
+            Question = "which ​version?",
+            Workspace = "corvid⁦",
+        };
+
+        Assert.Equal("Fix the tset kaep build", BoardText.Title(summary, TimeZoneInfo.Utc));
+        Assert.Equal("Fix the tset kaep build", BoardText.ShortTitle(summary.Title));
+        Assert.Equal("question · which version?", Text(BoardText.StateDetail(summary, null, DateTimeOffset.UnixEpoch, TimeZoneInfo.Utc)));
+        Assert.StartsWith("corvid · cli-1", Text(BoardText.Meta(summary)), StringComparison.Ordinal);
+        var running = summary with { State = SessionState.Running, Activity = "shell rm‮ -rf", Model = "qwen‮" };
+        Assert.Equal("shell rm -rf", Text(BoardText.StateDetail(running, null, DateTimeOffset.UnixEpoch, TimeZoneInfo.Utc)));
+        Assert.Equal("qwen", BoardText.Detail(running, null, DateTimeOffset.UnixEpoch));
+    }
+
+    [Fact]
+    public void AQuestionsItemCarriesItsQuestionsId()
+    {
+        var rig = Start();
+        var view = Card(rig, DemoSessionService.ReleaseNotesSessionId).View;
+        var question = rig.Board.Attention.Single(item => item.Kind == AttentionKind.Question);
+
+        Assert.Equal($"question:{DemoSessionService.ReleaseNotesSessionId}:{view?.Question?.QuestionId}", question.Id);
+    }
+
+    [Fact]
+    public void AnItemsReadAloudNameFollowsItsText()
+    {
+        var item = new AttentionItemViewModel("x", AttentionKind.Memory, "Memory", "2 facts", []);
+        var raised = new List<string?>();
+        item.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        item.What = "Memory · 3 facts";
+        item.Detail = "staged";
+
+        Assert.Equal(2, raised.Count(name => name == nameof(AttentionItemViewModel.AutomationName)));
+        Assert.Equal("Memory · 3 facts. staged", item.AutomationName);
+    }
+
+    [Fact]
+    public void PeekLinesWithTheSameStyledTextAreEqual()
+    {
+        Assert.Equal(PeekLine.Answer("corvid", "run `dotnet test` **now**"), PeekLine.Answer("corvid", "run `dotnet test` **now**"));
+        Assert.NotEqual(PeekLine.Answer("corvid", "run `dotnet test`"), PeekLine.Answer("corvid", "run **dotnet test**"));
+    }
+
+    [Fact]
+    public void AcceptingTheHeldMcpToolClearsMcpsBadge()
+    {
+        var rig = Start();
+        Assert.Equal(1, rig.Shell.RailItem(Area.Mcp).Badge);
+
+        rig.Board.Attention.Single(item => item.Kind == AttentionKind.McpTool).Buttons.Single(button => button.Label == "Accept").Command.Execute(null);
+
+        Assert.DoesNotContain(rig.Board.Attention, item => item.Kind == AttentionKind.McpTool);
+        Assert.Equal(0, rig.Shell.RailItem(Area.Mcp).Badge);
+    }
+
+    [Fact]
+    public void NotifyingWhenUnfocusedWaitsForTheEngineAndSaysSo()
+    {
+        var rig = Start();
+
+        Assert.False(rig.Board.ToggleNotifyCommand.CanExecute(null));
+        Assert.Contains("engine", rig.Board.NotifyUnavailableReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheClockStandsStillWhileTheBoardIsHiddenAndCatchesUpOnReturn()
+    {
+        var rig = Start(DemoScene.Main);
+        var card = Card(rig, "cli-c3d2");
+        rig.Shell.Navigate(Area.Skills);
+
+        rig.Time.Advance(TimeSpan.FromSeconds(30));
+        Assert.Equal("step 1 of 4 · qwen3.5-0.8b · 40 s", card.Detail);
+
+        rig.Shell.Navigate(Area.Board);
+        Assert.Equal("step 1 of 4 · qwen3.5-0.8b · 1 m", card.Detail);
     }
 
     [Fact]

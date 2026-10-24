@@ -8,7 +8,8 @@ namespace Corvid.App.Core.Board;
 
 /// <summary>
 /// The Board's words for a session (Board.dc.html <c>.scard</c>), from its summary and, when watched, its folded state.
-/// Pure functions of their inputs and the clock, so the copy is tested without a view.
+/// Pure functions of their inputs and the clock, so the copy is tested without a view. What a session reports (its title,
+/// workspace, branch, question, the running call, the model) is data and drawn cleaned (<see cref="SafeText.Clean"/>).
 /// </summary>
 public static partial class BoardText
 {
@@ -18,8 +19,8 @@ public static partial class BoardText
         ArgumentNullException.ThrowIfNull(summary);
         ArgumentNullException.ThrowIfNull(zone);
         if (summary.Job is { } job && summary.RunAt is { } run)
-            return $"{job} · run of {RelativeTime.ClockTime(run, zone)}";
-        return summary.Title;
+            return $"{SafeText.Clean(job)} · run of {RelativeTime.ClockTime(run, zone)}";
+        return SafeText.Clean(summary.Title);
     }
 
     /// <summary>
@@ -30,8 +31,8 @@ public static partial class BoardText
     {
         ArgumentNullException.ThrowIfNull(summary);
         if (summary.Job is not null)
-            return [new MarkdownRun(Join(summary.Id, summary.Schedule))];
-        var runs = new List<MarkdownRun> { new(Join(summary.Workspace, summary.Branch, summary.Id, summary.ForkOf is { } fork ? $"fork of {fork}" : null)) };
+            return [new MarkdownRun(SafeText.Clean(Join(summary.Id, summary.Schedule)))];
+        var runs = new List<MarkdownRun> { new(SafeText.Clean(Join(summary.Workspace, summary.Branch, summary.Id, summary.ForkOf is { } fork ? $"fork of {fork}" : null))) };
         if (summary.ReadOnly && Holder(summary.Holder) is { Length: > 0 } holder)
         {
             runs.Add(new MarkdownRun(" · "));
@@ -48,6 +49,7 @@ public static partial class BoardText
     public static string ShortTitle(string title)
     {
         ArgumentNullException.ThrowIfNull(title);
+        title = SafeText.Clean(title);
         var words = title.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         for (var i = words.Length - 2; i >= 3; i--)
         {
@@ -109,8 +111,8 @@ public static partial class BoardText
                 var place = $"approval 1 of {summary.PendingApprovals}";
                 return [new MarkdownRun(summary.Deadline is { } deadline ? Join(place, $"{SessionText.Countdown(deadline - now)} left") : place)];
             case SessionState.Waiting:
-                return [new MarkdownRun(Join("question", summary.Question))];
-            case SessionState.Running when summary.Activity is { Length: > 0 } activity:
+                return [new MarkdownRun(Join("question", SafeText.Clean(summary.Question)))];
+            case SessionState.Running when SafeText.Clean(summary.Activity) is { Length: > 0 } activity:
                 var space = activity.IndexOf(' ', StringComparison.Ordinal);
                 return space < 0
                     ? [new MarkdownRun(activity)]
@@ -129,6 +131,11 @@ public static partial class BoardText
     public static string Detail(SessionSummary summary, SessionView? view, DateTimeOffset now)
     {
         ArgumentNullException.ThrowIfNull(summary);
+        return SafeText.Clean(DetailText(summary, view, now));
+    }
+
+    private static string DetailText(SessionSummary summary, SessionView? view, DateTimeOffset now)
+    {
         var notices = view is null ? [] : LatestTurnNotices(view);
         if (summary.State == SessionState.Job)
         {
@@ -249,6 +256,7 @@ public static partial class BoardText
     {
         if (string.IsNullOrWhiteSpace(holder))
             return "";
+        holder = SafeText.Clean(holder);
         var cut = holder.IndexOf(';', StringComparison.Ordinal);
         return (cut < 0 ? holder : holder[..cut]).Trim();
     }

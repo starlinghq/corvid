@@ -42,7 +42,6 @@ public sealed class CheckRowViewModel
 {
     internal CheckRowViewModel(DoctorCheck check, Action<string> copy)
     {
-        Name = check.Name;
         Status = check.Status;
         StatusText = check.Status switch
         {
@@ -58,11 +57,14 @@ public sealed class CheckRowViewModel
             CheckStatus.Warning => Tone.Amber,
             _ => Tone.Red,
         };
+        Name = SafeText.Clean(check.Name);
         Detail = Spans.Parse(check.Detail);
-        Fix = Spans.Parse(check.Fix);
+        // The fix names the command Copy puts on the clipboard: revealed, so what is shown is what will be pasted and run.
+        // The clipboard gets the command as the check gave it.
+        Fix = Spans.Parse(Reveal(check.Fix));
         FixCommand = check.FixCommand ?? "";
         CopyCommand = new RelayCommand(() => copy(FixCommand), () => FixCommand.Length > 0);
-        AutomationName = $"{Name}: {StatusText}. {Spans.Plain(check.Detail)}{(check.Fix is { } fix ? $" {Spans.Plain(fix)}" : "")}";
+        AutomationName = $"{Name}: {StatusText}. {Spans.Plain(check.Detail)}{(check.Fix is { } fix ? $" {Spans.Plain(Reveal(fix))}" : "")}";
     }
 
     public string Name { get; }
@@ -93,6 +95,18 @@ public sealed class CheckRowViewModel
 
     /// <summary>The section's last row, which has no line below it (the panel's border is there).</summary>
     public bool IsLast { get; internal set; }
+
+    /// <summary>A line of markup whose text a person acts on: every hidden character shown, the marks kept.</summary>
+    private static string? Reveal(string? markup) => markup is null ? null : SafeText.Reveal(markup, keepJoiners: true);
+}
+
+/// <summary>A command for the clipboard; the view says whether the platform took it.</summary>
+public sealed class CopyRequestEventArgs(string text) : EventArgs
+{
+    public string Text { get; } = text;
+
+    /// <summary>Set by the view when the clipboard took the text.</summary>
+    public bool Copied { get; set; }
 }
 
 /// <summary>A section of the doctor's checks (one panel): its title, its summary ("2 ok", "1 warning") and its rows.</summary>
@@ -192,9 +206,9 @@ public sealed class FirstRunViewModel : AreaViewModel
     private readonly IModelService _models;
     private readonly ShellViewModel _shell;
     private readonly StatusBarViewModel _bar;
-    private readonly Dictionary<string, object?> _savedStatus = [];
-    private readonly Dictionary<string, object?> _myStatus = [];
+    private readonly StatusBarLease _lease;
     private bool _isSetup;
+    private bool _stepsShown = true;
     private bool _active;
     private bool _finished;
     private int _step;
@@ -206,6 +220,7 @@ public sealed class FirstRunViewModel : AreaViewModel
     private IReadOnlyList<TextRun> _hermes = [];
     private bool _hasHermes;
     private IReadOnlyList<TextRun> _notice = [];
+    private Tone _noticeTone = Tone.Green;
     private IReadOnlyList<TextRun> _deciderWarning = [];
     private bool _vaultPresent = true;
 
@@ -220,6 +235,7 @@ public sealed class FirstRunViewModel : AreaViewModel
         _models = models;
         _shell = shell;
         _bar = statusBar;
+        _lease = new StatusBarLease(statusBar);
         _isSetup = isSetup;
         Steps = [.. StepTable.Select((step, index) => new FirstRunStepViewModel(index, step.Name, step.Anchor, GoTo))];
         Steps[0].IsCurrent = true;
@@ -245,9 +261,12 @@ public sealed class FirstRunViewModel : AreaViewModel
         ClosePickerCommand = new RelayCommand(() => IsChoosingWorkspace = false);
         OpenImportCommand = new RelayCommand(() => _shell.Navigate(Area.Memory));
         DismissNoticeCommand = new RelayCommand(() => Say(""));
+        foreach (var command in new[] { RunAgainCommand, NextCommand, SkipSetupCommand, Downloads.DownloadCommand })
+            ReportFailures(command);
 
         _models.Changed += (_, _) => RefreshModels();
         _shell.PropertyChanged += OnShellChanged;
+        _bar.ModeRequested += OnModeRequested;
         SetMode(_mode);
         Posture = _posture;
         RefreshModels();
@@ -258,8 +277,8 @@ public sealed class FirstRunViewModel : AreaViewModel
     /// <summary>Raised to bring a step's panel into view (its anchor: check, models, workspace, approvals, privacy, import).</summary>
     public event EventHandler<string>? ScrollRequested;
 
-    /// <summary>Raised with a command for the clipboard ("Copy the command"); the view copies it.</summary>
-    public event EventHandler<string>? CopyRequested;
+    /// <summary>Raised with a command for the clipboard ("Copy the command"); the view copies it and says whether it could.</summary>
+    public event EventHandler<CopyRequestEventArgs>? CopyRequested;
 
     /// <summary>The window opened on a fresh machine: the setup's steps show in the left column, and the status bar is the setup's.</summary>
     public bool IsSetup
@@ -270,9 +289,29 @@ public sealed class FirstRunViewModel : AreaViewModel
             if (!SetProperty(ref _isSetup, value))
                 return;
             OnPropertyChanged(nameof(StatusTrailing));
+            OnPropertyChanged(nameof(ShowHeadSkip));
             UpdateRail();
         }
     }
+
+    /// <summary>
+    /// Whether the page shows the steps column (the setup at 860 px and wider); the page reports it. Without the column,
+    /// the page draws the shell's rail toggle again and "Skip setup" moves into the head.
+    /// </summary>
+    public bool IsStepsColumnShown
+    {
+        get => _stepsShown;
+        set
+        {
+            if (!SetProperty(ref _stepsShown, value))
+                return;
+            OnPropertyChanged(nameof(ShowHeadSkip));
+            UpdateRail();
+        }
+    }
+
+    /// <summary>"Skip setup" in the head: during the setup, while the steps column (where it usually is) is hidden.</summary>
+    public bool ShowHeadSkip => _isSetup && !_stepsShown;
 
     public IReadOnlyList<FirstRunStepViewModel> Steps { get; }
 
@@ -344,6 +383,9 @@ public sealed class FirstRunViewModel : AreaViewModel
     public IReadOnlyList<TextRun> Notice { get => _notice; private set { if (SetProperty(ref _notice, value)) OnPropertyChanged(nameof(HasNotice)); } }
 
     public bool HasNotice => _notice.Count > 0;
+
+    /// <summary>Green for what was done, red for what failed.</summary>
+    public Tone NoticeTone { get => _noticeTone; private set => SetProperty(ref _noticeTone, value); }
 
     public bool VaultPresent { get => _vaultPresent; private set => SetProperty(ref _vaultPresent, value); }
 
@@ -426,7 +468,7 @@ public sealed class FirstRunViewModel : AreaViewModel
             foreach (var path in await _service.SuggestWorkspacesAsync().ConfigureAwait(true))
             {
                 var folder = path;
-                WorkspaceChoices.Add(new Choice(folder, folder, new RelayCommand(() =>
+                WorkspaceChoices.Add(new Choice(SafeText.Reveal(folder), SafeText.Reveal(folder), new RelayCommand(() =>
                 {
                     Workspace = folder;
                     IsChoosingWorkspace = false;
@@ -437,11 +479,11 @@ public sealed class FirstRunViewModel : AreaViewModel
             HasHermes = hermes is not null;
             HermesText = Spans.Parse(hermes is null
                 ? "No Hermes installation was found. Nothing to import."
-                : $"Found `{hermes.Path}`: {hermes.Memories} memories and {hermes.Skills} skills. Memory previews every entry; nothing is staged until you approve it.");
+                : $"Found `{Spans.Escape(hermes.Path)}`: {hermes.Memories} memories and {hermes.Skills} skills. Memory previews every entry; nothing is staged until you approve it.");
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            Say($"The checks could not run: {exception.Message}");
+            Fail($"The checks could not run: {Spans.Escape(exception.Message)}");
         }
     }
 
@@ -468,13 +510,19 @@ public sealed class FirstRunViewModel : AreaViewModel
         if (info.Path == _workspace)
             WorkspaceNote = Spans.Parse(info.Description);
         foreach (var choice in WorkspaceChoices)
-            choice.IsSelected = choice.Label == _workspace;
+            choice.IsSelected = choice.Label == SafeText.Reveal(_workspace);
     }
 
     private void Copy(string command)
     {
-        CopyRequested?.Invoke(this, command);
-        Say($"Copied `{command}`. Run it in a terminal, then Run again.");
+        var request = new CopyRequestEventArgs(command);
+        CopyRequested?.Invoke(this, request);
+        // What is said shows every hidden character of what was copied.
+        var shown = Spans.Escape(SafeText.Reveal(command));
+        if (request.Copied)
+            Say($"Copied `{shown}`. Run it in a terminal, then Run again.");
+        else
+            Fail($"The clipboard did not take `{shown}`: select it in the fix and copy it by hand.");
     }
 
     private void SetMode(ApprovalMode mode)
@@ -485,7 +533,31 @@ public sealed class FirstRunViewModel : AreaViewModel
         OnPropertyChanged(nameof(Mode));
     }
 
-    private void Say(string message) => Notice = Spans.Parse(message);
+    private void Say(string message)
+    {
+        NoticeTone = Tone.Green;
+        Notice = Spans.Parse(message);
+    }
+
+    private void Fail(string message)
+    {
+        NoticeTone = Tone.Red;
+        Notice = Spans.Parse(message);
+    }
+
+    /// <summary>A button's run that failed shows as a red notice: the command keeps the error, and nothing else would show it.</summary>
+    private void ReportFailures(AsyncRelayCommand command) => command.PropertyChanged += (_, e) =>
+    {
+        if (e.PropertyName == nameof(AsyncRelayCommand.Error) && command.Error is { } error)
+            Fail($"That did not work: {Spans.Escape(error.Message)}");
+    };
+
+    /// <summary>After the setup, with no session open, a mode picked in the status bar is the mode from then on.</summary>
+    private void OnModeRequested(object? sender, ApprovalMode mode)
+    {
+        if (_finished && _shell.CurrentSession is null)
+            SetMode(mode);
+    }
 
     private void RefreshModels()
     {
@@ -494,7 +566,7 @@ public sealed class FirstRunViewModel : AreaViewModel
         VaultPresent = snapshot.Privacy.VaultPresent;
         var decider = snapshot.Find(snapshot.Decider.Model);
         DeciderWarning = decider is { State: not ModelState.Cached }
-            ? Spans.Parse($"Without `{decider.Name}`, decisions run on the degraded tier and every chat says so. Memory writes then wait for your review.")
+            ? Spans.Parse($"Without `{Spans.Escape(decider.Name)}`, decisions run on the degraded tier and every chat says so. Memory writes then wait for your review.")
             : [];
         if (_active)
             ApplyStatus();
@@ -522,19 +594,18 @@ public sealed class FirstRunViewModel : AreaViewModel
         _active = active;
         if (active)
         {
-            _savedStatus.Clear();
-            foreach (var (name, value) in ReadStatus())
-                _savedStatus[name] = value;
+            _lease.Take();
             ApplyStatus();
         }
         else
         {
             IsChoosingWorkspace = false;
-            RestoreStatus();
+            _lease.Release();
         }
     }
 
-    private void UpdateRail() => _shell.PageDrawsRail = _isSetup && _shell.CurrentArea == Area.FirstRun;
+    /// <summary>The page draws its own left column (the steps) in place of the rail, while that column shows.</summary>
+    private void UpdateRail() => _shell.PageDrawsRail = _isSetup && _stepsShown && _shell.CurrentArea == Area.FirstRun;
 
     private void ApplyStatus()
     {
@@ -543,20 +614,20 @@ public sealed class FirstRunViewModel : AreaViewModel
             ? $"{snapshot.Decider.DisplayName}, calibrated"
             : $"degraded until {snapshot.Decider.Model} is downloaded";
         var downloads = ModelsViewModel.StatusDownloads(snapshot);
-        Write(nameof(StatusBarViewModel.Engine), "not started · models load after this page");
-        Write(nameof(StatusBarViewModel.Generator), "");
-        Write(nameof(StatusBarViewModel.Decider), decider);
-        Write(nameof(StatusBarViewModel.Context), "");
-        Write(nameof(StatusBarViewModel.AreaFields), downloads);
-        Write(nameof(StatusBarViewModel.Mode), null);
-        Write(nameof(StatusBarViewModel.Tags), snapshot.Privacy.VaultPresent
-            ? (IReadOnlyList<StatusTag>)[]
-            : [new StatusTag("Vault absent", Tone.Amber, "No answer at $XDG_RUNTIME_DIR/corvid-vault.sock: cloud models and gateway bots are unavailable.")]);
-        Write(nameof(StatusBarViewModel.Scheduler), "");
-        Write(nameof(StatusBarViewModel.Gateway), "");
-        Write(nameof(StatusBarViewModel.Branch), "");
-        Write(nameof(StatusBarViewModel.SessionId), "");
-        Write(nameof(StatusBarViewModel.Trailing), StatusTrailing);
+        _lease.Engine = "not started · models load after this page";
+        _lease.Generator = "";
+        _lease.Decider = decider;
+        _lease.Context = "";
+        _lease.AreaFields = downloads;
+        _lease.Mode = null;
+        _lease.Tags = snapshot.Privacy.VaultPresent
+            ? []
+            : [new StatusTag("Vault absent", Tone.Amber, "No answer at $XDG_RUNTIME_DIR/corvid-vault.sock: cloud models and gateway bots are unavailable.")];
+        _lease.Scheduler = "";
+        _lease.Gateway = "";
+        _lease.Branch = "";
+        _lease.SessionId = "";
+        _lease.Trailing = StatusTrailing;
     }
 
     /// <summary>
@@ -594,58 +665,5 @@ public sealed class FirstRunViewModel : AreaViewModel
         _bar.Branch = "";
         _bar.SessionId = "";
         _bar.Trailing = "idle";
-    }
-
-    /// <summary>Puts back what the setup's status bar replaced, where nothing else has written since.</summary>
-    private void RestoreStatus()
-    {
-        foreach (var (name, value) in ReadStatus())
-        {
-            if (_myStatus.TryGetValue(name, out var mine) && Equals(value, mine) && _savedStatus.TryGetValue(name, out var saved))
-                Set(name, saved);
-        }
-
-        _myStatus.Clear();
-    }
-
-    private void Write(string name, object? value)
-    {
-        _myStatus[name] = value;
-        Set(name, value);
-    }
-
-    private IEnumerable<(string Name, object? Value)> ReadStatus()
-    {
-        yield return (nameof(StatusBarViewModel.Engine), _bar.Engine);
-        yield return (nameof(StatusBarViewModel.Generator), _bar.Generator);
-        yield return (nameof(StatusBarViewModel.Decider), _bar.Decider);
-        yield return (nameof(StatusBarViewModel.Context), _bar.Context);
-        yield return (nameof(StatusBarViewModel.AreaFields), _bar.AreaFields);
-        yield return (nameof(StatusBarViewModel.Mode), _bar.Mode);
-        yield return (nameof(StatusBarViewModel.Tags), _bar.Tags);
-        yield return (nameof(StatusBarViewModel.Scheduler), _bar.Scheduler);
-        yield return (nameof(StatusBarViewModel.Gateway), _bar.Gateway);
-        yield return (nameof(StatusBarViewModel.Branch), _bar.Branch);
-        yield return (nameof(StatusBarViewModel.SessionId), _bar.SessionId);
-        yield return (nameof(StatusBarViewModel.Trailing), _bar.Trailing);
-    }
-
-    private void Set(string name, object? value)
-    {
-        switch (name)
-        {
-            case nameof(StatusBarViewModel.Engine): _bar.Engine = (string)value!; break;
-            case nameof(StatusBarViewModel.Generator): _bar.Generator = (string)value!; break;
-            case nameof(StatusBarViewModel.Decider): _bar.Decider = (string)value!; break;
-            case nameof(StatusBarViewModel.Context): _bar.Context = (string)value!; break;
-            case nameof(StatusBarViewModel.AreaFields): _bar.AreaFields = (IReadOnlyList<StatusField>)value!; break;
-            case nameof(StatusBarViewModel.Mode): _bar.Mode = (ApprovalMode?)value; break;
-            case nameof(StatusBarViewModel.Tags): _bar.Tags = (IReadOnlyList<StatusTag>)value!; break;
-            case nameof(StatusBarViewModel.Scheduler): _bar.Scheduler = (string)value!; break;
-            case nameof(StatusBarViewModel.Gateway): _bar.Gateway = (string)value!; break;
-            case nameof(StatusBarViewModel.Branch): _bar.Branch = (string)value!; break;
-            case nameof(StatusBarViewModel.SessionId): _bar.SessionId = (string)value!; break;
-            case nameof(StatusBarViewModel.Trailing): _bar.Trailing = (string)value!; break;
-        }
     }
 }

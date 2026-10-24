@@ -24,7 +24,7 @@ public sealed class ModelsTests
     private static AppComposition Compose(params string[] args)
     {
         Assert.True(AppOptions.TryParse(args, out var options, out var error), error);
-        return new AppComposition(options, new InlineDispatcher());
+        return new AppComposition(options, new InlineDispatcher(), ManualTimeProvider.DemoLocal());
     }
 
     [Fact]
@@ -346,7 +346,7 @@ public sealed class ModelsTests
     [Fact]
     public void WhileModelsShowsTheStatusBarIsTheMockupsAndTheSessionsComesBack()
     {
-        var composition = Compose("--page", "models");
+        using var composition = Compose("--page", "models");
         var bar = composition.StatusBar;
 
         _ = composition.Models;
@@ -377,15 +377,173 @@ public sealed class ModelsTests
     [Fact]
     public void TheCompositionSharesOneModelStoreAndPicksTheSceneFromThePage()
     {
-        var main = Compose("--page", "models");
+        using var main = Compose("--page", "models");
         Assert.Same(main.ModelService, main.ModelService);
         Assert.False(main.Models.HasMissing);
         Assert.Equal(main.ModelService.Snapshot.Catalogue.Count(model => model.Kind == ModelKind.Local), main.FirstRun.Downloads.Items.Count);
         Assert.Equal(ModelState.Cached, main.ModelService.Snapshot.Find("kev-0.8b")!.State);
 
-        var firstRun = Compose("--page", "first-run");
+        using var firstRun = Compose("--page", "first-run");
         Assert.Equal(ModelState.Missing, firstRun.ModelService.Snapshot.Find("kev-0.8b")!.State);
         Assert.True(firstRun.Models.HasMissing);
+    }
+
+    [Fact]
+    public void AModelNamesHiddenCharactersShowWhereItIsDownloadedAndGoElsewhere()
+    {
+        var (service, _) = Demo();
+        var models = ViewModel(service);
+
+        models.ServerName = "evil‮gpj.exe";
+        models.ServerUrl = "http://127.0.0.1:11434/v1";
+        models.AddServerCommand.Execute(null);
+
+        // The catalogue row's one button acts on the model: its name shows the override.
+        Assert.Equal("evil⟨U+202E⟩gpj.exe", models.Catalogue[^1].Name);
+        Assert.Equal("evil‮gpj.exe", models.Catalogue[^1].Model.Name);
+        // The notice only reports it: drawn without the override.
+        var notice = string.Concat(models.Notice.Select(run => run.Text));
+        Assert.DoesNotContain('‮', notice);
+        Assert.Contains("evilgpj.exe", notice, StringComparison.Ordinal);
+
+        var choice = new DownloadChoiceViewModel(
+            new CatalogueModel("kev‮-9b", ModelKind.Local, "decider", "decider", "Starling", "1 GB", 1_000_000_000, ModelState.Missing, [ModelSlotNames.Decider]),
+            () => { });
+        Assert.Equal("kev⟨U+202E⟩-9b", choice.Text[0].Text);
+        Assert.True(choice.Text[0].Code);
+    }
+
+    [Fact]
+    public void MarksInATypedNameAreTextNotStyle()
+    {
+        var (service, _) = Demo();
+        var models = ViewModel(service);
+
+        models.ServerName = "qwen`~**x";
+        models.ServerUrl = "http://127.0.0.1:11434/v1";
+        models.AddServerCommand.Execute(null);
+
+        Assert.Equal(Tone.Green, models.NoticeTone);
+        var named = Assert.Single(models.Notice, run => run.Text.Contains("qwen`~**x", StringComparison.Ordinal));
+        Assert.False(named.Code || named.Bold || named.Muted);
+        Assert.Equal("qwen`~**x", models.Catalogue[^1].Name);
+        Assert.Equal([new TextRun("a`b~c**d\\e")], Spans.Parse(Spans.Escape("a`b~c**d\\e")));
+        Assert.Equal([new TextRun("x"), new TextRun("p`q", Code: true)], Spans.Parse($"x`{Spans.Escape("p`q")}`"));
+        Assert.Equal("ab", Spans.Plain("a‮b"));
+    }
+
+    [Fact]
+    public async Task ASlotBackOnALocalModelRunsWhereItRanBefore()
+    {
+        var (service, _) = Demo();
+        var token = TestContext.Current.CancellationToken;
+        var before = service.Snapshot.Slot(ModelSlotNames.Generator)!.Placement;
+
+        Assert.True((await service.SwitchAsync(ModelSlotNames.Generator, "qwen-27b", token)).Written);
+        Assert.Equal("local server", service.Snapshot.Slot(ModelSlotNames.Generator)!.Placement!.Device);
+        Assert.True((await service.SwitchAsync(ModelSlotNames.Generator, "qwen3.5-0.8b", token)).Written);
+
+        Assert.Equal(before, service.Snapshot.Slot(ModelSlotNames.Generator)!.Placement);
+        Assert.Equal(new SlotPlacement("cuda:0", 0, 180), before);
+
+        // Moved to the CPU while the slot ran another model: back on it, the slot follows the new placement.
+        Assert.True((await service.SwitchAsync(ModelSlotNames.Generator, "qwen-27b", token)).Written);
+        Assert.True((await service.SetPlacementAsync("qwen3.5-0.8b", "cpu", token)).Written);
+        Assert.True((await service.SwitchAsync(ModelSlotNames.Generator, "qwen3.5-0.8b", token)).Written);
+        Assert.Equal("cpu", service.Snapshot.Slot(ModelSlotNames.Generator)!.Placement!.Device);
+    }
+
+    [Fact]
+    public async Task ALadderKeepsItsHiddenCloudStepWhenItIsReordered()
+    {
+        var (service, _) = Demo(DemoModelScene.FirstRun);
+        var token = TestContext.Current.CancellationToken;
+        Assert.True((await service.AddServerAsync("qwen-coder", "http://127.0.0.1:11434/v1", token)).Written);
+
+        // claude has no key without Vault, but it is already on the ladder: moving the new step past it is allowed.
+        Assert.True((await service.SetLadderAsync(ModelSlotNames.Generator, ["qwen-coder", "claude"], token)).Written);
+        Assert.True((await service.SetLadderAsync(ModelSlotNames.Generator, ["claude", "qwen-coder"], token)).Written);
+        Assert.Equal(["claude", "qwen-coder"], service.Snapshot.Slot(ModelSlotNames.Generator)!.Escalation);
+        // A cloud step new to the ladder still needs its key.
+        Assert.True((await service.SetLadderAsync(ModelSlotNames.Generator, ["qwen-coder"], token)).Written);
+        Assert.False((await service.SetLadderAsync(ModelSlotNames.Generator, ["qwen-coder", "claude"], token)).Written);
+    }
+
+    [Fact]
+    public void AFailedButtonSaysSoInRed()
+    {
+        var (service, _) = Demo();
+        var models = ViewModel(new FailingModelService(service));
+
+        models.ServerName = "qwen-coder";
+        models.ServerUrl = "http://127.0.0.1:11434/v1";
+        models.AddServerCommand.Execute(null);
+
+        Assert.Equal(Tone.Red, models.NoticeTone);
+        Assert.Contains("the store is read-only", string.Concat(models.Notice.Select(run => run.Text)), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LeavingModelsForAnAreaWithNoStatusPutsTheBarBack()
+    {
+        using var composition = Compose("--page", "sessions");
+        var bar = composition.StatusBar;
+        var before = (bar.Generator, bar.Decider, bar.Trailing, bar.SessionId, bar.Context);
+        _ = composition.Models;
+
+        composition.Shell.Navigate(Area.Models);
+        Assert.Equal("idle", bar.Trailing);
+        Assert.Single(bar.AreaFields);
+        composition.Shell.Navigate(Area.Skills);
+
+        Assert.Equal(before, (bar.Generator, bar.Decider, bar.Trailing, bar.SessionId, bar.Context));
+        Assert.Empty(bar.AreaFields);
+    }
+
+    [Fact]
+    public void OpeningTheEgressLedgerFollowsALinkToWhatLeft()
+    {
+        using var composition = Compose("--page", "models");
+
+        composition.Models.OpenEgressCommand.Execute(null);
+
+        Assert.Equal(Area.Audit, composition.Shell.CurrentArea);
+        Assert.Equal(AreaLinkTarget.Egress, composition.Shell.Link?.Target);
+        Assert.Equal(Area.Audit, composition.Shell.Link?.Area);
+    }
+
+    /// <summary>The demo store, but adding a server fails as a store that cannot write would.</summary>
+    private sealed class FailingModelService(DemoModelService inner) : IModelService
+    {
+        public event EventHandler? Changed { add => inner.Changed += value; remove => inner.Changed -= value; }
+
+        public ModelsSnapshot Snapshot => inner.Snapshot;
+
+        public Task<ModelsSnapshot> LoadAsync(CancellationToken cancellationToken = default) => inner.LoadAsync(cancellationToken);
+
+        public Task<ConfigWrite> SetLadderAsync(string slot, IReadOnlyList<string> ladder, CancellationToken cancellationToken = default) =>
+            inner.SetLadderAsync(slot, ladder, cancellationToken);
+
+        public Task<ConfigWrite> SwitchAsync(string slot, string model, CancellationToken cancellationToken = default) =>
+            inner.SwitchAsync(slot, model, cancellationToken);
+
+        public Task<ConfigWrite> SetPinnedAsync(string slot, bool pinned, CancellationToken cancellationToken = default) =>
+            inner.SetPinnedAsync(slot, pinned, cancellationToken);
+
+        public Task<ConfigWrite> SetPlacementAsync(string model, string device, CancellationToken cancellationToken = default) =>
+            inner.SetPlacementAsync(model, device, cancellationToken);
+
+        public Task DownloadAsync(IEnumerable<string> models, CancellationToken cancellationToken = default) =>
+            inner.DownloadAsync(models, cancellationToken);
+
+        public Task CancelDownloadAsync(string model, CancellationToken cancellationToken = default) =>
+            inner.CancelDownloadAsync(model, cancellationToken);
+
+        public Task<ServerCheck> CheckServerAsync(string model, CancellationToken cancellationToken = default) =>
+            inner.CheckServerAsync(model, cancellationToken);
+
+        public Task<ConfigWrite> AddServerAsync(string name, string url, CancellationToken cancellationToken = default) =>
+            Task.FromException<ConfigWrite>(new IOException("the store is read-only"));
     }
 
     [Fact]

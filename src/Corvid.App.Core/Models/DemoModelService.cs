@@ -35,6 +35,7 @@ public sealed class DemoModelService : IModelService, IDisposable
     private readonly IDispatcher _dispatcher;
     private readonly TimeProvider _time;
     private readonly List<string> _queue = [];
+    private readonly Dictionary<(string Slot, string Model), SlotPlacement> _localPlacements = [];
     private ModelsSnapshot _snapshot;
     private ITimer? _timer;
 
@@ -63,7 +64,7 @@ public sealed class DemoModelService : IModelService, IDisposable
     {
         ArgumentNullException.ThrowIfNull(ladder);
         if (_snapshot.Slot(slot) is not { } current)
-            return Refused($"There is no slot named {slot}.");
+            return Refused($"There is no slot named {E(slot)}.");
         if (current.Name is not (ModelSlotNames.Generator or ModelSlotNames.Decider))
             return Refused($"The {current.Name} has no escalation ladder.");
         if (ladder.Distinct(StringComparer.Ordinal).Count() != ladder.Count)
@@ -71,36 +72,44 @@ public sealed class DemoModelService : IModelService, IDisposable
         foreach (var name in ladder)
         {
             if (string.Equals(name, current.Model, StringComparison.Ordinal))
-                return Refused($"{name} is the {current.Name} itself; the ladder holds the models a hard step goes to.");
+                return Refused($"{E(name)} is the {current.Name} itself; the ladder holds the models a hard step goes to.");
+            // A reorder keeps the steps already configured, even one unavailable now (a cloud step hidden while Vault is
+            // absent); only a step new to the ladder is validated.
+            if (current.Escalation.Contains(name, StringComparer.Ordinal))
+                continue;
             if (_snapshot.Find(name) is not { } model || !model.CanServe.Contains(current.Name))
-                return Refused($"{name} cannot serve as the {current.Name}.");
+                return Refused($"{E(name)} cannot serve as the {current.Name}.");
             if (model.Kind == ModelKind.Cloud && model.State == ModelState.Unavailable)
-                return Refused($"{name} has no key: set `{model.Secret}` in Vault first.");
+                return Refused($"{E(name)} has no key: set `{E(model.Secret)}` in Vault first.");
         }
 
         Replace(current with { Ladder = [.. ladder] });
-        var order = ladder.Count == 0 ? "nowhere: no escalation" : string.Join(", then ", ladder);
+        var order = ladder.Count == 0 ? "nowhere: no escalation" : string.Join(", then ", ladder.Select(E));
         return Written($"Written to `{ConfigPath}`: a hard step on the {current.Name} goes to {order}. Applies to new sessions.");
     }
 
     public Task<ConfigWrite> SwitchAsync(string slot, string model, CancellationToken cancellationToken = default)
     {
         if (_snapshot.Slot(slot) is not { } current)
-            return Refused($"There is no slot named {slot}.");
+            return Refused($"There is no slot named {E(slot)}.");
         if (current.Shared)
             return Refused($"The {current.Name} is shared by every session: run `corvid model switch {current.Name} …`, then restart.");
         if (_snapshot.Find(model) is not { } chosen || !chosen.CanServe.Contains(current.Name))
-            return Refused($"{model} cannot serve as the {current.Name}.");
+            return Refused($"{E(model)} cannot serve as the {current.Name}.");
         if (!chosen.IsAvailable)
             return Refused(chosen.Kind == ModelKind.Local
-                ? $"{model} is not downloaded yet."
-                : $"{model} is unavailable: {Unavailable(chosen)}.");
+                ? $"{E(model)} is not downloaded yet."
+                : $"{E(model)} is unavailable: {Unavailable(chosen)}.");
         if (string.Equals(current.Model, model, StringComparison.Ordinal))
-            return Written($"The {current.Name} is already {model}.");
+            return Written($"The {current.Name} is already {E(model)}.");
 
+        // A slot back on a local model runs where that model last ran in it (or where its placement says), not where the
+        // server or cloud model it leaves ran.
+        if (current.Placement is { } leaving && current.Model is { } leavingModel && _snapshot.Find(leavingModel) is { Kind: ModelKind.Local })
+            _localPlacements[(current.Name, leavingModel)] = leaving;
         var placement = chosen.Kind switch
         {
-            ModelKind.Local => current.Placement ?? new SlotPlacement("cpu", null, 100),
+            ModelKind.Local => _localPlacements.TryGetValue((current.Name, model), out var last) ? last : LocalPlacement(model),
             ModelKind.Server => new SlotPlacement("local server", 0, 620),
             _ => new SlotPlacement("cloud", 0, 1400),
         };
@@ -111,31 +120,31 @@ public sealed class DemoModelService : IModelService, IDisposable
             Ladder = current.Ladder?.Where(step => step != model).ToList(),
             Placement = placement,
         });
-        return Written($"Written to `{ConfigPath}`: the {current.Name} is {model}. Applies to new sessions; this one switches after its issued tool calls.");
+        return Written($"Written to `{ConfigPath}`: the {current.Name} is {E(model)}. Applies to new sessions; this one switches after its issued tool calls.");
     }
 
     public Task<ConfigWrite> SetPinnedAsync(string slot, bool pinned, CancellationToken cancellationToken = default)
     {
         if (_snapshot.Slot(slot) is not { } current)
-            return Refused($"There is no slot named {slot}.");
+            return Refused($"There is no slot named {E(slot)}.");
         if (!current.Pinnable)
             return Refused($"The {current.Name} cannot be pinned.");
         Replace(current with { Pinned = pinned });
         return Written(pinned
-            ? $"The {current.Name} is pinned to {current.Model} for this session: escalation leaves it alone."
+            ? $"The {current.Name} is pinned to {E(current.Model)} for this session: escalation leaves it alone."
             : $"The {current.Name} is no longer pinned: a hard step escalates again.");
     }
 
     public Task<ConfigWrite> SetPlacementAsync(string model, string device, CancellationToken cancellationToken = default)
     {
         if (_snapshot.Placements.FirstOrDefault(placement => placement.Model == model) is not { } current)
-            return Refused($"{model} is not a local model with a placement.");
+            return Refused($"{E(model)} is not a local model with a placement.");
         if (device is not ("cuda" or "cpu"))
-            return Refused($"{device} is not a device on this machine: cuda or cpu.");
+            return Refused($"{E(device)} is not a device on this machine: cuda or cpu.");
         if (device == "cuda" && _snapshot.Gpus.Count == 0)
             return Refused("No GPU passed the doctor's checks.");
         if (current.Device == device)
-            return Written($"{model} already runs on {device}.");
+            return Written($"{E(model)} already runs on {device}.");
 
         var placements = _snapshot.Placements.Select(placement => placement == current ? placement with { Device = device } : placement).ToList();
         var slots = _snapshot.Slots.Select(slot =>
@@ -145,8 +154,11 @@ public sealed class DemoModelService : IModelService, IDisposable
             var p50 = device == "cpu" ? at.P50Milliseconds * 4 : Math.Max(1, at.P50Milliseconds / 4);
             return slot with { Placement = at with { Device = device == "cuda" ? _snapshot.Gpus[0].Id : "cpu", P50Milliseconds = p50 } };
         }).ToList();
+        // Where a slot last ran the model no longer holds: a slot that goes back to it follows the new placement.
+        foreach (var key in _localPlacements.Keys.Where(key => key.Model == model).ToList())
+            _localPlacements.Remove(key);
         Set(_snapshot with { Placements = placements, Slots = slots });
-        return Written($"Written to `{ConfigPath}`: {model} on {device}, falling back to {current.Fallback}. Applies when it next loads.");
+        return Written($"Written to `{ConfigPath}`: {E(model)} on {device}, falling back to {E(current.Fallback)}. Applies when it next loads.");
     }
 
     public Task DownloadAsync(IEnumerable<string> models, CancellationToken cancellationToken = default)
@@ -189,10 +201,10 @@ public sealed class DemoModelService : IModelService, IDisposable
     public Task<ServerCheck> CheckServerAsync(string model, CancellationToken cancellationToken = default) =>
         Task.FromResult(_snapshot.Find(model) switch
         {
-            { Kind: ModelKind.Server, State: ModelState.Reachable } server => new ServerCheck(true, $"{server.Name} answered in 41 ms · {server.Fit}."),
-            { Kind: ModelKind.Server } server => new ServerCheck(false, $"{server.Name} did not answer: {Where(server)}."),
-            null => new ServerCheck(false, $"There is no model named {model}."),
-            var other => new ServerCheck(false, $"{other.Name} is not a local server."),
+            { Kind: ModelKind.Server, State: ModelState.Reachable } server => new ServerCheck(true, $"{E(server.Name)} answered in 41 ms · {E(server.Fit)}."),
+            { Kind: ModelKind.Server } server => new ServerCheck(false, $"{E(server.Name)} did not answer: {Where(server)}."),
+            null => new ServerCheck(false, $"There is no model named {E(model)}."),
+            var other => new ServerCheck(false, $"{E(other.Name)} is not a local server."),
         });
 
     public Task<ConfigWrite> AddServerAsync(string name, string url, CancellationToken cancellationToken = default)
@@ -202,19 +214,19 @@ public sealed class DemoModelService : IModelService, IDisposable
         if (name.Length == 0 || name.Any(char.IsWhiteSpace))
             return Refused("Give the server a name without spaces, such as qwen-coder.");
         if (_snapshot.Find(name) is not null)
-            return Refused($"The catalogue already has a model named {name}.");
+            return Refused($"The catalogue already has a model named {E(name)}.");
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
             return Refused("The address must be an http or https URL, such as http://127.0.0.1:11434/v1.");
 
         // The demo's only answering servers are on this machine.
         var answers = uri.IsLoopback;
-        var server = new CatalogueModel(name, ModelKind.Server, "generator", "generator", $"local server · `{uri}`",
+        var server = new CatalogueModel(name, ModelKind.Server, "generator", "generator", $"local server · `{E(uri.ToString())}`",
             answers ? "context 32k" : "context unknown", 0, answers ? ModelState.Reachable : ModelState.Unreachable,
             [ModelSlotNames.Generator, ModelSlotNames.Summarizer]);
         Set(_snapshot with { Catalogue = [.. _snapshot.Catalogue, server] });
         return answers
-            ? Written($"Written to `{ConfigPath}`: {name} at `{uri}` answered and can serve the generator.")
-            : Written($"Written to `{ConfigPath}`: {name} at `{uri}`, which did not answer; it stays unavailable until it does.");
+            ? Written($"Written to `{ConfigPath}`: {E(name)} at `{E(uri.ToString())}` answered and can serve the generator.")
+            : Written($"Written to `{ConfigPath}`: {E(name)} at `{E(uri.ToString())}`, which did not answer; it stays unavailable until it does.");
     }
 
     public void Dispose()
@@ -295,9 +307,19 @@ public sealed class DemoModelService : IModelService, IDisposable
     private static List<CatalogueModel> With(IReadOnlyList<CatalogueModel> catalogue, CatalogueModel entry) =>
         [.. catalogue.Select(model => model.Name == entry.Name ? entry : model)];
 
-    private static string Unavailable(CatalogueModel model) => model.Secret is { } secret ? $"set `{secret}` in Vault" : "no key";
+    private static string Unavailable(CatalogueModel model) => model.Secret is { } secret ? $"set `{E(secret)}` in Vault" : "no key";
 
-    private static string Where(CatalogueModel model) => model.Where.Replace("`", "", StringComparison.Ordinal);
+    /// <summary>Where a server runs, as plain words inside a message: its marks dropped, then escaped.</summary>
+    private static string Where(CatalogueModel model) => E(Spans.Plain(model.Where));
+
+    /// <summary>A name or address put into a message (markup): its marks are text (<see cref="Spans.Escape"/>).</summary>
+    private static string E(string? value) => Spans.Escape(value);
+
+    /// <summary>Where a local model runs when a slot has not run it yet: its placement's device (the first GPU for cuda).</summary>
+    private SlotPlacement LocalPlacement(string model) =>
+        _snapshot.Placements.FirstOrDefault(placement => placement.Model == model) is { Device: "cuda" } && _snapshot.Gpus.Count > 0
+            ? new SlotPlacement(_snapshot.Gpus[0].Id, 0, 180)
+            : new SlotPlacement("cpu", null, 100);
 
     private static string? DefaultModel(string slot) => slot switch
     {
