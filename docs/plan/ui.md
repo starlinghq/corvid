@@ -4,8 +4,9 @@ Version 0.1, 2026-10-23. Status: design exploration for a windowed Corvid built 
 Platform](https://platform.uno), the step before any screen is drawn. It is the sibling of the terminal design in
 [`tui.md`](tui.md) and rests on the same evidence ([`docs/research/tui/`](../research/tui/README.md), gathered
 2026-10-21), plus the desktop and web agent apps and the local chat front ends read for this document (§12). Plan §18
-lists a desktop UI under phase 3; this document says what it should do and how it should feel. Mockups come next, in
-`ui-mockups/`, the way `tui-mockups/` followed `tui.md`.
+lists a desktop UI under phase 3; this document says what it should do and how it should feel. The mockups are in
+[`ui-mockups/`](ui-mockups/README.md), as `tui-mockups/` followed `tui.md`; the build's shared rules are in
+[`ui-build.md`](ui-build.md) and where it stands in [`ui-handoff.md`](ui-handoff.md).
 
 ## 0. Thesis
 

@@ -5,8 +5,10 @@ project. It builds the Skia desktop head (`net10.0-desktop`: X11 and the framebu
 and the WebAssembly head only on request. Its view models live in [`Corvid.App.Core`](../Corvid.App.Core), which has no
 Uno types and is tested headless in [`tests/Corvid.App.Core.Tests`](../../tests/Corvid.App.Core.Tests).
 
-This is the A0 scaffold: the shell as the Main mockup draws it (rail, content frame, dock column, status bar), the theme,
-the fonts, the icons, navigation to every area, and a placeholder page per area. The areas fill in from here.
+So far: the A0 scaffold (the shell as the Main mockup draws it, the theme, the fonts, the icons, navigation to every
+area, a placeholder page per area) and the session core in `Corvid.App.Core/Sessions` that the Sessions page will bind
+to. Where the build stands and what comes next: [`docs/plan/ui-handoff.md`](../../docs/plan/ui-handoff.md); the rules
+every builder follows: [`docs/plan/ui-build.md`](../../docs/plan/ui-build.md).
 
 ## Build and run
 
@@ -38,6 +40,7 @@ It restores and passes the boundary checker here, but has not been built or run,
 | `--theme light\|dark\|system` | The theme to start in; `system` by default. Settings switches it at run time. |
 | `--page <area>` | The area to open: `sessions`, `board`, `review`, `rewind`, `memory`, `skills`, `jobs`, `models`, `safety`, `mcp`, `gateway`, `secrets`, `audit`, `settings`, `first-run` (any case; `=` works too: `--page=models`). |
 | `--session <id>` | The session to select and open, such as `cli-9f2e`; with `--page`, it is selected and the page shows. |
+| `--scene main\|approval` | The demo scenario's moment: `main` (turn 12 running, as Main.png; the default) or `approval` (turn 13 waiting on approval a-32, as Approval.png). |
 | `--help` | The usage. A wrong argument prints the usage and exits with 2. |
 
 `CORVID_APP_RENDERER=software` draws with Skia on the CPU instead of OpenGL (see the harness check below).

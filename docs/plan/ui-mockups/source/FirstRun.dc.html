@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Corvid first run</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="corvid.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#2f5fa8}a:hover{color:#1d4a8a}
+</style>
+</helmet>
+<div class="app shell {{theme}}" style="height: 100vh; min-height: 720px; display: grid; grid-template-columns: 260px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 28px;">
+
+<nav class="rail" aria-label="Setup steps">
+  <div class="brand">
+    <span class="logo" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M2 9c2-4 5-6 9-6l3 1-2 1c-1 3-3 5-6 6l-1 2-1-2H2z"/></svg></span>
+    <div style="flex: 1; min-width: 0;">
+      <div class="brand-name">Corvid</div>
+      <div class="muted small">first run · 0.2.0</div>
+    </div>
+  </div>
+  <ul class="nav" aria-label="Steps">
+    <li><a href="#check" aria-current="step"><span class="tag green">1</span>Check this machine</a></li>
+    <li><a href="#models"><span class="tag grey">2</span>Models to download</a></li>
+    <li><a href="#workspace"><span class="tag grey">3</span>Workspace</a></li>
+    <li><a href="#approvals"><span class="tag grey">4</span>Approval mode</a></li>
+    <li><a href="#privacy"><span class="tag grey">5</span>Cloud privacy</a></li>
+    <li><a href="#import"><span class="tag grey">6</span>Import from Hermes</a></li>
+  </ul>
+  <div class="section-title">About this setup</div>
+  <div class="muted small" style="padding: 0 8px; display: flex; flex-direction: column; gap: 8px;">
+    <span>Every step can be skipped. The app runs with what it has and says what is missing.</span>
+    <span>No account, no telemetry, no background process until you turn one on.</span>
+  </div>
+  <div class="rail-foot"><a href="Main.dc.html">Skip setup</a></div>
+</nav>
+
+<main class="page">
+  <header class="page-head">
+    <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+      <h1>Check this machine</h1>
+      <span class="muted">the same checks as <span class="mono">corvid doctor</span>, each with its fix</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <button class="btn" type="button">Run again</button>
+      <button class="btn primary" type="button">Continue to models</button>
+    </div>
+  </header>
+
+  <div class="page-body" style="display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 18px; align-content: start;">
+    <div style="display: flex; flex-direction: column; gap: 14px; min-width: 0;">
+      <div class="panel" id="check">
+        <div class="panel-head"><span>Configuration and data</span><span class="muted small">2 ok</span></div>
+        <table class="table" aria-label="Configuration checks">
+          <tbody>
+            <tr><td style="width: 110px;"><span class="tag green">ok</span></td><td>configuration</td><td class="muted">defaults, no <span class="mono">~/.config/corvid/corvid.json</span> yet; the app writes one when you change a setting</td></tr>
+            <tr><td><span class="tag green">ok</span></td><td>data directory</td><td class="muted">writable · <span class="mono">~/.local/share/corvid</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><span>Sandbox and secrets</span><span class="muted small">1 warning</span></div>
+        <table class="table" aria-label="Sandbox and secrets checks">
+          <tbody>
+            <tr><td style="width: 110px;"><span class="tag green">ok</span></td><td>bubblewrap</td><td class="muted"><span class="mono">bwrap</span> 0.11 on PATH · unprivileged user namespaces available</td></tr>
+            <tr><td><span class="tag green">ok</span></td><td>corvid-sandbox</td><td class="muted"><span class="mono">~/.local/lib/corvid/0.2.0/corvid-sandbox</span></td></tr>
+            <tr>
+              <td><span class="tag amber">warning</span></td>
+              <td>Vault socket</td>
+              <td><div class="muted">no answer at <span class="mono">$XDG_RUNTIME_DIR/corvid-vault.sock</span></div><div class="small" style="margin-top: 4px;">Without Vault, cloud models and gateway bots are unavailable. Local models work. Fix: <span class="mono">systemctl --user enable --now corvid-vault</span></div><div style="margin-top: 6px;"><button class="btn sm" type="button">Copy the command</button></div></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><span>GPU</span><span class="muted small">CUDA build · 1 info</span></div>
+        <table class="table" aria-label="GPU checks">
+          <tbody>
+            <tr><td style="width: 110px;"><span class="tag green">ok</span></td><td>driver</td><td class="muted">NVIDIA 580.65 · CUDA driver API 13.0</td></tr>
+            <tr><td><span class="tag green">ok</span></td><td>GPU 0</td><td class="muted">RTX 3090 · 24 GB · nothing placed on it yet</td></tr>
+            <tr><td><span class="tag green">ok</span></td><td>onnx runtime</td><td class="muted">CUDA build: CUDAExecutionProvider is listed</td></tr>
+            <tr><td><span class="tag green">ok</span></td><td>cuda runtime</td><td class="muted">libcudart.so.13, libcublas.so.13 resolve for this user</td></tr>
+            <tr><td><span class="tag grey">info</span></td><td>cudnn</td><td class="muted">not required by the ONNX models Corvid ships</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 14px; min-width: 0;" id="models">
+      <div class="panel">
+        <div class="panel-head"><span>Models</span><span class="muted small">nothing downloads until you say so</span></div>
+        <div class="panel-body" style="display: flex; flex-direction: column; gap: 8px;">
+          <label class="radio"><input type="checkbox" checked="checked" disabled="disabled"><span><span class="mono">qwen3.5-0.8b</span> · generator · 1.9 GB <span class="tag green">cached</span></span></label>
+          <label class="radio"><input type="checkbox" checked="checked" disabled="disabled"><span><span class="mono">gliner2-base-v1</span> · extractor · 0.6 GB <span class="tag green">cached</span></span></label>
+          <label class="radio"><input type="checkbox" checked="checked"><span><span class="mono">embeddinggemma-2</span> · embedder.text · 1.2 GB <span class="muted">missing</span></span></label>
+          <label class="radio"><input type="checkbox" checked="checked"><span><span class="mono">kev-0.8b</span> · decider · 2.1 GB <span class="muted">missing</span> · fits cuda:0</span></label>
+          <label class="radio"><input type="checkbox"><span><span class="mono">kev-4b</span> · second decider tier · 17 GB · needs 18 GB RAM <span class="muted">optional</span></span></label>
+          <div class="kv" style="margin-top: 4px;"><span class="k">selected</span><span><b>3.3 GB</b> · about 2 minutes at 48 MB/s</span></div>
+          <div class="row taint" style="font-size: 12.5px;"><span class="ic"><svg viewBox="0 0 16 16"><path d="M8 2l6.5 11.5h-13zM8 6.5v3M8 11.8v.4"/></svg></span><span>Without <span class="mono">kev-0.8b</span>, decisions run on the degraded tier and every chat says so. Memory writes then wait for your review.</span></div>
+          <div style="display: flex; gap: 8px;"><button class="btn primary sm" type="button">Download selected</button><button class="btn sm ghost" type="button">Skip for now</button></div>
+        </div>
+      </div>
+
+      <div class="panel" id="workspace">
+        <div class="panel-head"><span>Workspace</span><span class="muted small">where tools may read and write</span></div>
+        <div class="panel-body" style="display: flex; flex-direction: column; gap: 8px;">
+          <div style="display: flex; gap: 8px; align-items: center;"><span class="mono" style="flex: 1; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px;">~/src/corvid</span><button class="btn sm" type="button">Choose…</button></div>
+          <div class="muted small">A git repository: checkpoints and the project's lessons are on. Secrets locations in it (<span class="mono">.env*</span>, <span class="mono">*.pem</span>) stay hidden from tools.</div>
+        </div>
+      </div>
+
+      <div class="panel" id="approvals">
+        <div class="panel-head"><span>Approval mode</span><span class="muted small">the hardline list applies in every mode</span></div>
+        <div class="panel-body" style="display: flex; flex-direction: column; gap: 4px;">
+          <label class="radio"><input type="radio" name="mode"><span><b>Manual</b><span class="muted"> · every side effect asks</span></span></label>
+          <label class="radio"><input type="radio" name="mode" checked="checked"><span><b>Smart</b><span class="muted"> · runs unasked only when Kev rates it low risk and it stays in the workspace, with no network, elevation or destructive tool</span></span></label>
+          <label class="radio"><input type="radio" name="mode"><span><b>Permissive</b><span class="muted"> · follows the fabric: calibrated levels 0 to 1 run, 2 to 4 ask</span></span></label>
+        </div>
+      </div>
+
+      <div class="panel" id="privacy">
+        <div class="panel-head"><span>Cloud privacy</span><span class="tag blue">redact</span></div>
+        <div class="panel-body muted small">Requests to cloud models are redacted (PII and credential values) and every one is viewable afterwards in Audit. Cloud keys live in Vault, never in the app.</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer class="statusbar">
+  <span><b>engine</b> not started · models load after this page</span>
+  <span><b>decider</b> degraded until kev-0.8b is downloaded</span>
+  <span class="tag amber">Vault absent</span>
+  <span style="margin-left: auto;">step 1 of 6</span>
+</footer>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","default":"light","options":["light","dark"],"section":"Look"},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { theme: this.props.theme ?? 'light' };
+  }
+}
+</script>
+</body>
+</html>

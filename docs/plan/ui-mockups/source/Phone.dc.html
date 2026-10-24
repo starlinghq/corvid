@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Corvid on a phone: attached client with an approval</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="corvid.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#2f5fa8}a:hover{color:#1d4a8a}
+</style>
+</helmet>
+<div class="app phone {{theme}}" style="width: 390px; height: 844px; display: flex; flex-direction: column;">
+
+<header class="ph-top">
+  <button class="iconbtn" type="button" aria-label="Sessions"><span class="ic"><svg viewBox="0 0 16 16"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg></span></button>
+  <div style="flex: 1; min-width: 0;">
+    <div class="title" style="font-size: 14px;">Fix the flaky sandbox test on CI</div>
+    <div class="muted small">attached to mark-ws · owner device</div>
+  </div>
+  <span class="tag amber">tainted</span>
+  <button class="iconbtn" type="button" aria-label="Attention: 3 items waiting"><span class="ic"><svg viewBox="0 0 16 16"><path d="M4 11V7a4 4 0 0 1 8 0v4l1 1H3zM6.5 13.5a1.5 1.5 0 0 0 3 0"/></svg></span><span class="count">3</span></button>
+</header>
+
+<section class="ph-body" aria-label="Transcript">
+  <article class="msg user">
+    <div class="who">you · 14:01</div>
+    <p style="font-size: 13px;">the sandbox test fails on CI only. find out why and fix it without touching the production launcher.</p>
+  </article>
+
+  <div class="turn-head"><span class="who">corvid · turn 13</span><span class="muted small">claude · step 2 of 6</span></div>
+
+  <div class="row esc" style="font-size: 12px;"><span class="ic"><svg viewBox="0 0 16 16"><path d="M5 12.5h7a3 3 0 0 0 .5-6A4.5 4.5 0 0 0 4 7.5 2.5 2.5 0 0 0 5 12.5z"/></svg></span><span>escalated to <b>claude</b> · 2 values redacted</span></div>
+
+  <div class="card">
+    <div class="card-head" style="padding: 8px 10px;"><span class="ic"><svg viewBox="0 0 16 16"><rect x="1.5" y="3" width="13" height="10" rx="1.5"/><path d="M4.5 6.5l2 1.5-2 1.5M8 10h3.5"/></svg></span><span class="card-title mono" style="font-size: 12px;">rm -rf build/ &amp;&amp; dotnet test Corvid.slnx</span></div>
+  </div>
+
+  <section class="approval" aria-labelledby="ph-ap">
+    <div class="approval-head" style="padding: 8px 12px; font-size: 13px;">
+      <span class="ic"><svg viewBox="0 0 16 16"><path d="M8 1.5l5 2v4c0 3-2.2 5.3-5 6.5-2.8-1.2-5-3.5-5-6.5v-4z"/></svg></span>
+      <span id="ph-ap">Approval 1 of 2</span>
+      <span style="margin-left: auto; font-weight: 500;">4:12 left</span>
+    </div>
+    <div class="approval-body" style="padding: 10px 12px; gap: 8px;">
+      <div style="display: flex; flex-direction: column; gap: 6px; font-size: 12.5px;">
+        <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;"><span class="mono" style="font-weight: 500;">rm -rf build/</span><span class="tag red">delete, recursive</span></div>
+        <div class="kv"><span class="k">target</span><span class="target del"><span class="mono">./build/</span> · 212 files</span></div>
+        <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;"><span class="mono" style="font-weight: 500;">dotnet test Corvid.slnx</span><span class="tag grey">execute</span></div>
+        <div class="kv"><span class="k">target</span><span class="target"><span class="mono">Corvid.slnx</span> · workspace</span></div>
+      </div>
+      <ul class="reasons" style="font-size: 12.5px;">
+        <li><span class="code">risk 3</span><span>recursive delete; Kev scored 3 (0.86), above the smart floor</span></li>
+        <li><span class="code">reversible</span><span>checkpoint c-45 is taken first</span></li>
+        <li><span class="code">taint</span><span>outside content in the session; this call reaches no network</span></li>
+      </ul>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <button class="opt" type="button" style="height: 44px; justify-content: center;">Allow once</button>
+        <button class="opt" type="button" style="height: 44px; justify-content: center;">Allow for this session</button>
+        <button class="opt" type="button" style="height: 44px; justify-content: center;">Always, after a rule preview…</button>
+        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px;">
+          <button class="opt deny" type="button" style="height: 44px; justify-content: center;">Deny</button>
+          <button class="opt deny" type="button" style="height: 44px; justify-content: center;">Deny and say why</button>
+        </div>
+      </div>
+      <div class="muted small">Next in the queue: patch_file BubblewrapSandbox.cs (diff ready)</div>
+    </div>
+  </section>
+</section>
+
+<form class="composer" action="#" onsubmit="return false" style="padding: 8px 12px;">
+  <label class="sr" for="ph-prompt">Message to Corvid</label>
+  <div style="display: flex; gap: 8px; align-items: flex-end;">
+    <textarea id="ph-prompt" rows="1" placeholder="Ask Corvid…" style="min-height: 44px; flex: 1;"></textarea>
+    <button class="btn primary" type="button" style="height: 44px; width: 44px; padding: 0; justify-content: center;" aria-label="Send"><span class="ic"><svg viewBox="0 0 16 16"><path d="M14 2L2 7l5 2 2 5z"/></svg></span></button>
+  </div>
+</form>
+
+<nav class="ph-bar" aria-label="Sections">
+  <a href="#chat" aria-current="page"><span class="ic"><svg viewBox="0 0 16 16"><path d="M2.5 3.5h11v7h-7l-3 2.5v-2.5h-1z"/></svg></span>Chat</a>
+  <a href="#changes"><span class="ic"><svg viewBox="0 0 16 16"><path d="M4 2.5v11M2 6h4M10 2.5v11M12 10H8"/></svg></span>Changes<span class="count">3</span></a>
+  <a href="#attention"><span class="ic"><svg viewBox="0 0 16 16"><path d="M4 11V7a4 4 0 0 1 8 0v4l1 1H3zM6.5 13.5a1.5 1.5 0 0 0 3 0"/></svg></span>Attention<span class="count">3</span></a>
+  <a href="#more"><span class="ic"><svg viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12.5" cy="8" r="1.2"/></svg></span>More</a>
+</nav>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","default":"light","options":["light","dark"],"section":"Look"},"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { theme: this.props.theme ?? 'light' };
+  }
+}
+</script>
+</body>
+</html>

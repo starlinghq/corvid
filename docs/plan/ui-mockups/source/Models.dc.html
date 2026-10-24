@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Corvid models: slots, ladder and downloads</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="corvid.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#2f5fa8}a:hover{color:#1d4a8a}
+</style>
+</helmet>
+<div class="app shell {{theme}}" style="height: 100vh; min-height: 720px; display: grid; grid-template-columns: 260px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 28px;">
+
+<nav class="rail" aria-label="Main">
+  <div class="brand">
+    <span class="logo" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M2 9c2-4 5-6 9-6l3 1-2 1c-1 3-3 5-6 6l-1 2-1-2H2z"/></svg></span>
+    <div style="flex: 1; min-width: 0;">
+      <div class="brand-name">Corvid</div>
+      <div class="muted small">corvid · main</div>
+    </div>
+    <button class="iconbtn" type="button" aria-label="Attention: 3 items waiting"><span class="ic"><svg viewBox="0 0 16 16"><path d="M4 11V7a4 4 0 0 1 8 0v4l1 1H3zM6.5 13.5a1.5 1.5 0 0 0 3 0"/></svg></span><span class="count">3</span></button>
+  </div>
+  <ul class="nav">
+    <li><a href="Main.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><path d="M2.5 3.5h11v7h-7l-3 2.5v-2.5h-1z"/></svg></span>Sessions<span class="badge">2</span></a></li>
+    <li><a href="Board.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><path d="M2.5 2.5h4v6h-4zM9.5 2.5h4v3h-4zM9.5 8.5h4v5h-4zM2.5 11.5h4v2h-4z"/></svg></span>Board</a></li>
+    <li><a href="Review.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><path d="M4 2.5v11M2 6h4M10 2.5v11M12 10H8"/></svg></span>Review<span class="badge">3</span></a></li>
+    <li><a href="Memory.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><path d="M8 2.5l5.5 3L8 8.5l-5.5-3zM2.5 8.5L8 11.5l5.5-3M2.5 11L8 14l5.5-3"/></svg></span>Memory<span class="badge">1</span></a></li>
+    <li><a href="#skills"><span class="ic"><svg viewBox="0 0 16 16"><path d="M8 2l1.5 4L14 7.5 9.5 9 8 13 6.5 9 2 7.5 6.5 6z"/></svg></span>Skills</a></li>
+    <li><a href="#jobs"><span class="ic"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 5v3l2 1.5"/></svg></span>Jobs</a></li>
+    <li><a href="Models.dc.html" aria-current="page"><span class="ic"><svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5"/><path d="M6.5 1.5v2.5M9.5 1.5v2.5M6.5 12v2.5M9.5 12v2.5M1.5 6.5H4M1.5 9.5H4M12 6.5h2.5M12 9.5h2.5"/></svg></span>Models</a></li>
+    <li><a href="#safety"><span class="ic"><svg viewBox="0 0 16 16"><path d="M8 1.5l5 2v4c0 3-2.2 5.3-5 6.5-2.8-1.2-5-3.5-5-6.5v-4z"/></svg></span>Safety</a></li>
+    <li><a href="#mcp"><span class="ic"><svg viewBox="0 0 16 16"><path d="M5 2v4M11 2v4M3.5 6h9v2a4.5 4.5 0 0 1-9 0zM8 12.5V15"/></svg></span>MCP<span class="badge">1</span></a></li>
+    <li><a href="#gateway"><span class="ic"><svg viewBox="0 0 16 16"><path d="M14 2L2 7l5 2 2 5z"/></svg></span>Gateway</a></li>
+    <li><a href="#secrets"><span class="ic"><svg viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg></span>Secrets</a></li>
+    <li><a href="Audit.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><path d="M3 3h10M3 6.5h10M3 10h6M3 13.5h4"/></svg></span>Audit</a></li>
+  </ul>
+  <div class="section-title">Pinned</div>
+  <ul class="sessions">
+    <li><a href="Main.dc.html"><span class="dot run"></span><span class="name">Fix the flaky sandbox test on CI</span><span class="muted small">12 s</span></a></li>
+  </ul>
+  <div class="section-title">Recent</div>
+  <ul class="sessions">
+    <li><a href="#s2"><span class="dot run"></span><span class="name">Draft release notes for v0.2</span><span class="muted small">2 m</span></a></li>
+    <li><a href="#s3"><span class="dot"></span><span class="name">Vault policy for ntfy</span><span class="muted small">1 h</span></a></li>
+    <li><a href="#s4"><span class="dot job"></span><span class="name">nightly-tidy run</span><span class="muted small">09:00</span></a></li>
+  </ul>
+  <div class="rail-foot"><a href="FirstRun.dc.html">Settings</a><a href="FirstRun.dc.html">Doctor</a></div>
+</nav>
+
+<main class="page">
+  <header class="page-head">
+    <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+      <h1>Models</h1>
+      <span class="muted">config <span class="mono">~/.config/corvid/corvid.json</span> · validated · a slot change is written there and applies to new sessions</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <button class="btn" type="button">Add a local server…</button>
+      <button class="btn primary" type="button">Download…</button>
+    </div>
+  </header>
+
+  <div class="page-body" style="display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 18px; align-content: start;">
+    <div style="display: flex; flex-direction: column; gap: 18px; min-width: 0;">
+      <div class="panel">
+        <div class="panel-head"><span>Slots</span><span class="muted small">this session · switching mid-turn waits for issued tool calls</span></div>
+        <table class="table" aria-label="Model slots">
+          <thead><tr><th>slot</th><th>current</th><th>escalation and fallbacks</th><th>placement · p50</th><th></th></tr></thead>
+          <tbody>
+            <tr>
+              <td><b>generator</b></td>
+              <td><span class="mono">qwen3.5-0.8b</span><div class="muted small">default</div></td>
+              <td><div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;"><span class="target" title="drag to reorder">⋮⋮ <span class="mono">qwen-27b</span></span><span class="muted">→</span><span class="target">⋮⋮ <span class="mono">claude</span></span></div><div class="muted small">a hard step escalates up this ladder</div></td>
+              <td>cuda:0 · q0 · 180 ms<div class="meter" style="width: 90px; margin-top: 4px;"><span style="width: 30%;"></span></div></td>
+              <td><div style="display: flex; gap: 6px;"><button class="btn sm" type="button">Switch…</button><button class="btn sm ghost" type="button">Pin</button></div></td>
+            </tr>
+            <tr>
+              <td><b>summarizer</b></td>
+              <td><span class="mono">qwen3.5-0.8b</span></td>
+              <td class="muted">none</td>
+              <td>cuda:0 · q0 · 210 ms<div class="meter" style="width: 90px; margin-top: 4px;"><span style="width: 35%;"></span></div></td>
+              <td><button class="btn sm" type="button">Switch…</button></td>
+            </tr>
+            <tr>
+              <td><b>decider</b></td>
+              <td><span class="mono">kev-0.8b</span> <span class="tag green">calibrated</span></td>
+              <td><span class="target">⋮⋮ <span class="mono">kev-4b</span></span><div class="muted small">second tier for gates below their floor · downloading</div></td>
+              <td>cuda:0 · q0 · 240 ms<div class="meter" style="width: 90px; margin-top: 4px;"><span style="width: 40%;"></span></div></td>
+              <td><div class="muted small">shared by every session: <span class="mono">corvid model switch decider …</span>, then restart</div></td>
+            </tr>
+            <tr>
+              <td><b>extractor</b></td>
+              <td><span class="mono">gliner2-base-v1</span></td>
+              <td class="muted">none</td>
+              <td>cpu · 38 ms<div class="meter" style="width: 90px; margin-top: 4px;"><span style="width: 8%;"></span></div></td>
+              <td><button class="btn sm" type="button">Switch…</button></td>
+            </tr>
+            <tr>
+              <td><b>embedder.text</b></td>
+              <td><span class="mono">embeddinggemma-2</span></td>
+              <td><span class="muted">fallback</span> <span class="mono">e5</span><div class="muted small">memory embeds only with models configured at start</div></td>
+              <td>cpu · 12 ms<div class="meter" style="width: 90px; margin-top: 4px;"><span style="width: 3%;"></span></div></td>
+              <td><button class="btn sm" type="button">Switch…</button></td>
+            </tr>
+            <tr>
+              <td><b>embedder.media</b></td>
+              <td class="muted">unbound</td>
+              <td class="muted">media memory comes with plan §9.4</td>
+              <td class="muted">—</td>
+              <td></td>
+            </tr>
+            <tr>
+              <td><b>vision</b></td>
+              <td class="muted">unbound</td>
+              <td class="muted">needed for images in prompts (K-8)</td>
+              <td class="muted">—</td>
+              <td></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><span>Catalogue and downloads</span><span class="muted small">nothing downloads implicitly · default set about 10 GB</span></div>
+        <table class="table" aria-label="Catalogue">
+          <thead><tr><th>model</th><th>where</th><th>size · fit</th><th>state</th><th></th></tr></thead>
+          <tbody>
+            <tr><td><span class="mono">qwen3.5-0.8b</span><div class="muted small">generator, summarizer</div></td><td>Starling, in-process</td><td>1.9 GB · cuda fits</td><td><span class="tag green">cached</span></td><td></td></tr>
+            <tr><td><span class="mono">kev-0.8b</span><div class="muted small">decider</div></td><td>Starling, in-process</td><td>2.1 GB · cuda fits</td><td><span class="tag green">cached</span></td><td></td></tr>
+            <tr>
+              <td><span class="mono">kev-4b</span><div class="muted small">decider, second tier</div></td>
+              <td>Starling, in-process</td>
+              <td>17 GB · needs 18 GB RAM · cuda fits (24 GB)</td>
+              <td><div class="meter" style="width: 140px;"><span style="width: 42%;"></span></div><div class="muted small" style="margin-top: 4px;">42% · 7.1 of 17 GB · 48 MB/s · 3 m left</div></td>
+              <td><button class="btn sm ghost danger" type="button">Cancel</button></td>
+            </tr>
+            <tr><td><span class="mono">gliner2-base-v1</span><div class="muted small">extractor</div></td><td>Starling, in-process</td><td>0.6 GB</td><td><span class="tag green">cached</span></td><td></td></tr>
+            <tr><td><span class="mono">embeddinggemma-2</span><div class="muted small">embedder.text</div></td><td>Starling, in-process</td><td>1.2 GB</td><td><span class="tag green">cached</span></td><td></td></tr>
+            <tr><td><span class="mono">qwen-27b</span><div class="muted small">generator, escalation 1</div></td><td>local server · <span class="mono">http://127.0.0.1:8080/v1</span></td><td>context 32k</td><td><span class="tag green">reachable</span></td><td><button class="btn sm ghost" type="button">Check</button></td></tr>
+            <tr><td><span class="mono">claude</span><div class="muted small">generator, escalation 2 · claude-opus-5-5</div></td><td>anthropic · key <span class="mono">anthropic.key</span> in Vault</td><td>context 1M · accepted 200k</td><td><span class="tag blue">redact</span> <span class="tag green">key bound</span></td><td><a class="btn sm ghost" href="Audit.dc.html">Egress</a></td></tr>
+            <tr><td><span class="mono">gemini</span><div class="muted small">configured, no key</div></td><td>gemini · key <span class="mono">gemini.key</span></td><td>context 1M</td><td><span class="tag amber">unavailable</span></td><td><button class="btn sm ghost" type="button">Set the secret…</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 18px; min-width: 0;">
+      <div class="panel">
+        <div class="panel-head"><span>Privacy and egress</span><span class="tag blue">cloud: redact</span></div>
+        <div class="panel-body" style="display: flex; flex-direction: column; gap: 8px;">
+          <div>Requests to cloud models are redacted before they leave: PII and any credential value. The extractor is bound, so cloud slots are available.</div>
+          <div class="kv"><span class="k">today</span><span>7 cloud requests · 11 values redacted · 0 refused</span></div>
+          <div class="kv"><span class="k">without Vault</span><span>cloud slots disappear; no key is ever read from the environment</span></div>
+          <a href="Audit.dc.html">Open the egress ledger</a>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><span>Decider</span><span class="tag green">Kev-0.8B, calibrated</span></div>
+        <div class="panel-body" style="display: flex; flex-direction: column; gap: 8px;">
+          <div class="kv"><span class="k">floors</span><span>catalogue 2026-10-21 · ingress p50 240 ms on cuda:0</span></div>
+          <div class="kv"><span class="k">second tier</span><span>kev-4b for gates below their floor, after the download finishes</span></div>
+          <div class="kv"><span class="k">fallback</span><span>the degraded tier (generator and embedder) for states over the hard stop</span></div>
+          <div class="kv"><span class="k">profile</span><span>full checkpoints (the CPU-only reduction is off)</span></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><span>Placement</span><span class="muted small">from the doctor's GPU section</span></div>
+        <div class="panel-body" style="display: flex; flex-direction: column; gap: 8px;">
+          <div class="kv"><span class="k">cuda:0</span><span>NVIDIA RTX 3090 · 24 GB · driver 580 · CUDA 13 runtime found</span></div>
+          <div class="kv"><span class="k">kev-0.8b</span><span>device cuda · fallback cpu, with a notice</span></div>
+          <div class="kv"><span class="k">qwen3.5-0.8b</span><span>device cuda · fallback cpu</span></div>
+          <div class="kv"><span class="k">cpu</span><span>16 threads for the fabric, 12 for ONNX intra-op</span></div>
+          <button class="btn sm" type="button" style="align-self: flex-start;">Edit placement…</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer class="statusbar">
+  <span><b>generator</b> qwen3.5-0.8b · cuda:0 · q0 · 180 ms</span>
+  <span><b>decider</b> Kev-0.8B, calibrated</span>
+  <span><b>downloads</b> kev-4b 42%</span>
+  <span class="seg" role="group" aria-label="Approval mode"><button type="button" aria-pressed="false">manual</button><button type="button" aria-pressed="true">smart</button><button type="button" aria-pressed="false">permissive</button></span>
+  <span><b>scheduler</b> here · 2 jobs</span>
+  <span>main</span>
+  <span style="margin-left: auto;">idle</span>
+</footer>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","default":"light","options":["light","dark"],"section":"Look"},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { theme: this.props.theme ?? 'light' };
+  }
+}
+</script>
+</body>
+</html>
