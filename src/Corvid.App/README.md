@@ -56,7 +56,9 @@ and `Alt+Right` move a focused escalation-ladder step (or drag it by its grip), 
 placement editor. `Ctrl+Shift+C` opens Review from anywhere; on Review `Up` and `Down` move through the file list. On
 Audit: `Up` and `Down` move between event rows, `Enter`
 and `Space` open the focused row, `Ctrl+F` puts the caret in the "path or tool" filter, and `Esc` first shows every
-event again after a detection's link narrowed the log, then closes the open event. The rest of the keyboard map
+event again after a detection's link narrowed the log, then closes the open event. On Jobs and MCP, `Up` and `Down`
+move between jobs or servers from a focused row and `Enter` opens it; on Jobs, MCP and Gateway, `Esc` closes an open
+question (remove, trust, forget, pair as owner, revoke), then the form or allowlist editor. The rest of the keyboard map
 (`docs/plan/ui.md` §6) comes with the screens it drives.
 
 ## The harness check
@@ -106,7 +108,9 @@ src/Corvid.App/
   Shell/                     ShellPage (the window's content), RailView, StatusBarView, AreaPages, IDockProvider,
                              EqualColumnsPanel
   Pages/                     one <Area>Page.xaml per area; SessionsDock and BoardDock are those areas' dock panels;
-                             ModelsStyles.xaml and SpanText are the Models and First run pages' shared parts
+                             ModelsStyles.xaml and SpanText are the Models and First run pages' shared parts;
+                             Jobs, MCP and Gateway also merge ModelsStyles.xaml, and share OpsStyles.xaml (row button,
+                             fields, pairing code) and OpsLayout (head, columns, tables, focus after a change)
   Infrastructure/            UiDispatcher (the core's IDispatcher), Ui (x:Bind helpers), AppLogging
 src/Corvid.App.Core/
   Mvvm/                      ObservableObject, RelayCommand(<T>), AsyncRelayCommand, Choice, IDispatcher, InlineDispatcher
