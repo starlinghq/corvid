@@ -34,15 +34,14 @@ public sealed partial class MemoryPage : Page
         foreach (var tab in Enum.GetValues<MemoryTabKind>())
             AddKey(VirtualKey.Number1 + (int)tab, VirtualKeyModifiers.Control, () => ViewModel?.Select(tab));
         Root.SizeChanged += (_, e) => ApplyWidth(e.NewSize.Width);
+        TabStrip.SizeChanged += (_, _) => ApplyWidth(Root.ActualWidth);
         // The window's first focus would otherwise land on the first card's Approve and draw its ring (Memory.png has
         // none); the page itself takes it, which draws nothing, and Tab goes on to the tabs from there.
+        IsTabStop = true;
         Loaded += (_, _) =>
         {
             if (XamlRoot is { } root && FocusManager.GetFocusedElement(root) is null or Button)
-            {
-                IsTabStop = true;
                 Focus(FocusState.Programmatic);
-            }
         };
     }
 
@@ -79,8 +78,12 @@ public sealed partial class MemoryPage : Page
         Body.ColumnSpacing = oneColumn ? 0 : 18;
         Grid.SetColumn(SideColumn, oneColumn ? 0 : 1);
         Grid.SetRow(SideColumn, oneColumn ? 1 : 0);
-        // The search keeps the mockup's 300 px until the head is narrower than that.
-        SearchBox.Width = Math.Min(300, Math.Max(160, width - 2 * gutter));
+        var inner = width - 2 * gutter;
+        MemoryLayout.Current.NarrowTable = (oneColumn ? inner : (inner - 18) / 2.4) < 400;
+        // The search is 300 px (Memory.png). It gives up to 80 px to stay on the title's line, as the narrow render's
+        // does; below that it takes a line of its own, never wider than the head.
+        var left = inner - PageTitle.ActualWidth - TabStrip.ActualWidth - 24;
+        SearchBox.Width = left >= 220 ? Math.Min(300, left) : Math.Min(300, Math.Max(160, inner));
     }
 
     // ---- keys ----

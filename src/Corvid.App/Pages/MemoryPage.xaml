@@ -355,9 +355,9 @@
     <DataTemplate x:Key="FactRow" x:DataType="memory:FactRowView">
       <Grid BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,1,0,0" AutomationProperties.Name="{x:Bind AutomationName}">
         <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="2.1*" />
-          <ColumnDefinition Width="1.1*" />
-          <ColumnDefinition Width="0.7*" />
+          <ColumnDefinition Width="{x:Bind local:MemoryLayout.Current.FactColumn, Mode=OneWay}" />
+          <ColumnDefinition Width="{x:Bind local:MemoryLayout.Current.ValidColumn, Mode=OneWay}" />
+          <ColumnDefinition Width="{x:Bind local:MemoryLayout.Current.RecordedColumn, Mode=OneWay}" />
         </Grid.ColumnDefinitions>
         <TextBlock Text="{x:Bind Text}" Style="{StaticResource MemCell}" Padding="10,7" Visibility="{x:Bind ui:Ui.VisibleIf(IsCurrent)}" />
         <Border Padding="10,7" Visibility="{x:Bind ui:Ui.VisibleIf(IsInvalidated)}">
@@ -421,20 +421,6 @@
         </StackPanel>
       </Border>
     </DataTemplate>
-
-    <!-- The facts table: head row, then the rows. -->
-    <DataTemplate x:Key="FactsHeader" x:DataType="x:String">
-      <Grid>
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="2.1*" />
-          <ColumnDefinition Width="1.1*" />
-          <ColumnDefinition Width="0.7*" />
-        </Grid.ColumnDefinitions>
-        <TextBlock Text="fact" Style="{StaticResource MemTh}" />
-        <TextBlock Grid.Column="1" Text="valid" Style="{StaticResource MemTh}" />
-        <TextBlock Grid.Column="2" Text="recorded" Style="{StaticResource MemTh}" />
-      </Grid>
-    </DataTemplate>
   </Page.Resources>
 
   <Grid x:Name="Root">
@@ -448,7 +434,7 @@
       <controls:WrapRowPanel Spacing="12" LineSpacing="8" PushLastRight="True" VerticalAlignment="Center">
         <TextBlock x:Name="PageTitle" Text="{x:Bind ViewModel.Title}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
                    AutomationProperties.HeadingLevel="Level1" />
-        <ItemsControl ItemsSource="{x:Bind ViewModel.Tabs}" IsTabStop="False" VerticalAlignment="Center" AutomationProperties.Name="Memory views">
+        <ItemsControl x:Name="TabStrip" ItemsSource="{x:Bind ViewModel.Tabs}" IsTabStop="False" VerticalAlignment="Center" AutomationProperties.Name="Memory views">
           <ItemsControl.ItemsPanel>
             <ItemsPanelTemplate>
               <controls:WrapRowPanel Spacing="2" LineSpacing="2" />
@@ -550,7 +536,7 @@
                   <TextBlock Text="bi-temporal" Style="{StaticResource MemHeadDetail}" />
                 </local:MemoryHeadPanel>
               </Border>
-              <ContentControl ContentTemplate="{StaticResource FactsHeader}" Content="fact" HorizontalContentAlignment="Stretch" IsTabStop="False" />
+              <local:MemoryFactsHead />
               <ItemsControl ItemsSource="{x:Bind ViewModel.RecentFacts}" ItemTemplate="{StaticResource FactRow}" IsTabStop="False"
                             AutomationProperties.Name="Recent facts" />
             </StackPanel>
@@ -570,7 +556,7 @@
             </Border>
             <controls:LinkButton Text="Clear the search" FontSize="12.5" Margin="14,8,14,0" Command="{x:Bind ViewModel.ClearSearchCommand}"
                                  Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsFiltered), Mode=OneWay}" HorizontalAlignment="Left" />
-            <ContentControl ContentTemplate="{StaticResource FactsHeader}" Content="fact" HorizontalContentAlignment="Stretch" IsTabStop="False" />
+            <local:MemoryFactsHead />
             <ItemsControl ItemsSource="{x:Bind ViewModel.Facts}" ItemTemplate="{StaticResource FactRow}" IsTabStop="False" AutomationProperties.Name="Facts" />
             <TextBlock Text="No fact matches. Try fewer words." Style="{StaticResource CorvidMutedText}" Margin="14,10"
                        Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasNoFacts), Mode=OneWay}" />
