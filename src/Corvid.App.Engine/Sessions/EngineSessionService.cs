@@ -197,8 +197,10 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 return;
             channel.Cancelling = true;
         }
+        // The turn's token first, so the pipeline records each open prompt as cancelled rather than denied; then the cards close.
         if (runtime.TryGetSession(sessionId, out var session))
             session.Cancel();
+        ClosePending(channel, "interrupted");
     }
 
     public Task AnswerQuestionAsync(string sessionId, string questionId, string answer, CancellationToken cancellationToken = default) =>
@@ -410,6 +412,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         bool interrupted;
         lock (channel.Gate)
             interrupted = channel.Cancelling;
+        // A prompt the turn left open (its cancellation raced the prompt's own) closes before the turn does.
+        ClosePending(channel, interrupted ? "interrupted" : "the turn ended");
         Publish(channel, translator =>
         {
             var ended = translator.EndTurn(outcome, _time.GetUtcNow(), elapsed, error ?? (interrupted && outcome == TurnOutcome.Cancelled ? "interrupted" : null));
@@ -688,7 +692,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             }
         }
         var open = runtime.TryGetSession(id, out var session);
-        return new SessionSummary(id, Line(title) ?? id)
+        // A session this window made holding no message yet (a fork before the first one) is new, not its id.
+        return new SessionSummary(id, Line(title) ?? (_created.ContainsKey(id) || _forks.ContainsKey(id) ? "New session" : id))
         {
             Workspace = runtime.Builtin.Environment.Workspace,
             Surface = SurfaceOf(id),

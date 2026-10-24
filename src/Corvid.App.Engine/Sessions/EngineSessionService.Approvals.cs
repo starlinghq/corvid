@@ -51,6 +51,26 @@ public sealed partial class EngineSessionService
         }
     }
 
+    /// <summary>
+    /// Closes the channel's open prompts as cancelled (an interrupt, or the turn ending around them): their cards close at
+    /// once, and the prompters still waiting deny. Nothing runs on a stale prompt.
+    /// </summary>
+    private void ClosePending(Channel channel, string reason)
+    {
+        PendingApproval[] open;
+        lock (channel.Gate)
+        {
+            open = [.. channel.Pending.Values];
+            channel.Pending.Clear();
+        }
+        if (open.Length == 0)
+            return;
+        var at = _time.GetUtcNow();
+        Publish(channel, _ => [.. open.Select(pending => new AppResolved(pending.Prompt.ApprovalId, ApprovalOutcome.Cancelled) { At = at, Reason = reason })]);
+        foreach (var pending in open)
+            pending.Answer.TrySetResult(null);
+    }
+
     /// <summary>The pipeline's answer for the card's, and the rules it writes; refuses what the prompt did not offer.</summary>
     private static (PipelineAnswer Reply, ImmutableArray<ApprovalRule> Written) Decide(PendingApproval pending, AppAnswer answer)
     {
@@ -138,12 +158,15 @@ public sealed partial class EngineSessionService
             using (cancellationToken.Register(() => pending.Answer.TrySetResult(null)))
                 answer = await pending.Answer.Task.ConfigureAwait(false);
 
-            bool interrupted;
+            bool interrupted, open;
             lock (channel.Gate)
             {
-                channel.Pending.Remove(prompt.ApprovalId);
+                open = channel.Pending.Remove(prompt.ApprovalId);
                 interrupted = channel.Cancelling;
             }
+            // Closed already (an interrupt, the turn's end): its card says so; deny.
+            if (!open && !service._disposed)
+                return PipelineAnswer.Deny();
             var at = service._time.GetUtcNow();
             if (answer is null)
             {
