@@ -17,7 +17,7 @@ pull request starlinghq/corvid#71.
 | A0.3 Sessions page: transcript, composer, approval card, dock, keyboard | done, flows F2, F3, F6 and F9 driven on the running app (§1.1) | `93d6c02` |
 | A0 verify loop | done: one independent verifier, one fix round (§1.1) | `60e90fd` |
 | A1 the seven other mocked screens: Review and Rewind, Board, Models and First run, Memory, Audit | done, verified on the running app by an independent verifier in two rounds (§1.2) | branch `a1/screens` |
-| A2 the pages without mockups, the palette, the rest of the keys | not started | |
+| A2 the pages without mockups (Skills, Jobs, MCP, Gateway, Safety, Secrets, Settings), the palette, the rest of the keys, the phone screens, an accessibility pass | done, verified on the running app in three rounds (§1.3) | branch `a2/screens` |
 | A3 `Corvid.App.Engine`: the real runtime behind the services | not started | |
 
 The build ran as a workflow in a cloud container: one agent per step, each building, launching the app on a virtual
@@ -147,6 +147,36 @@ Left:
 
 Each builder's own list of differences from its mockup is in the workflow run's report; the verifier judged them
 acceptable.
+
+### 1.3 The pages without mockups, the keys and the phone (A2)
+
+Built by `.claude/workflows/corvid-app-a2-reach.js`: four builders in parallel (Skills; Jobs, MCP and Gateway; Safety
+and Secrets; Settings with the command palette and the rest of `ui.md` §6's keys), an integrator, one agent for the
+phone layout and an accessibility pass, then an independent verifier with fix rounds. The builders had no mockups:
+each page follows `ui.md` §4 and the look of the mocked pages, and A1's review findings were written into their rules
+(SafeText on untrusted text, no leaks, capped lists, failures shown, the status bar lease, no writes in demo mode).
+Round 1 found three major defects (a Gateway allowlist that could grant a tool whose name hid characters; the Board's
+"Pair as owner" granting owner in one click; literal hidden characters in tests), round 2 three more (a status bar fix
+that hid the taint tag; the palette drawing two selected rows; job prompts and commands not revealed before Resume);
+all were fixed, and round 3 passed with nine minor defects. App.Core tests went from 327 to 580.
+
+Accessibility could not be checked with a screen reader here: Uno 6.7's X11 runtime has no AT-SPI support, so on
+Linux the app exposes no accessibility tree at all. The pass audited names, headings, tab order, keyboard reach, focus
+visibility and colour-only meaning in the XAML and the running app. Screen-reader checks need Windows or macOS.
+
+Left from the last round:
+
+- The bell counts every attention item (5) on every page; `Main.png` and `Phone.png` draw 3 (the mockups disagree among
+  themselves).
+- The Board's job link lands on Jobs without selecting the job; "Pair as owner…" from the tray opens Gateway without
+  opening the owner question.
+- Safety and Audit name the same detection differently (demo data).
+- Jobs' Pause and Remove… still show tooltips on keyboard focus over the detail panel.
+- The status bar's last item differs by page while a turn runs, and Secrets and Settings can keep Audit's.
+- Skills' filter box at 390 is 300 px and right-aligned instead of spanning the gutters.
+- At 390, wide tables (Jobs, Gateway's paired users, MCP's servers, Models) scroll sideways with no sign that they do.
+- A read-only job session still draws Aside, Rewind and Compact… enabled.
+- On the phone, non-session pages have two level-1 headings, and the turn strip shows only while there is a queue.
 
 ### What the running app shows today
 
