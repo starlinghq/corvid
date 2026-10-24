@@ -239,6 +239,48 @@ public sealed class PipelineTests
     }
 
     [Fact]
+    public async Task Remembered_rules_are_listed_with_their_scope_and_removed_K7()
+    {
+        using var db = new TempLog();
+        var path = Path.Combine(db.Root, "config", "corvid", "approvals.json");
+        var answers = new Queue<ApprovalAnswer>([ApprovalAnswer.Approve(ApprovalScope.Session), ApprovalAnswer.Approve(ApprovalScope.Always)]);
+        var pipeline = Fixtures.Pipeline(db, prompter: new ScriptedPrompter(_ => answers.Dequeue()), always: new JsonFileApprovalRuleStore(path));
+        var context = Fixtures.Context(ApprovalMode.Manual);
+        await pipeline.AuthorizeAsync(context, new ShellAction("git commit -m wip"), Ct);
+        await pipeline.AuthorizeAsync(context, new ShellAction("git push origin main"), Ct);
+
+        var (sessionId, sessionRules) = Assert.Single(pipeline.AllSessionRules);
+        Assert.Equal(Session, sessionId);
+        var sessionRule = Assert.Single(sessionRules);
+        Assert.Equal("commit", sessionRule.Subcommand);
+        var alwaysRule = Assert.Single(pipeline.AlwaysRules);
+        Assert.Equal("push", alwaysRule.Subcommand);
+
+        // Removed, each call asks again; removing twice changes nothing.
+        Assert.True(pipeline.RemoveSessionRule(Session, sessionRule));
+        Assert.False(pipeline.RemoveSessionRule(Session, sessionRule));
+        Assert.Empty(pipeline.AllSessionRules);
+        Assert.True(pipeline.RemoveAlwaysRule(alwaysRule));
+        Assert.False(pipeline.RemoveAlwaysRule(alwaysRule));
+        Assert.Empty(new JsonFileApprovalRuleStore(path).Rules);
+        Assert.Equal(ApprovalOutcome.Ask, (await pipeline.AssessAsync(context, new ShellAction("git commit -m again"), Ct)).Outcome);
+        Assert.Equal(ApprovalOutcome.Ask, (await pipeline.AssessAsync(context, new ShellAction("git push origin main"), Ct)).Outcome);
+    }
+
+    [Fact]
+    public void The_in_memory_store_removes_equal_rules_only()
+    {
+        var store = new InMemoryApprovalRuleStore();
+        var at = new DateTimeOffset(2026, 10, 24, 12, 0, 0, TimeSpan.Zero);
+        var a = new ApprovalRule(RuleDecision.Allow, "shell", "make", null, ActionEffects.None, false, ["/w"], [], "make", at);
+        var b = a with { Verb = "ninja", Source = "ninja" };
+        store.Add([a, b]);
+        Assert.True(store.Remove(a with { Paths = ["/w"] }));
+        Assert.Equal([b], store.Rules);
+        Assert.False(store.Remove(a));
+    }
+
+    [Fact]
     public void Rule_files_reject_unknown_fields_and_versions()
     {
         Assert.Throws<InvalidDataException>(() => JsonFileApprovalRuleStore.Parse("""{"format":"corvid-approval-rules","format_version":2,"rules":[]}"""));

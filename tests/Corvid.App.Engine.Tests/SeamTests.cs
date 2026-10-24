@@ -74,7 +74,8 @@ public sealed class SeamTests
 
         var sessions = Assert.IsType<EngineSessionService>(composition.SessionService);
         Assert.Empty(await sessions.ListAsync(TestContext.Current.CancellationToken));
-        Assert.Null(source.Inner.CreateMemoryStatus(composition));
+        // The runtime is up, so the Memory page's engine line is the runtime's.
+        Assert.StartsWith("fake-gen", source.Inner.CreateMemoryStatus(composition)!.Generator, StringComparison.Ordinal);
         // A3 history's areas are the engine's own.
         Assert.IsType<Corvid.App.Engine.Review.EngineReviewService>(composition.ReviewService);
         Assert.IsType<Corvid.App.Engine.Rewind.EngineRewindService>(composition.RewindService);
@@ -83,11 +84,14 @@ public sealed class SeamTests
         Assert.IsType<Corvid.App.Engine.Models.EngineModelService>(composition.ModelService);
         Assert.IsType<Corvid.App.Engine.FirstRun.EngineFirstRunService>(composition.FirstRunService);
         Assert.IsType<Corvid.App.Engine.Settings.EngineSettingsService>(composition.SettingsService);
+        // A3 knowledge's too.
+        Assert.IsType<Corvid.App.Engine.Memory.EngineMemoryService>(composition.MemoryService);
+        Assert.IsType<Corvid.App.Engine.Skills.EngineSkillsService>(composition.SkillsService);
+        Assert.IsType<Corvid.App.Engine.Safety.EngineSafetyService>(composition.SafetyService);
 
         // Every other area opens on a refusal that names the group that brings it.
         (object Service, string Group)[] areas =
         [
-            (composition.MemoryService, "knowledge"), (composition.SkillsService, "knowledge"), (composition.SafetyService, "knowledge"),
             (composition.JobsService, "ops"), (composition.McpService, "ops"), (composition.GatewayService, "ops"),
             (composition.SecretsService, "ops"), (composition.BoardService, "integration"), (composition.PromptHistory, "integration"),
         ];

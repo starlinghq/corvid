@@ -59,7 +59,17 @@ public sealed class DetectionEngine
 
     public RulePack Pack { get; }
 
-    public bool Enforce { get; }
+    private volatile bool _enforce;
+
+    /// <summary>
+    /// Whether enforce rules force an ask (<c>Detections:Enforce</c>). Settable while running so the user's switch takes
+    /// effect at once (the app's Safety page writes the setting too, for the next start); the next evaluation reads it.
+    /// </summary>
+    public bool Enforce
+    {
+        get => _enforce;
+        set => _enforce = value;
+    }
 
     public string PostureOf(DetectionRule rule) => Enforce ? rule.Posture : RulePosture.Detect;
 

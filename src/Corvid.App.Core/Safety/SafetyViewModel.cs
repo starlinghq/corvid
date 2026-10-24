@@ -480,7 +480,7 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
 
         var where = rule.Scope == RuleScope.Session && rule.SessionId is { } session
             ? $"from `{Spans.Escape(SafeText.Clean(session))}`"
-            : "from corvid.json";
+            : $"from {Spans.Escape(SafeText.Clean(rule.Origin ?? "corvid.json"))}";
         SetNotice(Spans.Parse($"Removed the {row.Scope} rule {row.Decision} {Spans.Escape(row.Plain)} {where}. The next such call asks again."), Tone.Green);
         await ReloadAsync(cancellationToken).ConfigureAwait(true);
     }

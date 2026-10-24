@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Corvid.Abstractions.Events;
@@ -61,6 +62,18 @@ public sealed record SkillStoreOptions
 
 /// <summary>What an import did, per skill.</summary>
 public sealed record ImportResult(ImmutableArray<string> Imported, ImmutableArray<SkillIssue> Refused, string? Revision);
+
+/// <summary>A skill folder an import would copy, as a dry run found it (<see cref="SkillStore.PreviewImportAsync"/>).</summary>
+/// <param name="Label">The folder relative to the source, as the import names it.</param>
+/// <param name="Name">The SKILL.md's name, or null when it could not be read.</param>
+/// <param name="Findings">The scanner's findings; any of them refuses the folder.</param>
+/// <param name="Problem">Why else the import would refuse it, or null.</param>
+/// <param name="Fingerprint">The folder's content hash, which the import checks again; empty when it could not be read.</param>
+public sealed record ImportPreview(string Label, string? Name, string Description, ImmutableArray<ScanFinding> Findings, string? Problem,
+    string Fingerprint)
+{
+    public bool Refused => !Findings.IsEmpty || Problem is not null;
+}
 
 /// <summary>
 /// The skills directory (plan §11): agentskills.io <c>SKILL.md</c> folders, found at any depth up to
@@ -229,6 +242,26 @@ public sealed class SkillStore : ISkillSource
         return revision;
     }
 
+    /// <summary>
+    /// Creates or updates a skill as the user: the person's own text (a reviewed draft they edited first). Authored
+    /// <c>user</c>, which keeps the learning loop and the curator off it from then on. A new skill's folder must not exist.
+    /// </summary>
+    /// <returns>The new revision, or null when the content was unchanged.</returns>
+    public async Task<string?> WriteUserSkillAsync(SkillDocument document, string? sessionId = null, string? message = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        var existing = TryGet(document.Name, out var skill) ? skill : null;
+        var folder = existing?.Folder ?? System.IO.Path.Combine(Root, document.Name);
+        if (existing is null && Directory.Exists(folder))
+            throw new SkillOwnershipException($"{Relative(folder)} already exists and is not a skill Corvid loaded; nothing is written into it.");
+        var revision = await Repository.CommitAsync(folder, SkillAuthor.User, message ?? $"{(existing is null ? "Add" : "Update")} skill {document.Name}",
+            _ => File.WriteAllTextAsync(System.IO.Path.Combine(EnsureFolder(folder), SkillDocument.FileName), document.Text, cancellationToken),
+            check: existing is null ? token => EnsureNewFolderAsync(folder, token) : null, cancellationToken).ConfigureAwait(false);
+        await AfterChangeAsync(document.Name, revision, SkillAuthor.User, sessionId, cancellationToken).ConfigureAwait(false);
+        return revision;
+    }
+
     /// <summary>Moves an agent-authored skill to <c>.archive/</c> (the curator's stale rule). Pinned skills are never archived.</summary>
     public async Task<string?> ArchiveAsync(string name, string? sessionId = null, CancellationToken cancellationToken = default)
     {
@@ -302,26 +335,39 @@ public sealed class SkillStore : ISkillSource
     /// special file, a nested repository, an unreadable SKILL.md, a scanner finding, a name already in use or too much
     /// content is refused and reported; the others are imported. Nothing is executed.
     /// </summary>
-    public async Task<ImportResult> ImportAsync(string source, SkillAuthor author, string? sessionId = null, CancellationToken cancellationToken = default)
+    public Task<ImportResult> ImportAsync(string source, SkillAuthor author, string? sessionId = null, CancellationToken cancellationToken = default) =>
+        ImportAsync(source, author, sessionId, null, cancellationToken);
+
+    /// <summary>
+    /// Imports only the skill folders a dry run (<see cref="PreviewImportAsync"/>) showed and the person picked:
+    /// <paramref name="selected"/> maps each picked folder's label to its fingerprint then. A picked folder whose content
+    /// changed since, or that is gone, is refused; a folder not picked is left alone. Null imports every folder, as
+    /// <see cref="ImportAsync(string, SkillAuthor, string?, CancellationToken)"/> does.
+    /// </summary>
+    public async Task<ImportResult> ImportAsync(string source, SkillAuthor author, string? sessionId, IReadOnlyDictionary<string, string>? selected,
+        CancellationToken cancellationToken)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(source);
         ArgumentNullException.ThrowIfNull(author);
         if (!author.IsHub)
             throw new ArgumentException("Imports are authored by a hub (hub:<source>); the user's own edits are recorded from disk.", nameof(author));
-        var root = System.IO.Path.GetFullPath(source);
-        if (!Directory.Exists(root) || new DirectoryInfo(root).LinkTarget is not null)
-            throw new ArgumentException($"{source} is not a directory.", nameof(source));
+        var root = ImportRoot(source);
         var imported = ImmutableArray.CreateBuilder<string>();
         var refused = ImmutableArray.CreateBuilder<SkillIssue>();
         var plan = new List<(string Source, string Target, SkillDocument Document, List<string> Files)>();
         var names = _snapshot.Skills.Keys.ToHashSet(StringComparer.Ordinal);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var folder in FindSkillFolders(root, _options.MaxDepth))
         {
             var relative = System.IO.Path.GetRelativePath(root, folder).Replace('\\', '/');
             var label = relative == "." ? System.IO.Path.GetFileName(root) : relative;
+            if (selected is not null && !selected.ContainsKey(label))
+                continue;
+            seen.Add(label);
             try
             {
                 var files = CheckImportFolder(folder);
+                if (selected is not null && Fingerprint(folder, files) != selected[label])
+                    throw new InvalidDataException("it changed since the dry run; run the dry run again");
                 var document = SkillDocument.Parse(await File.ReadAllTextAsync(System.IO.Path.Combine(folder, SkillDocument.FileName), cancellationToken).ConfigureAwait(false));
                 if (SkillScanner.ScanFolder(folder) is { IsEmpty: false } findings)
                     throw new InvalidDataException("the scanner flagged it: " + string.Join("; ",
@@ -339,6 +385,8 @@ public sealed class SkillStore : ISkillSource
                 refused.Add(new SkillIssue(label, exception.Message));
             }
         }
+        foreach (var gone in selected?.Keys.Where(label => !seen.Contains(label)) ?? [])
+            refused.Add(new SkillIssue(gone, "it is no longer in the folder; run the dry run again"));
         string? revision = null;
         if (plan.Count > 0)
         {
@@ -359,6 +407,73 @@ public sealed class SkillStore : ISkillSource
             await AfterChangeAsync("import:" + author.Name, revision, author, sessionId, cancellationToken).ConfigureAwait(false);
         }
         return new ImportResult(imported.ToImmutable(), refused.ToImmutable(), revision);
+    }
+
+    /// <summary>
+    /// A dry run of <see cref="ImportAsync(string, SkillAuthor, string?, CancellationToken)"/>: each skill folder found under
+    /// <paramref name="source"/>, with its name and description, the scanner's findings, why else it would be refused (a
+    /// link, a name in use, too much content), and its fingerprint for importing exactly what was shown. Nothing is copied.
+    /// </summary>
+    public async Task<ImmutableArray<ImportPreview>> PreviewImportAsync(string source, CancellationToken cancellationToken = default)
+    {
+        var root = ImportRoot(source);
+        var names = _snapshot.Skills.Keys.ToHashSet(StringComparer.Ordinal);
+        var previews = ImmutableArray.CreateBuilder<ImportPreview>();
+        foreach (var folder in FindSkillFolders(root, _options.MaxDepth))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var relative = System.IO.Path.GetRelativePath(root, folder).Replace('\\', '/');
+            var label = relative == "." ? System.IO.Path.GetFileName(root) : relative;
+            try
+            {
+                var files = CheckImportFolder(folder);
+                var fingerprint = Fingerprint(folder, files);
+                var findings = SkillScanner.ScanFolder(folder);
+                SkillDocument document;
+                try
+                {
+                    document = SkillDocument.Parse(await File.ReadAllTextAsync(System.IO.Path.Combine(folder, SkillDocument.FileName), cancellationToken).ConfigureAwait(false));
+                }
+                catch (SkillFormatException exception)
+                {
+                    previews.Add(new ImportPreview(label, null, "", findings, exception.Message, fingerprint));
+                    continue;
+                }
+                var targetRelative = relative == "." ? document.Name : relative;
+                var problem = !names.Add(document.Name) ? $"a skill named '{document.Name}' already exists"
+                    : Directory.Exists(System.IO.Path.Combine(Root, targetRelative)) || File.Exists(System.IO.Path.Combine(Root, targetRelative))
+                        ? $"{targetRelative} already exists in the skills directory"
+                        : null;
+                previews.Add(new ImportPreview(label, document.Name, document.Description, findings, problem, fingerprint));
+            }
+            catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException)
+            {
+                previews.Add(new ImportPreview(label, null, "", [], exception.Message, ""));
+            }
+        }
+        return previews.ToImmutable();
+    }
+
+    private static string ImportRoot(string source)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(source);
+        var root = System.IO.Path.GetFullPath(source);
+        if (!Directory.Exists(root) || new DirectoryInfo(root).LinkTarget is not null)
+            throw new ArgumentException($"{source} is not a directory.", nameof(source));
+        return root;
+    }
+
+    /// <summary>A folder's content as one hash: each file's relative path and bytes, in path order.</summary>
+    private static string Fingerprint(string folder, List<string> files)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (var file in files.Order(StringComparer.Ordinal))
+        {
+            hash.AppendData(System.Text.Encoding.UTF8.GetBytes(file + "\0"));
+            hash.AppendData(File.ReadAllBytes(System.IO.Path.Combine(folder, file)));
+            hash.AppendData([0]);
+        }
+        return Convert.ToHexStringLower(hash.GetHashAndReset());
     }
 
     private List<string> CheckImportFolder(string folder)

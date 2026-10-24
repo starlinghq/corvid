@@ -466,7 +466,8 @@ public static class CoreCommands
         var lines = new List<string>();
         var rows = new List<string[]>();
         int staged = 0, problems = 0;
-        foreach (var file in HermesMemory.Read(directory))
+        var scan = Knowledge.HermesMemoryImport.Scan(directory);
+        foreach (var file in scan.Files)
         {
             if (file.Problem is { } problem)
             {
@@ -476,13 +477,12 @@ public static class CoreCommands
                 continue;
             }
             int offered = 0, duplicates = 0, refused = 0, flagged = 0;
-            for (var i = 0; i < file.Entries.Length; i++)
+            foreach (var entry in scan.Entries.Where(entry => entry.File == file.File))
             {
-                var entry = file.Entries[i];
-                if (SkillScanner.Scan(file.File, entry) is { IsEmpty: false } findings)
+                if (entry.Flagged)
                 {
                     flagged++;
-                    lines.Add($"flagged {file.File} entry {i + 1}: {string.Join(", ", findings.Select(finding => finding.Rule).Distinct())}; not imported.");
+                    lines.Add($"flagged {file.File} entry {entry.Index}: {string.Join(", ", entry.Findings.Select(finding => finding.Rule).Distinct())}; not imported.");
                     continue;
                 }
                 if (dryRun)
@@ -492,7 +492,7 @@ public static class CoreCommands
                 }
                 try
                 {
-                    var result = await writer.StageImportAsync(context.Session.Id, entry, "import:hermes " + file.File, cancellationToken)
+                    var result = await Knowledge.HermesMemoryImport.StageAsync(writer, context.Session.Id, entry, cancellationToken)
                         .ConfigureAwait(false);
                     if (result.Status == MemoryImportStatus.Staged)
                         offered++;
@@ -502,7 +502,7 @@ public static class CoreCommands
                 catch (ArgumentException exception)
                 {
                     refused++;
-                    lines.Add($"refused {file.File} entry {i + 1}: {exception.Message}");
+                    lines.Add($"refused {file.File} entry {entry.Index}: {exception.Message}");
                 }
             }
             staged += offered;

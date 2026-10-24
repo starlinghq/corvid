@@ -324,11 +324,40 @@ public sealed class MemoryWriter
     /// </summary>
     /// <exception cref="InvalidOperationException">The write was already resolved, its target is no longer current, or the
     /// block changed or would exceed its budget; the write stays pending except in the first case.</exception>
-    public async Task<MemoryWriteResult> ApproveAsync(string pendingId, string? operation = null, string? targetFactId = null,
-        CancellationToken cancellationToken = default)
+    public Task<MemoryWriteResult> ApproveAsync(string pendingId, string? operation = null, string? targetFactId = null,
+        CancellationToken cancellationToken = default) =>
+        ApproveAsync(pendingId, operation, targetFactId, null, cancellationToken);
+
+    /// <summary>
+    /// Applies a staged write as reviewed and corrected (G-8): <paramref name="correctedText"/>, when given and different,
+    /// is written instead of what was staged: a fact's statement (its entities found again from the new text) or a block's
+    /// whole content. A correction is checked as a write is (no credential value; a block within its budget, at the revision
+    /// it was staged against) and recorded as the decision's outcome <c>corrected</c>.
+    /// </summary>
+    /// <exception cref="ArgumentException">The correction holds a credential value, or the extractor refused it (too long);
+    /// nothing was written and the write stays pending.</exception>
+    public async Task<MemoryWriteResult> ApproveAsync(string pendingId, string? operation, string? targetFactId, string? correctedText,
+        CancellationToken cancellationToken)
     {
         var pending = Open(pendingId);
         var proposal = pending.Proposal;
+        var staged = pending.Kind == PendingKind.Block ? proposal.Content : proposal.Text;
+        var corrected = correctedText is not null && !string.Equals(correctedText, staged, StringComparison.Ordinal);
+        if (corrected)
+        {
+            if (pending.Kind == PendingKind.Fact)
+                ArgumentException.ThrowIfNullOrWhiteSpace(correctedText, nameof(correctedText));
+            if (CredentialRefusal(correctedText!) is { } refused)
+                throw new ArgumentException("The correction " + refused + "; nothing was written.", nameof(correctedText));
+            if (pending.Kind == PendingKind.Block)
+                proposal = proposal with { Content = correctedText };
+            else
+            {
+                // The entities are the new statement's, so the fact graph links what the reviewer wrote, not what was staged.
+                var (entities, _) = await ContextAsync(correctedText!, default, cancellationToken);
+                proposal = proposal with { Text = correctedText, Entities = [.. entities.Select(ProposedEntity.From)], Relation = null };
+            }
+        }
         MemoryWriteResult result;
         string applied;
         if (pending.Kind == PendingKind.Block)
@@ -386,7 +415,7 @@ public sealed class MemoryWriter
         }
         if (pending.DecisionId is { } decisionId)
             _fabric.RecordOutcome(pending.SessionId, decisionId,
-                operation is not null && operation != proposal.Operation ? "corrected" : "approved", cancellationToken);
+                corrected || operation is not null && operation != proposal.Operation ? "corrected" : "approved", cancellationToken);
         return result;
     }
 

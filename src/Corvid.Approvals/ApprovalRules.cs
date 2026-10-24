@@ -135,6 +135,12 @@ public interface IApprovalRuleStore
     ImmutableArray<ApprovalRule> Rules { get; }
 
     void Add(IEnumerable<ApprovalRule> rules);
+
+    /// <summary>
+    /// Removes a remembered rule (K-7): every stored rule equal to <paramref name="rule"/>. Calls it allowed ask again from
+    /// the next one. False when no such rule is stored (already removed), which changes nothing.
+    /// </summary>
+    bool Remove(ApprovalRule rule);
 }
 
 public sealed class InMemoryApprovalRuleStore : IApprovalRuleStore
@@ -147,6 +153,19 @@ public sealed class InMemoryApprovalRuleStore : IApprovalRuleStore
     {
         ArgumentNullException.ThrowIfNull(rules);
         ImmutableInterlocked.Update(ref _rules, (current, added) => current.AddRange(added), rules.ToArray());
+    }
+
+    public bool Remove(ApprovalRule rule)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
+        var removed = false;
+        ImmutableInterlocked.Update(ref _rules, current =>
+        {
+            var kept = current.RemoveAll(stored => stored.Equals(rule));
+            removed = kept.Length != current.Length;
+            return kept;
+        });
+        return removed;
     }
 }
 
@@ -185,13 +204,32 @@ public sealed class JsonFileApprovalRuleStore : IApprovalRuleStore
         ArgumentNullException.ThrowIfNull(rules);
         lock (_gate)
         {
-            var updated = _rules.AddRange(rules);
-            Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-            var temporary = _path + ".tmp";
-            File.WriteAllText(temporary, Serialize(updated));
-            File.Move(temporary, _path, overwrite: true);
-            _rules = updated;
+            Write(_rules.AddRange(rules));
         }
+    }
+
+    /// <summary>Removes the rule and rewrites the file atomically; a rule not in the file leaves it untouched.</summary>
+    public bool Remove(ApprovalRule rule)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
+        lock (_gate)
+        {
+            var kept = _rules.RemoveAll(stored => stored.Equals(rule));
+            if (kept.Length == _rules.Length)
+                return false;
+            Write(kept);
+            return true;
+        }
+    }
+
+    // Under the gate: the file first, then the list, so a failed write leaves both as they were.
+    private void Write(ImmutableArray<ApprovalRule> updated)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
+        var temporary = _path + ".tmp";
+        File.WriteAllText(temporary, Serialize(updated));
+        File.Move(temporary, _path, overwrite: true);
+        _rules = updated;
     }
 
     public static string Serialize(IEnumerable<ApprovalRule> rules) => JsonSerializer.Serialize(

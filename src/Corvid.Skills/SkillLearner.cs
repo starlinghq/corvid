@@ -263,7 +263,42 @@ public sealed class SkillLearner : ISkillLearning
         return revision;
     }
 
-    public void Reject(string pendingId, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Applies a staged draft the user edited first: <paramref name="editedContent"/> is written instead of the draft, as the
+    /// user's (the person's text, which the loop and the curator then leave alone), and the <c>skill_write_safe</c> decision
+    /// records <c>corrected</c>. The edit must still name the draft's skill and pass the scanner. Content equal to the draft's
+    /// is a plain <see cref="ApproveAsync(string, string?, CancellationToken)"/>.
+    /// </summary>
+    /// <exception cref="SkillFormatException">The edit is not a valid SKILL.md.</exception>
+    /// <exception cref="ArgumentException">The draft is not waiting, the edit names another skill, or the scanner flags it.</exception>
+    public async Task<string?> ApproveAsync(string pendingId, string? sessionId, string? editedContent, CancellationToken cancellationToken)
+    {
+        var pending = _database.FindPending(pendingId) is { Status: PendingSkillStatus.Pending } found ? found
+            : throw new ArgumentException($"No draft '{pendingId}' is waiting for review.", nameof(pendingId));
+        if (editedContent is null || string.Equals(editedContent, pending.Content, StringComparison.Ordinal))
+            return await ApproveAsync(pendingId, sessionId, cancellationToken).ConfigureAwait(false);
+        var edited = SkillDocument.Parse(editedContent);
+        if (!string.Equals(edited.Name, pending.Skill, StringComparison.Ordinal))
+            throw new ArgumentException($"The edited SKILL.md names '{edited.Name}', not {pending.Skill}, the skill this draft writes.", nameof(editedContent));
+        if (SkillScanner.Scan(SkillDocument.FileName, editedContent) is { IsEmpty: false } findings)
+            throw new ArgumentException("The scanner flagged the edit: " + string.Join("; ",
+                findings.Take(5).Select(finding => $"line {finding.Line} {finding.Rule}")) + ".", nameof(editedContent));
+        var revision = await _store.WriteUserSkillAsync(edited, sessionId ?? pending.SessionId,
+            "Add skill " + edited.Name + " (a draft the user edited and approved)", cancellationToken).ConfigureAwait(false);
+        if (!_database.Resolve(pendingId, PendingSkillStatus.Approved))
+            throw new InvalidOperationException($"'{pendingId}' was resolved meanwhile.");
+        _fabric.RecordOutcome(pending.SessionId, pending.DecisionId, "corrected", cancellationToken);
+        RecordReview(pending, SkillApproved, cancellationToken);
+        if (pending.OpportunityId is { } opportunity)
+            _database.SetState(opportunity, OpportunityState.Applied, "approved by the user with edits");
+        await RunEvalsAsync(edited.Name, cancellationToken).ConfigureAwait(false);
+        return revision;
+    }
+
+    public void Reject(string pendingId, CancellationToken cancellationToken = default) => Reject(pendingId, null, cancellationToken);
+
+    /// <summary>Rejects a staged draft; <paramref name="reason"/>, when given, is recorded on the opportunity it came from.</summary>
+    public void Reject(string pendingId, string? reason, CancellationToken cancellationToken)
     {
         var pending = _database.FindPending(pendingId) is { Status: PendingSkillStatus.Pending } found ? found
             : throw new ArgumentException($"No draft '{pendingId}' is waiting for review.", nameof(pendingId));
@@ -272,7 +307,8 @@ public sealed class SkillLearner : ISkillLearning
         _fabric.RecordOutcome(pending.SessionId, pending.DecisionId, "rejected", cancellationToken);
         RecordReview(pending, SkillRejected, cancellationToken);
         if (pending.OpportunityId is { } opportunity)
-            _database.SetState(opportunity, OpportunityState.Failed, "rejected by the user");
+            _database.SetState(opportunity, OpportunityState.Failed,
+                string.IsNullOrWhiteSpace(reason) ? "rejected by the user" : "rejected by the user: " + reason.Trim());
     }
 
     /// <summary>The outcome a review records on the egress decisions that queued the draft (C-026).</summary>

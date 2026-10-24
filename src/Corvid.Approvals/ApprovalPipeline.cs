@@ -217,6 +217,32 @@ public sealed class ApprovalPipeline
 
     public ImmutableArray<ApprovalRule> AlwaysRules => _always.Rules;
 
+    /// <summary>Every session that holds remembered rules, with its rules (K-7's listing), ordered by session id.</summary>
+    public ImmutableArray<(string SessionId, ImmutableArray<ApprovalRule> Rules)> AllSessionRules =>
+        [.. _session.Where(pair => !pair.Value.IsEmpty).OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => (pair.Key, pair.Value))];
+
+    /// <summary>
+    /// Removes a session's remembered rule (K-7): the next matching call in that session asks again. False when the session
+    /// holds no such rule (already removed), which changes nothing.
+    /// </summary>
+    public bool RemoveSessionRule(string sessionId, ApprovalRule rule)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentNullException.ThrowIfNull(rule);
+        while (_session.TryGetValue(sessionId, out var current))
+        {
+            var kept = current.RemoveAll(stored => stored.Equals(rule));
+            if (kept.Length == current.Length)
+                return false;
+            if (_session.TryUpdate(sessionId, kept, current))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>Removes an "always" rule from the rule store (K-7). False when the store holds no such rule.</summary>
+    public bool RemoveAlwaysRule(ApprovalRule rule) => _always.Remove(rule);
+
     /// <summary>Parses and describes an action without deciding anything.</summary>
     public ActionAnalysis Analyze(ProposedAction action) => Resolve(action) switch
     {

@@ -30,6 +30,15 @@ public sealed class EpisodicIndex
 
     public static string ItemIdOf(Guid eventId) => "event:" + eventId.ToString("D");
 
+    /// <summary>How many episodes are indexed, across every session.</summary>
+    public int Count()
+    {
+        using var connection = _database.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT count(*) FROM episodes;";
+        return Convert.ToInt32(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
     /// <summary>The last sequence indexed for a session, 0 when none.</summary>
     public long IndexedThrough(string sessionId)
     {
