@@ -39,6 +39,10 @@ public interface IMemoryService
     /// <summary>Lists what an import would stage, and what the scanner refuses; nothing is staged.</summary>
     Task<IReadOnlyList<ImportEntry>> DryRunImportAsync(CancellationToken cancellationToken);
 
-    /// <summary>Stages the entries the scanner passed as proposals for review (never writes) and returns them.</summary>
-    Task<IReadOnlyList<StagedFact>> ImportForReviewAsync(CancellationToken cancellationToken);
+    /// <summary>
+    /// Stages the dry run's entries named by <paramref name=entryIds/> (<see cref="ImportEntry.Id"/>) that the scanner
+    /// passed, as proposals for review (never writes), and returns them. An id the source no longer has (it changed after
+    /// the dry run) or one already staged stages nothing: what is staged is what the person saw.
+    /// </summary>
+    Task<IReadOnlyList<StagedFact>> ImportForReviewAsync(IReadOnlyList<string> entryIds, CancellationToken cancellationToken);
 }

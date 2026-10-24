@@ -73,6 +73,7 @@ public sealed partial class MemoryPage : Page
         // The phone's top bar names the page already.
         PageTitle.Visibility = phone ? Visibility.Collapsed : Visibility.Visible;
         Body.Padding = new Thickness(gutter, 18, gutter, 18);
+        Notices.Padding = new Thickness(gutter, 14, gutter, 0);
         Head.Padding = new Thickness(gutter, 12, gutter, 12);
         LeftColumn.Width = new GridLength(oneColumn ? 1 : 1.4, GridUnitType.Star);
         RightColumn.Width = oneColumn ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
@@ -176,26 +177,44 @@ public sealed partial class MemoryPage : Page
         command.Execute(null);
     }
 
-    /// <summary>An editor takes the caret when its card opens it (Correct…, a consolidation, Reject with a reason…).</summary>
+    /// <summary>
+    /// An editor takes the caret when its card opens it (Correct…, a consolidation, Reject with a reason…). The card
+    /// outlives its editor (the view model keeps it while the page comes and goes), so the hook is kept on the editor's
+    /// <c>Tag</c> and taken off when the editor unloads; collapsing it on Undo does not unload it.
+    /// </summary>
     private void OnEditorLoaded(object sender, RoutedEventArgs e)
     {
         var box = (TextBox)sender;
-        if (box.Tag is not null || box.DataContext is not INotifyPropertyChanged source)
+        if (box.Tag is EditorHook || box.DataContext is not INotifyPropertyChanged source)
             return;
-        box.Tag = source;
-        source.PropertyChanged += (_, args) =>
+        var dispatcher = DispatcherQueue;
+        PropertyChangedEventHandler handler = (_, args) =>
         {
             if (args.PropertyName is null || !EditorModes.Contains(args.PropertyName))
                 return;
-            DispatcherQueue.TryEnqueue(() =>
+            dispatcher.TryEnqueue(() =>
             {
-                if (!IsOpen(source))
+                if (!IsOpen(source) || !box.IsLoaded)
                     return;
                 box.Focus(FocusState.Programmatic);
                 box.SelectionStart = box.Text.Length;
             });
         };
+        source.PropertyChanged += handler;
+        box.Tag = new EditorHook(source, handler);
     }
+
+    private void OnEditorUnloaded(object sender, RoutedEventArgs e)
+    {
+        var box = (TextBox)sender;
+        if (box.Tag is not EditorHook hook)
+            return;
+        hook.Source.PropertyChanged -= hook.Handler;
+        box.Tag = null;
+    }
+
+    /// <summary>What an editor subscribed to on its card, so it can let go.</summary>
+    private sealed record EditorHook(INotifyPropertyChanged Source, PropertyChangedEventHandler Handler);
 
     private static bool IsOpen(object source) => source switch
     {

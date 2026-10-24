@@ -14,7 +14,7 @@ public enum MemorySpanStyle
 }
 
 /// <summary>
-/// A span of text in one style, for the lines that mix them ("<b>Mark</b> prefers <b>CI failures…</b>", a fact with a
+/// A span of text in one style, for the lines that mix them ("<b>The user</b> prefers <b>CI failures…</b>", a fact with a
 /// path in monospace and its date muted and small). The page draws a list of spans as runs in one wrapping text block.
 /// </summary>
 public sealed record MemorySpan(string Text, MemorySpanStyle Style = MemorySpanStyle.None)
@@ -81,11 +81,48 @@ public static class MemoryText
         return fact.ValidUntil is { } until ? $"{Date(fact.ValidFrom)} to {Date(until)}" : $"from {Date(fact.ValidFrom)}";
     }
 
-    /// <summary>Text with its <c>`code`</c> marks removed, for places that draw it in one font.</summary>
-    public static string Plain(string text) => (text ?? "").Replace("`", "", StringComparison.Ordinal);
+    /// <summary>
+    /// Text with its <c>`code`</c> marks removed, for places that draw it in one font, with every hidden character shown
+    /// (<see cref="SafeText.Reveal"/>): the approval surfaces, where what is shown must be what is written.
+    /// </summary>
+    public static string Plain(string text) => SafeText.Reveal(Unmarked(text), keepJoiners: true);
 
-    /// <summary>Splits text at <c>`code`</c> marks into plain spans in <paramref name="style"/> and code spans.</summary>
-    public static IReadOnlyList<MemorySpan> Spans(string text, MemorySpanStyle style = MemorySpanStyle.None)
+    /// <summary>Text with its <c>`code`</c> marks and hidden characters removed (<see cref="SafeText.Clean"/>): display only.</summary>
+    public static string CleanPlain(string text) => SafeText.Clean(Unmarked(text));
+
+    /// <summary>
+    /// Whether the text holds a character a reader cannot see (a bidirectional override, a zero-width or tag character, a
+    /// control): what <see cref="SafeText.Reveal"/> would mark. The joiners and variation selectors are not counted, as
+    /// <see cref="Plain"/> leaves them, so Persian and emoji stay writable. Approving such text is refused until it is
+    /// corrected: memory is injected into later prompts, so it must hold only what the person saw.
+    /// </summary>
+    public static bool HasHidden(string? text) =>
+        !string.IsNullOrEmpty(text) && !string.Equals(SafeText.Reveal(text, keepJoiners: true), text, StringComparison.Ordinal);
+
+    /// <summary>
+    /// The text an editor opens with: as it is, or, when it hides characters, with each one shown as its code (⟨U+202E⟩),
+    /// so the person sees it and deletes it rather than approving it unseen.
+    /// </summary>
+    public static string Editable(string text) => HasHidden(text) ? SafeText.Reveal(text, keepJoiners: true) : text ?? "";
+
+    /// <summary>"⟨U+202E⟩": what <see cref="SafeText.Reveal"/> writes for a hidden character, left in an editor until deleted.</summary>
+    public static bool HasRevealedMarks(string? text) => text is not null && text.Contains("⟨U+", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Splits text at <c>`code`</c> marks into plain spans in <paramref name="style"/> and code spans, then shows the hidden
+    /// characters of each piece (<see cref="SafeText.Reveal"/>): for text a person approves. The marks are found first, so
+    /// a revealed code never splits a span.
+    /// </summary>
+    public static IReadOnlyList<MemorySpan> Spans(string text, MemorySpanStyle style = MemorySpanStyle.None) =>
+        Split(text, style, piece => SafeText.Reveal(piece, keepJoiners: true));
+
+    /// <summary>As <see cref="Spans"/>, with the hidden characters removed instead (<see cref="SafeText.Clean"/>): display only.</summary>
+    public static IReadOnlyList<MemorySpan> CleanSpans(string text, MemorySpanStyle style = MemorySpanStyle.None) =>
+        Split(text, style, SafeText.Clean);
+
+    private static string Unmarked(string text) => (text ?? "").Replace("`", "", StringComparison.Ordinal);
+
+    private static List<MemorySpan> Split(string text, MemorySpanStyle style, Func<string, string> shown)
     {
         var spans = new List<MemorySpan>();
         var parts = (text ?? "").Split('`');
@@ -95,7 +132,9 @@ public static class MemoryText
                 continue;
             // Odd parts sit between a pair of marks; an unpaired mark leaves the rest plain.
             var code = i % 2 == 1 && i < parts.Length - 1;
-            spans.Add(new MemorySpan(parts[i], code ? style | MemorySpanStyle.Code : style));
+            var piece = shown(parts[i]);
+            if (piece.Length > 0)
+                spans.Add(new MemorySpan(piece, code ? style | MemorySpanStyle.Code : style));
         }
 
         return spans;

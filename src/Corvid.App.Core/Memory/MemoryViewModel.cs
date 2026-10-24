@@ -47,6 +47,7 @@ public sealed class MemoryViewModel : AreaViewModel
     private ImportSource? _import;
     private bool _hasPreview;
     private string _loadError = "";
+    private int _searches;
     private readonly RelayCommand _openReview;
 
     public MemoryViewModel(IMemoryService service, TimeProvider time, ShellViewModel? shell = null, StatusBarViewModel? statusBar = null,
@@ -74,8 +75,10 @@ public sealed class MemoryViewModel : AreaViewModel
         ClearSearchCommand = new AsyncRelayCommand(ct => { SearchText = ""; return SearchAsync(ct); });
         EditBlocksCommand = new RelayCommand(() => Select(MemoryTabKind.CoreBlocks));
         DryRunCommand = new AsyncRelayCommand(DryRunAsync);
-        ImportForReviewCommand = new AsyncRelayCommand(ct => HasPreview ? StageImportAsync(ct) : DryRunAsync(ct));
-        StageImportCommand = new AsyncRelayCommand(StageImportAsync, () => ImportEntries.Any(e => !e.IsRefused));
+        ImportForReviewCommand = new AsyncRelayCommand(ct => !HasPreview ? DryRunAsync(ct)
+            : PassedCount > 0 ? StageImportAsync(ct)
+            : NothingToStage());
+        StageImportCommand = new AsyncRelayCommand(StageImportAsync, () => PassedCount > 0);
         CancelImportCommand = new RelayCommand(() => { ImportEntries.Clear(); HasPreview = false; });
         DismissOutcomeCommand = new RelayCommand(() => SetOutcome("", Tone.Grey));
         if (_shell is not null)
@@ -85,8 +88,11 @@ public sealed class MemoryViewModel : AreaViewModel
                 ApplyStatus();
         }
 
-        _ = LoadAsync(CancellationToken.None);
+        Loaded = LoadAsync(CancellationToken.None);
     }
+
+    /// <summary>Completes when the first load has (a failure lands in <see cref="LoadError"/>); tests await it.</summary>
+    public Task Loaded { get; }
 
     public string IntroText => Intro;
 
@@ -152,6 +158,9 @@ public sealed class MemoryViewModel : AreaViewModel
 
     public bool HasLoadError => _loadError.Length > 0;
 
+    /// <summary>The strip under the page head shows: an outcome, a failure or a failed load.</summary>
+    public bool HasNotice => HasOutcome || HasLoadError;
+
     // ---- blocks, facts, lessons ----
 
     public ObservableCollection<CoreBlockView> CoreBlocks { get; } = [];
@@ -205,18 +214,24 @@ public sealed class MemoryViewModel : AreaViewModel
         }
     }
 
-    /// <summary>"Dry run: 3 would be staged, 2 refused. Nothing is staged yet."</summary>
+    /// <summary>"Dry run: 3 would be staged, 2 refused. Nothing is staged yet.", or that every entry was refused.</summary>
     public string PreviewSummary
     {
         get
         {
-            var passed = ImportEntries.Count(e => !e.IsRefused);
+            var passed = PassedCount;
             var refused = ImportEntries.Count - passed;
-            return $"Dry run: {passed} would be staged, {refused} refused. Nothing is staged yet.";
+            if (ImportEntries.Count == 0)
+                return "Dry run: the source holds no entries. Nothing can be staged.";
+            return passed == 0
+                ? $"Dry run: the scanner refused {(refused == 1 ? "the one entry" : $"all {refused} entries")}. Nothing can be staged."
+                : $"Dry run: {passed} would be staged, {refused} refused. Nothing is staged yet.";
         }
     }
 
-    public string StageLabel => $"Stage {ImportEntries.Count(e => !e.IsRefused)} for review";
+    public string StageLabel => PassedCount == 0 ? "Nothing to stage" : $"Stage {PassedCount} for review";
+
+    private int PassedCount => ImportEntries.Count(e => !e.IsRefused);
 
     // ---- commands ----
 
@@ -237,7 +252,7 @@ public sealed class MemoryViewModel : AreaViewModel
 
     public RelayCommand DismissOutcomeCommand { get; }
 
-    /// <summary>Reads the store again and redraws the page.</summary>
+    /// <summary>Reads the store again and redraws the page; a failure shows in <see cref="LoadError"/>.</summary>
     public async Task LoadAsync(CancellationToken cancellationToken)
     {
         MemorySnapshot snapshot;
@@ -247,12 +262,11 @@ public sealed class MemoryViewModel : AreaViewModel
         }
         catch (Exception exception) when (exception is not OperationCanceledException and not OutOfMemoryException)
         {
-            _loadError = "Could not read memory: " + exception.Message;
-            OnPropertyChanged(nameof(LoadError));
-            OnPropertyChanged(nameof(HasLoadError));
+            SetLoadError("Could not read memory: " + SafeText.Clean(exception.Message));
             return;
         }
 
+        SetLoadError("");
         var zone = _time.LocalTimeZone;
         _facts.Clear();
         _facts.AddRange(snapshot.Facts);
@@ -264,7 +278,7 @@ public sealed class MemoryViewModel : AreaViewModel
         Reset(CoreBlocks, snapshot.Blocks.Select(BlockView));
         _import = snapshot.Import;
         _stats = snapshot.Stats;
-        RefreshFacts();
+        await RefreshFactsAsync(cancellationToken).ConfigureAwait(true);
         RefreshLessons();
         OnPropertyChanged(nameof(ImportTitle));
         OnPropertyChanged(nameof(ImportPath));
@@ -287,71 +301,126 @@ public sealed class MemoryViewModel : AreaViewModel
         OnPropertyChanged(nameof(ShowsSidePanels));
     }
 
-    // ---- actions the cards call ----
+    // ---- actions the cards call; a failure shows as the outcome, in red, and the card stays ----
 
     internal async Task ApproveFactAsync(StagedFactView fact, CancellationToken cancellationToken)
     {
         var operation = fact.Operation;
         var text = fact.TextToWrite;
         var corrected = fact.IsCorrected;
-        var write = await _service.ApproveFactAsync(fact.Id, operation, text, fact.Target?.Fact.FactId, cancellationToken).ConfigureAwait(true);
+        FactWrite write;
+        try
+        {
+            write = await _service.ApproveFactAsync(fact.Id, operation, text, fact.Target?.Fact.FactId, cancellationToken).ConfigureAwait(true);
+        }
+        catch (Exception exception) when (Failed(exception))
+        {
+            Fail($"Could not write “{MemoryText.CleanPlain(text)}”", exception);
+            return;
+        }
+
         StagedFacts.Remove(fact);
         if (write.Closed is { } closed)
+        {
             Replace(closed);
+            // The closed fact no longer holds: no other card may offer it, nor close it again.
+            foreach (var other in StagedFacts)
+                other.Forget(closed.Id);
+        }
+
         if (write.Written is { } written)
         {
             _facts.Insert(0, written);
             _stats = _stats with { Facts = _stats.Facts + 1 };
         }
 
-        RefreshFacts();
-        var plain = MemoryText.Plain(text);
+        var plain = MemoryText.CleanPlain(text);
         var how = corrected ? "Corrected and written" : "Written";
         SetOutcome(operation switch
         {
-            MemoryOperation.Update when write.Closed is { } c => $"{how} as an update: “{plain}”. It replaces “{MemoryText.Plain(c.Text)}”, kept as history.",
-            MemoryOperation.Invalidate when write.Closed is { } c => $"Invalidated “{MemoryText.Plain(c.Text)}” from today.",
+            MemoryOperation.Update when write.Closed is { } c => $"{how} as an update: “{plain}”. It replaces “{MemoryText.CleanPlain(c.Text)}”, kept as history.",
+            MemoryOperation.Invalidate when write.Closed is { } c => $"Invalidated “{MemoryText.CleanPlain(c.Text)}” from today.",
             MemoryOperation.Noop => $"Nothing written for “{plain}”; the proposal is cleared.",
             _ => $"{how}: “{plain}”.",
         }, Tone.Green);
         QueueChanged();
+        await RefreshFactsAsync(cancellationToken).ConfigureAwait(true);
     }
 
     internal async Task RejectFactAsync(StagedFactView fact, CancellationToken cancellationToken)
     {
-        await _service.RejectAsync(fact.Id, "rejected in review", cancellationToken).ConfigureAwait(true);
+        try
+        {
+            await _service.RejectAsync(fact.Id, "rejected in review", cancellationToken).ConfigureAwait(true);
+        }
+        catch (Exception exception) when (Failed(exception))
+        {
+            Fail($"Could not reject “{MemoryText.CleanPlain(fact.Fact.Text)}”", exception);
+            return;
+        }
+
         StagedFacts.Remove(fact);
-        SetOutcome($"Rejected “{MemoryText.Plain(fact.Fact.Text)}”; the reason is recorded with the proposal.", Tone.Grey);
+        SetOutcome($"Rejected “{MemoryText.CleanPlain(fact.Fact.Text)}”; the reason is recorded with the proposal.", Tone.Grey);
         QueueChanged();
     }
 
     internal async Task ApproveBlockAsync(BlockUpdateView update, CancellationToken cancellationToken)
     {
         var replaces = update.IsConsolidated;
-        var text = update.IsEditing ? update.EditText : update.Added;
-        var block = await _service.ApproveBlockUpdateAsync(update.Id, text, replaces, cancellationToken).ConfigureAwait(true);
+        var text = update.TextToWrite;
+        CoreBlock block;
+        try
+        {
+            block = await _service.ApproveBlockUpdateAsync(update.Id, text, replaces, cancellationToken).ConfigureAwait(true);
+        }
+        catch (Exception exception) when (Failed(exception))
+        {
+            Fail($"Could not write the {SafeText.Clean(update.Update.Block)} block", exception);
+            return;
+        }
+
         BlockUpdates.Remove(update);
-        var index = CoreBlocks.ToList().FindIndex(b => b.Name == block.Name);
+        var index = CoreBlocks.ToList().FindIndex(b => b.Block.Name == block.Name);
         var view = BlockView(block);
         if (index >= 0)
             CoreBlocks[index] = view;
         else
             CoreBlocks.Add(view);
-        SetOutcome($"Wrote the {block.Name} block{(replaces ? ", consolidated" : "")}: {view.CountText} tokens, revision {block.Revision}.", Tone.Green);
+        SetOutcome($"Wrote the {SafeText.Clean(block.Name)} block{(replaces ? ", consolidated" : "")}: {view.CountText} tokens, revision {block.Revision}.", Tone.Green);
+        await RestageBlockUpdatesAsync(block.Name, cancellationToken).ConfigureAwait(true);
         QueueChanged();
     }
 
     internal async Task RejectBlockAsync(BlockUpdateView update, CancellationToken cancellationToken)
     {
-        await _service.RejectAsync(update.Id, "rejected in review", cancellationToken).ConfigureAwait(true);
+        try
+        {
+            await _service.RejectAsync(update.Id, "rejected in review", cancellationToken).ConfigureAwait(true);
+        }
+        catch (Exception exception) when (Failed(exception))
+        {
+            Fail($"Could not reject the {SafeText.Clean(update.Update.Block)} block update", exception);
+            return;
+        }
+
         BlockUpdates.Remove(update);
-        SetOutcome($"Rejected the {update.Update.Block} block update; the block stays as it was.", Tone.Grey);
+        SetOutcome($"Rejected the {SafeText.Clean(update.Update.Block)} block update; the block stays as it was.", Tone.Grey);
         QueueChanged();
     }
 
     internal async Task ConsolidateAsync(BlockUpdateView update, CancellationToken cancellationToken)
     {
-        var consolidation = await _service.ConsolidateAsync(update.Id, cancellationToken).ConfigureAwait(true);
+        BlockConsolidation consolidation;
+        try
+        {
+            consolidation = await _service.ConsolidateAsync(update.Id, cancellationToken).ConfigureAwait(true);
+        }
+        catch (Exception exception) when (Failed(exception))
+        {
+            Fail($"Could not consolidate the {SafeText.Clean(update.Update.Block)} block", exception);
+            return;
+        }
+
         update.ShowConsolidation(consolidation);
     }
 
@@ -359,7 +428,17 @@ public sealed class MemoryViewModel : AreaViewModel
 
     internal async Task ApproveLessonAsync(LessonCandidateView lesson, string? supersedesId, CancellationToken cancellationToken)
     {
-        var approved = await _service.ApproveLessonAsync(lesson.Id, supersedesId, cancellationToken).ConfigureAwait(true);
+        Lesson approved;
+        try
+        {
+            approved = await _service.ApproveLessonAsync(lesson.Id, supersedesId, cancellationToken).ConfigureAwait(true);
+        }
+        catch (Exception exception) when (Failed(exception))
+        {
+            Fail($"Could not approve the lesson “{MemoryText.CleanPlain(lesson.Lesson.Rule)}”", exception);
+            return;
+        }
+
         LessonCandidates.Remove(lesson);
         string? replaced = null;
         if (supersedesId is not null)
@@ -374,17 +453,30 @@ public sealed class MemoryViewModel : AreaViewModel
 
         _lessons.Insert(0, approved);
         RefreshLessons();
+        // What the others could supersede changed: the replaced lesson leaves, the approved one joins.
+        foreach (var other in LessonCandidates)
+            other.Refresh(_lessons);
+        var project = SafeText.Clean(approved.Project);
         SetOutcome(replaced is null
-            ? $"Lesson approved for project {approved.Project}: “{approved.Rule}”"
-            : $"Lesson approved for project {approved.Project}; it supersedes “{MemoryText.Plain(replaced)}”.", Tone.Green);
+            ? $"Lesson approved for project {project}: “{MemoryText.CleanPlain(approved.Rule)}”"
+            : $"Lesson approved for project {project}; it supersedes “{MemoryText.CleanPlain(replaced)}”.", Tone.Green);
         QueueChanged();
     }
 
     internal async Task RejectLessonAsync(LessonCandidateView lesson, string reason, CancellationToken cancellationToken)
     {
-        await _service.RejectLessonAsync(lesson.Id, reason, cancellationToken).ConfigureAwait(true);
+        try
+        {
+            await _service.RejectLessonAsync(lesson.Id, reason, cancellationToken).ConfigureAwait(true);
+        }
+        catch (Exception exception) when (Failed(exception))
+        {
+            Fail("Could not reject the lesson", exception);
+            return;
+        }
+
         LessonCandidates.Remove(lesson);
-        SetOutcome($"Lesson rejected: “{reason}”.", Tone.Grey);
+        SetOutcome($"Lesson rejected: “{SafeText.Clean(reason)}”.", Tone.Grey);
         QueueChanged();
     }
 
@@ -395,35 +487,67 @@ public sealed class MemoryViewModel : AreaViewModel
 
     private async Task SearchAsync(CancellationToken cancellationToken)
     {
-        var query = _searchText.Trim();
-        var found = await _service.SearchFactsAsync(query, cancellationToken).ConfigureAwait(true);
-        _searchedFor = query;
-        Reset(Facts, found.Select(f => new FactRowView(f)));
-        RaiseFacts();
+        _searchedFor = _searchText.Trim();
+        await RefreshFactsAsync(cancellationToken).ConfigureAwait(true);
         Select(MemoryTabKind.Facts);
     }
 
     private async Task DryRunAsync(CancellationToken cancellationToken)
     {
-        var entries = await _service.DryRunImportAsync(cancellationToken).ConfigureAwait(true);
+        IReadOnlyList<ImportEntry> entries;
+        try
+        {
+            entries = await _service.DryRunImportAsync(cancellationToken).ConfigureAwait(true);
+        }
+        catch (Exception exception) when (Failed(exception))
+        {
+            Fail("The dry run failed", exception);
+            return;
+        }
+
         Reset(ImportEntries, entries.Select(e => new ImportEntryView(e)));
         HasPreview = false;
         HasPreview = true;
         OnPropertyChanged(nameof(PreviewSummary));
         OnPropertyChanged(nameof(StageLabel));
+        StageImportCommand.NotifyCanExecuteChanged();
     }
 
+    /// <summary>"Import for review" on a dry run that refused every entry: nothing to stage, and it says so.</summary>
+    private Task NothingToStage()
+    {
+        SetOutcome("Nothing to stage: the scanner refused every entry of the dry run.", Tone.Grey);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Stages exactly what the dry run showed: the entries it passed, by their ids.</summary>
     private async Task StageImportAsync(CancellationToken cancellationToken)
     {
-        var staged = await _service.ImportForReviewAsync(cancellationToken).ConfigureAwait(true);
+        IReadOnlyList<string> ids = [.. ImportEntries.Where(e => !e.IsRefused).Select(e => e.Entry.Id)];
+        IReadOnlyList<StagedFact> staged;
+        try
+        {
+            staged = await _service.ImportForReviewAsync(ids, cancellationToken).ConfigureAwait(true);
+        }
+        catch (Exception exception) when (Failed(exception))
+        {
+            Fail("Could not stage the import", exception);
+            return;
+        }
+
         var zone = _time.LocalTimeZone;
         foreach (var fact in staged)
             StagedFacts.Add(new StagedFactView(this, fact, zone));
         ImportEntries.Clear();
         HasPreview = false;
-        SetOutcome(staged.Count == 0
-            ? "Nothing new to stage: this import is already in the queue."
-            : $"Staged {staged.Count} {(staged.Count == 1 ? "entry" : "entries")} from {_import?.Name ?? "the import"} for review; nothing is written until you approve.", Tone.Green);
+        var name = SafeText.Clean(_import?.Name ?? "the import");
+        SetOutcome(staged.Count switch
+        {
+            0 => "Nothing new to stage: these entries are already in the queue, or the source changed since the dry run.",
+            _ when staged.Count < ids.Count => $"Staged {staged.Count} of {ids.Count} entries from {name} for review; the rest were staged before or changed since the dry run.",
+            1 => $"Staged 1 entry from {name} for review; nothing is written until you approve.",
+            _ => $"Staged {staged.Count} entries from {name} for review; nothing is written until you approve.",
+        }, Tone.Green);
         QueueChanged();
         Select(MemoryTabKind.Review);
     }
@@ -484,6 +608,7 @@ public sealed class MemoryViewModel : AreaViewModel
         OnPropertyChanged(nameof(Outcome));
         OnPropertyChanged(nameof(OutcomeTone));
         OnPropertyChanged(nameof(HasOutcome));
+        OnPropertyChanged(nameof(HasNotice));
     }
 
     private void Replace(FactRecord fact)
@@ -494,12 +619,80 @@ public sealed class MemoryViewModel : AreaViewModel
         _facts.Insert(0, fact);
     }
 
-    private void RefreshFacts()
+    /// <summary>
+    /// Redraws the recent facts, and the Facts tab by running its search again through the service, so a write never
+    /// leaves the tab matching by other rules than a search does. A newer refresh wins over one still in flight.
+    /// </summary>
+    private async Task RefreshFactsAsync(CancellationToken cancellationToken)
     {
         Reset(RecentFacts, _facts.Take(RecentCount).Select(f => new FactRowView(f)));
-        var words = _searchedFor.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        Reset(Facts, _facts.Where(f => words.All(w => f.Text.Contains(w, StringComparison.OrdinalIgnoreCase))).Select(f => new FactRowView(f)));
+        var search = ++_searches;
+        var query = _searchedFor;
+        IReadOnlyList<FactRecord> found;
+        try
+        {
+            found = await _service.SearchFactsAsync(query, cancellationToken).ConfigureAwait(true);
+        }
+        catch (Exception exception) when (Failed(exception))
+        {
+            if (search == _searches)
+                Fail("The facts could not be searched", exception);
+            return;
+        }
+
+        if (search != _searches)
+            return;
+        Reset(Facts, found.Select(f => new FactRowView(f)));
         RaiseFacts();
+    }
+
+    /// <summary>
+    /// A block was written: the other updates staged to it were staged against the old text, so they are read again
+    /// (their context and sizes follow the block) and their cards rebuilt.
+    /// </summary>
+    private async Task RestageBlockUpdatesAsync(string block, CancellationToken cancellationToken)
+    {
+        if (!BlockUpdates.Any(u => u.Update.Block == block))
+            return;
+        MemorySnapshot snapshot;
+        try
+        {
+            snapshot = await _service.LoadAsync(cancellationToken).ConfigureAwait(true);
+        }
+        catch (Exception exception) when (Failed(exception))
+        {
+            Fail($"The {SafeText.Clean(block)} block was written, but the updates still staged to it could not be read again", exception);
+            return;
+        }
+
+        var zone = _time.LocalTimeZone;
+        for (var i = 0; i < BlockUpdates.Count; i++)
+        {
+            var current = BlockUpdates[i];
+            if (current.Update.Block == block && snapshot.BlockUpdates.FirstOrDefault(u => u.Id == current.Id) is { } fresh && fresh != current.Update)
+            {
+                // Remove and insert rather than replace in place: a moved or replaced item re-templated outside the
+                // page's theme (src/Corvid.App/README.md).
+                BlockUpdates.RemoveAt(i);
+                BlockUpdates.Insert(i, new BlockUpdateView(this, fresh, zone));
+            }
+        }
+    }
+
+    private static bool Failed(Exception exception) => exception is not OperationCanceledException and not OutOfMemoryException;
+
+    /// <summary>An action failed: the outcome line says what and why, in red; nothing in the queue changes.</summary>
+    private void Fail(string what, Exception exception) =>
+        SetOutcome($"{what}: {SafeText.Clean(exception.Message)}", Tone.Red);
+
+    private void SetLoadError(string text)
+    {
+        if (string.Equals(_loadError, text, StringComparison.Ordinal))
+            return;
+        _loadError = text;
+        OnPropertyChanged(nameof(LoadError));
+        OnPropertyChanged(nameof(HasLoadError));
+        OnPropertyChanged(nameof(HasNotice));
     }
 
     private void RaiseFacts()
