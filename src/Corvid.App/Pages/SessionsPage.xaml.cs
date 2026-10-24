@@ -570,7 +570,8 @@ public sealed partial class SessionsPage : Page, IDockProvider
         }
 
         var now = DateTimeOffset.UtcNow;
-        if (session.Draft.Length == 0 && now - _lastEscape < DoubleEscape)
+        // A read-only session is not rewound from here, as its header's Rewind says.
+        if (session.Draft.Length == 0 && !session.IsReadOnly && now - _lastEscape < DoubleEscape)
         {
             _lastEscape = default;
             ViewModel.OpenRewindCommand.Execute(null);
