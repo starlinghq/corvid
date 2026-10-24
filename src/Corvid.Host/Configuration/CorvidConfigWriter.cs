@@ -105,7 +105,8 @@ public sealed class CorvidConfigWriter(CorvidConfigFile file, IConfiguration con
     /// <summary>
     /// The configuration the next start of this process would read: the file as it is now (an empty object when it does
     /// not exist), with this process's environment and <c>--set</c> values over it. The host's own configuration is read
-    /// once, at start, so after a write only this shows what was written.
+    /// once, at start, and the runtime never reloads, so after a write only this shows what was written (an MCP server's
+    /// trust, a server added, a slot's model).
     /// </summary>
     /// <exception cref="InvalidDataException">The file cannot be read as JSON.</exception>
     public IConfiguration NextStart()

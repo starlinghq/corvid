@@ -88,12 +88,16 @@ public sealed class SeamTests
         Assert.IsType<Corvid.App.Engine.Memory.EngineMemoryService>(composition.MemoryService);
         Assert.IsType<Corvid.App.Engine.Skills.EngineSkillsService>(composition.SkillsService);
         Assert.IsType<Corvid.App.Engine.Safety.EngineSafetyService>(composition.SafetyService);
+        // A3 ops's too.
+        Assert.IsType<Corvid.App.Engine.Jobs.EngineJobsService>(composition.JobsService);
+        Assert.IsType<Corvid.App.Engine.Mcp.EngineMcpService>(composition.McpService);
+        Assert.IsType<Corvid.App.Engine.Gateway.EngineGatewayService>(composition.GatewayService);
+        Assert.IsType<Corvid.App.Engine.Secrets.EngineSecretsService>(composition.SecretsService);
 
         // Every other area opens on a refusal that names the group that brings it.
         (object Service, string Group)[] areas =
         [
-            (composition.JobsService, "ops"), (composition.McpService, "ops"), (composition.GatewayService, "ops"),
-            (composition.SecretsService, "ops"), (composition.BoardService, "integration"), (composition.PromptHistory, "integration"),
+            (composition.BoardService, "integration"), (composition.PromptHistory, "integration"),
         ];
         foreach (var (service, group) in areas)
         {

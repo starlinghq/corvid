@@ -37,6 +37,12 @@ public sealed record VaultStatus(VaultState State)
 
     /// <summary>An out-of-band confirm Vault is showing now, in Vault's own words; the app only says one is pending.</summary>
     public string? PendingConfirm { get; init; }
+
+    /// <summary>
+    /// What Vault's audit summary says when it cannot give the day's counts above (V-n): its counts since its audit log
+    /// began, in a sentence. When set, the page shows it in place of the "today" counts, which are then not known.
+    /// </summary>
+    public string? AuditSummary { get; init; }
 }
 
 /// <summary>How a method may use a secret: silently, with Corvid's approval prompt, or with Vault's own confirm (vault.md §6).</summary>
@@ -83,6 +89,13 @@ public sealed record SecretInfo(string Name)
     public MethodPolicy Tainted { get; init; } = MethodPolicy.Ask;
 
     public DateTimeOffset? LastUsed { get; init; }
+
+    /// <summary>
+    /// Whether Vault reported this secret's method policy, role, budget, tainted-turn policy and last use. Vault's catalogue
+    /// gives names, descriptions, hosts and toolsets only (V-n), so the engine sets false and the page says "not reported"
+    /// for those rather than show defaults as though Vault had said them.
+    /// </summary>
+    public bool PolicyReported { get; init; } = true;
 }
 
 /// <summary>What waits on a secret: a model slot's cloud model, a gateway adapter, an MCP server, a tool.</summary>

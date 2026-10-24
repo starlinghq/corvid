@@ -44,6 +44,9 @@ internal sealed class FakeVault : IAsyncDisposable
     /// <summary>What a catalogue request returns: names and bound hosts, never values.</summary>
     public List<CatalogEntry> Catalogue { get; } = [];
 
+    /// <summary>What an audit summary request returns (<c>op.decision</c> counts); null answers it as an unexpected request.</summary>
+    public Dictionary<string, int>? AuditCounts { get; set; }
+
     /// <summary>Errors returned to the next forward requests instead of forwarding them.</summary>
     public ConcurrentQueue<(string Code, string Message)> Refusals { get; } = new();
 
@@ -86,6 +89,7 @@ internal sealed class FakeVault : IAsyncDisposable
         {
             PlaceholderRequest mint => Mint(mint),
             CatalogRequest => new CatalogResponse { Secrets = [.. Catalogue] },
+            AuditSummaryRequest when AuditCounts is { } counts => new AuditSummaryResponse { Counts = new Dictionary<string, int>(counts) },
             ForwardRequest forward => Relay(forward),
             // V-003b's doctor check opens and closes a sandbox proxy; nothing listens on the returned socket.
             SandboxOpenRequest open => OpenSandbox(open),

@@ -7,6 +7,11 @@ public enum AdapterState
     Connecting,
     Down,
     Off,
+    /// <summary>
+    /// Enabled, but run by a gateway in another process or none: this app does not host the gateway (G-14), so it cannot
+    /// see whether the adapter is connected.
+    /// </summary>
+    Unknown,
 }
 
 /// <summary>A channel the gateway serves (Telegram, Discord, Slack): its state, since when, the bot's account and what to know.</summary>

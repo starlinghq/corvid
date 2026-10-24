@@ -53,6 +53,24 @@ public sealed class PairingStoreTests : IDisposable
         Assert.Equal(SenderRole.None, store.RoleOf(adapter, "42"));
     }
 
+    /// <summary>G-14: Ignore drops the code; the sender stays unpaired and asking again gets a new code.</summary>
+    [Fact]
+    public void DismissingACodePairsNobodyAndTheNextAskGetsANewCode()
+    {
+        var store = Store();
+        var request = store.Request("telegram", "42", "mark", "42").Request!;
+
+        Assert.True(store.Dismiss(PairingStore.Display(request.Code).ToLowerInvariant()));
+        Assert.False(store.Dismiss(request.Code));
+        Assert.False(store.Dismiss("not a code"));
+        Assert.Empty(store.Pending());
+        Assert.Null(store.Approve(request.Code));
+        Assert.Equal(SenderRole.None, store.RoleOf(new AdapterOptions("telegram"), "42"));
+        var again = store.Request("telegram", "42", "mark", "42");
+        Assert.True(again.Notify);
+        Assert.NotEqual(request.Code, again.Request!.Code);
+    }
+
     [Fact]
     public void ConfigurationAllowlistsNeedNoPairing()
     {
