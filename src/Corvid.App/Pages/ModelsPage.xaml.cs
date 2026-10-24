@@ -72,9 +72,9 @@ public sealed partial class ModelsPage : Page
     private void OnViewModelChanged(object? sender, PropertyChangedEventArgs e)
     {
         // A picker takes focus when it opens, so Tab and Esc work in it at once.
+        // Its rows are generated in the next layout pass, so focus waits for that.
         if (e.PropertyName == nameof(ModelsViewModel.IsPickerOpen) && ViewModel.IsPickerOpen)
-            DispatcherQueue.TryEnqueue(() => _ = FocusManager.TryFocusAsync(
-                FocusManager.FindFirstFocusableElement(PickerCard) ?? PickerCard, FocusState.Programmatic));
+            DispatcherQueue.TryEnqueue(() => PickerHost.Focus(FocusState.Programmatic));
     }
 
     /// <summary>

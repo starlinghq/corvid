@@ -179,6 +179,8 @@ public sealed class DemoModelService : IModelService, IDisposable
         _queue.Remove(model);
         // The partial file goes with the download: the cache holds finished models only.
         Update(entry with { State = ModelState.Missing, Download = null });
+        if (_snapshot.Slot(ModelSlotNames.Decider)?.Escalation.Contains(model) == true)
+            _snapshot = _snapshot with { Decider = _snapshot.Decider with { SecondTier = $"{model} for gates below their floor, when it is downloaded" } };
         Advance(0);
         StopWhenIdle();
         return Task.CompletedTask;

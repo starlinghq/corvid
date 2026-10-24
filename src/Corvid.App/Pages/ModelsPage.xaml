@@ -455,8 +455,10 @@
     <!-- The pickers, over the page: a scrim that closes them, then the card. -->
     <Grid x:Name="PickerLayer" Grid.RowSpan="2" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsPickerOpen), Mode=OneWay}">
       <Border Background="#33000000" Tapped="OnScrimTapped" />
-      <Border x:Name="PickerCard" Style="{StaticResource PickerCard}" Width="460" Margin="16,64,16,16" VerticalAlignment="Top"
-              HorizontalAlignment="Center">
+      <!-- A focusable host, so the picker takes focus when it opens and Esc reaches the page from it. -->
+      <ContentControl x:Name="PickerHost" IsTabStop="True" UseSystemFocusVisuals="False" VerticalAlignment="Top" HorizontalAlignment="Center"
+                      Margin="16,64,16,16" HorizontalContentAlignment="Stretch">
+      <Border x:Name="PickerCard" Style="{StaticResource PickerCard}" Width="460">
         <Grid>
           <!-- Switch… -->
           <StackPanel Spacing="10" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsSwitchOpen), Mode=OneWay}">
@@ -536,6 +538,7 @@
           </StackPanel>
         </Grid>
       </Border>
+      </ContentControl>
     </Grid>
   </Grid>
 </Page>

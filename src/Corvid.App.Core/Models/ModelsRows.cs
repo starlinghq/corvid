@@ -279,11 +279,11 @@ public sealed class CatalogueRowViewModel : ObservableObject
 
     public string Serves => _model.Serves;
 
-    public IReadOnlyList<TextRun> Where { get => _where; private set => SetProperty(ref _where, value); }
+    public IReadOnlyList<TextRun> Where { get => _where; private set { if (!_where.SequenceEqual(value)) SetProperty(ref _where, value); } }
 
     public string Fit => _model.Fit;
 
-    public IReadOnlyList<StatusTag> Tags { get => _tags; private set => SetProperty(ref _tags, value); }
+    public IReadOnlyList<StatusTag> Tags { get => _tags; private set { if (!_tags.SequenceEqual(value)) SetProperty(ref _tags, value); } }
 
     public bool IsDownloading { get => _downloading; private set => SetProperty(ref _downloading, value); }
 
@@ -367,7 +367,7 @@ public sealed class DownloadChoiceViewModel : ObservableObject
     public CatalogueModel Model => _model;
 
     /// <summary>"`kev-0.8b` · decider · 2.1 GB ~missing~ · fits cuda:0" as runs.</summary>
-    public IReadOnlyList<TextRun> Text { get => _text; private set => SetProperty(ref _text, value); }
+    public IReadOnlyList<TextRun> Text { get => _text; private set { if (!_text.SequenceEqual(value)) SetProperty(ref _text, value); } }
 
     /// <summary>"cached" as a green tag after the text; empty otherwise.</summary>
     public string StateTag { get => _stateTag; private set => SetProperty(ref _stateTag, value); }
@@ -465,7 +465,7 @@ public sealed class DownloadSelectionViewModel : ObservableObject
     /// <summary>"**3.3 GB** · about 2 minutes at 48 MB/s".</summary>
     public string SelectedText { get => _selected; private set => SetProperty(ref _selected, value); }
 
-    public IReadOnlyList<TextRun> SelectedRuns => Spans.Parse(SelectedText);
+    public IReadOnlyList<TextRun> SelectedRuns { get; private set; } = [];
 
     /// <summary>Some model is missing, so there is something to pick.</summary>
     public bool HasPending { get => _hasPending; private set => SetProperty(ref _hasPending, value); }
@@ -504,7 +504,11 @@ public sealed class DownloadSelectionViewModel : ObservableObject
     private void Recount()
     {
         var bytes = SelectedBytes;
-        SelectedText = bytes > 0 ? $"**{ModelText.Size(bytes)}** · {ModelText.Estimate(bytes, DemoModelService.Rate)}" : "nothing to download";
+        var text = bytes > 0 ? $"**{ModelText.Size(bytes)}** · {ModelText.Estimate(bytes, DemoModelService.Rate)}" : "nothing to download";
+        if (text == SelectedText && SelectedRuns.Count > 0)
+            return;
+        SelectedText = text;
+        SelectedRuns = Spans.Parse(text);
         OnPropertyChanged(nameof(SelectedBytes));
         OnPropertyChanged(nameof(SelectedRuns));
         DownloadCommand.NotifyCanExecuteChanged();

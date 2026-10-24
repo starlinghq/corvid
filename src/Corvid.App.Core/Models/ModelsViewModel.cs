@@ -164,7 +164,7 @@ public sealed class ModelsViewModel : AreaViewModel
         UpdateActive();
     }
 
-    public IReadOnlyList<TextRun> Subtitle { get => _subtitle; private set => SetProperty(ref _subtitle, value); }
+    public IReadOnlyList<TextRun> Subtitle { get => _subtitle; private set => SetRuns(ref _subtitle, value); }
 
     public ObservableCollection<SlotRowViewModel> Slots { get; } = [];
 
@@ -186,7 +186,7 @@ public sealed class ModelsViewModel : AreaViewModel
 
     public bool HasMissing => _missing.Count > 0;
 
-    public IReadOnlyList<TextRun> MissingText { get => _missing; private set { if (SetProperty(ref _missing, value)) OnPropertyChanged(nameof(HasMissing)); } }
+    public IReadOnlyList<TextRun> MissingText { get => _missing; private set { if (SetRuns(ref _missing, value)) OnPropertyChanged(nameof(HasMissing)); } }
 
     /// <summary>"Download 3.3 GB".</summary>
     public string MissingButtonText { get => _missingButton; private set => SetProperty(ref _missingButton, value); }
@@ -195,17 +195,17 @@ public sealed class ModelsViewModel : AreaViewModel
 
     public string PrivacyTag { get => _privacyTag; private set => SetProperty(ref _privacyTag, value); }
 
-    public IReadOnlyList<TextRun> PrivacySummary { get => _privacySummary; private set => SetProperty(ref _privacySummary, value); }
+    public IReadOnlyList<TextRun> PrivacySummary { get => _privacySummary; private set => SetRuns(ref _privacySummary, value); }
 
-    public IReadOnlyList<ModelFact> PrivacyFacts { get => _privacyFacts; private set => SetProperty(ref _privacyFacts, value); }
+    public IReadOnlyList<ModelFact> PrivacyFacts { get => _privacyFacts; private set => SetFacts(ref _privacyFacts, value); }
 
     public string DeciderTag { get => _deciderTag; private set => SetProperty(ref _deciderTag, value); }
 
     public Tone DeciderTone { get => _deciderTone; private set => SetProperty(ref _deciderTone, value); }
 
-    public IReadOnlyList<ModelFact> DeciderFacts { get => _deciderFacts; private set => SetProperty(ref _deciderFacts, value); }
+    public IReadOnlyList<ModelFact> DeciderFacts { get => _deciderFacts; private set => SetFacts(ref _deciderFacts, value); }
 
-    public IReadOnlyList<ModelFact> PlacementFacts { get => _placementFacts; private set => SetProperty(ref _placementFacts, value); }
+    public IReadOnlyList<ModelFact> PlacementFacts { get => _placementFacts; private set => SetFacts(ref _placementFacts, value); }
 
     /// <summary>The Placement panel's editor (Edit placement…): one row per local model.</summary>
     public ObservableCollection<PlacementRowViewModel> PlacementRows { get; } = [];
@@ -520,6 +520,27 @@ public sealed class ModelsViewModel : AreaViewModel
     }
 
     private static ModelFact Fact(string key, string value) => new(key, Spans.Parse(value));
+
+    /// <summary>
+    /// Replaces a panel's facts only when their text changed: the snapshot changes on every download tick, and a list
+    /// rebuilt each time would make the view regenerate its rows four times a second.
+    /// </summary>
+    private bool SetRuns(ref IReadOnlyList<TextRun> field, IReadOnlyList<TextRun> value, [System.Runtime.CompilerServices.CallerMemberName] string? name = null)
+    {
+        if (field.SequenceEqual(value))
+            return false;
+        field = value;
+        OnPropertyChanged(name);
+        return true;
+    }
+
+    private void SetFacts(ref IReadOnlyList<ModelFact> field, IReadOnlyList<ModelFact> value, [System.Runtime.CompilerServices.CallerMemberName] string? name = null)
+    {
+        if (field.Select(fact => fact.AutomationName).SequenceEqual(value.Select(fact => fact.AutomationName)))
+            return;
+        field = value;
+        OnPropertyChanged(name);
+    }
 
     // The status bar while Models shows (Models.dc.html): generator, decider, downloads, the mode, scheduler, branch, "idle".
 

@@ -293,7 +293,7 @@ public sealed class FirstRunViewModel : AreaViewModel
     public DownloadSelectionViewModel Downloads { get; }
 
     /// <summary>The amber warning while the decider's model is not on disk.</summary>
-    public IReadOnlyList<TextRun> DeciderWarning { get => _deciderWarning; private set { if (SetProperty(ref _deciderWarning, value)) OnPropertyChanged(nameof(HasDeciderWarning)); } }
+    public IReadOnlyList<TextRun> DeciderWarning { get => _deciderWarning; private set { if (!_deciderWarning.SequenceEqual(value) && SetProperty(ref _deciderWarning, value)) OnPropertyChanged(nameof(HasDeciderWarning)); } }
 
     public bool HasDeciderWarning => _deciderWarning.Count > 0;
 
