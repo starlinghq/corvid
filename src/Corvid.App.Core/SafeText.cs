@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -32,6 +33,35 @@ public static partial class SafeText
         return clean.ToString();
     }
 
+    /// <summary>
+    /// For text a person approves (a command, a path, a proposed edit): nothing is removed, so what is shown is what will
+    /// run. Controls become their visible pictures (␍, ␛, ␇), and bidirectional and zero-width marks become a code in
+    /// brackets (⟨U+202E⟩), so a hidden character is seen rather than silently dropped. Line breaks and tabs stay.
+    /// </summary>
+    public static string Reveal(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return "";
+        if (!NeedsCleaning(text))
+            return text;
+        var shown = new StringBuilder(text.Length + 8);
+        foreach (var c in text)
+        {
+            if (c is '\n' or '\t')
+                shown.Append(c);
+            else if (c < ' ')
+                shown.Append((char)('␀' + c));
+            else if (c == '\u007f')
+                shown.Append('␡');
+            else if (IsInvisibleControl(c))
+                shown.Append(CultureInfo.InvariantCulture, $"⟨U+{(int)c:X4}⟩");
+            else
+                shown.Append(c);
+        }
+
+        return shown.ToString();
+    }
+
     private static bool NeedsCleaning(string text)
     {
         foreach (var c in text)
@@ -45,10 +75,12 @@ public static partial class SafeText
         return false;
     }
 
-    // C0 and C1 controls, the bidirectional embeddings, overrides and isolates, and the zero-width marks that steer them.
+    // C0 and C1 controls, the bidirectional embeddings, overrides and isolates, the marks that steer them, and the
+    // zero-width characters (space, joiners, word joiner, byte-order mark) that hide inside a word.
     private static bool IsInvisibleControl(char c) =>
         c < ' ' || c is '\u007f' || c is >= '\u0080' and <= '\u009f'
-        || c is >= '‪' and <= '‮' || c is >= '⁦' and <= '⁩' || c is '‎' or '‏' or '؜';
+        || c is >= '‪' and <= '‮' || c is >= '⁦' and <= '⁩' || c is '‎' or '‏' or '؜'
+        || c is >= '​' and <= '‍' || c is '⁠' or '﻿';
 
     // CSI (ESC [ ... final), OSC (ESC ] ... BEL or ST), and two-character escapes.
     [GeneratedRegex(@"\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|[@-_])")]

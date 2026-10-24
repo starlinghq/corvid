@@ -46,7 +46,11 @@ app and looking at it.
 - Style: match the repo: file-scoped namespaces, sealed classes and records by default, XML doc comments that say why.
 - CI (`.github/workflows/ci.yml`) builds `Corvid.slnx` in Release, runs the checker, then the tests, on a self-hosted
   Arch runner with no display and no workloads. Nothing may need a display in CI.
-- Commit messages follow `git log` (`App: <what> (<step>)`), ending with the session's attribution lines.
+- Commit messages follow `git log` (`App: <what> (<step>)`) and carry no Claude attribution: no `Co-Authored-By`,
+  `Claude-Session` or "Generated with" lines, and no claude.ai links, in commits or pull request bodies.
+- Memory: this machine shares its RAM and CPU with CI runners and a model server. Before every `dotnet build` or `dotnet
+  test`, run `agent-budget level`; if it prints `critical`, wait (`agent-budget alert --from critical --timeout 300`);
+  if `tight`, pass `-m:2`. Spawn no more parallel builders than `agent-budget -q` allows.
 
 ## 5. Architecture
 

@@ -12,7 +12,7 @@ public sealed class ShellViewModelTests
     private static ShellViewModel DemoShellViewModel(out StatusBarViewModel bar)
     {
         Assert.True(AppOptions.TryParse([], out var options, out var error), error);
-        var composition = new AppComposition(options, new InlineDispatcher());
+        var composition = new AppComposition(options, new InlineDispatcher(), ManualTimeProvider.DemoLocal());
         bar = composition.StatusBar;
         return composition.Shell;
     }

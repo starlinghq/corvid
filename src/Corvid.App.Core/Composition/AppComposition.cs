@@ -13,15 +13,19 @@ namespace Corvid.App.Core.Composition;
 /// edit the same file, and a page reaches its view model through the composition it is navigated with.
 /// </para>
 /// </summary>
-public sealed partial class AppComposition
+public sealed partial class AppComposition : IDisposable
 {
-    public AppComposition(AppOptions options, IDispatcher dispatcher)
+    /// <param name="time">
+    /// The clock; by default frozen at the demo's minute in demo mode and the system clock otherwise. Tests pass a manual
+    /// clock so no timer fires on another thread while they assert.
+    /// </param>
+    public AppComposition(AppOptions options, IDispatcher dispatcher, TimeProvider? time = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(dispatcher);
         Options = options;
         Dispatcher = dispatcher;
-        Time = options.Demo ? FrozenTimeProvider.Demo() : TimeProvider.System;
+        Time = time ?? (options.Demo ? FrozenTimeProvider.Demo() : TimeProvider.System);
 
         StatusBar = new StatusBarViewModel();
         Shell = new ShellViewModel(StatusBar) { Theme = options.Theme };
@@ -48,4 +52,7 @@ public sealed partial class AppComposition
     public ShellViewModel Shell { get; }
 
     public StatusBarViewModel StatusBar { get; }
+
+    /// <summary>Stops the session feeds and their timers.</summary>
+    public void Dispose() => SessionHub.Dispose();
 }

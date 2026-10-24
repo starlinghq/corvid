@@ -52,10 +52,14 @@ public sealed class FileDiff
     /// <summary>Unchanged lines kept around each change in the views (git's default).</summary>
     public const int DefaultContext = 3;
 
+    /// <summary>Old and new lines together beyond which the texts are not compared line by line.</summary>
+    public const int MaxDiffLines = 20_000;
+
     private readonly List<Line> _lines;
 
-    private FileDiff(string path, string? oldText, string newText, List<Line> lines)
+    private FileDiff(string path, string? oldText, string newText, List<Line> lines, bool wholeFile)
     {
+        IsWholeFile = wholeFile;
         Path = path;
         OldText = oldText;
         NewText = newText;
@@ -65,6 +69,12 @@ public sealed class FileDiff
     }
 
     public string Path { get; }
+
+    /// <summary>
+    /// The texts were too long to compare line by line (<see cref="MaxDiffLines"/>): every old line shows as removed and
+    /// every new one as added.
+    /// </summary>
+    public bool IsWholeFile { get; }
 
     /// <summary>The file before; null for a new file.</summary>
     public string? OldText { get; }
@@ -86,8 +96,21 @@ public sealed class FileDiff
         ArgumentNullException.ThrowIfNull(newText);
         var oldLines = SplitLines(oldText);
         var newLines = SplitLines(newText);
-        var (a, b) = LineDiff.Number(oldLines, newLines);
-        var (removed, added) = LineDiff.Compute(a, b);
+        bool[] removed, added;
+        var wholeFile = false;
+        if (oldLines.Count + newLines.Count > MaxDiffLines)
+        {
+            // The line diff's time grows with the lines times the changes, and it runs when a card is drawn: past the cap
+            // the whole old text counts as removed and the whole new text as added.
+            removed = Enumerable.Repeat(true, oldLines.Count).ToArray();
+            added = Enumerable.Repeat(true, newLines.Count).ToArray();
+            wholeFile = true;
+        }
+        else
+        {
+            var (a, b) = LineDiff.Number(oldLines, newLines);
+            (removed, added) = LineDiff.Compute(a, b);
+        }
 
         var lines = new List<Line>(Math.Max(oldLines.Count, newLines.Count));
         int i = 0, j = 0;
@@ -102,7 +125,8 @@ public sealed class FileDiff
                     gone.Add(i++);
                 while (j < newLines.Count && added[j])
                     come.Add(j++);
-                var pairs = Math.Min(gone.Count, come.Count);
+                // Past the cap nothing is paired: word highlights would cost as much as the diff saved.
+                var pairs = wholeFile ? 0 : Math.Min(gone.Count, come.Count);
                 var oldSegments = new IReadOnlyList<DiffSegment>[gone.Count];
                 var newSegments = new IReadOnlyList<DiffSegment>[come.Count];
                 for (var p = 0; p < pairs; p++)
@@ -124,7 +148,7 @@ public sealed class FileDiff
             }
         }
 
-        return new FileDiff(path, oldText, newText, lines);
+        return new FileDiff(path, oldText, newText, lines, wholeFile);
     }
 
     /// <summary>The unified view: each hunk's context, removed and added lines, with folds between hunks.</summary>
@@ -205,7 +229,8 @@ public sealed class FileDiff
         var count = lines.Length > 0 && lines[^1].Length == 0 ? lines.Length - 1 : lines.Length;
         var result = new string[count];
         for (var i = 0; i < count; i++)
-            result[i] = lines[i].EndsWith('\r') ? lines[i][..^1] : lines[i];
+            // Revealed, not cleaned: a proposed edit is approved as shown, so a hidden character must show (SafeText.Reveal).
+            result[i] = SafeText.Reveal(lines[i].EndsWith('\r') ? lines[i][..^1] : lines[i]);
         return result;
     }
 

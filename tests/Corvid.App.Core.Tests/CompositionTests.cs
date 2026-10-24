@@ -11,7 +11,8 @@ public sealed class CompositionTests
     private static AppComposition Compose(params string[] args)
     {
         Assert.True(AppOptions.TryParse(args, out var options, out var error), error);
-        return new AppComposition(options, new InlineDispatcher());
+        // A manual clock: the demo's running turn would otherwise start real timers that fire on the thread pool.
+        return new AppComposition(options, new InlineDispatcher(), ManualTimeProvider.DemoLocal());
     }
 
     [Fact]

@@ -46,11 +46,11 @@ public static class SessionFold
             TurnEnded ended => OnTurnEnded(state, ended),
             UsageUpdate usage => OnUsage(state, usage),
             PlanUpdate plan => state with { Plan = plan.Entries.IsDefault ? [] : plan.Entries },
-            TitleChanged title => state with { Title = title.Title },
-            GoalChanged goal => state with { Goal = string.IsNullOrWhiteSpace(goal.Goal) ? null : goal.Goal.Trim() },
+            TitleChanged title => state with { Title = SafeText.Clean(title.Title) },
+            GoalChanged goal => state with { Goal = string.IsNullOrWhiteSpace(goal.Goal) ? null : SafeText.Clean(goal.Goal.Trim()) },
             ApprovalModeChanged mode => state with { Mode = mode.Mode },
             SessionForked fork => state with { ForkOf = fork.FromSession, ForkTurn = fork.AtTurn },
-            DriverChanged driver => state with { ReadOnly = driver.ReadOnly, Holder = driver.ReadOnly ? driver.Holder : null },
+            DriverChanged driver => state with { ReadOnly = driver.ReadOnly, Holder = driver.ReadOnly && driver.Holder is { } holder ? SafeText.Clean(holder) : null },
             AvailableCommandsUpdate commands => state with { Commands = commands.Commands.IsDefault ? [] : commands.Commands },
             QueueChanged queue => state with { Queue = queue.Items.IsDefault ? [] : queue.Items },
             CommandResult result => AddNew(state, "command", id => new CommandEntry(id, result)),
@@ -98,6 +98,9 @@ public static class SessionFold
     public static string ApprovalId(string approvalId) => "approval-" + approvalId;
 
     public static string QuestionId(string questionId) => "question-" + questionId;
+
+    /// <summary>A cleaned engine string, or null when the update did not carry one (so the old value stays).</summary>
+    private static string? Cleaned(string? text) => text is null ? null : SafeText.Clean(text);
 
     private static SessionView OnUserMessage(SessionView state, UserMessage message)
     {
@@ -545,12 +548,13 @@ public static class SessionFold
     private static SessionView OnEngine(SessionView state, EngineStatus engine) => state with
     {
         Generator = engine.Generator ?? state.Generator,
-        Model = engine.Generator?.Model ?? state.Model,
-        Decider = engine.Decider ?? state.Decider,
-        Scheduler = engine.Scheduler ?? state.Scheduler,
-        Workspace = engine.Workspace ?? state.Workspace,
-        Branch = engine.Branch ?? state.Branch,
-        Project = engine.Project ?? state.Project,
+        // Engine strings reach the header and status bar: cleaned once here (a branch name may hold bidi marks).
+        Model = Cleaned(engine.Generator?.Model) ?? state.Model,
+        Decider = Cleaned(engine.Decider) ?? state.Decider,
+        Scheduler = Cleaned(engine.Scheduler) ?? state.Scheduler,
+        Workspace = Cleaned(engine.Workspace) ?? state.Workspace,
+        Branch = Cleaned(engine.Branch) ?? state.Branch,
+        Project = Cleaned(engine.Project) ?? state.Project,
         Loading = engine.Loading,
     };
 

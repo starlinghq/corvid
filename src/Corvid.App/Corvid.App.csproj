@@ -22,7 +22,7 @@
 
     <!-- The Skia renderer on every target, so the desktop and the browser draw the same pixels. -->
     <UnoFeatures>SkiaRenderer</UnoFeatures>
-    <!-- Inter and JetBrains Mono ship as assets (Assets/Fonts) and Inter is set as the default text font in Program.cs,
+    <!-- Inter and JetBrains Mono ship as assets (Assets/Fonts) and Inter is set as the default text font in App.xaml.cs,
          so Uno's Open Sans package is not needed. -->
     <UnoDefaultFont>None</UnoDefaultFont>
     <!-- Hot Design brings CommunityToolkit.Mvvm, Uno.Toolkit and Uno.Themes into the graph, which the app does not take

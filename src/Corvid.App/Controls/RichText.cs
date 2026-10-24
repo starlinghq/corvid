@@ -46,10 +46,15 @@ public static class RichText
             text.FontStyle = Windows.UI.Text.FontStyle.Italic;
         if (run.IsStrikethrough)
             text.TextDecorations = Windows.UI.Text.TextDecorations.Strikethrough;
-        if (!run.IsLink || !Uri.TryCreate(run.Url, UriKind.Absolute, out var uri))
+        // Only web and mail addresses open, whatever built the run: the parser already filters, this is the last gate.
+        if (!run.IsLink || !Uri.TryCreate(run.Url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https" or "mailto"))
             return text;
         var link = new Hyperlink { NavigateUri = uri, Foreground = ThemeBrushes.Get(owner, "CorvidAccent"), UnderlineStyle = UnderlineStyle.None };
         link.Inlines.Add(text);
+        // Link text can name one site and lead to another: when it does not show the host, the host follows it.
+        var host = uri.Scheme == "mailto" ? uri.OriginalString["mailto:".Length..] : uri.Host;
+        if (host.Length > 0 && !run.Text.Contains(host, StringComparison.OrdinalIgnoreCase))
+            link.Inlines.Add(new Run { Text = $" ({host})" });
         return link;
     }
 

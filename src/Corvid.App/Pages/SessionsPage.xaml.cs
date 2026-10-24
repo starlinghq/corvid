@@ -49,6 +49,7 @@ public sealed partial class SessionsPage : Page, IDockProvider
     private int _newCount;
     private DateTimeOffset _lastEscape;
     private bool _swallowLineBreak;
+    private bool _spinning;
 
     public SessionsPage()
     {
@@ -66,6 +67,8 @@ public sealed partial class SessionsPage : Page, IDockProvider
         AddKey(VirtualKey.O, VirtualKeyModifiers.Control, () => _session?.ExpandLatestOutputCommand.Execute(null));
         AddKey(VirtualKey.T, VirtualKeyModifiers.Control, () => _session?.ToggleThoughtsCommand.Execute(null));
         AddKey(VirtualKey.D, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, () => _session?.ToggleDecisionsCommand.Execute(null));
+        // OnNavigatedFrom detaches; a page moved out of and back into the tree re-attaches here.
+        Loaded += (_, _) => { if (_composition is not null) Attach(ViewModel.Session); };
         Unloaded += (_, _) => Detach();
     }
 
@@ -227,6 +230,7 @@ public sealed partial class SessionsPage : Page, IDockProvider
         _session = null;
         WatchApproval();
         _spinner.Stop();
+        _spinning = false;
     }
 
     private void OnSessionChanged(object? sender, PropertyChangedEventArgs e)
@@ -589,7 +593,11 @@ public sealed partial class SessionsPage : Page, IDockProvider
     /// <summary>The spinner turns only while a turn works, so an idle window draws nothing.</summary>
     private void UpdateSpinner()
     {
-        if (_session?.IsWorking == true)
+        var spin = _session?.IsWorking == true;
+        if (spin == _spinning)
+            return;
+        _spinning = spin;
+        if (spin)
             _spinner.Begin();
         else
             _spinner.Stop();

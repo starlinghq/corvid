@@ -49,12 +49,12 @@ public sealed record ParsedCommandView(
         var effects = command.Effects.Where(effect => effect != "read").ToList();
         var dangerous = effects.Any(effect => effect is "delete" or "network" or "elevated" or "system" or "signal" or "configuration");
         return new ParsedCommandView(
-            SafeText.Clean(command.Text),
+            SafeText.Reveal(command.Text),
             string.Join(", ", effects),
             dangerous ? Tone.Red : Tone.Grey,
-            SafeText.Clean(command.Verb),
-            SafeText.Clean(command.Subcommand),
-            string.Join(" ", command.Flags.Select(SafeText.Clean)),
+            SafeText.Reveal(command.Verb),
+            SafeText.Reveal(command.Subcommand),
+            string.Join(" ", command.Flags.Select(SafeText.Reveal)),
             [.. command.Targets.Select(Chip)],
             [.. command.Notes.Select(note => new CommandNoteView(note.Label, SessionText.Runs(note.Text)))]);
     }
@@ -70,7 +70,7 @@ public sealed record ParsedCommandView(
             _ => null,
         };
         var detail = string.Join(" · ", new[] { where, SafeText.Clean(target.Detail) }.Where(part => !string.IsNullOrEmpty(part)));
-        return new TargetChip(target.Implied ? $"{target.Access}s under" : "", SafeText.Clean(target.Value), detail, target.Access == "delete");
+        return new TargetChip(target.Implied ? $"{target.Access}s under" : "", SafeText.Reveal(target.Value), detail, target.Access == "delete");
     }
 }
 
@@ -147,10 +147,10 @@ public sealed class RuleRowView : ObservableObject
     internal RuleRowView(RulePreview rule)
     {
         Decision = rule.Decision;
-        Command = SafeText.Clean(rule.Command);
+        Command = SafeText.Reveal(rule.Command);
         Scope = SafeText.Clean(rule.Scope);
         _original = rule.Paths;
-        _paths = string.Join(" ", rule.Paths.Select(SafeText.Clean));
+        _paths = string.Join(" ", rule.Paths.Select(SafeText.Reveal));
     }
 
     /// <summary>"allow" (a green tag) or "deny".</summary>
@@ -479,7 +479,7 @@ public sealed class ApprovalCardBlock : TranscriptBlock
     private void Build(TranscriptEntry entry)
     {
         var request = ((ApprovalEntry)entry).Request;
-        CommandText = SafeText.Clean(request.Tool == "shell" || request.Text.StartsWith(request.Tool, StringComparison.Ordinal)
+        CommandText = SafeText.Reveal(request.Tool == "shell" || request.Text.StartsWith(request.Tool, StringComparison.Ordinal)
             ? request.Text
             : $"{request.Tool} {request.Text}");
         Unparsed = SafeText.Clean(request.Unparsed);

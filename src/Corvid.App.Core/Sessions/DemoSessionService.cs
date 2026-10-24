@@ -150,6 +150,10 @@ public sealed partial class DemoSessionService : ISessionService
         // Nothing runs on a stale prompt: an answer to one that has closed changes nothing.
         if (session.State.Approvals.All(open => open.ApprovalId != approvalId))
             return Task.CompletedTask;
+        // The script answers its prompts in order; an answer to a later one first would leave the earlier handler waiting
+        // on a prompt that is gone, so the demo takes answers to the current prompt only.
+        if (session.State.CurrentApproval?.ApprovalId != approvalId)
+            return Task.CompletedTask;
         if (session.Script?.Approvals.Remove(approvalId, out var handler) == true)
             handler(answer, false);
         else
@@ -341,7 +345,12 @@ public sealed partial class DemoSessionService : ISessionService
         starter.Then(delay, () =>
         {
             if (session.State.Running || session.Queue.IsEmpty)
+            {
+                // The message was taken back or removed in the meantime: end, so a later message can start a turn.
+                starter.End();
                 return;
+            }
+
             var next = session.Queue[0];
             SetQueue(session, session.Queue.RemoveAt(0));
             starter.End();

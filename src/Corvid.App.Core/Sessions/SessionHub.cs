@@ -51,6 +51,9 @@ public sealed class SessionHub : IDisposable
     /// <summary>The session the rail selected, opened; null when none is selected.</summary>
     public SessionViewModel? Current => _current;
 
+    /// <summary>Why the sessions could not be listed at start-up; empty when they were. Also shown as a status bar tag.</summary>
+    public string StartError { get; private set; } = "";
+
     /// <summary>Raised when <see cref="Current"/> changes to another session.</summary>
     public event EventHandler? CurrentChanged;
 
@@ -63,7 +66,19 @@ public sealed class SessionHub : IDisposable
     /// </summary>
     public async Task StartAsync(string? select, string? fallback, CancellationToken cancellationToken = default)
     {
-        var summaries = await _service.ListAsync(cancellationToken).ConfigureAwait(true);
+        IReadOnlyList<SessionSummary> summaries;
+        try
+        {
+            summaries = await _service.ListAsync(cancellationToken).ConfigureAwait(true);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            // Called without awaiting at start-up: a failure must show, not vanish with the task.
+            StartError = $"Sessions could not be listed: {SafeText.Clean(exception.Message)}";
+            _statusBar.Tags = [new StatusTag("sessions unavailable", Tone.Red, StartError)];
+            return;
+        }
+
         foreach (var summary in summaries)
             _summaries[summary.Id] = summary;
         RebuildRail();
@@ -98,7 +113,7 @@ public sealed class SessionHub : IDisposable
             return;
         if (!_summaries.TryGetValue(sessionId, out var summary))
             return;
-        _shell.SelectSession(_shell.CreateSession(sessionId, summary.Title, summary.State, When(summary)));
+        _shell.SelectSession(_shell.CreateSession(sessionId, SafeText.Clean(summary.Title), summary.State, When(summary)));
         _shell.Navigate(Area.Sessions);
     }
 
@@ -233,11 +248,11 @@ public sealed class SessionHub : IDisposable
         UpdateCounts();
     }
 
-    private SessionListItem Item(SessionSummary summary) => _shell.CreateSession(summary.Id, summary.Title, summary.State, When(summary));
+    private SessionListItem Item(SessionSummary summary) => _shell.CreateSession(summary.Id, SafeText.Clean(summary.Title), summary.State, When(summary));
 
     private void Refresh(SessionListItem item, SessionSummary summary)
     {
-        item.Title = summary.Title;
+        item.Title = SafeText.Clean(summary.Title);
         item.State = summary.State;
         item.When = When(summary);
     }
