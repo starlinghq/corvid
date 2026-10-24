@@ -510,7 +510,8 @@
               </ItemsControl.ItemTemplate>
             </ItemsControl>
             <TextBlock Text="{x:Bind McpText}" Style="{StaticResource CorvidSmallText}" Visibility="{x:Bind ui:Ui.VisibleIfText(McpText)}" />
-            <ItemsControl ItemsSource="{x:Bind Reasons}" IsTabStop="False" AutomationProperties.Name="Why Corvid asks">
+            <ItemsControl ItemsSource="{x:Bind Reasons}" IsTabStop="False" AutomationProperties.Name="Why Corvid asks"
+                          Visibility="{x:Bind ui:Ui.CollapsedIf(local:SessionsLayout.Current.IsPhone)}">
               <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="sessions:ReasonView">
                   <Grid ColumnSpacing="8" Padding="0,4">
@@ -522,8 +523,28 @@
                       <TextBlock Text="{x:Bind Label}" FontFamily="{StaticResource CorvidMono}" FontSize="11" Foreground="{ThemeResource CorvidText2}"
                                  VerticalAlignment="Center" />
                     </Border>
-                    <TextBlock Grid.Column="1" controls:RichText.Runs="{x:Bind local:SessionsPage.PickRuns(local:SessionsLayout.Current.IsPhone, ShortRuns, Runs)}"
-                               Style="{StaticResource CorvidBodyText}" FontSize="{x:Bind local:SessionsPage.CardTextSize(local:SessionsLayout.Current.IsPhone)}" />
+                    <TextBlock Grid.Column="1" controls:RichText.Runs="{x:Bind Runs}"
+                               Style="{StaticResource CorvidBodyText}" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <!-- The phone's short reasons (Phone.png), at 12.5 px. -->
+            <ItemsControl ItemsSource="{x:Bind Reasons}" IsTabStop="False" AutomationProperties.Name="Why Corvid asks"
+                          Visibility="{x:Bind ui:Ui.VisibleIf(local:SessionsLayout.Current.IsPhone)}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="sessions:ReasonView">
+                  <Grid ColumnSpacing="8" Padding="0,4">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto" />
+                      <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Border Height="18" Padding="6,0" CornerRadius="4" Background="{ThemeResource CorvidBg3}" VerticalAlignment="Top" Margin="0,1,0,0">
+                      <TextBlock Text="{x:Bind Label}" FontFamily="{StaticResource CorvidMono}" FontSize="11" Foreground="{ThemeResource CorvidText2}"
+                                 VerticalAlignment="Center" />
+                    </Border>
+                    <TextBlock Grid.Column="1" controls:RichText.Runs="{x:Bind ShortRuns}"
+                               Style="{StaticResource CorvidBodyText}" FontSize="12.5" />
                   </Grid>
                 </DataTemplate>
               </ItemsControl.ItemTemplate>

@@ -156,10 +156,6 @@ public sealed partial class SessionsPage : Page, IDockProvider
     /// <summary>The phone's shorter words where it has them ("Approval 1 of 2", "4:12 left").</summary>
     public static string Pick(bool phone, string phoneText, string text) => phone ? phoneText : text;
 
-    /// <summary>The phone's short reasons (Phone.png: "checkpoint c-45 is taken first").</summary>
-    public static IReadOnlyList<MarkdownRun> PickRuns(bool phone, IReadOnlyList<MarkdownRun> phoneRuns, IReadOnlyList<MarkdownRun> runs) =>
-        phone ? phoneRuns : runs;
-
     /// <summary>The card's head: 8px 12px on the phone, 10px 14px otherwise.</summary>
     public static Thickness CardHeadPadding(bool phone) => phone ? new Thickness(12, 8, 12, 8) : new Thickness(14, 10, 14, 10);
 
@@ -167,9 +163,6 @@ public sealed partial class SessionsPage : Page, IDockProvider
     public static Thickness CardBodyPadding(bool phone) => phone ? new Thickness(12, 10, 12, 10) : new Thickness(14, 12, 14, 12);
 
     public static double CardSpacing(bool phone) => phone ? 8 : 10;
-
-    /// <summary>The card's reasons at 12.5 px on the phone, the body's 13.5 otherwise.</summary>
-    public static double CardTextSize(bool phone) => phone ? 12.5 : 13.5;
 
     /// <summary>A list shown at one width class only, and only when it has items.</summary>
     public static Visibility WhenAny(bool phone, bool phoneOnly, System.Collections.IEnumerable? items) =>
@@ -227,14 +220,58 @@ public sealed partial class SessionsPage : Page, IDockProvider
         UpdateTurnStrip();
 
         // The templates read the width class when they are made: Uno does not re-evaluate their static-rooted x:Bind paths
-        // when it changes (the window starts at one width and is resized), so the transcript is made again, once.
+        // when it changes (the window starts at one width and is resized), so the transcript is made again, once. The
+        // repeater would take its old elements back from the templates' recycle pools, bound as before, so the pools are
+        // replaced with empty ones first.
         if ((phone != wasPhone || narrow != wasNarrow) && Transcript.ItemsSource is { } blocks)
         {
+            // The repeater keeps the element that holds focus rather than letting it go, so focus leaves the transcript
+            // first and comes back to the card's answer once the new elements exist.
+            var focusInside = XamlRoot is { } root && FocusManager.GetFocusedElement(root) is DependencyObject focused && IsWithin(focused, Transcript);
+            var refocusCard = focusInside && _session?.CurrentApproval is { IsFocused: true };
+            if (focusInside)
+                Composer.Focus(FocusState.Programmatic);
             Transcript.ItemsSource = null;
+            // The repeater lets its elements go in its next layout pass: run it now, so they reach the old pools.
+            Transcript.UpdateLayout();
+            if (Resources["BlockTemplates"] is TranscriptTemplateSelector selector)
+            {
+                foreach (var template in selector.Templates)
+                    RecyclePool.SetPoolInstance(template, new RecyclePool());
+            }
+
             Transcript.ItemsSource = blocks;
             _positioned = false;
-            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, PositionAtLatest);
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            {
+                // An element the repeater kept anyway (it can hold on to one it had focused) is bound again: a template's
+                // x:Bind reads every path, the width class too, when its data context is set.
+                for (var i = 0; i < VisualTreeHelper.GetChildrenCount(Transcript); i++)
+                {
+                    if (VisualTreeHelper.GetChild(Transcript, i) is FrameworkElement { DataContext: { } data } element)
+                    {
+                        element.DataContext = null;
+                        element.DataContext = data;
+                    }
+                }
+
+                PositionAtLatest();
+                // After the rebound card has drawn its answers for the new width.
+                if (refocusCard)
+                    DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, FocusApproval);
+            });
         }
+    }
+
+    private static bool IsWithin(DependencyObject element, DependencyObject ancestor)
+    {
+        for (var current = element; current is not null; current = VisualTreeHelper.GetParent(current))
+        {
+            if (ReferenceEquals(current, ancestor))
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>Phone.png's composer: the short placeholder, the prefixes being for a keyboard.</summary>

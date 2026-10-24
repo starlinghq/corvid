@@ -217,7 +217,11 @@ And from A2:
   for its layout.
 - A template's `x:Bind` to a static source (`SessionsLayout.Current.IsPhone`) is read when the template is made and not
   again: the window starts at one width and is resized, so the Sessions page makes its transcript again when the width
-  class changes. A row that must follow the width (First run's checks) sets itself on its own `SizeChanged`.
+  class changes. That takes three steps, since the repeater otherwise hands back its old elements bound as before:
+  clear the source and lay out, replace the templates' `RecyclePool`s, and set each element it kept anyway (a focused
+  one) to its data context again. A nested item template is not rebound by that, so a list that differs by width is two
+  lists, one shown per width (the card's reasons). A row that must follow the width (First run's checks) sets itself on
+  its own `SizeChanged`.
 - An `ItemsRepeater` let Tab reach only its first focusable control; the transcript sets `TabFocusNavigation="Local"`.
 
 ## The phone layout and accessibility
