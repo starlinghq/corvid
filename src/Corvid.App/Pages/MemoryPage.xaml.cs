@@ -56,8 +56,8 @@ public sealed partial class MemoryPage : Page
 
     // ---- x:Bind helpers ----
 
-    /// <summary>" · the scanner flagged a credential", or nothing.</summary>
-    public static string Dotted(string? text) => string.IsNullOrEmpty(text) ? "" : " · " + text;
+    /// <summary>"· the scanner flagged a credential", or nothing; the space before it is the runs' own.</summary>
+    public static string Dotted(string? text) => string.IsNullOrEmpty(text) ? "" : "· " + text;
 
     /// <summary>A date that may break after its hyphens, as the browser breaks the mockup's table cells ("2026-10-" over "16").</summary>
     public static string Breakable(string? text) => (text ?? "").Replace("-", "-​", StringComparison.Ordinal);
@@ -132,7 +132,7 @@ public sealed partial class MemoryPage : Page
             Confirm(e, lesson.ConfirmRejectCommand, lesson.BackCommand);
     }
 
-    private static void Confirm(KeyRoutedEventArgs e, System.Windows.Input.ICommand enter, System.Windows.Input.ICommand escape)
+    private void Confirm(KeyRoutedEventArgs e, System.Windows.Input.ICommand enter, System.Windows.Input.ICommand escape)
     {
         var command = e.Key switch
         {
@@ -143,8 +143,12 @@ public sealed partial class MemoryPage : Page
         if (command is null)
             return;
         e.Handled = true;
-        if (command.CanExecute(null))
-            command.Execute(null);
+        if (!command.CanExecute(null))
+            return;
+        // The editor is about to close (or its card to go): the page keeps the caret rather than the next card's first
+        // button, which would light up as if chosen.
+        Focus(FocusState.Programmatic);
+        command.Execute(null);
     }
 
     /// <summary>An editor takes the caret when its card opens it (Correct…, a consolidation, Reject with a reason…).</summary>

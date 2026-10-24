@@ -126,6 +126,12 @@ public sealed class MemoryViewModel : AreaViewModel
 
     public bool HasNoLessonCandidates => LessonCandidates.Count == 0;
 
+    public bool HasStagedFacts => StagedFacts.Count > 0;
+
+    public bool HasBlockUpdates => BlockUpdates.Count > 0;
+
+    public bool HasLessonCandidates => LessonCandidates.Count > 0;
+
     public string EmptyReviewText => "Nothing waits for review. Writes the decider is unsure of, block updates and lessons land here.";
 
     /// <summary>What the last action did: "Written as an update: …", "Rejected: …".</summary>
@@ -455,6 +461,9 @@ public sealed class MemoryViewModel : AreaViewModel
         OnPropertyChanged(nameof(ReviewCount));
         OnPropertyChanged(nameof(HasNothingToReview));
         OnPropertyChanged(nameof(HasNoLessonCandidates));
+        OnPropertyChanged(nameof(HasStagedFacts));
+        OnPropertyChanged(nameof(HasBlockUpdates));
+        OnPropertyChanged(nameof(HasLessonCandidates));
         OnPropertyChanged(nameof(StatsText));
         if (_shell?.CurrentArea == Area.Memory)
             ApplyStatus();

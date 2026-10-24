@@ -152,9 +152,9 @@
                        AcceptsReturn="False" PreviewKeyDown="OnFactEditorKeyDown" Loaded="OnEditorLoaded"
                        AutomationProperties.Name="The statement, corrected" />
             </StackPanel>
-            <controls:WrapRowPanel Spacing="8" LineSpacing="8" Visibility="{x:Bind ui:Ui.VisibleIf(HasEntities)}">
-              <TextBlock Text="entities" Style="{StaticResource MemKey}" />
-              <ItemsControl ItemsSource="{x:Bind Entities}" IsTabStop="False" VerticalAlignment="Center">
+            <controls:WrapRowPanel Spacing="8" LineSpacing="8">
+              <TextBlock Text="entities" Style="{StaticResource MemKey}" Visibility="{x:Bind ui:Ui.VisibleIf(HasEntities)}" />
+              <ItemsControl ItemsSource="{x:Bind Entities}" IsTabStop="False" VerticalAlignment="Center" Visibility="{x:Bind ui:Ui.VisibleIf(HasEntities)}">
                 <ItemsControl.ItemsPanel>
                   <ItemsPanelTemplate>
                     <controls:WrapRowPanel Spacing="8" LineSpacing="8" />
@@ -353,12 +353,7 @@
 
     <!-- A .table row: fact, valid, recorded; invalidated facts muted with their tag. -->
     <DataTemplate x:Key="FactRow" x:DataType="memory:FactRowView">
-      <Grid BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,1,0,0" AutomationProperties.Name="{x:Bind AutomationName}">
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="{x:Bind local:MemoryLayout.Current.FactColumn, Mode=OneWay}" />
-          <ColumnDefinition Width="{x:Bind local:MemoryLayout.Current.ValidColumn, Mode=OneWay}" />
-          <ColumnDefinition Width="{x:Bind local:MemoryLayout.Current.RecordedColumn, Mode=OneWay}" />
-        </Grid.ColumnDefinitions>
+      <local:MemoryTableRow BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,1,0,0" AutomationProperties.Name="{x:Bind AutomationName}">
         <TextBlock Text="{x:Bind Text}" Style="{StaticResource MemCell}" Padding="10,7" Visibility="{x:Bind ui:Ui.VisibleIf(IsCurrent)}" />
         <Border Padding="10,7" Visibility="{x:Bind ui:Ui.VisibleIf(IsInvalidated)}">
           <controls:WrapRowPanel Spacing="4" LineSpacing="2">
@@ -368,7 +363,7 @@
         </Border>
         <TextBlock Grid.Column="1" Text="{x:Bind local:MemoryPage.Breakable(ValidText)}" Style="{StaticResource MemCell}" Padding="10,7" />
         <TextBlock Grid.Column="2" Text="{x:Bind local:MemoryPage.Breakable(RecordedText)}" Style="{StaticResource MemMutedCell}" Padding="10,7" />
-      </Grid>
+      </local:MemoryTableRow>
     </DataTemplate>
 
     <!-- The Hermes import: the note, Dry run and Import for review, then the dry run's list before anything is staged. -->
@@ -481,21 +476,24 @@
           </controls:ToneRow>
           <TextBlock Text="{x:Bind ViewModel.EmptyReviewText}" Style="{StaticResource CorvidMutedText}"
                      Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasNothingToReview), Mode=OneWay}" />
-          <ItemsControl ItemsSource="{x:Bind ViewModel.StagedFacts}" ItemTemplate="{StaticResource FactCard}" IsTabStop="False">
+          <ItemsControl ItemsSource="{x:Bind ViewModel.StagedFacts}" ItemTemplate="{StaticResource FactCard}" IsTabStop="False"
+                        Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasStagedFacts), Mode=OneWay}">
             <ItemsControl.ItemsPanel>
               <ItemsPanelTemplate>
                 <StackPanel Spacing="14" />
               </ItemsPanelTemplate>
             </ItemsControl.ItemsPanel>
           </ItemsControl>
-          <ItemsControl ItemsSource="{x:Bind ViewModel.BlockUpdates}" ItemTemplate="{StaticResource BlockCard}" IsTabStop="False">
+          <ItemsControl ItemsSource="{x:Bind ViewModel.BlockUpdates}" ItemTemplate="{StaticResource BlockCard}" IsTabStop="False"
+                        Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasBlockUpdates), Mode=OneWay}">
             <ItemsControl.ItemsPanel>
               <ItemsPanelTemplate>
                 <StackPanel Spacing="14" />
               </ItemsPanelTemplate>
             </ItemsControl.ItemsPanel>
           </ItemsControl>
-          <ItemsControl ItemsSource="{x:Bind ViewModel.LessonCandidates}" ItemTemplate="{StaticResource LessonCard}" IsTabStop="False">
+          <ItemsControl ItemsSource="{x:Bind ViewModel.LessonCandidates}" ItemTemplate="{StaticResource LessonCard}" IsTabStop="False"
+                        Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasLessonCandidates), Mode=OneWay}">
             <ItemsControl.ItemsPanel>
               <ItemsPanelTemplate>
                 <StackPanel Spacing="14" />
@@ -536,7 +534,7 @@
                   <TextBlock Text="bi-temporal" Style="{StaticResource MemHeadDetail}" />
                 </local:MemoryHeadPanel>
               </Border>
-              <local:MemoryFactsHead />
+              <local:MemoryTableRow><TextBlock Text="fact" Style="{StaticResource MemTh}" /><TextBlock Grid.Column="1" Text="valid" Style="{StaticResource MemTh}" /><TextBlock Grid.Column="2" Text="recorded" Style="{StaticResource MemTh}" /></local:MemoryTableRow>
               <ItemsControl ItemsSource="{x:Bind ViewModel.RecentFacts}" ItemTemplate="{StaticResource FactRow}" IsTabStop="False"
                             AutomationProperties.Name="Recent facts" />
             </StackPanel>
@@ -556,7 +554,7 @@
             </Border>
             <controls:LinkButton Text="Clear the search" FontSize="12.5" Margin="14,8,14,0" Command="{x:Bind ViewModel.ClearSearchCommand}"
                                  Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsFiltered), Mode=OneWay}" HorizontalAlignment="Left" />
-            <local:MemoryFactsHead />
+            <local:MemoryTableRow><TextBlock Text="fact" Style="{StaticResource MemTh}" /><TextBlock Grid.Column="1" Text="valid" Style="{StaticResource MemTh}" /><TextBlock Grid.Column="2" Text="recorded" Style="{StaticResource MemTh}" /></local:MemoryTableRow>
             <ItemsControl ItemsSource="{x:Bind ViewModel.Facts}" ItemTemplate="{StaticResource FactRow}" IsTabStop="False" AutomationProperties.Name="Facts" />
             <TextBlock Text="No fact matches. Try fewer words." Style="{StaticResource CorvidMutedText}" Margin="14,10"
                        Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasNoFacts), Mode=OneWay}" />
@@ -593,7 +591,8 @@
         <StackPanel Grid.ColumnSpan="2" Spacing="14" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsLessonsTab), Mode=OneWay}">
           <TextBlock Text="Lessons waiting for review" Style="{StaticResource MemSectTitle}" AutomationProperties.HeadingLevel="Level2" />
           <TextBlock Text="No lesson waits for review." Style="{StaticResource CorvidMutedText}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasNoLessonCandidates), Mode=OneWay}" />
-          <ItemsControl ItemsSource="{x:Bind ViewModel.LessonCandidates}" ItemTemplate="{StaticResource LessonCard}" IsTabStop="False">
+          <ItemsControl ItemsSource="{x:Bind ViewModel.LessonCandidates}" ItemTemplate="{StaticResource LessonCard}" IsTabStop="False"
+                        Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasLessonCandidates), Mode=OneWay}">
             <ItemsControl.ItemsPanel>
               <ItemsPanelTemplate>
                 <StackPanel Spacing="14" />
