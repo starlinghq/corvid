@@ -23,12 +23,13 @@ const theme = {
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ deviceScaleFactor: 1 });
-await page.setContent(`<html><head><style>${xtermCss} body{margin:0;background:${theme.background}} #t{display:inline-block;padding:26px 30px}</style></head><body><div id="t"></div><script>${xtermJs}</script><script>${canvasJs}</script></body></html>`);
+await page.setContent(`<html><head><style>${xtermCss} body{margin:0;background:${theme.background}} #win{display:inline-block;background:${theme.background}} #bar{background:#0c0d11;padding:12px 18px 0;display:flex;gap:10px;align-items:flex-end;font:500 22px 'JetBrains Mono',monospace} #bar .dots{display:flex;gap:9px;padding:0 10px 16px 2px} #bar .dots i{width:14px;height:14px;border-radius:50%;background:#2c3038;display:block} #tab{background:${theme.background};color:#c8ccd4;padding:12px 26px 13px;border-radius:10px 10px 0 0;white-space:nowrap} #t{display:block;padding:22px 30px 26px}</style></head><body><div id="win"><div id="bar"><span class="dots"><i></i><i></i><i></i></span><span id="tab"></span></div><div id="t"></div></div><script>${xtermJs}</script><script>${canvasJs}</script></body></html>`);
 
 for (const m of manifest) {
   const data = fs.readFileSync(path.join(frames, m.name + ".ans"), "utf8");
   const rows = m.mode === "fullscreen" ? m.rows : m.total;
-  await page.evaluate(async ({ data, cols, rows, theme }) => {
+  await page.evaluate(async ({ data, cols, rows, theme, title }) => {
+    document.getElementById("tab").textContent = title;
     await document.fonts.load("26px 'JetBrains Mono'");
     await document.fonts.load("bold 26px 'JetBrains Mono'");
     const host = document.getElementById("t");
@@ -40,8 +41,8 @@ for (const m of manifest) {
     await new Promise((resolve) => term.write(data, resolve));
     term.write("\x1b[?25l"); // the composer draws its own caret in these frames
     await new Promise((r) => setTimeout(r, 150));
-  }, { data, cols: m.cols, rows, theme });
-  await page.locator("#t").screenshot({ path: path.join(out, m.name + ".png") });
+  }, { data, cols: m.cols, rows, theme, title: m.title });
+  await page.locator("#win").screenshot({ path: path.join(out, m.name + ".png") });
   console.log("rendered", m.name, `${m.cols}x${rows}`);
 }
 await browser.close();
