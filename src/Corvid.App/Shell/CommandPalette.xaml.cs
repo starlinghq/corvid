@@ -138,12 +138,18 @@ public sealed partial class CommandPalette : UserControl
         ViewModel.Close();
     }
 
-    /// <summary>A click on the scrim, not one that bubbled up from the card.</summary>
-    private void OnScrimTapped(object sender, TappedRoutedEventArgs e)
+    /// <summary>
+    /// A press on the scrim, not one that bubbled up from the card. A press rather than a tap: the click that opened the
+    /// palette (the header's Aside) ends over the scrim that click made appear, and its tap would close it again at once.
+    /// </summary>
+    private void OnScrimPressed(object sender, PointerRoutedEventArgs e)
     {
-        var at = e.GetPosition(Card);
+        var at = e.GetCurrentPoint(Card).Position;
         if (at.X < 0 || at.Y < 0 || at.X > Card.ActualWidth || at.Y > Card.ActualHeight)
+        {
             Cancel();
+            e.Handled = true;
+        }
     }
 
     private void OnCloseClick(object sender, RoutedEventArgs e) => Cancel();

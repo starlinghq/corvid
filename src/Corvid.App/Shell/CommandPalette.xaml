@@ -56,7 +56,7 @@
     </Style>
   </UserControl.Resources>
 
-  <Grid x:Name="Root" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="#66000000" Tapped="OnScrimTapped"
+  <Grid x:Name="Root" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="#66000000" PointerPressed="OnScrimPressed"
         Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsOpen), Mode=OneWay}">
     <ContentControl x:Name="CardHost" IsTabStop="True" UseSystemFocusVisuals="False" VerticalAlignment="Top" HorizontalAlignment="Center"
                     Margin="16,64,16,16" HorizontalContentAlignment="Stretch" AutomationProperties.Name="{x:Bind ViewModel.Title, Mode=OneWay}">

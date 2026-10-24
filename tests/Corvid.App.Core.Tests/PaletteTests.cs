@@ -310,6 +310,11 @@ public sealed class PaletteTests
         Assert.Equal(composition.Keys.Bindings.Count, palette.Items.Count);
         Assert.Equal("Anywhere", palette.Items[0].GroupHeader);
         Assert.Contains(palette.Items, item => item.GroupHeader == "Composer");
+        // A page's own key says where it works rather than doing nothing.
+        palette.Choose(palette.Items.First(item => item.KeyText == "Ctrl+Enter"));
+        Assert.True(palette.IsOpen);
+        Assert.Equal("Ctrl+Enter belongs to Composer: it works while the focus is there.", palette.Note);
+
         palette.Query = "rail";
         // Filtering keeps the groups' order and headings.
         Assert.Equal("Anywhere", palette.Items[0].GroupHeader);

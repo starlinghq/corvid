@@ -84,6 +84,23 @@ public sealed class KeyMapTests
     }
 
     [Fact]
+    public void TheWindowLeavesAGestureToThePageThatShowsWithItsOwnKey()
+    {
+        var keys = new KeyMap();
+        Assert.True(keys.IsPagesKey(keys[KeyCommands.Find], Area.Audit));
+        Assert.True(keys.IsPagesKey(keys[KeyCommands.Find], Area.Memory));
+        Assert.False(keys.IsPagesKey(keys[KeyCommands.Find], Area.Sessions));
+        Assert.True(keys.IsPagesKey(keys[KeyCommands.SwitchGenerator], Area.Models));
+        Assert.False(keys.IsPagesKey(keys[KeyCommands.SwitchGenerator], Area.Sessions));
+        Assert.False(keys.IsPagesKey(keys[KeyCommands.Palette], Area.Settings));
+
+        // A remapping onto a page's key is left to that page where it shows.
+        Assert.True(keys.Rebind(KeyCommands.Palette, "Ctrl+S").Accepted);
+        Assert.True(keys.IsPagesKey(keys[KeyCommands.Palette], Area.Sessions));
+        Assert.False(keys.IsPagesKey(keys[KeyCommands.Palette], Area.Board));
+    }
+
+    [Fact]
     public void ARemappingThatConflictsIsRefusedAndChangesNothing()
     {
         var keys = new KeyMap();
