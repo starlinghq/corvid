@@ -35,6 +35,7 @@ public sealed class SecretsServiceTests
 
         Assert.Equal(VaultState.Absent, snapshot.Vault.State);
         Assert.Equal(Path.Combine(fixture.Host.Root, "absent.sock"), snapshot.Vault.Socket);
+        Assert.Equal(EngineSecretsService.NoCounts, snapshot.Vault.AuditSummary);
         Assert.Empty(snapshot.Secrets);
         var telegram = Assert.Single(snapshot.Consumers);
         Assert.Equal(("gateway:telegram", ConsumerKind.Gateway, "telegram.bot-token", "api.telegram.org"),

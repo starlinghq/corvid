@@ -43,6 +43,9 @@ public sealed class EngineSecretsService : ISecretsService, IDisposable
 
     public const string NotReportedVersion = "not reported by Vault yet (V-n)";
 
+    /// <summary>The audit line while Vault does not answer: no counts, rather than zeros it never said.</summary>
+    public const string NoCounts = "Vault does not answer, so it gives no counts.";
+
     private static readonly TimeSpan VaultTimeout = TimeSpan.FromSeconds(5);
 
     private readonly AppEngine _engine;
@@ -70,7 +73,7 @@ public sealed class EngineSecretsService : ISecretsService, IDisposable
         }
         catch (InvalidOperationException exception)
         {
-            return new SecretsSnapshot(new VaultStatus(VaultState.Absent) { Socket = exception.Message }, [], consumers);
+            return new SecretsSnapshot(new VaultStatus(VaultState.Absent) { Socket = exception.Message, AuditSummary = NoCounts }, [], consumers);
         }
 
         var client = new VaultClient(VaultSession, socket);
@@ -85,7 +88,7 @@ public sealed class EngineSecretsService : ISecretsService, IDisposable
             catch (Exception exception) when (exception is SocketException or IOException
                 or OperationCanceledException && !cancellationToken.IsCancellationRequested)
             {
-                return new SecretsSnapshot(new VaultStatus(VaultState.Absent) { Socket = socket }, [], consumers);
+                return new SecretsSnapshot(new VaultStatus(VaultState.Absent) { Socket = socket, AuditSummary = NoCounts }, [], consumers);
             }
             catch (VaultException exception)
             {

@@ -161,7 +161,7 @@ public sealed class EngineGatewayService : IGatewayService, IDisposable
             adapters.Add(settings is { Enabled: true }
                 ? new GatewayAdapter(name, AdapterState.Unknown)
                 {
-                    Detail = $"enabled, with its token in Vault as {settings.Secret ?? "(no secret named)"}; `corvid gateway` runs it, and this app does not host the gateway yet (G-14), so its state is not known here",
+                    Detail = $"enabled, its token the Vault secret {settings.Secret ?? "(none named)"}; only corvid gateway runs adapters until this app hosts the gateway (G-14), so whether it is connected is not known here",
                 }
                 : new GatewayAdapter(name, AdapterState.Off)
                 {
