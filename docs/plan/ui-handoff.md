@@ -16,7 +16,7 @@ pull request starlinghq/corvid#71.
 | A0.2 Session core: update contract, fold, demo scenario, view models, markdown and diff | done, tested headless and through the Sessions page | `a143605` |
 | A0.3 Sessions page: transcript, composer, approval card, dock, keyboard | done, flows F2, F3, F6 and F9 driven on the running app (§1.1) | `93d6c02` |
 | A0 verify loop | done: one independent verifier, one fix round (§1.1) | `60e90fd` |
-| A1 the seven other mocked screens | not started | |
+| A1 the seven other mocked screens: Review and Rewind, Board, Models and First run, Memory, Audit | done, verified on the running app by an independent verifier in two rounds (§1.2) | branch `a1/screens` |
 | A2 the pages without mockups, the palette, the rest of the keys | not started | |
 | A3 `Corvid.App.Engine`: the real runtime behind the services | not started | |
 
@@ -91,6 +91,38 @@ Decisions and differences that remain:
 - Uno's TextBox types the line break of an Enter the page has handled, so the page cancels that one change
   (`BeforeTextChanging`). x:Bind paths on the page itself do not follow a static source, so the phone switches set the
   header's and hint's visibility in code; templates do bind to `SessionsLayout.Current`.
+
+### 1.2 The seven other mocked screens (A1)
+
+Built by the workflow `.claude/workflows/corvid-app-a1-screens.js`: five builders in parallel, each in its own worktree
+and headless display (Review and Rewind; Board with its attention tray; Models and First run; Memory; Audit with the
+egress ledger), one integrator merging their branches into `a1/screens` (no conflicts), then an independent verifier
+with a fix round. Round 1 found two major defects: focused controls redrew in the dark theme's brushes under
+`--theme light`, and First run's end state (an empty session, the degraded badge) was not reached. Both were fixed.
+Round 2 passed with ten minor ones. Each area has its core, demo service and tests in `Corvid.App.Core/<Area>/`
+(App.Core tests went from 152 to 250), and each screen was compared with its render at 1440 in light and dark, at 1024, at 820
+against the narrow render, and at 390. Flows F1, F4, F5, F8, F10, F11, F14, F18, F21 and F23 were driven on the running
+app. Shared additions: `SideBySideDiffView` and `PathText` (Review and Rewind), `DemoSessionService.Rewind` (a restore
+on the session's stream), Ctrl+Shift+C for Review.
+
+Left from the last verification round:
+
+- After a restore, Review still shows the restored turn's files and counts, and the Sessions dock its old counts: the
+  restore does not reach the session's change lists yet.
+- First run's Finish leaves Sessions with no session open but the header's actions and Send still look enabled.
+- Memory: choosing "update" preselects the nearest fact by score, so approving can replace an unrelated fact. The
+  update target should be chosen, not guessed.
+- Models: the slots table's horizontal scroll bar draws over its last row.
+- Accepting an MCP item on the Board does not clear the rail's MCP badge.
+- "Open in Audit" from the Sessions dock keeps Audit's earlier filter and notice.
+- Rewind's preview stacks the two sides of its diff, so unchanged lines read twice.
+- Board: "Open a workspace…", "New session" and "Take over" draw disabled (the flows come later); Board.png shows them
+  enabled, "New session" as the primary button.
+- First run at 390 shows the session's bottom bar and subtitle.
+- The Sessions page opens with the jump pill over the streaming answer (A0's behaviour, by design in `ui.md` §2).
+
+Each builder's own list of differences from its mockup is in the workflow run's report; the verifier judged them
+acceptable.
 
 ### What the running app shows today
 
