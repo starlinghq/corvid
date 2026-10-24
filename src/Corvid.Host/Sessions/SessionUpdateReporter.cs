@@ -78,6 +78,10 @@ public sealed class SessionUpdateReporter : ITurnObserver
         Emit(new AnswerChunk(delta));
     });
 
+    public void Thought(string delta) => Then(() => Emit(new ThoughtChunk(delta)));
+
+    public void Usage(long? inputTokens, long? outputTokens) => Then(() => Emit(new UsageReported(inputTokens, outputTokens)));
+
     public void ToolStarted(string callId, string tool, bool approval) => Then(() =>
     {
         CatchUp();

@@ -582,6 +582,18 @@ public sealed class CorvidSession
     /// <summary>Whether outside content is in the session's context (plan §10.3).</summary>
     public bool Tainted => Runner.Tainted;
 
+    /// <summary>
+    /// The approval mode this session's calls are assessed under (G-10): <c>Corvid:Approvals:Mode</c> until a surface sets
+    /// another for this session; applies from the next call assessed, the running turn's included. Held by this process
+    /// only: the session opened again in another process starts at the configured mode. The hardline list applies in
+    /// every mode.
+    /// </summary>
+    public ApprovalMode ApprovalMode
+    {
+        get => Runner.ApprovalMode;
+        set => Runner.ApprovalMode = value;
+    }
+
     /// <summary>Runs one turn and waits for its delivery.</summary>
     public Task<Delivery> SendAsync(string text, CancellationToken cancellationToken = default) =>
         _runtime.SendAsync(this, text, EnvelopeOrigin.User, cancellationToken);

@@ -25,6 +25,18 @@ public sealed record PromptSent(string Text, long Sequence) : SessionStreamUpdat
 /// <summary>Answer text (ACP <c>agent_message_chunk</c>): a streamed delta live, the whole message on replay.</summary>
 public sealed record AnswerChunk(string Text) : SessionStreamUpdate;
 
+/// <summary>
+/// Reasoning the generator streamed (ACP <c>agent_thought_chunk</c>, K-1): live only, a delta; the log does not keep it,
+/// so a replay has none.
+/// </summary>
+public sealed record ThoughtChunk(string Text) : SessionStreamUpdate;
+
+/// <summary>
+/// One generator call's tokens as its provider reported them (K-5, live only: the log does not keep usage yet). The
+/// prompt's count is the rendered prompt the call sent, which is what a context gauge shows.
+/// </summary>
+public sealed record UsageReported(long? InputTokens, long? OutputTokens) : SessionStreamUpdate;
+
 /// <summary>A tool call's state, as ACP names it.</summary>
 public enum ToolCallState
 {

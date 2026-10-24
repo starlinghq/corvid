@@ -156,6 +156,24 @@ public sealed class TurnRunner
     /// </summary>
     public bool Tainted { get; private set; }
 
+    private int _approvalMode = -1;
+
+    /// <summary>
+    /// The approval mode this session's calls are assessed under (G-10): <see cref="TurnOptions.ApprovalMode"/> until a
+    /// surface sets another for the session, which applies from the next call assessed, the running turn's included. Kept
+    /// for the runner's lifetime only; the log does not record it. Thread-safe: a surface sets it beside a running turn.
+    /// </summary>
+    public ApprovalMode ApprovalMode
+    {
+        get => Volatile.Read(ref _approvalMode) is var mode and >= 0 ? (ApprovalMode)mode : _options.ApprovalMode;
+        set
+        {
+            if (!Enum.IsDefined(value))
+                throw new ArgumentOutOfRangeException(nameof(value), value, "Not an approval mode.");
+            Volatile.Write(ref _approvalMode, (int)value);
+        }
+    }
+
     public async Task<TurnResult> RunAsync(Envelope envelope, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(envelope);
@@ -875,7 +893,7 @@ public sealed class TurnRunner
             if (_services.Approvals is not { } approvals)
                 return ("no approval pipeline is configured, so side-effecting tools do not run", null);
             var action = new ToolAction(call.Tool.Descriptor, call.Arguments);
-            var context = new ApprovalContext(runner.SessionId, _options.ApprovalMode, State())
+            var context = new ApprovalContext(runner.SessionId, runner.ApprovalMode, State())
             {
                 Tainted = runner.Tainted,
                 KnownRecipients = _options.KnownRecipients,

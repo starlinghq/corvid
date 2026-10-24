@@ -206,6 +206,36 @@ public sealed class CompositionTests
     }
 
     [Fact]
+    public async Task ASessionsApprovalModeAppliesToItsCallsOnly()
+    {
+        var models = new FakeModels(new FakeGenerator(Reply.Call("add_note", """{"text":"one"}"""), Reply.Say("Added."),
+            Reply.Call("add_note", """{"text":"two"}"""), Reply.Say("Added."),
+            Reply.Call("add_note", """{"text":"three"}"""), Reply.Say("Added.")));
+        await using var host = TestHost.Create(models);
+        await using var runtime = await host.StartAsync();
+        var session = runtime.OpenSession();
+        var other = runtime.OpenSession();
+        var prompter = new RecordingPrompter(Corvid.Approvals.ApprovalAnswer.Approve());
+        using var attached = runtime.AttachPrompter(session.Id, prompter);
+        using var attachedOther = runtime.AttachPrompter(other.Id, prompter);
+
+        // G-10: the configured mode (Smart) until the session sets its own; another session keeps the configured one.
+        Assert.Equal(Corvid.Approvals.ApprovalMode.Smart, session.ApprovalMode);
+        await session.SendAsync("add a note: one", TestContext.Current.CancellationToken);
+        session.ApprovalMode = Corvid.Approvals.ApprovalMode.Manual;
+        await session.SendAsync("add a note: two", TestContext.Current.CancellationToken);
+        await other.SendAsync("add a note: three", TestContext.Current.CancellationToken);
+
+        Assert.Equal(3, prompter.Prompts.Count);
+        Assert.DoesNotContain(prompter.Prompts[0].Reasons, reason => reason.Code == "mode");
+        Assert.Contains(prompter.Prompts[1].Reasons, reason => reason.Code == "mode");
+        Assert.DoesNotContain(prompter.Prompts[2].Reasons, reason => reason.Code == "mode");
+        Assert.Equal(Corvid.Approvals.ApprovalMode.Manual, session.ApprovalMode);
+        Assert.Equal(Corvid.Approvals.ApprovalMode.Smart, other.ApprovalMode);
+        Assert.Throws<ArgumentOutOfRangeException>(() => session.ApprovalMode = (Corvid.Approvals.ApprovalMode)42);
+    }
+
+    [Fact]
     public async Task TheTurnFeedStreamsTextAndReportsTools()
     {
         var models = new FakeModels(new FakeGenerator(Reply.Call("list_notes"), Reply.Say("You have two notes.")));

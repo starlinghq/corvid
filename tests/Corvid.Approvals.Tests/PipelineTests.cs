@@ -114,6 +114,56 @@ public sealed class PipelineTests
     }
 
     [Fact]
+    public async Task An_always_answer_writes_the_previewed_rule_narrowed_to_the_users_paths()
+    {
+        using var db = new TempLog();
+        var build = Fixtures.Workspace + "/build";
+        var answer = ApprovalAnswer.Approve(ApprovalScope.Always) with { RulePaths = [[build + "/cache"]] };
+        var pipeline = Fixtures.Pipeline(db, prompter: ScriptedPrompter.Always(answer));
+        var context = Fixtures.Context(ApprovalMode.Manual);
+
+        // G-11: the preview is exactly what the answer writes, before narrowing.
+        var preview = ApprovalPipeline.RulesFor(Fixtures.Analyze("rm -rf build"), RuleDecision.Allow, DateTimeOffset.UnixEpoch);
+        Assert.Equal([build], Assert.Single(preview).Paths);
+
+        Assert.Equal(ApprovalScope.Always, (await pipeline.AuthorizeAsync(context, new ShellAction("rm -rf build"), Ct)).Scope);
+        Assert.Equal([build + "/cache"], Assert.Single(pipeline.AlwaysRules).Paths);
+        Assert.Equal(ApprovalOutcome.Auto, (await pipeline.AssessAsync(context, new ShellAction("rm -rf build/cache/x"), Ct)).Outcome);
+        Assert.Equal(ApprovalOutcome.Ask, (await pipeline.AssessAsync(context, new ShellAction("rm -rf build/other"), Ct)).Outcome);
+    }
+
+    [Fact]
+    public async Task A_narrowing_that_widens_writes_no_rule_and_applies_once()
+    {
+        using var db = new TempLog();
+        var answer = ApprovalAnswer.Approve(ApprovalScope.Session) with { RulePaths = [[Fixtures.Workspace + "/src"]] };
+        var pipeline = Fixtures.Pipeline(db, prompter: ScriptedPrompter.Always(answer));
+
+        var result = await pipeline.AuthorizeAsync(Fixtures.Context(ApprovalMode.Manual), new ShellAction("rm -rf build"), Ct);
+
+        Assert.True(result.Allowed);
+        Assert.Equal(ApprovalScope.Once, result.Scope);
+        Assert.Empty(pipeline.SessionRules(Session));
+        Assert.Empty(pipeline.AlwaysRules);
+    }
+
+    [Theory]
+    [InlineData("build/cache", "not an absolute path")]
+    [InlineData("/elsewhere", "a rule can only be narrowed")]
+    [InlineData("{ws}/build/../src", "a rule can only be narrowed")]
+    public void Narrowing_accepts_only_absolute_paths_at_or_under_the_rules_own(string path, string error)
+    {
+        var rules = ApprovalPipeline.RulesFor(Fixtures.Analyze("rm -rf build"), RuleDecision.Allow, DateTimeOffset.UnixEpoch);
+
+        Assert.False(ApprovalPipeline.Narrow(rules, [[path.Replace("{ws}", Fixtures.Workspace, StringComparison.Ordinal)]], out var kept, out var why));
+        Assert.Contains(error, why, StringComparison.Ordinal);
+        Assert.Equal(rules, kept);
+        Assert.True(ApprovalPipeline.Narrow(rules, [[]], out var unchanged, out _));
+        Assert.Equal(rules, unchanged);
+        Assert.False(ApprovalPipeline.Narrow(rules, [[], []], out _, out _));
+    }
+
+    [Fact]
     public async Task An_approved_pattern_covers_only_what_it_matches()
     {
         using var db = new TempLog();
