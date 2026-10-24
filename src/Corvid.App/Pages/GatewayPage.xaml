@@ -1,22 +1,333 @@
 <Page x:Class="Corvid.App.Pages.GatewayPage"
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:controls="using:Corvid.App.Controls"
+      xmlns:gateway="using:Corvid.App.Core.Gateway"
+      xmlns:local="using:Corvid.App.Pages"
+      xmlns:ui="using:Corvid.App.Infrastructure"
       Background="{ThemeResource CorvidBg}"
       Foreground="{ThemeResource CorvidText}"
       FontSize="13.5">
-  <!-- .page: the page head with the area's title, then the body. A placeholder until the area is built. -->
-  <Grid>
+  <!--
+    The Gateway area (docs/plan/ui.md §4.10, F16; no mockup: drawn in the mocked pages' language). The head with where the
+    gateway runs and its channels; then two columns (1.4fr and 1fr): pairing requests (each code with Pair as guest, Pair
+    as owner…, Ignore), paired users with their guest tool allowlists, and deliveries waiting on the left; the channels,
+    the host and the per-chat overrides on the right. Esc closes a question or an allowlist editor.
+  -->
+  <Page.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="ms-appx:///Pages/ModelsStyles.xaml" />
+        <ResourceDictionary Source="ms-appx:///Pages/OpsStyles.xaml" />
+      </ResourceDictionary.MergedDictionaries>
+
+      <DataTemplate x:Key="LineTemplate" x:DataType="gateway:GatewayLine">
+        <StackPanel Padding="14,8" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,1,0,0" AutomationProperties.Name="{x:Bind AutomationName}">
+          <TextBlock Text="{x:Bind What}" Style="{StaticResource Cell}" />
+          <TextBlock Text="{x:Bind Detail}" Style="{StaticResource CellSmall}" />
+        </StackPanel>
+      </DataTemplate>
+    </ResourceDictionary>
+  </Page.Resources>
+
+  <Grid x:Name="Root">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto" />
       <RowDefinition Height="*" />
     </Grid.RowDefinitions>
-    <Border Style="{StaticResource CorvidPageHead}">
-      <TextBlock Text="{x:Bind ViewModel.Title}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
-                 AutomationProperties.HeadingLevel="Level1" />
+
+    <Border x:Name="HeadHost" Style="{StaticResource CorvidPageHead}">
+      <Grid ColumnSpacing="12">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <controls:WrapRowPanel x:Name="HeadTitle" Spacing="12" LineSpacing="12" VerticalAlignment="Center">
+          <TextBlock Text="{x:Bind ViewModel.Title}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
+                     AutomationProperties.HeadingLevel="Level1" />
+          <TextBlock local:SpanText.Runs="{x:Bind ViewModel.Subtitle, Mode=OneWay}" Style="{StaticResource CorvidMutedText}" VerticalAlignment="Center" />
+        </controls:WrapRowPanel>
+        <StackPanel x:Name="HeadButtons" Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" />
+      </Grid>
     </Border>
-    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-      <StackPanel Padding="24,18,24,18" Spacing="18" MaxWidth="960" HorizontalAlignment="Left">
-        <TextBlock Text="{x:Bind ViewModel.Summary}" Style="{StaticResource CorvidMutedText}" />
+
+    <ScrollViewer x:Name="BodyScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled" HorizontalScrollBarVisibility="Disabled">
+      <StackPanel x:Name="Body" Padding="24,18,24,18" Spacing="18">
+        <controls:ToneRow Tone="{x:Bind ViewModel.NoticeTone, Mode=OneWay}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasNotice), Mode=OneWay}"
+                          AutomationProperties.LiveSetting="Polite">
+          <Grid ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock local:SpanText.Runs="{x:Bind ViewModel.Notice, Mode=OneWay}" TextWrapping="Wrap" VerticalAlignment="Center"
+                       LineHeight="18.125" LineStackingStrategy="BlockLineHeight" />
+            <controls:CorvidButton Grid.Column="1" Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Dismiss"
+                                   Foreground="{ThemeResource CorvidText2}" Command="{x:Bind ViewModel.DismissNoticeCommand}" />
+          </Grid>
+        </controls:ToneRow>
+
+        <Grid x:Name="Columns" ColumnSpacing="18" RowSpacing="18">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="1.4*" />
+            <ColumnDefinition x:Name="RightColumn" Width="1*" />
+          </Grid.ColumnDefinitions>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+          </Grid.RowDefinitions>
+
+          <StackPanel Spacing="18">
+            <!-- Pairing requests (F16): approved here, never from a chat. -->
+            <Border Style="{StaticResource CorvidPanel}">
+              <StackPanel>
+                <Border Style="{StaticResource PanelHead}">
+                  <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                    <TextBlock Text="Pairing requests" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                    <TextBlock Text="match the code with the one the bot sent" Style="{StaticResource PanelNote}" />
+                  </controls:WrapRowPanel>
+                </Border>
+                <ItemsControl x:Name="RequestCards" ItemsSource="{x:Bind ViewModel.Requests}" IsTabStop="False" Padding="14,12"
+                              Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasRequests), Mode=OneWay}">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                      <StackPanel Spacing="10" />
+                    </ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="gateway:PairingRequestViewModel">
+                      <Border Style="{StaticResource OpsCard}" Tag="request" AutomationProperties.Name="{x:Bind AutomationName}">
+                        <StackPanel Spacing="8">
+                          <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                              <ColumnDefinition Width="Auto" />
+                              <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <controls:Icon Kind="Send" Width="16" Height="16" Foreground="{ThemeResource CorvidViolet}" VerticalAlignment="Top" Margin="0,2,0,0" />
+                            <StackPanel Grid.Column="1" Spacing="2">
+                              <controls:WrapRowPanel Spacing="12" LineSpacing="4">
+                                <TextBlock Text="{x:Bind Title}" Style="{StaticResource PanelTitle}" />
+                                <Border Background="{ThemeResource CorvidBg}" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1" CornerRadius="6" Padding="8,1">
+                                  <TextBlock Text="{x:Bind Code}" Style="{StaticResource OpsCode}" AutomationProperties.Name="{x:Bind local:GatewayPage.CodeName(Code)}" />
+                                </Border>
+                              </controls:WrapRowPanel>
+                              <TextBlock Text="{x:Bind Note}" Style="{StaticResource CellSmall}" />
+                            </StackPanel>
+                          </Grid>
+                          <controls:ToneRow Tone="Red" Visibility="{x:Bind ui:Ui.VisibleIf(HasHidden)}">
+                            <TextBlock Text="{x:Bind Warning}" TextWrapping="Wrap" LineHeight="18.125" LineStackingStrategy="BlockLineHeight" />
+                          </controls:ToneRow>
+                          <controls:WrapRowPanel Spacing="8" LineSpacing="8" Margin="28,0,0,0" Visibility="{x:Bind ui:Ui.CollapsedIf(IsConfirmingOwner), Mode=OneWay}">
+                            <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Primary" Content="Pair as guest" Command="{x:Bind GuestCommand}"
+                                                   AutomationProperties.Name="{x:Bind GuestName}"
+                                                   ToolTipService.ToolTip="A guest talks to Corvid with no tools until you widen its allowlist" />
+                            <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Content="Pair as owner…" Command="{x:Bind AskOwnerCommand}" Click="OnAskOwnerClick"
+                                                   AutomationProperties.Name="{x:Bind OwnerName}"
+                                                   ToolTipService.ToolTip="An owner answers approvals from the chat. Asks first." />
+                            <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Ignore" Foreground="{ThemeResource CorvidRed}"
+                                                   Command="{x:Bind IgnoreCommand}" AutomationProperties.Name="{x:Bind IgnoreName}"
+                                                   ToolTipService.ToolTip="Drop the code; the sender stays unpaired" />
+                          </controls:WrapRowPanel>
+                          <controls:ToneRow Tone="Amber" Margin="28,0,0,0" Visibility="{x:Bind ui:Ui.VisibleIf(IsConfirmingOwner), Mode=OneWay}">
+                            <StackPanel Spacing="8">
+                              <TextBlock local:SpanText.Runs="{x:Bind OwnerQuestion}" TextWrapping="Wrap" LineHeight="18.125" LineStackingStrategy="BlockLineHeight" />
+                              <StackPanel Orientation="Horizontal" Spacing="8">
+                                <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Primary" Content="Pair as owner" Command="{x:Bind OwnerCommand}"
+                                                       AutomationProperties.Name="{x:Bind OwnerName}" />
+                                <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Cancel" Command="{x:Bind CancelOwnerCommand}" />
+                              </StackPanel>
+                            </StackPanel>
+                          </controls:ToneRow>
+                        </StackPanel>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock Text="{x:Bind ViewModel.NoRequestsText}" Style="{StaticResource CellMuted}" Margin="14,12"
+                           Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.HasRequests), Mode=OneWay}" />
+              </StackPanel>
+            </Border>
+
+            <!-- Paired users: role, since, and a guest's tool allowlist. -->
+            <Border Style="{StaticResource CorvidPanel}">
+              <StackPanel>
+                <Border Style="{StaticResource PanelHead}">
+                  <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                    <TextBlock Text="Paired users" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                    <TextBlock Text="a guest's allowlist is empty until you widen it" Style="{StaticResource PanelNote}" />
+                  </controls:WrapRowPanel>
+                </Border>
+                <ScrollViewer HorizontalScrollMode="Auto" HorizontalScrollBarVisibility="Auto" VerticalScrollMode="Disabled"
+                              VerticalScrollBarVisibility="Disabled" SizeChanged="OnTableSized">
+                  <StackPanel MinWidth="600" AutomationProperties.Name="Paired users">
+                    <Grid>
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="1.1*" />
+                        <ColumnDefinition Width="70" />
+                        <ColumnDefinition Width="1*" />
+                        <ColumnDefinition Width="1.4*" />
+                        <ColumnDefinition Width="168" />
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Text="user" Style="{StaticResource TableHead}" />
+                      <TextBlock Grid.Column="1" Text="role" Style="{StaticResource TableHead}" />
+                      <TextBlock Grid.Column="2" Text="since" Style="{StaticResource TableHead}" />
+                      <TextBlock Grid.Column="3" Text="tools" Style="{StaticResource TableHead}" />
+                    </Grid>
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.Users}" IsTabStop="False">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="gateway:PairedUserViewModel">
+                          <StackPanel BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,1,0,0" AutomationProperties.Name="{x:Bind AutomationName}">
+                            <Grid>
+                              <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="1.1*" />
+                                <ColumnDefinition Width="70" />
+                                <ColumnDefinition Width="1*" />
+                                <ColumnDefinition Width="1.4*" />
+                                <ColumnDefinition Width="168" />
+                              </Grid.ColumnDefinitions>
+                              <StackPanel Margin="10,5.5,10,8.5">
+                                <TextBlock Text="{x:Bind Handle}" Style="{StaticResource CellMono}" FontWeight="Medium" />
+                                <TextBlock Text="{x:Bind Channel}" Style="{StaticResource CellSmall}" />
+                              </StackPanel>
+                              <controls:TagChip Grid.Column="1" Margin="10,7" HorizontalAlignment="Left" VerticalAlignment="Top"
+                                                Text="{x:Bind RoleText}" Tone="{x:Bind RoleTone}" />
+                              <TextBlock Grid.Column="2" Margin="10,5.5,10,8.5" Text="{x:Bind Since}" Style="{StaticResource Cell}" />
+                              <TextBlock Grid.Column="3" Margin="10,5.5,10,8.5" Text="{x:Bind ToolsText}" Style="{StaticResource Cell}"
+                                         FontFamily="{x:Bind local:GatewayPage.ToolsFont(ToolsEmpty, IsGuest)}" />
+                              <StackPanel Grid.Column="4" Margin="0,6,10,6" Orientation="Horizontal" Spacing="6" VerticalAlignment="Top" HorizontalAlignment="Right">
+                                <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Content="Widen…" Command="{x:Bind EditCommand}"
+                                                       Visibility="{x:Bind ui:Ui.VisibleIf(IsGuest)}" AutomationProperties.Name="{x:Bind EditName}"
+                                                       ToolTipService.ToolTip="Choose the tools this guest may use" />
+                                <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Revoke…" Foreground="{ThemeResource CorvidRed}"
+                                                       Command="{x:Bind AskRevokeCommand}" AutomationProperties.Name="{x:Bind RevokeName}"
+                                                       ToolTipService.ToolTip="Unpair: their next message gets a new code. Asks first." />
+                              </StackPanel>
+                            </Grid>
+                            <!-- The allowlist editor, under its row. -->
+                            <StackPanel Margin="10,0,10,10" Padding="12,10" Spacing="8" Background="{ThemeResource CorvidBg2}" CornerRadius="8"
+                                        Visibility="{x:Bind ui:Ui.VisibleIf(IsEditing), Mode=OneWay}">
+                              <TextBlock Text="Tools this guest may use. Each still follows the approval mode." Style="{StaticResource CellSmall}" />
+                              <ItemsControl ItemsSource="{x:Bind Choices, Mode=OneWay}" IsTabStop="False" AutomationProperties.Name="{x:Bind EditName}">
+                                <ItemsControl.ItemsPanel>
+                                  <ItemsPanelTemplate>
+                                    <controls:WrapRowPanel Spacing="18" LineSpacing="6" />
+                                  </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                  <DataTemplate x:DataType="gateway:GuestToolChoice">
+                                    <CheckBox Style="{StaticResource SetupCheckBox}" IsChecked="{x:Bind IsChecked, Mode=TwoWay}" AutomationProperties.Name="{x:Bind Name}">
+                                      <TextBlock Text="{x:Bind Name}" Style="{StaticResource CellMono}" />
+                                    </CheckBox>
+                                  </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                              </ItemsControl>
+                              <StackPanel Orientation="Horizontal" Spacing="8">
+                                <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Primary" Content="Save allowlist" Command="{x:Bind SaveCommand}" />
+                                <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Cancel" Command="{x:Bind CancelEditCommand}" />
+                              </StackPanel>
+                            </StackPanel>
+                            <controls:ToneRow Tone="Red" Margin="10,0,10,10" Visibility="{x:Bind ui:Ui.VisibleIf(IsConfirmingRevoke), Mode=OneWay}">
+                              <StackPanel Spacing="8">
+                                <TextBlock local:SpanText.Runs="{x:Bind RevokeQuestion}" TextWrapping="Wrap" LineHeight="18.125" LineStackingStrategy="BlockLineHeight" />
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                  <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Content="Revoke" Foreground="{ThemeResource CorvidRed}"
+                                                         Command="{x:Bind RevokeCommand}" AutomationProperties.Name="{x:Bind RevokeName}" />
+                                  <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Keep" Command="{x:Bind CancelRevokeCommand}" />
+                                </StackPanel>
+                              </StackPanel>
+                            </controls:ToneRow>
+                          </StackPanel>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </ScrollViewer>
+                <TextBlock Text="{x:Bind ViewModel.GuestToolsNote, Mode=OneWay}" Style="{StaticResource CellSmall}" Margin="14,10" />
+              </StackPanel>
+            </Border>
+
+            <!-- Deliveries waiting. -->
+            <Border Style="{StaticResource CorvidPanel}">
+              <StackPanel>
+                <Border Style="{StaticResource PanelHead}">
+                  <TextBlock Text="Deliveries waiting" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                </Border>
+                <ItemsControl ItemsSource="{x:Bind ViewModel.Deliveries, Mode=OneWay}" IsTabStop="False" ItemTemplate="{StaticResource LineTemplate}"
+                              Margin="0,-1,0,0" />
+                <TextBlock Text="Nothing waits: every result went out." Style="{StaticResource CellMuted}" Margin="14,10"
+                           Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.HasDeliveries), Mode=OneWay}" />
+              </StackPanel>
+            </Border>
+          </StackPanel>
+
+          <StackPanel x:Name="RightStack" Grid.Column="1" Spacing="18">
+            <!-- The channels and their state. -->
+            <Border Style="{StaticResource CorvidPanel}">
+              <StackPanel>
+                <Border Style="{StaticResource PanelHead}">
+                  <TextBlock Text="Channels" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                </Border>
+                <ItemsControl ItemsSource="{x:Bind ViewModel.Adapters, Mode=OneWay}" IsTabStop="False" Margin="0,-1,0,0">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="gateway:AdapterRow">
+                      <Grid Padding="14,8" ColumnSpacing="10" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,1,0,0"
+                            AutomationProperties.Name="{x:Bind AutomationName}">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="*" />
+                          <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="1">
+                          <TextBlock Text="{x:Bind Name}" Style="{StaticResource Cell}" FontWeight="SemiBold" />
+                          <TextBlock Text="{x:Bind Account}" Style="{StaticResource CellSmall}" FontFamily="{StaticResource CorvidMono}"
+                                     Visibility="{x:Bind ui:Ui.VisibleIf(HasAccount)}" />
+                          <TextBlock Text="{x:Bind Detail}" Style="{StaticResource CellSmall}" Visibility="{x:Bind ui:Ui.VisibleIf(HasDetail)}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Spacing="2" HorizontalAlignment="Right">
+                          <controls:TagChip Text="{x:Bind StateText}" Tone="{x:Bind StateTone}" HorizontalAlignment="Right" />
+                          <TextBlock Text="{x:Bind local:GatewayPage.SinceText(Since)}" Style="{StaticResource CellSmall}" HorizontalAlignment="Right" />
+                        </StackPanel>
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </Border>
+
+            <!-- Where the gateway runs (U-8). -->
+            <Border Style="{StaticResource CorvidPanel}">
+              <StackPanel>
+                <Border Style="{StaticResource PanelHead}">
+                  <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                    <TextBlock Text="Host" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                    <controls:TagChip Text="{x:Bind ViewModel.HostTag, Mode=OneWay}" Tone="Green" />
+                  </controls:WrapRowPanel>
+                </Border>
+                <StackPanel Padding="14,12" Spacing="8">
+                  <TextBlock local:SpanText.Runs="{x:Bind ViewModel.HostText, Mode=OneWay}" Style="{StaticResource PanelText}" />
+                  <TextBlock Text="Pairing is approved on this machine only; a chat can never pair itself or anyone else." Style="{StaticResource PanelSmall}" />
+                </StackPanel>
+              </StackPanel>
+            </Border>
+
+            <!-- Per-chat overrides. -->
+            <Border Style="{StaticResource CorvidPanel}">
+              <StackPanel>
+                <Border Style="{StaticResource PanelHead}">
+                  <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                    <TextBlock Text="Per-chat overrides" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                    <TextBlock Text="persona and slot" Style="{StaticResource PanelNote}" />
+                  </controls:WrapRowPanel>
+                </Border>
+                <ItemsControl ItemsSource="{x:Bind ViewModel.Overrides, Mode=OneWay}" IsTabStop="False" ItemTemplate="{StaticResource LineTemplate}"
+                              Margin="0,-1,0,0" />
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </Grid>
       </StackPanel>
     </ScrollViewer>
   </Grid>
