@@ -220,11 +220,11 @@ public sealed class JobsTests
     }
 
     [Fact]
-    public void AJobTheModelNamedWithHiddenCharactersIsDrawnClean()
+    public void AJobTheModelMadeWithHiddenCharactersShowsThemAndCannotBeResumed()
     {
         var service = new ScriptedJobsService(ManualTimeProvider.Demo())
         {
-            Extra = new JobRecord("j-evil", "tidy\u202Eexe.sh", "every day at 9am", JobState.Active)
+            Extra = new JobRecord("j-evil", "tidy\u202Eexe.sh", "every day at 9am", JobState.Paused)
             {
                 Prompt = "Delete\U000E0041 the logs",
                 Script = "rm -rf\u202E ./tmp",
@@ -237,8 +237,38 @@ public sealed class JobsTests
         Assert.Equal("tidyexe.sh", row.Name);
         row.SelectCommand.Execute(null);
         Assert.Equal("tidyexe.sh", jobs.DetailTitle);
-        Assert.Equal("Delete the logs", Text(jobs.Detail.Single(fact => fact.Key == "prompt").Value));
-        Assert.Equal("rm -rf ./tmp", Text(jobs.Detail.Single(fact => fact.Key == "pre-run").Value));
+        // What would run is shown as it is, its hidden characters as codes, and Resume stays off.
+        Assert.Equal("Delete\u27E8U+E0041\u27E9 the logs", Text(jobs.Detail.Single(fact => fact.Key == "prompt").Value));
+        Assert.Equal("rm -rf\u27E8U+202E\u27E9 ./tmp", Text(jobs.Detail.Single(fact => fact.Key == "pre-run").Value));
+        Assert.True(jobs.CanResume);
+        Assert.False(jobs.ResumeCommand.CanExecute(null));
+        Assert.True(jobs.HasHiddenWarning);
+        Assert.StartsWith("Its prompt holds hidden characters", jobs.HiddenWarning, StringComparison.Ordinal);
+
+        // A paused job with nothing hidden resumes in one click, with no warning.
+        Assert.Single(jobs.Jobs, job => job.Id == DemoJobsService.DepsId).SelectCommand.Execute(null);
+        Assert.True(jobs.ResumeCommand.CanExecute(null));
+        Assert.False(jobs.HasHiddenWarning);
+    }
+
+    [Theory]
+    [InlineData("script")]
+    [InlineData("schedule")]
+    [InlineData("deliver")]
+    public void AHiddenCharacterInAnyPartThatRunsTurnsResumeOff(string part)
+    {
+        var job = new JobRecord("j-evil", "tidy", part == "schedule" ? "every day\u202E at 9am" : "every day at 9am", JobState.Paused)
+        {
+            Prompt = "Tidy",
+            Script = part == "script" ? "scripts/x.sh\U000E0041" : null,
+            Deliver = part == "deliver" ? "this app\u202E" : "this app",
+        };
+        var (jobs, _, _) = ViewModel(new ScriptedJobsService(ManualTimeProvider.Demo()) { Extra = job });
+
+        Assert.Single(jobs.Jobs, row => row.Id == "j-evil").SelectCommand.Execute(null);
+
+        Assert.False(jobs.ResumeCommand.CanExecute(null));
+        Assert.True(jobs.HasHiddenWarning);
     }
 
     [Fact]

@@ -48,6 +48,7 @@
   <!-- A form field in the prose font (names, prompts); FieldBox (ModelsStyles) is the mono one for schedules and commands. -->
   <Style x:Key="OpsField" TargetType="TextBox">
     <Setter Property="FontSize" Value="13" />
+    <Setter Property="PlaceholderForeground" Value="{ThemeResource CorvidText2}" />
     <Setter Property="Foreground" Value="{ThemeResource CorvidText}" />
     <Setter Property="Background" Value="{ThemeResource CorvidBg}" />
     <Setter Property="BorderBrush" Value="{ThemeResource CorvidLine}" />

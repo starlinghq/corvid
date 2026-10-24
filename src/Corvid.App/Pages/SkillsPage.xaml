@@ -65,6 +65,7 @@
     </Style>
     <Style x:Key="SkTextBox" TargetType="TextBox">
       <Setter Property="FontSize" Value="13.5" />
+      <Setter Property="PlaceholderForeground" Value="{ThemeResource CorvidText2}" />
       <Setter Property="MinHeight" Value="30" />
       <Setter Property="Padding" Value="8,5" />
       <Setter Property="CornerRadius" Value="6" />
@@ -298,7 +299,7 @@
           </ItemsControl.ItemTemplate>
         </ItemsControl>
         <TextBox x:Name="FilterBox" Width="300" Height="28" MinHeight="28" Padding="8,3,8,3" FontSize="13.5" CornerRadius="6"
-                 VerticalAlignment="Center" PlaceholderText="Filter skills and history…"
+                 VerticalAlignment="Center" PlaceholderText="Filter skills and history…" PlaceholderForeground="{ThemeResource CorvidText2}"
                  Text="{x:Bind ViewModel.FilterText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                  BorderBrush="{ThemeResource CorvidLine}" PreviewKeyDown="OnFilterKeyDown" AutomationProperties.Name="Filter skills and history" />
       </controls:WrapRowPanel>
@@ -402,7 +403,7 @@
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
-                <controls:CorvidButton Content="{x:Bind ViewModel.ArchiveAllLabel, Mode=OneWay}" Variant="Ghost" Style="{StaticResource CorvidSmallButton}"
+                <controls:CorvidButton Content="{x:Bind ViewModel.ArchiveAllLabel, Mode=OneWay}" Style="{StaticResource CorvidSmallButton}"
                                        Command="{x:Bind ViewModel.ArchiveAllStaleCommand}" HorizontalAlignment="Left"
                                        Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasStaleSkills), Mode=OneWay}" />
               </StackPanel>

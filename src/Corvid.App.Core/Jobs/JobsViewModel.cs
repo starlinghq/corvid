@@ -61,7 +61,7 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
         _lease = new StatusBarLease(statusBar);
 
         PauseCommand = new AsyncRelayCommand(PauseAsync, () => _selected?.Record.State == JobState.Active);
-        ResumeCommand = new AsyncRelayCommand(ResumeAsync, () => _selected?.Record.State == JobState.Paused);
+        ResumeCommand = new AsyncRelayCommand(ResumeAsync, () => _selected is { Record: { State: JobState.Paused } job } && HiddenIn(job) is null);
         AskRemoveCommand = new RelayCommand(() => IsConfirmingRemove = true, () => _selected is not null);
         RemoveCommand = new AsyncRelayCommand(RemoveAsync, () => _selected is not null);
         CancelRemoveCommand = new RelayCommand(() => IsConfirmingRemove = false);
@@ -120,6 +120,17 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
     public bool CanPause => _selected?.Record.State == JobState.Active;
 
     public bool CanResume => _selected?.Record.State == JobState.Paused;
+
+    /// <summary>
+    /// Why Resume is off: the job's prompt, script, schedule or delivery target holds characters a reader cannot see
+    /// (they are shown above as codes in brackets). A job comes from the agent through cron_create, so what would run is
+    /// not set running in one click while part of it is hidden.
+    /// </summary>
+    public string HiddenWarning => _selected is { Record: { State: JobState.Paused } job } && HiddenIn(job) is { } part
+        ? $"Its {part} holds hidden characters, shown above as codes in brackets, so it cannot be resumed from here. Remove the job, or fix it where it was made."
+        : "";
+
+    public bool HasHiddenWarning => HiddenWarning.Length > 0;
 
     public AsyncRelayCommand PauseCommand { get; }
 
@@ -385,6 +396,8 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
         OnPropertyChanged(nameof(DetailTitle));
         OnPropertyChanged(nameof(CanPause));
         OnPropertyChanged(nameof(CanResume));
+        OnPropertyChanged(nameof(HiddenWarning));
+        OnPropertyChanged(nameof(HasHiddenWarning));
         PauseCommand.NotifyCanExecuteChanged();
         ResumeCommand.NotifyCanExecuteChanged();
         AskRemoveCommand.NotifyCanExecuteChanged();
@@ -400,15 +413,15 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
         var zone = _time.LocalTimeZone;
         var facts = new List<ModelFact>
         {
-            Fact("schedule", $"{Spans.Escape(SafeText.Clean(job.Schedule))} ~· {Spans.Escape(SafeText.Clean(job.Parsed))} · {Spans.Escape(SafeText.Clean(job.Zone))}~"),
+            Fact("schedule", $"{Spans.Escape(SafeText.Reveal(job.Schedule))} ~· {Spans.Escape(SafeText.Reveal(job.Parsed))} · {Spans.Escape(SafeText.Reveal(job.Zone))}~"),
             Fact("next run", job.NextRun is { } next ? JobsText.When(next, now, zone)
                 : job.State == JobState.Paused ? "none while paused" : "none: its schedule has no run left"),
         };
         if (!job.NoAgent)
-            facts.Add(Fact("prompt", Spans.Escape(SafeText.Clean(job.Prompt))));
+            facts.Add(Fact("prompt", Spans.Escape(SafeText.Reveal(job.Prompt))));
         if (job.Script is { } script)
-            facts.Add(Fact(job.NoAgent ? "runs" : "pre-run", $"`{Spans.Escape(SafeText.Clean(script))}`"));
-        facts.Add(Fact("delivers to", Spans.Escape(SafeText.Clean(job.Deliver))));
+            facts.Add(Fact(job.NoAgent ? "runs" : "pre-run", $"`{Spans.Escape(SafeText.Reveal(script))}`"));
+        facts.Add(Fact("delivers to", Spans.Escape(SafeText.Reveal(job.Deliver))));
         facts.Add(Fact("created by", Spans.Escape(SafeText.Clean(job.CreatedBy))));
         if (job.CreatedTainted)
             facts.Add(Fact("taint", "made in a tainted session: each run starts tainted, so network egress asks"));
@@ -416,6 +429,14 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
         DetailTags = JobTags.Of(job);
         OnPropertyChanged(nameof(RemoveQuestion));
     }
+
+    /// <summary>The first part of the job that would run and holds a hidden character, or null.</summary>
+    private static string? HiddenIn(JobRecord job) =>
+        SafeText.HasHidden(job.Prompt) && !job.NoAgent ? "prompt"
+        : SafeText.HasHidden(job.Script) ? (job.NoAgent ? "command" : "pre-run script")
+        : SafeText.HasHidden(job.Schedule) || SafeText.HasHidden(job.Parsed) || SafeText.HasHidden(job.Zone) ? "schedule"
+        : SafeText.HasHidden(job.Deliver) ? "delivery target"
+        : null;
 
     private static ModelFact Fact(string key, string markup) => new(key, Spans.Parse(markup));
 
@@ -460,7 +481,7 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
 
     private async Task ResumeAsync(CancellationToken cancellationToken)
     {
-        if (_selected is not { } row)
+        if (_selected is not { } row || HiddenIn(row.Record) is not null)
             return;
         var job = await _service.ResumeAsync(row.Id, cancellationToken).ConfigureAwait(true);
         var name = Spans.Escape(SafeText.Clean(job.Name));

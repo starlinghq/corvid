@@ -38,6 +38,9 @@ public sealed partial class AppComposition : IDisposable
         // The session service feeds the rail, the attention count and the status bar from here on, and selects the
         // session the command line named.
         StartSessions();
+        // The Board's service counts the other areas' attention items for the bell from the start, so the bell reads the
+        // same whichever page opens first, not DemoShell's placeholder until MCP, Gateway or the Board is visited.
+        _ = BoardService;
         Shell.Navigate(options.Page ?? Area.Sessions);
     }
 

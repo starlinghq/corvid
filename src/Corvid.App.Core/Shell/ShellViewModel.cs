@@ -248,6 +248,9 @@ public sealed class ShellViewModel : ObservableObject
 
     public RelayCommand OpenSettingsCommand { get; }
 
+    /// <summary>Settings is the current page: its link at the rail's foot is marked as a rail row is.</summary>
+    public bool IsSettingsCurrent => _area == Area.Settings;
+
     /// <summary>The rail footer's Doctor: the first run's checks, which are <c>corvid doctor</c>'s.</summary>
     public RelayCommand OpenDoctorCommand { get; }
 
@@ -348,7 +351,7 @@ public sealed class ShellViewModel : ObservableObject
             _session.IsSelected = false;
         _session = session;
         if (_session is not null)
-            _session.IsSelected = true;
+            _session.IsSelected = SessionRowShows;
         // The status bar names the session the window shows.
         StatusBar.SessionId = _session?.Id ?? "";
         OnPropertyChanged(nameof(CurrentSession));
@@ -402,7 +405,16 @@ public sealed class ShellViewModel : ObservableObject
         _changesTab.IsSelected = _area == Area.Review;
         _attentionTab.IsSelected = _area == Area.Board;
         _moreTab.IsSelected = !(_chatTab.IsSelected || _changesTab.IsSelected || _attentionTab.IsSelected);
+        OnPropertyChanged(nameof(IsSettingsCurrent));
+        if (_session is not null)
+            _session.IsSelected = SessionRowShows;
     }
+
+    /// <summary>
+    /// The open session's rail row is marked only while a page of that session shows (Sessions, Review, Rewind): on
+    /// another area the area's own row is the current one, as Models.png and Audit.png draw the rail.
+    /// </summary>
+    private bool SessionRowShows => _area is Area.Sessions or Area.Review or Area.Rewind;
 
     private void RaiseLayout()
     {

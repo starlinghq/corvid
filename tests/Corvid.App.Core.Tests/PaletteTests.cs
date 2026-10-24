@@ -75,6 +75,31 @@ public sealed class PaletteTests
     }
 
     [Fact]
+    public void OneRowIsSelectedAsTheQueryNarrowsAndTheSelectionMoves()
+    {
+        using var composition = Compose();
+        var palette = composition.Palette;
+        palette.Execute(KeyCommands.Palette);
+
+        foreach (var query in new[] { "s", "se", "sec", "secr" })
+        {
+            palette.Query = query;
+            Assert.Single(palette.Items, item => item.IsSelected);
+            Assert.Same(palette.Selected, palette.Items.Single(item => item.IsSelected));
+        }
+
+        palette.MoveSelection(1);
+        Assert.Single(palette.Items, item => item.IsSelected);
+        Assert.Same(palette.Items[palette.SelectedIndex], palette.Items.Single(item => item.IsSelected));
+
+        palette.Query = "sec";
+        palette.MoveSelection(1);
+        palette.Query = "";
+        Assert.Single(palette.Items, item => item.IsSelected);
+        Assert.True(palette.Items[0].IsSelected);
+    }
+
+    [Fact]
     public void TheWindowsOwnKeysRunWithoutThePalette()
     {
         using var composition = Compose();

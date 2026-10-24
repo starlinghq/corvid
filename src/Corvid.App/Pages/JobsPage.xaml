@@ -340,6 +340,8 @@
                       </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                   </ItemsControl>
+                  <TextBlock Text="{x:Bind ViewModel.HiddenWarning, Mode=OneWay}" TextWrapping="Wrap" Foreground="{ThemeResource CorvidRed}"
+                             Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasHiddenWarning), Mode=OneWay}" />
                   <controls:WrapRowPanel Spacing="8" LineSpacing="8" Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.IsConfirmingRemove), Mode=OneWay}">
                     <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Content="Pause" Command="{x:Bind ViewModel.PauseCommand}"
                                            Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.CanPause), Mode=OneWay}"

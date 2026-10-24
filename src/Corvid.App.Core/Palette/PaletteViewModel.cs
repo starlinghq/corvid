@@ -635,6 +635,13 @@ public sealed class PaletteViewModel : ObservableObject
         }
 
         var all = matched.ToList();
+        // The row highlighted under the last query is cleared while the old list is still the one indexed: one row,
+        // the one Enter runs, is ever drawn selected.
+        if (Selected is { } previous)
+            previous.IsSelected = false;
+        _selected = -1;
+        foreach (var item in all)
+            item.IsSelected = false;
         var grouped = _mode == PaletteMode.Help || _query.Trim().Length == 0;
         foreach (var item in all)
             item.Choose = ChooseCommand;

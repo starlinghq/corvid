@@ -23,8 +23,10 @@ public sealed class ShellViewModelTests
         var shell = DemoShellViewModel(out var bar);
 
         Assert.Equal("corvid · main", shell.Workspace);
-        Assert.Equal("3", shell.AttentionText);
-        Assert.Equal("Attention: 3 items waiting", shell.AttentionName);
+        // The bell counts the Board's attention items from the start (a held MCP tool, a pairing, staged memory, a
+        // finished job) and the question waiting in cli-a410: one count on every page, where Main.png's moment drew 3.
+        Assert.Equal("5", shell.AttentionText);
+        Assert.Equal("Attention: 5 items waiting", shell.AttentionName);
         Assert.Equal(["2", "", "3", "1", "", "", "", "", "1", "", "", ""], shell.NavItems.Select(item => item.BadgeText));
         Assert.Equal(["Pinned", "Recent"], shell.SessionGroups.Select(group => group.Title));
         Assert.Equal(
@@ -54,9 +56,16 @@ public sealed class ShellViewModelTests
         shell.Navigate(Area.Rewind);
         Assert.Equal([Area.Sessions], shell.NavItems.Where(item => item.IsSelected).Select(item => item.Area));
 
+        Assert.True(shell.CurrentSession!.IsSelected);
+        Assert.False(shell.IsSettingsCurrent);
+
         shell.OpenSettingsCommand.Execute(null);
         Assert.Equal(Area.Settings, shell.CurrentArea);
         Assert.DoesNotContain(shell.NavItems, item => item.IsSelected);
+        Assert.True(shell.IsSettingsCurrent);
+        // On another area the open session stays open but its rail row is not marked: the area is the current row.
+        Assert.Equal("cli-9f2e", shell.CurrentSession!.Id);
+        Assert.False(shell.CurrentSession.IsSelected);
 
         shell.OpenDoctorCommand.Execute(null);
         Assert.Equal(Area.FirstRun, shell.CurrentArea);
@@ -168,7 +177,7 @@ public sealed class ShellViewModelTests
         var shell = DemoShellViewModel(out _);
         shell.Layout = ShellLayout.Phone;
 
-        Assert.Equal(["Chat", "Changes|3", "Attention|3", "More"], shell.PhoneTabs.Select(tab => tab.CountText.Length > 0 ? $"{tab.Label}|{tab.CountText}" : tab.Label));
+        Assert.Equal(["Chat", "Changes|3", "Attention|5", "More"], shell.PhoneTabs.Select(tab => tab.CountText.Length > 0 ? $"{tab.Label}|{tab.CountText}" : tab.Label));
         Assert.Equal("Chat", Selected(shell));
         shell.PhoneTabs[1].Open.Execute(null);
         Assert.Equal((Area.Review, "Changes"), (shell.CurrentArea, Selected(shell)));
