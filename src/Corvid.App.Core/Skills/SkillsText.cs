@@ -108,7 +108,10 @@ public static class SkillsText
         return "";
     }
 
-    /// <summary>The frontmatter's <c>name:</c>, or null when the frontmatter has none (or there is no frontmatter).</summary>
+    /// <summary>
+    /// The frontmatter's <c>name:</c>, unquoted as the engine's parser reads a quoted scalar (<c>name: "tidy"</c>), or null
+    /// when the frontmatter has none (or there is no frontmatter).
+    /// </summary>
     public static string? Name(string? content)
     {
         var text = Lines(content);
@@ -117,8 +120,10 @@ public static class SkillsText
         var end = text.IndexOf("\n---", 4, StringComparison.Ordinal);
         foreach (var line in (end < 0 ? text[4..] : text[4..end]).Split('\n'))
         {
-            if (line.StartsWith("name:", StringComparison.Ordinal))
-                return line["name:".Length..].Trim();
+            if (!line.StartsWith("name:", StringComparison.Ordinal))
+                continue;
+            var value = line["name:".Length..].Trim();
+            return value.Length >= 2 && value[0] is '"' or '\'' && value[^1] == value[0] ? value[1..^1] : value;
         }
 
         return null;

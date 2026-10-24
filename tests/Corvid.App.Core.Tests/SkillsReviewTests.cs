@@ -288,6 +288,10 @@ public sealed class SkillsReviewTests
         Assert.Equal("The frontmatter must keep name: tidy; this draft writes that skill.", draft.EditProblem);
         draft.EditText = draft.Source + "\nmore";
         Assert.True(draft.ApproveCommand.CanExecute(null));
+        // A quoted name is the same name, as the engine's frontmatter parser reads it.
+        draft.EditText = draft.Source.Replace("name: tidy", "name: \"tidy\"", StringComparison.Ordinal);
+        Assert.True(draft.ApproveCommand.CanExecute(null));
+        Assert.Equal("tidy", SkillsText.Name("---\nname: 'tidy'\n---\n"));
     }
 
     [Fact]
