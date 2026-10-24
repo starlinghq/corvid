@@ -33,10 +33,15 @@ public sealed class AuditViewModelTests
         Assert.Equal("cli-9f2e", bar.SessionId);
         Assert.Equal("log 1,214 events", bar.Trailing);
 
-        // Leaving takes the detections back; a session's area writes its own bar again.
+        // The whole log names no session; leaving takes the detections back and the window's session comes back.
+        composition.Audit.SessionIndex = composition.Audit.SessionOptions.Count - 1;
+        await composition.Audit.Loaded;
+        Assert.Equal("", bar.SessionId);
+        Assert.Equal("1 high in the log", bar.AreaFields[0].Value);
         composition.Shell.Navigate(Area.Sessions);
         Assert.Empty(bar.AreaFields);
         Assert.Equal("38%", bar.Context);
+        Assert.Equal("cli-9f2e", bar.SessionId);
     }
 
     [Fact]

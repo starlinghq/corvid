@@ -143,15 +143,20 @@ public sealed partial class ModelsPage : Page
             scroller.ChangeView(edge.HorizontalAlignment == HorizontalAlignment.Right ? scroller.ScrollableWidth : 0, null, null);
     }
 
-    /// <summary>Shows an edge strip on each side the table has columns scrolled out of view.</summary>
+    /// <summary>
+    /// Shows an edge strip on each side the table has columns scrolled out of view. At 1440 the tables run a few dozen
+    /// pixels past their panels, as Models.png's do (its "Pin" is cut at the edge), so the right strip waits until a
+    /// column's worth is hidden.
+    /// </summary>
     private static void UpdateTableEdges(ScrollViewer scroller)
     {
+        const double HiddenColumn = 60;
         if (scroller.Parent is not Grid host)
             return;
         foreach (var edge in host.Children.OfType<Button>())
         {
             var hidden = edge.HorizontalAlignment == HorizontalAlignment.Right
-                ? scroller.ScrollableWidth - scroller.HorizontalOffset > 1
+                ? scroller.ScrollableWidth - scroller.HorizontalOffset > HiddenColumn
                 : scroller.HorizontalOffset > 1;
             edge.Visibility = hidden ? Visibility.Visible : Visibility.Collapsed;
         }

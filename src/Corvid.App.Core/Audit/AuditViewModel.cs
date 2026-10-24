@@ -48,6 +48,7 @@ public sealed class AuditViewModel : AreaViewModel
     private string _statusDetections = "";
     private string _statusLog = "";
     private IReadOnlyList<StatusField> _myFields = [];
+    private bool _showingStatus;
 
     public AuditViewModel(IAuditService service, TimeProvider time, ShellViewModel? shell = null, IAuditSessionStatus? sessionStatus = null)
         : base(Area.Audit, "The event log per session, scans with the detection rules, trace export and the egress ledger.")
@@ -537,11 +538,19 @@ public sealed class AuditViewModel : AreaViewModel
         var bar = _shell.StatusBar;
         if (_shell.CurrentArea != Area.Audit)
         {
+            if (!_showingStatus)
+                return;
+            _showingStatus = false;
             if (_myFields.Count > 0 && ReferenceEquals(bar.AreaFields, _myFields))
                 bar.AreaFields = [];
             _myFields = [];
+            // The picker may have shown the whole log (no session id); the session the window shows comes back.
+            if (bar.SessionId.Length == 0)
+                bar.SessionId = _shell.CurrentSession?.Id ?? "";
             return;
         }
+
+        _showingStatus = true;
 
         if (_sessionStatus is { } session)
         {
