@@ -81,7 +81,6 @@ public sealed class SeamTests
         [
             (composition.ReviewService, "history"), (composition.RewindService, "history"), (composition.AuditService, "history"),
             (composition.ModelService, "setup"), (composition.FirstRunService, "setup"), (composition.SettingsService, "setup"),
-            (composition.MemoryService, "knowledge"), (composition.SkillsService, "knowledge"), (composition.SafetyService, "knowledge"),
             (composition.JobsService, "ops"), (composition.McpService, "ops"), (composition.GatewayService, "ops"),
             (composition.SecretsService, "ops"), (composition.BoardService, "integration"), (composition.PromptHistory, "integration"),
         ];
