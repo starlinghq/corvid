@@ -133,6 +133,10 @@
             </local:MemoryHeadPanel>
           </Border>
           <StackPanel Padding="14,12" Spacing="10">
+            <!-- Hidden characters in the statement: shown as codes, and Approve stays off until Correct… removes them. -->
+            <controls:ToneRow Tone="Red" Padding="10,6" Visibility="{x:Bind ui:Ui.VisibleIf(HasHiddenText)}">
+              <TextBlock Text="{x:Bind HiddenWarning}" FontSize="12.5" TextWrapping="Wrap" />
+            </controls:ToneRow>
             <!-- .row.memory: bg-2, a dashed line border, 6px 10px; staged memory is dotted (ui.md §7). -->
             <Grid Visibility="{x:Bind ui:Ui.VisibleIf(IsReading), Mode=OneWay}">
               <Rectangle RadiusX="6" RadiusY="6" Fill="{ThemeResource CorvidBg2}" Stroke="{ThemeResource CorvidLine}" StrokeThickness="1"
@@ -149,7 +153,7 @@
             <StackPanel Spacing="4" Visibility="{x:Bind ui:Ui.VisibleIf(IsCorrecting), Mode=OneWay}">
               <TextBlock Text="Correct the statement; Approve writes it as edited. Enter approves, Esc undoes." Style="{StaticResource CorvidSmallText}" />
               <TextBox Text="{x:Bind CorrectedText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource MemTextBox}"
-                       AcceptsReturn="False" PreviewKeyDown="OnFactEditorKeyDown" Loaded="OnEditorLoaded"
+                       AcceptsReturn="False" PreviewKeyDown="OnFactEditorKeyDown" Loaded="OnEditorLoaded" Unloaded="OnEditorUnloaded"
                        AutomationProperties.Name="The statement, corrected" />
             </StackPanel>
             <controls:WrapRowPanel Spacing="8" LineSpacing="8">
@@ -170,7 +174,7 @@
               </ItemsControl>
               <TextBlock Text="{x:Bind ValidText}" FontSize="12.5" Foreground="{ThemeResource CorvidText2}" VerticalAlignment="Center" TextWrapping="NoWrap" />
             </controls:WrapRowPanel>
-            <StackPanel Visibility="{x:Bind ui:Ui.VisibleIf(HasNearest)}">
+            <StackPanel Visibility="{x:Bind ui:Ui.VisibleIf(HasNearest), Mode=OneWay}">
               <Grid Margin="0,0,0,6">
                 <TextBlock Text="Nearest existing facts" Style="{StaticResource MemSectTitle}" AutomationProperties.HeadingLevel="Level3" />
                 <TextBlock Text="{x:Bind SearchKind}" Style="{StaticResource MemSectDetail}" />
@@ -231,6 +235,9 @@
             </local:MemoryHeadPanel>
           </Border>
           <StackPanel Padding="14,12" Spacing="10">
+            <controls:ToneRow Tone="Red" Padding="10,6" Visibility="{x:Bind ui:Ui.VisibleIf(HasHiddenText), Mode=OneWay}">
+              <TextBlock Text="{x:Bind HiddenWarning, Mode=OneWay}" FontSize="12.5" TextWrapping="Wrap" />
+            </controls:ToneRow>
             <!-- .diff with two .dl rows: the context, then the added line on add-bg in green; 12.5 px, no wrapping. -->
             <Border BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1" CornerRadius="8" Background="{ThemeResource CorvidBg}"
                     Visibility="{x:Bind ui:Ui.VisibleIf(ShowsDiff), Mode=OneWay}">
@@ -259,7 +266,7 @@
             <StackPanel Spacing="4" Visibility="{x:Bind ui:Ui.VisibleIf(IsEditing), Mode=OneWay}">
               <TextBlock Text="{x:Bind EditLabel, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" />
               <TextBox Text="{x:Bind EditText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource MemTextBox}"
-                       AcceptsReturn="False" PreviewKeyDown="OnBlockEditorKeyDown" Loaded="OnEditorLoaded"
+                       AcceptsReturn="False" PreviewKeyDown="OnBlockEditorKeyDown" Loaded="OnEditorLoaded" Unloaded="OnEditorUnloaded"
                        AutomationProperties.Name="{x:Bind EditLabel, Mode=OneWay}" />
             </StackPanel>
             <controls:WrapRowPanel Spacing="8" LineSpacing="8">
@@ -267,6 +274,8 @@
               <TextBlock Text="{x:Bind BudgetText, Mode=OneWay}" FontSize="12.5" VerticalAlignment="Center" TextWrapping="NoWrap" />
               <controls:Meter Width="120" Fraction="{x:Bind BudgetFraction, Mode=OneWay}" IsWarning="{x:Bind IsNearBudget, Mode=OneWay}" VerticalAlignment="Center" />
               <TextBlock Text="{x:Bind ConsolidationNote}" FontSize="12" Foreground="{ThemeResource CorvidText2}" VerticalAlignment="Center" TextWrapping="NoWrap" />
+              <TextBlock Text="{x:Bind CountProblem, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource CorvidRed}" VerticalAlignment="Center" TextWrapping="Wrap"
+                         Visibility="{x:Bind ui:Ui.VisibleIf(HasCountProblem), Mode=OneWay}" />
             </controls:WrapRowPanel>
             <controls:WrapRowPanel Spacing="8" LineSpacing="8" PushLastRight="True">
               <controls:CorvidButton Content="Approve" Variant="Primary" Style="{StaticResource CorvidSmallButton}" Command="{x:Bind ApproveCommand}" />
@@ -293,6 +302,9 @@
             </local:MemoryHeadPanel>
           </Border>
           <StackPanel Padding="14,12" Spacing="8">
+            <controls:ToneRow Tone="Red" Padding="10,6" Visibility="{x:Bind ui:Ui.VisibleIf(HasHiddenText)}">
+              <TextBlock Text="{x:Bind HiddenWarning}" FontSize="12.5" TextWrapping="Wrap" />
+            </controls:ToneRow>
             <TextBlock local:MemorySpans.Spans="{x:Bind Text}" Style="{StaticResource CorvidBodyText}" />
             <TextBlock Text="{x:Bind Evidence}" Style="{StaticResource CorvidSmallText}" />
             <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind ui:Ui.VisibleIf(ShowsActions), Mode=OneWay}">
@@ -327,7 +339,7 @@
             <StackPanel Spacing="6" Visibility="{x:Bind ui:Ui.VisibleIf(IsRejecting), Mode=OneWay}">
               <TextBox Text="{x:Bind Reason, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource MemTextBox}"
                        PlaceholderText="Why not? Kept with the lesson so it is not drawn again" AcceptsReturn="False"
-                       PreviewKeyDown="OnReasonKeyDown" Loaded="OnEditorLoaded" AutomationProperties.Name="Reason for rejecting the lesson" />
+                       PreviewKeyDown="OnReasonKeyDown" Loaded="OnEditorLoaded" Unloaded="OnEditorUnloaded" AutomationProperties.Name="Reason for rejecting the lesson" />
               <StackPanel Orientation="Horizontal" Spacing="8">
                 <controls:CorvidButton Content="Reject" Foreground="{ThemeResource CorvidRed}" Style="{StaticResource CorvidSmallButton}"
                                        Command="{x:Bind ConfirmRejectCommand}" />
@@ -421,6 +433,7 @@
   <Grid x:Name="Root">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
       <RowDefinition Height="*" />
     </Grid.RowDefinitions>
 
@@ -449,7 +462,26 @@
       </controls:WrapRowPanel>
     </Border>
 
-    <ScrollViewer x:Name="Scroller" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+    <!-- What the last action did, or why it failed, and a failed load: on every tab, under the head. -->
+    <StackPanel x:Name="Notices" Grid.Row="1" Spacing="8" Padding="24,14,24,0"
+                Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasNotice), Mode=OneWay}" AutomationProperties.LiveSetting="Polite">
+      <controls:ToneRow Tone="Red" Padding="12,8" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasLoadError), Mode=OneWay}">
+        <TextBlock Text="{x:Bind ViewModel.LoadError, Mode=OneWay}" FontSize="12.5" TextWrapping="Wrap" />
+      </controls:ToneRow>
+      <controls:ToneRow Tone="{x:Bind ViewModel.OutcomeTone, Mode=OneWay}" Padding="12,8" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasOutcome), Mode=OneWay}">
+        <Grid ColumnSpacing="10">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+          </Grid.ColumnDefinitions>
+          <TextBlock Text="{x:Bind ViewModel.Outcome, Mode=OneWay}" FontSize="12.5" TextWrapping="Wrap" VerticalAlignment="Center" />
+          <controls:IconButton Grid.Column="1" Icon="Check" Width="22" Height="22" Command="{x:Bind ViewModel.DismissOutcomeCommand}"
+                               AutomationProperties.Name="Dismiss" ToolTipService.ToolTip="Dismiss" />
+        </Grid>
+      </controls:ToneRow>
+    </StackPanel>
+
+    <ScrollViewer x:Name="Scroller" Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
       <Grid x:Name="Body" Padding="24,18" ColumnSpacing="18" RowSpacing="14">
         <Grid.ColumnDefinitions>
           <ColumnDefinition x:Name="LeftColumn" Width="1.4*" />
@@ -463,17 +495,6 @@
         <!-- The review queue. -->
         <StackPanel x:Name="ReviewColumn" Spacing="14" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsReviewTab), Mode=OneWay}">
           <TextBlock Text="{x:Bind ViewModel.IntroText}" Style="{StaticResource CorvidSmallText}" />
-          <controls:ToneRow Tone="{x:Bind ViewModel.OutcomeTone, Mode=OneWay}" Padding="12,8" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasOutcome), Mode=OneWay}">
-            <Grid ColumnSpacing="10">
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-              </Grid.ColumnDefinitions>
-              <TextBlock Text="{x:Bind ViewModel.Outcome, Mode=OneWay}" FontSize="12.5" TextWrapping="Wrap" VerticalAlignment="Center" />
-              <controls:IconButton Grid.Column="1" Icon="Check" Width="22" Height="22" Command="{x:Bind ViewModel.DismissOutcomeCommand}"
-                                   AutomationProperties.Name="Dismiss" ToolTipService.ToolTip="Dismiss" />
-            </Grid>
-          </controls:ToneRow>
           <TextBlock Text="{x:Bind ViewModel.EmptyReviewText}" Style="{StaticResource CorvidMutedText}"
                      Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasNothingToReview), Mode=OneWay}" />
           <ItemsControl ItemsSource="{x:Bind ViewModel.StagedFacts}" ItemTemplate="{StaticResource FactCard}" IsTabStop="False"

@@ -61,7 +61,7 @@ public sealed class CoreBlockView(CoreBlock block, TimeProvider time)
 {
     public CoreBlock Block { get; } = block;
 
-    public string Name => Block.Name;
+    public string Name => SafeText.Clean(Block.Name);
 
     public string CountText => string.Create(CultureInfo.InvariantCulture, $"{Block.Tokens} / {Block.Budget}");
 
@@ -72,7 +72,8 @@ public sealed class CoreBlockView(CoreBlock block, TimeProvider time)
 
     public string Detail { get; } = MemoryText.BlockDetail(block, time);
 
-    public string Text => Block.Text;
+    /// <summary>The block as stored, for reading: hidden characters removed (a staged write to it shows them).</summary>
+    public string Text => SafeText.Clean(Block.Text);
 
     /// <summary>A staged update to this block waits in Review, where consolidation is offered.</summary>
     public bool HasPendingUpdate { get; init; }
@@ -98,7 +99,8 @@ public sealed class FactRowView(FactRecord fact)
 {
     public FactRecord Fact { get; } = fact;
 
-    public string Text { get; } = MemoryText.Plain(fact.Text);
+    /// <summary>The fact as stored, for reading: its marks and hidden characters removed.</summary>
+    public string Text { get; } = MemoryText.CleanPlain(fact.Text);
 
     public string ValidText { get; } = MemoryText.Valid(fact);
 
@@ -118,14 +120,14 @@ public sealed class LessonRowView(Lesson lesson)
 
     public IReadOnlyList<MemorySpan> Text { get; } =
     [
-        .. MemoryText.Spans(lesson.Rule, MemorySpanStyle.Bold),
+        .. MemoryText.CleanSpans(lesson.Rule, MemorySpanStyle.Bold),
         new(" "),
-        new($"Applies when {lesson.AppliesWhen}.", MemorySpanStyle.Muted),
+        new($"Applies when {SafeText.Clean(lesson.AppliesWhen)}.", MemorySpanStyle.Muted),
     ];
 
     public string Detail { get; } = lesson.SupersededBy is { } by
-        ? $"superseded by “{by}” · project {lesson.Project}"
-        : $"approved {MemoryText.Date(lesson.Approved)} · project {lesson.Project}";
+        ? $"superseded by “{MemoryText.CleanPlain(by)}” · project {SafeText.Clean(lesson.Project)}"
+        : $"approved {MemoryText.Date(lesson.Approved)} · project {SafeText.Clean(lesson.Project)}";
 
     public bool IsSuperseded => Lesson.SupersededBy is not null;
 }
@@ -135,16 +137,18 @@ public sealed class ImportEntryView(ImportEntry entry)
 {
     public ImportEntry Entry { get; } = entry;
 
-    public string File => Entry.File;
+    /// <summary>The file it came from, any hidden character shown: the dry run is what the person stages.</summary>
+    public string File => SafeText.Reveal(Entry.File, keepJoiners: true);
 
-    public string Text => Entry.Text;
+    /// <summary>The entry's text, any hidden character shown as its code.</summary>
+    public string Text => SafeText.Reveal(Entry.Text, keepJoiners: true);
 
     public bool IsRefused => Entry.Refused;
 
     /// <summary>"would be staged", or "refused: the scanner flagged a credential".</summary>
     public string Verdict => Entry.Refused ? "refused" : "would be staged";
 
-    public string Reason => Entry.Reason;
+    public string Reason => SafeText.Clean(Entry.Reason);
 
     public Tone VerdictTone => Entry.Refused ? Tone.Red : Tone.Green;
 

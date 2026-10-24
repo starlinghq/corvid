@@ -12,7 +12,7 @@ public enum MemoryOperation
     Noop,
 }
 
-/// <summary>An entity a fact names, as the fact graph types it: "person · Mark", "habit · CI review".</summary>
+/// <summary>An entity a fact names, as the fact graph types it: "person · the user", "habit · CI review".</summary>
 public sealed record FactEntity(string Kind, string Name)
 {
     public string Label => $"{Kind} · {Name}";
@@ -52,8 +52,9 @@ public sealed record StagedFact(string Id, string Subject, string Predicate, str
     /// <summary>"job:nightly-tidy events 41, 58"; empty when there is none (an import).</summary>
     public string Evidence { get; init; } = "";
 
-    /// <summary>The statement as one sentence, which a correction edits.</summary>
-    public string Text => $"{Subject} {Predicate} {Object}";
+    /// <summary>The statement as one sentence, which a correction edits: the parts that are there, one space apart (an
+    /// import's entry is all subject).</summary>
+    public string Text => string.Join(' ', new[] { Subject, Predicate, Object }.Where(part => part.Length > 0));
 }
 
 /// <summary>
@@ -154,6 +155,12 @@ public sealed record ImportSource(string Name, string Path, string Note);
 /// <summary>An entry a dry run found: its file, its text, and whether the scanner refused it and why.</summary>
 public sealed record ImportEntry(string File, string Text)
 {
+    /// <summary>
+    /// Names the entry as the dry run read it (a hash of its file and text), so staging takes exactly what the dry run
+    /// showed: an entry whose source changed since has another id and is not staged.
+    /// </summary>
+    public string Id { get; init; } = "";
+
     public bool Refused { get; init; }
 
     public string Reason { get; init; } = "";

@@ -49,6 +49,7 @@ public sealed class AuditViewModel : AreaViewModel
     private string _statusLog = "";
     private IReadOnlyList<StatusField> _myFields = [];
     private bool _showingStatus;
+    private bool _holdRefilter;
 
     public AuditViewModel(IAuditService service, TimeProvider time, ShellViewModel? shell = null, IAuditSessionStatus? sessionStatus = null)
         : base(Area.Audit, "The event log per session, scans with the detection rules, trace export and the egress ledger.")
@@ -136,6 +137,9 @@ public sealed class AuditViewModel : AreaViewModel
                 Refilter();
         }
     }
+
+    /// <summary>The filter's words, split once per change rather than once per event.</summary>
+    private string[] PathWords => _pathFilter.Split([' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     public RelayCommand ResetCommand { get; }
 
@@ -269,7 +273,10 @@ public sealed class AuditViewModel : AreaViewModel
         return row is not null;
     }
 
-    /// <summary>Selects the next (+1) or previous (−1) visible row; with nothing selected, the first.</summary>
+    /// <summary>
+    /// Selects the next (+1) or previous (−1) visible row, stopping at the ends; with nothing selected, Down (+1) takes
+    /// the first row and Up (−1) the last.
+    /// </summary>
     public void MoveSelection(int delta)
     {
         if (Rows.Count == 0)
@@ -301,12 +308,41 @@ public sealed class AuditViewModel : AreaViewModel
     private static string MatchLabel(int count, string? rule) =>
         string.Create(CultureInfo.InvariantCulture, $"{count} events matched by {rule ?? "the detection"}");
 
+    /// <summary>"reset": the usual boxes, no path filter, no detection's narrowing; the table is rebuilt once.</summary>
     private void Reset()
     {
-        foreach (var filter in Filters)
-            filter.IsChecked = filter.DefaultChecked;
-        PathFilter = "";
-        SetMatch(null, "");
+        _holdRefilter = true;
+        try
+        {
+            foreach (var filter in Filters)
+                filter.IsChecked = filter.DefaultChecked;
+            PathFilter = "";
+            SetMatch(null, "");
+        }
+        finally
+        {
+            _holdRefilter = false;
+        }
+
+        Refilter();
+    }
+
+    /// <summary>The boxes and the path filter back to the usual set, the export's note gone; the caller refilters.</summary>
+    private void ClearFilters()
+    {
+        _holdRefilter = true;
+        try
+        {
+            foreach (var filter in Filters)
+                filter.IsChecked = filter.DefaultChecked;
+            PathFilter = "";
+        }
+        finally
+        {
+            _holdRefilter = false;
+        }
+
+        ExportResult = "";
     }
 
     private void SetMatch(IEnumerable<long>? events, string label)
@@ -319,31 +355,49 @@ public sealed class AuditViewModel : AreaViewModel
         Refilter();
     }
 
-    private bool Shows(AuditEvent auditEvent)
+    private bool Shows(AuditEvent auditEvent, HashSet<AuditEventGroup> groups, string[] words)
     {
         // A detection's link shows exactly its events, whatever the boxes say.
         if (_match is not null)
             return _match.Contains(auditEvent.Sequence);
-        if (!Filters.First(filter => filter.Group == auditEvent.Group).IsChecked)
+        if (!groups.Contains(auditEvent.Group))
             return false;
-        var words = _pathFilter.Split([' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         return words.Length == 0 || words.Any(word =>
             string.Equals(word, auditEvent.Type, StringComparison.OrdinalIgnoreCase)
             || (auditEvent.Tool?.Contains(word, StringComparison.OrdinalIgnoreCase) ?? false)
             || (auditEvent.Path?.Contains(word, StringComparison.OrdinalIgnoreCase) ?? false));
     }
 
-    /// <summary>Rebuilds the table from the loaded events; the selection stays when its row still shows.</summary>
+    /// <summary>
+    /// Brings the table in line with the filters: the rows that no longer show are removed and the ones that now show
+    /// inserted where they belong, so typing in the filter does not rebuild every row. The selection stays when its row
+    /// still shows.
+    /// </summary>
     private void Refilter()
     {
-        var selected = _selected?.Sequence;
-        Rows.Clear();
-        foreach (var auditEvent in _events.Where(Shows))
-            Rows.Add(RowFor(auditEvent));
+        if (_holdRefilter)
+            return;
+        var groups = Filters.Where(filter => filter.IsChecked).Select(filter => filter.Group).ToHashSet();
+        var words = PathWords;
+        var wanted = _events.Where(auditEvent => Shows(auditEvent, groups, words)).Select(RowFor).ToList();
+        // Both lists keep the log's order, so one pass reconciles them (remove and insert only: a moved item is
+        // re-templated outside the page's theme, src/Corvid.App/README.md).
+        var keep = wanted.ToHashSet();
+        for (var i = Rows.Count - 1; i >= 0; i--)
+        {
+            if (!keep.Contains(Rows[i]))
+                Rows.RemoveAt(i);
+        }
+
+        for (var i = 0; i < wanted.Count; i++)
+        {
+            if (i >= Rows.Count || !ReferenceEquals(Rows[i], wanted[i]))
+                Rows.Insert(i, wanted[i]);
+        }
+
         OnPropertyChanged(nameof(HasRows));
         OnPropertyChanged(nameof(EmptyText));
-        var keep = selected is { } sequence ? Rows.FirstOrDefault(row => row.Sequence == sequence) : null;
-        if (keep is null)
+        if (_selected is not null && !keep.Contains(_selected))
             Select(null);
     }
 
@@ -377,12 +431,12 @@ public sealed class AuditViewModel : AreaViewModel
             _statusLog = $"log {AuditText.Count(log.TotalEvents)} events";
             LogPath = log.Path;
             foreach (var session in await _service.ListSessionsAsync(CancellationToken.None))
-                SessionOptions.Add(new AuditSessionOption(session.Id, $"{session.Id} · {session.Title}"));
+                SessionOptions.Add(new AuditSessionOption(session.Id, SafeText.Clean($"{session.Id} · {session.Title}")));
             SessionOptions.Add(new AuditSessionOption(null, "whole log"));
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            Error = $"The event log could not be read: {exception.Message}";
+            Error = $"The event log could not be read: {SafeText.Clean(exception.Message)}";
             return;
         }
 
@@ -426,7 +480,9 @@ public sealed class AuditViewModel : AreaViewModel
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            Error = $"The event log could not be read: {exception.Message}";
+            // A newer pick is loading; its answer, not this failure, is what the page shows.
+            if (load == _loads)
+                Error = $"The event log could not be read: {SafeText.Clean(exception.Message)}";
             return;
         }
 
@@ -434,6 +490,10 @@ public sealed class AuditViewModel : AreaViewModel
         if (load != _loads)
             return;
         Error = "";
+        // A link lands on what it names, not on what the person had narrowed the log to before: the boxes, the path
+        // filter and the last export's note start afresh (the Detection case narrows again below).
+        if (link is not null)
+            ClearFilters();
         _events.Clear();
         _events.AddRange(events);
         _rows.Clear();
@@ -464,7 +524,13 @@ public sealed class AuditViewModel : AreaViewModel
             case AreaLinkTarget.Egress:
                 SetMatch(null, "");
                 if (egress.FirstOrDefault() is { } latest)
+                {
+                    // The request's event must show to be selected: its group's box is checked if the usual set leaves it out.
+                    if (!Rows.Any(row => row.Sequence == latest.Sequence) && _events.FirstOrDefault(e => e.Sequence == latest.Sequence) is { } sent)
+                        Filters.First(filter => filter.Group == sent.Group).IsChecked = true;
                     SelectSequence(latest.Sequence);
+                }
+
                 break;
             default:
                 SetMatch(null, "");
@@ -494,7 +560,7 @@ public sealed class AuditViewModel : AreaViewModel
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            Error = $"The scan failed: {exception.Message}";
+            Error = $"The scan failed: {SafeText.Clean(exception.Message)}";
         }
     }
 
@@ -507,14 +573,14 @@ public sealed class AuditViewModel : AreaViewModel
             var retention = result.Retention == TraceRetention.MetadataOnly ? "metadata only" : "full content, secrets redacted";
             ExportResult = result.Written
                 ? string.Create(CultureInfo.InvariantCulture,
-                    $"Wrote {result.Events} events ({AuditText.Size(result.Bytes)}, {retention}) to {result.Path}, readable by you only.")
+                    $"Wrote {result.Events} events ({AuditText.Size(result.Bytes)}, {retention}) to {SafeText.Clean(result.Path)}, readable by you only.")
                 : string.Create(CultureInfo.InvariantCulture,
-                    $"Demo: no file was written. The engine would write {result.Events} events ({AuditText.Size(result.Bytes)}, {retention}) to {result.Path}, readable by you only.");
+                    $"Demo: no file was written. The engine would write {result.Events} events ({AuditText.Size(result.Bytes)}, {retention}) to {SafeText.Clean(result.Path)}, readable by you only.");
             Error = "";
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            Error = $"The trace was not written: {exception.Message}";
+            Error = $"The trace was not written: {SafeText.Clean(exception.Message)}";
         }
     }
 

@@ -15,7 +15,7 @@ public sealed class DemoMemoryServiceTests
         var snapshot = await Service().LoadAsync(TestContext.Current.CancellationToken);
 
         var fact = Assert.Single(snapshot.StagedFacts);
-        Assert.Equal("Mark prefers CI failures reviewed first thing on weekdays", fact.Text);
+        Assert.Equal("The user prefers CI failures reviewed first thing on weekdays", fact.Text);
         Assert.Equal("nightly-tidy", fact.StagedBy);
         Assert.Equal(new DateTimeOffset(2026, 10, 24, 9, 0, 0, TimeSpan.Zero), fact.StagedAt);
         Assert.Equal([0.58, 0.41], fact.Nearest.Select(n => n.Score));
@@ -40,11 +40,17 @@ public sealed class DemoMemoryServiceTests
         Assert.Equal(2, entries.Count(e => e.Refused));
         Assert.Single((await service.LoadAsync(token)).StagedFacts);
 
-        var staged = await service.ImportForReviewAsync(token);
+        IReadOnlyList<string> ids = [.. entries.Select(e => e.Id)];
+        Assert.All(ids, id => Assert.StartsWith("h-", id, StringComparison.Ordinal));
+        Assert.Equal(5, ids.Distinct().Count());
+        // The ids name what the dry run showed: a refused entry's id stages nothing, nor does an id the source lacks.
+        var staged = await service.ImportForReviewAsync([.. ids, "h-000000000000"], token);
         Assert.Equal(3, staged.Count);
         Assert.All(staged, s => Assert.Equal("hermes import", s.StagedBy));
+        // An import's statement is its text alone, with no trailing spaces from an empty relation.
+        Assert.Equal(entries[0].Text, staged[0].Text);
         Assert.Equal(4, (await service.LoadAsync(token)).StagedFacts.Count);
-        Assert.Empty(await service.ImportForReviewAsync(token));
+        Assert.Empty(await service.ImportForReviewAsync(ids, token));
     }
 
     [Fact]
@@ -66,7 +72,7 @@ public sealed class DemoMemoryServiceTests
 
 public sealed class MemoryViewModelTests
 {
-    private static (MemoryViewModel Memory, DemoMemoryService Service, ShellViewModel Shell, StatusBarViewModel Bar) Create(Area area = Area.Memory)
+    private static async Task<(MemoryViewModel Memory, DemoMemoryService Service, ShellViewModel Shell, StatusBarViewModel Bar)> Create(Area area = Area.Memory)
     {
         var time = ManualTimeProvider.Demo();
         var bar = new StatusBarViewModel();
@@ -75,20 +81,22 @@ public sealed class MemoryViewModelTests
         DemoShell.Fill(shell);
         shell.Navigate(area);
         var service = new DemoMemoryService(time);
-        return (new MemoryViewModel(service, time, shell, bar, MemoryEngineStatus.Demo), service, shell, bar);
+        var memory = new MemoryViewModel(service, time, shell, bar, MemoryEngineStatus.Demo);
+        await memory.Loaded;
+        return (memory, service, shell, bar);
     }
 
     private static int RailBadge(ShellViewModel shell) => shell.NavItems.Single(item => item.Area == Area.Memory).Badge;
 
     [Fact]
-    public void ThePageDrawsTheMockupsQueueAndPanels()
+    public async Task ThePageDrawsTheMockupsQueueAndPanels()
     {
-        var (memory, _, shell, _) = Create();
+        var (memory, _, shell, _) = await Create();
 
         var fact = Assert.Single(memory.StagedFacts);
         Assert.Equal("Fact · staged 09:00 by nightly-tidy", fact.Title);
         Assert.Equal("why staged: memory_op 0.62, under its floor 0.80", fact.Why);
-        Assert.Equal(["person · Mark", "habit · CI review"], fact.Entities);
+        Assert.Equal(["person · the user", "habit · CI review"], fact.Entities);
         Assert.Equal("valid from 2026-10-24", fact.ValidText);
         Assert.Equal("add", fact.OperationLabel);
         Assert.Equal("evidence: job:nightly-tidy events 41, 58", fact.Evidence);
@@ -106,16 +114,16 @@ public sealed class MemoryViewModelTests
             memory.CoreBlocks.Select(b => b.Detail));
         Assert.Equal([true, false, false], memory.CoreBlocks.Select(b => b.IsNearBudget));
         Assert.Equal(["from 2026-10-16", "from 2026-10-22", "2026-10-19 to 2026-10-24"], memory.RecentFacts.Select(f => f.ValidText));
-        Assert.Equal("Mark works in starlinghq/corvid on an Arch workstation", memory.RecentFacts[0].Text);
+        Assert.Equal("The user works in starlinghq/corvid on a Linux workstation", memory.RecentFacts[0].Text);
         Assert.Equal(["2", "", "", "1", ""], memory.Tabs.Select(t => t.BadgeText));
         Assert.Equal("Import from Hermes", memory.ImportTitle);
         Assert.Equal(2, RailBadge(shell));
     }
 
     [Fact]
-    public void OnTheMemoryPageTheStatusBarIsTheStores()
+    public async Task OnTheMemoryPageTheStatusBarIsTheStores()
     {
-        var (_, _, _, bar) = Create();
+        var (_, _, _, bar) = await Create();
 
         Assert.Equal("qwen3.5-0.8b · cuda:0 · q0 · 180 ms", bar.Generator);
         Assert.Equal("", bar.Context);
@@ -126,9 +134,9 @@ public sealed class MemoryViewModelTests
     }
 
     [Fact]
-    public void TheStatusBarIsLeftAloneUntilThePageShows()
+    public async Task TheStatusBarIsLeftAloneUntilThePageShows()
     {
-        var (_, _, shell, bar) = Create(Area.Sessions);
+        var (_, _, shell, bar) = await Create(Area.Sessions);
 
         Assert.Equal("turn 48 s", bar.Trailing);
         shell.Navigate(Area.Memory);
@@ -138,24 +146,30 @@ public sealed class MemoryViewModelTests
     [Fact]
     public async Task ACorrectedFactApprovedAsAnUpdateReplacesTheNearestFact()
     {
-        var (memory, _, shell, bar) = Create();
+        var (memory, _, shell, bar) = await Create();
         var fact = memory.StagedFacts[0];
 
         fact.CorrectCommand.Execute(null);
         Assert.True(fact.IsCorrecting);
-        fact.CorrectedText = "Mark prefers CI failures reviewed first thing on workdays";
+        fact.CorrectedText = "The user prefers CI failures reviewed first thing on workdays";
         fact.Operations[(int)MemoryOperation.Update].Choose.Execute(null);
         Assert.Equal(MemoryOperation.Update, fact.Operation);
-        Assert.True(fact.Nearest[0].IsTarget);
+        // The closest fact scores 0.58, under the sure score: nothing is picked for the person, and Approve waits for a pick.
+        Assert.Null(fact.Target);
+        Assert.DoesNotContain(fact.Nearest, n => n.IsTarget);
+        Assert.False(fact.ApproveCommand.CanExecute(null));
+        Assert.StartsWith("Click the existing fact this update replaces", fact.TargetHint, StringComparison.Ordinal);
         fact.Nearest[1].SelectCommand.Execute(null);
+        Assert.True(fact.Nearest[1].IsTarget);
         Assert.False(fact.Nearest[0].IsTarget);
-        Assert.Contains("Mark prefers quiet UI chrome", fact.TargetHint, StringComparison.Ordinal);
+        Assert.True(fact.ApproveCommand.CanExecute(null));
+        Assert.Contains("The user prefers quiet UI chrome", fact.TargetHint, StringComparison.Ordinal);
         await memory.ApproveFactAsync(fact, TestContext.Current.CancellationToken);
 
         Assert.Empty(memory.StagedFacts);
-        Assert.Equal("Mark prefers CI failures reviewed first thing on workdays", memory.RecentFacts[0].Text);
+        Assert.Equal("The user prefers CI failures reviewed first thing on workdays", memory.RecentFacts[0].Text);
         Assert.Equal("from 2026-10-24", memory.RecentFacts[0].ValidText);
-        Assert.Equal("Mark prefers quiet UI chrome", memory.RecentFacts[1].Text);
+        Assert.Equal("The user prefers quiet UI chrome", memory.RecentFacts[1].Text);
         Assert.True(memory.RecentFacts[1].IsInvalidated);
         Assert.Equal("2026-10-02 to 2026-10-24", memory.RecentFacts[1].ValidText);
         Assert.StartsWith("Corrected and written as an update", memory.Outcome, StringComparison.Ordinal);
@@ -165,9 +179,9 @@ public sealed class MemoryViewModelTests
     }
 
     [Fact]
-    public void UndoingACorrectionRestoresTheStagedText()
+    public async Task UndoingACorrectionRestoresTheStagedText()
     {
-        var (memory, _, _, _) = Create();
+        var (memory, _, _, _) = await Create();
         var fact = memory.StagedFacts[0];
 
         fact.CorrectCommand.Execute(null);
@@ -182,7 +196,7 @@ public sealed class MemoryViewModelTests
     [Fact]
     public async Task RejectingTheBlockUpdateRecordsWhyAndEmptiesTheQueue()
     {
-        var (memory, service, shell, _) = Create();
+        var (memory, service, shell, _) = await Create();
         var token = TestContext.Current.CancellationToken;
 
         await memory.RejectBlockAsync(memory.BlockUpdates[0], token);
@@ -204,7 +218,7 @@ public sealed class MemoryViewModelTests
     [Fact]
     public async Task ACorrectionRecountsTheBudgetAndConsolidationShrinksTheBlock()
     {
-        var (memory, _, _, _) = Create();
+        var (memory, _, _, _) = await Create();
         var update = memory.BlockUpdates[0];
 
         update.CorrectCommand.Execute(null);
@@ -231,7 +245,7 @@ public sealed class MemoryViewModelTests
     [Fact]
     public async Task TheCoreBlocksTabOffersConsolidationForABlockNearItsBudget()
     {
-        var (memory, _, _, _) = Create();
+        var (memory, _, _, _) = await Create();
         memory.Select(MemoryTabKind.CoreBlocks);
 
         var user = memory.CoreBlocks[0];
@@ -249,7 +263,7 @@ public sealed class MemoryViewModelTests
     [Fact]
     public async Task ALessonApprovedSupersedingMarksTheOldOne()
     {
-        var (memory, _, _, _) = Create();
+        var (memory, _, _, _) = await Create();
         var lesson = memory.LessonCandidates[0];
 
         lesson.StartSupersedingCommand.Execute(null);
@@ -268,7 +282,7 @@ public sealed class MemoryViewModelTests
     [Fact]
     public async Task ALessonIsRejectedOnlyWithAReason()
     {
-        var (memory, service, _, _) = Create();
+        var (memory, service, _, _) = await Create();
         var lesson = memory.LessonCandidates[0];
 
         lesson.StartRejectingCommand.Execute(null);
@@ -285,7 +299,7 @@ public sealed class MemoryViewModelTests
     [Fact]
     public async Task ImportForReviewShowsTheDryRunBeforeStaging()
     {
-        var (memory, _, shell, _) = Create();
+        var (memory, _, shell, _) = await Create();
         memory.Select(MemoryTabKind.Import);
 
         await memory.ImportForReviewCommand.ExecuteAsync();
@@ -305,7 +319,7 @@ public sealed class MemoryViewModelTests
     [Fact]
     public async Task SearchingFiltersTheFactsTab()
     {
-        var (memory, _, _, _) = Create();
+        var (memory, _, _, _) = await Create();
 
         memory.SearchText = "kev";
         await memory.SearchCommand.ExecuteAsync();
@@ -319,10 +333,11 @@ public sealed class MemoryViewModelTests
     }
 
     [Fact]
-    public void TheCompositionCreatesTheMemoryPageOnTheDemo()
+    public async Task TheCompositionCreatesTheMemoryPageOnTheDemo()
     {
         Assert.True(AppOptions.TryParse(["--page", "memory"], out var options, out var error), error);
         var composition = new AppComposition(options, new InlineDispatcher());
+        await composition.Memory.Loaded;
 
         Assert.Equal(2, composition.Memory.ReviewCount);
         Assert.Equal("idle", composition.StatusBar.Trailing);

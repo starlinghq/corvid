@@ -29,6 +29,12 @@ public interface IAuditService
     /// <summary>Scans a session (or the whole log) with the detection rules; <paramref name="failOn"/> is the preset's severity.</summary>
     Task<ScanResult> ScanAsync(string? sessionId, string failOn, CancellationToken cancellationToken);
 
-    /// <summary>Writes a Beacon JSONL trace of a session (or the whole log) to an owner-only file.</summary>
+    /// <summary>
+    /// Writes a Beacon JSONL trace of a session (or the whole log) to an owner-only file. The file name takes the session
+    /// id only through <see cref="DemoAuditService.FileNamePart"/>'s rule (an id is data and may hold a slash). For the
+    /// engine: full retention writes each event as stored (secrets redacted, strings cut at 4 KiB), not the one-line
+    /// summary the demo writes; without <see cref="TraceExportOptions.IncludeLocalMemory"/> only local-only memory content
+    /// is left out (recalled and staged facts, block text), not the skills used or drafted, which the demo also keeps.
+    /// </summary>
     Task<TraceExportResult> ExportAsync(string? sessionId, TraceExportOptions options, CancellationToken cancellationToken);
 }

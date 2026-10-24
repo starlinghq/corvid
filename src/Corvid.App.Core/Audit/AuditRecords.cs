@@ -65,6 +65,11 @@ public sealed record AuditSpan(string Text, AuditSpanStyle Style = AuditSpanStyl
 /// <param name="Type">The event's type as stored: <c>tool_call_issued</c>, <c>approval_resolved</c>…</param>
 public sealed record AuditEvent(long Sequence, string SessionId, DateTimeOffset At, string Type, AuditEventGroup Group)
 {
+    /// <summary>
+    /// The one-line summary as spans. The engine builds them structurally, a span per piece, with what came from the model,
+    /// a tool or a file in plain spans; it never parses untrusted text as markup (<see cref="AuditText.Parse"/> is for the
+    /// app's own wording, with untrusted pieces put in through <see cref="AuditText.Escape"/>).
+    /// </summary>
     public ImmutableArray<AuditSpan> Summary { get; init; } = [];
 
     /// <summary>The tool the event concerns, for the "path or tool" filter.</summary>
@@ -87,6 +92,13 @@ public sealed record AuditEvent(long Sequence, string SessionId, DateTimeOffset 
 /// One request that left the machine for a cloud model (the egress ledger, docs/plan/ui.md §4.12, F8): when and for which
 /// step, the model and the route, how much was sent, what the privacy gate redacted, and the request as sent, rendered on
 /// demand by the same gate (G-9).
+/// <para>
+/// For the engine: the gate should hand its redactions over as structure (where each one sits in <see cref="Full"/> and
+/// what kind it is), not only as <c>[redacted:kind]</c> markers in the text, which a tool's output or the model can
+/// imitate; until then the page checks the markers it finds against <see cref="Redacted"/> and warns when they differ.
+/// <see cref="Excerpt"/> and <see cref="Bytes"/> should be derived from <see cref="Full"/> (its start and end, its UTF-8
+/// size), never supplied separately, so the excerpt cannot show something other than what was sent.
+/// </para>
 /// </summary>
 /// <param name="Number">The request's number in the ledger ("request 7").</param>
 /// <param name="Sequence">The event that sent it (the <c>model_switched</c> or generator call).</param>
