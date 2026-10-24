@@ -38,6 +38,7 @@ public enum PaletteMode
 public sealed class PaletteItem : ObservableObject
 {
     private bool _isSelected;
+    private string _groupHeader = "";
 
     public PaletteItem(string title, string detail, Action? run, string group = "", string keyText = "", IconKind icon = IconKind.None)
     {
@@ -72,6 +73,9 @@ public sealed class PaletteItem : ObservableObject
     /// <summary>Text matched but not shown (a session's id, a command's slash name).</summary>
     public string Keywords { get; init; } = "";
 
+    /// <summary>The palette's choose command, with the row as its parameter: a click runs the row or shows why it cannot.</summary>
+    public System.Windows.Input.ICommand? Choose { get; internal set; }
+
     public bool IsEnabled => Run is not null;
 
     public bool HasNote => Note.Length > 0;
@@ -79,6 +83,19 @@ public sealed class PaletteItem : ObservableObject
     public bool HasDetail => Detail.Length > 0;
 
     public bool HasKey => KeyText.Length > 0;
+
+    /// <summary>The group's heading when this row starts a group in the list as drawn; empty otherwise.</summary>
+    public string GroupHeader
+    {
+        get => _groupHeader;
+        set
+        {
+            if (SetProperty(ref _groupHeader, value ?? ""))
+                OnPropertyChanged(nameof(HasGroupHeader));
+        }
+    }
+
+    public bool HasGroupHeader => _groupHeader.Length > 0;
 
     public bool IsSelected
     {

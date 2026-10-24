@@ -743,8 +743,8 @@
             <TextBlock Text="{x:Bind ViewModel.Session.GoalText, Mode=OneWay, FallbackValue=''}" FontSize="12" Foreground="{ThemeResource CorvidAccent}"
                        VerticalAlignment="Center" TextWrapping="NoWrap" />
           </Border>
-          <controls:CorvidButton x:Name="AsideButton" Content="Aside" Variant="Ghost" IsEnabled="False"
-                                 ToolTipService.ToolTip="A side question in a scratch fork (Ctrl+;) comes with flow F7" />
+          <controls:CorvidButton x:Name="AsideButton" Content="Aside" Variant="Ghost" Click="OnAside"
+                                 ToolTipService.ToolTip="A side question in a scratch fork (Ctrl+;); it comes with flow F7, and this says so" />
           <controls:CorvidButton x:Name="RewindButton" Content="Rewind" Variant="Ghost" Foreground="{ThemeResource CorvidAccent}"
                                  Command="{x:Bind ViewModel.OpenRewindCommand}" ToolTipService.ToolTip="The session's checkpoint timeline (Esc Esc)" />
           <controls:CorvidButton x:Name="CompactButton" Content="Compact…" Variant="Ghost"

@@ -128,7 +128,7 @@ public sealed class PaletteViewModel : ObservableObject
     public PaletteItem? Selected => _selected >= 0 && _selected < _items.Count ? _items[_selected] : null;
 
     /// <summary>"12 matches", or "50 of 73 · type to narrow" when the list was capped.</summary>
-    public string CountText => _matched > _items.Count
+    public string CountText => _mode == PaletteMode.Pending ? "" : _matched > _items.Count
         ? $"{_items.Count} of {_matched} · type to narrow"
         : _matched == 1 ? "1 match" : $"{_matched.ToString(CultureInfo.InvariantCulture)} matches";
 
@@ -615,15 +615,20 @@ public sealed class PaletteViewModel : ObservableObject
         }
         else
         {
-            matched = _source
+            var scored = _source
                 .Select((item, index) => (item, index, score: FuzzyMatch.Best(_query, item.Title, item.Detail, item.Group, item.Keywords)))
-                .Where(entry => entry.score is not null)
-                .OrderByDescending(entry => entry.score)
-                .ThenBy(entry => entry.index)
+                .Where(entry => entry.score is not null);
+            // The shortcuts keep their grouping; everything else ranks best first.
+            matched = (_mode == PaletteMode.Help ? scored : scored.OrderByDescending(entry => entry.score).ThenBy(entry => entry.index))
                 .Select(entry => entry.item);
         }
 
         var all = matched.ToList();
+        var grouped = _mode == PaletteMode.Help || _query.Trim().Length == 0;
+        foreach (var item in all)
+            item.Choose = ChooseCommand;
+        for (var i = 0; i < all.Count; i++)
+            all[i].GroupHeader = grouped && all[i].Group.Length > 0 && (i == 0 || all[i - 1].Group != all[i].Group) ? all[i].Group : "";
         _matched = all.Count;
         Items = all.Count > MaxItems ? all.GetRange(0, MaxItems) : all;
         OnPropertyChanged(nameof(CountText));

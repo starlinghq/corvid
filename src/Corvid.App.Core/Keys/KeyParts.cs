@@ -18,7 +18,8 @@ public static class KeyParts
         for (var i = 0; i < words.Length; i++)
         {
             var word = words[i];
-            var comma = word.Length > 1 && word.EndsWith(',');
+            // "Up," is Up and a comma; "Ctrl+," is the comma key.
+            var comma = word.Length > 1 && word.EndsWith(',') && !word.EndsWith("+,", StringComparison.Ordinal);
             if (comma)
                 word = word[..^1];
             if (word is "to" or "or" or "then")
