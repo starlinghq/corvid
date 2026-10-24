@@ -130,14 +130,22 @@ public sealed class BoardViewModelTests
             rig.Board.Attention.Select(item => item.Kind));
         var approval = rig.Board.Attention[0];
         Assert.Equal("Approval · rm -rf build/ && dotnet test Corvid.slnx", approval.What);
-        Assert.Equal("Fix the flaky sandbox test on CI · 4:12 left · opens the full card", approval.Detail);
+        Assert.Equal("Fix the flaky sandbox test · 4:12 left · opens the full card", approval.Detail);
         Assert.Equal(["Open card"], approval.Buttons.Select(button => button.Label));
         var question = rig.Board.Attention[1];
         Assert.Equal("Question · which version number?", question.What);
-        Assert.Equal("Draft release notes for v0.2 · \"0.2.0, or 0.2.0-rc1 for the first tag?\"", question.Detail);
+        Assert.Equal("Draft release notes · \"0.2.0, or 0.2.0-rc1 for the first tag?\"", question.Detail);
         Assert.Equal(["0.2.0", "0.2.0-rc1", "Answer…"], question.Buttons.Select(button => button.Label));
         Assert.Equal(6, rig.Shell.AttentionCount);
     }
+
+    [Theory]
+    [InlineData("Fix the flaky sandbox test on CI", "Fix the flaky sandbox test")]
+    [InlineData("Draft release notes for v0.2", "Draft release notes")]
+    [InlineData("Vault policy for ntfy", "Vault policy for ntfy")]
+    [InlineData("Spike S4 write-up", "Spike S4 write-up")]
+    public void TheTrayNamesASessionWithoutItsClosingQualifier(string title, string expected) =>
+        Assert.Equal(expected, BoardText.ShortTitle(title));
 
     [Fact]
     public void InTheMainSceneTheTrayHasNoApproval()

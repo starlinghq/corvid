@@ -363,9 +363,9 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         var left = summary.Deadline is { } deadline ? $"{SessionText.Countdown(deadline - now)} left" : null;
         return new AttentionItemViewModel($"approval:{summary.Id}", AttentionKind.Approval,
             BoardText.Join("Approval", summary.Approval),
-            BoardText.Join(summary.Title, left, "opens the full card"),
+            BoardText.Join(BoardText.ShortTitle(summary.Title), left, "opens the full card"),
             [new AttentionButton("Open card", AttentionActionStyle.Default, "Open the session at its approval card: the parsed command, reasons and diff",
-                new RelayCommand(() => Open(summary.Id)))])
+                new RelayCommand(() => Open(summary.Id)), isLink: true)])
         {
             SessionId = summary.Id,
         };
@@ -389,7 +389,7 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
             new RelayCommand(() => Open(summary.Id))));
         return new AttentionItemViewModel($"question:{summary.Id}", AttentionKind.Question,
             BoardText.Join("Question", summary.Question),
-            BoardText.Join(summary.Title, question is not null ? $"\"{question.Text}\"" : null),
+            BoardText.Join(BoardText.ShortTitle(summary.Title), question is not null ? $"\"{question.Text}\"" : null),
             buttons)
         {
             SessionId = summary.Id,
@@ -410,7 +410,7 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
 
     private AttentionItemViewModel AreaItem(AttentionItem item)
     {
-        var buttons = item.Actions.Select(action => new AttentionButton(action.Label, action.Style, action.Help, new RelayCommand(() => Act(item, action)))).ToList();
+        var buttons = item.Actions.Select(action => new AttentionButton(action.Label, action.Style, action.Help, new RelayCommand(() => Act(item, action)), action.IsLink)).ToList();
         return new AttentionItemViewModel(item.Id, item.Kind, item.What, item.Detail, buttons);
     }
 

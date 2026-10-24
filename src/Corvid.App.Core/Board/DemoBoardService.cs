@@ -75,7 +75,7 @@ public sealed class DemoBoardService : IBoardService
                 [
                     new AttentionAction("review", "Review", AttentionActionKind.Navigate)
                     {
-                        Area = Core.Area.Memory, Help = "Open Memory's review of the staged facts",
+                        Area = Core.Area.Memory, IsLink = true, Help = "Open Memory's review of the staged facts",
                     },
                 ],
             },

@@ -41,6 +41,23 @@ public static partial class BoardText
         return Merge(runs);
     }
 
+    /// <summary>
+    /// A session's title as the narrow tray names it: without a closing qualifier after its first three words ("Fix the
+    /// flaky sandbox test on CI" is "Fix the flaky sandbox test", "Draft release notes for v0.2" is "Draft release notes").
+    /// </summary>
+    public static string ShortTitle(string title)
+    {
+        ArgumentNullException.ThrowIfNull(title);
+        var words = title.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = words.Length - 2; i >= 3; i--)
+        {
+            if (words[i] is "on" or "for" or "in" or "of" or "from" or "with")
+                return string.Join(' ', words[..i]);
+        }
+
+        return title;
+    }
+
     /// <summary>The state dot's colour: amber waiting, the accent running, violet a job run, grey idle.</summary>
     public static Tone StateTone(SessionSummary summary)
     {

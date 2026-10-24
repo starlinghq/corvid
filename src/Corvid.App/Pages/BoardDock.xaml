@@ -1,18 +1,79 @@
 <UserControl x:Class="Corvid.App.Pages.BoardDock"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:Corvid.App.Controls"
+             xmlns:board="using:Corvid.App.Core.Board"
+             xmlns:local="using:Corvid.App.Pages"
+             xmlns:ui="using:Corvid.App.Infrastructure"
              Foreground="{ThemeResource CorvidText}"
              FontSize="13.5">
-  <!-- .tray: the attention tray's head, then its items (built with the Board). -->
+  <!--
+    .tray (Board.dc.html aside.tray): the head (12px 14px, a line below, semibold) with "Notify when unfocused"; the items
+    (.tray-item: 10px 14px, a line below, the icon 2 px down and 10 from the body; the body's what, detail and buttons 3
+    apart); and the note at the foot (12px 14px, a line above, small and muted).
+  -->
   <Grid>
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto" />
       <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
-    <Border Padding="14,0,14,0" MinHeight="49" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,0,0,1">
-      <TextBlock Text="Attention" FontWeight="SemiBold" VerticalAlignment="Center" AutomationProperties.HeadingLevel="Level2" />
+    <Grid Padding="14,12" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,0,0,1" ColumnSpacing="10">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="Auto" />
+      </Grid.ColumnDefinitions>
+      <TextBlock Text="{x:Bind ViewModel.AttentionHead, Mode=OneWay}" FontWeight="SemiBold" VerticalAlignment="Center" TextWrapping="NoWrap"
+                 TextTrimming="CharacterEllipsis" AutomationProperties.HeadingLevel="Level2" />
+      <controls:CorvidButton Grid.Column="1" Content="{x:Bind ViewModel.NotifyLabel, Mode=OneWay}" Style="{StaticResource CorvidSmallButton}"
+                             Variant="Ghost" Command="{x:Bind ViewModel.ToggleNotifyCommand}"
+                             ToolTipService.ToolTip="A native notification for each new item while the window is unfocused" />
+    </Grid>
+
+    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled">
+      <StackPanel>
+        <ItemsControl ItemsSource="{x:Bind ViewModel.Attention}" IsTabStop="False" AutomationProperties.Name="Attention">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="board:AttentionItemViewModel">
+              <Grid Padding="14,10" ColumnSpacing="10" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,0,0,1"
+                    AutomationProperties.Name="{x:Bind AutomationName, Mode=OneWay}">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="16" />
+                  <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <local:ToneIcon Kind="{x:Bind Icon}" Tone="{x:Bind IconTone}" Plain="{x:Bind IconPlain}" Margin="0,2,0,0" VerticalAlignment="Top" />
+                <StackPanel Grid.Column="1" Spacing="3">
+                  <TextBlock Text="{x:Bind What, Mode=OneWay}" Style="{StaticResource CorvidBodyText}" FontWeight="Medium" />
+                  <TextBlock Text="{x:Bind Detail, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" />
+                  <ItemsControl ItemsSource="{x:Bind Buttons, Mode=OneWay}" IsTabStop="False">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate>
+                        <controls:WrapRowPanel Spacing="6" LineSpacing="6" />
+                      </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="board:AttentionButton">
+                        <controls:CorvidButton Content="{x:Bind Label}" Style="{StaticResource CorvidSmallButton}"
+                                               Variant="{x:Bind local:BoardDock.Variant(IsGhost)}"
+                                               local:ThemedForeground.Key="{x:Bind local:BoardDock.LabelKey(IsLink, IsDanger)}"
+                                               Command="{x:Bind Command}" ToolTipService.ToolTip="{x:Bind Help}"
+                                               AutomationProperties.HelpText="{x:Bind Help}" />
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </Grid>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+        <TextBlock Margin="14,12" Style="{StaticResource CorvidSmallText}" Text="Nothing waits on you."
+                   Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.HasAttention), Mode=OneWay}" />
+      </StackPanel>
+    </ScrollViewer>
+
+    <Border Grid.Row="2" Padding="14,12" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,1,0,0">
+      <TextBlock Style="{StaticResource CorvidSmallText}"
+                 Text="Nothing here is answered from a bare button: approvals open their full card, with the parsed command, reasons and diff." />
     </Border>
-    <TextBlock Grid.Row="1" Margin="14,12,14,12" Style="{StaticResource CorvidSmallText}"
-               Text="Everything waiting on you across sessions: approvals, questions, held tools, pairing codes, reviews and finished jobs. Each item opens its full card." />
   </Grid>
 </UserControl>

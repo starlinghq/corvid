@@ -49,6 +49,9 @@ public sealed record AttentionAction(string Id, string Label, AttentionActionKin
 {
     public AttentionActionStyle Style { get; init; }
 
+    /// <summary>Drawn as a link (the accent text of the mockup's <c>a.btn</c>): it goes to the item's full card elsewhere.</summary>
+    public bool IsLink { get; init; }
+
     /// <summary>For <see cref="AttentionActionKind.Navigate"/>: the area to open.</summary>
     public Area? Area { get; init; }
 

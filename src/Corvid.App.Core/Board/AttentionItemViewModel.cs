@@ -4,9 +4,12 @@ using Corvid.App.Core.Mvvm;
 namespace Corvid.App.Core.Board;
 
 /// <summary>A button on an attention item: its label, how it is drawn, what it does and the sentence that says so.</summary>
-public sealed class AttentionButton(string label, AttentionActionStyle style, string help, ICommand command)
+public sealed class AttentionButton(string label, AttentionActionStyle style, string help, ICommand command, bool isLink = false)
 {
     public string Label { get; } = label;
+
+    /// <summary>Accent text: it opens the item's full card rather than acting (the mockup's <c>a.btn</c>).</summary>
+    public bool IsLink { get; } = isLink;
 
     public AttentionActionStyle Style { get; } = style;
 
