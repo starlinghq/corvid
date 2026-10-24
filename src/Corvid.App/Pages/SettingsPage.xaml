@@ -1,0 +1,45 @@
+<Page x:Class="Corvid.App.Pages.SettingsPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:controls="using:Corvid.App.Controls"
+      xmlns:mvvm="using:Corvid.App.Core.Mvvm"
+      Background="{ThemeResource CorvidBg}"
+      Foreground="{ThemeResource CorvidText}"
+      FontSize="13.5">
+  <!-- .page: the page head with the area's title, then the body. A placeholder until the area is built. -->
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+    </Grid.RowDefinitions>
+    <Border Style="{StaticResource CorvidPageHead}">
+      <TextBlock Text="{x:Bind ViewModel.Title}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
+                 AutomationProperties.HeadingLevel="Level1" />
+    </Border>
+    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+      <StackPanel Padding="24,18,24,18" Spacing="18" MaxWidth="960" HorizontalAlignment="Left">
+        <TextBlock Text="{x:Bind ViewModel.Summary}" Style="{StaticResource CorvidMutedText}" />
+        <StackPanel Spacing="8">
+          <TextBlock Text="Theme" FontWeight="SemiBold" AutomationProperties.HeadingLevel="Level2" />
+          <Border Height="28" HorizontalAlignment="Left" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1" CornerRadius="6">
+            <ItemsControl ItemsSource="{x:Bind ViewModel.Themes}" IsTabStop="False" AutomationProperties.Name="Theme">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                  <StackPanel Orientation="Horizontal" />
+                </ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="mvvm:Choice">
+                  <controls:SegmentButton Content="{x:Bind Label}" IsChecked="{x:Bind IsSelected, Mode=OneWay}" Command="{x:Bind Choose}"
+                                          FontSize="12.5" Padding="12,0" AutomationProperties.HelpText="{x:Bind Description}"
+                                          ToolTipService.ToolTip="{x:Bind Description}" />
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </Border>
+          <TextBlock Text="Applies at once. The command line's --theme sets it at start." Style="{StaticResource CorvidSmallText}" />
+        </StackPanel>
+      </StackPanel>
+    </ScrollViewer>
+  </Grid>
+</Page>

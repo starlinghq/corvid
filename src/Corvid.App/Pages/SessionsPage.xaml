@@ -1,0 +1,34 @@
+<Page x:Class="Corvid.App.Pages.SessionsPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:controls="using:Corvid.App.Controls"
+      Background="{ThemeResource CorvidBg}"
+      Foreground="{ThemeResource CorvidText}"
+      FontSize="13.5">
+  <!--
+    The Sessions area. The conversation (its header, transcript, turn strip and composer) replaces the body; until then the
+    page names the session the rail selected and links to its Rewind, as the session header will.
+  -->
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+    </Grid.RowDefinitions>
+    <Border Style="{StaticResource CorvidPageHead}">
+      <TextBlock Text="{x:Bind ViewModel.Title}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
+                 AutomationProperties.HeadingLevel="Level1" />
+    </Border>
+    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+      <StackPanel Padding="24,18,24,18" Spacing="18" MaxWidth="960" HorizontalAlignment="Left">
+        <TextBlock Text="{x:Bind ViewModel.Summary}" Style="{StaticResource CorvidMutedText}" />
+        <StackPanel Spacing="4">
+          <TextBlock Text="{x:Bind ViewModel.SessionTitle, Mode=OneWay}" Style="{StaticResource CorvidSessionTitle}"
+                     AutomationProperties.HeadingLevel="Level2" />
+          <TextBlock Text="{x:Bind ViewModel.SessionDetail, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" />
+        </StackPanel>
+        <controls:LinkButton Text="Rewind" Command="{x:Bind ViewModel.OpenRewindCommand}" HorizontalAlignment="Left"
+                             ToolTipService.ToolTip="The session's checkpoint timeline" />
+      </StackPanel>
+    </ScrollViewer>
+  </Grid>
+</Page>

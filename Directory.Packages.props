@@ -42,4 +42,17 @@
          which brings Microsoft.ML.OnnxRuntime.Gpu 1.30.0. Declared always so restore stays central either way. -->
     <PackageVersion Include="Microsoft.ML.OnnxRuntimeGenAI.Cuda" Version="0.17.1" />
   </ItemGroup>
+  <!-- The windowed app (docs/plan/ui.md §8). Markdig is Corvid.App.Core's one package; Uno's packages come from Uno.Sdk
+       (global.json) into Corvid.App only. The checker enforces both. -->
+  <ItemGroup>
+    <PackageVersion Include="Markdig" Version="1.4.2" />
+  </ItemGroup>
+  <!-- Security pins for Corvid.App's WebAssembly target: Uno.Sdk's implicit Microsoft.Windows.Compatibility resolves
+       10.0.12 of these, which has known advisories (NU1902, NU1903; GHSA-2fmv-rv2c-59x7, GHSA-846f-f764-76mx,
+       GHSA-7hqp-7c5m-4vq6, GHSA-c399-9853-6jmj, GHSA-r955-8q5j-3h83). Corvid.App references the patched release directly.
+       Raise these with each .NET servicing release; never silence the audit instead. -->
+  <ItemGroup>
+    <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
+    <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.13" />
+  </ItemGroup>
 </Project>

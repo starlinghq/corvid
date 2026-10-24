@@ -2,6 +2,8 @@
   <Folder Name="/src/">
     <Project Path="src/Corvid.Abstractions/Corvid.Abstractions.csproj" />
     <Project Path="src/Corvid.Acp/Corvid.Acp.csproj" />
+    <Project Path="src/Corvid.App/Corvid.App.csproj" />
+    <Project Path="src/Corvid.App.Core/Corvid.App.Core.csproj" />
     <Project Path="src/Corvid.Approvals/Corvid.Approvals.csproj" />
     <Project Path="src/Corvid.Cli/Corvid.Cli.csproj" />
     <Project Path="src/Corvid.Fabric/Corvid.Fabric.csproj" />
@@ -40,6 +42,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Corvid.Acp.Tests/Corvid.Acp.Tests.csproj" />
+    <Project Path="tests/Corvid.App.Core.Tests/Corvid.App.Core.Tests.csproj" />
     <Project Path="tests/Corvid.Http.Tests/Corvid.Http.Tests.csproj" />
     <Project Path="tests/Corvid.Approvals.Tests/Corvid.Approvals.Tests.csproj" />
     <Project Path="tests/Corvid.Kernel.Tests/Corvid.Kernel.Tests.csproj" />

@@ -1,0 +1,35 @@
+<UserControl x:Class="Corvid.App.Pages.SessionsDock"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:Corvid.App.Controls"
+             xmlns:sessions="using:Corvid.App.Core.Sessions"
+             Foreground="{ThemeResource CorvidText}"
+             FontSize="13.5">
+  <!-- .dock: the tab strip (8px 10px, gap 2, a line below), then the selected panel's body (12px 14px). -->
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+    </Grid.RowDefinitions>
+    <Border Padding="10,8,10,8" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,0,0,1">
+      <ItemsControl ItemsSource="{x:Bind ViewModel.Panels}" IsTabStop="False" AutomationProperties.Name="Panels">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate>
+            <controls:WrapRowPanel Spacing="2" LineSpacing="2" />
+          </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="sessions:SessionPanel">
+            <controls:DockTab Label="{x:Bind Label}" Badge="{x:Bind BadgeText, Mode=OneWay}" IsSelected="{x:Bind IsSelected, Mode=OneWay}"
+                              Command="{x:Bind Open}" AutomationProperties.Name="{x:Bind AutomationName, Mode=OneWay}" />
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </Border>
+    <StackPanel Grid.Row="1" Padding="14,12,14,12" Spacing="6">
+      <TextBlock Text="{x:Bind ViewModel.SelectedPanel.Label, Mode=OneWay}" FontSize="12.5" FontWeight="SemiBold"
+                 AutomationProperties.HeadingLevel="Level2" />
+      <TextBlock Text="{x:Bind ViewModel.SelectedPanel.EmptyText, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" />
+    </StackPanel>
+  </Grid>
+</UserControl>

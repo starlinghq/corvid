@@ -1,0 +1,135 @@
+<!--
+  Corvid's colour tokens, one brush per custom property of the mockups' corvid.css (.app for Light, .app.dark for Dark),
+  with the exact values. Pages and templates use them as {ThemeResource CorvidBg} and so on, so a theme switch at run time
+  (the root element's RequestedTheme) repaints everything. Each brush has a Color twin (CorvidBgColor) for the few places
+  that need a colour. CorvidOnAccent is the text colour on accent and amber fills (the CSS writes it inline: #fff in light,
+  #141619 in dark).
+  Tokens, by custom property (named without the two leading dashes, which an XML comment cannot hold):
+    CorvidBg        bg
+    CorvidBg2       bg-2
+    CorvidBg3       bg-3
+    CorvidLine      line
+    CorvidText      text
+    CorvidText2     text-2
+    CorvidAccent    accent
+    CorvidAccentBg  accent-bg
+    CorvidAmber     amber
+    CorvidAmberBg   amber-bg
+    CorvidRed       red
+    CorvidRedBg     red-bg
+    CorvidGreen     green
+    CorvidGreenBg   green-bg
+    CorvidViolet    violet
+    CorvidVioletBg  violet-bg
+    CorvidCodeBg    code-bg
+    CorvidAddBg     add-bg
+    CorvidAddWord   add-word
+    CorvidDelBg     del-bg
+    CorvidDelWord   del-word
+    CorvidOnAccent  #fff / #141619 on accent and amber fills
+-->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <ResourceDictionary.ThemeDictionaries>
+    <ResourceDictionary x:Key="Light">
+      <Color x:Key="CorvidBgColor">#FFFFFFFF</Color>
+      <Color x:Key="CorvidBg2Color">#FFF5F6F8</Color>
+      <Color x:Key="CorvidBg3Color">#FFEAEDF1</Color>
+      <Color x:Key="CorvidLineColor">#FFDFE3E8</Color>
+      <Color x:Key="CorvidTextColor">#FF1B1F24</Color>
+      <Color x:Key="CorvidText2Color">#FF56606C</Color>
+      <Color x:Key="CorvidAccentColor">#FF2F5FA8</Color>
+      <Color x:Key="CorvidAccentBgColor">#FFE8EFFA</Color>
+      <Color x:Key="CorvidAmberColor">#FF8A5A00</Color>
+      <Color x:Key="CorvidAmberBgColor">#FFFFF3D6</Color>
+      <Color x:Key="CorvidRedColor">#FFB42318</Color>
+      <Color x:Key="CorvidRedBgColor">#FFFEE4E2</Color>
+      <Color x:Key="CorvidGreenColor">#FF146C2E</Color>
+      <Color x:Key="CorvidGreenBgColor">#FFE3F6E8</Color>
+      <Color x:Key="CorvidVioletColor">#FF5B48B8</Color>
+      <Color x:Key="CorvidVioletBgColor">#FFECE8FB</Color>
+      <Color x:Key="CorvidCodeBgColor">#FFF2F3F5</Color>
+      <Color x:Key="CorvidAddBgColor">#FFE6F4EA</Color>
+      <Color x:Key="CorvidAddWordColor">#FFB7E1C1</Color>
+      <Color x:Key="CorvidDelBgColor">#FFFDECEA</Color>
+      <Color x:Key="CorvidDelWordColor">#FFF5C2BD</Color>
+      <Color x:Key="CorvidOnAccentColor">#FFFFFFFF</Color>
+
+      <SolidColorBrush x:Key="CorvidBg" Color="{StaticResource CorvidBgColor}" />
+      <SolidColorBrush x:Key="CorvidBg2" Color="{StaticResource CorvidBg2Color}" />
+      <SolidColorBrush x:Key="CorvidBg3" Color="{StaticResource CorvidBg3Color}" />
+      <SolidColorBrush x:Key="CorvidLine" Color="{StaticResource CorvidLineColor}" />
+      <SolidColorBrush x:Key="CorvidText" Color="{StaticResource CorvidTextColor}" />
+      <SolidColorBrush x:Key="CorvidText2" Color="{StaticResource CorvidText2Color}" />
+      <SolidColorBrush x:Key="CorvidAccent" Color="{StaticResource CorvidAccentColor}" />
+      <SolidColorBrush x:Key="CorvidAccentBg" Color="{StaticResource CorvidAccentBgColor}" />
+      <SolidColorBrush x:Key="CorvidAmber" Color="{StaticResource CorvidAmberColor}" />
+      <SolidColorBrush x:Key="CorvidAmberBg" Color="{StaticResource CorvidAmberBgColor}" />
+      <SolidColorBrush x:Key="CorvidRed" Color="{StaticResource CorvidRedColor}" />
+      <SolidColorBrush x:Key="CorvidRedBg" Color="{StaticResource CorvidRedBgColor}" />
+      <SolidColorBrush x:Key="CorvidGreen" Color="{StaticResource CorvidGreenColor}" />
+      <SolidColorBrush x:Key="CorvidGreenBg" Color="{StaticResource CorvidGreenBgColor}" />
+      <SolidColorBrush x:Key="CorvidViolet" Color="{StaticResource CorvidVioletColor}" />
+      <SolidColorBrush x:Key="CorvidVioletBg" Color="{StaticResource CorvidVioletBgColor}" />
+      <SolidColorBrush x:Key="CorvidCodeBg" Color="{StaticResource CorvidCodeBgColor}" />
+      <SolidColorBrush x:Key="CorvidAddBg" Color="{StaticResource CorvidAddBgColor}" />
+      <SolidColorBrush x:Key="CorvidAddWord" Color="{StaticResource CorvidAddWordColor}" />
+      <SolidColorBrush x:Key="CorvidDelBg" Color="{StaticResource CorvidDelBgColor}" />
+      <SolidColorBrush x:Key="CorvidDelWord" Color="{StaticResource CorvidDelWordColor}" />
+      <SolidColorBrush x:Key="CorvidOnAccent" Color="{StaticResource CorvidOnAccentColor}" />
+
+      <!-- The page background WinUI's own controls read. -->
+      <SolidColorBrush x:Key="ApplicationPageBackgroundThemeBrush" Color="{StaticResource CorvidBgColor}" />
+    </ResourceDictionary>
+    <ResourceDictionary x:Key="Dark">
+      <Color x:Key="CorvidBgColor">#FF141619</Color>
+      <Color x:Key="CorvidBg2Color">#FF1B1E23</Color>
+      <Color x:Key="CorvidBg3Color">#FF23272E</Color>
+      <Color x:Key="CorvidLineColor">#FF2D333B</Color>
+      <Color x:Key="CorvidTextColor">#FFE6E8EB</Color>
+      <Color x:Key="CorvidText2Color">#FFA3ABB5</Color>
+      <Color x:Key="CorvidAccentColor">#FF8AB4F8</Color>
+      <Color x:Key="CorvidAccentBgColor">#FF1E2B40</Color>
+      <Color x:Key="CorvidAmberColor">#FFF2B94C</Color>
+      <Color x:Key="CorvidAmberBgColor">#FF3A2D10</Color>
+      <Color x:Key="CorvidRedColor">#FFFF7B72</Color>
+      <Color x:Key="CorvidRedBgColor">#FF3D1A1A</Color>
+      <Color x:Key="CorvidGreenColor">#FF6FD08C</Color>
+      <Color x:Key="CorvidGreenBgColor">#FF17301F</Color>
+      <Color x:Key="CorvidVioletColor">#FFB4A4FF</Color>
+      <Color x:Key="CorvidVioletBgColor">#FF2A2447</Color>
+      <Color x:Key="CorvidCodeBgColor">#FF1F2329</Color>
+      <Color x:Key="CorvidAddBgColor">#FF1B3022</Color>
+      <Color x:Key="CorvidAddWordColor">#FF2F6B3F</Color>
+      <Color x:Key="CorvidDelBgColor">#FF3A1E1E</Color>
+      <Color x:Key="CorvidDelWordColor">#FF7A2E2E</Color>
+      <Color x:Key="CorvidOnAccentColor">#FF141619</Color>
+
+      <SolidColorBrush x:Key="CorvidBg" Color="{StaticResource CorvidBgColor}" />
+      <SolidColorBrush x:Key="CorvidBg2" Color="{StaticResource CorvidBg2Color}" />
+      <SolidColorBrush x:Key="CorvidBg3" Color="{StaticResource CorvidBg3Color}" />
+      <SolidColorBrush x:Key="CorvidLine" Color="{StaticResource CorvidLineColor}" />
+      <SolidColorBrush x:Key="CorvidText" Color="{StaticResource CorvidTextColor}" />
+      <SolidColorBrush x:Key="CorvidText2" Color="{StaticResource CorvidText2Color}" />
+      <SolidColorBrush x:Key="CorvidAccent" Color="{StaticResource CorvidAccentColor}" />
+      <SolidColorBrush x:Key="CorvidAccentBg" Color="{StaticResource CorvidAccentBgColor}" />
+      <SolidColorBrush x:Key="CorvidAmber" Color="{StaticResource CorvidAmberColor}" />
+      <SolidColorBrush x:Key="CorvidAmberBg" Color="{StaticResource CorvidAmberBgColor}" />
+      <SolidColorBrush x:Key="CorvidRed" Color="{StaticResource CorvidRedColor}" />
+      <SolidColorBrush x:Key="CorvidRedBg" Color="{StaticResource CorvidRedBgColor}" />
+      <SolidColorBrush x:Key="CorvidGreen" Color="{StaticResource CorvidGreenColor}" />
+      <SolidColorBrush x:Key="CorvidGreenBg" Color="{StaticResource CorvidGreenBgColor}" />
+      <SolidColorBrush x:Key="CorvidViolet" Color="{StaticResource CorvidVioletColor}" />
+      <SolidColorBrush x:Key="CorvidVioletBg" Color="{StaticResource CorvidVioletBgColor}" />
+      <SolidColorBrush x:Key="CorvidCodeBg" Color="{StaticResource CorvidCodeBgColor}" />
+      <SolidColorBrush x:Key="CorvidAddBg" Color="{StaticResource CorvidAddBgColor}" />
+      <SolidColorBrush x:Key="CorvidAddWord" Color="{StaticResource CorvidAddWordColor}" />
+      <SolidColorBrush x:Key="CorvidDelBg" Color="{StaticResource CorvidDelBgColor}" />
+      <SolidColorBrush x:Key="CorvidDelWord" Color="{StaticResource CorvidDelWordColor}" />
+      <SolidColorBrush x:Key="CorvidOnAccent" Color="{StaticResource CorvidOnAccentColor}" />
+
+      <!-- The page background WinUI's own controls read. -->
+      <SolidColorBrush x:Key="ApplicationPageBackgroundThemeBrush" Color="{StaticResource CorvidBgColor}" />
+    </ResourceDictionary>
+  </ResourceDictionary.ThemeDictionaries>
+</ResourceDictionary>

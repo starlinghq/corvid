@@ -1,0 +1,7 @@
+{
+  "fonts": [
+    { "family_name": "ms-appx:///Assets/Fonts/Inter-Regular.ttf", "font_weight": 400, "font_style": "Normal", "font_stretch": "Normal" },
+    { "family_name": "ms-appx:///Assets/Fonts/Inter-Medium.ttf", "font_weight": 500, "font_style": "Normal", "font_stretch": "Normal" },
+    { "family_name": "ms-appx:///Assets/Fonts/Inter-SemiBold.ttf", "font_weight": 600, "font_style": "Normal", "font_stretch": "Normal" }
+  ]
+}

@@ -164,6 +164,90 @@ public static class BoundaryCheck
         }
     };
 
+    // The windowed app (docs/plan/ui.md §8). Corvid.App is the Uno head: the only project that resolves Uno's packages,
+    // and, in its desktop target alone, a way to the composition root (through Corvid.App.Engine); its WebAssembly target
+    // runs attached to an engine elsewhere and never reaches the host. Corvid.App.Core holds the view models and takes no
+    // package but Markdig and no project but the contracts, so it builds and tests without a UI framework. Corvid.App.Engine
+    // adapts the composition root to the app's services, as the ACP front end adapts it to ACP; only the head references it.
+    private const string AppHead = "Corvid.App";
+    private const string AppCore = "Corvid.App.Core";
+    private const string AppEngine = "Corvid.App.Engine";
+
+    private static readonly HashSet<string> AppCorePackages = new(StringComparer.OrdinalIgnoreCase) { "Markdig" };
+
+    private static readonly HashSet<string> AppCoreProjects = new(StringComparer.Ordinal) { "Corvid.Abstractions" };
+
+    // What the head resolves in every target with Uno.Sdk 6.7.30 (UnoFeatures SkiaRenderer; Hot Design, the in-app MCP
+    // endpoint and the Open Sans package turned off): Uno.Sdk's implicit packages and what they bring. Explicit like the
+    // other lists, so an Uno upgrade that brings a new package gets reviewed. CommunityToolkit, Uno.Extensions (MVUX,
+    // navigation, hosting), Uno.Toolkit and Uno.Themes are deliberately absent: the app's MVVM is hand-written.
+    private static readonly HashSet<string> AppHeadPackages = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // Uno Platform, its Skia runtime for each desktop OS, the dev server's client (inert in Release) and the build helpers.
+        "Uno.Core.Extensions.Logging", "Uno.Core.Extensions.Logging.Singleton", "Uno.Diagnostics.Eventing",
+        "Uno.Fonts.Fluent", "Uno.Foundation", "Uno.Foundation.Logging", "Uno.icu-macos", "Uno.icu-win",
+        "Uno.Resizetizer", "Uno.Sdk.Extras", "Uno.Settings.DevServer", "Uno.UI.Adapter.Microsoft.Extensions.Logging",
+        "Uno.Wasm.WebSockets", "Uno.WinRT", "Uno.WinUI", "Uno.WinUI.DevServer", "Uno.WinUI.DevServer.Messaging",
+        "Uno.WinUI.Graphics2DSK", "Uno.WinUI.Lottie", "Uno.WinUI.Runtime.Skia",
+        "Uno.WinUI.Runtime.Skia.Linux.FrameBuffer", "Uno.WinUI.Runtime.Skia.MacOS", "Uno.WinUI.Runtime.Skia.Win32",
+        "Uno.WinUI.Runtime.Skia.X11",
+        // The renderer: SkiaSharp and HarfBuzz with their native libraries.
+        "SkiaSharp", "SkiaSharp.NativeAssets.Linux", "SkiaSharp.NativeAssets.macOS",
+        "SkiaSharp.NativeAssets.WebAssembly", "SkiaSharp.NativeAssets.Win32", "SkiaSharp.Resources",
+        "SkiaSharp.SceneGraph", "SkiaSharp.Skottie", "SkiaSharp.Views.Uno.WinUI", "HarfBuzzSharp",
+        "HarfBuzzSharp.NativeAssets.Linux", "HarfBuzzSharp.NativeAssets.macOS", "HarfBuzzSharp.NativeAssets.Win32",
+        // Logging, which Uno's adapter routes through Microsoft.Extensions.Logging.
+        "Microsoft.Extensions.Configuration", "Microsoft.Extensions.Configuration.Abstractions",
+        "Microsoft.Extensions.Configuration.Binder", "Microsoft.Extensions.DependencyInjection",
+        "Microsoft.Extensions.DependencyInjection.Abstractions", "Microsoft.Extensions.Logging",
+        "Microsoft.Extensions.Logging.Abstractions", "Microsoft.Extensions.Logging.Configuration",
+        "Microsoft.Extensions.Logging.Console", "Microsoft.Extensions.Options",
+        "Microsoft.Extensions.Options.ConfigurationExtensions", "Microsoft.Extensions.Primitives",
+        // Win32 interop the Windows runtime generates, D-Bus for the Linux runtime, and what the rest bring.
+        "Microsoft.Windows.CsWin32", "Microsoft.Windows.SDK.Win32Docs", "Microsoft.Windows.SDK.Win32Metadata",
+        "Microsoft.Windows.WDK.Win32Metadata", "Tmds.DBus.Generator", "Tmds.DBus.Protocol", "CommonServiceLocator",
+        "DirectNAot", "DirectNAot.Extensions", "LibVLCSharp", "System.Json", "WebView2Aot",
+    };
+
+    // What the WebAssembly target adds, with -p:CorvidAppWasm=true only.
+    private static readonly HashSet<string> AppHeadWasmPackages = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // The browser runtime, the bootstrapper and its dev server, the console logger.
+        "Uno.Extensions.Logging.WebAssembly.Console", "Uno.Foundation.Runtime.WebAssembly", "Uno.icu-wasm",
+        "Uno.Wasm.Bootstrap", "Uno.Wasm.Bootstrap.DevServer", "Uno.WinUI.Runtime.Skia.WebAssembly.Browser",
+        "Uno.WinUI.Runtime.WebAssembly", "HarfBuzzSharp.NativeAssets.WebAssembly",
+        // Microsoft.Windows.Compatibility (an implicit package of a WebAssembly head) and what it resolves, with the
+        // System.Security.Cryptography pins from Directory.Packages.props over it; the WebAssembly SDK's own pack.
+        "Microsoft.Extensions.ObjectPool", "Microsoft.NET.Sdk.WebAssembly.Pack",
+        "Microsoft.Win32.Registry.AccessControl", "Microsoft.Win32.SystemEvents", "Microsoft.Windows.Compatibility",
+        "System.CodeDom", "System.ComponentModel.Composition", "System.ComponentModel.Composition.Registration",
+        "System.Configuration.ConfigurationManager", "System.Data.Odbc", "System.Data.OleDb",
+        "System.Data.SqlClient", "System.Diagnostics.EventLog", "System.Diagnostics.PerformanceCounter",
+        "System.DirectoryServices", "System.DirectoryServices.AccountManagement",
+        "System.DirectoryServices.Protocols", "System.Drawing.Common", "System.IO.Packaging", "System.IO.Ports",
+        "System.Management", "System.Reflection.Context", "System.Runtime.Caching",
+        "System.Security.Cryptography.Pkcs", "System.Security.Cryptography.ProtectedData",
+        "System.Security.Cryptography.Xml", "System.Security.Permissions", "System.ServiceModel.Http",
+        "System.ServiceModel.NetFramingBase", "System.ServiceModel.NetTcp", "System.ServiceModel.Primitives",
+        "System.ServiceModel.Syndication", "System.ServiceProcess.ServiceController", "System.Speech",
+        "System.Web.Services.Description", "System.Windows.Extensions",
+        "runtime.android-arm.runtime.native.System.IO.Ports", "runtime.android-arm64.runtime.native.System.IO.Ports",
+        "runtime.android-x64.runtime.native.System.IO.Ports", "runtime.android-x86.runtime.native.System.IO.Ports",
+        "runtime.linux-arm.runtime.native.System.IO.Ports", "runtime.linux-arm64.runtime.native.System.IO.Ports",
+        "runtime.linux-bionic-arm64.runtime.native.System.IO.Ports",
+        "runtime.linux-bionic-x64.runtime.native.System.IO.Ports",
+        "runtime.linux-musl-arm.runtime.native.System.IO.Ports",
+        "runtime.linux-musl-arm64.runtime.native.System.IO.Ports",
+        "runtime.linux-musl-x64.runtime.native.System.IO.Ports", "runtime.linux-x64.runtime.native.System.IO.Ports",
+        "runtime.maccatalyst-arm64.runtime.native.System.IO.Ports",
+        "runtime.maccatalyst-x64.runtime.native.System.IO.Ports", "runtime.native.System.Data.SqlClient.sni",
+        "runtime.native.System.IO.Ports", "runtime.osx-arm64.runtime.native.System.IO.Ports",
+        "runtime.osx-x64.runtime.native.System.IO.Ports",
+        "runtime.win-arm64.runtime.native.System.Data.SqlClient.sni",
+        "runtime.win-x64.runtime.native.System.Data.SqlClient.sni",
+        "runtime.win-x86.runtime.native.System.Data.SqlClient.sni",
+    };
+
     public static IReadOnlyList<string> CheckRepository(string root)
     {
         var errors = new List<string>();
@@ -210,8 +294,11 @@ public static class BoundaryCheck
         var buildTool = BuildToolProjects.Contains(project);
         var surface = SurfacePackages.TryGetValue(project, out var surfacePackages);
         var frontEnd = FrontEndProjects.Contains(project);
-        // A front end's graph is the host's, so its packages are judged as the composition root's are.
-        var composition = CompositionProjects.Contains(project) || frontEnd;
+        var appHead = project == AppHead;
+        var appCore = project == AppCore;
+        var appEngine = project == AppEngine;
+        // A front end's graph is the host's, so its packages are judged as the composition root's are; so is the app engine's.
+        var composition = CompositionProjects.Contains(project) || frontEnd || appEngine;
 
         errors.UnionWith(CheckFrameworkReferences(project, assets));
 
@@ -229,9 +316,13 @@ public static class BoundaryCheck
 
         foreach (var target in assets.GetProperty("targets").EnumerateObject())
         {
+            // The head's desktop target may reach the composition root; any other target of it (the browser, later mobile)
+            // runs attached to an engine elsewhere and may not.
+            var desktopHead = appHead && IsDesktopTarget(target.Name);
+            var browserHead = appHead && target.Name.Contains("browserwasm", StringComparison.OrdinalIgnoreCase);
             // Packages a composition project resolves only because an adapter or a surface brings them (Starling, ONNX Runtime,
             // the MCP SDK).
-            var adapterPackages = composition ? AdapterPackages(assets, target.Value) : null;
+            var adapterPackages = composition || desktopHead ? AdapterPackages(assets, target.Value) : null;
             foreach (var dependency in target.Value.EnumerateObject())
             {
                 var name = dependency.Name[..dependency.Name.LastIndexOf('/')];
@@ -246,33 +337,54 @@ public static class BoundaryCheck
 
                 var allowed = type switch
                 {
+                    // Uno's packages belong to the app's head alone, whatever else a project may take (an adapter takes any).
+                    "package" when !appHead && IsUnoPackage(name) => false,
+                    "package" when appHead => AppHeadPackages.Contains(name) || AppCorePackages.Contains(name)
+                        || browserHead && AppHeadWasmPackages.Contains(name)
+                        || desktopHead && (CorePackages.Contains(name) || CompositionPackages.Contains(name) || adapterPackages!.Contains(name)),
+                    "package" when appCore => AppCorePackages.Contains(name),
                     "package" when composition => CorePackages.Contains(name) || CompositionPackages.Contains(name)
-                        || project == "Corvid.Cli" && CliPackages.Contains(name) || adapterPackages!.Contains(name),
+                        || project == "Corvid.Cli" && CliPackages.Contains(name) || appEngine && AppCorePackages.Contains(name)
+                        || adapterPackages!.Contains(name),
                     "package" when surface => CorePackages.Contains(name) || surfacePackages!.Contains(name),
                     "package" => buildTool
                         ? BuildToolPackages.Contains(name)
                         : !independent && !vault && (adapter || CorePackages.Contains(name)),
+                    // The app: nothing references the head; only the head's desktop target references the engine; only the
+                    // head and the engine reference the core, which references the contracts alone; the head's other
+                    // targets reference the core and what it does.
+                    "project" when name == AppHead => false,
+                    "project" when name == AppEngine => desktopHead,
+                    "project" when name == AppCore => appHead || appEngine,
+                    "project" when appCore => AppCoreProjects.Contains(name),
+                    "project" when appHead && !desktopHead => AppCoreProjects.Contains(name),
                     // Only the composition root composes a surface; a surface references core projects only.
-                    "project" when SurfacePackages.ContainsKey(name) => composition,
+                    "project" when SurfacePackages.ContainsKey(name) => composition || desktopHead,
                     "project" when surface => name != "Corvid.Vault" && !name.StartsWith("Corvid.Models.", StringComparison.Ordinal)
                         && !CompositionProjects.Contains(name) && !FrontEndProjects.Contains(name) && !BuildToolProjects.Contains(name) && !LauncherProjects.Contains(name),
                     // A build tool in another project's graph means its assembly would ship; reference it as an analyzer.
                     "project" when buildTool || BuildToolProjects.Contains(name) => false,
                     // Executables are started by path; a reference would load one into another process.
                     "project" when LauncherProjects.Contains(name) => false,
-                    // Nothing composes the composition root but the CLI and the front ends; nothing references the CLI.
-                    "project" when CompositionProjects.Contains(name) => name == "Corvid.Host" && (project == "Corvid.Cli" || frontEnd),
+                    // Nothing composes the composition root but the CLI, the front ends and the app (its engine, and its
+                    // desktop target through it); nothing references the CLI.
+                    "project" when CompositionProjects.Contains(name) => name == "Corvid.Host" && (project == "Corvid.Cli" || frontEnd || appEngine || desktopHead),
                     // Only the CLI starts a front end.
                     "project" when FrontEndProjects.Contains(name) => project == "Corvid.Cli",
                     "project" => !independent && (vault
                         ? name == "Corvid.Vault.Contracts"
-                        : name != "Corvid.Vault" && (adapter || composition || !name.StartsWith("Corvid.Models.", StringComparison.Ordinal))),
+                        : name != "Corvid.Vault" && (adapter || composition || desktopHead || !name.StartsWith("Corvid.Models.", StringComparison.Ordinal))),
                     _ => false
                 };
 
                 if (!allowed)
                     errors.Add($"{project}: forbidden {type} dependency {dependency.Name} in {target.Name} (direct or transitive). " +
-                        (buildTool ? "Build tooling may use only Roslyn and its netstandard2.0 dependencies, and no projects."
+                        (type == "package" && !appHead && IsUnoPackage(name) ? "Uno's packages belong in Corvid.App alone; the core, the view models and the engine stay free of the UI framework."
+                        : type == "project" && (name is AppHead or AppEngine || appHead) ? "Only Corvid.App's desktop target references Corvid.App.Engine and, through it, the composition root; its other targets run attached and reference Corvid.App.Core alone. Nothing references Corvid.App."
+                        : type == "project" && name == AppCore ? "Only Corvid.App and Corvid.App.Engine reference Corvid.App.Core."
+                        : appCore ? "Corvid.App.Core takes no package but Markdig and no project but Corvid.Abstractions, so the view models build and test without a UI framework or the engine."
+                        : appHead ? "Corvid.App takes Uno.Sdk's implicit packages (AppHeadPackages, and AppHeadWasmPackages in its WebAssembly target) and, in its desktop target, what the composition root resolves; never CommunityToolkit, Uno.Extensions, Uno.Toolkit or Uno.Themes. Add a package after review."
+                        : buildTool ? "Build tooling may use only Roslyn and its netstandard2.0 dependencies, and no projects."
                         : type == "project" && BuildToolProjects.Contains(name) ? "Reference build tooling as an analyzer: OutputItemType=\"Analyzer\" ReferenceOutputAssembly=\"false\"."
                         : launcher ? "The corvid-sandbox launcher must have no dependencies; Vault and Corvid start it by path."
                         : type == "project" && LauncherProjects.Contains(name) ? "Start the corvid-sandbox launcher by path; do not reference it."
@@ -323,6 +435,12 @@ public static class BoundaryCheck
                             Check(reference.GetString() ?? "", $"through {dependency.Name} in {target.Name}");
         return errors.ToArray();
     }
+
+    /// <summary>Uno Platform's own packages, which only the app's head may resolve.</summary>
+    private static bool IsUnoPackage(string name) => name.StartsWith("Uno.", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The head's desktop target (<c>net10.0-desktop</c>, and its runtime-specific variants).</summary>
+    private static bool IsDesktopTarget(string target) => target.Contains("-desktop", StringComparison.OrdinalIgnoreCase);
 
     private static string ProjectName(JsonElement assets, string library) =>
         Path.GetFileNameWithoutExtension(assets.GetProperty("libraries").GetProperty(library).GetProperty("msbuildProject").GetString())

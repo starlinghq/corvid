@@ -1,0 +1,115 @@
+namespace Corvid.App.Core;
+
+/// <summary>
+/// The desktop app's command line (docs/plan/ui.md §8). Parsed here rather than in the head, so its rules are tested
+/// without a display.
+/// </summary>
+public sealed record AppOptions
+{
+    public const string Usage = """
+        Usage: Corvid.App [--demo] [--theme light|dark|system] [--page <area>] [--session <id>]
+
+          --demo              demo services and the scripted scenario, with the clock frozen at 2026-10-24 14:05
+                              local (the default until the engine is wired in)
+          --theme <theme>     light, dark or system (the default)
+          --page <area>       the area to open: sessions, board, review, rewind, memory, skills, jobs, models,
+                              safety, mcp, gateway, secrets, audit, settings or first-run
+          --session <id>      the session to open, such as cli-9f2e
+          --help              this text
+        """;
+
+    /// <summary>Demo services and the scripted scenario, with the clock frozen. The default until Corvid.App.Engine exists.</summary>
+    public bool Demo { get; init; } = true;
+
+    public AppTheme Theme { get; init; } = AppTheme.System;
+
+    /// <summary>The area to open on; Sessions when absent.</summary>
+    public Area? Page { get; init; }
+
+    /// <summary>The session to select and open, by id.</summary>
+    public string? Session { get; init; }
+
+    /// <summary>The caller asked for <see cref="Usage"/>; the app prints it and exits.</summary>
+    public bool Help { get; init; }
+
+    /// <summary>Reads the options; on failure <paramref name="error"/> says which argument was wrong and why.</summary>
+    public static bool TryParse(IReadOnlyList<string> args, out AppOptions options, out string error)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        options = new AppOptions();
+        error = "";
+        for (var i = 0; i < args.Count; i++)
+        {
+            // "--page models" and "--page=models" are the same.
+            var name = args[i];
+            string? inline = null;
+            var equals = name.IndexOf('=', StringComparison.Ordinal);
+            if (name.StartsWith("--", StringComparison.Ordinal) && equals > 0)
+            {
+                inline = name[(equals + 1)..];
+                name = name[..equals];
+            }
+
+            switch (name)
+            {
+                case "--demo" when inline is null:
+                    options = options with { Demo = true };
+                    break;
+                case "--help" or "-h" or "-?" when inline is null:
+                    options = options with { Help = true };
+                    break;
+                case "--theme":
+                    if (!TakeValue(args, ref i, name, inline, out var theme, out error))
+                        return false;
+                    AppTheme? parsed = theme.ToLowerInvariant() switch
+                    {
+                        "light" => AppTheme.Light,
+                        "dark" => AppTheme.Dark,
+                        "system" => AppTheme.System,
+                        _ => null,
+                    };
+                    if (parsed is not { } chosen)
+                    {
+                        error = $"--theme takes light, dark or system, not \"{theme}\".";
+                        return false;
+                    }
+
+                    options = options with { Theme = chosen };
+                    break;
+                case "--page":
+                    if (!TakeValue(args, ref i, name, inline, out var page, out error))
+                        return false;
+                    if (!Areas.TryParse(page, out var area))
+                    {
+                        error = $"--page takes an area such as sessions, review or models, not \"{page}\".";
+                        return false;
+                    }
+
+                    options = options with { Page = area };
+                    break;
+                case "--session":
+                    if (!TakeValue(args, ref i, name, inline, out var session, out error))
+                        return false;
+                    options = options with { Session = session };
+                    break;
+                default:
+                    error = $"Unknown argument \"{args[i]}\".";
+                    return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TakeValue(IReadOnlyList<string> args, ref int i, string name, string? inline, out string value, out string error)
+    {
+        error = "";
+        if (inline is null && i + 1 < args.Count && !args[i + 1].StartsWith("--", StringComparison.Ordinal))
+            inline = args[++i];
+        value = inline?.Trim() ?? "";
+        if (value.Length > 0)
+            return true;
+        error = $"{name} needs a value.";
+        return false;
+    }
+}
