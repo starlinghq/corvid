@@ -36,9 +36,8 @@
       <Setter Property="Padding" Value="8,5" />
       <Setter Property="HorizontalAlignment" Value="Stretch" />
       <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-      <Setter Property="UseSystemFocusVisuals" Value="True" />
-      <Setter Property="FocusVisualPrimaryBrush" Value="{ThemeResource CorvidAccent}" />
-      <Setter Property="FocusVisualSecondaryBrush" Value="{ThemeResource CorvidBg}" />
+      <!-- The system focus visual left keyboard-visited rows drawn faded; the template draws its own outline. -->
+      <Setter Property="UseSystemFocusVisuals" Value="False" />
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
@@ -46,7 +45,17 @@
               <Border x:Name="Film" Background="{ThemeResource CorvidBg3}" Visibility="Collapsed" />
               <ContentPresenter Content="{TemplateBinding Content}" Padding="{TemplateBinding Padding}"
                                 HorizontalContentAlignment="Stretch" VerticalContentAlignment="Center" />
+              <Border x:Name="FocusRing" BorderBrush="{ThemeResource CorvidAccent}" BorderThickness="2" CornerRadius="6" Visibility="Collapsed" />
               <VisualStateManager.VisualStateGroups>
+                <VisualStateGroup x:Name="FocusStates">
+                  <VisualState x:Name="Focused">
+                    <VisualState.Setters>
+                      <Setter Target="FocusRing.Visibility" Value="Visible" />
+                    </VisualState.Setters>
+                  </VisualState>
+                  <VisualState x:Name="PointerFocused" />
+                  <VisualState x:Name="Unfocused" />
+                </VisualStateGroup>
                 <VisualStateGroup x:Name="CommonStates">
                   <VisualState x:Name="Normal" />
                   <VisualState x:Name="PointerOver">

@@ -124,6 +124,9 @@ public sealed class RewindTests
         Assert.Equal(8, rewind.Entries.Count);
         Assert.Equal(("refused", Tone.Red, true), (rewind.LastRestoreTag, rewind.LastRestoreTone, rewind.LastRestoreRefused));
         Assert.Equal("refused 1 · nothing was restored or overwritten", rewind.LastRestoreSummary);
+        // Nothing changed, so the plan stays open on the same entry.
+        Assert.Equal("c-31", rewind.Selected?.CheckpointId);
+        Assert.True(rewind.HasPlan);
         var file = Assert.Single(rewind.LastRestoreFiles);
         Assert.Equal("docs/notes.md, refused: you edited it at 13:35, after c-32, and going back to c-31 would delete it", file.AutomationName);
     }

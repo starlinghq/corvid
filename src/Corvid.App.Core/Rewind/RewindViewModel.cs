@@ -365,7 +365,14 @@ public sealed class RewindViewModel : AreaViewModel
     {
         if (_plan is not { } plan || _sessionId is not { } sessionId)
             return;
-        await _service.RestoreAsync(sessionId, plan.CheckpointId, _scope).ConfigureAwait(true);
+        var outcome = await _service.RestoreAsync(sessionId, plan.CheckpointId, _scope).ConfigureAwait(true);
+        if (outcome.Refused)
+        {
+            // Nothing changed: the plan stays, with the refusal in the last restore panel below it.
+            await RefreshAsync().ConfigureAwait(true);
+            return;
+        }
+
         // The session went back; the old plan's turns are gone, so nothing stays selected.
         _preferred = null;
         if (_selected is not null)

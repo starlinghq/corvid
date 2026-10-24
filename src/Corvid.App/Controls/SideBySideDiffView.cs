@@ -18,8 +18,8 @@ namespace Corvid.App.Controls;
 /// before on the left and after on the right, each its own column that scrolls sideways (<c>.side</c>, overflow auto), so
 /// a comment under a right-hand line pushes only that column down and the left one's empty cells (<c>.dl.gap</c>) sit
 /// beside lines only the right has. Lines are mono 12 px on 22 px rows with a 38 px number gutter; added lines on add-bg,
-/// removed ones on del-bg, changed words highlighted. Under 860 px (<see cref="IsStacked"/>) the columns stack, before
-/// above after, as Review-narrow.png shows. With <see cref="IsUnified"/> it draws the unified rows in one column instead.
+/// removed ones on del-bg, changed words highlighted. Under 860 px (<see cref="IsStacked"/>), or when the view itself
+/// is under 640 px wide, the columns stack, before above after, as Review-narrow.png shows. With <see cref="IsUnified"/> it draws the unified rows in one column instead.
 /// <para>
 /// Comments: a line is a focusable target (arrow keys move within a column, Enter or a click invokes
 /// <see cref="LineCommand"/> with a <see cref="DiffLineRef"/>); <see cref="Comments"/> draw as the mockup's
@@ -52,17 +52,30 @@ public sealed partial class SideBySideDiffView : UserControl
 
     private const double RowHeight = 22;
     private const double Gutter = 38;
+    private const double NarrowWidth = 640;
 
     private readonly Grid _root = new();
     private readonly List<Column> _columns = [];
     private INotifyCollectionChanged? _observed;
     private TextBox? _editorBox;
+    private bool _narrow;
+
+    private bool Stacked => IsStacked || _narrow;
 
     public SideBySideDiffView()
     {
         IsTabStop = false;
         Content = _root;
         ActualThemeChanged += (_, _) => Rebuild();
+        // Two columns under 640 px would show a few characters each; they stack instead, as under 860 px.
+        SizeChanged += (_, e) =>
+        {
+            var narrow = e.NewSize.Width < NarrowWidth;
+            if (narrow == _narrow)
+                return;
+            _narrow = narrow;
+            Rebuild();
+        };
     }
 
     public IReadOnlyList<SideBySideRow>? Rows
@@ -216,10 +229,10 @@ public sealed partial class SideBySideDiffView : UserControl
         {
             // .side + .side: a line between the columns, or above the second when they stack.
             element.BorderBrush = ThemeBrushes.Get(this, "CorvidLine");
-            element.BorderThickness = IsStacked ? new Thickness(0, 1, 0, 0) : new Thickness(1, 0, 0, 0);
+            element.BorderThickness = Stacked ? new Thickness(0, 1, 0, 0) : new Thickness(1, 0, 0, 0);
         }
 
-        if (IsStacked || IsUnified)
+        if (Stacked || IsUnified)
         {
             _root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             Grid.SetRow(element, index);
@@ -274,8 +287,6 @@ public sealed partial class SideBySideDiffView : UserControl
             var line = new DiffLine(_owner.LineCommand, new DiffLineRef(side, number, text))
             {
                 MinHeight = RowHeight,
-                FocusVisualPrimaryBrush = ThemeBrushes.Get(_owner, "CorvidAccent"),
-                FocusVisualSecondaryBrush = ThemeBrushes.Get(_owner, "CorvidBg"),
             };
             // The row's colour is on its content: a ContentControl's own Background is not drawn without a template that uses it.
             var grid = new Grid
@@ -297,7 +308,7 @@ public sealed partial class SideBySideDiffView : UserControl
                 words.Children.Add(Segment(segment.Text, segment.Changed && kind != DiffRowKind.Context ? highlight : null));
             Grid.SetColumn(words, 1);
             grid.Children.Add(words);
-            line.Content = grid;
+            line.SetBody(grid, ThemeBrushes.Get(_owner, "CorvidAccent"));
             var sign = kind switch { DiffRowKind.Added => "added", DiffRowKind.Removed => "removed", _ => "line" };
             AutomationProperties.SetName(line, $"{sign} {number}: {text.Trim()}");
             _lines.Children.Add(line);
@@ -368,7 +379,7 @@ public sealed partial class SideBySideDiffView : UserControl
             var meta = new Grid();
             meta.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             meta.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            meta.Children.Add(new TextBlock { Text = comment.Meta, FontSize = 11.5, MinHeight = 16.7, Foreground = ThemeBrushes.Get(_owner, "CorvidText2"), VerticalAlignment = VerticalAlignment.Center });
+            meta.Children.Add(new TextBlock { Text = comment.Meta, FontSize = 11.5, MinHeight = 16.7, TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap, Foreground = ThemeBrushes.Get(_owner, "CorvidText2"), VerticalAlignment = VerticalAlignment.Center });
             var remove = new CorvidButton
             {
                 Variant = ButtonVariant.Ghost,
@@ -559,7 +570,8 @@ public sealed partial class SideBySideDiffView : UserControl
             _command = command;
             _line = line;
             IsTabStop = command is not null;
-            UseSystemFocusVisuals = true;
+            // The system focus visual leaves keyboard-visited rows drawn faded on Skia; the line draws its own ring.
+            UseSystemFocusVisuals = false;
             HorizontalContentAlignment = HorizontalAlignment.Stretch;
             VerticalContentAlignment = VerticalAlignment.Stretch;
             HorizontalAlignment = HorizontalAlignment.Stretch;
@@ -579,6 +591,18 @@ public sealed partial class SideBySideDiffView : UserControl
                     Invoke();
                 }
             };
+        }
+
+        /// <summary>The line's content under a 2 px accent ring that shows while the keyboard is on it.</summary>
+        public void SetBody(UIElement body, Brush ring)
+        {
+            var frame = new Border { BorderBrush = ring, BorderThickness = new Thickness(2), Visibility = Visibility.Collapsed, IsHitTestVisible = false };
+            var host = new Grid();
+            host.Children.Add(body);
+            host.Children.Add(frame);
+            Content = host;
+            GotFocus += (_, _) => frame.Visibility = FocusState == FocusState.Keyboard ? Visibility.Visible : Visibility.Collapsed;
+            LostFocus += (_, _) => frame.Visibility = Visibility.Collapsed;
         }
 
         private void Invoke()
