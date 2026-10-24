@@ -70,6 +70,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         _engine = engine;
         _dispatcher = dispatcher;
         _time = time;
+        _ = WatchJobsAsync();
     }
 
     public event EventHandler<SessionSummary>? SessionChanged;
@@ -299,6 +300,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     public void Dispose()
     {
         _disposed = true;
+        UnwatchJobs();
         foreach (var channel in _channels.Values)
         {
             PendingApproval[] open;

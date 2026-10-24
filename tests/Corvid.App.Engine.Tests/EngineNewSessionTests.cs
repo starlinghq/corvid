@@ -49,3 +49,29 @@ public sealed class EngineNewSessionTests
         await service.IdleAsync();
     }
 }
+
+/// <summary>A job run's session reaches the window's session list when the scheduler finishes it (F13's "open the run").</summary>
+public sealed class EngineJobRunSessionTests
+{
+    [Fact]
+    public async Task AFinishedRunsSessionIsRaisedSoTheRailAndTheTrayCanOpenIt()
+    {
+        await using var fixture = await EngineFixture.StartAsync(new FakeModels(new FakeGenerator(Reply.Say("Hello."))),
+            new Dictionary<string, string?> { ["Corvid:Scheduler:Enabled"] = "true", ["Corvid:Tools:Builtin"] = "true" });
+        using var service = fixture.Sessions();
+        var raised = new TaskCompletionSource<SessionSummary>(TaskCreationOptions.RunContinuationsAsynchronously);
+        service.SessionChanged += (_, summary) =>
+        {
+            if (summary.Id.StartsWith("job:", StringComparison.Ordinal))
+                raised.TrySetResult(summary);
+        };
+        // Due in a second (a schedule in the past is refused): the scheduler, woken by the store's change, runs it then.
+        var due = DateTimeOffset.Now.AddSeconds(1).ToString("yyyy-MM-ddTHH:mm:sszzz", System.Globalization.CultureInfo.InvariantCulture);
+
+        var job = fixture.Runtime.Builtin.Jobs.Add(new Corvid.Kernel.Jobs.NewJob("soon", "say hello", due));
+
+        var summary = await raised.Task.WaitAsync(TimeSpan.FromSeconds(25), TestContext.Current.CancellationToken);
+        Assert.Contains(job.JobId, summary.Id, StringComparison.Ordinal);
+        Assert.Equal(SessionState.Job, summary.State);
+    }
+}
