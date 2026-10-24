@@ -37,7 +37,8 @@ It restores and passes the boundary checker here, but has not been built or run,
 
 | Option | Effect |
 | --- | --- |
-| `--demo` | Demo services and the scripted scenario, with the clock frozen at 2026-10-24 14:05 local so every relative time and screenshot is stable. The default (and the only mode) until `Corvid.App.Engine` exists. |
+| `--demo` | Demo services and the scripted scenario, with the clock frozen at 2026-10-24 14:05 local so every relative time and screenshot is stable. The default. |
+| `--engine` | Corvid's engine in-process (`Corvid.App.Engine`, desktop head only), over the same `corvid.json`, models and event log as the CLI; `CORVID_CONFIG` and `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR` move them (a test home sets them all, and `Corvid:Models:Cache`, to temporary directories). The host starts and the model cache is checked before the window opens; the models load in the background. With models missing it opens First run. Areas whose engine service is not built yet open on a red "This comes with A3 <group>: …" notice. Not with `--demo`. |
 | `--theme light\|dark\|system` | The theme to start in; `system` by default. Settings switches it at run time. |
 | `--page <area>` | The area to open: `sessions`, `board`, `review`, `rewind`, `memory`, `skills`, `jobs`, `models`, `safety`, `mcp`, `gateway`, `secrets`, `audit`, `settings`, `first-run` (any case; `=` works too: `--page=models`). |
 | `--session <id>` | The session to select and open, such as `cli-9f2e`; with `--page`, it is selected and the page shows. |
@@ -124,10 +125,14 @@ src/Corvid.App/
                              Jobs, MCP and Gateway also merge ModelsStyles.xaml, and share OpsStyles.xaml (row button,
                              fields, pairing code) and OpsLayout (head, columns, tables, focus after a change)
   Infrastructure/            UiDispatcher (the core's IDispatcher), Ui (x:Bind helpers), AppLogging
+src/Corvid.App.Engine/       the in-process engine (desktop head only): AppEngine (the host and the runtime starting in the
+                             background), EngineAppServices (one partial file per area), Sessions/ (EngineSessionService,
+                             SessionUpdateTranslator from the host's K-10 stream to the app's updates)
 src/Corvid.App.Core/
   Mvvm/                      ObservableObject, RelayCommand(<T>), AsyncRelayCommand, Choice, IDispatcher, InlineDispatcher
   Shell/                     ShellViewModel, StatusBarViewModel, NavItem, SessionListItem, PhoneTab, ShellLayout, DemoShell
-  Composition/               AppComposition, one partial file per area (and AppComposition.Palette)
+  Composition/               AppComposition, one partial file per area (and AppComposition.Palette); IAppServices with
+                             DemoAppServices and Unavailable (the refusing services engine mode uses until an area is built)
   Keys/                      KeyMap (every key with its context, remapping, conflicts), KeyGesture
   Palette/                   PaletteViewModel (commands, pages, settings, sessions, prompt history, find), FuzzyMatch
   <Area>/                    each area's view model (and, as the area is built, its service, DTOs and demo service)
@@ -142,8 +147,10 @@ Secrets, Audit, Settings, FirstRun (`Area` in the core). An area owns, and only 
 - `src/Corvid.App.Core/<Area>/`: `I<Area>Service`, its DTO records, `Demo<Area>Service`, `<Area>ViewModel` (deriving
   from `AreaViewModel`, which gives the page its title).
 - `src/Corvid.App.Core/Composition/AppComposition.<Area>.cs`: the property named after the area that creates its service
-  and view model on first use. Demo mode passes the demo service and `Time` (the frozen clock); the engine's service
-  comes with `Corvid.App.Engine`.
+  (through `Services`, an `IAppServices`: `DemoAppServices` in demo mode, `Corvid.App.Engine`'s `EngineAppServices` in
+  engine mode) and view model on first use.
+- `src/Corvid.App.Engine/<Area>/` and `src/Corvid.App.Engine/EngineAppServices.<Area>.cs`: the area's engine service and
+  the factory member that makes it (until it is built, one of `Unavailable`'s refusing services).
 - `src/Corvid.App/Pages/<Area>Page.xaml(.cs)`: the page. It takes its view model from the composition the shell
   navigates with (`OnNavigatedTo`: `((AppComposition)e.Parameter).<Area>`, then `Bindings.Update()`) and binds with
   `x:Bind`.
