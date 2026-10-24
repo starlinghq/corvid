@@ -289,11 +289,18 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         foreach (var channel in _channels.Values)
         {
             PendingApproval[] open;
+            IDisposable? feed, prompter;
             lock (channel.Gate)
             {
                 channel.Subscribers.Clear();
                 open = [.. channel.Pending.Values];
+                (feed, prompter) = (channel.Feed, channel.Prompter);
+                (channel.Feed, channel.Prompter) = (null, null);
             }
+            // The turn's feed subscription and prompter go with the window; a turn still running reports to nobody, and
+            // its prompts fail closed in the pipeline (no surface attached).
+            feed?.Dispose();
+            prompter?.Dispose();
             foreach (var pending in open)
                 pending.Answer.TrySetResult(null);
         }
@@ -354,6 +361,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             }
             feed = runtime.Feed.Subscribe(sessionId, reporter);
             prompter = runtime.AttachPrompter(sessionId, new CardPrompter(this, channel, runtime, tools, reporter));
+            // Kept on the channel too, so closing the window lets go of them even while the turn runs on.
+            lock (channel.Gate)
+                (channel.Feed, channel.Prompter) = (feed, prompter);
             var started = _time.GetTimestamp();
             // Returns once the session's actor has the message; the turn runs on, and its end is tracked below.
             var delivery = await session.PostAsync(text, EnvelopeOrigin.User, cancellationToken).ConfigureAwait(false);
@@ -366,6 +376,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             {
                 channel.Running = false;
                 channel.Reporter = null;
+                (channel.Feed, channel.Prompter) = (null, null);
             }
             throw;
         }
@@ -404,6 +415,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         }
         finally
         {
+            lock (channel.Gate)
+                if (ReferenceEquals(channel.Feed, feed))
+                    (channel.Feed, channel.Prompter) = (null, null);
             feed.Dispose();
             prompter.Dispose();
         }
@@ -791,6 +805,11 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
 
         /// <summary>The running turn's reporter, which a prompt is ordered after.</summary>
         public SessionUpdateReporter? Reporter { get; set; }
+
+        /// <summary>The running turn's feed subscription and attached prompter, released when it ends or the window closes.</summary>
+        public IDisposable? Feed { get; set; }
+
+        public IDisposable? Prompter { get; set; }
 
         /// <summary>The running turn is being interrupted: its open prompts close as cancelled.</summary>
         public bool Cancelling { get; set; }

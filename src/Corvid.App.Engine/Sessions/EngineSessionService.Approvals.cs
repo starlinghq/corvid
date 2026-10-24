@@ -82,22 +82,31 @@ public sealed partial class EngineSessionService
             case ApprovalChoice.Session:
                 if (!offered.Contains(PipelineScope.Session))
                     throw new InvalidOperationException("This prompt asks for this action only; it cannot be allowed for the session.");
+                RefuseHidden(pending.Rules, []);
                 return (PipelineAnswer.Approve(PipelineScope.Session), pending.Rules);
             case ApprovalChoice.Always:
                 if (!offered.Contains(PipelineScope.Always))
                     throw new InvalidOperationException("This prompt asks for this action only; no rule can be written for it.");
                 var paths = answer.RulePaths.IsDefault ? [] : answer.RulePaths;
-                // A rule is written as structure the person must be able to read: nothing with a hidden character is granted.
-                if (pending.Rules.Any(rule => SafeText.HasHidden(rule.Verb) || SafeText.HasHidden(rule.Subcommand)
-                        || rule.Paths.Any(SafeText.HasHidden) || rule.Names.Any(SafeText.HasHidden))
-                    || paths.Any(row => !row.IsDefault && row.Any(SafeText.HasHidden)))
-                    throw new InvalidOperationException("The rule holds hidden characters, so it is not written. Allow once or deny.");
+                RefuseHidden(pending.Rules, paths);
                 if (!ApprovalPipeline.Narrow(pending.Rules, paths, out var narrowed, out var error))
                     throw new InvalidOperationException("The rule was not written: " + error);
                 return (PipelineAnswer.Approve(PipelineScope.Always) with { RulePaths = paths }, narrowed);
             default:
                 return (PipelineAnswer.Deny(), []);
         }
+    }
+
+    /// <summary>
+    /// A session or always rule is a standing grant written as structure the person must be able to read: nothing with a
+    /// hidden character in it is granted.
+    /// </summary>
+    private static void RefuseHidden(ImmutableArray<ApprovalRule> rules, ImmutableArray<ImmutableArray<string>> paths)
+    {
+        if (rules.Any(rule => SafeText.HasHidden(rule.Verb) || SafeText.HasHidden(rule.Subcommand)
+                || rule.Paths.Any(SafeText.HasHidden) || rule.Names.Any(SafeText.HasHidden))
+            || paths.Any(row => !row.IsDefault && row.Any(SafeText.HasHidden)))
+            throw new InvalidOperationException("The rule holds hidden characters, so it is not written. Allow once or deny.");
     }
 
     /// <summary>An open prompt: what it asked, the rules a session or always answer writes, and the card's answer when it comes.</summary>

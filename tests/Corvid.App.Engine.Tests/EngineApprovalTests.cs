@@ -195,6 +195,9 @@ public sealed class EngineApprovalTests
         await service.RemoveQueuedAsync(id, b.Id, Ct);
         Assert.Equal("a", await service.TakeBackQueuedAsync(id, a.Id, Ct));
         Assert.Null(await service.TakeBackQueuedAsync(id, a.Id, Ct));
+        // Compaction runs between turns, never under a running one.
+        var compacting = await Assert.ThrowsAsync<InvalidOperationException>(() => service.CompactAsync(id, null, Ct));
+        Assert.Equal("Compaction runs between turns; this one is still running.", compacting.Message);
 
         Assert.Equal(["c"], waiter.Updates.OfType<QueueChanged>().Last().Items.Select(item => item.Text));
         var full = waiter.Updates.OfType<QueueChanged>().Where(queue => queue.Items.Length == 3).Select(queue => string.Join(" ", queue.Items.Select(item => item.Text)));
@@ -277,11 +280,16 @@ public sealed class EngineApprovalTests
         var refused = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.AnswerApprovalAsync(id, request.ApprovalId, new ApprovalAnswer(ApprovalChoice.Always), Ct));
         Assert.Contains("hidden characters", refused.Message, StringComparison.Ordinal);
+        // A session rule is a standing grant too.
+        var forSession = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.AnswerApprovalAsync(id, request.ApprovalId, new ApprovalAnswer(ApprovalChoice.Session), Ct));
+        Assert.Contains("hidden characters", forSession.Message, StringComparison.Ordinal);
         await service.AnswerApprovalAsync(id, request.ApprovalId, ApprovalAnswer.Deny, Ct);
         await service.IdleAsync();
 
         Assert.Equal(ApprovalOutcome.Denied, Assert.Single(waiter.Updates.OfType<ApprovalResolved>()).Outcome);
         Assert.Empty(engine.Runtime.Approvals.AlwaysRules);
+        Assert.Empty(engine.Runtime.Approvals.SessionRules(id));
     }
 
     [Fact]
