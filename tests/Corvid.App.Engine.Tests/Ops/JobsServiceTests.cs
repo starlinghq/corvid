@@ -43,7 +43,8 @@ public sealed class JobsServiceTests
         Assert.Equal(EngineJobsService.KeptInSession, job.Deliver);
         Assert.Equal(store.Get(made.JobId)!.NextRunAt, job.NextRun);
         var last = Assert.IsType<JobRunRecord>(job.LastRun);
-        Assert.Equal((claimed.Run.RunId, CoreRunStatus.Ok, claimed.Run.SessionId, "completed"), (last.RunId, last.Status, last.SessionId, last.Detail));
+        Assert.Equal((claimed.Run.RunId, CoreRunStatus.Ok, claimed.Run.SessionId, "completed: 3 merged branches and 12 old TODOs"),
+            (last.RunId, last.Status, last.SessionId, last.Detail));
         Assert.Equal(claimed.Run.StartedAt.AddSeconds(41), last.FinishedAt);
 
         var runs = await service.RunsAsync(made.JobId, Token);
@@ -66,6 +67,8 @@ public sealed class JobsServiceTests
         Assert.Equal((CoreRunStatus.Failed, "interrupted: Corvid stopped during the run"),
             Map(Run(Corvid.Kernel.Jobs.JobRunStatus.Interrupted, "Corvid stopped during the run")));
         Assert.Equal((CoreRunStatus.Failed, "the generator timed out"), Map(Run(Corvid.Kernel.Jobs.JobRunStatus.Failed, "the generator timed out")));
+        // A run that answered: its detail is the turn's status, and its answer says what it did.
+        Assert.Equal((CoreRunStatus.Ok, "answered: Hello there!"), Map(Run(Corvid.Kernel.Jobs.JobRunStatus.Ran, "answered", "Hello\nthere!")));
         var long_ = Map(Run(Corvid.Kernel.Jobs.JobRunStatus.Ran, new string('x', 400))).Detail;
         Assert.Equal(160, long_.Length);
         Assert.EndsWith("…", long_, StringComparison.Ordinal);
@@ -76,6 +79,16 @@ public sealed class JobsServiceTests
             return (record.Status, record.Detail);
         }
     }
+
+    [Theory]
+    [InlineData("once 2026-10-24T21:39:04.4654001+00:00", "once 2026-10-24 21:39 UTC")]
+    [InlineData("every 1800s", "every 30m")]
+    [InlineData("every 7200s", "every 2h")]
+    [InlineData("every 86400s", "every 1d")]
+    [InlineData("every 90s", "every 90s")]
+    [InlineData("cron 0 9 * * 1-5", "cron 0 9 * * 1-5")]
+    public void TheStoresScheduleReadsAsAPersonWritesIt(string canonical, string shown) =>
+        Assert.Equal(shown, EngineJobsService.Readable(canonical));
 
     [Fact]
     public async Task ThePreviewIsTheKernelsReadingAndWritesNothing()

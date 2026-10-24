@@ -36,6 +36,29 @@ public sealed class OpsEngineShapesTests
     }
 
     [Fact]
+    public async Task AJobCreatedOnAnEngineIsSelectedWhenItsChangeArrivesAfterTheCreateReturns()
+    {
+        var time = ManualTimeProvider.Demo();
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar);
+        shell.Navigate(Area.Jobs);
+        var service = new LateJobs();
+        using var jobs = new JobsViewModel(service, shell, bar, time);
+        jobs.NewJobCommand.Execute(null);
+        jobs.DraftName = "digest";
+        jobs.DraftSchedule = "in 30m";
+        jobs.DraftPrompt = "Summarise the inbox.";
+
+        await jobs.CreateCommand.ExecuteAsync();
+        Assert.Equal("j-0", Assert.Single(jobs.Jobs).Id);
+        Assert.Equal("j-0", jobs.Selected?.Id);
+
+        // The engine's change is posted after the create returned: the new job is selected then.
+        service.Raise();
+        Assert.Equal("j-1", jobs.Selected?.Id);
+    }
+
+    [Fact]
     public void AnAdapterThisAppDoesNotHostIsNotCalledOffOrUp()
     {
         Assert.Equal("not hosted here", GatewayText.State(AdapterState.Unknown));
@@ -78,6 +101,37 @@ public sealed class OpsEngineShapesTests
         public Task<SchedulePreview> PreviewAsync(string schedule, CancellationToken cancellationToken) => Task.FromResult(SchedulePreview.Invalid("no"));
 
         public Task<JobRecord> CreateAsync(JobDraft draft, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<JobRecord> PauseAsync(string jobId, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<JobRecord> ResumeAsync(string jobId, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task RemoveAsync(string jobId, CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
+
+    /// <summary>A jobs service whose change, like an engine's, reaches the page only when it is posted later (<see cref="Raise"/>).</summary>
+    private sealed class LateJobs : IJobsService
+    {
+        private readonly List<JobRecord> _jobs = [new("j-0", "tidy", "daily at 9am", JobState.Active) { Prompt = "Tidy." }];
+
+        public event EventHandler? Changed;
+
+        public void Raise() => Changed?.Invoke(this, EventArgs.Empty);
+
+        public Task<JobsSnapshot> LoadAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new JobsSnapshot(new SchedulerStatus(SchedulerHost.Here, "this app"), [.. _jobs], ["kept"]));
+
+        public Task<IReadOnlyList<JobRunRecord>> RunsAsync(string jobId, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<JobRunRecord>>([]);
+
+        public Task<SchedulePreview> PreviewAsync(string schedule, CancellationToken cancellationToken) =>
+            Task.FromResult(new SchedulePreview(true, "once", [DateTimeOffset.UnixEpoch]));
+
+        public Task<JobRecord> CreateAsync(JobDraft draft, CancellationToken cancellationToken)
+        {
+            var job = new JobRecord("j-1", draft.Name, draft.Schedule, JobState.Active) { Prompt = draft.Prompt };
+            _jobs.Add(job);
+            return Task.FromResult(job);
+        }
 
         public Task<JobRecord> PauseAsync(string jobId, CancellationToken cancellationToken) => throw new NotSupportedException();
 

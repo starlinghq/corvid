@@ -30,6 +30,9 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
     private bool _disposed;
     private int _previewSequence;
     private int _refreshSequence;
+
+    /// <summary>A job just created whose row a later refresh brings (an engine's change arrives after the create returns).</summary>
+    private string? _selectWhenListed;
     private string _jobsMore = "";
 
     private IReadOnlyList<TextRun> _subtitle = [];
@@ -335,7 +338,12 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
         Subtitle = Spans.Parse(SubtitleText(_snapshot));
         if (_active)
             ApplyStatus();
-        if (_selected is null || !_rows.ContainsKey(_selected.Id))
+        if (_selectWhenListed is { } created && _rows.TryGetValue(created, out var listed))
+        {
+            _selectWhenListed = null;
+            Selected = listed;
+        }
+        else if (_selected is null || !_rows.ContainsKey(_selected.Id))
             Selected = Landing();
         else
         {
@@ -608,9 +616,11 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
         var draft = new JobDraft(_draftName, _draftSchedule, _draftPrompt, _draftScript.Trim().Length == 0 ? null : _draftScript, _draftNoAgent, _draftDeliver);
         var job = await _service.CreateAsync(draft, cancellationToken).ConfigureAwait(true);
         IsCreating = false;
-        // The service's Changed has rebuilt the rows; the new one is the selection.
+        // The service's Changed has rebuilt the rows (the demo's at once, an engine's on the next refresh); the new one is the selection.
         if (_rows.TryGetValue(job.Id, out var row))
             Selected = row;
+        else
+            _selectWhenListed = job.Id;
         var next = job.NextRun is { } at ? $": next run {JobsText.When(at, _time.GetUtcNow(), _time.LocalTimeZone)}" : "";
         Say(true, $"Created **{Spans.Escape(SafeText.Clean(job.Name))}**{next}.");
     }

@@ -100,7 +100,7 @@ public sealed class EngineJobsService : IJobsService, IDisposable
     internal static SchedulePreview Preview(string? schedule, DateTimeOffset now, TimeZoneInfo zone)
     {
         if (string.IsNullOrWhiteSpace(schedule))
-            return SchedulePreview.Invalid("Say when it runs: " + JobSchedule.Grammar + ".");
+            return ScheduleGrammar.Read(schedule, now, zone);
         if (SafeText.HasHidden(schedule))
             return SchedulePreview.Invalid("The schedule holds hidden characters; type it again.");
         try
@@ -109,7 +109,7 @@ public sealed class EngineJobsService : IJobsService, IDisposable
             var next = parsed.Upcoming(now, ScheduleGrammar.Shown);
             return next.Count == 0
                 ? SchedulePreview.Invalid($"'{schedule.Trim()}' never runs.")
-                : new SchedulePreview(true, parsed.Canonical, next);
+                : new SchedulePreview(true, Readable(parsed.Canonical), next);
         }
         catch (FormatException exception)
         {
@@ -270,7 +270,7 @@ public sealed class EngineJobsService : IJobsService, IDisposable
 
     internal static JobRecord Record(ScheduledJob job, JobRun? last) => new(job.JobId, job.Name, job.Schedule, State(job))
     {
-        Parsed = job.Spec,
+        Parsed = Readable(job.Spec),
         Zone = job.TimeZoneId,
         Prompt = job.Prompt,
         Script = job.Script,
@@ -282,6 +282,22 @@ public sealed class EngineJobsService : IJobsService, IDisposable
         NextRun = job.NextRunAt,
         LastRun = last is null ? null : Run(last),
     };
+
+    /// <summary>
+    /// The store's canonical schedule as the page shows it: a one-shot's instant to the minute in UTC
+    /// (<c>once 2026-10-24 21:39 UTC</c>), an interval in its largest whole unit (<c>every 2h</c>), a cron line as it is.
+    /// </summary>
+    internal static string Readable(string canonical)
+    {
+        if (canonical.StartsWith("once ", StringComparison.Ordinal)
+            && DateTimeOffset.TryParseExact(canonical[5..], "O", CultureInfo.InvariantCulture, DateTimeStyles.None, out var at))
+            return "once " + at.UtcDateTime.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " UTC";
+        if (canonical.StartsWith("every ", StringComparison.Ordinal) && canonical.EndsWith('s')
+            && long.TryParse(canonical[6..^1], NumberStyles.None, CultureInfo.InvariantCulture, out var seconds) && seconds > 0)
+            return "every " + (seconds % 86_400 == 0 ? $"{seconds / 86_400}d" : seconds % 3_600 == 0 ? $"{seconds / 3_600}h"
+                : seconds % 60 == 0 ? $"{seconds / 60}m" : $"{seconds}s");
+        return canonical;
+    }
 
     private static CoreJobState State(ScheduledJob job) => job.State switch
     {
@@ -309,7 +325,8 @@ public sealed class EngineJobsService : IJobsService, IDisposable
     /// <summary>One line on the run: its stored status where it says more than ok/failed, then its detail or the start of its output.</summary>
     private static string Detail(JobRun run)
     {
-        var text = run.Detail ?? run.Output ?? "";
+        // A run that answered says so in its detail ("answered"); its answer says what it did.
+        var text = run.Detail is { } said && run.Output is { Length: > 0 } output ? said + ": " + output : run.Detail ?? run.Output ?? "";
         var line = string.Join(' ', text.Split(['\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
         if (line.Length > 160)
         {
