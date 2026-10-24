@@ -88,7 +88,7 @@ public static class SessionText
 
     /// <summary>A rough token estimate for a draft, a quarter of its characters: "about 18 tokens".</summary>
     public static string TokenEstimate(string draft) =>
-        draft.Length == 0 ? "" : Invariant($"about {(int)Math.Ceiling(draft.Length / 4.0)} tokens");
+        draft.Length == 0 ? "" : $"about {Plural((int)Math.Ceiling(draft.Length / 4.0), "token")}";
 
     /// <summary>A checkpoint's name as people read it: "pre_execute" is "pre-execute".</summary>
     public static string Checkpoint(string checkpoint) => checkpoint.Replace('_', '-');

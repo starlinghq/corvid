@@ -483,6 +483,7 @@
 
   <!-- a: the accent colour, no underline until hovered. -->
   <Style TargetType="controls:LinkButton">
+    <Setter Property="FontSize" Value="13.5" />
     <Setter Property="Background" Value="Transparent" />
     <Setter Property="BorderThickness" Value="0" />
     <Setter Property="Padding" Value="0" />
@@ -493,7 +494,7 @@
       <Setter.Value>
         <ControlTemplate TargetType="controls:LinkButton">
           <Grid x:Name="Root" Background="Transparent" Padding="{TemplateBinding Padding}">
-            <TextBlock x:Name="LabelText" Text="{TemplateBinding Text}" Foreground="{ThemeResource CorvidAccent}" FontSize="13.5"
+            <TextBlock x:Name="LabelText" Text="{TemplateBinding Text}" Foreground="{ThemeResource CorvidAccent}" FontSize="{TemplateBinding FontSize}"
                        Padding="0,1.62" TextWrapping="NoWrap" />
             <VisualStateManager.VisualStateGroups>
               <VisualStateGroup x:Name="CommonStates">
@@ -519,6 +520,169 @@
         </ControlTemplate>
       </Setter.Value>
     </Setter>
+  </Style>
+
+  <!--
+    .btn: 30 high, 0 12px padding, radius 6, a line border on bg, weight 500; .btn.primary on the accent with
+    CorvidOnAccent text; .btn.ghost with no border or fill. Hover lays a faint text-coloured film over the face (.btn:hover
+    bg-2, .btn.ghost:hover bg-3).
+  -->
+  <Style x:Key="CorvidButtonBase" TargetType="controls:CorvidButton">
+    <Setter Property="Background" Value="{ThemeResource CorvidBg}" />
+    <Setter Property="BorderBrush" Value="{ThemeResource CorvidLine}" />
+    <Setter Property="Foreground" Value="{ThemeResource CorvidText}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="Padding" Value="12,0" />
+    <Setter Property="Height" Value="30" />
+    <Setter Property="FontSize" Value="13.5" />
+    <Setter Property="FontWeight" Value="Medium" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="UseSystemFocusVisuals" Value="True" />
+    <Setter Property="FocusVisualPrimaryBrush" Value="{ThemeResource CorvidAccent}" />
+    <Setter Property="FocusVisualSecondaryBrush" Value="{ThemeResource CorvidBg}" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="controls:CorvidButton">
+          <Grid x:Name="Root">
+            <Border x:Name="Face" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{TemplateBinding CornerRadius}" />
+            <Border x:Name="Film" Background="{ThemeResource CorvidText}" CornerRadius="{TemplateBinding CornerRadius}" Opacity="0.05"
+                    Visibility="Collapsed" />
+            <ContentPresenter x:Name="Presenter" Content="{TemplateBinding Content}" Foreground="{TemplateBinding Foreground}"
+                              FontSize="{TemplateBinding FontSize}" FontWeight="{TemplateBinding FontWeight}" Padding="{TemplateBinding Padding}"
+                              HorizontalContentAlignment="Center" VerticalContentAlignment="Center" VerticalAlignment="Center" />
+            <VisualStateManager.VisualStateGroups>
+              <VisualStateGroup x:Name="CommonStates">
+                <VisualState x:Name="Normal" />
+                <VisualState x:Name="PointerOver">
+                  <VisualState.Setters>
+                    <Setter Target="Film.Visibility" Value="Visible" />
+                  </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Pressed">
+                  <VisualState.Setters>
+                    <Setter Target="Film.Visibility" Value="Visible" />
+                    <Setter Target="Film.Opacity" Value="0.1" />
+                  </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Disabled">
+                  <VisualState.Setters>
+                    <Setter Target="Root.Opacity" Value="0.5" />
+                  </VisualState.Setters>
+                </VisualState>
+              </VisualStateGroup>
+              <VisualStateGroup x:Name="VariantStates">
+                <VisualState x:Name="Default" />
+                <VisualState x:Name="Primary">
+                  <VisualState.Setters>
+                    <Setter Target="Face.Background" Value="{ThemeResource CorvidAccent}" />
+                    <Setter Target="Face.BorderBrush" Value="{ThemeResource CorvidAccent}" />
+                    <Setter Target="Presenter.Foreground" Value="{ThemeResource CorvidOnAccent}" />
+                  </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Ghost">
+                  <VisualState.Setters>
+                    <Setter Target="Face.Background" Value="Transparent" />
+                    <Setter Target="Face.BorderBrush" Value="Transparent" />
+                  </VisualState.Setters>
+                </VisualState>
+              </VisualStateGroup>
+            </VisualStateManager.VisualStateGroups>
+          </Grid>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!--
+    .row: 6px 10px, radius 6, 12.5 px; .row.esc violet, .row.taint amber, .row.detect red on their backgrounds;
+    .row.memory (grey) bg-2 with a line border and text-2. Content inherits the tone's colour.
+  -->
+  <Style TargetType="controls:ToneRow">
+    <Setter Property="Padding" Value="10,6" />
+    <Setter Property="FontSize" Value="12.5" />
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="controls:ToneRow">
+          <Border x:Name="Root" Padding="{TemplateBinding Padding}" CornerRadius="6" Background="{ThemeResource CorvidBg2}"
+                  BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1">
+            <ContentPresenter x:Name="Presenter" Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}"
+                              Foreground="{ThemeResource CorvidText2}" FontSize="{TemplateBinding FontSize}"
+                              HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}" />
+            <VisualStateManager.VisualStateGroups>
+              <VisualStateGroup x:Name="ToneStates">
+                <VisualState x:Name="Grey" />
+                <VisualState x:Name="Amber">
+                  <VisualState.Setters>
+                    <Setter Target="Root.Background" Value="{ThemeResource CorvidAmberBg}" />
+                    <Setter Target="Root.BorderThickness" Value="0" />
+                    <Setter Target="Presenter.Foreground" Value="{ThemeResource CorvidAmber}" />
+                  </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Red">
+                  <VisualState.Setters>
+                    <Setter Target="Root.Background" Value="{ThemeResource CorvidRedBg}" />
+                    <Setter Target="Root.BorderThickness" Value="0" />
+                    <Setter Target="Presenter.Foreground" Value="{ThemeResource CorvidRed}" />
+                  </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Green">
+                  <VisualState.Setters>
+                    <Setter Target="Root.Background" Value="{ThemeResource CorvidGreenBg}" />
+                    <Setter Target="Root.BorderThickness" Value="0" />
+                    <Setter Target="Presenter.Foreground" Value="{ThemeResource CorvidGreen}" />
+                  </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Violet">
+                  <VisualState.Setters>
+                    <Setter Target="Root.Background" Value="{ThemeResource CorvidVioletBg}" />
+                    <Setter Target="Root.BorderThickness" Value="0" />
+                    <Setter Target="Presenter.Foreground" Value="{ThemeResource CorvidViolet}" />
+                  </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Blue">
+                  <VisualState.Setters>
+                    <Setter Target="Root.Background" Value="{ThemeResource CorvidAccentBg}" />
+                    <Setter Target="Root.BorderThickness" Value="0" />
+                    <Setter Target="Presenter.Foreground" Value="{ThemeResource CorvidAccent}" />
+                  </VisualState.Setters>
+                </VisualState>
+              </VisualStateGroup>
+            </VisualStateManager.VisualStateGroups>
+          </Border>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- The implicit style; an explicit Style replaces it, so the sizes below are based on the keyed one. -->
+  <Style TargetType="controls:CorvidButton" BasedOn="{StaticResource CorvidButtonBase}" />
+
+  <!-- .btn.sm: 26 high, 0 9px padding, 12.5 px. -->
+  <Style x:Key="CorvidSmallButton" TargetType="controls:CorvidButton" BasedOn="{StaticResource CorvidButtonBase}">
+    <Setter Property="Height" Value="26" />
+    <Setter Property="Padding" Value="9,0" />
+    <Setter Property="FontSize" Value="12.5" />
+  </Style>
+
+  <!-- kbd: 18 high, 0 5px padding, radius 4, a line border on bg-2, 11 px text-2. -->
+  <Style x:Key="CorvidKeyCap" TargetType="Border">
+    <Setter Property="Height" Value="18" />
+    <Setter Property="Padding" Value="5,0" />
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="BorderBrush" Value="{ThemeResource CorvidLine}" />
+    <Setter Property="Background" Value="{ThemeResource CorvidBg2}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <Style x:Key="CorvidKeyCapText" TargetType="TextBlock">
+    <Setter Property="FontFamily" Value="ms-appx:///Assets/Fonts/JetBrainsMono" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="Foreground" Value="{ThemeResource CorvidText2}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
 
   <!-- .page-head: 12px 24px, a line below; the title at 17 px semibold. -->
