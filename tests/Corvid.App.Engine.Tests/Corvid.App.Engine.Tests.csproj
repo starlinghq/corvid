@@ -9,5 +9,7 @@
     <ProjectReference Include="../../src/Corvid.App.Engine/Corvid.App.Engine.csproj" />
     <!-- The host tests' fake slots and test host, so the engine is driven on the fakes every host suite uses. -->
     <Compile Include="../Corvid.Host.Tests/Fakes.cs" Link="Fakes.cs" />
+    <!-- The app core tests' manual clock, so no timer of the composition fires on its own. -->
+    <Compile Include="../Corvid.App.Core.Tests/ManualTimeProvider.cs" Link="ManualTimeProvider.cs" />
   </ItemGroup>
 </Project>

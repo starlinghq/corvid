@@ -60,7 +60,9 @@ public sealed class AppEngine : IAsyncDisposable
     /// <see cref="StartFailure"/>, rather than failing here: the window still opens, on First run.
     /// </summary>
     /// <param name="ownsHost">Whether disposing the engine stops and disposes the host (the head's); tests keep their own.</param>
-    public static async Task<AppEngine> StartAsync(IHost host, bool ownsHost = true, CancellationToken cancellationToken = default)
+    /// <param name="progress">Told each stage of the runtime's start as it begins and ends, from a pool thread (as <see cref="Progress"/>).</param>
+    public static async Task<AppEngine> StartAsync(IHost host, bool ownsHost = true, IProgress<StartupStep>? progress = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(host);
         var lifetime = new CancellationTokenSource();
@@ -90,7 +92,11 @@ public sealed class AppEngine : IAsyncDisposable
         {
             try
             {
-                started.TrySetResult(await factory.StartAsync(new Relay(engine.Report), lifetime.Token).ConfigureAwait(false));
+                started.TrySetResult(await factory.StartAsync(new Relay(step =>
+                {
+                    engine.Report(step);
+                    progress?.Report(step);
+                }), lifetime.Token).ConfigureAwait(false));
             }
             catch (Exception exception)
             {
