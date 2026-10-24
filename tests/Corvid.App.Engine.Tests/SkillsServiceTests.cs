@@ -188,7 +188,7 @@ public sealed class SkillsServiceTests
     }
 }
 
-internal static class PathExtensions
+internal static class SkillsTestFiles
 {
     /// <summary>Creates the file's folder, for a test that writes it next.</summary>
     public static string EnsureDirectory(this string file)

@@ -152,11 +152,19 @@ public sealed class MemoryServiceTests
         var store = Memory(fixture).Lessons!.Store;
         var first = Lesson(project.Id, "Build the hooks binary before running the cli tests");
         var second = Lesson(project.Id, "Run the cli tests after building the hooks binary");
+        var third = Lesson(project.Id, "Clean the hooks binary before every cli test");
         store.File(first);
         store.File(second);
+        store.File(third);
         var service = Service(fixture);
 
         var snapshot = await service.LoadAsync(Ct);
+        Assert.Equal(3, snapshot.PendingLessons.Count);
+        // A rejection records why, and the candidate leaves the queue.
+        await Assert.ThrowsAsync<ArgumentException>(() => service.RejectLessonAsync(third.LessonId, "one-off​", Ct));
+        await service.RejectLessonAsync(third.LessonId, "one-off", Ct);
+        Assert.Equal((LessonStates.Rejected, "one-off"), (store.Get(third.LessonId)!.State, store.Get(third.LessonId)!.ReviewReason));
+        snapshot = await service.LoadAsync(Ct);
         Assert.Equal(2, snapshot.PendingLessons.Count);
         var candidate = snapshot.PendingLessons.Single(lesson => lesson.Id == first.LessonId);
         Assert.StartsWith("Build the hooks binary before running the cli tests Run `make build-hooks`", candidate.Rule, StringComparison.Ordinal);
