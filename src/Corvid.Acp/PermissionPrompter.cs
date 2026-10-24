@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Corvid.Approvals;
+using Corvid.Host.Sessions;
 
 namespace Corvid.Acp;
 
@@ -37,7 +38,7 @@ internal sealed class PermissionPrompter(AcpConnectionContext context, AcpSessio
 
         var content = new List<ToolCallContent>();
         if (tools?.ProposedDiff(toolName, arguments) is { } diff)
-            content.Add(diff);
+            content.Add(TurnReporter.Diff(diff));
         var reasons = string.Join("\n", prompt.Reasons.Select(reason => $"• {reason.Detail} ({reason.Code})"));
         content.Add(new ContentToolCallContent(new TextContent(
             (reasons.Length > 0 ? reasons + "\n" : "") + $"Denied automatically at {prompt.Deadline.ToLocalTime():HH:mm:ss} if unanswered.")));
@@ -54,7 +55,7 @@ internal sealed class PermissionPrompter(AcpConnectionContext context, AcpSessio
             Title = prompt.Analysis.Text,
             Status = ToolStatuses.Pending,
             RawInput = arguments,
-            Locations = tools?.Locations(arguments),
+            Locations = tools is null ? null : TurnReporter.Locations(tools.Locations(arguments)),
             Content = [.. content],
         }, [.. options]);
 

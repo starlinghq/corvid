@@ -37,7 +37,7 @@ public sealed class SessionUpdateReporter : ITurnObserver
 
     /// <param name="head">The log position the turn starts from: only later events are the turn's.</param>
     /// <param name="emit">Called with each update, one at a time and in order, on a pool thread.</param>
-    /// <param name="log">Where a report that cannot be built is said (standard error for ACP); it never fails the turn.</param>
+    /// <param name="log">Told why a report could not be built (a checkpoint the store cannot read); it never fails the turn.</param>
     public SessionUpdateReporter(CorvidRuntime runtime, string sessionId, ToolPresentation tools, long head, Action<SessionStreamUpdate> emit,
         Action<string>? log = null, TimeProvider? time = null)
     {
@@ -200,7 +200,7 @@ public sealed class SessionUpdateReporter : ITurnObserver
                 catch (Exception exception) when (exception is not OutOfMemoryException)
                 {
                     // A report that cannot be built (a checkpoint the store cannot read) must not fail the turn.
-                    _log?.Invoke($"corvid: could not report a session update: {exception.Message}");
+                    _log?.Invoke(exception.Message);
                 }
             }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
     }

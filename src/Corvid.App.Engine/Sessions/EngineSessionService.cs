@@ -115,7 +115,8 @@ public sealed class EngineSessionService : ISessionService, IDisposable
         {
             var session = runtime.TryGetSession(sessionId, out var open) ? open : runtime.OpenSession(sessionId, Surface);
             var reporter = new SessionUpdateReporter(runtime, sessionId, tools, runtime.Log.GetHead(sessionId, cancellationToken),
-                update => Publish(channel, translator => translator.Translate(update)), Log, _time);
+                update => Publish(channel, translator => translator.Translate(update)),
+                reason => Log("corvid app: could not report a session update: " + reason), _time);
             feed = runtime.Feed.Subscribe(sessionId, reporter);
             prompter = runtime.AttachPrompter(sessionId, new DenyingPrompter(action => Publish(channel, _ =>
             [

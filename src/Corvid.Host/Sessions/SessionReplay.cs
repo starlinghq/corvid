@@ -100,7 +100,9 @@ public static class SessionReplay
                     At = stored.TryGetValue(checkpoint.Sequence, out var item) ? item.RecordedAt : default,
                 }));
 
-        // A stable sort: the transcript's own order holds for entries at one position.
-        return new SessionHistory(sessionId, head, [.. items.OrderBy(item => item.Sequence).Select(item => item.Update)]);
+        // The transcript in its own order; plans and checkpoints placed among it by position (a stable sort, so the
+        // transcript's order holds for entries at one position).
+        var ordered = options.Plans || options.Checkpoints ? items.OrderBy(item => item.Sequence).ToList() : items;
+        return new SessionHistory(sessionId, head, [.. ordered.Select(item => item.Update)]);
     }
 }
