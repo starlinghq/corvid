@@ -341,6 +341,9 @@ public sealed class PaletteViewModel : ObservableObject
             items.Add(new PaletteItem($"Go to {area.Title()}", "", Then(() => shell.Navigate(area)), "Pages", key, area.Icon()));
         }
 
+        // The rail's footer holds Settings rather than its list.
+        if (!Areas.Rail.Contains(Area.Settings))
+            items.Add(new PaletteItem($"Go to {Area.Settings.Title()}", "", Then(() => shell.Navigate(Area.Settings)), "Pages", Key(KeyCommands.Settings), Area.Settings.Icon()));
         items.Add(new PaletteItem("Run the doctor", "The first run's checks: models, sandbox, Vault, GPU", Then(() => shell.Navigate(Area.FirstRun)), "Pages", "", IconKind.Check));
         items.Add(new PaletteItem("Open the attention tray", "Everything waiting on you, across sessions", Then(() => shell.OpenAttentionCommand.Execute(null)), "Pages", "", IconKind.Bell));
 

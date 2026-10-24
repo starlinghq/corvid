@@ -2,7 +2,8 @@ namespace Corvid.App.Core.Palette;
 
 /// <summary>
 /// The palette's matcher: every character of the query must appear in the text in order, ignoring case. Matches score
-/// higher when they start the text or a word, and when matched characters run together, so "gs" finds "Go to Settings"
+/// higher when they start the text or a word, and when matched characters run together; letters strewn across a long
+/// text are no match (the span stays within three times the query and six). So "gs" finds "Go to Settings"
 /// above "Toggle the dock's status" and "set" ranks "Settings" above "Reset". An empty query matches everything at 0.
 /// </summary>
 public static class FuzzyMatch
@@ -23,6 +24,7 @@ public static class FuzzyMatch
         var score = 0;
         var run = 0;
         var position = 0;
+        var first = -1;
         foreach (var c in needle)
         {
             if (char.IsWhiteSpace(c))
@@ -42,6 +44,11 @@ public static class FuzzyMatch
             }
 
             if (found < 0)
+                return null;
+            if (first < 0)
+                first = found;
+            // Letters strewn across a long sentence are not a match: the matched span stays near the query's length.
+            if (found - first + 1 > needle.Length * 3 + 6)
                 return null;
             run = found == position && position > 0 ? run + 1 : 0;
             var wordStart = found == 0 || !char.IsLetterOrDigit(text[found - 1]);

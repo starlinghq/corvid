@@ -15,7 +15,8 @@ public sealed class DemoSettingsService : ISettingsService
     /// <summary>Where the engine's file would be; shown, never opened.</summary>
     public const string DemoPath = "~/.config/corvid/corvid.json";
 
-    private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
+    // Written for a person to read and edit: "+" and non-ASCII stay as they are rather than \u escapes.
+    private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     private static readonly JsonDocumentOptions Reading = new() { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
 
     private readonly Dictionary<string, string> _app = new(StringComparer.Ordinal);

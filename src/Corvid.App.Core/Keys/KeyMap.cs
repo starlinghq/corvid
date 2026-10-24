@@ -63,6 +63,13 @@ public sealed class KeyMap
 {
     public const string App = "app";
 
+    // Written for a person to read: "Ctrl+K" keeps its "+" rather than a \u escape.
+    private static readonly JsonSerializerOptions Written = new()
+    {
+        WriteIndented = true,
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
     private readonly List<KeyBinding> _bindings;
     private readonly Dictionary<string, KeyBinding> _defaults;
 
@@ -161,7 +168,7 @@ public sealed class KeyMap
         }
 
         var root = new JsonObject { [App] = app };
-        return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        return root.ToJsonString(Written);
     }
 
     private IReadOnlyList<KeyBinding> Others(KeyBinding binding, bool sameContext)
