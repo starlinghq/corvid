@@ -93,13 +93,14 @@ public sealed class DemoAuditService : IAuditService
     {
         ArgumentNullException.ThrowIfNull(options);
         cancellationToken.ThrowIfCancellationRequested();
+        // Memory content stays out unless asked for; skills used or drafted are not memory and stay in.
         var events = Of(_events, sessionId, e => e.SessionId)
-            .Where(e => options.IncludeLocalMemory || e.Group != AuditEventGroup.MemoryAndSkills)
+            .Where(e => options.IncludeLocalMemory || !e.Type.StartsWith("memory_", StringComparison.Ordinal))
             .OrderBy(e => e.Sequence)
             .ToList();
         var bytes = events.Sum(e => (long)Encoding.UTF8.GetByteCount(TraceLine(e, options.Retention)) + 1);
         var stamp = _time.GetLocalNow().ToString("yyyyMMdd-HHmm", CultureInfo.InvariantCulture);
-        var path = $"~/.local/share/corvid/traces/{sessionId ?? "all"}-{stamp}.jsonl";
+        var path = $"~/.local/share/corvid/traces/{FileNamePart(sessionId ?? "all")}-{stamp}.jsonl";
         // The demo touches nothing on the person's machine: it reports the trace without writing it.
         return Task.FromResult(new TraceExportResult(path, events.Count, bytes, options.Retention, Written: false));
     }
@@ -133,6 +134,17 @@ public sealed class DemoAuditService : IAuditService
         }
 
         return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    /// <summary>
+    /// A session id made safe for a file name: letters, digits, dot, hyphen and underscore stay, anything else (a slash,
+    /// "..", a control character) becomes an underscore, and a name of dots alone is replaced.
+    /// </summary>
+    public static string FileNamePart(string id)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        var safe = string.Concat(id.Select(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '_'));
+        return safe.Length == 0 || safe.All(c => c == '.') ? "session" : safe;
     }
 
     private static IEnumerable<T> Of<T>(IEnumerable<T> items, string? sessionId, Func<T, string> session) =>
@@ -236,7 +248,7 @@ public sealed class DemoAuditService : IAuditService
             fields: [("turn", 11), ("tokens", 412)]);
         Add(1167, S, At(13, 59, 3), "checkpoint_recorded", AuditEventGroup.Checkpoints, "c-43 · after call-d2 · `patch_file` tests/…/SeccompTests.cs",
             tool: "patch_file", path: "tests/Corvid.Sandbox.Tests/SeccompTests.cs", fields: [("checkpoint", "c-43"), ("kind", "after")]);
-        Add(1168, S, At(14, 1, 5), "user_message", Messages, "the sandbox test fails on CI only…",
+        Add(1168, S, At(14, 1, 5), "user_message", Messages, AuditText.Escape("the sandbox test fails on CI only…"),
             fields: [("turn", 12), ("text", "the sandbox test fails on CI only. find out why and fix it without touching the production launcher.")]);
         Add(1169, S, At(14, 2, 38), "compaction_chunk", AuditEventGroup.Compaction, "chunks 1 and 2 · events 912 to 1104 · qwen3.5-0.8b",
             fields: [("from", 912), ("to", 1104), ("chunks", 2), ("summarizer", "qwen3.5-0.8b")]);
@@ -261,7 +273,7 @@ public sealed class DemoAuditService : IAuditService
         Add(1190, S, At(14, 3, 49), "detection_matched", AuditEventGroup.Detections,
             "`credential-read-then-egress` v3 · high · enforce → forced an ask · events 1182, 1189", alert: true,
             fields: [("rule", CredentialRule), ("version", 3), ("severity", "high"), ("posture", "enforce"), ("events", new long[] { 1182, 1189 }), ("forced_ask", "a-31")]);
-        Add(1191, S, At(14, 3, 50), "approval_resolved", Approvals, "a-31 · denied by you · \"not from a tainted session\"",
+        Add(1191, S, At(14, 3, 50), "approval_resolved", Approvals, "a-31 · denied by you · \"" + AuditText.Escape("not from a tainted session") + "\"",
             tool: "web_fetch", path: "https://hooks.example.org/ci",
             fields: [("approval", "a-31"), ("call", "call-7"), ("outcome", "denied"), ("reason", "not from a tainted session")]);
         Add(1194, S, At(14, 3, 52), "model_switched", AuditEventGroup.ModelSwitches,
@@ -341,7 +353,7 @@ public sealed class DemoAuditService : IAuditService
     private void SeedReleaseNotes()
     {
         const string S = ReleaseNotesSessionId;
-        Add(1171, S, At(14, 2, 50), "user_message", AuditEventGroup.Messages, "draft release notes for v0.2 from the merged pull requests");
+        Add(1171, S, At(14, 2, 50), "user_message", AuditEventGroup.Messages, AuditText.Escape("draft release notes for v0.2 from the merged pull requests"));
         Add(1172, S, At(14, 2, 52), "tool_call_issued", AuditEventGroup.Tools, "call-1 · shell · `gh pr list --state merged --base main`",
             tool: "shell", path: "gh pr list --state merged --base main", fields: [("call", "call-1")]);
         Add(1173, S, At(14, 2, 55), "tool_result", AuditEventGroup.Tools, "call-1 · shell · ok · 41 lines", tool: "shell", fields: [("call", "call-1"), ("outcome", "ok")]);
@@ -363,7 +375,7 @@ public sealed class DemoAuditService : IAuditService
     private void SeedVaultSession()
     {
         const string S = VaultSessionId;
-        Add(1052, S, At(13, 4, 10), "user_message", AuditEventGroup.Messages, "write a Vault policy that lets ntfy read only its own token");
+        Add(1052, S, At(13, 4, 10), "user_message", AuditEventGroup.Messages, AuditText.Escape("write a Vault policy that lets ntfy read only its own token"));
         Add(1053, S, At(13, 4, 12), "tool_call_issued", AuditEventGroup.Tools, "call-1 · read_file · policies/ntfy.hcl",
             tool: "read_file", path: "policies/ntfy.hcl", fields: [("call", "call-1")]);
         Add(1054, S, At(13, 4, 12), "tool_result", AuditEventGroup.Tools, "call-1 · read_file · ok · 412 B",
@@ -381,7 +393,7 @@ public sealed class DemoAuditService : IAuditService
     private void SeedTerminalSession()
     {
         const string S = TerminalSessionId;
-        Add(1205, S, At(14, 4, 25), "user_message", AuditEventGroup.Messages, "summarise spike S4's findings for the design doc");
+        Add(1205, S, At(14, 4, 25), "user_message", AuditEventGroup.Messages, AuditText.Escape("summarise spike S4's findings for the design doc"));
         Add(1206, S, At(14, 4, 27), "tool_call_issued", AuditEventGroup.Tools, "call-1 · read_file · docs/spikes/s4.md",
             tool: "read_file", path: "docs/spikes/s4.md", fields: [("call", "call-1")]);
         Add(1207, S, At(14, 4, 27), "tool_result", AuditEventGroup.Tools, "call-1 · read_file · ok · 9.8 KB",

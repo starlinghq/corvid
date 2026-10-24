@@ -442,7 +442,7 @@
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
               <TextBlock Text="path or tool" Style="{StaticResource CorvidSmallText}" Margin="0,6,0,0" />
-              <TextBox x:Name="PathBox" Text="{x:Bind ViewModel.PathFilter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+              <TextBox x:Name="PathBox" Text="{x:Bind ViewModel.PathFilter, Mode=OneWay}" TextChanged="OnPathTextChanged"
                        PlaceholderText="e.g. web_fetch" PlaceholderForeground="{ThemeResource CorvidText2}"
                        MinHeight="28" Height="28" Padding="8,4,8,0" FontSize="13.5" CornerRadius="6" BorderThickness="1"
                        BorderBrush="{ThemeResource CorvidLine}" Background="{ThemeResource CorvidBg}" Foreground="{ThemeResource CorvidText}"
@@ -557,6 +557,10 @@
                   <controls:TagChip Text="{x:Bind ViewModel.Egress.RedactedTag, Mode=OneWay, FallbackValue=''}" Tone="Amber" />
                   <TextBlock Style="{StaticResource KvText}" local:AuditRuns.Spans="{x:Bind ViewModel.Egress.RedactedSummary, Mode=OneWay, FallbackValue={x:Null}}" />
                 </controls:WrapRowPanel>
+                <!-- The markers in the text do not add up to the gate's count: one may be a tool's or the model's own text. -->
+                <controls:ToneRow Tone="Amber" Padding="10,6" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.Egress.HasRedactionMismatch), Mode=OneWay, FallbackValue=Collapsed}">
+                  <TextBlock Text="{x:Bind ViewModel.Egress.RedactionMismatch, Mode=OneWay, FallbackValue=''}" FontSize="12.5" TextWrapping="Wrap" />
+                </controls:ToneRow>
                 <!-- .sect-head: "As sent, after the gate" and what is shown; 4 px more above, 6 below. -->
                 <Grid Margin="0,4,0,6" ColumnSpacing="8">
                   <Grid.ColumnDefinitions>

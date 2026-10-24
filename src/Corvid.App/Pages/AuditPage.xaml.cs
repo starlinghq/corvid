@@ -25,9 +25,18 @@ public sealed partial class AuditPage : Page
 {
     private AppComposition? _composition;
 
+    /// <summary>How long typing in the "path or tool" filter pauses before the table follows it.</summary>
+    private static readonly TimeSpan PathFilterDelay = TimeSpan.FromMilliseconds(180);
+
+    private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _pathTimer;
+
     public AuditPage()
     {
         InitializeComponent();
+        _pathTimer = DispatcherQueue.CreateTimer();
+        _pathTimer.Interval = PathFilterDelay;
+        _pathTimer.IsRepeating = false;
+        _pathTimer.Tick += (_, _) => ApplyPathFilter();
         Root.KeyDown += OnRootKeyDown;
         var find = new KeyboardAccelerator { Key = VirtualKey.F, Modifiers = VirtualKeyModifiers.Control };
         find.Invoked += (_, args) =>
@@ -56,6 +65,7 @@ public sealed partial class AuditPage : Page
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
+        ApplyPathFilter();
         ViewModel.PropertyChanged -= OnViewModelChanged;
         if (_composition is not null)
             _composition.Shell.PropertyChanged -= OnShellChanged;
@@ -113,6 +123,28 @@ public sealed partial class AuditPage : Page
             item.Click += (_, _) => ViewModel.SessionIndex = index;
             SessionMenu.Items.Add(item);
         }
+    }
+
+    // ---- The "path or tool" filter: typing waits for a pause, so the table is not redone at every key ----
+
+    private void OnPathTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (string.Equals(PathBox.Text, ViewModel.PathFilter, StringComparison.Ordinal))
+        {
+            // The view model set it (reset, a link): nothing to wait for.
+            _pathTimer.Stop();
+            return;
+        }
+
+        _pathTimer.Stop();
+        _pathTimer.Start();
+    }
+
+    private void ApplyPathFilter()
+    {
+        _pathTimer.Stop();
+        if (ViewModel is not null && !string.Equals(PathBox.Text, ViewModel.PathFilter, StringComparison.Ordinal))
+            ViewModel.PathFilter = PathBox.Text;
     }
 
     // ---- Actions ----
