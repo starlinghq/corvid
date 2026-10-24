@@ -56,7 +56,9 @@ and `Alt+Right` move a focused escalation-ladder step (or drag it by its grip), 
 placement editor. `Ctrl+Shift+C` opens Review from anywhere; on Review `Up` and `Down` move through the file list. On
 Audit: `Up` and `Down` move between event rows, `Enter`
 and `Space` open the focused row, `Ctrl+F` puts the caret in the "path or tool" filter, and `Esc` first shows every
-event again after a detection's link narrowed the log, then closes the open event. The rest of the keyboard map
+event again after a detection's link narrowed the log, then closes the open event. On Safety: `Delete` on a rule's Remove… asks
+to remove it, the question's Remove takes focus, and `Esc` stops asking. On Secrets: `Enter` in Set a secret…'s name field
+starts the set, and `Esc` closes the picker. The rest of the keyboard map
 (`docs/plan/ui.md` §6) comes with the screens it drives.
 
 ## The harness check

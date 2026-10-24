@@ -71,9 +71,14 @@ public sealed partial class SecretsPage : Page
     {
         // A picker takes focus when it opens: the name field for Set, the card for Bind, so Tab and Esc work in it at once.
         if (e.PropertyName == nameof(SecretsViewModel.IsSetOpen) && ViewModel.IsSetOpen)
-            DispatcherQueue.TryEnqueue(() => SetNameBox.Focus(FocusState.Programmatic));
+            // Low priority: after the layout pass that shows the picker, or the collapsed box refuses focus.
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            {
+                SetNameBox.Focus(FocusState.Programmatic);
+                SetNameBox.SelectionStart = SetNameBox.Text.Length;
+            });
         else if (e.PropertyName == nameof(SecretsViewModel.IsBindOpen) && ViewModel.IsBindOpen)
-            DispatcherQueue.TryEnqueue(() => PickerHost.Focus(FocusState.Programmatic));
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => PickerHost.Focus(FocusState.Programmatic));
         else if (e.PropertyName == nameof(SecretsViewModel.IsPickerOpen) && !ViewModel.IsPickerOpen)
             Focus(FocusState.Programmatic);
     }
@@ -112,6 +117,16 @@ public sealed partial class SecretsPage : Page
             ViewModel.ClosePickerCommand.Execute(null);
             e.Handled = true;
         }
+    }
+
+    /// <summary>Enter in the name field starts the set, as Open in a terminal does.</summary>
+    private void OnSetNameKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key != VirtualKey.Enter)
+            return;
+        e.Handled = true;
+        if (ViewModel.StartSetCommand.CanExecute(null))
+            ViewModel.StartSetCommand.Execute(null);
     }
 
     private void OnScrimTapped(object sender, TappedRoutedEventArgs e) => ViewModel.ClosePickerCommand.Execute(null);

@@ -115,7 +115,8 @@ public sealed partial class SafetyPage : Page
     private void FocusRemove(DependencyObject? from)
     {
         var parent = from;
-        while (parent is not null and not Border { Child: StackPanel })
+        // Up to the row's container in the list, which holds both the question and Remove….
+        while (parent is not null and not ContentPresenter)
             parent = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(parent);
         DispatcherQueue.TryEnqueue(() =>
         {
