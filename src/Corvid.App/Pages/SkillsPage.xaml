@@ -162,7 +162,7 @@
               <TextBlock Text="Edit the SKILL.md; Approve as edited writes it as yours. Ctrl+Enter approves, Esc undoes." Style="{StaticResource CorvidSmallText}" />
               <TextBox Text="{x:Bind EditText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource SkTextBox}"
                        FontFamily="{StaticResource CorvidMono}" FontSize="12" AcceptsReturn="True" MinHeight="160" MaxHeight="360"
-                       ScrollViewer.VerticalScrollBarVisibility="Auto" PreviewKeyDown="OnDraftEditorKeyDown" Loaded="OnEditorLoaded" Unloaded="OnEditorUnloaded"
+                       ScrollViewer.VerticalScrollBarVisibility="Auto" PreviewKeyDown="OnDraftEditorKeyDown" BeforeTextChanging="OnDraftEditorTextChanging" Loaded="OnEditorLoaded" Unloaded="OnEditorUnloaded"
                        AutomationProperties.Name="The SKILL.md, edited" />
               <TextBlock Text="{x:Bind EditProblem, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource CorvidRed}" TextWrapping="Wrap"
                          Visibility="{x:Bind ui:Ui.VisibleIf(HasEditProblem), Mode=OneWay}" />

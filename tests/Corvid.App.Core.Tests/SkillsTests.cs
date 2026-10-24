@@ -99,6 +99,20 @@ public sealed class SkillsTests
     }
 
     [Fact]
+    public async Task AnEditorOpenedAndLeftAsItWasApprovesTheDraftAsTheAgents()
+    {
+        var (skills, _, _, _) = await Open();
+        var draft = skills.Drafts[0];
+
+        draft.EditCommand.Execute(null);
+        await draft.ApproveCommand.ExecuteAsync();
+
+        Assert.Equal("agent", skills.Skills.Single(s => s.Name == "vault-service-policy").Author);
+        Assert.Contains("as agent", skills.Outcome, StringComparison.Ordinal);
+        Assert.DoesNotContain("as edited", skills.Outcome, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task RejectingNeedsAReasonAndRecordsIt()
     {
         var (skills, service, _, _) = await Open();

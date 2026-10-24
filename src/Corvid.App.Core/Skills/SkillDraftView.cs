@@ -204,7 +204,17 @@ public sealed class SkillDraftView : ObservableObject
     }
 
     /// <summary>What Approve writes: the edit while editing, the draft otherwise.</summary>
-    internal string? EditedContent => _isEditing ? _editText.Replace("\r\n", "\n", StringComparison.Ordinal).TrimEnd('\n') + "\n" : null;
+    internal string? EditedContent
+    {
+        get
+        {
+            if (!_isEditing)
+                return null;
+            var text = _editText.Replace("\r\n", "\n", StringComparison.Ordinal).TrimEnd('\n') + "\n";
+            // Opened and left as it was: the draft as staged, written as the agent's.
+            return string.Equals(text, Draft.Content.TrimEnd('\n') + "\n", StringComparison.Ordinal) ? null : text;
+        }
+    }
 
     public string ApproveLabel => _isEditing ? "Approve as edited" : "Approve";
 

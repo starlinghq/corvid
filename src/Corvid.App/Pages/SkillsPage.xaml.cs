@@ -243,10 +243,28 @@ public sealed partial class SkillsPage : Page
         var control = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control)
             .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
         if (e.Key == VirtualKey.Enter && control)
+        {
+            // Uno still types the line break of a handled Enter in a box that accepts returns (README): drop that change.
+            _swallowLineBreak = true;
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => _swallowLineBreak = false);
             Confirm(e, draft.ApproveCommand);
+        }
         else if (e.Key == VirtualKey.Escape)
             Confirm(e, draft.CancelEditCommand);
     }
+
+    private bool _swallowLineBreak;
+
+    private void OnDraftEditorTextChanging(TextBox sender, TextBoxBeforeTextChangingEventArgs args)
+    {
+        if (_swallowLineBreak && LineBreaks(args.NewText) > LineBreaks(sender.Text))
+        {
+            args.Cancel = true;
+            _swallowLineBreak = false;
+        }
+    }
+
+    private static int LineBreaks(string text) => text.Count(c => c is '\r' or '\n');
 
     private void OnReasonKeyDown(object sender, KeyRoutedEventArgs e)
     {
