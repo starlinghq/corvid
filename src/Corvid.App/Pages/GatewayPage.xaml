@@ -51,7 +51,7 @@
                      AutomationProperties.HeadingLevel="Level1" />
           <TextBlock local:SpanText.Runs="{x:Bind ViewModel.Subtitle, Mode=OneWay}" Style="{StaticResource CorvidMutedText}" VerticalAlignment="Center" />
         </controls:WrapRowPanel>
-        <StackPanel x:Name="HeadButtons" Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" />
+        <StackPanel x:Name="HeadButtons" Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" Visibility="Collapsed" />
       </Grid>
     </Border>
 

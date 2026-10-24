@@ -167,10 +167,14 @@
                 <StackPanel>
                   <Border Style="{StaticResource PanelHead}">
                     <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
-                      <StackPanel Orientation="Horizontal" Spacing="8">
-                        <controls:Icon Kind="Plug" Width="15" Height="15" Foreground="{ThemeResource CorvidRed}" VerticalAlignment="Center" />
-                        <TextBlock Text="{x:Bind Title}" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
-                      </StackPanel>
+                      <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="Auto" />
+                          <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <controls:Icon Kind="Plug" Width="15" Height="15" Foreground="{ThemeResource CorvidRed}" VerticalAlignment="Top" Margin="0,2,0,0" />
+                        <TextBlock Grid.Column="1" Text="{x:Bind Title}" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                      </Grid>
                       <TextBlock Text="{x:Bind Note}" Style="{StaticResource PanelNote}" />
                     </controls:WrapRowPanel>
                   </Border>

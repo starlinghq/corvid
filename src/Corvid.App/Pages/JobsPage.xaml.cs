@@ -18,7 +18,12 @@ public sealed partial class JobsPage : Page
         InitializeComponent();
         SizeChanged += (_, _) => Arrange();
         Loaded += (_, _) => Arrange();
-        Root.KeyDown += OnRootKeyDown;
+        // The window's first focus would land on the first button with a keyboard ring: the page takes it instead, and
+        // hears Esc from anywhere in it.
+        IsTabStop = true;
+        UseSystemFocusVisuals = false;
+        Loaded += (_, _) => Focus(FocusState.Programmatic);
+        KeyDown += OnRootKeyDown;
     }
 
     public JobsViewModel ViewModel { get; private set; } = null!;
