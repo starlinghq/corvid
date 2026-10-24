@@ -74,8 +74,8 @@ public sealed class FileDiff
     public string Path { get; }
 
     /// <summary>
-    /// The texts were too long to compare line by line (<see cref="MaxDiffLines"/>): every old line shows as removed and
-    /// every new one as added.
+    /// The changed middle (between the equal lines at the start and the end) was too long to compare line by line
+    /// (<see cref="MaxDiffLines"/>): every old line of it shows as removed and every new one as added.
     /// </summary>
     public bool IsWholeFile { get; }
 
@@ -99,21 +99,35 @@ public sealed class FileDiff
         ArgumentNullException.ThrowIfNull(newText);
         var oldLines = SplitLines(oldText);
         var newLines = SplitLines(newText);
-        bool[] removed, added;
+        var removed = new bool[oldLines.Count];
+        var added = new bool[newLines.Count];
         var wholeFile = false;
         var wordBudget = MaxWordWork;
-        if (oldLines.Count + newLines.Count > MaxDiffLines)
+        // Equal lines at the start and the end match in one pass; only the middle between them is compared, so a small
+        // edit to a long file stays a small diff.
+        var head = 0;
+        while (head < oldLines.Count && head < newLines.Count && oldLines[head] == newLines[head])
+            head++;
+        var tail = 0;
+        while (tail < oldLines.Count - head && tail < newLines.Count - head
+               && oldLines[oldLines.Count - 1 - tail] == newLines[newLines.Count - 1 - tail])
+            tail++;
+        var oldMiddle = oldLines.Skip(head).Take(oldLines.Count - head - tail).ToList();
+        var newMiddle = newLines.Skip(head).Take(newLines.Count - head - tail).ToList();
+        if (oldMiddle.Count + newMiddle.Count > MaxDiffLines)
         {
             // The line diff's time grows with the lines times the changes, and it runs when a card is drawn: past the cap
-            // the whole old text counts as removed and the whole new text as added.
-            removed = Enumerable.Repeat(true, oldLines.Count).ToArray();
-            added = Enumerable.Repeat(true, newLines.Count).ToArray();
+            // the changed middle's old lines count as removed and its new lines as added.
+            Array.Fill(removed, true, head, oldMiddle.Count);
+            Array.Fill(added, true, head, newMiddle.Count);
             wholeFile = true;
         }
         else
         {
-            var (a, b) = LineDiff.Number(oldLines, newLines);
-            (removed, added) = LineDiff.Compute(a, b);
+            var (a, b) = LineDiff.Number(oldMiddle, newMiddle);
+            var (middleRemoved, middleAdded) = LineDiff.Compute(a, b);
+            Array.Copy(middleRemoved, 0, removed, head, middleRemoved.Length);
+            Array.Copy(middleAdded, 0, added, head, middleAdded.Length);
         }
 
         var lines = new List<Line>(Math.Max(oldLines.Count, newLines.Count));

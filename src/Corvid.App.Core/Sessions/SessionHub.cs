@@ -201,7 +201,8 @@ public sealed class SessionHub : IDisposable
         bar.Decider = session.StatusDecider;
         bar.Context = session.StatusContext;
         bar.Mode = session.Mode;
-        bar.Tags = session.StatusTags;
+        // A failed start-up listing stays in view whichever session shows.
+        bar.Tags = StartError.Length > 0 ? [new StatusTag("sessions unavailable", Tone.Red, StartError), .. session.StatusTags] : session.StatusTags;
         bar.Scheduler = session.StatusScheduler;
         bar.Branch = session.StatusBranch;
         bar.Trailing = session.StatusTrailing;

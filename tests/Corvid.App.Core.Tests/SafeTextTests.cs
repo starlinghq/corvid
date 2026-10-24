@@ -90,6 +90,31 @@ public sealed class SafeTextTests
     }
 
     [Fact]
+    public void AOneLineEditToALongFileStaysAOneLineDiff()
+    {
+        var lines = Enumerable.Range(0, FileDiff.MaxDiffLines).Select(i => $"line {i}").ToList();
+        var old = string.Join('\n', lines) + "\n";
+        lines[5000] = "line 5000, changed";
+        var @new = string.Join('\n', lines) + "\n";
+
+        var diff = FileDiff.Compute("long.txt", old, @new);
+
+        Assert.False(diff.IsWholeFile);
+        Assert.Equal((1, 1), (diff.Added, diff.Removed));
+    }
+
+    [Theory]
+    [InlineData("build/../etc")]
+    [InlineData("build/./x")]
+    public void ARulePathThatStepsUpOrAroundIsRefused(string edited)
+    {
+        var row = new Sessions.RuleRowView(new Sessions.RulePreview("allow", "rm -r") { Paths = ["build/"] }) { Paths = edited };
+
+        Assert.True(row.HasPathsError);
+        Assert.Contains(". or ..", row.PathsError, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ASmallTextIsComparedLineByLine() =>
         Assert.False(FileDiff.Compute("a.txt", "a\nb\n", "a\nc\n").IsWholeFile);
 }

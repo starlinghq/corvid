@@ -550,7 +550,7 @@ public static class SessionFold
 
     private static SessionView OnEngine(SessionView state, EngineStatus engine) => state with
     {
-        Generator = engine.Generator ?? state.Generator,
+        Generator = engine.Generator is { } generator ? generator with { Model = SafeText.Clean(generator.Model), Device = SafeText.Clean(generator.Device) } : state.Generator,
         // Engine strings reach the header and status bar: cleaned once here (a branch name may hold bidi marks).
         Model = Cleaned(engine.Generator?.Model) ?? state.Model,
         Decider = Cleaned(engine.Decider) ?? state.Decider,

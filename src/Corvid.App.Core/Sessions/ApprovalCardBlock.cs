@@ -221,6 +221,13 @@ public sealed class RuleRowView : ObservableObject
             return;
         }
 
+        // "Under" is checked on the text, so a path that steps up or around (build/../etc) is refused, not compared.
+        if (edited.FirstOrDefault(path => path.Split('/').Any(part => part is ".." or ".")) is { } stepping)
+        {
+            PathsError = $"{stepping} uses . or ..; name the narrower path itself";
+            return;
+        }
+
         var wider = edited.FirstOrDefault(path => !_original.Any(original => Covers(original, path)));
         PathsError = wider is null ? "" : $"{wider} is not under {string.Join(" or ", _original)}; a rule can only be narrowed";
     }
@@ -308,7 +315,7 @@ public sealed class ApprovalCardBlock : TranscriptBlock
 
     public string ApprovalId => _request.ApprovalId;
 
-    public string Tool => _request.Tool;
+    public string Tool => SafeText.Reveal(_request.Tool);
 
     /// <summary>"Approval 1 of 2 · shell" (one prompt: "Approval · shell").</summary>
     public string Title { get => _title; private set => SetProperty(ref _title, value); }
@@ -462,7 +469,7 @@ public sealed class ApprovalCardBlock : TranscriptBlock
             Build(card);
         }
 
-        Title = card.Count > 1 ? $"Approval {card.Position} of {card.Count} · {_request.Tool}" : $"Approval · {_request.Tool}";
+        Title = card.Count > 1 ? $"Approval {card.Position} of {card.Count} · {Tool}" : $"Approval · {Tool}";
         PhoneTitle = card.Count > 1 ? $"Approval {card.Position} of {card.Count}" : "Approval";
         if (card.Next is { } next)
         {

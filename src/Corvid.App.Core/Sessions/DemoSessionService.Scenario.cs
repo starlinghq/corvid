@@ -132,7 +132,7 @@ public sealed partial class DemoSessionService
     [
         new("help", "List the commands."),
         new("status", "Slots with their device, queue depth and median latency; the session's state."),
-        new("model", "List the model slots, or switch one for this session.", "[slot] [model] [--pin]"),
+        new("model", "Pick a model: lists a slot's models numbered, or switches one for this session.", "[slot] [<model> | <number>] [--pin] | unpin <slot>"),
         new("goal", "Show, set or clear the standing goal.", "[text | clear]"),
         new("approvals", "Pending approvals and the remembered approval rules."),
         new("todos", "The session's todo list."),

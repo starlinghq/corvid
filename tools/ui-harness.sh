@@ -24,13 +24,14 @@
 set -euo pipefail
 
 STATE="${UI_HARNESS_STATE:-${XDG_RUNTIME_DIR:-/tmp}/ui-harness-$UID}"
-mkdir -p -m 700 "$STATE"; chmod 700 "$STATE"
-[[ -O "$STATE" ]] || { echo "state directory $STATE is not owned by you" >&2; exit 2; }
+mkdir -p -m 700 "$STATE"
+[[ ! -L "$STATE" && -O "$STATE" ]] || { echo "state directory $STATE is a link or not owned by you" >&2; exit 2; }
+chmod 700 "$STATE"
 cmd="${1:-}"; shift || true
 n="${1:-}"; shift || true
 [[ -n "$cmd" && -n "$n" ]] || { sed -n '2,23p' "$0"; exit 2; }
-[[ "$n" =~ ^[0-9]+$ ]] || { echo "the display must be a number: $n" >&2; exit 2; }
-int() { [[ "$1" =~ ^-?[0-9]+$ ]] || { echo "not a whole number: $1" >&2; exit 2; }; }
+[[ "$n" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "the display must be a number: $n" >&2; exit 2; }
+int() { [[ "$1" =~ ^-?(0|[1-9][0-9]*)$ ]] || { echo "not a whole number: $1" >&2; exit 2; }; }
 count() { [[ "$1" =~ ^[1-9][0-9]*$ ]] || { echo "not a positive count: $1" >&2; exit 2; }; }
 wxh() { [[ "$1" =~ ^[0-9]+x[0-9]+$ ]] || { echo "not a size like 1440x900: $1" >&2; exit 2; }; }
 export DISPLAY=":$n"
