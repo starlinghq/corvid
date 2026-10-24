@@ -46,6 +46,27 @@ public sealed class BoardViewModelTests
     }
 
     [Fact]
+    public async Task ABoardMadeBeforeTheSessionsAreListedDrawsThemWhenTheyArrive()
+    {
+        // The engine lists its sessions once the runtime is up, after a window opened on the Board has made it.
+        var time = ManualTimeProvider.Demo();
+        var dispatcher = new InlineDispatcher();
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar);
+        var sessions = new DemoSessionService(dispatcher, time, DemoScene.Approval);
+        var hub = new SessionHub(sessions, dispatcher, time, shell, bar);
+        shell.Navigate(Area.Board);
+        using var board = new BoardViewModel(shell, hub, new DemoBoardService(time), new SessionServiceWatcher(sessions), time, dispatcher);
+        Assert.Empty(board.Tiles.OfType<SessionCardViewModel>());
+
+        await hub.StartAsync(null, null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["cli-9f2e", "cli-a410", "cli-77b0", "cli-c3d2", DemoSessionService.JobSessionId],
+            board.Tiles.OfType<SessionCardViewModel>().Select(card => card.Id));
+        hub.Dispose();
+    }
+
+    [Fact]
     public void TheWaitingCardSaysWhatItWaitsOnAndHowLongIsLeft()
     {
         var card = Card(Start(), "cli-9f2e");

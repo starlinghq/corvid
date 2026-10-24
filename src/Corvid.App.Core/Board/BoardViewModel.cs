@@ -85,6 +85,7 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         NewSession = new NewSessionTile(NewSessionText(_shell.Workspace), NewSessionCommand, OpenWorkspaceCommand);
 
         _hub.Service.SessionChanged += OnSessionChanged;
+        _hub.Listed += OnListed;
         _service.AttentionChanged += OnAttentionChanged;
         _shell.PropertyChanged += OnShellChanged;
         foreach (var summary in _hub.Summaries)
@@ -192,6 +193,7 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
             return;
         _disposed = true;
         _hub.Service.SessionChanged -= OnSessionChanged;
+        _hub.Listed -= OnListed;
         _service.AttentionChanged -= OnAttentionChanged;
         _shell.PropertyChanged -= OnShellChanged;
         _ticker?.Dispose();
@@ -226,6 +228,16 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         if (_disposed)
             return;
         Upsert(summary);
+        Rebuild();
+    }
+
+    /// <summary>The hub's start-up list arrived after this was made (the engine lists once its runtime is up).</summary>
+    private void OnListed(object? sender, EventArgs e)
+    {
+        if (_disposed)
+            return;
+        foreach (var summary in _hub.Summaries)
+            Upsert(summary);
         Rebuild();
     }
 

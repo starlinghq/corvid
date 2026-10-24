@@ -61,6 +61,12 @@ public sealed class SessionHub : IDisposable
     public IReadOnlyCollection<SessionSummary> Summaries => _summaries.Values;
 
     /// <summary>
+    /// The start-up list arrived and <see cref="Summaries"/> holds it. The demo lists at once; the engine lists once its
+    /// runtime is up, so a view made before then (the Board opened with <c>--page board</c>) reads the list again here.
+    /// </summary>
+    public event EventHandler? Listed;
+
+    /// <summary>
     /// Lists the sessions into the rail and selects one: <paramref name="select"/> when the rail lists it, otherwise
     /// <paramref name="fallback"/>. The demo service answers at once, so the rail is full when this returns.
     /// </summary>
@@ -82,6 +88,7 @@ public sealed class SessionHub : IDisposable
         foreach (var summary in summaries)
             _summaries[summary.Id] = summary;
         RebuildRail();
+        Listed?.Invoke(this, EventArgs.Empty);
         var chosen = select is not null ? _shell.FindSession(select) : null;
         chosen ??= fallback is not null ? _shell.FindSession(fallback) : null;
         if (chosen is not null)
