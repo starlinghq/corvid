@@ -171,6 +171,30 @@ public sealed class EngineRewindTests
     }
 
     [Fact]
+    public async Task ARestoreReachesTheOpenTranscriptAndTheNextPromptTakesTheTurnThatLeft()
+    {
+        await using var fixture = await HistoryFixture.StartAsync(new FakeModels(new FakeGenerator(Reply.Say("Hello."))));
+        var id = await ThreeTurnsAsync(fixture);
+        using var rewind = fixture.Rewind();
+        var live = new Recorder();
+        using var subscription = await fixture.Sessions.OpenAsync(id, live.Add, Ct);
+        var latest = (await rewind.GetTimelineAsync(id, Ct)).Entries[0];
+        Assert.Equal(2, latest.Turn);
+
+        var outcome = await rewind.RestoreAsync(id, latest.CheckpointId, AppScope.ConversationOnly, Ct);
+
+        Assert.False(outcome.Refused);
+        var rewound = Assert.Single(live.Updates.OfType<Corvid.App.Core.Sessions.SessionRewound>());
+        Assert.Equal((2, AppScope.ConversationOnly, latest.CheckpointId), (rewound.Turn, rewound.Scope, rewound.RestorePoint));
+        var view = Corvid.App.Core.Sessions.SessionFold.Replay(id, [.. subscription.History, .. live.Updates]);
+        Assert.DoesNotContain(view.Transcript, entry => entry.Turn >= 2);
+
+        await fixture.Sessions.SendAsync(id, "hello", Ct);
+        await fixture.Sessions.IdleAsync();
+        Assert.Equal(2, Assert.Single(live.Updates.OfType<Corvid.App.Core.Sessions.TurnStarted>()).Turn);
+    }
+
+    [Fact]
     public async Task AFilesOnlyRestoreKeepsTheConversation()
     {
         await using var fixture = await HistoryFixture.StartAsync();

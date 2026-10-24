@@ -53,6 +53,16 @@ public sealed class SessionUpdateTranslator(string workspace)
     /// <summary>A turn has started and not ended.</summary>
     public bool TurnOpen { get; private set; }
 
+    /// <summary>
+    /// The conversation went back to before <paramref name="firstTurnGone"/> (a rollback from Rewind): the latest turn is
+    /// the one before it, so the next prompt is numbered as a replay of the log would number it.
+    /// </summary>
+    public void RewindTo(int firstTurnGone)
+    {
+        Turn = Math.Min(Turn, Math.Max(0, firstTurnGone - 1));
+        TurnOpen = false;
+    }
+
     public IReadOnlyList<SessionUpdate> Translate(SessionStreamUpdate update)
     {
         ArgumentNullException.ThrowIfNull(update);

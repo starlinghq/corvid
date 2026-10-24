@@ -599,6 +599,24 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             Raise(changed);
     }
 
+    /// <summary>
+    /// A restore from Rewind reached the session (A3 integration): an open session's transcript and change lists follow it
+    /// as the demo's do, and a conversation rollback lowers the turn the next prompt opens. A session not open in this
+    /// window shows the conversation as it stands when it is opened.
+    /// </summary>
+    internal void PublishRewound(string sessionId, SessionRewound rewound)
+    {
+        ArgumentNullException.ThrowIfNull(rewound);
+        if (!_channels.TryGetValue(sessionId, out var channel))
+            return;
+        Publish(channel, translator =>
+        {
+            if (!rewound.Refused && rewound.Scope != RewindScope.FilesOnly)
+                translator.RewindTo(rewound.Turn);
+            return [rewound];
+        });
+    }
+
     private void PublishQueue(Channel channel) => Publish(channel, _ => [new QueueChanged(channel.Queue) { At = _time.GetUtcNow() }]);
 
     /// <summary>Changes the queue under the channel's lock; true when it changed.</summary>

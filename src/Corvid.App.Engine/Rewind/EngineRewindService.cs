@@ -13,6 +13,7 @@ using Corvid.Kernel.Events;
 using AppConflict = Corvid.App.Core.Sessions.RestoreConflict;
 using AppLedgerEntry = Corvid.App.Core.Rewind.LedgerEntry;
 using AppPlan = Corvid.App.Core.Rewind.RestorePlan;
+using AppRewound = Corvid.App.Core.Sessions.SessionRewound;
 using AppScope = Corvid.App.Core.Sessions.RewindScope;
 using KernelEntry = Corvid.Kernel.Checkpoints.LedgerEntry;
 
@@ -146,7 +147,7 @@ public sealed class EngineRewindService : IRewindService, IDisposable
 
     public async Task<IReadOnlyList<RestorePreviewFile>> PreviewAsync(string sessionId, string checkpointId, CancellationToken cancellationToken = default)
     {
-        var (_, _, session) = await FindAsync(sessionId, checkpointId, cancellationToken).ConfigureAwait(false);
+        var (ledger, entry, session) = await FindAsync(sessionId, checkpointId, cancellationToken).ConfigureAwait(false);
         var texts = await _texts.Value.ConfigureAwait(false);
         var plan = session.PlanRollbackTo(checkpointId) ?? throw Missing(sessionId, checkpointId);
         var draft = await session.DraftRollbackToAsync(checkpointId, null, cancellationToken).ConfigureAwait(false);
@@ -180,7 +181,7 @@ public sealed class EngineRewindService : IRewindService, IDisposable
 
     public async Task<RestoreOutcome> RestoreAsync(string sessionId, string checkpointId, AppScope scope, CancellationToken cancellationToken = default)
     {
-        var (_, _, session) = await FindAsync(sessionId, checkpointId, cancellationToken).ConfigureAwait(false);
+        var (ledger, entry, session) = await FindAsync(sessionId, checkpointId, cancellationToken).ConfigureAwait(false);
         var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
         var label = $"rollback to before {checkpointId}";
         var result = await session.RollbackToAsync(checkpointId, Scope(scope), null, cancellationToken).ConfigureAwait(false);
@@ -201,6 +202,19 @@ public sealed class EngineRewindService : IRewindService, IDisposable
             _outcomes[(sessionId, restorePoint)] = outcome;
         else
             _unrecorded[sessionId] = (outcome, head);
+        // The open transcript follows, as the demo's does: the turns from the checkpoint's leave it (unless only files went
+        // back), and the files put back are marked.
+        if (result is not null)
+            _signals.Rewound(sessionId, new AppRewound(ledger.TurnAt(entry.CallSequence), scope, "rollback")
+            {
+                Restored = outcome.Restored,
+                Merged = outcome.Merged,
+                Conflicts = outcome.Conflicts,
+                CheckpointId = outcome.CheckpointId,
+                RestorePoint = checkpointId,
+                Refused = outcome.Refused,
+                Detail = outcome.Detail,
+            });
         _signals.Raise(sessionId);
         return outcome;
     }

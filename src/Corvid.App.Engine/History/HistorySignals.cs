@@ -6,7 +6,8 @@ namespace Corvid.App.Engine.History;
 /// <summary>
 /// Tells Rewind and Review that a session's ledger may have moved: a turn the window ran ended (the session service's
 /// <see cref="ISessionService.SessionChanged"/>), or one of them restored or reverted files. Raised on the UI thread with
-/// the session's id. One per window; disposing it stops listening to the session service.
+/// the session's id, and carries a restore to the open transcript (<see cref="Rewound"/>). One per window; disposing it
+/// stops listening to the session service.
 /// </summary>
 internal sealed class HistorySignals : IDisposable
 {
@@ -32,6 +33,13 @@ internal sealed class HistorySignals : IDisposable
         if (!_disposed)
             Changed?.Invoke(sessionId);
     });
+
+    /// <summary>A restore moved the session: the window's session service shows it in the open transcript.</summary>
+    public void Rewound(string sessionId, SessionRewound rewound)
+    {
+        if (!_disposed && _sessions is Sessions.EngineSessionService engine)
+            engine.PublishRewound(sessionId, rewound);
+    }
 
     public void Dispose()
     {
