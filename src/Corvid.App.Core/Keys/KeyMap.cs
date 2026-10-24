@@ -95,6 +95,7 @@ public sealed class KeyMap
     [
         (App, "Anywhere"), ("composer", "Composer"), ("transcript", "Transcript"), ("approval", "Approval card"), ("dock", "Dock"),
         ("review", "Review"), ("models", "Models"), ("audit", "Audit"), ("memory", "Memory"), ("board", "Board"), ("rewind", "Rewind"),
+        ("skills", "Skills"), ("jobs", "Jobs"), ("mcp", "MCP"), ("gateway", "Gateway"), ("safety", "Safety"), ("secrets", "Secrets"),
     ];
 
     public static string Heading(string context) => Contexts.FirstOrDefault(pair => pair.Context == context).Heading ?? context;
@@ -122,6 +123,12 @@ public sealed class KeyMap
         Area.Memory => ["memory"],
         Area.Board => ["board"],
         Area.Rewind => ["rewind"],
+        Area.Skills => ["skills"],
+        Area.Jobs => ["jobs"],
+        Area.Mcp => ["mcp"],
+        Area.Gateway => ["gateway"],
+        Area.Safety => ["safety"],
+        Area.Secrets => ["secrets"],
         _ => [],
     };
 
@@ -266,5 +273,19 @@ public sealed class KeyMap
         yield return Page("memory", "memory.tabs", "Picks a tab", "Ctrl+1 to Ctrl+5", "Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4", "Ctrl+5");
         yield return PageKeys("board", "board.move", "Moves between sessions; Enter attaches, Space peeks", "Arrows, Enter, Space");
         yield return PageKeys("rewind", "rewind.move", "Moves through the timeline", "Up, Down");
+        yield return Page("skills", "skills.filter", "Puts the caret in the skills filter", "Ctrl+F", "Ctrl+F");
+        yield return Page("skills", "skills.tabs", "Picks Review, Library, History or Import", "Ctrl+1 to Ctrl+4", "Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4");
+        yield return PageKeys("skills", "skills.rows", "In the library or the history, opens the next or previous row", "Up, Down");
+        yield return Page("skills", "skills.approve", "In a draft's editor, approves as edited", "Ctrl+Enter", "Ctrl+Enter");
+        yield return PageKeys("skills", "skills.close", "Clears the filter, undoes an edit, or closes the open skill or commit", "Esc");
+        yield return PageKeys("jobs", "jobs.rows", "Moves between jobs; Enter opens one", "Up, Down, Enter");
+        yield return PageKeys("jobs", "jobs.close", "Closes an open question, then the form", "Esc");
+        yield return PageKeys("mcp", "mcp.rows", "Moves between servers; Enter opens one", "Up, Down, Enter");
+        yield return PageKeys("mcp", "mcp.close", "Closes an open question (remove, trust, forget)", "Esc");
+        yield return PageKeys("gateway", "gateway.close", "Closes an open question, then the allowlist editor", "Esc");
+        yield return PageKeys("safety", "safety.remove", "On a rule's Remove…, asks to remove it", "Delete");
+        yield return PageKeys("safety", "safety.close", "Stops asking", "Esc");
+        yield return PageKeys("secrets", "secrets.set", "In Set a secret…'s name field, starts the set", "Enter");
+        yield return PageKeys("secrets", "secrets.close", "Closes the picker", "Esc");
     }
 }

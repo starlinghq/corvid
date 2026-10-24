@@ -78,7 +78,7 @@ public sealed class KeyMapTests
     {
         var keys = new KeyMap();
         var shadows = keys.ShadowsOf(keys[KeyCommands.Find]);
-        Assert.Equal(["audit", "memory"], shadows.Select(shadow => shadow.Context).Order());
+        Assert.Equal(["audit", "memory", "skills"], shadows.Select(shadow => shadow.Context).Order());
         Assert.Equal("models", Assert.Single(keys.ShadowsOf(keys[KeyCommands.SwitchGenerator])).Context);
         Assert.Empty(keys.ShadowsOf(keys[KeyCommands.Palette]));
     }
@@ -90,6 +90,8 @@ public sealed class KeyMapTests
         Assert.True(keys.IsPagesKey(keys[KeyCommands.Find], Area.Audit));
         Assert.True(keys.IsPagesKey(keys[KeyCommands.Find], Area.Memory));
         Assert.False(keys.IsPagesKey(keys[KeyCommands.Find], Area.Sessions));
+        Assert.True(keys.IsPagesKey(keys[KeyCommands.Find], Area.Skills));
+        Assert.False(keys.IsPagesKey(keys[KeyCommands.Find], Area.Jobs));
         Assert.True(keys.IsPagesKey(keys[KeyCommands.SwitchGenerator], Area.Models));
         Assert.False(keys.IsPagesKey(keys[KeyCommands.SwitchGenerator], Area.Sessions));
         Assert.False(keys.IsPagesKey(keys[KeyCommands.Palette], Area.Settings));

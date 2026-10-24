@@ -46,7 +46,7 @@ public sealed record PaletteHost(ShellViewModel Shell, KeyMap Keys, TimeProvider
 /// </summary>
 public sealed class PaletteViewModel : ObservableObject
 {
-    /// <summary>The most rows the list draws; the count line says how many more matched.</summary>
+    /// <summary>The most rows the list draws (the shortcuts excepted); the count line says how many more matched.</summary>
     public const int MaxItems = 50;
 
     private readonly PaletteHost _host;
@@ -641,7 +641,8 @@ public sealed class PaletteViewModel : ObservableObject
         for (var i = 0; i < all.Count; i++)
             all[i].GroupHeader = grouped && all[i].Group.Length > 0 && (i == 0 || all[i - 1].Group != all[i].Group) ? all[i].Group : "";
         _matched = all.Count;
-        Items = all.Count > MaxItems ? all.GetRange(0, MaxItems) : all;
+        // The shortcuts are the key map's fixed list, drawn whole; what grows (sessions, prompts, finds) is capped.
+        Items = all.Count > MaxItems && _mode != PaletteMode.Help ? all.GetRange(0, MaxItems) : all;
         OnPropertyChanged(nameof(CountText));
         Select(_items.Count == 0 ? -1 : FirstEnabled());
     }
