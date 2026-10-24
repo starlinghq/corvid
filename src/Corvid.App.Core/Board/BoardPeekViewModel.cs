@@ -8,6 +8,12 @@ namespace Corvid.App.Core.Board;
 /// <summary>A line of a peek: who or what ("you", "corvid", "read_file"), and the text.</summary>
 public sealed record PeekLine(string Label, string Text, bool IsCode = false)
 {
+    /// <summary>Two lines are the same when they read the same and their runs are styled the same.</summary>
+    public bool Equals(PeekLine? other) =>
+        other is not null && Label == other.Label && Text == other.Text && IsCode == other.IsCode && Runs.SequenceEqual(other.Runs);
+
+    public override int GetHashCode() => HashCode.Combine(Label, Text, IsCode, Runs.Count);
+
     public string AutomationName => $"{Label}: {Text}";
 
     /// <summary>The text as styled runs: an answer's code spans and bold, without the markdown's backticks and stars.</summary>
@@ -70,7 +76,10 @@ public sealed class BoardPeekViewModel : ObservableObject, IDisposable
 
     public void Dispose() => Card.PropertyChanged -= OnCardChanged;
 
-    /// <summary>The latest entries of a session's transcript as lines: messages, tool calls, answers, prompts and notices.</summary>
+    /// <summary>
+    /// The latest entries of a session's transcript as lines: messages, tool calls, answers, prompts and notices. Every
+    /// line is what a session reported, so it is cleaned (<see cref="SafeText.Clean"/>); an answer's markdown cleans itself.
+    /// </summary>
     public static IReadOnlyList<PeekLine> Build(SessionView? view)
     {
         if (view is null)
@@ -81,11 +90,11 @@ public sealed class BoardPeekViewModel : ObservableObject, IDisposable
             PeekLine? line = entry switch
             {
                 UserEntry user => new PeekLine("you", Clip(user.Text)),
-                ToolEntry tool => new PeekLine(tool.Tool, BoardText.Join(tool.Target, Status(tool)), IsCode: true),
+                ToolEntry tool => new PeekLine(SafeText.Clean(tool.Tool), Clip(BoardText.Join(tool.Target, Status(tool))), IsCode: true),
                 AnswerEntry answer when answer.Text.Length > 0 => PeekLine.Answer("corvid", Clip(answer.Text)),
                 ApprovalEntry approval => new PeekLine("approval", BoardText.Join(Clip(approval.Request.Text), $"{approval.Position} of {approval.Count}")),
                 QuestionEntry question => new PeekLine("question", question.Answer is { } given
-                    ? $"{Clip(question.Question.Text)} → {given}"
+                    ? $"{Clip(question.Question.Text)} → {Clip(given)}"
                     : Clip(question.Question.Text)),
                 NoticeEntry notice => new PeekLine("notice", Clip(notice.Notice.Text)),
                 _ => null,
@@ -107,7 +116,7 @@ public sealed class BoardPeekViewModel : ObservableObject, IDisposable
 
     private static string Clip(string text)
     {
-        var flat = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var flat = string.Join(' ', SafeText.Clean(text).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         return flat.Length <= MaxText ? flat : string.Concat(flat.AsSpan(0, MaxText - 1), "…");
     }
 
@@ -119,11 +128,12 @@ public sealed class BoardPeekViewModel : ObservableObject, IDisposable
 
     private void Rebuild()
     {
+        // The note follows the card's read-only state whether or not the lines changed.
+        OnPropertyChanged(nameof(Note));
         var lines = Build(Card.View);
         if (lines.SequenceEqual(_lines))
             return;
         Entries = lines;
         OnPropertyChanged(nameof(HasEntries));
-        OnPropertyChanged(nameof(Note));
     }
 }

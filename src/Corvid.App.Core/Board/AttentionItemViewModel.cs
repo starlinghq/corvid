@@ -76,9 +76,25 @@ public sealed class AttentionItemViewModel : ObservableObject
     /// <summary>Drawn in the text colour rather than a role's: staged memory and finished jobs.</summary>
     public bool IconPlain => IconTone == Tone.Grey;
 
-    public string What { get => _what; set => SetProperty(ref _what, value ?? ""); }
+    public string What
+    {
+        get => _what;
+        set
+        {
+            if (SetProperty(ref _what, value ?? ""))
+                OnPropertyChanged(nameof(AutomationName));
+        }
+    }
 
-    public string Detail { get => _detail; set => SetProperty(ref _detail, value ?? ""); }
+    public string Detail
+    {
+        get => _detail;
+        set
+        {
+            if (SetProperty(ref _detail, value ?? ""))
+                OnPropertyChanged(nameof(AutomationName));
+        }
+    }
 
     public IReadOnlyList<AttentionButton> Buttons { get => _buttons; set => SetProperty(ref _buttons, value ?? []); }
 

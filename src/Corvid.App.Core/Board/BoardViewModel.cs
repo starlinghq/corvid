@@ -34,7 +34,10 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
 
     private const string Unavailable = "Starting sessions and opening workspaces come with the engine (Corvid.App.Engine).";
 
+    private const string NotifyUnavailable = "Native notifications while the window is unfocused come with the engine (Corvid.App.Engine).";
+
     private readonly ShellViewModel _shell;
+    private readonly StatusBarLease _lease;
     private readonly SessionHub _hub;
     private readonly IBoardService _service;
     private readonly ISessionWatcher _watcher;
@@ -63,6 +66,7 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         ArgumentNullException.ThrowIfNull(time);
         ArgumentNullException.ThrowIfNull(dispatcher);
         _shell = shell;
+        _lease = new StatusBarLease(shell.StatusBar);
         _hub = hub;
         _service = service;
         _watcher = watcher;
@@ -75,7 +79,8 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         NewSessionCommand = new RelayCommand(() => { }, () => false);
         OpenWorkspaceCommand = new RelayCommand(() => { }, () => false);
         ClosePeekCommand = new RelayCommand(ClosePeek, () => _peek is not null);
-        ToggleNotifyCommand = new RelayCommand(() => NotifyWhenUnfocused = !NotifyWhenUnfocused);
+        // Nothing sends native notifications yet, so the toggle is off and says why, as New session does.
+        ToggleNotifyCommand = new RelayCommand(() => NotifyWhenUnfocused = !NotifyWhenUnfocused, () => false);
         NewSession = new NewSessionTile(NewSessionText(_shell.Workspace), NewSessionCommand, OpenWorkspaceCommand);
 
         _hub.Service.SessionChanged += OnSessionChanged;
@@ -83,6 +88,8 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         _shell.PropertyChanged += OnShellChanged;
         foreach (var summary in _hub.Summaries)
             Upsert(summary);
+        if (_shell.CurrentArea == Area.Board)
+            _lease.Take();
         Rebuild();
         _ = LoadAsync();
     }
@@ -167,6 +174,9 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
 
     /// <summary>Why New session and Open a workspace are disabled.</summary>
     public string UnavailableReason => Unavailable;
+
+    /// <summary>Why "Notify when unfocused" is disabled.</summary>
+    public string NotifyUnavailableReason => NotifyUnavailable;
 
     public RelayCommand ClosePeekCommand { get; }
 
@@ -349,6 +359,7 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
     /// <summary>An item already listed keeps its view model (and its row) with the new text and buttons.</summary>
     private AttentionItemViewModel Reuse(AttentionItemViewModel fresh)
     {
+        // A question's id is in its item's id, so buttons that answer an earlier question are never kept for a new one.
         var existing = Attention.FirstOrDefault(item => item.Id == fresh.Id && item.Kind == fresh.Kind);
         if (existing is null)
             return fresh;
@@ -363,7 +374,7 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
     {
         var left = summary.Deadline is { } deadline ? $"{SessionText.Countdown(deadline - now)} left" : null;
         return new AttentionItemViewModel($"approval:{summary.Id}", AttentionKind.Approval,
-            BoardText.Join("Approval", summary.Approval),
+            BoardText.Join("Approval", SafeText.Clean(summary.Approval)),
             BoardText.Join(BoardText.ShortTitle(summary.Title), left, "opens the full card"),
             [new AttentionButton("Open card", AttentionActionStyle.Default, "Open the session at its approval card: the parsed command, reasons and diff",
                 new RelayCommand(() => Open(summary.Id)), isLink: true)])
@@ -381,16 +392,20 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
             foreach (var option in question.Options)
             {
                 var questionId = question.QuestionId;
-                buttons.Add(new AttentionButton(option, AttentionActionStyle.Default, $"Answer \"{option}\"",
+                // One click sends the option as the answer, so its label shows every hidden character (SafeText.Reveal);
+                // the answer sent is the option as the session gave it.
+                var shown = SafeText.Reveal(option);
+                buttons.Add(new AttentionButton(shown, AttentionActionStyle.Default, $"Answer \"{shown}\"",
                     new RelayCommand(() => _ = AnswerAsync(summary.Id, questionId, option))));
             }
         }
 
         buttons.Add(new AttentionButton("Answer…", AttentionActionStyle.Ghost, "Open the session to answer in your own words",
             new RelayCommand(() => Open(summary.Id))));
-        return new AttentionItemViewModel($"question:{summary.Id}", AttentionKind.Question,
-            BoardText.Join("Question", summary.Question),
-            BoardText.Join(BoardText.ShortTitle(summary.Title), question is not null ? $"\"{question.Text}\"" : null),
+        var id = question is null ? $"question:{summary.Id}" : $"question:{summary.Id}:{question.QuestionId}";
+        return new AttentionItemViewModel(id, AttentionKind.Question,
+            BoardText.Join("Question", SafeText.Clean(summary.Question)),
+            BoardText.Join(BoardText.ShortTitle(summary.Title), question is not null ? $"\"{SafeText.Clean(question.Text)}\"" : null),
             buttons)
         {
             SessionId = summary.Id,
@@ -411,8 +426,11 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
 
     private AttentionItemViewModel AreaItem(AttentionItem item)
     {
-        var buttons = item.Actions.Select(action => new AttentionButton(action.Label, action.Style, action.Help, new RelayCommand(() => Act(item, action)), action.IsLink)).ToList();
-        return new AttentionItemViewModel(item.Id, item.Kind, item.What, item.Detail, buttons);
+        // An area's item can carry outside names (an MCP tool's, a pairing handle): drawn cleaned; its buttons' labels are
+        // the area's own words.
+        var buttons = item.Actions.Select(action => new AttentionButton(action.Label, action.Style, SafeText.Clean(action.Help),
+            new RelayCommand(() => Act(item, action)), action.IsLink)).ToList();
+        return new AttentionItemViewModel(item.Id, item.Kind, SafeText.Clean(item.What), SafeText.Clean(item.Detail), buttons);
     }
 
     private void Act(AttentionItem item, AttentionAction action)
@@ -426,22 +444,36 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
                 Open(session);
                 break;
             case AttentionActionKind.Resolve:
-                _ = ResolveAsync(item.Id, action.Id);
+                _ = ResolveAsync(item, action.Id);
                 break;
         }
     }
 
-    private async Task ResolveAsync(string itemId, string actionId)
+    private async Task ResolveAsync(AttentionItem item, string actionId)
     {
         try
         {
-            await _service.ResolveAsync(itemId, actionId).ConfigureAwait(true);
+            await _service.ResolveAsync(item.Id, actionId).ConfigureAwait(true);
+            // An answered item no longer counts on its area's rail badge (an accepted MCP pin clears MCP's).
+            if (BadgeArea(item.Kind) is { } area)
+            {
+                _areaItems = await _service.ListAttentionAsync().ConfigureAwait(true);
+                _shell.SetBadge(area, _areaItems.Count(listed => listed.Kind == item.Kind));
+                RebuildAttention();
+            }
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
             AttentionHead = $"Attention · could not answer: {exception.Message}";
         }
     }
+
+    /// <summary>The rail item whose badge counts an area's items of this kind: MCP's held tools.</summary>
+    private static Area? BadgeArea(AttentionKind kind) => kind switch
+    {
+        AttentionKind.McpTool => Area.Mcp,
+        _ => null,
+    };
 
     // ---- Peek ----
 
@@ -464,7 +496,20 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         switch (e.PropertyName)
         {
             case nameof(ShellViewModel.CurrentArea):
-                ApplyStatus();
+                if (_shell.CurrentArea == Area.Board)
+                {
+                    _lease.Take();
+                    // The clock stood still while the Board was hidden: bring the times up to now.
+                    Tick();
+                    ApplyStatus();
+                }
+                else
+                {
+                    // An area that writes no status of its own shows what the Board's replaced, not the Board's.
+                    _lease.Release();
+                }
+
+                UpdateTicker();
                 break;
             case nameof(ShellViewModel.Workspace):
                 NewSession = new NewSessionTile(NewSessionText(_shell.Workspace), NewSessionCommand, OpenWorkspaceCommand);
@@ -476,23 +521,24 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
 
     /// <summary>
     /// The Board's status bar (Board.dc.html): the engine and its workspaces, the decider, the mode, the scheduler, the
-    /// gateway, and how many sessions run and wait. Written only while the Board shows; a session's area writes its own.
+    /// gateway, and how many sessions run and wait. Written only while the Board shows; leaving puts back what it replaced.
     /// </summary>
     private void ApplyStatus()
     {
         if (_shell.CurrentArea != Area.Board || _status is not { } status)
             return;
+        _lease.Take();
         var summaries = _cards.Values.Select(card => card.Summary).ToList();
-        var bar = _shell.StatusBar;
+        var bar = _lease;
         var workspaces = BoardText.Workspaces(summaries);
-        bar.Engine = BoardText.Join(status.Engine, workspaces > 0 ? BoardText.Plural(workspaces, "workspace") : null);
+        bar.Engine = SafeText.Clean(BoardText.Join(status.Engine, workspaces > 0 ? BoardText.Plural(workspaces, "workspace") : null));
         bar.Generator = "";
-        bar.Decider = status.Decider;
+        bar.Decider = SafeText.Clean(status.Decider);
         bar.Context = "";
         bar.AreaFields = [];
         bar.Tags = [];
-        bar.Scheduler = status.Scheduler;
-        bar.Gateway = status.Gateway;
+        bar.Scheduler = SafeText.Clean(status.Scheduler);
+        bar.Gateway = SafeText.Clean(status.Gateway);
         bar.Branch = "";
         bar.Trailing = BoardText.Activity(summaries);
     }
@@ -503,13 +549,15 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
             :
             [
                 new MarkdownRun("Start another session in "),
-                new MarkdownRun(workspace, InlineStyle.Bold),
+                new MarkdownRun(SafeText.Clean(workspace), InlineStyle.Bold),
                 new MarkdownRun(", or open a workspace. Each workspace runs its own engine until workspace-per-session lands (G-4)."),
             ];
 
+    /// <summary>The 1 s tick moves countdowns and times on while the Board shows and a session runs or waits.</summary>
     private void UpdateTicker()
     {
-        var needed = !_disposed && _cards.Values.Any(card => card.Summary.State is SessionState.Running or SessionState.Waiting);
+        var needed = !_disposed && _shell.CurrentArea == Area.Board
+            && _cards.Values.Any(card => card.Summary.State is SessionState.Running or SessionState.Waiting);
         if (needed && _ticker is null)
             _ticker = _time.CreateTimer(_ => _dispatcher.Post(Tick), null, TickInterval, TickInterval);
         else if (!needed && _ticker is not null)

@@ -20,12 +20,12 @@ public sealed class LadderStepViewModel
     internal LadderStepViewModel(SlotRowViewModel slot, string model, int index, int count)
     {
         Slot = slot;
-        Model = model;
+        Model = SafeText.Clean(model);
         Index = index;
         IsLast = index == count - 1;
         MoveEarlierCommand = new RelayCommand(() => slot.MoveStep(index, index - 1), () => index > 0);
         MoveLaterCommand = new RelayCommand(() => slot.MoveStep(index, index + 1), () => index < count - 1);
-        AutomationName = $"{model}, step {index + 1} of {count} of the {slot.Name}'s escalation ladder. Alt+Left or Alt+Right moves it.";
+        AutomationName = $"{Model}, step {index + 1} of {count} of the {slot.Name}'s escalation ladder. Alt+Left or Alt+Right moves it.";
     }
 
     public SlotRowViewModel Slot { get; }
@@ -180,7 +180,8 @@ public sealed class SlotRowViewModel : ObservableObject
     internal void Update(ModelSlot slot, ModelsSnapshot snapshot)
     {
         IsBound = slot.IsBound;
-        Model = slot.Model ?? "unbound";
+        // Names from the configuration are data: drawn cleaned; what is written back uses the configured names.
+        Model = slot.Model is { } bound ? SafeText.Clean(bound) : "unbound";
         IsPinned = slot.Pinned;
         IsShared = slot.Shared;
         CurrentNote = (slot.IsDefault, slot.Pinned) switch
@@ -205,15 +206,15 @@ public sealed class SlotRowViewModel : ObservableObject
         var hidden = slot.Escalation.Where(step => IsHidden(snapshot, step)).ToList();
         _hiddenLadder = hidden;
         SetLadder(slot.Escalation.Where(step => !IsHidden(snapshot, step)).ToList());
-        Fallback = slot.Fallback ?? "";
+        Fallback = SafeText.Clean(slot.Fallback);
 
-        var note = slot.Note ?? "";
+        var note = SafeText.Clean(slot.Note);
         // A ladder step still on its way says so ("second tier for gates below their floor · downloading").
         var waiting = _visibleLadder.Select(snapshot.Find).FirstOrDefault(model => model is { Kind: ModelKind.Local } && model.State != ModelState.Cached);
         if (waiting is not null)
             note = $"{note} · {(waiting.State is ModelState.Downloading or ModelState.Queued ? "downloading" : "not downloaded")}";
         if (hidden.Count > 0)
-            note = $"{string.Join(", ", hidden)} hidden: no Vault, so no key";
+            note = $"{string.Join(", ", hidden.Select(SafeText.Clean))} hidden: no Vault, so no key";
         if (HasLadder || Fallback.Length > 0)
         {
             Note = note;
@@ -222,10 +223,10 @@ public sealed class SlotRowViewModel : ObservableObject
         else
         {
             Note = "";
-            Plain = hidden.Count > 0 ? $"none · {note}" : slot.Note ?? "none";
+            Plain = hidden.Count > 0 ? $"none · {note}" : slot.Note is null ? "none" : SafeText.Clean(slot.Note);
         }
 
-        Placement = slot.Placement is { } at ? ModelText.Placement(at) : "—";
+        Placement = slot.Placement is { } at ? SafeText.Clean(ModelText.Placement(at)) : "—";
         Latency = slot.Placement is { } p ? Math.Clamp(p.P50Milliseconds / GaugeFullMilliseconds, 0, 1) : 0;
         OnPropertyChanged(nameof(HasPlacement));
         CanSwitch = slot.IsBound && !slot.Shared;
@@ -268,7 +269,8 @@ public sealed class CatalogueRowViewModel : ObservableObject
     {
         _model = model;
         _owner = owner;
-        Name = model.Name;
+        // Revealed: its one button downloads (or cancels) this model, so a hidden character in the name must show.
+        Name = SafeText.Reveal(model.Name);
         ActionCommand = new RelayCommand(() => owner.Act(this), () => _action.Length > 0);
         Update(model);
     }
@@ -277,11 +279,11 @@ public sealed class CatalogueRowViewModel : ObservableObject
 
     public CatalogueModel Model => _model;
 
-    public string Serves => _model.Serves;
+    public string Serves => SafeText.Clean(_model.Serves);
 
     public IReadOnlyList<TextRun> Where { get => _where; private set { if (!_where.SequenceEqual(value)) SetProperty(ref _where, value); } }
 
-    public string Fit => _model.Fit;
+    public string Fit => SafeText.Clean(_model.Fit);
 
     public IReadOnlyList<StatusTag> Tags { get => _tags; private set { if (!_tags.SequenceEqual(value)) SetProperty(ref _tags, value); } }
 
@@ -321,9 +323,9 @@ public sealed class CatalogueRowViewModel : ObservableObject
             ModelState.Queued => [new StatusTag("queued", Tone.Grey, "Waits for the download before it.")],
             ModelState.Reachable => [new StatusTag("reachable", Tone.Green)],
             ModelState.Unreachable => [new StatusTag("unreachable", Tone.Amber)],
-            ModelState.KeyBound => [new StatusTag(model.Egress ?? "redact", Tone.Blue, "Egress posture: values are redacted before a request leaves."),
-                new StatusTag("key bound", Tone.Green, $"The key is {model.Secret} in Vault; the app never sees it.")],
-            ModelState.Unavailable => [new StatusTag("unavailable", Tone.Amber, model.Secret is { } secret ? $"Set {secret} in Vault." : "")],
+            ModelState.KeyBound => [new StatusTag(model.Egress is { } egress ? SafeText.Clean(egress) : "redact", Tone.Blue, "Egress posture: values are redacted before a request leaves."),
+                new StatusTag("key bound", Tone.Green, $"The key is {SafeText.Clean(model.Secret)} in Vault; the app never sees it.")],
+            ModelState.Unavailable => [new StatusTag("unavailable", Tone.Amber, model.Secret is { } secret ? $"Set {SafeText.Clean(secret)} in Vault." : "")],
             _ => [],
         };
         (ActionLabel, ActionIsDanger) = model.State switch
@@ -408,8 +410,9 @@ public sealed class DownloadChoiceViewModel : ObservableObject
             _isSelected = true;
         else if (!wasEnabled)
             _isSelected = model.InDefaultSet;
-        var name = $"`{model.Name}` · {model.Role} · {ModelText.Size(model.SizeBytes)}";
-        var note = model.SetupNote.Length > 0 ? $" · {model.SetupNote}" : "";
+        // The name is revealed (this box picks it for download) and escaped, like the role and note, so its marks are text.
+        var name = $"`{Spans.Escape(SafeText.Reveal(model.Name))}` · {Spans.Escape(model.Role)} · {ModelText.Size(model.SizeBytes)}";
+        var note = model.SetupNote.Length > 0 ? $" · {Spans.Escape(model.SetupNote)}" : "";
         Text = Spans.Parse(model.State switch
         {
             ModelState.Cached => name,

@@ -46,18 +46,23 @@ public sealed class PlacementRowViewModel : ObservableObject
 
     internal PlacementRowViewModel(ModelPlacement placement, GpuDevice? gpu)
     {
-        Model = placement.Model;
+        Id = placement.Model;
+        Model = SafeText.Clean(placement.Model);
         Original = placement.Device;
         _device = placement.Device;
-        Fallback = placement.NoticeOnFallback ? $"fallback {placement.Fallback}, with a notice" : $"fallback {placement.Fallback}";
+        Fallback = SafeText.Clean(placement.NoticeOnFallback ? $"fallback {placement.Fallback}, with a notice" : $"fallback {placement.Fallback}");
         Checks = gpu is null
             ? []
-            : [.. gpu.Checks.Select(check => new ModelFact(check.Name, Spans.Parse($"{(check.Ok ? "**ok**" : "**failed**")} · {check.Detail}")))];
+            : [.. gpu.Checks.Select(check => new ModelFact(SafeText.Clean(check.Name), Spans.Parse($"{(check.Ok ? "**ok**" : "**failed**")} · {check.Detail}")))];
         Devices = gpu is null ? ["cpu"] : ["cuda", "cpu"];
-        Choices = [.. Devices.Select(device => new Choice(device, device == "cuda" ? $"{gpu!.Id}: {gpu.Summary}" : "the CPU",
+        Choices = [.. Devices.Select(device => new Choice(device, device == "cuda" ? SafeText.Clean($"{gpu!.Id}: {gpu.Summary}") : "the CPU",
             new RelayCommand(() => Device = device)) { IsSelected = device == _device })];
     }
 
+    /// <summary>The model as the configuration names it, for the write.</summary>
+    public string Id { get; }
+
+    /// <summary>The model's name as drawn (cleaned).</summary>
     public string Model { get; }
 
     public string Original { get; }
@@ -105,7 +110,7 @@ public sealed class ModelsViewModel : AreaViewModel
     private readonly IModelService _service;
     private readonly ShellViewModel _shell;
     private readonly StatusBarViewModel _bar;
-    private IReadOnlyList<StatusField> _myFields = [];
+    private readonly StatusBarLease _lease;
     private bool _active;
     private IReadOnlyList<TextRun> _notice = [];
     private Tone _noticeTone = Tone.Green;
@@ -135,6 +140,7 @@ public sealed class ModelsViewModel : AreaViewModel
         _service = service;
         _shell = shell;
         _bar = statusBar;
+        _lease = new StatusBarLease(statusBar);
         Downloads = new DownloadSelectionViewModel(service);
         Downloads.Started += (_, _) =>
         {
@@ -148,7 +154,7 @@ public sealed class ModelsViewModel : AreaViewModel
         ClosePickerCommand = new RelayCommand(ClosePicker);
         DismissNoticeCommand = new RelayCommand(() => Say(true, ""));
         DownloadMissingCommand = new AsyncRelayCommand(DownloadMissingAsync, () => MissingModels().Count > 0);
-        OpenEgressCommand = new RelayCommand(() => _shell.Navigate(Area.Audit));
+        OpenEgressCommand = new RelayCommand(OpenEgress);
         EditPlacementCommand = new RelayCommand(() => IsEditingPlacement = true);
         SavePlacementCommand = new AsyncRelayCommand(SavePlacementAsync);
         CancelPlacementCommand = new RelayCommand(() => IsEditingPlacement = false);
@@ -157,6 +163,8 @@ public sealed class ModelsViewModel : AreaViewModel
             if (Slots.FirstOrDefault(slot => slot.Name == ModelSlotNames.Generator) is { CanSwitch: true } generator)
                 OpenSwitch(generator);
         });
+        foreach (var command in new[] { AddServerCommand, DownloadMissingCommand, SavePlacementCommand, Downloads.DownloadCommand })
+            ReportFailures(command);
 
         _service.Changed += (_, _) => Refresh();
         _shell.PropertyChanged += OnShellChanged;
@@ -292,7 +300,8 @@ public sealed class ModelsViewModel : AreaViewModel
                 : model.Kind == ModelKind.Local ? (model.State is ModelState.Downloading or ModelState.Queued ? "downloading" : "not downloaded")
                 : model.Secret is { } secret ? $"set {secret} in Vault" : "unavailable";
             var name = model.Name;
-            SwitchChoices.Add(new SwitchChoiceViewModel(name, $"{Spans.Plain(model.Where)} · {model.Serves}", name == slot.Model,
+            // Revealed: choosing it switches the slot in one click, so a hidden character in the name must show.
+            SwitchChoices.Add(new SwitchChoiceViewModel(SafeText.Reveal(name), $"{Spans.Plain(model.Where)} · {SafeText.Clean(model.Serves)}", name == slot.Model,
                 model.IsAvailable, reason, new RelayCommand(() => Run(() => SwitchAsync(slot.Name, name)), () => model.IsAvailable && name != slot.Model)));
         }
 
@@ -309,14 +318,14 @@ public sealed class ModelsViewModel : AreaViewModel
 
     internal void Act(CatalogueRowViewModel row)
     {
-        var name = row.Name;
+        var name = row.Model.Name;
         switch (row.Model.State)
         {
             case ModelState.Downloading or ModelState.Queued:
                 Run(async () =>
                 {
                     await _service.CancelDownloadAsync(name).ConfigureAwait(true);
-                    Say(true, $"`{name}`: download cancelled. The partial file was removed, so the cache holds only finished models.");
+                    Say(true, $"`{Spans.Escape(name)}`: download cancelled. The partial file was removed, so the cache holds only finished models.");
                 });
                 break;
             case ModelState.Missing:
@@ -330,7 +339,7 @@ public sealed class ModelsViewModel : AreaViewModel
                 });
                 break;
             case ModelState.KeyBound:
-                _shell.Navigate(Area.Audit);
+                OpenEgress();
                 break;
             case ModelState.Unavailable:
                 _shell.Navigate(Area.Secrets);
@@ -369,7 +378,7 @@ public sealed class ModelsViewModel : AreaViewModel
     {
         var answers = new List<ConfigWrite>();
         foreach (var row in PlacementRows.Where(row => row.IsChanged).ToList())
-            answers.Add(await _service.SetPlacementAsync(row.Model, row.Device, cancellationToken).ConfigureAwait(true));
+            answers.Add(await _service.SetPlacementAsync(row.Id, row.Device, cancellationToken).ConfigureAwait(true));
         IsEditingPlacement = false;
         if (answers.Count == 0)
             Say(true, "Placement unchanged.");
@@ -394,7 +403,17 @@ public sealed class ModelsViewModel : AreaViewModel
             IsEditingPlacement = false;
     }
 
+    /// <summary>Audit's egress ledger, landing on the latest request that left the machine (the window's session's).</summary>
+    private void OpenEgress() => _shell.Follow(new AreaLink(Area.Audit, _shell.CurrentSession?.Id, AreaLinkTarget.Egress));
+
     private void Report(ConfigWrite answer) => Say(answer.Written, answer.Message);
+
+    /// <summary>A button's run that failed shows as a red notice: the command keeps the error, and nothing else would show it.</summary>
+    private void ReportFailures(AsyncRelayCommand command) => command.PropertyChanged += (_, e) =>
+    {
+        if (e.PropertyName == nameof(AsyncRelayCommand.Error) && command.Error is { } error)
+            Say(false, $"That did not work: {Spans.Escape(error.Message)}");
+    };
 
     private void Say(bool ok, string message)
     {
@@ -411,7 +430,7 @@ public sealed class ModelsViewModel : AreaViewModel
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            Say(false, $"That did not work: {exception.Message}");
+            Say(false, $"That did not work: {Spans.Escape(exception.Message)}");
         }
     }
 
@@ -421,7 +440,7 @@ public sealed class ModelsViewModel : AreaViewModel
     private void Refresh()
     {
         var snapshot = _service.Snapshot;
-        Subtitle = Spans.Parse($"config `{snapshot.ConfigPath}` · {(snapshot.Validated ? "validated" : "not valid")} · {ConfigNote}");
+        Subtitle = Spans.Parse($"config `{Spans.Escape(snapshot.ConfigPath)}` · {(snapshot.Validated ? "validated" : "not valid")} · {ConfigNote}");
 
         if (!snapshot.Slots.Select(slot => slot.Name).SequenceEqual(Slots.Select(slot => slot.Name)))
         {
@@ -433,7 +452,7 @@ public sealed class ModelsViewModel : AreaViewModel
         foreach (var (row, slot) in Slots.Zip(snapshot.Slots))
             row.Update(slot, snapshot);
 
-        if (!snapshot.Catalogue.Select(model => model.Name).SequenceEqual(Catalogue.Select(row => row.Name)))
+        if (!snapshot.Catalogue.Select(model => model.Name).SequenceEqual(Catalogue.Select(row => row.Model.Name)))
         {
             Catalogue.Clear();
             foreach (var model in snapshot.Catalogue)
@@ -464,10 +483,10 @@ public sealed class ModelsViewModel : AreaViewModel
             return;
         }
 
-        var names = string.Join(" and ", missing.Select(model => $"`{model.Name}` ({model.Role})"));
+        var names = string.Join(" and ", missing.Select(model => $"`{Spans.Escape(SafeText.Reveal(model.Name))}` ({Spans.Escape(model.Role)})"));
         var decider = missing.FirstOrDefault(model => model.CanServe.Contains(ModelSlotNames.Decider));
         var consequence = decider is not null
-            ? $" Decisions run on the degraded tier and every chat says so until `{decider.Name}` is downloaded."
+            ? $" Decisions run on the degraded tier and every chat says so until `{Spans.Escape(decider.Name)}` is downloaded."
             : "";
         MissingText = Spans.Parse($"**{(missing.Count == 1 ? "1 model is" : $"{missing.Count} models are")} missing:** {names}.{consequence}");
         MissingButtonText = $"Download {ModelText.Size(missing.Sum(model => model.SizeBytes))}";
@@ -506,7 +525,7 @@ public sealed class ModelsViewModel : AreaViewModel
         [
             .. snapshot.Gpus.Select(gpu => Fact(gpu.Id, gpu.Summary)),
             .. snapshot.Placements.Select(placement => Fact(placement.Model,
-                $"device {placement.Device} · fallback {placement.Fallback}{(placement.NoticeOnFallback ? ", with a notice" : "")}")),
+                $"device {Spans.Escape(placement.Device)} · fallback {Spans.Escape(placement.Fallback)}{(placement.NoticeOnFallback ? ", with a notice" : "")}")),
             Fact("cpu", snapshot.Cpu),
         ];
     }
@@ -519,7 +538,7 @@ public sealed class ModelsViewModel : AreaViewModel
             PlacementRows.Add(new PlacementRowViewModel(placement, snapshot.Gpus.FirstOrDefault()));
     }
 
-    private static ModelFact Fact(string key, string value) => new(key, Spans.Parse(value));
+    private static ModelFact Fact(string key, string value) => new(SafeText.Clean(key), Spans.Parse(value));
 
     /// <summary>
     /// Replaces a panel's facts only when their text changed: the snapshot changes on every download tick, and a list
@@ -558,15 +577,15 @@ public sealed class ModelsViewModel : AreaViewModel
         _active = active;
         if (active)
         {
+            _lease.Take();
             ApplyStatus();
             return;
         }
 
-        // Leaving: the session's own status comes back from the session hub for the session areas; what this area added
-        // goes, and the session id (which the hub does not set) comes back.
+        // Leaving: what this area wrote and nobody has written since goes back to what it replaced (the session hub
+        // writes the session areas' own items), and the session id, which the hub does not set, comes back.
         ClosePicker();
-        if (ReferenceEquals(_bar.AreaFields, _myFields))
-            _bar.AreaFields = [];
+        _lease.Release();
         if (_bar.SessionId.Length == 0)
             _bar.SessionId = _shell.CurrentSession?.Id ?? "";
     }
@@ -575,25 +594,24 @@ public sealed class ModelsViewModel : AreaViewModel
     {
         var snapshot = _service.Snapshot;
         var generator = snapshot.Slot(ModelSlotNames.Generator);
-        _bar.Engine = "";
-        _bar.Gateway = "";
-        _bar.Context = "";
-        _bar.Generator = generator is { Model: { } model, Placement: { } at } ? $"{model} · {ModelText.Placement(at)}" : generator?.Model ?? "";
-        _bar.Decider = StatusDecider(snapshot);
-        _myFields = StatusDownloads(snapshot);
-        _bar.AreaFields = _myFields;
-        _bar.Tags = [];
-        _bar.SessionId = "";
-        _bar.Trailing = "idle";
+        _lease.Engine = "";
+        _lease.Gateway = "";
+        _lease.Context = "";
+        _lease.Generator = SafeText.Clean(generator is { Model: { } model, Placement: { } at } ? $"{model} · {ModelText.Placement(at)}" : generator?.Model ?? "");
+        _lease.Decider = StatusDecider(snapshot);
+        _lease.AreaFields = StatusDownloads(snapshot);
+        _lease.Tags = [];
+        _lease.SessionId = "";
+        _lease.Trailing = "idle";
     }
 
     /// <summary>"Kev-0.8B, calibrated", or "degraded until kev-0.8b is downloaded".</summary>
     public static string StatusDecider(ModelsSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        return snapshot.Decider.Tier == DeciderTier.Calibrated
+        return SafeText.Clean(snapshot.Decider.Tier == DeciderTier.Calibrated
             ? $"{snapshot.Decider.DisplayName}, calibrated"
-            : $"degraded until {snapshot.Decider.Model} is downloaded";
+            : $"degraded until {snapshot.Decider.Model} is downloaded");
     }
 
     /// <summary>"downloads kev-4b 42%", with how many wait behind it; nothing when no download runs.</summary>
@@ -604,7 +622,7 @@ public sealed class ModelsViewModel : AreaViewModel
         var queued = snapshot.Catalogue.Count(model => model.State == ModelState.Queued);
         if (running.Count == 0 && queued == 0)
             return [];
-        var text = string.Join(" · ", running.Select(model => $"{model.Name} {model.Download!.Percent}%"));
+        var text = string.Join(" · ", running.Select(model => $"{SafeText.Clean(model.Name)} {model.Download!.Percent}%"));
         if (queued > 0)
             text = text.Length > 0 ? $"{text} · {queued} queued" : $"{queued} queued";
         return [new StatusField("downloads", text)];

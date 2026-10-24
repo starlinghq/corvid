@@ -177,6 +177,10 @@
             <TextBlock local:SpanText.Runs="{x:Bind ViewModel.Subtitle, Mode=OneWay}" Style="{StaticResource CorvidMutedText}" VerticalAlignment="Center" />
           </controls:WrapRowPanel>
           <StackPanel x:Name="HeadButtons" Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+            <!-- Under 860 px the steps column, and its Skip setup, is hidden: the head offers it instead. -->
+            <controls:CorvidButton Content="Skip setup" Variant="Ghost" Command="{x:Bind ViewModel.SkipSetupCommand}"
+                                   Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.ShowHeadSkip), Mode=OneWay}"
+                                   ToolTipService.ToolTip="Keep what is chosen so far and start; every step can be done later" />
             <controls:CorvidButton Content="Run again" Command="{x:Bind ViewModel.RunAgainCommand}"
                                    ToolTipService.ToolTip="Run every check again, after a fix" />
             <controls:CorvidButton Content="{x:Bind ViewModel.NextLabel, Mode=OneWay}" Variant="Primary" Command="{x:Bind ViewModel.NextCommand}" />
@@ -186,7 +190,7 @@
 
       <ScrollViewer x:Name="BodyScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled" HorizontalScrollBarVisibility="Disabled">
         <StackPanel x:Name="Body" Padding="24,18,24,18" Spacing="14">
-          <controls:ToneRow Tone="Green" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasNotice), Mode=OneWay}" AutomationProperties.LiveSetting="Polite">
+          <controls:ToneRow Tone="{x:Bind ViewModel.NoticeTone, Mode=OneWay}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasNotice), Mode=OneWay}" AutomationProperties.LiveSetting="Polite">
             <Grid ColumnSpacing="8">
               <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />

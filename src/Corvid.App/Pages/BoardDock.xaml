@@ -25,7 +25,7 @@
                  TextTrimming="CharacterEllipsis" AutomationProperties.HeadingLevel="Level2" />
       <controls:CorvidButton Grid.Column="1" Content="{x:Bind ViewModel.NotifyLabel, Mode=OneWay}" Style="{StaticResource CorvidSmallButton}"
                              Variant="Ghost" Command="{x:Bind ViewModel.ToggleNotifyCommand}"
-                             ToolTipService.ToolTip="A native notification for each new item while the window is unfocused" />
+                             ToolTipService.ToolTip="{x:Bind ViewModel.NotifyUnavailableReason}" />
     </Grid>
 
     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled">
