@@ -13,6 +13,34 @@ namespace Corvid.Kernel.Events;
 [JsonSerializable(typeof(SessionEvent))]
 internal sealed partial class EventJsonContext : JsonSerializerContext;
 
+/// <summary>
+/// An event payload in its stored form, for a surface that shows the log as it is (the windowed app's Audit): the JSON the
+/// log keeps and the type name its discriminator gives (<c>tool_call_issued</c>). Payloads read from the log were scrubbed
+/// of credentials when they were appended (C-040).
+/// </summary>
+public static class EventPayload
+{
+    /// <summary>The payload as the log stores it, with its <c>type</c> discriminator, on one line.</summary>
+    public static string Json(SessionEvent value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        return EventJson.Serialize(value);
+    }
+
+    /// <summary>The payload's stored type name ("user_message"), the same for every payload of its class.</summary>
+    public static string Type(SessionEvent value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        return Types.GetOrAdd(value.GetType(), _ =>
+        {
+            using var document = JsonDocument.Parse(Json(value));
+            return document.RootElement.TryGetProperty("type", out var type) && type.ValueKind == JsonValueKind.String ? type.GetString()! : "";
+        });
+    }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, string> Types = new();
+}
+
 internal static class EventJson
 {
     internal const int Version = 1;

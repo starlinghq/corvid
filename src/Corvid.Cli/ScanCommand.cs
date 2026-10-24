@@ -1,11 +1,9 @@
-using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
-using Corvid.Abstractions.Events;
+using Corvid.Host.Audit;
 using Corvid.Host.Configuration;
 using Corvid.Kernel.Events;
 using Corvid.Rules;
-using Corvid.Tools.Builtin;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
@@ -20,8 +18,6 @@ namespace Corvid.Cli;
 internal static class ScanCommand
 {
     public const string UsageText = "usage: corvid scan [--session <id>] [--fail-on info|low|medium|high|critical] [--json]";
-
-    private const int PageSize = 4096;
 
     public static int Run(IHost host, CliArguments arguments, CliContext context, CancellationToken cancellationToken)
     {
@@ -47,44 +43,27 @@ internal static class ScanCommand
             return ExitCodes.Failure;
         }
 
-        RulePack pack;
+        DetectionEngine engine;
         try
         {
-            pack = RulePack.BuiltIn();
+            engine = LogScan.CreateEngine(options);
         }
         catch (RuleLoadException exception)
         {
             console.MarkupLine($"[red]The detection rules did not load:[/] {Markup.Escape(exception.Message)}");
             return ExitCodes.Failure;
         }
-        var engine = new DetectionEngine(pack, BuiltinTools.ShellToolMapping, options.Detections.Enforce);
 
-        List<string> sessions;
-        var findings = ImmutableArray.CreateBuilder<DetectionFinding>();
-        var errors = ImmutableArray.CreateBuilder<DetectionError>();
-        var recorded = new HashSet<(string Session, string Rule)>();
+        LogScanResult scan;
         try
         {
             var log = new SqliteEventLog(path);
-            sessions = [.. log.ListSessions(cancellationToken)];
-            if (session is not null)
+            if (session is not null && !log.ListSessions(cancellationToken).Contains(session, StringComparer.Ordinal))
             {
-                if (!sessions.Contains(session, StringComparer.Ordinal))
-                {
-                    console.MarkupLine($"[red]No session '{Markup.Escape(session)}' in {Markup.Escape(path)}.[/]");
-                    return ExitCodes.Failure;
-                }
-                sessions = [session];
+                console.MarkupLine($"[red]No session '{Markup.Escape(session)}' in {Markup.Escape(path)}.[/]");
+                return ExitCodes.Failure;
             }
-            foreach (var id in sessions)
-            {
-                var events = Read(log, id, cancellationToken);
-                foreach (var matched in events.Select(stored => stored.Payload).OfType<DetectionMatched>())
-                    recorded.Add((id, matched.RuleId));
-                var scan = engine.Scan(events);
-                findings.AddRange(scan.Findings);
-                errors.AddRange(scan.Errors);
-            }
+            scan = LogScan.Run(log, engine, session is null ? null : [session], cancellationToken);
         }
         catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException
                                               or Microsoft.Data.Sqlite.SqliteException)
@@ -94,35 +73,17 @@ internal static class ScanCommand
         }
 
         if (json)
-            WriteJson(console, pack, sessions.Count, findings, errors, recorded);
+            WriteJson(console, scan);
         else
-            WriteText(console, pack, sessions.Count, findings, errors, recorded);
-
-        if (errors.Count > 0)
-            return ExitCodes.Failure;
-        return failOn is not null && findings.Any(finding => RuleSeverity.Rank(finding.Rule.Severity) >= RuleSeverity.Rank(failOn))
-            ? ExitCodes.Findings
-            : ExitCodes.Success;
+            WriteText(console, scan);
+        return scan.ExitCode(failOn);
     }
 
-    private static List<StoredEvent> Read(SqliteEventLog log, string session, CancellationToken cancellationToken)
+    private static void WriteText(IAnsiConsole console, LogScanResult scan)
     {
-        var head = log.GetHead(session, cancellationToken);
-        var events = new List<StoredEvent>();
-        for (long after = 0; after < head;)
-        {
-            var page = log.Read(session, after, head, PageSize, cancellationToken);
-            if (page.Count == 0)
-                break;
-            events.AddRange(page);
-            after = page[^1].Sequence;
-        }
-        return events;
-    }
-
-    private static void WriteText(IAnsiConsole console, RulePack pack, int sessions, IReadOnlyList<DetectionFinding> findings,
-        IReadOnlyList<DetectionError> errors, HashSet<(string, string)> recorded)
-    {
+        var (pack, sessions) = (scan.Pack, scan.Sessions.Length);
+        IReadOnlyList<DetectionFinding> findings = scan.Findings;
+        IReadOnlyList<DetectionError> errors = scan.Errors;
         console.MarkupLine($"[bold]corvid scan[/] · {pack.Rules.Length} rules · {sessions} session{(sessions == 1 ? "" : "s")} · " +
             $"{findings.Count} finding{(findings.Count == 1 ? "" : "s")}");
         foreach (var group in findings.GroupBy(finding => finding.SessionId, StringComparer.Ordinal))
@@ -133,7 +94,7 @@ internal static class ScanCommand
                 var rule = finding.Rule;
                 console.MarkupLine($"  [{Colour(rule.Severity)}]{rule.Severity,-8}[/] {Markup.Escape(rule.Id)} v{rule.Version} ({finding.Posture}): {Markup.Escape(rule.Title)}");
                 var events = finding.Sequences.IsEmpty ? "" : $" · events {string.Join(", ", finding.Sequences)}";
-                var inline = recorded.Contains((finding.SessionId, rule.Id)) ? " · recorded inline" : "";
+                var inline = scan.RecordedInline(finding) ? " · recorded inline" : "";
                 console.MarkupLine($"           [grey]{Markup.Escape(rule.Reason)}{events}{inline}[/]");
             }
         }
@@ -151,9 +112,11 @@ internal static class ScanCommand
     };
 
     // One JSON document, written to the terminal's raw writer so nothing wraps it.
-    private static void WriteJson(IAnsiConsole console, RulePack pack, int sessions, IReadOnlyList<DetectionFinding> findings,
-        IReadOnlyList<DetectionError> errors, HashSet<(string, string)> recorded)
+    private static void WriteJson(IAnsiConsole console, LogScanResult scan)
     {
+        var (pack, sessions) = (scan.Pack, scan.Sessions.Length);
+        IReadOnlyList<DetectionFinding> findings = scan.Findings;
+        IReadOnlyList<DetectionError> errors = scan.Errors;
         using var buffer = new MemoryStream();
         using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true }))
         {
@@ -177,7 +140,7 @@ internal static class ScanCommand
                 foreach (var sequence in finding.Sequences)
                     writer.WriteNumberValue(sequence);
                 writer.WriteEndArray();
-                writer.WriteBoolean("recorded_inline", recorded.Contains((finding.SessionId, rule.Id)));
+                writer.WriteBoolean("recorded_inline", scan.RecordedInline(finding));
                 writer.WriteEndObject();
             }
             writer.WriteEndArray();
