@@ -107,12 +107,15 @@ public sealed class ReviewViewModel : AreaViewModel
 
     public ObservableCollection<ReviewFileView> Files { get; } = [];
 
-    /// <summary>"3 changed · +31 −9": the readable files and their totals; files Corvid may not read are listed but not counted.</summary>
+    /// <summary>
+    /// "3 changed · +31 −9": the readable files and their totals; files Corvid may not read, and files put back to their
+    /// checkpoint, are listed but not counted.
+    /// </summary>
     public string FilesSummary
     {
         get
         {
-            var counted = Files.Where(file => file.IsReadable).ToList();
+            var counted = Files.Where(file => file.ShowCounts).ToList();
             return counted.Count == 0
                 ? "nothing changed"
                 : string.Create(CultureInfo.InvariantCulture,
@@ -143,7 +146,8 @@ public sealed class ReviewViewModel : AreaViewModel
 
     public bool HasSelection => _selected is not null;
 
-    public string DiffPath => _selected?.Path ?? "";
+    /// <summary>The selected file's path with any hidden character shown (it is the file the actions below act on).</summary>
+    public string DiffPath => SafeText.Reveal(_selected?.Path);
 
     /// <summary>"reversible · c-44" when a checkpoint covers the file; empty otherwise.</summary>
     public string ReversibleText => _selected?.File is { CheckpointId: { } checkpoint, Readable: true }
@@ -161,8 +165,9 @@ public sealed class ReviewViewModel : AreaViewModel
     public string NoDiffText => _selected?.File switch
     {
         null => "",
-        { Readable: false } file => $"Corvid may not read {file.Path}, so its change is listed by name only.",
-        { Note: { } note } file => $"{file.Path}: {note}. Only its name and counts show.",
+        { Readable: false } file => $"Corvid may not read {SafeText.Reveal(file.Path)}, so its change is listed by name only.",
+        { Reverted: true } file => $"{SafeText.Reveal(file.Path)} is back at {file.CheckpointId}: nothing of this range is left in it to show.",
+        { Note: { } note } file => $"{SafeText.Reveal(file.Path)}: {note}. Only its name and counts show.",
         _ => "This file has no changes to show.",
     };
 
@@ -318,8 +323,25 @@ public sealed class ReviewViewModel : AreaViewModel
             SetBadge(changes);
     }
 
-    /// <summary>The rail's Review badge: the open session's readable files changed since its last review point.</summary>
-    private void SetBadge(ReviewChanges changes) => _shell.SetBadge(Area.Review, changes.Files.Count(file => file.Readable));
+    /// <summary>The rail's Review badge: the open session's readable files changed since its last review point, less those put back.</summary>
+    private void SetBadge(ReviewChanges changes) => _shell.SetBadge(Area.Review, changes.Files.Count(file => file.Readable && !file.Reverted));
+
+    /// <summary>The badge again, whatever scope the list shows: it always counts "since last review".</summary>
+    private async Task RefreshBadgeAsync(string sessionId)
+    {
+        if (Scope == ReviewScope.SinceLastReview || sessionId != _shell.CurrentSession?.Id)
+            return;
+        try
+        {
+            var changes = await _service.GetChangesAsync(sessionId, ReviewScope.SinceLastReview).ConfigureAwait(true);
+            if (sessionId == _shell.CurrentSession?.Id)
+                SetBadge(changes);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or KeyNotFoundException)
+        {
+            // The list's own refresh says what went wrong.
+        }
+    }
 
     private void Select(ReviewFileView? file, bool force = false)
     {
@@ -338,8 +360,8 @@ public sealed class ReviewViewModel : AreaViewModel
         if (_editor is not null && _editor.Path != file?.Path)
             Editor = null;
         _diff = file?.File.Diff();
-        _sideRows = TrimFolds(_diff?.SideBySide() ?? [], row => row.IsSkip);
-        _unifiedRows = TrimFolds(_diff?.Unified() ?? [], row => row.Kind == DiffRowKind.Skip);
+        _sideRows = DiffFolds.Trim(_diff?.SideBySide() ?? [], row => row.IsSkip);
+        _unifiedRows = DiffFolds.Trim(_diff?.Unified() ?? [], row => row.Kind == DiffRowKind.Skip);
         OnPropertyChanged(nameof(SelectedFile));
         OnPropertyChanged(nameof(HasSelection));
         OnPropertyChanged(nameof(DiffPath));
@@ -417,8 +439,7 @@ public sealed class ReviewViewModel : AreaViewModel
                 $"Sent {Plural(comments.Count, "comment")} to the session as one message at {Local(point.At):HH:mm}. The review point is now turn {point.Turn}."), Tone.Green);
             await RefreshAsync().ConfigureAwait(true);
             // The badge counts what is new since the review point the comments just set, whatever scope the list shows.
-            if (Scope != ReviewScope.SinceLastReview && sessionId == _shell.CurrentSession?.Id)
-                SetBadge(await _service.GetChangesAsync(sessionId, ReviewScope.SinceLastReview).ConfigureAwait(true));
+            await RefreshBadgeAsync(sessionId).ConfigureAwait(true);
         }
         catch (InvalidOperationException exception)
         {
@@ -442,15 +463,16 @@ public sealed class ReviewViewModel : AreaViewModel
             return;
         var line = FileComments.FirstOrDefault()?.Line ?? FirstChangedLine();
         var ran = await _service.OpenInEditorAsync(_selected.Path, line).ConfigureAwait(true);
-        Say($"Opened in the editor: {ran}", Tone.Grey);
+        Say($"Opened in the editor: {SafeText.Reveal(ran)}", Tone.Grey);
     }
 
     private async Task RevertFileAsync()
     {
-        if (_selected is null || _sessionId is not { } sessionId)
+        if (_selected?.File is not { CheckpointId: { } checkpoint } file || _sessionId is not { } sessionId)
             return;
-        var result = await _service.RevertFileAsync(sessionId, _selected.Path).ConfigureAwait(true);
-        var name = System.IO.Path.GetFileName(result.Path);
+        var result = await _service.RevertFileAsync(sessionId, file.Path, checkpoint).ConfigureAwait(true);
+        // The name the person acted on, with any hidden character in it shown.
+        var name = SafeText.Reveal(System.IO.Path.GetFileName(result.Path));
         if (result.Refused)
             Say($"{name} was not put back: {result.Reason}. Nothing was overwritten.", Tone.Red);
         else
@@ -458,6 +480,7 @@ public sealed class ReviewViewModel : AreaViewModel
                 ? $"{name} is back at {result.CheckpointId}, merged three ways with your own edit."
                 : $"{name} is back at {result.CheckpointId}.", Tone.Green);
         await RefreshAsync().ConfigureAwait(true);
+        await RefreshBadgeAsync(sessionId).ConfigureAwait(true);
     }
 
     private int FirstChangedLine()
@@ -506,26 +529,14 @@ public sealed class ReviewViewModel : AreaViewModel
 
     private void OnChangesChanged(object? sender, string sessionId)
     {
-        if (sessionId == _sessionId)
-            Refresh();
+        if (sessionId != _sessionId)
+            return;
+        Refresh();
+        // The list may show another scope; the rail's badge still follows "since last review".
+        _ = RefreshBadgeAsync(sessionId);
     }
 
     private DateTimeOffset Local(DateTimeOffset at) => TimeZoneInfo.ConvertTime(at, _time.LocalTimeZone);
-
-    /// <summary>
-    /// Review.png starts at the first hunk and ends at the last: the folds before the first and after the last are left
-    /// out (the line numbers say where the hunk is); folds between hunks stay.
-    /// </summary>
-    private static IReadOnlyList<T> TrimFolds<T>(IReadOnlyList<T> rows, Func<T, bool> isFold)
-    {
-        var start = 0;
-        var end = rows.Count;
-        while (start < end && isFold(rows[start]))
-            start++;
-        while (end > start && isFold(rows[end - 1]))
-            end--;
-        return start == 0 && end == rows.Count ? rows : rows.Skip(start).Take(end - start).ToList();
-    }
 
     private static string Plural(int count, string noun) =>
         string.Create(CultureInfo.InvariantCulture, $"{count} {noun}{(count == 1 ? "" : "s")}");

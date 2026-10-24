@@ -3,9 +3,9 @@ using Corvid.App.Core.Sessions;
 namespace Corvid.App.Core.Review;
 
 /// <summary>
-/// The texts of the files the demo's main session changed, before and after, with the call and checkpoint that cover each:
-/// what Review draws its diffs from and what Rewind previews a restore with. The sandbox files are the Sessions demo's own
-/// (<see cref="DemoFiles"/>); ci.yml's three added lines are this area's.
+/// The texts of the files the demo's main session changed, before and after: what Review draws its diffs from and what
+/// Rewind previews a restore with. The sandbox files are the Sessions demo's own (<see cref="DemoFiles"/>); ci.yml's
+/// three added lines are this area's.
 /// </summary>
 internal static class DemoChangedFiles
 {
@@ -98,13 +98,15 @@ internal static class DemoChangedFiles
 
         """;
 
-    /// <summary>What the demo knows of each path: its texts and the call and checkpoint that cover it.</summary>
-    public static readonly Dictionary<string, (string? Old, string New, string Tool, int Turn, string Checkpoint)> Known = new(StringComparer.Ordinal)
+    /// <summary>
+    /// What the demo knows of each path: its texts before and after. The checkpoint, call and turn that cover a file come
+    /// from the session's write ledger, not from here.
+    /// </summary>
+    public static readonly Dictionary<string, (string? Old, string New)> Known = new(StringComparer.Ordinal)
     {
-        [DemoFiles.BubblewrapPath] = (BubblewrapBefore, BubblewrapAfter, "patch_file", 11, "c-41"),
-        [DemoFiles.SeccompTestsPath] = (DemoFiles.SeccompTestsBefore, DemoFiles.SeccompTestsAfter, "patch_file", 12, "c-44"),
-        [CiPath] = (CiBefore, CiAfter, "write_file", 10, "c-41"),
-        [DemoFiles.ReleaseNotesPath] = (null, DemoFiles.ReleaseNotes, "write_file", 1, "c-12"),
+        [DemoFiles.BubblewrapPath] = (BubblewrapBefore, BubblewrapAfter),
+        [DemoFiles.SeccompTestsPath] = (DemoFiles.SeccompTestsBefore, DemoFiles.SeccompTestsAfter),
+        [CiPath] = (CiBefore, CiAfter),
+        [DemoFiles.ReleaseNotesPath] = (null, DemoFiles.ReleaseNotes),
     };
-
 }

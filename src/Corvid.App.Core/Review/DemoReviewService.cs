@@ -5,10 +5,12 @@ namespace Corvid.App.Core.Review;
 
 /// <summary>
 /// Review over the demo sessions: the changed files are the session's own (<see cref="SessionView.TurnChanges"/> and
-/// <see cref="SessionView.SessionChanges"/>), their texts come from the demo's files, and comments go to the session
-/// through <see cref="ISessionService.SendAsync"/>, where they start a turn or wait in the queue. The review point of
-/// Review.png (turn 11, two comments sent at 14:02) is seeded for <c>cli-9f2e</c>; points live here, as G-7 keeps them in
-/// <c>ui.db</c> beside the log rather than in it.
+/// <see cref="SessionView.SessionChanges"/>), their texts come from the demo's files, the checkpoint, call and turn of each
+/// from the session's write ledger, and comments go to the session through <see cref="ISessionService.SendAsync"/>, where
+/// they start a turn or wait in the queue. Putting a file back goes on the session's stream as a restore does (a restore
+/// checkpoint and a files-only <see cref="SessionRewound"/>), so Rewind lists it and the change lists drop it. The review
+/// point of Review.png (turn 11, two comments sent at 14:02) is seeded for <c>cli-9f2e</c>; points live here, as G-7 keeps
+/// them in <c>ui.db</c> beside the log rather than in it.
 /// </summary>
 public sealed class DemoReviewService : IReviewService
 {
@@ -19,17 +21,25 @@ public sealed class DemoReviewService : IReviewService
     public const string EditedByYouPath = DemoFiles.SeccompTestsPath;
 
     private readonly SessionHub _sessions;
+    private readonly DemoSessionService _demo;
     private readonly TimeProvider _time;
     private readonly Dictionary<string, ReviewPoint> _points = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _sentFrom = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, HashSet<string>> _reverted = new(StringComparer.Ordinal);
+    /// <summary>
+    /// Where a send put the review point: the ledger's finished calls at that moment, by their after checkpoints. "Since
+    /// last review" is every finished call not among them, so a call that was running at the send counts once it ends.
+    /// </summary>
+    private readonly Dictionary<string, HashSet<string>> _reviewed = new(StringComparer.Ordinal);
+    /// <summary>Files put back from here: the checkpoint and the turn of the call it went back from, by session and path.</summary>
+    private readonly Dictionary<string, Dictionary<string, (string Checkpoint, int Turn)>> _reverted = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (ImmutableArray<FileChange> Turn, ImmutableArray<FileChange> Session, ImmutableList<LedgerRow> Ledger)> _watched = new(StringComparer.Ordinal);
 
-    public DemoReviewService(SessionHub sessions, TimeProvider time)
+    public DemoReviewService(SessionHub sessions, DemoSessionService demo, TimeProvider time)
     {
         ArgumentNullException.ThrowIfNull(sessions);
+        ArgumentNullException.ThrowIfNull(demo);
         ArgumentNullException.ThrowIfNull(time);
         _sessions = sessions;
+        _demo = demo;
         _time = time;
         var today = time.GetLocalNow();
         _points[MainSessionId] = new ReviewPoint(11, 2, new DateTimeOffset(today.Year, today.Month, today.Day, 14, 2, 0, today.Offset));
@@ -44,22 +54,40 @@ public sealed class DemoReviewService : IReviewService
         Watch(session);
         var state = session.State;
         _points.TryGetValue(sessionId, out var point);
+        _reviewed.TryGetValue(sessionId, out var reviewed);
+        // The ledger's calls the scope covers: what a file's checkpoint, call and turn are taken from.
+        Func<LedgerRow, bool> inScope = scope switch
+        {
+            ReviewScope.ThisTurn => row => row.Turn == state.Turn,
+            ReviewScope.SinceLastReview when reviewed is not null => row => !reviewed.Contains(row.AfterId ?? ""),
+            _ => _ => true,
+        };
         var changes = scope switch
         {
             ReviewScope.ThisTurn => state.TurnChanges,
             ReviewScope.ThisSession => state.SessionChanges,
             // Until comments are sent from here, the seeded point stands for the session's list (Review.png); after a
-            // send, only turns after the point count.
-            _ when !_sentFrom.Contains(sessionId) => state.SessionChanges,
-            // After a send: what the ledger's calls changed in the turns after the point.
-            _ => Since(state, point?.Turn ?? 0),
+            // send, what the ledger's calls changed after it.
+            _ when reviewed is null => state.SessionChanges,
+            _ => Since(state, inScope),
         };
-        _reverted.TryGetValue(sessionId, out var reverted);
-        var files = changes.IsDefault ? [] : changes.Select(change => File(change, reverted)).ToImmutableArray();
-        var checkpoints = files.Select(file => file.CheckpointId).OfType<string>().OrderBy(Number).ToList();
+        var rows = state.Ledger.Where(row => row.Kind == CheckpointKind.After && inScope(row)).ToList();
+        var files = (changes.IsDefault ? [] : changes).Select(change => File(change, rows)).ToList();
+        // A file put back from here that no longer counts as changed stays listed, as reverted, until it changes again.
+        if (_reverted.TryGetValue(sessionId, out var reverted))
+        {
+            foreach (var (path, (checkpoint, turn)) in reverted)
+            {
+                if (files.Exists(file => file.Path == path) || scope == ReviewScope.ThisTurn && turn != state.Turn)
+                    continue;
+                files.Add(new ReviewFile(path, 0, 0) { Reverted = true, CheckpointId = checkpoint });
+            }
+        }
+
+        var checkpoints = files.Where(file => !file.Reverted).Select(file => file.CheckpointId).OfType<string>().OrderBy(Number).ToList();
         return Task.FromResult(new ReviewChanges(sessionId, scope)
         {
-            Files = files,
+            Files = [.. files],
             Turn = state.Turn,
             ReviewPoint = point,
             FirstCheckpoint = checkpoints.FirstOrDefault(),
@@ -73,26 +101,42 @@ public sealed class DemoReviewService : IReviewService
         ArgumentNullException.ThrowIfNull(comments);
         if (comments.Count == 0)
             throw new ArgumentException("There are no comments to send.", nameof(comments));
-        var turn = _sessions.Get(sessionId).State.Turn;
+        var state = _sessions.Get(sessionId).State;
+        var reviewed = state.Ledger.Where(row => row.Kind == CheckpointKind.After).Select(row => row.AfterId ?? "").ToHashSet(StringComparer.Ordinal);
         await _sessions.Service.SendAsync(sessionId, ReviewMessage.Compose(comments), cancellationToken).ConfigureAwait(true);
-        var point = new ReviewPoint(turn, comments.Count, _time.GetLocalNow());
+        var point = new ReviewPoint(state.Turn, comments.Count, _time.GetLocalNow());
         _points[sessionId] = point;
-        _sentFrom.Add(sessionId);
+        _reviewed[sessionId] = reviewed;
         return point;
     }
 
-    public Task<FileRevertResult> RevertFileAsync(string sessionId, string path, CancellationToken cancellationToken = default)
+    public Task<FileRevertResult> RevertFileAsync(string sessionId, string path, string checkpointId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        if (!DemoChangedFiles.Known.TryGetValue(path, out var known))
-            return Task.FromResult(new FileRevertResult(path, "", false, true, "no checkpoint covers this file"));
-        if (!_reverted.TryGetValue(sessionId, out var reverted))
-            _reverted[sessionId] = reverted = new HashSet<string>(StringComparer.Ordinal);
-        reverted.Add(path);
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpointId);
+        var state = _sessions.Get(sessionId).State;
+        var call = state.Ledger.FirstOrDefault(row => row.Kind == CheckpointKind.After && row.BeforeId == checkpointId);
+        if (call is null || !state.Ledger.Any(row => row.Kind == CheckpointKind.After && row.Turn >= call.Turn && row.LiveChanges.Any(change => change.Path == path)))
+            return Task.FromResult(new FileRevertResult(path, checkpointId, false, true, $"no call since {checkpointId} changed it"));
+
         // The person edited SeccompTests.cs after the checkpoint: the restore merges three ways and keeps that edit.
         var merged = string.Equals(path, EditedByYouPath, StringComparison.Ordinal);
-        return Task.FromResult(new FileRevertResult(path, known.Checkpoint, merged, false));
+        // Known before the stream moves, so the lists Review reloads as it hears the restore already show it reverted.
+        if (!_reverted.TryGetValue(sessionId, out var reverted))
+            _reverted[sessionId] = reverted = new Dictionary<string, (string, int)>(StringComparer.Ordinal);
+        reverted[path] = (checkpointId, call.Turn);
+        var restorePoint = _demo.NextRestorePoint(sessionId);
+        _demo.Rewind(sessionId,
+            new CheckpointRecorded(restorePoint, CheckpointKind.Restore) { Target = $"revert {System.IO.Path.GetFileName(path)} to {checkpointId}", Turn = state.Turn },
+            new SessionRewound(call.Turn, RewindScope.FilesOnly, "revert")
+            {
+                Restored = merged ? [] : [path],
+                Merged = merged ? [path] : [],
+                CheckpointId = restorePoint,
+            },
+            stopRunningTurn: false);
+        return Task.FromResult(new FileRevertResult(path, checkpointId, merged, false));
     }
 
     public Task<string> OpenInEditorAsync(string path, int line, CancellationToken cancellationToken = default)
@@ -118,13 +162,13 @@ public sealed class DemoReviewService : IReviewService
         };
     }
 
-    /// <summary>The files the ledger's calls changed after a turn, each with its counts summed, in the order first changed.</summary>
-    private static ImmutableArray<FileChange> Since(SessionView state, int turn)
+    /// <summary>What the ledger's finished calls in range still have in the files, each path's counts summed, in the order first changed.</summary>
+    private static ImmutableArray<FileChange> Since(SessionView state, Func<LedgerRow, bool> inScope)
     {
         var files = new List<FileChange>();
-        foreach (var row in state.Ledger.Where(row => row.Kind == CheckpointKind.After && row.Turn > turn))
+        foreach (var row in state.Ledger.Where(row => row.Kind == CheckpointKind.After && inScope(row)))
         {
-            foreach (var change in row.Changes)
+            foreach (var change in row.LiveChanges)
             {
                 var index = files.FindIndex(file => file.Path == change.Path);
                 if (index < 0)
@@ -137,26 +181,26 @@ public sealed class DemoReviewService : IReviewService
         return [.. files];
     }
 
-    private static ReviewFile File(FileChange change, HashSet<string>? reverted)
+    /// <summary>
+    /// A changed file with its texts, and from the ledger's calls in scope that still have a change of it in the files: the
+    /// checkpoint before the first (what the whole file goes back to) and the tool and turn of the last (what changed it
+    /// last). None of them when no recorded call covers it, and then it is not reversible from here.
+    /// </summary>
+    private static ReviewFile File(FileChange change, List<LedgerRow> rows)
     {
         var file = new ReviewFile(change.Path, change.Added, change.Removed)
         {
             Readable = change.Readable,
             Note = change.Readable ? null : "not readable by Corvid",
-            Reverted = reverted?.Contains(change.Path) == true,
         };
         if (!change.Readable)
             return file;
+        var covering = rows.Where(row => row.LiveChanges.Any(live => live.Path == change.Path)).ToList();
+        if (covering.Count > 0)
+            file = file with { CheckpointId = covering[0].BeforeId, Tool = covering[^1].Tool, Turn = covering[^1].Turn };
         if (!DemoChangedFiles.Known.TryGetValue(change.Path, out var known))
             return file with { Note = "no text in the demo" };
-        return file with
-        {
-            OldText = known.Old,
-            NewText = known.New,
-            Tool = known.Tool,
-            Turn = known.Turn,
-            CheckpointId = known.Checkpoint,
-        };
+        return file with { OldText = known.Old, NewText = known.New };
     }
 
     private static int Number(string checkpointId) =>

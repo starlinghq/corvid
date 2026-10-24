@@ -19,8 +19,12 @@ public interface IReviewService
     /// </summary>
     Task<ReviewPoint> SendCommentsAsync(string sessionId, IReadOnlyList<ReviewComment> comments, CancellationToken cancellationToken = default);
 
-    /// <summary>Puts one file back to its checkpoint, merging three ways with the person's own edits (G-3).</summary>
-    Task<FileRevertResult> RevertFileAsync(string sessionId, string path, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Puts one file back to the checkpoint Review lists for it (<see cref="ReviewFile.CheckpointId"/>), merging three
+    /// ways with the person's own edits (G-3). It goes on the session's stream as a restore does, so Rewind lists it and
+    /// the session's change lists drop what went back.
+    /// </summary>
+    Task<FileRevertResult> RevertFileAsync(string sessionId, string path, string checkpointId, CancellationToken cancellationToken = default);
 
     /// <summary>Opens the file at a line in the person's editor (<c>$EDITOR</c>, <c>xdg-open</c> or <c>code --goto</c>); returns what ran.</summary>
     Task<string> OpenInEditorAsync(string path, int line, CancellationToken cancellationToken = default);

@@ -101,6 +101,68 @@ public sealed class RewindTests
     }
 
     [Fact]
+    public async Task ASecondRestorePutsBackOnlyWhatTheFirstLeft()
+    {
+        var composition = Compose("--page", "rewind");
+        var rewind = composition.Rewind;
+        var session = composition.SessionHub.Get(DemoSessionService.MainSessionId);
+        await rewind.RestoreCommand.ExecuteAsync();
+        Assert.Equal(9, session.State.Turn);
+
+        // c-40's call was put back by the first restore and its turn has left: nothing of it is left to go back from.
+        rewind.Entries.Single(entry => entry.CheckpointId == "c-40").Select.Execute(null);
+        Assert.False(rewind.HasPlanFiles);
+        Assert.Equal(("no turns", "No turns leave the transcript."), (rewind.ConversationRange, rewind.ConversationText));
+
+        // Before c-36 (turn 9's README.md patch): that file alone, and turn 9 alone leaves.
+        rewind.Entries.Single(entry => entry.CheckpointId == "c-36").Select.Execute(null);
+        Assert.Equal(["README.md"], rewind.PlanFiles.Select(file => file.Path));
+        Assert.Equal(("turn 9", "One turn leaves the transcript. It stays in the log and in Audit, and the fork tree keeps a branch for it."),
+            (rewind.ConversationRange, rewind.ConversationText));
+
+        await rewind.RestoreCommand.ExecuteAsync();
+
+        var marker = Assert.IsType<RewindEntry>(session.State.Transcript[^1]).Rewind;
+        Assert.Equal((9, "c-50"), (marker.Turn, marker.CheckpointId));
+        Assert.Equal(["README.md"], marker.Restored);
+        Assert.Empty(marker.Merged);
+        Assert.Equal(8, session.State.Turn);
+        Assert.Equal(10, rewind.Entries.Count);
+        Assert.Equal(("rollback to before c-36 · c-50", "1 put back"), (rewind.Entries[0].Detail, rewind.Entries[0].Paths));
+        // The first restore's row still has its own result.
+        Assert.Equal(("rollback to before c-38 · c-49", "2 put back, 1 merged"), (rewind.Entries[1].Detail, rewind.Entries[1].Paths));
+        Assert.Equal("restored 1 · merged 0 · refused 0 · restore checkpoint c-50", rewind.LastRestoreSummary);
+    }
+
+    [Fact]
+    public async Task GoingBackToBeforeARestorePointPutsBackItsOwnPaths()
+    {
+        var composition = Compose("--page", "rewind");
+        var rewind = composition.Rewind;
+        await rewind.RestoreCommand.ExecuteAsync();
+
+        rewind.Entries[0].Select.Execute(null);
+
+        Assert.Equal("Go back to before c-49 · turn 12, 14:05", rewind.PlanTitle);
+        Assert.Equal([".github/workflows/ci.yml", DemoFiles.BubblewrapPath, DemoFiles.SeccompTestsPath], rewind.PlanFiles.Select(file => file.Path));
+        Assert.Equal(["to c-49", "to c-49", "to c-49 ·"], rewind.PlanFiles.Select(file => file.Prefix));
+        Assert.Equal("merge", rewind.PlanFiles[2].Word);
+    }
+
+    [Fact]
+    public void ARestoreShowsTheHiddenCharactersOfThePathsItActsOn()
+    {
+        const string Path = "src/evil‮cs.txt";
+        var restore = new LedgerEntryView(new LedgerEntry("c-50", LedgerEntryKind.Restore, DateTimeOffset.UnixEpoch, 3) { Target = $"revert {Path} to c-1" },
+            TimeZoneInfo.Utc, new RelayCommand(() => { }));
+        Assert.Equal("revert src/evil⟨U+202E⟩cs.txt to c-1 · c-50", restore.Detail);
+
+        var putBack = new PutBackFileView(new PutBackFile(Path, PutBackKind.Restore, 2, 1), "c-1");
+        Assert.Equal("src/evil⟨U+202E⟩cs.txt, back to c-1, 2 lines removed, 1 restored", putBack.AutomationName);
+        Assert.Equal("src/evil⟨U+202E⟩cs.txt, restored", new OutcomeFileView(Path, "restored", false).AutomationName);
+    }
+
+    [Fact]
     public async Task AConflictRefusesTheRestoreAndChangesNothing()
     {
         var composition = Compose("--page", "rewind");

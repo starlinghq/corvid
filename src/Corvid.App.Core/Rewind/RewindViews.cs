@@ -43,7 +43,8 @@ public sealed class LedgerEntryView : ObservableObject
         get
         {
             if (IsRestore)
-                return $"{SafeText.Clean(Entry.Target ?? "restore")} · {Entry.CheckpointId}";
+                // A restore's label can name a file (a revert from Review): shown with any hidden character in it.
+                return $"{SafeText.Reveal(Entry.Target ?? "restore")} · {Entry.CheckpointId}";
             var command = Entry.Tool == "shell" && !string.IsNullOrEmpty(Entry.Target) ? SafeText.Clean(Entry.Target) : "";
             var checkpoints = Entry.AfterId is { } after ? $"· {Entry.CheckpointId} → {after}" : "";
             return string.Join(' ', new[] { command, checkpoints }.Where(part => part.Length > 0));
@@ -116,8 +117,11 @@ public sealed class PutBackFileView(PutBackFile file, string checkpointId)
 
     public bool IsConflict => File.Kind == PutBackKind.Conflict;
 
-    /// <summary>"to c-38 ·" before the counts or the word; a trailing space would be trimmed, so the row spaces them.</summary>
-    public string Prefix => IsConflict ? "" : $"to {checkpointId} ·";
+    /// <summary>
+    /// "to c-38 ·" before the counts or the word; a trailing space would be trimmed, so the row spaces them. Just "to c-49"
+    /// when nothing follows (a path a restore put back, whose counts its result does not carry).
+    /// </summary>
+    public string Prefix => IsConflict ? "" : ShowCounts && RemoveText.Length == 0 && AddText.Length == 0 ? $"to {checkpointId}" : $"to {checkpointId} ·";
 
     /// <summary>The lines going back undo the call's: its added lines are removed ("−19") and its removed ones return ("+5").</summary>
     public bool ShowCounts => File.Kind == PutBackKind.Restore;
@@ -138,9 +142,9 @@ public sealed class PutBackFileView(PutBackFile file, string checkpointId)
 
     public string AutomationName => File.Kind switch
     {
-        PutBackKind.Merge => $"{File.Path}, back to {checkpointId}, merged with your edit",
-        PutBackKind.Conflict => $"{File.Path}, conflict: {File.Reason}",
-        _ => $"{File.Path}, back to {checkpointId}, {File.Added} lines removed, {File.Removed} restored",
+        PutBackKind.Merge => $"{SafeText.Reveal(File.Path)}, back to {checkpointId}, merged with your edit",
+        PutBackKind.Conflict => $"{SafeText.Reveal(File.Path)}, conflict: {SafeText.Reveal(File.Reason)}",
+        _ => $"{SafeText.Reveal(File.Path)}, back to {checkpointId}, {File.Added} lines removed, {File.Removed} restored",
     };
 }
 
@@ -210,19 +214,20 @@ public sealed class OutcomeFileView(string path, string what, bool refused)
 
     public bool IsRefused { get; } = refused;
 
-    public string AutomationName => $"{Path}, {What}";
+    public string AutomationName => $"{SafeText.Reveal(Path)}, {SafeText.Reveal(What)}";
 }
 
 /// <summary>A file in the restore's preview: its path, what the restore does to it, and the diff from now to restored.</summary>
 public sealed class PreviewFileView
 {
+    private IReadOnlyList<SideBySideRow>? _rows;
+
     internal PreviewFileView(RestorePreviewFile file)
     {
         File = file;
         Diff = file.CurrentText is not null && file.RestoredText is not null
             ? FileDiff.Compute(file.Path, file.CurrentText, file.RestoredText)
             : null;
-        Rows = Diff?.SideBySide() ?? [];
     }
 
     public RestorePreviewFile File { get; }
@@ -242,5 +247,6 @@ public sealed class PreviewFileView
 
     public string Note => File.Note is { } note ? $"No diff to show: {note}." : "";
 
-    public IReadOnlyList<SideBySideRow> Rows { get; }
+    /// <summary>The side-by-side rows from the first hunk to the last, as Review draws them; made when first drawn.</summary>
+    public IReadOnlyList<SideBySideRow> Rows => _rows ??= Review.DiffFolds.Trim(Diff?.SideBySide() ?? [], row => row.IsSkip);
 }
