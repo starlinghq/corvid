@@ -113,8 +113,9 @@ public sealed class McpHeldViewModel : ObservableObject
     internal McpHeldViewModel(McpHeldTool held, DateTimeOffset now, TimeZoneInfo zone, ICommand accept, ICommand allow, ICommand keep)
     {
         Held = held;
-        Tool = SafeText.Clean(held.Tool);
-        Server = SafeText.Clean(held.Server);
+        // The tool and its server are what accept pins in one click, so their names show every hidden character.
+        Tool = SafeText.Reveal(held.Tool);
+        Server = SafeText.Reveal(held.Server);
         var heldAt = Jobs.JobsText.When(held.HeldAt, now, zone);
         var pinned = held.PinnedAt is { } at ? at.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : "";
         Title = held.Reason switch
@@ -134,9 +135,9 @@ public sealed class McpHeldViewModel : ObservableObject
             McpHoldReason.New => "New since the server's tools were pinned. Accept pins the definition below.",
             _ => $"Its definition differs from the pin of {pinned}. Accept pins the new one below; until then the tool is not offered.",
         });
-        HasHidden = SafeText.HasHidden(held.Definition.All);
+        HasHidden = McpText.HasHidden(held);
         HiddenWarning = HasHidden
-            ? "This definition holds hidden characters, shown as ⟨U+…⟩ below. It cannot be pinned: what the model would read is not what you see."
+            ? "Its name, server or definition holds hidden characters, shown as ⟨U+…⟩. It cannot be pinned: what the model would read is not what you see."
             : "";
         var diff = FileDiff.Compute(held.Tool, held.Pinned is { } before ? Document(before) : null, Document(held.Definition));
         Rows = diff.SideBySide(Context);
@@ -234,30 +235,64 @@ public sealed class McpHeldViewModel : ObservableObject
             text.Append("  ").Append(line.TrimEnd('\r')).Append('\n');
     }
 
+    /// <summary>
+    /// Wraps at word boundaries, ending a line at each sentence. A run of spaces other than the single space a line break
+    /// takes is kept as it is, so a change of whitespace alone still shows as a changed line.
+    /// </summary>
     private static IEnumerable<string> Wrap(string text, int width)
     {
         var line = new StringBuilder();
-        foreach (var word in text.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        var gap = "";
+        // A line just ended: the break stands for one space of the gap before the next word.
+        var broke = false;
+        foreach (var token in Tokens(text))
         {
-            if (line.Length > 0 && line.Length + 1 + word.Length > width)
+            if (token[0] == ' ')
             {
-                yield return line.ToString();
-                line.Clear();
+                gap += token;
+                continue;
             }
 
-            if (line.Length > 0)
-                line.Append(' ');
-            line.Append(word);
-            // A sentence ends its line, so an added sentence is an added line rather than a reflowed paragraph.
-            if (word.EndsWith('.') || word.EndsWith('?') || word.EndsWith('!'))
+            if (line.Length > 0 && line.Length + gap.Length + token.Length > width)
             {
                 yield return line.ToString();
                 line.Clear();
+                broke = true;
+            }
+
+            if (broke && gap.Length > 0)
+                gap = gap[1..];
+            broke = false;
+            line.Append(gap).Append(token);
+            gap = "";
+            // A sentence ends its line, so an added sentence is an added line rather than a reflowed paragraph.
+            if (token.EndsWith('.') || token.EndsWith('?') || token.EndsWith('!'))
+            {
+                yield return line.ToString();
+                line.Clear();
+                broke = true;
             }
         }
 
+        if (broke && gap.Length > 0)
+            gap = gap[1..];
+        line.Append(gap);
         if (line.Length > 0)
             yield return line.ToString();
+    }
+
+    /// <summary>The text as runs of spaces and runs of anything else, in order.</summary>
+    private static IEnumerable<string> Tokens(string text)
+    {
+        var start = 0;
+        for (var i = 1; i <= text.Length; i++)
+        {
+            if (i == text.Length || (text[i] == ' ') != (text[i - 1] == ' '))
+            {
+                yield return text[start..i];
+                start = i;
+            }
+        }
     }
 }
 
@@ -282,6 +317,16 @@ public static class McpText
         McpServerState.Failed => Tone.Red,
         _ => Tone.Grey,
     };
+
+    /// <summary>
+    /// Whether any part of what accept or allow would take holds a hidden character: the tool's name, its server's, or its
+    /// definition. The view model and the service both refuse such a tool.
+    /// </summary>
+    public static bool HasHidden(McpHeldTool held)
+    {
+        ArgumentNullException.ThrowIfNull(held);
+        return SafeText.HasHidden(held.Server) || SafeText.HasHidden(held.Tool) || SafeText.HasHidden(held.Definition.All);
+    }
 
     public static string Reason(McpHoldReason reason) => reason switch
     {

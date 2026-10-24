@@ -10,7 +10,8 @@ namespace Corvid.App.Core.Mcp;
 /// engine would; nothing is written, nothing is started and nothing is fetched.
 /// <para>
 /// The held tool is also the Board's attention item (<see cref="DemoBoardService.McpItemId"/>): accepting it here answers
-/// that item, and accepting it from the Board's tray accepts it here, so the two never disagree.
+/// that item. The tray only leads here (its Review… lands on the card); it never pins, since a pin is accepted where its
+/// diff and hash are shown.
 /// </para>
 /// </summary>
 public sealed class DemoMcpService : IMcpService, IDisposable
@@ -22,7 +23,6 @@ public sealed class DemoMcpService : IMcpService, IDisposable
     private readonly IBoardService? _board;
     private readonly List<McpServerRecord> _servers = [];
     private readonly List<McpHeldTool> _held = [];
-    private bool _disposed;
 
     public DemoMcpService(TimeProvider time, IBoardService? board = null)
     {
@@ -30,12 +30,6 @@ public sealed class DemoMcpService : IMcpService, IDisposable
         _time = time;
         _board = board;
         Seed();
-        if (_board is not null)
-        {
-            _board.AttentionChanged += OnBoardChanged;
-            // The Board may have answered before this area was opened.
-            FollowBoard();
-        }
     }
 
     public event EventHandler? Changed;
@@ -51,7 +45,7 @@ public sealed class DemoMcpService : IMcpService, IDisposable
             "~/.local/share/corvid/mcp-pins.json"));
     }
 
-    public async Task AcceptAsync(string server, string tool, string hash, CancellationToken cancellationToken)
+    public Task AcceptAsync(string server, string tool, string hash, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var held = Held(server, tool);
@@ -59,11 +53,12 @@ public sealed class DemoMcpService : IMcpService, IDisposable
             throw new InvalidOperationException($"{tool}'s definition changed since it was shown (now {held.Hash}); review it again.");
         if (held.NeedsAllow)
             throw new InvalidOperationException($"{tool} was {(held.Reason == McpHoldReason.Flagged ? "flagged" : "withheld")}: only allow offers it, as a tool that asks every time.");
-        if (SafeText.HasHidden(held.Definition.All))
-            throw new InvalidOperationException($"{tool}'s definition holds hidden characters; it cannot be pinned.");
+        if (McpText.HasHidden(held))
+            throw new InvalidOperationException($"{SafeText.Reveal(tool)}'s name, server or definition holds hidden characters; it cannot be pinned.");
         Take(held, McpToolState.Pinned);
-        if (_board is not null && server == NotesServer && tool == HeldTool)
-            await _board.ResolveAsync(DemoBoardService.McpItemId, "accept", cancellationToken).ConfigureAwait(true);
+        if (_board is DemoBoardService board && server == NotesServer && tool == HeldTool)
+            board.AnsweredInArea(DemoBoardService.McpItemId, "accept");
+        return Task.CompletedTask;
     }
 
     public Task AllowAsync(string server, string tool, string hash, CancellationToken cancellationToken)
@@ -74,8 +69,8 @@ public sealed class DemoMcpService : IMcpService, IDisposable
             throw new InvalidOperationException($"{tool}'s definition changed since it was shown (now {held.Hash}); review it again.");
         if (!held.NeedsAllow)
             throw new InvalidOperationException($"{tool} is not flagged; accept pins it.");
-        if (SafeText.HasHidden(held.Definition.All))
-            throw new InvalidOperationException($"{tool}'s definition holds hidden characters; it cannot be allowed.");
+        if (McpText.HasHidden(held))
+            throw new InvalidOperationException($"{SafeText.Reveal(tool)}'s name, server or definition holds hidden characters; it cannot be allowed.");
         Take(held, McpToolState.Allowed);
         return Task.CompletedTask;
     }
@@ -174,13 +169,9 @@ public sealed class DemoMcpService : IMcpService, IDisposable
         Changed?.Invoke(this, EventArgs.Empty);
     }
 
+    /// <summary>Nothing to let go of since the tray stopped pinning; kept so the composition disposes every area's service alike.</summary>
     public void Dispose()
     {
-        if (_disposed)
-            return;
-        _disposed = true;
-        if (_board is not null)
-            _board.AttentionChanged -= OnBoardChanged;
     }
 
     private McpHeldTool Held(string server, string tool) =>
@@ -201,17 +192,6 @@ public sealed class DemoMcpService : IMcpService, IDisposable
             return;
         var record = _servers[index];
         _servers[index] = record with { HasPins = true, Tools = [.. record.Tools.Select(candidate => candidate.Name == tool ? change(candidate) : candidate)] };
-    }
-
-    private void OnBoardChanged(object? sender, EventArgs e) => FollowBoard();
-
-    /// <summary>The Board's tray accepted the held tool: pin it here too.</summary>
-    private void FollowBoard()
-    {
-        if (_board is not DemoBoardService board || !board.Resolved.Contains((DemoBoardService.McpItemId, "accept")))
-            return;
-        if (_held.Find(held => held.Server == NotesServer && held.Tool == HeldTool) is { } held)
-            Take(held, McpToolState.Pinned);
     }
 
     private DateTimeOffset At(int days, int hour, int minute)

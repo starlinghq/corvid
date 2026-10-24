@@ -16,7 +16,8 @@ public sealed class PairingRequestViewModel : ObservableObject
 {
     private bool _confirmingOwner;
 
-    internal PairingRequestViewModel(PairingRequest request, DateTimeOffset now, TimeZoneInfo zone, ICommand guest, ICommand owner, ICommand ignore)
+    internal PairingRequestViewModel(PairingRequest request, DateTimeOffset now, TimeZoneInfo zone, ICommand guest,
+        Func<CancellationToken, Task> pairOwner, ICommand ignore, Action<AsyncRelayCommand> report)
     {
         Request = request;
         Channel = GatewayText.Channel(request.Adapter);
@@ -27,7 +28,9 @@ public sealed class PairingRequestViewModel : ObservableObject
         Note = $"{JobsText.When(request.At, now, zone)} · {SafeText.Clean(request.Chat)} · approved on this machine only, never from a chat";
         Warning = HasHidden ? "The handle holds hidden characters, shown as ⟨U+…⟩: it may not be who it reads as. It can only be ignored." : "";
         GuestCommand = guest;
-        OwnerCommand = owner;
+        // Pairing as owner is the question's answer only: it does nothing until the question is open.
+        OwnerCommand = new AsyncRelayCommand(pairOwner, () => !HasHidden && IsConfirmingOwner);
+        report(OwnerCommand);
         IgnoreCommand = ignore;
         AskOwnerCommand = new RelayCommand(() => IsConfirmingOwner = true, () => !HasHidden);
         CancelOwnerCommand = new RelayCommand(() => IsConfirmingOwner = false);
@@ -54,7 +57,7 @@ public sealed class PairingRequestViewModel : ObservableObject
 
     public ICommand GuestCommand { get; }
 
-    public ICommand OwnerCommand { get; }
+    public AsyncRelayCommand OwnerCommand { get; }
 
     public ICommand IgnoreCommand { get; }
 
@@ -62,7 +65,16 @@ public sealed class PairingRequestViewModel : ObservableObject
 
     public RelayCommand CancelOwnerCommand { get; }
 
-    public bool IsConfirmingOwner { get => _confirmingOwner; set => SetProperty(ref _confirmingOwner, value); }
+    /// <summary>The owner question is open. It never opens for a handle that hides a character.</summary>
+    public bool IsConfirmingOwner
+    {
+        get => _confirmingOwner;
+        set
+        {
+            if (SetProperty(ref _confirmingOwner, value && !HasHidden))
+                OwnerCommand.NotifyCanExecuteChanged();
+        }
+    }
 
     public IReadOnlyList<TextRun> OwnerQuestion => Spans.Parse(
         $"Pair **{Spans.Escape(Handle)}** as an owner? An owner answers approvals and runs commands from {Spans.Escape(Channel)}, as you do here.");
@@ -70,6 +82,9 @@ public sealed class PairingRequestViewModel : ObservableObject
     public string GuestName => $"Pair {Handle} as a guest";
 
     public string OwnerName => $"Pair {Handle} as an owner";
+
+    /// <summary>The button that opens the owner question, named apart from the question's answer.</summary>
+    public string AskOwnerName => $"Ask before pairing {Handle} as an owner";
 
     public string IgnoreName => $"Ignore {Handle}'s code";
 
@@ -131,6 +146,8 @@ public sealed class PairedUserViewModel : ObservableObject
     {
         User = user;
         Handle = SafeText.Clean(user.Handle);
+        HandleHasHidden = SafeText.HasHidden(user.Handle);
+        RevealedHandle = SafeText.Reveal(user.Handle);
         Channel = GatewayText.Channel(user.Adapter);
         Since = JobsText.When(user.Since, now, zone);
         _guestTools = guestTools;
@@ -145,14 +162,16 @@ public sealed class PairedUserViewModel : ObservableObject
             OnPropertyChanged(nameof(HiddenWarning));
             RefreshSave();
             IsEditing = true;
-        }, () => IsGuest);
+        }, () => IsGuest && !HandleHasHidden);
         SaveCommand = new AsyncRelayCommand(async () =>
         {
+            if (HandleHasHidden)
+                throw new InvalidOperationException("The guest's handle holds hidden characters; their tools cannot be widened. Revoke them instead.");
             if (Choices.Any(choice => choice.IsChecked && choice.HasHidden))
                 throw new InvalidOperationException("A ticked tool's name holds hidden characters; untick it before saving.");
             await save(this, [.. Choices.Where(choice => choice.IsChecked).Select(choice => choice.Raw)]).ConfigureAwait(true);
             IsEditing = false;
-        }, () => !Choices.Any(choice => choice.IsChecked && choice.HasHidden));
+        }, () => !HandleHasHidden && !Choices.Any(choice => choice.IsChecked && choice.HasHidden));
         CancelEditCommand = new RelayCommand(() => IsEditing = false);
         AskRevokeCommand = new RelayCommand(() => IsConfirmingRevoke = true);
         RevokeCommand = new AsyncRelayCommand(async () =>
@@ -171,6 +190,15 @@ public sealed class PairedUserViewModel : ObservableObject
     public PairedUser User { get; }
 
     public string Handle { get; }
+
+    /// <summary>The handle with every hidden character shown (⟨U+202E⟩): the editor names whom it widens this way.</summary>
+    public string RevealedHandle { get; }
+
+    /// <summary>The handle hides a character: it may not be who it reads as, so its tools are never widened from here.</summary>
+    public bool HandleHasHidden { get; }
+
+    /// <summary>"Tools @river may use. …": the editor's heading, naming the guest as they would be granted.</summary>
+    public string EditHeading => $"Tools {RevealedHandle} may use. Each still follows the approval mode.";
 
     public string Channel { get; }
 
@@ -254,6 +282,28 @@ public sealed record AdapterRow(string Name, string StateText, Tone StateTone, s
 public sealed record GatewayLine(string What, string Detail)
 {
     public string AutomationName => $"{What}. {Detail}";
+}
+
+/// <summary>
+/// What a link into Gateway names (<see cref="Shell.AreaLink.Name"/>): a pairing request's card, or that card with the
+/// owner question open. The Board's tray leads here with one; Gateway reads it back.
+/// </summary>
+public static class GatewayLinks
+{
+    private const string OwnerSuffix = "#owner";
+
+    /// <summary>Lands on the request's card.</summary>
+    public static string Card(string requestId) => requestId;
+
+    /// <summary>Lands on the request's card with the owner question open.</summary>
+    public static string Owner(string requestId) => requestId + OwnerSuffix;
+
+    /// <summary>The request a link names, and whether it asks the owner question.</summary>
+    public static (string RequestId, bool Owner) Read(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return name.EndsWith(OwnerSuffix, StringComparison.Ordinal) ? (name[..^OwnerSuffix.Length], true) : (name, false);
+    }
 }
 
 /// <summary>The Gateway page's wording.</summary>

@@ -56,10 +56,16 @@ internal static class OpsLayout
         if (sender is ScrollViewer { Content: FrameworkElement table } scroller && e.NewSize.Width > 0)
         {
             table.Width = Math.Max(table.MinWidth, e.NewSize.Width);
-            // A table that scrolls sideways keeps a strip under its last row for the scroll bar.
-            var room = new Thickness(0, 0, 0, table.MinWidth > e.NewSize.Width + 1 ? 8 : 0);
+            var scrolls = table.MinWidth > e.NewSize.Width + 1;
+            // A table that scrolls sideways keeps a strip under its last row for the scroll bar, shows the bar, and shows
+            // its hint (the element after the scroller tagged "scroll-hint"), so a narrow window says there is more.
+            var room = new Thickness(0, 0, 0, scrolls ? 8 : 0);
             if (scroller.Padding != room)
                 scroller.Padding = room;
+            scroller.HorizontalScrollBarVisibility = scrolls ? ScrollBarVisibility.Visible : ScrollBarVisibility.Auto;
+            if (scroller.Parent is Panel panel && panel.Children.IndexOf(scroller) is var at and >= 0 && at + 1 < panel.Children.Count
+                && panel.Children[at + 1] is FrameworkElement { Tag: "scroll-hint" } hint)
+                hint.Visibility = scrolls ? Visibility.Visible : Visibility.Collapsed;
         }
     }
 

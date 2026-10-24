@@ -323,6 +323,89 @@ public sealed class JobsTests
     }
 
     [Fact]
+    public async Task ResumingAnIntervalJobRunsItOnFromNow()
+    {
+        var time = ManualTimeProvider.Demo();
+        var service = new DemoJobsService(time);
+        var job = await service.CreateAsync(new JobDraft("poll", "every 2 hours", "Check the inbox", null, false, "this app"), TestContext.Current.CancellationToken);
+        await service.PauseAsync(job.Id, TestContext.Current.CancellationToken);
+        time.Advance(TimeSpan.FromMinutes(30));
+
+        var resumed = await service.ResumeAsync(job.Id, TestContext.Current.CancellationToken);
+
+        Assert.Equal(JobState.Active, resumed.State);
+        Assert.Equal(time.GetUtcNow().AddHours(2), resumed.NextRun);
+    }
+
+    [Fact]
+    public async Task ResumingAOneOffKeepsItsTimeUntilItHasPassed()
+    {
+        var time = ManualTimeProvider.Demo();
+        var service = new DemoJobsService(time);
+        var job = await service.CreateAsync(new JobDraft("remind", "in 30m", "Remind me to stretch", null, false, "this app"), TestContext.Current.CancellationToken);
+        var due = job.NextRun;
+        await service.PauseAsync(job.Id, TestContext.Current.CancellationToken);
+        time.Advance(TimeSpan.FromMinutes(10));
+
+        var resumed = await service.ResumeAsync(job.Id, TestContext.Current.CancellationToken);
+        Assert.Equal(JobState.Active, resumed.State);
+        Assert.Equal(due, resumed.NextRun);
+
+        await service.PauseAsync(job.Id, TestContext.Current.CancellationToken);
+        time.Advance(TimeSpan.FromMinutes(30));
+        var late = await service.ResumeAsync(job.Id, TestContext.Current.CancellationToken);
+        Assert.Equal(JobState.Finished, late.State);
+        Assert.Null(late.NextRun);
+    }
+
+    [Fact]
+    public async Task TheServiceRefusesToResumeAJobHidingACharacter()
+    {
+        var service = new DemoJobsService(ManualTimeProvider.Demo());
+        service.Add(new JobRecord("j-evil", "tidy", "every day at 9am", JobState.Paused)
+        {
+            Parsed = "cron 0 9 * * *",
+            Prompt = "Tidy\u202E the logs",
+            Deliver = "this app",
+        });
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => service.ResumeAsync("j-evil", TestContext.Current.CancellationToken));
+
+        Assert.Contains("prompt holds hidden characters", error.Message, StringComparison.Ordinal);
+        Assert.Equal(JobState.Paused, (await service.LoadAsync(TestContext.Current.CancellationToken)).Jobs.Single(job => job.Id == "j-evil").State);
+    }
+
+    [Fact]
+    public void TheBoardsJobLinkSelectsTheRunsJobEvenBeforeTheAreaExists()
+    {
+        var time = ManualTimeProvider.Demo();
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar);
+        shell.Navigate(Area.Board);
+
+        shell.Follow(new AreaLink(Area.Jobs, "job:weekly-deps:2026-10-16"));
+        var jobs = new JobsViewModel(new DemoJobsService(time), shell, bar, time);
+
+        Assert.Equal("weekly-deps", jobs.Selected?.Name);
+        Assert.True(jobs.Runs[0].IsHighlighted);
+    }
+
+    [Fact]
+    public void TheJobsTableIsCappedWithACount()
+    {
+        var time = ManualTimeProvider.Demo();
+        var service = new DemoJobsService(time);
+        for (var i = 0; i < JobsViewModel.MaxRows + 5; i++)
+            service.Add(new JobRecord($"j-x{i:00}", $"extra-{i:00}", "every day at 9am", JobState.Paused) { Parsed = "cron 0 9 * * *", Prompt = "x" });
+
+        var (jobs, _, _) = ViewModel(service);
+
+        Assert.Equal(JobsViewModel.MaxRows, jobs.Jobs.Count);
+        Assert.Equal("and 7 more jobs: /cron in a chat lists them all", jobs.JobsMore);
+        Assert.True(jobs.HasJobsMore);
+    }
+
+    [Fact]
     public void TheCompositionBuildsJobsOnTheDemoAndDisposesIt()
     {
         using var composition = Compose("--page", "jobs");

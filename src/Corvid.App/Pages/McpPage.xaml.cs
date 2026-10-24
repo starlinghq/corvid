@@ -42,6 +42,9 @@ public sealed partial class McpPage : Page
         // After the bindings, so a control the change shows is visible when the handler looks for it.
         ViewModel.PropertyChanged += OnViewModelChanged;
         ViewModel.ReviewRequested += OnReviewRequested;
+        // A link (the Board's Review…) is handled before the page exists: the card it asked for comes into view now.
+        if (ViewModel.PendingReview is { } card)
+            OnReviewRequested(this, card);
         base.OnNavigatedTo(e);
     }
 
@@ -84,11 +87,33 @@ public sealed partial class McpPage : Page
     /// <summary>Focuses a control a change just showed, once it is laid out (Uno refuses focus to one not yet measured).</summary>
     private static void FocusSoon(Control control, FocusState state) => OpsLayout.FocusWhenShown(control, state);
 
-    private void OnReviewRequested(object? sender, McpHeldViewModel card) => DispatcherQueue.TryEnqueue(() =>
+    /// <summary>
+    /// Brings a held card into view, once its container exists and is laid out (on a fresh page, after a few layout passes).
+    /// </summary>
+    private void OnReviewRequested(object? sender, McpHeldViewModel card)
     {
-        if (HeldCards.ContainerFromItem(card) is UIElement container)
-            container.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false, VerticalAlignmentRatio = 0 });
-    });
+        ViewModel.TakePendingReview();
+        var passes = 0;
+        var done = false;
+        EventHandler<object>? handler = null;
+        handler = (_, _) =>
+        {
+            if (done)
+                return;
+            if (HeldCards.ContainerFromItem(card) is FrameworkElement { ActualHeight: > 0 } container)
+            {
+                done = true;
+                HeldCards.LayoutUpdated -= handler;
+                container.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false, VerticalAlignmentRatio = 0 });
+            }
+            else if (++passes > 60)
+            {
+                HeldCards.LayoutUpdated -= handler;
+            }
+        };
+        HeldCards.LayoutUpdated += handler;
+        DispatcherQueue.TryEnqueue(() => handler(null, EventArgs.Empty));
+    }
 
     /// <summary>Up and Down from a server row: the previous or next server, focused and in view.</summary>
     private void OnRowsKeyDown(object sender, KeyRoutedEventArgs e)

@@ -249,8 +249,12 @@
                     </ItemsControl>
                   </StackPanel>
                 </ScrollViewer>
+                <TextBlock Tag="scroll-hint" Visibility="Collapsed" Text="The table is wider than the window: scroll it sideways for the rest →"
+                           Style="{StaticResource CellSmall}" Margin="14,2,14,6" TextWrapping="Wrap" />
                 <TextBlock Text="{x:Bind ViewModel.EmptyText}" Style="{StaticResource CellMuted}" Margin="14,12"
                            Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.HasJobs), Mode=OneWay}" />
+                <TextBlock Text="{x:Bind ViewModel.JobsMore, Mode=OneWay}" Style="{StaticResource CellMuted}" Margin="14,8"
+                           Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasJobsMore), Mode=OneWay}" />
               </StackPanel>
             </Border>
 
@@ -309,6 +313,8 @@
                     </ItemsControl>
                   </StackPanel>
                 </ScrollViewer>
+                <TextBlock Tag="scroll-hint" Visibility="Collapsed" Text="The table is wider than the window: scroll it sideways for the rest →"
+                           Style="{StaticResource CellSmall}" Margin="14,2,14,6" TextWrapping="Wrap" />
                 <TextBlock Text="{x:Bind ViewModel.NoRunsText, Mode=OneWay}" Style="{StaticResource CellMuted}" Margin="14,12"
                            Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.HasRuns), Mode=OneWay}" />
               </StackPanel>
@@ -345,12 +351,12 @@
                   <controls:WrapRowPanel Spacing="8" LineSpacing="8" Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.IsConfirmingRemove), Mode=OneWay}">
                     <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Content="Pause" Command="{x:Bind ViewModel.PauseCommand}"
                                            Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.CanPause), Mode=OneWay}"
-                                           ToolTipService.ToolTip="It will not run until you resume it" />
+                                           AutomationProperties.HelpText="It will not run until you resume it" />
                     <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Primary" Content="Resume" Command="{x:Bind ViewModel.ResumeCommand}"
                                            Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.CanResume), Mode=OneWay}"
-                                           ToolTipService.ToolTip="It runs again from its next scheduled time" />
+                                           AutomationProperties.HelpText="It runs again from its next scheduled time" />
                     <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Remove…" Foreground="{ThemeResource CorvidRed}"
-                                           Command="{x:Bind ViewModel.AskRemoveCommand}" ToolTipService.ToolTip="It will not run again; its runs stay recorded" />
+                                           Command="{x:Bind ViewModel.AskRemoveCommand}" AutomationProperties.HelpText="It will not run again; its runs stay recorded. Asks first." />
                   </controls:WrapRowPanel>
                   <controls:ToneRow Tone="Red" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsConfirmingRemove), Mode=OneWay}">
                     <StackPanel Spacing="8">

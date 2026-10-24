@@ -126,7 +126,7 @@
                                                    AutomationProperties.Name="{x:Bind GuestName}"
                                                    AutomationProperties.HelpText="A guest talks to Corvid with no tools until you widen its allowlist" />
                             <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Content="Pair as owner…" Command="{x:Bind AskOwnerCommand}" Click="OnAskOwnerClick"
-                                                   AutomationProperties.Name="{x:Bind OwnerName}"
+                                                   AutomationProperties.Name="{x:Bind AskOwnerName}"
                                                    AutomationProperties.HelpText="An owner answers approvals from the chat. Asks first." />
                             <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Ignore" Foreground="{ThemeResource CorvidRed}"
                                                    Command="{x:Bind IgnoreCommand}" AutomationProperties.Name="{x:Bind IgnoreName}"
@@ -210,7 +210,7 @@
                             <!-- The allowlist editor, under its row. -->
                             <StackPanel Margin="10,0,10,10" Padding="12,10" Spacing="8" Background="{ThemeResource CorvidBg2}" CornerRadius="8"
                                         Visibility="{x:Bind ui:Ui.VisibleIf(IsEditing), Mode=OneWay}">
-                              <TextBlock Text="Tools this guest may use. Each still follows the approval mode." Style="{StaticResource CellSmall}" />
+                              <TextBlock Text="{x:Bind EditHeading}" Style="{StaticResource CellSmall}" TextWrapping="Wrap" />
                               <ItemsControl ItemsSource="{x:Bind Choices, Mode=OneWay}" IsTabStop="False" AutomationProperties.Name="{x:Bind EditName}">
                                 <ItemsControl.ItemsPanel>
                                   <ItemsPanelTemplate>
@@ -250,6 +250,8 @@
                     </ItemsControl>
                   </StackPanel>
                 </ScrollViewer>
+                <TextBlock Tag="scroll-hint" Visibility="Collapsed" Text="The table is wider than the window: scroll it sideways for the rest →"
+                           Style="{StaticResource CellSmall}" Margin="14,2,14,6" TextWrapping="Wrap" />
                 <TextBlock Text="{x:Bind ViewModel.GuestToolsNote, Mode=OneWay}" Style="{StaticResource CellSmall}" Margin="14,10" />
               </StackPanel>
             </Border>

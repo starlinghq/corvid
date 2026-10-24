@@ -9,7 +9,8 @@ namespace Corvid.App.Core.Gateway;
 /// widening an allowlist change this state as the gateway would; nothing is sent and nothing is written.
 /// <para>
 /// The request is also the Board's attention item (<see cref="DemoBoardService.PairingItemId"/>): answering it here answers
-/// that item, and answering it from the Board's tray answers it here.
+/// that item. From the tray, pairing only leads here (to the card, or to its owner question); the tray's Ignore is
+/// followed here.
 /// </para>
 /// </summary>
 public sealed class DemoGatewayService : IGatewayService, IDisposable
@@ -51,20 +52,14 @@ public sealed class DemoGatewayService : IGatewayService, IDisposable
         return Task.FromResult(new GatewaySnapshot(_host, [.. _adapters], [.. _requests], [.. _users], [.. _deliveries], [.. _overrides], [.. _guestTools]));
     }
 
-    public async Task<PairedUser> PairAsync(string requestId, PairingRole role, CancellationToken cancellationToken)
+    public Task<PairedUser> PairAsync(string requestId, PairingRole role, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var user = Pair(Request(requestId), role);
-        if (_board is not null && requestId == DanaRequestId)
-        {
-            // The tray only leads to the owner question, so an owner answered here is told to the Board directly.
-            if (role == PairingRole.Owner && _board is DemoBoardService demo)
-                demo.AnsweredInArea(DemoBoardService.PairingItemId, "owner");
-            else
-                await _board.ResolveAsync(DemoBoardService.PairingItemId, "guest", cancellationToken).ConfigureAwait(true);
-        }
-
-        return user;
+        // The tray only leads here to pair, so a pairing answered here is told to the Board directly.
+        if (_board is DemoBoardService demo && requestId == DanaRequestId)
+            demo.AnsweredInArea(DemoBoardService.PairingItemId, role == PairingRole.Owner ? "owner" : "guest");
+        return Task.FromResult(user);
     }
 
     public async Task IgnoreAsync(string requestId, CancellationToken cancellationToken)
@@ -96,6 +91,8 @@ public sealed class DemoGatewayService : IGatewayService, IDisposable
             throw new InvalidOperationException($"There is no paired user {userId}.");
         if (_users[index].Role != PairingRole.Guest)
             throw new InvalidOperationException("An owner has every tool; the allowlist is for guests.");
+        if (SafeText.HasHidden(_users[index].Handle))
+            throw new InvalidOperationException($"{SafeText.Reveal(_users[index].Handle)} holds hidden characters; their tools cannot be widened.");
         if (tools.FirstOrDefault(SafeText.HasHidden) is { } hidden)
             throw new InvalidOperationException($"{SafeText.Reveal(hidden)} holds hidden characters; it cannot be given to a guest.");
         if (tools.FirstOrDefault(tool => !_guestTools.Contains(tool)) is { } unknown)
@@ -152,27 +149,18 @@ public sealed class DemoGatewayService : IGatewayService, IDisposable
 
     private void OnBoardChanged(object? sender, EventArgs e) => FollowBoard();
 
-    /// <summary>The Board's tray answered the request: answer it here the same way.</summary>
+    /// <summary>
+    /// The Board's tray ignored the request: drop it here too. Only an ignore is followed (the tray pairs no one), and only
+    /// one the tray gave; the Board may have answered before this area was opened, so its whole record is read.
+    /// </summary>
     private void FollowBoard()
     {
         if (_board is not DemoBoardService board || _requests.Find(request => request.Id == DanaRequestId) is not { } request)
             return;
-        foreach (var (item, action) in board.Resolved)
+        if (board.Resolved.Contains((DemoBoardService.PairingItemId, "ignore")))
         {
-            if (item != DemoBoardService.PairingItemId)
-                continue;
-            if (action == "ignore")
-            {
-                _requests.Remove(request);
-                Changed?.Invoke(this, EventArgs.Empty);
-            }
-            else if (action == "guest" && !SafeText.HasHidden(request.Handle))
-            {
-                // The tray pairs only as a guest; an owner is paired on Gateway, after the owner question.
-                Pair(request, PairingRole.Guest);
-            }
-
-            return;
+            _requests.Remove(request);
+            Changed?.Invoke(this, EventArgs.Empty);
         }
     }
 

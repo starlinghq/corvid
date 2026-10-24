@@ -70,14 +70,86 @@ public sealed class GatewayTests
     }
 
     [Fact]
-    public async Task APairingAnsweredFromTheBoardsTrayIsAnsweredHere()
+    public async Task TheTrayPairsNoOneButItsIgnoreIsFollowedHere()
     {
         var rig = Build();
 
         await rig.Board.ResolveAsync(DemoBoardService.PairingItemId, "guest", TestContext.Current.CancellationToken);
+        Assert.Single(rig.Gateway.Requests);
+        Assert.DoesNotContain(rig.Gateway.Users, user => user.Handle == "@dana");
 
+        await rig.Board.ResolveAsync(DemoBoardService.PairingItemId, "ignore", TestContext.Current.CancellationToken);
         Assert.Empty(rig.Gateway.Requests);
-        Assert.Equal("guest", rig.Gateway.Users.Single(user => user.Handle == "@dana").RoleText);
+        Assert.DoesNotContain(rig.Gateway.Users, user => user.Handle == "@dana");
+    }
+
+    [Fact]
+    public void TheTraysOwnerLinkArrivesWithTheQuestionOpenEvenBeforeTheAreaExists()
+    {
+        var time = ManualTimeProvider.Demo();
+        var board = new DemoBoardService(time);
+        var service = new DemoGatewayService(time, board);
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar);
+        shell.Navigate(Area.Board);
+
+        shell.Follow(new AreaLink(Area.Gateway, null) { Name = GatewayLinks.Owner(DemoGatewayService.DanaRequestId) });
+        var gateway = new GatewayViewModel(service, shell, bar, time);
+
+        var card = Assert.Single(gateway.Requests);
+        Assert.True(card.IsConfirmingOwner);
+        Assert.True(card.OwnerCommand.CanExecute(null));
+        Assert.Same(card, gateway.TakePendingLanding());
+        Assert.Null(gateway.PendingLanding);
+    }
+
+    [Fact]
+    public void TheTraysGuestLinkLandsOnTheCardWithoutTheQuestion()
+    {
+        var rig = Build();
+        rig.Shell.Navigate(Area.Board);
+
+        rig.Shell.Follow(new AreaLink(Area.Gateway, null) { Name = GatewayLinks.Card(DemoGatewayService.DanaRequestId) });
+
+        var card = Assert.Single(rig.Gateway.Requests);
+        Assert.False(card.IsConfirmingOwner);
+        Assert.Same(card, rig.Gateway.PendingLanding);
+
+        rig.Shell.Navigate(Area.Board);
+        rig.Shell.Follow(new AreaLink(Area.Gateway, null) { Name = GatewayLinks.Owner(DemoGatewayService.DanaRequestId) });
+        Assert.True(card.IsConfirmingOwner);
+    }
+
+    [Fact]
+    public void PairingAsOwnerDoesNothingUntilTheQuestionIsOpen()
+    {
+        var rig = Build();
+        var card = rig.Gateway.Requests[0];
+
+        Assert.False(card.OwnerCommand.CanExecute(null));
+        Assert.NotEqual(card.AskOwnerName, card.OwnerName);
+        card.AskOwnerCommand.Execute(null);
+        Assert.True(card.OwnerCommand.CanExecute(null));
+        card.CancelOwnerCommand.Execute(null);
+        Assert.False(card.OwnerCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task AGuestWhoseHandleHidesACharacterCannotBeWidened()
+    {
+        var time = ManualTimeProvider.Demo();
+        var saved = new List<IReadOnlyList<string>>();
+        var user = new PairedUser("u-9", "discord", "wr\u202Een#1", PairingRole.Guest, time.GetUtcNow());
+        var row = new PairedUserViewModel(user, time.GetUtcNow(), TimeZoneInfo.Utc, () => ["memory_search"],
+            (_, tools) => { saved.Add(tools); return Task.CompletedTask; }, _ => Task.CompletedTask, _ => { });
+
+        Assert.True(row.HandleHasHidden);
+        Assert.Equal("wr⟨U+202E⟩en#1", row.RevealedHandle);
+        Assert.Equal("Tools wr⟨U+202E⟩en#1 may use. Each still follows the approval mode.", row.EditHeading);
+        Assert.False(row.EditCommand.CanExecute(null));
+        Assert.False(row.SaveCommand.CanExecute(null));
+        await row.SaveCommand.ExecuteAsync();
+        Assert.Empty(saved);
     }
 
     [Fact]
@@ -88,6 +160,7 @@ public sealed class GatewayTests
             .Single(item => item.Id == DemoBoardService.PairingItemId).Actions.Single(action => action.Id == "owner");
         Assert.Equal(AttentionActionKind.Navigate, owner.Kind);
         Assert.Equal(Area.Gateway, owner.Area);
+        Assert.Equal(GatewayLinks.Owner(DemoGatewayService.DanaRequestId), owner.Target);
 
         await rig.Board.ResolveAsync(DemoBoardService.PairingItemId, "owner", TestContext.Current.CancellationToken);
         Assert.Single(rig.Gateway.Requests);
@@ -96,7 +169,7 @@ public sealed class GatewayTests
         // Answered on Gateway after its question, the tray's item goes too.
         var card = rig.Gateway.Requests[0];
         card.AskOwnerCommand.Execute(null);
-        await ((AsyncRelayCommand)card.OwnerCommand).ExecuteAsync();
+        await card.OwnerCommand.ExecuteAsync();
         Assert.Equal("owner", rig.Gateway.Users.Single(user => user.Handle == "@dana").RoleText);
         Assert.DoesNotContain(await rig.Board.ListAttentionAsync(TestContext.Current.CancellationToken), item => item.Id == DemoBoardService.PairingItemId);
     }

@@ -8,6 +8,21 @@ public static class JobsText
     /// <summary>How many runs the history lists, as <c>/cron runs</c> does.</summary>
     public const int RunsShown = 20;
 
+    /// <summary>
+    /// The first part of the job that would run and holds a hidden character ("prompt", "pre-run script", "command",
+    /// "schedule", "delivery target"), or null. A job comes from the agent through cron_create, so neither the page nor the
+    /// service sets one running while part of it is hidden.
+    /// </summary>
+    public static string? HiddenPart(JobRecord job)
+    {
+        ArgumentNullException.ThrowIfNull(job);
+        return SafeText.HasHidden(job.Prompt) && !job.NoAgent ? "prompt"
+            : SafeText.HasHidden(job.Script) ? (job.NoAgent ? "command" : "pre-run script")
+            : SafeText.HasHidden(job.Schedule) || SafeText.HasHidden(job.Parsed) || SafeText.HasHidden(job.Zone) ? "schedule"
+            : SafeText.HasHidden(job.Deliver) ? "delivery target"
+            : null;
+    }
+
     /// <summary>"today 09:00", "tomorrow 09:00", "Wed 09:00" within the week, "Mon 2 Nov 09:00", or with the year when it differs.</summary>
     public static string When(DateTimeOffset at, DateTimeOffset now, TimeZoneInfo zone)
     {

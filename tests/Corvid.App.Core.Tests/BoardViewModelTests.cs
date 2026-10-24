@@ -1,5 +1,6 @@
 using Corvid.App.Core;
 using Corvid.App.Core.Board;
+using Corvid.App.Core.Gateway;
 using Corvid.App.Core.Markdown;
 using Corvid.App.Core.Mvvm;
 using Corvid.App.Core.Sessions;
@@ -177,9 +178,9 @@ public sealed class BoardViewModelTests
         var rig = Start();
         var pairing = rig.Board.Attention.Single(item => item.Kind == AttentionKind.Pairing);
 
-        pairing.Buttons.Single(button => button.Label == "Pair as guest").Command.Execute(null);
+        pairing.Buttons.Single(button => button.Label == "Ignore").Command.Execute(null);
 
-        Assert.Equal([(DemoBoardService.PairingItemId, "guest")], rig.Service.Resolved);
+        Assert.Equal([(DemoBoardService.PairingItemId, "ignore")], rig.Service.Resolved);
         Assert.DoesNotContain(rig.Board.Attention, item => item.Kind == AttentionKind.Pairing);
         Assert.Equal(5, rig.Shell.AttentionCount);
 
@@ -204,6 +205,8 @@ public sealed class BoardViewModelTests
         rig.Shell.Navigate(Area.Board);
         Card(rig, DemoSessionService.JobSessionId).OpenJobsCommand.Execute(null);
         Assert.Equal(Area.Jobs, rig.Shell.CurrentArea);
+        // The link names the run, so Jobs lands on its job with the run marked.
+        Assert.Equal(new AreaLink(Area.Jobs, DemoSessionService.JobSessionId), rig.Shell.Link);
     }
 
     [Fact]
@@ -353,15 +356,76 @@ public sealed class BoardViewModelTests
     }
 
     [Fact]
-    public void AcceptingTheHeldMcpToolClearsMcpsBadge()
+    public void TheHeldMcpToolsItemLeadsToItsCardAndPinsNothing()
     {
         var rig = Start();
         Assert.Equal(1, rig.Shell.RailItem(Area.Mcp).Badge);
+        var item = rig.Board.Attention.Single(item => item.Kind == AttentionKind.McpTool);
+        Assert.Equal(["Review…"], item.Buttons.Select(button => button.Label));
 
-        rig.Board.Attention.Single(item => item.Kind == AttentionKind.McpTool).Buttons.Single(button => button.Label == "Accept").Command.Execute(null);
+        item.Buttons[0].Command.Execute(null);
 
-        Assert.DoesNotContain(rig.Board.Attention, item => item.Kind == AttentionKind.McpTool);
-        Assert.Equal(0, rig.Shell.RailItem(Area.Mcp).Badge);
+        Assert.Equal(Area.Mcp, rig.Shell.CurrentArea);
+        Assert.Equal(new AreaLink(Area.Mcp, null) { Name = "notes__search" }, rig.Shell.Link);
+        Assert.Contains(rig.Board.Attention, listed => listed.Kind == AttentionKind.McpTool);
+        Assert.Empty(rig.Service.Resolved);
+        Assert.Equal(1, rig.Shell.RailItem(Area.Mcp).Badge);
+    }
+
+    [Fact]
+    public void ThePairingsButtonsLeadToGatewaysCardAndOwnerQuestion()
+    {
+        var rig = Start();
+        var item = rig.Board.Attention.Single(item => item.Kind == AttentionKind.Pairing);
+        Assert.Equal(["Pair as guest…", "Pair as owner…", "Ignore"], item.Buttons.Select(button => button.Label));
+
+        item.Buttons[0].Command.Execute(null);
+        Assert.Equal(Area.Gateway, rig.Shell.CurrentArea);
+        Assert.Equal(GatewayLinks.Card(DemoGatewayService.DanaRequestId), rig.Shell.Link?.Name);
+
+        rig.Shell.Navigate(Area.Board);
+        item.Buttons[1].Command.Execute(null);
+        Assert.Equal(Area.Gateway, rig.Shell.CurrentArea);
+        Assert.Equal(GatewayLinks.Owner(DemoGatewayService.DanaRequestId), rig.Shell.Link?.Name);
+        Assert.Empty(rig.Service.Resolved);
+    }
+
+    [Fact]
+    public async Task ARefusedAnswerLeavesTheItemAndSaysWhyCleaned()
+    {
+        var time = ManualTimeProvider.Demo();
+        var dispatcher = new InlineDispatcher();
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar);
+        var sessions = new DemoSessionService(dispatcher, time, DemoScene.Main);
+        var hub = new SessionHub(sessions, dispatcher, time, shell, bar);
+        await hub.StartAsync(null, DemoShell.CurrentSessionId, TestContext.Current.CancellationToken);
+        shell.Navigate(Area.Board);
+        var board = new BoardViewModel(shell, hub, new RefusingBoard(new DemoBoardService(time)), new SessionServiceWatcher(sessions), time, dispatcher);
+
+        board.Attention.Single(item => item.Kind == AttentionKind.Pairing).Buttons.Single(button => button.Label == "Ignore").Command.Execute(null);
+
+        Assert.Contains(board.Attention, item => item.Kind == AttentionKind.Pairing);
+        Assert.Equal("Attention · 5 · could not answer: the gateway is unreachable", board.AttentionHead);
+        time.Advance(TimeSpan.FromSeconds(2));
+        Assert.EndsWith("could not answer: the gateway is unreachable", board.AttentionHead, StringComparison.Ordinal);
+    }
+
+    /// <summary>The demo's items, with every answer refused as an unreachable engine would refuse it.</summary>
+    private sealed class RefusingBoard(DemoBoardService demo) : IBoardService
+    {
+        public event EventHandler? AttentionChanged
+        {
+            add => demo.AttentionChanged += value;
+            remove => demo.AttentionChanged -= value;
+        }
+
+        public Task<IReadOnlyList<AttentionItem>> ListAttentionAsync(CancellationToken cancellationToken = default) => demo.ListAttentionAsync(cancellationToken);
+
+        public Task ResolveAsync(string itemId, string actionId, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("the gateway is\u202E unreachable");
+
+        public Task<BoardStatus> GetStatusAsync(CancellationToken cancellationToken = default) => demo.GetStatusAsync(cancellationToken);
     }
 
     [Fact]

@@ -91,27 +91,79 @@ public sealed class McpTests
     }
 
     [Fact]
-    public async Task AnAcceptFromTheBoardsTrayPinsItHereToo()
+    public async Task TheBoardsTrayCannotPinItOnlyLeadsToTheCard()
     {
         var rig = Build();
+        var item = (await rig.Board.ListAttentionAsync(TestContext.Current.CancellationToken)).Single(item => item.Id == DemoBoardService.McpItemId);
+        var review = Assert.Single(item.Actions);
+        Assert.Equal("Review…", review.Label);
+        Assert.Equal(AttentionActionKind.Navigate, review.Kind);
+        Assert.Equal(Area.Mcp, review.Area);
+        Assert.Equal(DemoMcpService.HeldTool, review.Target);
 
+        // Nothing the tray can send pins it: not its own action, not the old one-click accept.
+        await rig.Board.ResolveAsync(DemoBoardService.McpItemId, "review", TestContext.Current.CancellationToken);
         await rig.Board.ResolveAsync(DemoBoardService.McpItemId, "accept", TestContext.Current.CancellationToken);
 
-        Assert.Empty(rig.Mcp.Held);
-        Assert.Equal("pinned", rig.Mcp.Tools[0].StateText);
-        Assert.Equal(0, Badge(rig.Shell));
+        Assert.Single(rig.Mcp.Held);
+        Assert.Equal("held · changed", rig.Mcp.Tools[0].StateText);
+        Assert.Equal(1, Badge(rig.Shell));
+        Assert.Empty(rig.Board.Resolved);
     }
 
     [Fact]
-    public async Task ABoardAnsweredBeforeTheAreaOpenedIsFollowed()
+    public async Task AnUnrelatedTrayAnswerNeverPinsAToolHeldLater()
     {
         var time = ManualTimeProvider.Demo();
         var board = new DemoBoardService(time);
         await board.ResolveAsync(DemoBoardService.McpItemId, "accept", TestContext.Current.CancellationToken);
-
         using var service = new DemoMcpService(time, board);
 
-        Assert.Empty((await service.LoadAsync(TestContext.Current.CancellationToken)).Held);
+        // An answer to another item raises AttentionChanged; the held tool stays held.
+        await board.ResolveAsync(DemoBoardService.PairingItemId, "ignore", TestContext.Current.CancellationToken);
+
+        Assert.Single((await service.LoadAsync(TestContext.Current.CancellationToken)).Held);
+    }
+
+    [Fact]
+    public void TheTraysReviewLandsOnTheHeldToolsCardEvenBeforeTheAreaExists()
+    {
+        var time = ManualTimeProvider.Demo();
+        var board = new DemoBoardService(time);
+        var service = new DemoMcpService(time, board);
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar);
+        shell.Navigate(Area.Board);
+
+        shell.Follow(new AreaLink(Area.Mcp, null) { Name = DemoMcpService.HeldTool });
+        var mcp = new McpViewModel(service, shell, bar, time);
+
+        Assert.Equal("notes", mcp.Selected!.Name);
+        var card = Assert.Single(mcp.Held);
+        Assert.Same(card, mcp.PendingReview);
+        Assert.True(card.ShowDiff);
+        Assert.Same(card, mcp.TakePendingReview());
+        Assert.Null(mcp.PendingReview);
+    }
+
+    [Fact]
+    public async Task TheTraysReviewLandsOnTheCardWhenTheAreaIsOpenAlreadyAndKeepsTheServer()
+    {
+        var rig = Build();
+        await ((AsyncRelayCommand)rig.Mcp.Held[0].KeepBlockedCommand).ExecuteAsync();
+        rig.Mcp.Servers.Single(row => row.Id == "github").SelectCommand.Execute(null);
+        rig.Shell.Navigate(Area.Board);
+        rig.Shell.Navigate(Area.Mcp);
+        Assert.Equal("github", rig.Mcp.Selected!.Name);
+        rig.Shell.Navigate(Area.Board);
+        McpHeldViewModel? asked = null;
+        rig.Mcp.ReviewRequested += (_, card) => asked = card;
+
+        rig.Shell.Follow(new AreaLink(Area.Mcp, null) { Name = DemoMcpService.HeldTool });
+
+        Assert.Equal("notes", rig.Mcp.Selected!.Name);
+        Assert.Same(rig.Mcp.Held[0], asked);
+        Assert.True(asked!.ShowDiff);
     }
 
     [Fact]
@@ -131,6 +183,88 @@ public sealed class McpTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             rig.Service.AcceptAsync("web-tools", "web_tools__extract_links", "c0ffee12", TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task AToolOrServerNameHoldingHiddenCharactersIsRevealedAndCannotBePinned()
+    {
+        var rig = Build();
+        rig.Service.Hold(HeldWith("Lists the links on a page.") with { Tool = "web_tools__extract\u202Elinks" });
+
+        var card = Assert.Single(rig.Mcp.Held, card => card.Held.Tool == "web_tools__extract\u202Elinks");
+        Assert.Equal("web_tools__extract⟨U+202E⟩links", card.Tool);
+        Assert.StartsWith("web_tools__extract⟨U+202E⟩links · changed", card.Title, StringComparison.Ordinal);
+        Assert.Equal("web-tools", card.Server);
+        Assert.True(card.HasHidden);
+        Assert.False(card.CanAccept);
+        Assert.False(card.AcceptCommand.CanExecute(null));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            rig.Service.AcceptAsync("web-tools", "web_tools__extract\u202Elinks", "c0ffee12", TestContext.Current.CancellationToken));
+
+        var server = new McpHeldTool("web\U000E0041tools", "web_tools__map", McpHoldReason.New,
+            new McpDefinition("Maps a site.", "Map", "{ }"), "0badc0de", ManualTimeProvider.Demo().GetUtcNow());
+        var other = new McpHeldViewModel(server, ManualTimeProvider.Demo().GetUtcNow(), TimeZoneInfo.Utc, new RelayCommand(() => { }),
+            new RelayCommand(() => { }), new RelayCommand(() => { }));
+        Assert.Equal("web⟨U+E0041⟩tools", other.Server);
+        Assert.True(other.HasHidden);
+        Assert.False(other.CanAccept);
+        Assert.True(McpText.HasHidden(server));
+    }
+
+    [Fact]
+    public void ReviewBringsAToolPastTheCapIntoTheHeldCards()
+    {
+        var rig = Build();
+        for (var i = 0; i < McpViewModel.MaxHeldCards + 1; i++)
+        {
+            rig.Service.Hold(HeldWith("Lists the links on a page, again.") with
+            {
+                Tool = $"web_tools__t{i:00}", HeldAt = ManualTimeProvider.Demo().GetUtcNow().AddMinutes(i),
+            });
+        }
+
+        Assert.Equal(McpViewModel.MaxHeldCards, rig.Mcp.Held.Count);
+        Assert.Equal("and 2 more held tools: review them from their servers' tools", rig.Mcp.HeldMore);
+        Assert.DoesNotContain(rig.Mcp.Held, card => card.Held.Tool == "web_tools__t12");
+
+        rig.Mcp.Servers.Single(row => row.Id == "web-tools").SelectCommand.Execute(null);
+        var last = rig.Mcp.Tools.Single(tool => tool.Name == "web_tools__t12");
+        Assert.True(last.ReviewCommand.CanExecute(null));
+        last.ReviewCommand.Execute(null);
+
+        Assert.Equal(McpViewModel.MaxHeldCards, rig.Mcp.Held.Count);
+        Assert.Equal("web_tools__t12", rig.Mcp.Held[0].Held.Tool);
+        Assert.Same(rig.Mcp.Held[0], rig.Mcp.PendingReview);
+    }
+
+    [Fact]
+    public void AServersToolsAreCappedWithACount()
+    {
+        var tools = Enumerable.Range(0, McpViewModel.MaxToolRows + 5)
+            .Select(i => new McpToolRecord("many", $"many__t{i:00}", McpToolState.Pinned) { Hash = "00000000" }).ToList();
+        var rig = Build(service => new ExtraServer(service, new McpServerRecord("many", McpTransport.Stdio, McpTrust.Untrusted, McpServerState.Running)
+        {
+            Target = "many-mcp", Tools = tools,
+        }));
+
+        rig.Mcp.Servers.Single(row => row.Id == "many").SelectCommand.Execute(null);
+
+        Assert.Equal(McpViewModel.MaxToolRows, rig.Mcp.Tools.Count);
+        Assert.Equal("and 5 more tools", rig.Mcp.ToolsMore);
+        Assert.True(rig.Mcp.HasToolsMore);
+    }
+
+    [Fact]
+    public void AChangeOfSpacesAloneStillShowsInTheDiff()
+    {
+        var before = McpHeldViewModel.Document(new McpDefinition("Search the notes. Returns titles.", "Search", "{ }"));
+        var after = McpHeldViewModel.Document(new McpDefinition("Search the notes.  Returns  titles.", "Search", "{ }"));
+
+        Assert.NotEqual(before, after);
+        Assert.Contains("  Returns titles.\n", before, StringComparison.Ordinal);
+        Assert.Contains("   Returns  titles.\n", after, StringComparison.Ordinal);
+        var diff = FileDiff.Compute("t", before, after);
+        Assert.Contains(diff.SideBySide(40), row => row.Right?.Kind == DiffRowKind.Added);
     }
 
     [Fact]

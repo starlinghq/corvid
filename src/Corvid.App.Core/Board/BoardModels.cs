@@ -35,9 +35,12 @@ public enum AttentionActionStyle
 /// <summary>What pressing an attention item's button does.</summary>
 public enum AttentionActionKind
 {
-    /// <summary>Answers the item through its service (accept a pin, pair as guest, ignore); the item goes away.</summary>
+    /// <summary>
+    /// Answers the item through its service; the item goes away. Only for an answer that grants nothing (ignore a code):
+    /// pinning a tool or pairing someone is done on the area's card, where what is granted is shown in full.
+    /// </summary>
     Resolve,
-    /// <summary>Opens the area that holds the item's full card (Memory's review, MCP's diff, Jobs).</summary>
+    /// <summary>Opens the area that holds the item's full card (Memory's review, MCP's held definition, Gateway's request).</summary>
     Navigate,
     /// <summary>Opens a session: an approval's full card, a question, a job's run.</summary>
     OpenSession,
@@ -54,6 +57,12 @@ public sealed record AttentionAction(string Id, string Label, AttentionActionKin
 
     /// <summary>For <see cref="AttentionActionKind.Navigate"/>: the area to open.</summary>
     public Area? Area { get; init; }
+
+    /// <summary>
+    /// For <see cref="AttentionActionKind.Navigate"/>: what in the area to land on (a held tool's name, a pairing request),
+    /// followed as the link's <see cref="Shell.AreaLink.Name"/>; null opens the area where it was left.
+    /// </summary>
+    public string? Target { get; init; }
 
     /// <summary>For <see cref="AttentionActionKind.OpenSession"/>: the session to open.</summary>
     public string? SessionId { get; init; }
