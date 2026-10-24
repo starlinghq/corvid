@@ -25,12 +25,12 @@ public sealed class AuditReviewTests
     [Fact]
     public void WhatLeftTheMachineShowsEveryHiddenCharacterAndCopiesTheRawText()
     {
-        var full = "zero\u200Bwidth\n" + "tag\U000E0041char\n" + "\u202Eevil\r\n" + "GH_TOKEN=[redacted:credential]\n" + "joined \u200D kept";
+        var full = "zero\u200Bwidth\n" + "tag\U000E0041char\n" + "\u202Eevil\r\n" + "GH_TOKEN=[redacted:credential]\n" + "joined \U0001F469\u200D\U0001F466 kept, stray \u200D";
         var request = new EgressRequest(1, 10, "s", At, "model") { Excerpt = full, Full = full, Redacted = 1 };
 
         var egress = new EgressView(request, TimeZoneInfo.Utc);
 
-        Assert.Equal(["zero⟨U+200B⟩width", "tag⟨U+E0041⟩char", "⟨U+202E⟩evil", "GH_TOKEN=[redacted:credential]", "joined \u200D kept"],
+        Assert.Equal(["zero⟨U+200B⟩width", "tag⟨U+E0041⟩char", "⟨U+202E⟩evil", "GH_TOKEN=[redacted:credential]", "joined \U0001F469\u200D\U0001F466 kept, stray ⟨U+200D⟩"],
             egress.Lines.Select(Shown));
         Assert.True(egress.Lines[3].Segments[1].IsRedaction);
         // Copy keeps what was sent, nothing revealed or removed.

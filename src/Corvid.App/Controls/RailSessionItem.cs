@@ -19,7 +19,7 @@ public sealed partial class RailSessionItem : Button
         nameof(State), typeof(SessionState), typeof(RailSessionItem), new PropertyMetadata(SessionState.Idle, (d, _) => ((RailSessionItem)d).UpdateStates(true)));
 
     public static readonly DependencyProperty IsSelectedProperty = DependencyProperty.Register(
-        nameof(IsSelected), typeof(bool), typeof(RailSessionItem), new PropertyMetadata(false, (d, _) => ((RailSessionItem)d).UpdateStates(true)));
+        nameof(IsSelected), typeof(bool), typeof(RailSessionItem), new PropertyMetadata(false, (d, e) => ((RailSessionItem)d).OnSelectedChanged((bool)e.NewValue)));
 
     public RailSessionItem() => DefaultStyleKey = typeof(RailSessionItem);
 
@@ -45,6 +45,16 @@ public sealed partial class RailSessionItem : Button
     {
         get => (bool)GetValue(IsSelectedProperty);
         set => SetValue(IsSelectedProperty, value);
+    }
+
+    /// <summary>Says which item is current to assistive technology, not only in the accent colour.</summary>
+    protected override Microsoft.UI.Xaml.Automation.Peers.AutomationPeer OnCreateAutomationPeer() =>
+        new SelectableButtonAutomationPeer(this, () => IsSelected);
+
+    private void OnSelectedChanged(bool selected)
+    {
+        UpdateStates(true);
+        SelectableButtonAutomationPeer.Raise(this, selected);
     }
 
     protected override void OnApplyTemplate()

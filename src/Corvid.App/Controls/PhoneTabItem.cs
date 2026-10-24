@@ -18,7 +18,7 @@ public sealed partial class PhoneTabItem : Button
         nameof(Count), typeof(string), typeof(PhoneTabItem), new PropertyMetadata("", (d, _) => ((PhoneTabItem)d).UpdateStates(true)));
 
     public static readonly DependencyProperty IsSelectedProperty = DependencyProperty.Register(
-        nameof(IsSelected), typeof(bool), typeof(PhoneTabItem), new PropertyMetadata(false, (d, _) => ((PhoneTabItem)d).UpdateStates(true)));
+        nameof(IsSelected), typeof(bool), typeof(PhoneTabItem), new PropertyMetadata(false, (d, e) => ((PhoneTabItem)d).OnSelectedChanged((bool)e.NewValue)));
 
     public PhoneTabItem() => DefaultStyleKey = typeof(PhoneTabItem);
 
@@ -44,6 +44,16 @@ public sealed partial class PhoneTabItem : Button
     {
         get => (bool)GetValue(IsSelectedProperty);
         set => SetValue(IsSelectedProperty, value);
+    }
+
+    /// <summary>Says which item is current to assistive technology, not only in the accent colour.</summary>
+    protected override Microsoft.UI.Xaml.Automation.Peers.AutomationPeer OnCreateAutomationPeer() =>
+        new SelectableButtonAutomationPeer(this, () => IsSelected);
+
+    private void OnSelectedChanged(bool selected)
+    {
+        UpdateStates(true);
+        SelectableButtonAutomationPeer.Raise(this, selected);
     }
 
     protected override void OnApplyTemplate()

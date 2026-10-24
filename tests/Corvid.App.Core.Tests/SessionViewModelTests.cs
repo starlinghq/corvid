@@ -79,6 +79,8 @@ public sealed class SessionViewModelTests
         Assert.True(session.ShowTurnStrip);
         Assert.True(session.IsWorking);
         Assert.Equal("step 4 of 6 · shell running · 12 s", session.TurnStripText);
+        // The live region's words leave out the ticking time, so a screen reader hears a step change, not every second.
+        Assert.Equal("step 4 of 6 · shell running", session.TurnStripStatus);
         Assert.Equal(["queued|also check the retry count"], session.Queue.Select(chip => $"{chip.Label}|{chip.Text}"));
         Assert.Equal("Ctrl ↵ steers at the next checkpoint · Esc interrupts", string.Concat(session.Hint.Select(part => part.Text)));
         Assert.Equal([true, false, true, false, true, false], session.Hint.Select(part => part.IsKey));
@@ -209,7 +211,7 @@ public sealed class SessionViewModelTests
         card.ConfirmRuleCommand.Execute(null);
 
         var shell = service.StateOf(Main).Transcript.OfType<ToolEntry>().Single(tool => tool.CallId == "call-5");
-        Assert.Equal((VerdictKind.ApprovedAlways, "`rm -r` under build/cache and `dotnet test` in the workspace"), (shell.Verdict!.Kind, shell.Verdict.Rule));
+        Assert.Equal((VerdictKind.ApprovedAlways, "`rm -r` under `build/cache` and `dotnet test` in the workspace"), (shell.Verdict!.Kind, shell.Verdict.Rule));
     }
 
     [Fact]

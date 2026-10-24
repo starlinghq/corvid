@@ -465,7 +465,7 @@
     <!-- What the last action did, or why it failed, and a failed load: on every tab, under the head. -->
     <StackPanel x:Name="Notices" Grid.Row="1" Spacing="8" Padding="24,14,24,0"
                 Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasNotice), Mode=OneWay}" AutomationProperties.LiveSetting="Polite">
-      <controls:ToneRow Tone="Red" Padding="12,8" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasLoadError), Mode=OneWay}">
+      <controls:ToneRow AutomationProperties.LiveSetting="Assertive" Tone="Red" Padding="12,8" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasLoadError), Mode=OneWay}">
         <TextBlock Text="{x:Bind ViewModel.LoadError, Mode=OneWay}" FontSize="12.5" TextWrapping="Wrap" />
       </controls:ToneRow>
       <controls:ToneRow Tone="{x:Bind ViewModel.OutcomeTone, Mode=OneWay}" Padding="12,8" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasOutcome), Mode=OneWay}">

@@ -405,7 +405,11 @@ public sealed partial class DemoSessionService
             : resolved;
     }
 
-    /// <summary>The rule in words with the paths the user narrowed it to.</summary>
+    /// <summary>
+    /// The rule in words with the paths the user narrowed it to, each in backticks as the engine writes paths, so a
+    /// tilde or a star in one is never read as a mark. A backtick in a path (and a backslash before one, or at its end) is
+    /// escaped with a backslash, so the path stays one code span.
+    /// </summary>
     private static string NarrowedRule(string rule, ImmutableArray<ImmutableArray<string>> paths)
     {
         var first = paths.FirstOrDefault(list => !list.IsDefaultOrEmpty);
@@ -416,7 +420,21 @@ public sealed partial class DemoSessionService
         if (under < 0)
             return rule;
         var tail = and > under ? rule[and..] : "";
-        return $"{rule[..under]} under {string.Join(" ", first)}{tail}";
+        return $"{rule[..under]} under {string.Join(" ", first.Select(path => $"`{CodeEscape(path)}`"))}{tail}";
+    }
+
+    private static string CodeEscape(string path)
+    {
+        var escaped = new System.Text.StringBuilder(path.Length);
+        for (var i = 0; i < path.Length; i++)
+        {
+            var c = path[i];
+            if (c == '`' || (c == '\\' && (i + 1 == path.Length || path[i + 1] is '`' or '\\')))
+                escaped.Append('\\');
+            escaped.Append(c);
+        }
+
+        return escaped.ToString();
     }
 
     /// <summary>"Deny and say why": the reason goes as the next message, ahead of anything queued.</summary>

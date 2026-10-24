@@ -355,6 +355,7 @@
     <Setter Property="FontFamily" Value="{StaticResource CorvidMono}" />
     <Setter Property="FontSize" Value="12.5" />
     <Setter Property="Foreground" Value="{ThemeResource CorvidText}" />
+    <Setter Property="PlaceholderForeground" Value="{ThemeResource CorvidText2}" />
     <Setter Property="Background" Value="{ThemeResource CorvidBg}" />
     <Setter Property="BorderBrush" Value="{ThemeResource CorvidLine}" />
     <Setter Property="BorderThickness" Value="1" />

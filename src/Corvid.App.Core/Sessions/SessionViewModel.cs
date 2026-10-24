@@ -73,6 +73,9 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
 
     public string SessionId { get; }
 
+    /// <summary>Asks the page to put the caret in the composer (a prompt from the history was put there).</summary>
+    public void RequestComposerFocus() => FocusRequested?.Invoke(this, SessionFocusTarget.Composer);
+
     /// <summary>The fold's current state, for tests and for views that need a raw value.</summary>
     public SessionView State => _state;
 

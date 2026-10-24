@@ -63,6 +63,31 @@ public sealed class SessionsViewModel : AreaViewModel
     /// <summary>The session header's Rewind: the checkpoint timeline (Esc Esc on an empty composer).</summary>
     public RelayCommand OpenRewindCommand { get; }
 
+    /// <summary>
+    /// A transcript block find-in-session (Ctrl+F) asked to bring into view; the page takes it with
+    /// <see cref="TakeReveal"/> once it has drawn the session, so the request survives the page being created anew.
+    /// </summary>
+    public string? PendingReveal { get; private set; }
+
+    /// <summary>Raised when <see cref="Reveal"/> asks for a block; a page that is showing takes it at once.</summary>
+    public event EventHandler? RevealRequested;
+
+    /// <summary>Asks the page to bring a block of the selected session into view.</summary>
+    public void Reveal(string blockId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(blockId);
+        PendingReveal = blockId;
+        RevealRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>The block to bring into view, once: the page clears it as it takes it.</summary>
+    public string? TakeReveal()
+    {
+        var id = PendingReveal;
+        PendingReveal = null;
+        return id;
+    }
+
     /// <summary>Sets a dock tab's count (Changes: files changed; Tasks: open tasks).</summary>
     public void SetPanelBadge(string label, int count) =>
         Panels.First(panel => string.Equals(panel.Label, label, StringComparison.Ordinal)).Badge = count;

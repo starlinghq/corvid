@@ -13,7 +13,7 @@ public sealed partial class DockTab : Button
         nameof(Badge), typeof(string), typeof(DockTab), new PropertyMetadata("", (d, _) => ((DockTab)d).UpdateStates(true)));
 
     public static readonly DependencyProperty IsSelectedProperty = DependencyProperty.Register(
-        nameof(IsSelected), typeof(bool), typeof(DockTab), new PropertyMetadata(false, (d, _) => ((DockTab)d).UpdateStates(true)));
+        nameof(IsSelected), typeof(bool), typeof(DockTab), new PropertyMetadata(false, (d, e) => ((DockTab)d).OnSelectedChanged((bool)e.NewValue)));
 
     public DockTab() => DefaultStyleKey = typeof(DockTab);
 
@@ -33,6 +33,16 @@ public sealed partial class DockTab : Button
     {
         get => (bool)GetValue(IsSelectedProperty);
         set => SetValue(IsSelectedProperty, value);
+    }
+
+    /// <summary>Says which item is current to assistive technology, not only in the accent colour.</summary>
+    protected override Microsoft.UI.Xaml.Automation.Peers.AutomationPeer OnCreateAutomationPeer() =>
+        new SelectableButtonAutomationPeer(this, () => IsSelected);
+
+    private void OnSelectedChanged(bool selected)
+    {
+        UpdateStates(true);
+        SelectableButtonAutomationPeer.Raise(this, selected);
     }
 
     protected override void OnApplyTemplate()

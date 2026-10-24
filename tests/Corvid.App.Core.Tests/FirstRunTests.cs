@@ -54,6 +54,7 @@ public sealed class FirstRunTests
         var bar = setup.Bar;
 
         Assert.True(setup.Shell.PageDrawsRail);
+        Assert.True(setup.Shell.SetupShowing);
         Assert.False(setup.Shell.ShowRail);
         Assert.False(setup.Shell.ShowRailToggle);
         Assert.Equal("not started · models load after this page", bar.Engine);
@@ -70,6 +71,7 @@ public sealed class FirstRunTests
         Assert.Equal(Area.Sessions, setup.Shell.CurrentArea);
         Assert.False(setup.FirstRun.IsSetup);
         Assert.False(setup.Shell.PageDrawsRail);
+        Assert.False(setup.Shell.SetupShowing);
         Assert.True(setup.Shell.ShowRail);
         // F1 ends on an empty session, and the bar keeps what the setup found: degraded, what is missing, Vault absent.
         Assert.Null(setup.Shell.CurrentSession);

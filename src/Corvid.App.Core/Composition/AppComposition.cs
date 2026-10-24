@@ -38,6 +38,10 @@ public sealed partial class AppComposition : IDisposable
         // The session service feeds the rail, the attention count and the status bar from here on, and selects the
         // session the command line named.
         StartSessions();
+        // The Board's service counts the other areas' attention items for the bell from the start, so the bell reads the
+        // same whichever page opens first, not DemoShell's placeholder until MCP, Gateway or the Board is visited.
+        _ = BoardService;
+        _ = SkillsService; // counts the waiting drafts for the rail's Skills badge before the page is visited
         Shell.Navigate(options.Page ?? Area.Sessions);
     }
 
@@ -59,8 +63,17 @@ public sealed partial class AppComposition : IDisposable
     /// </summary>
     public void Dispose()
     {
-        _board?.Dispose();
+        DisposeBoard();
+        DisposeSafety();
+        DisposeSecrets();
+        _skills?.Dispose();
         (_modelService as IDisposable)?.Dispose();
+        // A2 ops: the Jobs, MCP and Gateway view models and the demo services that follow the Board's.
+        _jobs?.Dispose();
+        _mcp?.Dispose();
+        _gateway?.Dispose();
+        (_mcpService as IDisposable)?.Dispose();
+        (_gatewayService as IDisposable)?.Dispose();
         SessionHub.Dispose();
         (SessionService as IDisposable)?.Dispose();
     }

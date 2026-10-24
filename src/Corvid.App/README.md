@@ -46,7 +46,14 @@ It restores and passes the boundary checker here, but has not been built or run,
 
 `CORVID_APP_RENDERER=software` draws with Skia on the CPU instead of OpenGL (see the harness check below).
 
-Keys so far: `Ctrl+B` the dock, `Ctrl+Shift+B` the rail, `Ctrl+,` Settings, `Esc` closes an overlay. On the Sessions
+The window's own keys come from the key map (`Corvid.App.Core/Keys/KeyMap.cs`, `ui.md` §6) and can be remapped at once
+in Settings › Keybindings: `Ctrl+K` and `Ctrl+P` the command palette, `Ctrl+Tab` the session switcher (again for the
+next, `Ctrl+Shift+Tab` back), `Ctrl+R` prompt history, `Ctrl+F` find in the session, `Ctrl+Shift+F` search across
+sessions, `Alt+P` switch the generator, `F1` and `?` (outside a text field) the shortcuts, `Ctrl+N`, `Ctrl+Shift+N` and
+`Ctrl+;` the surfaces of what comes later, `Ctrl+B` the dock, `Ctrl+Shift+B` the rail, `Ctrl+,` Settings,
+`Ctrl+Shift+C` Review, `Esc` closes the palette or an overlay. A page's own key on the same gesture (Audit's, Memory's
+and Skills' `Ctrl+F`, Models' `Alt+P`) wins while that area shows; a new page key goes into `KeyMap`'s defaults and
+`KeyMap.ContextsOf` so the help and the conflict check know it. On the Sessions
 page: `Enter` sends (queued while a turn runs), `Shift+Enter` breaks the line, `Ctrl+Enter` steers, `Esc` interrupts,
 `Esc Esc` on an idle empty composer opens Rewind, `Up` takes the last queued message back, `Shift+Tab` cycles the
 approval mode, `Ctrl+S` puts the draft aside; on an open approval card the first `Enter` focuses it, then `1` to `5`
@@ -56,7 +63,14 @@ and `Alt+Right` move a focused escalation-ladder step (or drag it by its grip), 
 placement editor. `Ctrl+Shift+C` opens Review from anywhere; on Review `Up` and `Down` move through the file list. On
 Audit: `Up` and `Down` move between event rows, `Enter`
 and `Space` open the focused row, `Ctrl+F` puts the caret in the "path or tool" filter, and `Esc` first shows every
-event again after a detection's link narrowed the log, then closes the open event. The rest of the keyboard map
+event again after a detection's link narrowed the log, then closes the open event. On Skills: `Ctrl+1` to `Ctrl+4` pick
+Review, Library, History and Import, `Ctrl+F` puts the caret in the filter (`Esc` there clears it), `Up` and `Down` in
+the library or the history open the next or previous row, `Esc` closes the open skill or commit; in a draft's editor
+`Ctrl+Enter` approves as edited and `Esc` undoes the edit, in a reason `Enter` rejects. On Jobs and MCP, `Up` and `Down`
+move between jobs or servers from a focused row and `Enter` opens it; on Jobs, MCP and Gateway, `Esc` closes an open
+question (remove, trust, forget, pair as owner, revoke), then the form or allowlist editor. On Safety: `Delete` on a rule's
+Remove… asks to remove it, the question's Remove takes focus, and `Esc` stops asking. On Secrets: `Enter` in Set a
+secret…'s name field starts the set, and `Esc` closes the picker. The rest of the keyboard map
 (`docs/plan/ui.md` §6) comes with the screens it drives.
 
 ## The harness check
@@ -103,15 +117,19 @@ src/Corvid.App/
                              PhoneTabItem, DockTab, LinkButton, PitchedStackPanel, WrapRowPanel, CorvidButton (.btn),
                              ToneRow (.row), ColumnsPanel, Meter, RichText (runs from the markdown model), MarkdownView,
                              DiffRowsView, HintLine (key caps)
-  Shell/                     ShellPage (the window's content), RailView, StatusBarView, AreaPages, IDockProvider,
-                             EqualColumnsPanel
+  Shell/                     ShellPage (the window's content), RailView, StatusBarView (+ FitRowPanel), AreaPages, IDockProvider,
+                             EqualColumnsPanel, CommandPalette (Ctrl+K, the switcher, history, find, help), KeyGestures
   Pages/                     one <Area>Page.xaml per area; SessionsDock and BoardDock are those areas' dock panels;
-                             ModelsStyles.xaml and SpanText are the Models and First run pages' shared parts
+                             ModelsStyles.xaml and SpanText are the Models and First run pages' shared parts;
+                             Jobs, MCP and Gateway also merge ModelsStyles.xaml, and share OpsStyles.xaml (row button,
+                             fields, pairing code) and OpsLayout (head, columns, tables, focus after a change)
   Infrastructure/            UiDispatcher (the core's IDispatcher), Ui (x:Bind helpers), AppLogging
 src/Corvid.App.Core/
   Mvvm/                      ObservableObject, RelayCommand(<T>), AsyncRelayCommand, Choice, IDispatcher, InlineDispatcher
   Shell/                     ShellViewModel, StatusBarViewModel, NavItem, SessionListItem, PhoneTab, ShellLayout, DemoShell
-  Composition/               AppComposition, one partial file per area
+  Composition/               AppComposition, one partial file per area (and AppComposition.Palette)
+  Keys/                      KeyMap (every key with its context, remapping, conflicts), KeyGesture
+  Palette/                   PaletteViewModel (commands, pages, settings, sessions, prompt history, find), FuzzyMatch
   <Area>/                    each area's view model (and, as the area is built, its service, DTOs and demo service)
   Area.cs, AppOptions.cs, IconKind.cs, AppTheme.cs (with Tone), FrozenTimeProvider.cs, AreaViewModel.cs
 ```
@@ -187,6 +205,56 @@ And from the A1 screens:
   focus itself on `Loaded` (`IsTabStop` and a programmatic `Focus`).
 - Closing an inline editor sends focus to the next item's first button, which then looks pressed: focus the page before
   the command runs.
+
+And from A2:
+
+- Uno fires the first matching `KeyboardAccelerator` in registration order, whatever has focus, and stops there even
+  when the handler leaves `args.Handled` false. So the shell leaves unbound a window gesture the showing page also binds
+  (`KeyMap.IsPagesKey`), and a page key that shares a window key's gesture must be in `KeyMap`'s defaults.
+- A `Tapped` that follows the `Click` that opened an overlay lands on the overlay's scrim: use `PointerPressed` on
+  scrims, as `CommandPalette` does. Tab gestures never reach accelerators; the shell handles them in `PreviewKeyDown`.
+- Uno refuses focus to a control that has not been laid out since it became visible; `OpsLayout.FocusWhenShown` waits
+  for its layout.
+- A template's `x:Bind` to a static source (`SessionsLayout.Current.IsPhone`) is read when the template is made and not
+  again: the window starts at one width and is resized, so the Sessions page makes its transcript again when the width
+  class changes. That takes three steps, since the repeater otherwise hands back its old elements bound as before:
+  clear the source and lay out, replace the templates' `RecyclePool`s, and set each element it kept anyway (a focused
+  one) to its data context again. A nested item template is not rebound by that, so a list that differs by width is two
+  lists, one shown per width (the card's reasons). A row that must follow the width (First run's checks) sets itself on
+  its own `SizeChanged`.
+- An `ItemsRepeater` let Tab reach only its first focusable control; the transcript sets `TabFocusNavigation="Local"`.
+- The status bar's row (`FitRowPanel`) gives way whole and by priority: each tag is its own item, "tainted" never gives
+  way, and the right-hand item is in the same contest. An item that gave way leaves the tab order until it shows again.
+  The right-hand item is the area's own (the Board's activity, Audit's log size, the first run's step) or else the open
+  session's (`StatusBarViewModel.ShownTrailing`), so every page says the same while a turn runs; an area that writes one
+  gives it back when it goes.
+- The bell counts every attention item across sources (`ShellViewModel.SetAttention`: the sessions' approvals and
+  questions, and the tray's other items, such as a memory review or a pairing request): 5 in the demo, where `Main.png`
+  and `Phone.png` draw 3 (the mockups disagree among themselves). The sum is the right count for a tray that lists all
+  of them, so it stays.
+
+## The phone layout and accessibility
+
+Under 720 px (Phone.png): the top bar (the menu, the session's or area's title, one tag of the status bar's, the bell)
+and the bottom bar (Chat to Sessions, Changes to Review, Attention to the Board and its tray, More to the rail). The tag
+is "tainted" whenever the bar has it (taint always shows), otherwise the first. The top bar's title is the page's
+level-1 heading where the page drops its own title on the phone, and not a heading where it keeps it (Review, Rewind,
+Models, Audit, the first run). The first run's setup has neither the bottom bar nor the menu, bell and workspace line
+(`ShellViewModel.SetupShowing`). On the session the header, the key hint and the composer's bar go; the turn strip
+shows while the turn works or has a queue, not while it waits on an answer (the card says so); the composer is
+one line with a 44 px send button; the approval card leaves the command to the tool card above it, shows compact parsed
+rows (the command, its effects, each target), the short reasons, and full-width answers with the denials side by side
+(`PhoneAnswersPanel`). Other areas lay out in one column; their wide tables scroll sideways inside their panels.
+
+Accessibility (`ui.md` §4.15), as built: icon-only buttons are named and every page has a level-1 heading (both checked
+over every XAML file by `AccessibilityMarkupTests`, with notice and error rows as live regions); the rail's areas and
+sessions, the dock's tabs and the phone's tabs report which is current through `SelectableButtonAutomationPeer`; diffs
+draw `+` and `−` in the gutter as well as their colours; the Sessions page announces the turn's step politely (without
+its ticking time, `TurnStripStatus`) and an approval, a question or a finished turn assertively; the command palette
+marks its selected row with a bar as well as its colour and says it politely as the arrows move it ("Go to Board, 2 of
+42"). Uno's X11 head has no
+AT-SPI bridge, so on Linux no screen reader sees the app; the peers and live regions are for the Windows and macOS
+heads and are unverified with a real screen reader.
 
 ## Fonts
 

@@ -21,6 +21,12 @@ public sealed partial class TranscriptTemplateSelector : DataTemplateSelector
     public DataTemplate? Question { get; set; }
     public DataTemplate? Command { get; set; }
 
+    /// <summary>Every template the selector picks from.</summary>
+    public IEnumerable<DataTemplate> Templates => new[]
+    {
+        User, TurnHeader, Decisions, Switch, Tool, Approval, Taint, Answer, Thought, Notice, Detection, Compaction, Rewind, Question, Command,
+    }.OfType<DataTemplate>();
+
     protected override DataTemplate? SelectTemplateCore(object item) => item is TranscriptBlock block
         ? block.Kind switch
         {

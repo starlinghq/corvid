@@ -16,7 +16,10 @@ public sealed class DemoBoardServiceTests
 
         Assert.Equal([AttentionKind.McpTool, AttentionKind.Pairing, AttentionKind.Memory, AttentionKind.Job], items.Select(item => item.Kind));
         Assert.Equal("Pairing · Telegram · @dana · code ABCD-EFGH", items[1].What);
-        Assert.Equal(["Pair as guest", "Pair as owner", "Ignore"], items[1].Actions.Select(action => action.Label));
+        Assert.Equal(["Pair as guest…", "Pair as owner…", "Ignore"], items[1].Actions.Select(action => action.Label));
+        // Only Ignore answers from the tray: pinning and pairing lead to the area's card.
+        Assert.Equal([AttentionActionKind.Navigate, AttentionActionKind.Navigate, AttentionActionKind.Resolve], items[1].Actions.Select(action => action.Kind));
+        Assert.Equal(AttentionActionKind.Navigate, Assert.Single(items[0].Actions).Kind);
         Assert.Equal(AttentionActionStyle.Danger, items[1].Actions[2].Style);
         var run = Assert.Single(items[3].Actions);
         Assert.Equal(AttentionActionKind.OpenSession, run.Kind);
@@ -31,14 +34,17 @@ public sealed class DemoBoardServiceTests
         var changes = 0;
         service.AttentionChanged += (_, _) => changes++;
 
-        await service.ResolveAsync(DemoBoardService.McpItemId, "diff", TestContext.Current.CancellationToken);
-        await service.ResolveAsync("nothing", "accept", TestContext.Current.CancellationToken);
+        await service.ResolveAsync(DemoBoardService.McpItemId, "review", TestContext.Current.CancellationToken);
+        await service.ResolveAsync(DemoBoardService.McpItemId, "accept", TestContext.Current.CancellationToken);
+        await service.ResolveAsync(DemoBoardService.PairingItemId, "guest", TestContext.Current.CancellationToken);
+        await service.ResolveAsync(DemoBoardService.PairingItemId, "owner", TestContext.Current.CancellationToken);
+        await service.ResolveAsync("nothing", "ignore", TestContext.Current.CancellationToken);
         Assert.Equal(0, changes);
         Assert.Equal(4, (await service.ListAttentionAsync(TestContext.Current.CancellationToken)).Count);
 
-        await service.ResolveAsync(DemoBoardService.McpItemId, "accept", TestContext.Current.CancellationToken);
+        await service.ResolveAsync(DemoBoardService.PairingItemId, "ignore", TestContext.Current.CancellationToken);
         Assert.Equal(1, changes);
-        Assert.DoesNotContain(await service.ListAttentionAsync(TestContext.Current.CancellationToken), item => item.Id == DemoBoardService.McpItemId);
+        Assert.DoesNotContain(await service.ListAttentionAsync(TestContext.Current.CancellationToken), item => item.Id == DemoBoardService.PairingItemId);
     }
 
     [Fact]

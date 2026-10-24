@@ -38,14 +38,16 @@
           <ColumnDefinition Width="Auto" />
         </Grid.ColumnDefinitions>
         <controls:IconButton Icon="Menu" VerticalAlignment="Center" Command="{x:Bind ViewModel.ToggleRailCommand}"
-                             AutomationProperties.Name="Sessions" ToolTipService.ToolTip="Sessions and areas" />
+                             Visibility="{x:Bind infra:Ui.VisibleIf(ViewModel.ShowPhoneTabs), Mode=OneWay}"
+                             AutomationProperties.Name="Sessions and areas" ToolTipService.ToolTip="Sessions and areas" />
         <StackPanel Grid.Column="1" VerticalAlignment="Center">
-          <TextBlock Text="{x:Bind ViewModel.PhoneTitle, Mode=OneWay}" Style="{StaticResource CorvidSessionTitle}" FontSize="14"
+          <!-- The level-1 heading where the page drops its own title on the phone (ShellViewModel.PhoneTitleIsHeading). -->
+          <TextBlock x:Name="PhoneTitleText" Text="{x:Bind ViewModel.PhoneTitle, Mode=OneWay}" Style="{StaticResource CorvidSessionTitle}" FontSize="14"
                      LineHeight="20.3" AutomationProperties.HeadingLevel="Level1" />
-          <TextBlock Text="{x:Bind ViewModel.Workspace, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" TextWrapping="NoWrap"
-                     TextTrimming="CharacterEllipsis" />
+          <TextBlock Text="{x:Bind ViewModel.PhoneSubtitle, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" TextWrapping="NoWrap"
+                     TextTrimming="CharacterEllipsis" Visibility="{x:Bind infra:Ui.VisibleIfText(ViewModel.PhoneSubtitle), Mode=OneWay}" />
         </StackPanel>
-        <ItemsControl Grid.Column="2" ItemsSource="{x:Bind ViewModel.StatusBar.Tags, Mode=OneWay}" IsTabStop="False" VerticalAlignment="Center">
+        <ItemsControl Grid.Column="2" ItemsSource="{x:Bind ViewModel.PhoneTags, Mode=OneWay}" IsTabStop="False" VerticalAlignment="Center">
           <ItemsControl.ItemsPanel>
             <ItemsPanelTemplate>
               <StackPanel Orientation="Horizontal" Spacing="6" />
@@ -61,6 +63,7 @@
         <controls:IconButton Grid.Column="3" Icon="Bell" VerticalAlignment="Center"
                              Count="{x:Bind ViewModel.AttentionText, Mode=OneWay}"
                              Command="{x:Bind ViewModel.OpenAttentionCommand}"
+                             Visibility="{x:Bind infra:Ui.VisibleIf(ViewModel.ShowPhoneTabs), Mode=OneWay}"
                              AutomationProperties.Name="{x:Bind ViewModel.AttentionName, Mode=OneWay}" />
       </Grid>
 
@@ -86,7 +89,7 @@
       <!-- .ph-bar: the phone's bottom bar. -->
       <Grid Grid.Row="2" Grid.ColumnSpan="3" Padding="4,6,4,10" Background="{ThemeResource CorvidBg2}"
             BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,1,0,0"
-            Visibility="{x:Bind infra:Ui.VisibleIf(ViewModel.ShowPhoneBars), Mode=OneWay}"
+            Visibility="{x:Bind infra:Ui.VisibleIf(ViewModel.ShowPhoneTabs), Mode=OneWay}"
             AutomationProperties.Name="Sections">
         <ItemsControl ItemsSource="{x:Bind ViewModel.PhoneTabs}" IsTabStop="False">
           <ItemsControl.ItemsPanel>

@@ -51,6 +51,7 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
     private BoardFilter _filter = BoardFilter.All;
     private string _counts = "";
     private string _attentionHead = "Attention";
+    private string? _failure;
     private BoardPeekViewModel? _peek;
     private bool _notifyWhenUnfocused;
     private ITimer? _ticker;
@@ -211,7 +212,7 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         {
             _areaItems = [];
             _status = new BoardStatus("unreachable", "", "", "");
-            AttentionHead = $"Attention · could not load: {exception.Message}";
+            _failure = $"could not load: {SafeText.Clean(exception.Message)}";
         }
 
         RebuildAttention();
@@ -237,7 +238,8 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         else
         {
             card = new SessionCardViewModel(summary, _time.GetUtcNow(), _time.LocalTimeZone, card => Open(card.Id), OpenPeek,
-                () => _shell.Navigate(Area.Jobs));
+                // A job run's link to Jobs names the run, so Jobs lands on its job with the run marked.
+                () => _shell.Follow(new AreaLink(Area.Jobs, summary.Id)));
             _cards[summary.Id] = card;
             card.PropertyChanged += OnCardChanged;
             _ = WatchAsync(card);
@@ -327,7 +329,8 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            AttentionHead = $"Attention · could not load: {exception.Message}";
+            _failure = $"could not load: {SafeText.Clean(exception.Message)}";
+            RebuildAttention();
             return;
         }
 
@@ -350,7 +353,7 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         foreach (var item in _areaItems)
             wanted.Add(Reuse(AreaItem(item)));
         Sync(Attention, wanted);
-        AttentionHead = $"Attention · {Attention.Count}";
+        AttentionHead = _failure is null ? $"Attention · {Attention.Count}" : $"Attention · {Attention.Count} · {_failure}";
         OnPropertyChanged(nameof(HasAttention));
         // The bell counts the sessions' items itself (SessionHub); the areas' items are reported here.
         _shell.SetAttention(DemoShell.AreasAttention, _areaItems.Count);
@@ -417,17 +420,20 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         try
         {
             await _hub.Service.AnswerQuestionAsync(sessionId, questionId, answer).ConfigureAwait(true);
+            _failure = null;
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            AttentionHead = $"Attention · could not answer: {exception.Message}";
+            _failure = $"could not answer: {SafeText.Clean(exception.Message)}";
         }
+
+        RebuildAttention();
     }
 
     private AttentionItemViewModel AreaItem(AttentionItem item)
     {
-        // An area's item can carry outside names (an MCP tool's, a pairing handle): drawn cleaned; its buttons' labels are
-        // the area's own words.
+        // An area's item can carry outside names (an MCP tool's, a pairing handle): drawn cleaned, since its buttons grant
+        // nothing here; they lead to the area's card, which reveals what it grants. Their labels are the area's own words.
         var buttons = item.Actions.Select(action => new AttentionButton(action.Label, action.Style, SafeText.Clean(action.Help),
             new RelayCommand(() => Act(item, action)), action.IsLink)).ToList();
         return new AttentionItemViewModel(item.Id, item.Kind, SafeText.Clean(item.What), SafeText.Clean(item.Detail), buttons);
@@ -437,6 +443,10 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
     {
         switch (action.Kind)
         {
+            // A target is followed as a link, so the area lands on it (the held tool's card, the pairing's question).
+            case AttentionActionKind.Navigate when action.Area is { } area && action.Target is { } target:
+                _shell.Follow(new AreaLink(area, null) { Name = target });
+                break;
             case AttentionActionKind.Navigate when action.Area is { } area:
                 _shell.Navigate(area);
                 break;
@@ -449,31 +459,24 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         }
     }
 
+    /// <summary>
+    /// Answers an area's item. A refusal leaves the item listed and says why in the tray's head. Rail badges are not the
+    /// tray's to write: each area counts its own (MCP's held tools come from the MCP service).
+    /// </summary>
     private async Task ResolveAsync(AttentionItem item, string actionId)
     {
         try
         {
             await _service.ResolveAsync(item.Id, actionId).ConfigureAwait(true);
-            // An answered item no longer counts on its area's rail badge (an accepted MCP pin clears MCP's).
-            if (BadgeArea(item.Kind) is { } area)
-            {
-                _areaItems = await _service.ListAttentionAsync().ConfigureAwait(true);
-                _shell.SetBadge(area, _areaItems.Count(listed => listed.Kind == item.Kind));
-                RebuildAttention();
-            }
+            _failure = null;
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            AttentionHead = $"Attention · could not answer: {exception.Message}";
+            _failure = $"could not answer: {SafeText.Clean(exception.Message)}";
         }
-    }
 
-    /// <summary>The rail item whose badge counts an area's items of this kind: MCP's held tools.</summary>
-    private static Area? BadgeArea(AttentionKind kind) => kind switch
-    {
-        AttentionKind.McpTool => Area.Mcp,
-        _ => null,
-    };
+        RebuildAttention();
+    }
 
     // ---- Peek ----
 

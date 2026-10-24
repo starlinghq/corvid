@@ -82,6 +82,7 @@ public sealed partial class SessionsPage : Page, IDockProvider
         ViewModel = _composition.Sessions;
         _dock.ViewModel = ViewModel;
         ViewModel.PropertyChanged += OnViewModelChanged;
+        ViewModel.RevealRequested += OnRevealRequested;
         _composition.Shell.PropertyChanged += OnShellChanged;
         ApplyLayout();
         Bindings.Update();
@@ -92,6 +93,7 @@ public sealed partial class SessionsPage : Page, IDockProvider
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
         ViewModel.PropertyChanged -= OnViewModelChanged;
+        ViewModel.RevealRequested -= OnRevealRequested;
         if (_composition is not null)
             _composition.Shell.PropertyChanged -= OnShellChanged;
         Detach();
@@ -107,6 +109,8 @@ public sealed partial class SessionsPage : Page, IDockProvider
     public static Thickness SolidBorder(bool unsure) => unsure ? default : new Thickness(1);
 
     public static string Prefixed(string prefix, string? text) => string.IsNullOrEmpty(text) ? "" : prefix + text;
+
+    public static string Suffixed(string? text, string suffix) => string.IsNullOrEmpty(text) ? "" : text + suffix;
 
     public static string Dotted(string? text) => string.IsNullOrEmpty(text) ? "" : "· " + text;
 
@@ -152,6 +156,22 @@ public sealed partial class SessionsPage : Page, IDockProvider
     /// <summary>The phone's shorter words where it has them ("Approval 1 of 2", "4:12 left").</summary>
     public static string Pick(bool phone, string phoneText, string text) => phone ? phoneText : text;
 
+    /// <summary>The card's head: 8px 12px on the phone, 10px 14px otherwise.</summary>
+    public static Thickness CardHeadPadding(bool phone) => phone ? new Thickness(12, 8, 12, 8) : new Thickness(14, 10, 14, 10);
+
+    /// <summary>The card's body: 10px 12px with 8 between its parts on the phone, 12px 14px with 10 otherwise.</summary>
+    public static Thickness CardBodyPadding(bool phone) => phone ? new Thickness(12, 10, 12, 10) : new Thickness(14, 12, 14, 12);
+
+    public static double CardSpacing(bool phone) => phone ? 8 : 10;
+
+    /// <summary>A list shown at one width class only, and only when it has items.</summary>
+    public static Visibility WhenAny(bool phone, bool phoneOnly, System.Collections.IEnumerable? items) =>
+        phone == phoneOnly ? Infrastructure.Ui.VisibleIfAny(items) : Visibility.Collapsed;
+
+    /// <summary>The next prompt in the queue: the long line on a desktop, the short one on the phone.</summary>
+    public static Visibility NextVisible(bool hasNext, bool phone, bool phoneLine) =>
+        hasNext && phone == phoneLine ? Visibility.Visible : Visibility.Collapsed;
+
 
     /// <summary>A command's table as aligned monospace columns.</summary>
     public static string Table(IReadOnlyList<string> columns, IReadOnlyList<IReadOnlyList<string>> rows)
@@ -171,21 +191,123 @@ public sealed partial class SessionsPage : Page, IDockProvider
             ApplyLayout();
     }
 
-    /// <summary>Under 860 px the gutters are 14 px (Main-narrow.png); the phone drops the header and the key hint.</summary>
+    /// <summary>
+    /// Under 860 px the gutters are 14 px (Main-narrow.png). The phone (Phone.png) drops the header and the key hint, keeps
+    /// the turn strip only for a queue, and has a one-line composer with a send button and no bar under it.
+    /// </summary>
     private void ApplyLayout()
     {
         var layout = _composition?.Shell.Layout ?? ShellLayout.Wide;
+        var wasPhone = SessionsLayout.Current.IsPhone;
+        var wasNarrow = SessionsLayout.Current.IsNarrow;
         SessionsLayout.Current.Layout = layout;
         var narrow = SessionsLayout.Current.IsNarrow;
+        var phone = SessionsLayout.Current.IsPhone;
         var side = narrow ? 14 : 24;
         TranscriptBody.Padding = new Thickness(side, narrow ? 12 : 16, side, 8);
         TurnStrip.Padding = new Thickness(side, 6, side, 6);
-        ComposerArea.Padding = new Thickness(side, 10, side, 12);
+        ComposerArea.Padding = phone ? new Thickness(12, 8, 12, 8) : new Thickness(side, 10, side, 12);
         Header.Padding = new Thickness(narrow ? 14 : 20, 10, narrow ? 14 : 20, 10);
         // Set here, not bound: the page's own x:Bind paths do not follow a static source's changes.
-        var phone = SessionsLayout.Current.IsPhone;
         Header.Visibility = phone ? Visibility.Collapsed : Visibility.Visible;
         HintHost.Visibility = phone ? Visibility.Collapsed : Visibility.Visible;
+        ComposerBar.Visibility = phone ? Visibility.Collapsed : Visibility.Visible;
+        PhoneSendButton.Visibility = phone ? Visibility.Visible : Visibility.Collapsed;
+        Composer.MinHeight = phone ? 44 : 60;
+        Composer.MaxHeight = phone ? 120 : 220;
+        Composer.Padding = phone ? new Thickness(12, 11, 12, 11) : new Thickness(12, 10, 12, 10);
+        Composer.PlaceholderText = phone ? PhonePlaceholder : SessionViewModel.ComposerPlaceholder;
+        UpdateTurnStrip();
+
+        // The templates read the width class when they are made: Uno does not re-evaluate their static-rooted x:Bind paths
+        // when it changes (the window starts at one width and is resized), so the transcript is made again, once. The
+        // repeater would take its old elements back from the templates' recycle pools, bound as before, so the pools are
+        // replaced with empty ones first.
+        if ((phone != wasPhone || narrow != wasNarrow) && Transcript.ItemsSource is { } blocks)
+        {
+            // The repeater keeps the element that holds focus rather than letting it go, so focus leaves the transcript
+            // first and comes back to the card's answer once the new elements exist.
+            var focusInside = XamlRoot is { } root && FocusManager.GetFocusedElement(root) is DependencyObject focused && IsWithin(focused, Transcript);
+            var refocusCard = focusInside && _session?.CurrentApproval is { IsFocused: true };
+            if (focusInside)
+                Composer.Focus(FocusState.Programmatic);
+            Transcript.ItemsSource = null;
+            // The repeater lets its elements go in its next layout pass: run it now, so they reach the old pools.
+            Transcript.UpdateLayout();
+            if (Resources["BlockTemplates"] is TranscriptTemplateSelector selector)
+            {
+                foreach (var template in selector.Templates)
+                    RecyclePool.SetPoolInstance(template, new RecyclePool());
+            }
+
+            Transcript.ItemsSource = blocks;
+            _positioned = false;
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            {
+                // An element the repeater kept anyway (it can hold on to one it had focused) is bound again: a template's
+                // x:Bind reads every path, the width class too, when its data context is set.
+                for (var i = 0; i < VisualTreeHelper.GetChildrenCount(Transcript); i++)
+                {
+                    if (VisualTreeHelper.GetChild(Transcript, i) is FrameworkElement { DataContext: { } data } element)
+                    {
+                        element.DataContext = null;
+                        element.DataContext = data;
+                    }
+                }
+
+                PositionAtLatest();
+                // After the rebound card has drawn its answers for the new width.
+                if (refocusCard)
+                    DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, FocusApproval);
+            });
+        }
+    }
+
+    private static bool IsWithin(DependencyObject element, DependencyObject ancestor)
+    {
+        for (var current = element; current is not null; current = VisualTreeHelper.GetParent(current))
+        {
+            if (ReferenceEquals(current, ancestor))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>Phone.png's composer: the short placeholder, the prefixes being for a keyboard.</summary>
+    private const string PhonePlaceholder = "Ask Corvid…";
+
+    /// <summary>
+    /// The turn strip shows while a turn runs, waits or has a queue. On the phone it shows while the turn works or has a
+    /// queue, but not while it waits on an answer (Phone.png: the open card says so and takes the room). The phone has
+    /// no status bar, so without the strip nothing would say a turn is running, or for how long.
+    /// </summary>
+    private void UpdateTurnStrip()
+    {
+        var show = _session is { ShowTurnStrip: true } session && (!SessionsLayout.Current.IsPhone || session.HasQueue || session.IsWorking);
+        TurnStrip.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// A read-only session (a job's, one another window drives) asks nothing, compacts nothing and is not rewound from
+    /// here: the header's Aside, Rewind and Compact… draw disabled and say why.
+    /// </summary>
+    private void UpdateReadOnly()
+    {
+        var readOnly = _session is { IsReadOnly: true };
+        foreach (var button in new Control[] { AsideButton, RewindButton, CompactButton })
+        {
+            button.IsEnabled = !readOnly;
+            if (readOnly)
+                ToolTipService.SetToolTip(button, "This session is read-only here.");
+        }
+
+        if (!readOnly)
+        {
+            ToolTipService.SetToolTip(AsideButton, "A side question in a scratch fork (Ctrl+;); it comes with flow F7, and this says so");
+            ToolTipService.SetToolTip(RewindButton, "The session's checkpoint timeline (Esc Esc)");
+            ToolTipService.SetToolTip(CompactButton, "Summarise older context now, with an optional focus");
+        }
     }
 
     // ---- The session ----
@@ -208,12 +330,18 @@ public sealed partial class SessionsPage : Page, IDockProvider
         if (_session is null)
         {
             UpdateJump();
+            UpdateTurnStrip();
+            UpdateReadOnly();
+            ResetAnnouncements(null);
             return;
         }
 
         _session.PropertyChanged += OnSessionChanged;
         _session.FocusRequested += OnFocusRequested;
         _session.Blocks.CollectionChanged += OnBlocksChanged;
+        ResetAnnouncements(_session);
+        UpdateTurnStrip();
+        UpdateReadOnly();
         UpdateSpinner();
         UpdateJump();
         WatchApproval();
@@ -243,12 +371,67 @@ public sealed partial class SessionsPage : Page, IDockProvider
 
         if (e.PropertyName is nameof(SessionViewModel.CurrentApproval) or null or "")
             WatchApproval();
+        if (e.PropertyName is nameof(SessionViewModel.ShowTurnStrip) or nameof(SessionViewModel.HasQueue) or nameof(SessionViewModel.IsWorking) or null or "")
+            UpdateTurnStrip();
+        if (e.PropertyName is nameof(SessionViewModel.IsReadOnly) or null or "")
+            UpdateReadOnly();
+        UpdateAnnouncements(e.PropertyName);
+    }
+
+    // ---- Live regions (docs/plan/ui.md §4.15) ----
+
+    private ApprovalCardBlock? _announcedApproval;
+    private QuestionBlock? _announcedQuestion;
+    private bool _wasRunning;
+
+    /// <summary>What a screen reader hears without moving focus: the step as it changes, then an approval, a question or a finished turn.</summary>
+    private void UpdateAnnouncements(string? property)
+    {
+        if (_session is not { } session)
+            return;
+        if (property is nameof(SessionViewModel.TurnStripStatus) or null or "")
+            Raise(StepAnnouncer, session.TurnStripStatus);
+        if (session.CurrentApproval is { } card && !ReferenceEquals(card, _announcedApproval))
+            Announce($"Approval needed. {card.AutomationName}");
+        _announcedApproval = session.CurrentApproval;
+        if (session.PendingQuestion is { } question && !ReferenceEquals(question, _announcedQuestion))
+            Announce($"Corvid asks: {question.Text}");
+        _announcedQuestion = session.PendingQuestion;
+        if (_wasRunning && !session.IsRunning)
+            Announce("The turn finished.");
+        _wasRunning = session.IsRunning;
+    }
+
+    /// <summary>Starts from the session as it is when the page opens: only what happens after is announced.</summary>
+    private void ResetAnnouncements(SessionViewModel? session)
+    {
+        _announcedApproval = session?.CurrentApproval;
+        _announcedQuestion = session?.PendingQuestion;
+        _wasRunning = session?.IsRunning == true;
+        StepAnnouncer.Text = session?.TurnStripStatus ?? "";
+        Announcer.Text = "";
+    }
+
+    private void Announce(string text) => Raise(Announcer, text);
+
+    private static void Raise(TextBlock region, string text)
+    {
+        if (region.Text == text)
+            return;
+        region.Text = text;
+        AutomationProperties.SetName(region, text);
+        Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(region)
+            ?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged);
     }
 
     private void OnFocusRequested(object? sender, SessionFocusTarget target)
     {
         if (target == SessionFocusTarget.Composer)
+        {
             Composer.Focus(FocusState.Programmatic);
+            // With the caret after the draft, so typing goes on from it (a prompt put back from the history).
+            Composer.SelectionStart = Composer.Text.Length;
+        }
         else
             FocusApproval();
     }
@@ -387,7 +570,8 @@ public sealed partial class SessionsPage : Page, IDockProvider
         }
 
         var now = DateTimeOffset.UtcNow;
-        if (session.Draft.Length == 0 && now - _lastEscape < DoubleEscape)
+        // A read-only session is not rewound from here, as its header's Rewind says.
+        if (session.Draft.Length == 0 && !session.IsReadOnly && now - _lastEscape < DoubleEscape)
         {
             _lastEscape = default;
             ViewModel.OpenRewindCommand.Execute(null);
@@ -468,8 +652,9 @@ public sealed partial class SessionsPage : Page, IDockProvider
         if (_session is not { } session || _positioned)
             return;
         _positioned = true;
-        var index = -1;
-        for (var i = session.Blocks.Count - 1; i >= 0; i--)
+        // A find (Ctrl+F) that opened the page lands on its block rather than on the latest message.
+        var index = RevealIndex(session);
+        for (var i = session.Blocks.Count - 1; i >= 0 && index < 0; i--)
         {
             if (session.Blocks[i].Kind == TranscriptBlockKind.User)
             {
@@ -487,6 +672,39 @@ public sealed partial class SessionsPage : Page, IDockProvider
         ScrollToBlock(index);
         // The repeater estimates the heights of blocks it has not drawn; once the ones around the target are drawn the
         // estimate can move it, so the position is taken again after that layout.
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            if (_session is not null && index < _session.Blocks.Count)
+                ScrollToBlock(index);
+        });
+    }
+
+    /// <summary>The header's Aside: the same surface as Ctrl+;, which says what asides come with.</summary>
+    private void OnAside(object sender, RoutedEventArgs e) => _composition?.Palette.Execute(Corvid.App.Core.Keys.KeyCommands.Aside);
+
+    /// <summary>The index of the block find-in-session asked for, taken once; -1 when none was asked or it is gone.</summary>
+    private int RevealIndex(SessionViewModel session)
+    {
+        if (ViewModel.TakeReveal() is not { } id)
+            return -1;
+        for (var i = 0; i < session.Blocks.Count; i++)
+        {
+            if (session.Blocks[i].Id == id)
+                return i;
+        }
+
+        return -1;
+    }
+
+    /// <summary>Find chose a block while the page shows: scroll to it now (and once more after the repeater's layout).</summary>
+    private void OnRevealRequested(object? sender, EventArgs e)
+    {
+        if (!_positioned || _session is not { } session)
+            return;
+        var index = RevealIndex(session);
+        if (index < 0)
+            return;
+        ScrollToBlock(index);
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
             if (_session is not null && index < _session.Blocks.Count)

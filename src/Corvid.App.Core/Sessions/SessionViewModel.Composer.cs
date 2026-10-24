@@ -65,6 +65,7 @@ public sealed partial class SessionViewModel
     private string _draft = "";
     private string? _stash;
     private string _stripText = "";
+    private string _stripStatus = "";
     private IReadOnlyList<HintPart> _hint = [];
 
     /// <summary>The composer's text (two-way). Enter sends it, or queues it while a turn runs.</summary>
@@ -115,6 +116,12 @@ public sealed partial class SessionViewModel
 
     /// <summary>"step 4 of 6 · shell running · 12 s", "step 2 of 6 · waiting on you · 2 approvals".</summary>
     public string TurnStripText { get => _stripText; private set => SetProperty(ref _stripText, value); }
+
+    /// <summary>
+    /// The strip's words without the ticking time ("step 4 of 6 · shell running"), for a polite live region: it changes
+    /// when the step or what runs changes, not every second (docs/plan/ui.md §4.15).
+    /// </summary>
+    public string TurnStripStatus { get => _stripStatus; private set => SetProperty(ref _stripStatus, value); }
 
     /// <summary>The strip's right-hand hint, with key caps: how to steer and interrupt, or how the card takes Enter.</summary>
     public IReadOnlyList<HintPart> Hint { get => _hint; private set => SetProperty(ref _hint, value); }
@@ -230,6 +237,9 @@ public sealed partial class SessionViewModel
         StashDraftCommand.NotifyCanExecuteChanged();
     }
 
+    /// <summary>Whether a draft waits put aside (Ctrl+S); there is room for one.</summary>
+    public bool HasStashedDraft => _stash is not null;
+
     /// <summary>Puts a draft aside as Ctrl+S does (the demo opens with one, as Main.png shows "draft saved").</summary>
     public void StashDraft(string text)
     {
@@ -289,7 +299,8 @@ public sealed partial class SessionViewModel
 
     private void UpdateStrip()
     {
-        TurnStripText = StripText();
+        TurnStripText = StripText(withTime: true);
+        TurnStripStatus = StripText(withTime: false);
         var hint = _currentApproval is not null ? ApprovalHint : _state.Running ? RunningHint : [];
         if (!ReferenceEquals(hint, _hint))
         {
@@ -298,7 +309,7 @@ public sealed partial class SessionViewModel
         }
     }
 
-    private string StripText()
+    private string StripText(bool withTime)
     {
         if (!_state.Running)
             return "";
@@ -316,13 +327,15 @@ public sealed partial class SessionViewModel
         if (running is not null)
         {
             parts.Add($"{SafeText.Clean(running.Tool)} running");
-            parts.Add(SessionText.Duration(Now - running.StartedAt));
+            if (withTime)
+                parts.Add(SessionText.Duration(Now - running.StartedAt));
         }
         else
         {
             var thinking = _state.Transcript.Count > 0 && _state.Transcript[^1] is ThoughtEntry { Streaming: true };
             parts.Add(thinking ? "thinking" : "generating");
-            parts.Add(SessionText.Duration(Now - (_state.ActivitySince ?? _state.TurnStartedAt ?? Now)));
+            if (withTime)
+                parts.Add(SessionText.Duration(Now - (_state.ActivitySince ?? _state.TurnStartedAt ?? Now)));
         }
 
         return string.Join(" · ", parts);

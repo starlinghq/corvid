@@ -23,9 +23,12 @@ public sealed class ShellViewModelTests
         var shell = DemoShellViewModel(out var bar);
 
         Assert.Equal("corvid · main", shell.Workspace);
-        Assert.Equal("3", shell.AttentionText);
-        Assert.Equal("Attention: 3 items waiting", shell.AttentionName);
-        Assert.Equal(["2", "", "3", "1", "", "", "", "", "1", "", "", ""], shell.NavItems.Select(item => item.BadgeText));
+        // The bell counts the Board's attention items from the start (a held MCP tool, a pairing, staged memory, a
+        // finished job) and the question waiting in cli-a410: one count on every page, where Main.png's moment drew 3.
+        Assert.Equal("5", shell.AttentionText);
+        Assert.Equal("Attention: 5 items waiting", shell.AttentionName);
+        // Skills counts the demo's waiting draft from the start, before its page is visited; Main.png draws no Skills badge.
+        Assert.Equal(["2", "", "3", "1", "1", "", "", "", "1", "", "", ""], shell.NavItems.Select(item => item.BadgeText));
         Assert.Equal(["Pinned", "Recent"], shell.SessionGroups.Select(group => group.Title));
         Assert.Equal(
             ["Fix the flaky sandbox test on CI|Running|12 s", "Draft release notes for v0.2|Running|2 m", "Vault policy for ntfy|Idle|1 h", "nightly-tidy run|Job|09:00"],
@@ -54,9 +57,16 @@ public sealed class ShellViewModelTests
         shell.Navigate(Area.Rewind);
         Assert.Equal([Area.Sessions], shell.NavItems.Where(item => item.IsSelected).Select(item => item.Area));
 
+        Assert.True(shell.CurrentSession!.IsSelected);
+        Assert.False(shell.IsSettingsCurrent);
+
         shell.OpenSettingsCommand.Execute(null);
         Assert.Equal(Area.Settings, shell.CurrentArea);
         Assert.DoesNotContain(shell.NavItems, item => item.IsSelected);
+        Assert.True(shell.IsSettingsCurrent);
+        // On another area the open session stays open but its rail row is not marked: the area is the current row.
+        Assert.Equal("cli-9f2e", shell.CurrentSession!.Id);
+        Assert.False(shell.CurrentSession.IsSelected);
 
         shell.OpenDoctorCommand.Execute(null);
         Assert.Equal(Area.FirstRun, shell.CurrentArea);
@@ -168,7 +178,7 @@ public sealed class ShellViewModelTests
         var shell = DemoShellViewModel(out _);
         shell.Layout = ShellLayout.Phone;
 
-        Assert.Equal(["Chat", "Changes|3", "Attention|3", "More"], shell.PhoneTabs.Select(tab => tab.CountText.Length > 0 ? $"{tab.Label}|{tab.CountText}" : tab.Label));
+        Assert.Equal(["Chat", "Changes|3", "Attention|5", "More"], shell.PhoneTabs.Select(tab => tab.CountText.Length > 0 ? $"{tab.Label}|{tab.CountText}" : tab.Label));
         Assert.Equal("Chat", Selected(shell));
         shell.PhoneTabs[1].Open.Execute(null);
         Assert.Equal((Area.Review, "Changes"), (shell.CurrentArea, Selected(shell)));
@@ -184,6 +194,126 @@ public sealed class ShellViewModelTests
         shell.SetBadge(Area.Review, 5);
         Assert.Equal("5", shell.PhoneTabs[1].CountText);
         Assert.Throws<ArgumentOutOfRangeException>(() => shell.SetBadge(Area.Settings, 1));
+    }
+
+    [Fact]
+    public void ThePhoneTopBarShowsOneTagAndTheTabsSayWhichIsCurrent()
+    {
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar) { Layout = ShellLayout.Phone, Workspace = "corvid · main" };
+        var changed = new List<string?>();
+        ((INotifyPropertyChanged)shell).PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        bar.Tags = [new StatusTag("tainted", Tone.Amber), new StatusTag("2 approvals", Tone.Amber)];
+
+        // Phone.png: "tainted" beside the title; the bell counts the approvals.
+        Assert.Equal(["tainted"], shell.PhoneTags.Select(tag => tag.Text));
+        Assert.Contains(nameof(ShellViewModel.PhoneTags), changed);
+        Assert.True(shell.ShowPhoneTabs);
+        Assert.Equal("corvid · main", shell.PhoneSubtitle);
+        // The current tab is said in words as well as drawn in the accent.
+        Assert.Equal(["Chat, current", "Changes", "Attention", "More"], shell.PhoneTabs.Select(tab => tab.AutomationName));
+        shell.Navigate(Area.Review);
+        Assert.Equal(["Chat", "Changes, current", "Attention", "More"], shell.PhoneTabs.Select(tab => tab.AutomationName));
+    }
+
+    [Fact]
+    public void ThePhoneTopBarShowsTaintWhateverComesBeforeIt()
+    {
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar) { Layout = ShellLayout.Phone };
+
+        // A read-only (a job's) session that read outside content: taint always shows (ui.md §7).
+        bar.Tags = [new StatusTag("read-only", Tone.Grey), new StatusTag("tainted", Tone.Amber)];
+        Assert.Equal(["tainted"], shell.PhoneTags.Select(tag => tag.Text));
+
+        bar.Tags = [new StatusTag("sessions unavailable", Tone.Red), new StatusTag("read-only", Tone.Grey), new StatusTag("tainted", Tone.Amber)];
+        Assert.Equal(["tainted"], shell.PhoneTags.Select(tag => tag.Text));
+
+        // Without taint the first tag shows, as before.
+        bar.Tags = [new StatusTag("read-only", Tone.Grey), new StatusTag("2 approvals", Tone.Amber)];
+        Assert.Equal(["read-only"], shell.PhoneTags.Select(tag => tag.Text));
+    }
+
+    [Fact]
+    public void ThePhoneTitleIsTheLevelOneHeadingOnlyWherePagesDropTheirOwn()
+    {
+        var shell = new ShellViewModel(new StatusBarViewModel()) { Layout = ShellLayout.Phone };
+        var changed = new List<string?>();
+        ((INotifyPropertyChanged)shell).PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        Assert.True(shell.PhoneTitleIsHeading);
+        foreach (var area in new[] { Area.Review, Area.Rewind, Area.Models, Area.Audit, Area.FirstRun })
+        {
+            shell.Navigate(area);
+            Assert.False(shell.PhoneTitleIsHeading);
+        }
+
+        foreach (var area in new[] { Area.Settings, Area.Jobs, Area.Mcp, Area.Gateway, Area.Skills, Area.Safety, Area.Secrets, Area.Memory, Area.Board, Area.Sessions })
+        {
+            shell.Navigate(area);
+            Assert.True(shell.PhoneTitleIsHeading);
+        }
+
+        Assert.Contains(nameof(ShellViewModel.PhoneTitleIsHeading), changed);
+    }
+
+    [Fact]
+    public void TheLastItemIsTheSessionsWhereAnAreaHasNoneOfItsOwn()
+    {
+        Assert.True(AppOptions.TryParse(["--demo"], out var options, out var error), error);
+        using var composition = new AppComposition(options, new InlineDispatcher(), ManualTimeProvider.DemoLocal());
+        var shell = composition.Shell;
+        var bar = composition.StatusBar;
+        var session = bar.SessionTrailing;
+        Assert.StartsWith("turn ", session, StringComparison.Ordinal);
+        Assert.Equal(session, bar.ShownTrailing);
+
+        // An area's own item wins while it shows; leaving it never leaves the item behind.
+        _ = composition.Audit;
+        shell.Navigate(Area.Audit);
+        Assert.StartsWith("log ", bar.ShownTrailing, StringComparison.Ordinal);
+        shell.Navigate(Area.Settings);
+        Assert.Equal(session, bar.ShownTrailing);
+        shell.Navigate(Area.Audit);
+        shell.Navigate(Area.Secrets);
+        Assert.Equal(session, bar.ShownTrailing);
+        foreach (var area in new[] { Area.Jobs, Area.Mcp, Area.Gateway, Area.Models, Area.Settings })
+        {
+            if (area == Area.Models)
+                _ = composition.Models;
+            shell.Navigate(area);
+            Assert.Equal(session, bar.ShownTrailing);
+        }
+
+        // A session's item left on a page without its own follows the session rather than standing frozen.
+        bar.SessionTrailing = "turn 50 s";
+        Assert.Equal("turn 50 s", bar.ShownTrailing);
+
+        // An area's "idle" says only that it knows of no turn: the running turn shows over it.
+        bar.Trailing = "idle";
+        Assert.Equal("turn 50 s", bar.ShownTrailing);
+        bar.SessionTrailing = "";
+        Assert.Equal("idle", bar.ShownTrailing);
+    }
+
+    [Fact]
+    public void TheSetupHasNoBottomBarMenuBellOrWorkspaceOnThePhone()
+    {
+        var shell = new ShellViewModel(new StatusBarViewModel()) { Layout = ShellLayout.Phone, Workspace = "corvid · main" };
+
+        shell.SetupShowing = true;
+
+        Assert.True(shell.ShowPhoneBars);
+        Assert.False(shell.ShowPhoneTabs);
+        Assert.Equal("", shell.PhoneSubtitle);
+
+        shell.SetupShowing = false;
+
+        Assert.True(shell.ShowPhoneTabs);
+        Assert.Equal("corvid · main", shell.PhoneSubtitle);
+        shell.Layout = ShellLayout.Wide;
+        Assert.False(shell.ShowPhoneTabs);
     }
 
     [Fact]

@@ -89,7 +89,12 @@
       <!-- .rail-foot: a line above, Settings and Doctor. -->
       <Border Grid.Row="2" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,1,0,0" Padding="8,12,8,0">
         <StackPanel Orientation="Horizontal" Spacing="12">
-          <controls:LinkButton Text="Settings" Command="{x:Bind ViewModel.OpenSettingsCommand}" />
+          <!-- Marked with the accent background, as a current rail row is, while Settings shows. -->
+          <Grid>
+            <Border Background="{ThemeResource CorvidAccentBg}" CornerRadius="6" Margin="-6,-3"
+                    Visibility="{x:Bind infra:Ui.VisibleIf(ViewModel.IsSettingsCurrent), Mode=OneWay}" />
+            <controls:LinkButton Text="Settings" Command="{x:Bind ViewModel.OpenSettingsCommand}" />
+          </Grid>
           <controls:LinkButton Text="Doctor" Command="{x:Bind ViewModel.OpenDoctorCommand}"
                                ToolTipService.ToolTip="The checks corvid doctor runs, each with its fix" />
         </StackPanel>

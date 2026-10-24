@@ -595,7 +595,7 @@ public sealed partial class DemoSessionService
             Branch = "main",
             Surface = "job",
             Job = "nightly-tidy",
-            Schedule = "weekdays at 9am",
+            Schedule = "every day at 9am",
             RunAt = At(9, 0),
         });
         Seed(session, At(9, 0),

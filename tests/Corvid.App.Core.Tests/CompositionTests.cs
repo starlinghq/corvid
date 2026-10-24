@@ -15,6 +15,24 @@ public sealed class CompositionTests
         return new AppComposition(options, new InlineDispatcher(), ManualTimeProvider.DemoLocal());
     }
 
+    [Theory]
+    [InlineData("jobs")]
+    [InlineData("sessions")]
+    [InlineData("mcp")]
+    public void TheBellReadsTheSameWhicheverPageOpensFirstAndVisitingAnotherChangesNothing(string page)
+    {
+        using var reference = Compose("--demo", "--page", "board");
+        _ = reference.Board;
+        var expected = reference.Shell.AttentionCount;
+
+        using var composition = Compose("--demo", "--page", page);
+        Assert.Equal(expected, composition.Shell.AttentionCount);
+        _ = composition.Mcp;
+        _ = composition.Gateway;
+        composition.Shell.Navigate(Area.Mcp);
+        Assert.Equal(expected, composition.Shell.AttentionCount);
+    }
+
     [Fact]
     public void EveryAreaHasAPropertyNamedAfterItThatGivesItsViewModel()
     {

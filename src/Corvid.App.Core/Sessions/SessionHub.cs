@@ -191,6 +191,8 @@ public sealed class SessionHub : IDisposable
 
     private void ApplyStatus()
     {
+        // Every area without a right-hand item of its own shows the session's (StatusBarViewModel.ShownTrailing).
+        _statusBar.SessionTrailing = _current?.StatusTrailing ?? "";
         if (_current is not { } session || !ShowsSessionStatus(_shell.CurrentArea))
             return;
         var bar = _statusBar;

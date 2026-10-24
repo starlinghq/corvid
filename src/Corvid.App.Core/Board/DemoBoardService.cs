@@ -1,3 +1,5 @@
+using Corvid.App.Core.Gateway;
+using Corvid.App.Core.Mcp;
 using Corvid.App.Core.Sessions;
 
 namespace Corvid.App.Core.Board;
@@ -37,13 +39,11 @@ public sealed class DemoBoardService : IBoardService
                 At = At(8, 12),
                 Actions =
                 [
-                    new AttentionAction("diff", "Diff", AttentionActionKind.Navigate)
+                    // Pinning is done on MCP's card, which shows the diff and the hash accept pins; never from a bare button.
+                    new AttentionAction("review", "Review…", AttentionActionKind.Navigate)
                     {
-                        Area = Core.Area.Mcp, Help = "Open MCP with the old and new definition side by side",
-                    },
-                    new AttentionAction("accept", "Accept", AttentionActionKind.Resolve)
-                    {
-                        Style = AttentionActionStyle.Ghost, Help = "Pin the new definition and offer the tool again",
+                        Area = Core.Area.Mcp, Target = DemoMcpService.HeldTool,
+                        Help = "Open MCP at the held definition: its diff against the pin, the hash accept pins, and the answers",
                     },
                 ],
             },
@@ -53,13 +53,17 @@ public sealed class DemoBoardService : IBoardService
                 At = At(8, 40),
                 Actions =
                 [
-                    new AttentionAction("guest", "Pair as guest", AttentionActionKind.Resolve)
+                    // Pairing is done on Gateway's card, which shows the handle with any hidden character revealed. An owner
+                    // answers approvals from the chat, so the tray opens that question there, never pairing from a bare button.
+                    new AttentionAction("guest", "Pair as guest…", AttentionActionKind.Navigate)
                     {
-                        Help = "Pair @dana as a guest, with an empty tool allowlist you can widen on Gateway",
+                        Area = Core.Area.Gateway, Target = GatewayLinks.Card(DemoGatewayService.DanaRequestId),
+                        Help = "Open Gateway at @dana's request, to pair them as a guest with an empty tool allowlist",
                     },
-                    new AttentionAction("owner", "Pair as owner", AttentionActionKind.Resolve)
+                    new AttentionAction("owner", "Pair as owner…", AttentionActionKind.Navigate)
                     {
-                        Style = AttentionActionStyle.Ghost, Help = "Pair @dana as an owner, who can answer approvals",
+                        Area = Core.Area.Gateway, Target = GatewayLinks.Owner(DemoGatewayService.DanaRequestId), Style = AttentionActionStyle.Ghost,
+                        Help = "Open Gateway, which asks before pairing @dana as an owner who can answer approvals",
                     },
                     new AttentionAction("ignore", "Ignore", AttentionActionKind.Resolve)
                     {
@@ -110,10 +114,26 @@ public sealed class DemoBoardService : IBoardService
         var item = _items.FirstOrDefault(candidate => candidate.Id == itemId);
         if (item is null || !item.Actions.Any(action => action.Id == actionId && action.Kind == AttentionActionKind.Resolve))
             return Task.CompletedTask;
+        Answer(item, actionId);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// The item was answered on its own area's page with an answer the tray only leads to (accepting a held tool on MCP,
+    /// pairing on Gateway): it goes, as if the tray had answered it.
+    /// </summary>
+    public void AnsweredInArea(string itemId, string answer)
+    {
+        if (_items.FirstOrDefault(candidate => candidate.Id == itemId) is { } item)
+            Answer(item, answer);
+    }
+
+    private void Answer(AttentionItem item, string actionId)
+    {
+        var itemId = item.Id;
         _items.Remove(item);
         _resolved.Add((itemId, actionId));
         AttentionChanged?.Invoke(this, EventArgs.Empty);
-        return Task.CompletedTask;
     }
 
     public Task<BoardStatus> GetStatusAsync(CancellationToken cancellationToken = default) =>

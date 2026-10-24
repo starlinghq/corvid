@@ -42,8 +42,13 @@ public sealed class PhoneTab : ObservableObject
     public bool IsSelected
     {
         get => _isSelected;
-        internal set => SetProperty(ref _isSelected, value);
+        internal set
+        {
+            if (SetProperty(ref _isSelected, value))
+                OnPropertyChanged(nameof(AutomationName));
+        }
     }
 
-    public string AutomationName => _count > 0 ? $"{Label}, {CountText}" : Label;
+    /// <summary>"Changes, 3, current": the label, the count, and whether it is the tab shown (not said by colour alone).</summary>
+    public string AutomationName => (_count > 0 ? $"{Label}, {CountText}" : Label) + (_isSelected ? ", current" : "");
 }

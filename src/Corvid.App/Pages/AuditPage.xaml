@@ -520,7 +520,7 @@
 
         <!-- The right column: the selected event (the egress ledger, or the raw event), the detection, Export. -->
         <StackPanel x:Name="SideStack" Grid.Column="2" Spacing="14" VerticalAlignment="Top">
-          <controls:ToneRow Tone="Red" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasError), Mode=OneWay}">
+          <controls:ToneRow AutomationProperties.LiveSetting="Assertive" Tone="Red" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasError), Mode=OneWay}">
             <TextBlock Text="{x:Bind ViewModel.Error, Mode=OneWay}" TextWrapping="Wrap" />
           </controls:ToneRow>
 

@@ -67,20 +67,33 @@ public sealed partial class DiffRowsView : UserControl
             _ => null,
         };
         var number = row.Kind == DiffRowKind.Removed ? row.OldNumber : row.NewNumber ?? row.OldNumber;
+        // The sign beside the number says added or removed without the row's colour (ui.md §7: never colour alone).
+        var numbers = new Grid();
+        numbers.Children.Add(new TextBlock
+        {
+            Text = DiffSign(row.Kind),
+            FontFamily = mono,
+            FontSize = 12,
+            Foreground = ThemeBrushes.Get(this, "CorvidText2"),
+            Margin = new Thickness(3, 0, 0, 0),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        numbers.Children.Add(new TextBlock
+        {
+            Text = number?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "",
+            FontFamily = mono,
+            FontSize = 12,
+            Foreground = ThemeBrushes.Get(this, "CorvidText2"),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
         var gutter = new Border
         {
             BorderBrush = ThemeBrushes.Get(this, "CorvidLine"),
             BorderThickness = new Thickness(0, 0, 1, 0),
             Padding = new Thickness(0, 0, 8, 0),
-            Child = new TextBlock
-            {
-                Text = number?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "",
-                FontFamily = mono,
-                FontSize = 12,
-                Foreground = ThemeBrushes.Get(this, "CorvidText2"),
-                HorizontalAlignment = HorizontalAlignment.Right,
-                VerticalAlignment = VerticalAlignment.Center,
-            },
+            Child = numbers,
         };
         line.Children.Add(gutter);
         var text = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
@@ -101,6 +114,9 @@ public sealed partial class DiffRowsView : UserControl
         AutomationProperties.SetName(line, row.Kind == DiffRowKind.Skip ? label ?? row.SkipText : $"{sign} {number} {row.Text}".Trim());
         return line;
     }
+
+    /// <summary>"+" for an added line and "−" for a removed one, drawn in the gutter; nothing for context.</summary>
+    internal static string DiffSign(DiffRowKind kind) => kind switch { DiffRowKind.Added => "+", DiffRowKind.Removed => "−", _ => "" };
 
     private static Border Segment(string text, FontFamily mono, Brush? highlight, Brush foreground) => new()
     {

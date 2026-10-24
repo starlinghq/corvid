@@ -36,6 +36,7 @@ public sealed class StatusBarViewModel : ObservableObject
     private string _branch = "";
     private string _sessionId = "";
     private string _trailing = "";
+    private string _sessionTrailing = "";
 
     public StatusBarViewModel()
     {
@@ -102,8 +103,46 @@ public sealed class StatusBarViewModel : ObservableObject
     /// <summary>The current session's id.</summary>
     public string SessionId { get => _sessionId; set => SetProperty(ref _sessionId, value ?? ""); }
 
-    /// <summary>The right-hand item: the running turn's elapsed time ("turn 48 s"), or "idle".</summary>
-    public string Trailing { get => _trailing; set => SetProperty(ref _trailing, value ?? ""); }
+    /// <summary>
+    /// The current area's right-hand item: the running turn's elapsed time ("turn 48 s") on a session's pages, the Board's
+    /// activity, Audit's log size; or "idle", or nothing. What the view draws is <see cref="ShownTrailing"/>.
+    /// </summary>
+    public string Trailing
+    {
+        get => _trailing;
+        set
+        {
+            if (SetProperty(ref _trailing, value ?? ""))
+                OnPropertyChanged(nameof(ShownTrailing));
+        }
+    }
+
+    /// <summary>
+    /// The open session's right-hand item whatever the area ("turn 48 s", "idle"); the sessions keep it current. While
+    /// <see cref="Trailing"/> still holds the session's last value (a page that writes no item of its own, after a
+    /// session's page), it follows, so it never stands frozen at an old turn time.
+    /// </summary>
+    public string SessionTrailing
+    {
+        get => _sessionTrailing;
+        set
+        {
+            var previous = _sessionTrailing;
+            if (!SetProperty(ref _sessionTrailing, value ?? ""))
+                return;
+            if (previous.Length > 0 && string.Equals(_trailing, previous, StringComparison.Ordinal))
+                Trailing = _sessionTrailing;
+            OnPropertyChanged(nameof(ShownTrailing));
+        }
+    }
+
+    /// <summary>
+    /// The right-hand item as drawn: the area's own when it has one, otherwise the open session's. An area's "idle" says
+    /// only that it knows of no turn, so a running turn's time shows over it: every page says the same while a turn runs,
+    /// and an area that writes nothing (Settings, Secrets) shows the session's rather than the last area's item (areas
+    /// give theirs back when they go: the status bar lease, Audit).
+    /// </summary>
+    public string ShownTrailing => _trailing.Length > 0 && !(_trailing == "idle" && _sessionTrailing.Length > 0) ? _trailing : _sessionTrailing;
 
     /// <summary>Asks for a mode (the segmented control's buttons).</summary>
     public RelayCommand<ApprovalMode> RequestModeCommand { get; }

@@ -30,6 +30,7 @@ public sealed class ShellViewModel : ObservableObject
     private bool _dockOverlayOpen;
     private bool _railOverlayOpen;
     private bool _pageDrawsRail;
+    private bool _setupShowing;
 
     public ShellViewModel(StatusBarViewModel statusBar)
     {
@@ -51,6 +52,12 @@ public sealed class ShellViewModel : ObservableObject
         ToggleDockCommand = new RelayCommand(ToggleDock);
         ToggleRailCommand = new RelayCommand(ToggleRail);
         CloseOverlaysCommand = new RelayCommand(() => SetOverlays(rail: false, dock: false));
+        // Both live as long as the window: the phone's top bar shows the status bar's first tag.
+        StatusBar.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is nameof(StatusBarViewModel.Tags) or null or "")
+                OnPropertyChanged(nameof(PhoneTags));
+        };
         UpdateSelection();
     }
 
@@ -69,8 +76,37 @@ public sealed class ShellViewModel : ObservableObject
     public string Workspace
     {
         get => _workspace;
-        set => SetProperty(ref _workspace, value ?? "");
+        set
+        {
+            if (SetProperty(ref _workspace, value ?? ""))
+                OnPropertyChanged(nameof(PhoneSubtitle));
+        }
     }
+
+    /// <summary>
+    /// The phone top bar's second line: the workspace, except while the page draws its own steps (the first run's setup),
+    /// which belongs to no workspace yet.
+    /// </summary>
+    public string PhoneSubtitle => _setupShowing ? "" : _workspace;
+
+    /// <summary>
+    /// The phone top bar's tag: one, since a phone has room for one beside the title and the bell already counts
+    /// approvals. Taint always shows (ui.md §7), so "tainted" is the one whenever the bar has it, whatever comes before it
+    /// ("read-only", "sessions unavailable"); otherwise the bar's first. The status bar keeps them all at desktop widths.
+    /// </summary>
+    public IReadOnlyList<StatusTag> PhoneTags => StatusBar.Tags.Count <= 1
+        ? StatusBar.Tags
+        : [StatusBar.Tags.FirstOrDefault(IsTaint) ?? StatusBar.Tags[0]];
+
+    /// <summary>The taint tag ("tainted"), which the status bar and the phone keep in view whatever else gives way.</summary>
+    public static bool IsTaint(StatusTag? tag) => tag is not null && string.Equals(tag.Text, "tainted", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether the phone top bar's title is the page's level-1 heading. It is wherever the page drops its own title on the
+    /// phone (Sessions and the A2 pages); Review, Rewind, Models, Audit and the first run keep their own, so there the top
+    /// bar's title is not a heading, and a screen reader finds one level-1 heading per page.
+    /// </summary>
+    public bool PhoneTitleIsHeading => _area is not (Area.Review or Area.Rewind or Area.Models or Area.Audit or Area.FirstRun);
 
     /// <summary>
     /// How many items wait in the attention tray, across sessions (the bell's count): the sum of what each source reports
@@ -189,8 +225,31 @@ public sealed class ShellViewModel : ObservableObject
     /// </summary>
     public bool ShowModeControl => _layout is ShellLayout.Wide or ShellLayout.Medium;
 
-    /// <summary>The phone layout's top bar and bottom bar.</summary>
+    /// <summary>The phone layout's top bar.</summary>
     public bool ShowPhoneBars => _layout == ShellLayout.Phone;
+
+    /// <summary>
+    /// The phone's bottom bar (Chat, Changes, Attention, More) and the top bar's menu and bell: not while the page draws
+    /// its own steps, since the first run's setup is a path of its own with its own way out (Skip setup).
+    /// </summary>
+    public bool ShowPhoneTabs => _layout == ShellLayout.Phone && !_setupShowing;
+
+    /// <summary>
+    /// The first run's setup shows (not its checks reached from Doctor): at every width a path of its own, so the phone
+    /// drops the session's bottom bar, menu, bell and workspace line. The first run's view model sets it while its setup is
+    /// the current area and clears it when it is not.
+    /// </summary>
+    public bool SetupShowing
+    {
+        get => _setupShowing;
+        set
+        {
+            if (!SetProperty(ref _setupShowing, value))
+                return;
+            RaiseLayout();
+            OnPropertyChanged(nameof(PhoneSubtitle));
+        }
+    }
 
     /// <summary>The status bar's rail toggle, shown whenever the rail is hidden on a desktop width.</summary>
     public bool ShowRailToggle => _layout != ShellLayout.Phone && !ShowRail && !_pageDrawsRail;
@@ -201,6 +260,9 @@ public sealed class ShellViewModel : ObservableObject
     public RelayCommand<Area> NavigateCommand { get; }
 
     public RelayCommand OpenSettingsCommand { get; }
+
+    /// <summary>Settings is the current page: its link at the rail's foot is marked as a rail row is.</summary>
+    public bool IsSettingsCurrent => _area == Area.Settings;
 
     /// <summary>The rail footer's Doctor: the first run's checks, which are <c>corvid doctor</c>'s.</summary>
     public RelayCommand OpenDoctorCommand { get; }
@@ -227,6 +289,7 @@ public sealed class ShellViewModel : ObservableObject
             return;
         _area = area;
         OnPropertyChanged(nameof(CurrentArea));
+        OnPropertyChanged(nameof(PhoneTitleIsHeading));
         OnPropertyChanged(nameof(CurrentTitle));
         OnPropertyChanged(nameof(PhoneTitle));
         UpdateSelection();
@@ -302,7 +365,7 @@ public sealed class ShellViewModel : ObservableObject
             _session.IsSelected = false;
         _session = session;
         if (_session is not null)
-            _session.IsSelected = true;
+            _session.IsSelected = SessionRowShows;
         // The status bar names the session the window shows.
         StatusBar.SessionId = _session?.Id ?? "";
         OnPropertyChanged(nameof(CurrentSession));
@@ -356,7 +419,16 @@ public sealed class ShellViewModel : ObservableObject
         _changesTab.IsSelected = _area == Area.Review;
         _attentionTab.IsSelected = _area == Area.Board;
         _moreTab.IsSelected = !(_chatTab.IsSelected || _changesTab.IsSelected || _attentionTab.IsSelected);
+        OnPropertyChanged(nameof(IsSettingsCurrent));
+        if (_session is not null)
+            _session.IsSelected = SessionRowShows;
     }
+
+    /// <summary>
+    /// The open session's rail row is marked only while a page of that session shows (Sessions, Review, Rewind): on
+    /// another area the area's own row is the current one, as Models.png and Audit.png draw the rail.
+    /// </summary>
+    private bool SessionRowShows => _area is Area.Sessions or Area.Review or Area.Rewind;
 
     private void RaiseLayout()
     {
@@ -368,6 +440,7 @@ public sealed class ShellViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowStatusBar));
         OnPropertyChanged(nameof(ShowModeControl));
         OnPropertyChanged(nameof(ShowPhoneBars));
+        OnPropertyChanged(nameof(ShowPhoneTabs));
         OnPropertyChanged(nameof(ShowRailToggle));
         OnPropertyChanged(nameof(ShowDockToggle));
     }
