@@ -233,7 +233,7 @@
                               <Grid>
                                 <Grid.ColumnDefinitions>
                                   <ColumnDefinition Width="110" />
-                                  <ColumnDefinition Width="116" />
+                                  <ColumnDefinition Width="106" />
                                   <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
                                 <controls:TagChip Margin="10,7" VerticalAlignment="Top" HorizontalAlignment="Left" Text="{x:Bind StatusText}"

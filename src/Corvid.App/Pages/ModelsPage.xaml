@@ -257,7 +257,7 @@
                 </Border>
                 <ScrollViewer x:Name="CatalogueScroll" HorizontalScrollMode="Auto" HorizontalScrollBarVisibility="Auto" VerticalScrollMode="Disabled"
                               VerticalScrollBarVisibility="Disabled" SizeChanged="OnTableScrollSized">
-                  <StackPanel MinWidth="646" AutomationProperties.Name="Catalogue">
+                  <StackPanel MinWidth="700" AutomationProperties.Name="Catalogue">
                     <Grid>
                       <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="132" />

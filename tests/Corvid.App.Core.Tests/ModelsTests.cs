@@ -327,17 +327,17 @@ public sealed class ModelsTests
         var (service, _) = Demo(DemoModelScene.FirstRun);
         var selection = new DownloadSelectionViewModel(service);
 
-        Assert.Equal(["qwen3.5-0.8b", "kev-0.8b", "kev-4b", "gliner2-base-v1", "embeddinggemma-2"], selection.Items.Select(item => item.Name));
+        Assert.Equal(["qwen3.5-0.8b", "gliner2-base-v1", "embeddinggemma-2", "kev-0.8b", "kev-4b"], selection.Items.Select(item => item.Name));
         Assert.Equal("3.3 GB · about 2 minutes at 48 MB/s", string.Concat(selection.SelectedRuns.Select(run => run.Text)));
         Assert.True(selection.Items[0].IsSelected);
         Assert.False(selection.Items[0].IsEnabled);
         Assert.Equal("cached", selection.Items[0].StateTag);
-        Assert.Equal("kev-0.8b · decider · 2.1 GB missing · fits cuda:0", string.Concat(selection.Items[1].Text.Select(run => run.Text)));
-        Assert.Contains(selection.Items[1].Text, run => run.Muted && run.Text == "missing");
-        Assert.Equal("kev-4b · second decider tier · 17 GB · needs 18 GB RAM optional", string.Concat(selection.Items[2].Text.Select(run => run.Text)));
-        Assert.False(selection.Items[2].IsSelected);
+        Assert.Equal("kev-0.8b · decider · 2.1 GB missing · fits cuda:0", string.Concat(selection.Items[3].Text.Select(run => run.Text)));
+        Assert.Contains(selection.Items[3].Text, run => run.Muted && run.Text == "missing");
+        Assert.Equal("kev-4b · second decider tier · 17 GB · needs 18 GB RAM optional", string.Concat(selection.Items[4].Text.Select(run => run.Text)));
+        Assert.False(selection.Items[4].IsSelected);
 
-        selection.Items[2].IsSelected = true;
+        selection.Items[4].IsSelected = true;
         Assert.Equal("20 GB · about 8 minutes at 48 MB/s", string.Concat(selection.SelectedRuns.Select(run => run.Text)));
         selection.Items[0].IsSelected = false;
         Assert.True(selection.Items[0].IsSelected);

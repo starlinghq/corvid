@@ -128,15 +128,18 @@ public sealed class FirstRunTests
 
         var kev = downloads.Items.Single(item => item.Name == "kev-0.8b");
         var gemma = downloads.Items.Single(item => item.Name == "embeddinggemma-2");
-        Assert.True(kev.IsDownloading);
-        Assert.Equal("queued", gemma.Progress);
-        Assert.Equal("kev-0.8b 0% · 1 queued", setup.Bar.AreaFields[0].Value);
+        // In the panel's order: the smaller one first.
+        Assert.True(gemma.IsDownloading);
+        Assert.Equal("queued", kev.Progress);
+        Assert.Equal("embeddinggemma-2 0% · 1 queued", setup.Bar.AreaFields[0].Value);
 
         setup.Time.Advance(21);
-        Assert.Equal("downloading 48% · 1.0 of 2.1 GB · 48 MB/s · 23 s left", kev.Progress);
-        Assert.Equal(0.48, kev.Fraction, 3);
+        Assert.Equal("downloading 84% · 1.0 of 1.2 GB · 48 MB/s · 4 s left", gemma.Progress);
+        Assert.Equal(0.84, gemma.Fraction, 3);
 
         setup.Time.Advance(60);
+        // The rows keep FirstRun.png's order while downloads finish.
+        Assert.Equal(["qwen3.5-0.8b", "gliner2-base-v1", "embeddinggemma-2", "kev-0.8b", "kev-4b"], downloads.Items.Select(item => item.Name));
         Assert.Equal("cached", kev.StateTag);
         Assert.Equal("cached", gemma.StateTag);
         Assert.False(setup.FirstRun.HasDeciderWarning);

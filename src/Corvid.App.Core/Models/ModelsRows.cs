@@ -472,20 +472,29 @@ public sealed class DownloadSelectionViewModel : ObservableObject
 
     public AsyncRelayCommand DownloadCommand { get; }
 
-    /// <summary>Takes the catalogue's latest state: new rows, states, progress.</summary>
+    /// <summary>
+    /// Takes the catalogue's latest state: new rows, states, progress. The list is ordered once, as FirstRun.png lists it
+    /// (what is cached, then the missing default models smallest first, then the optional ones), and keeps that order
+    /// while downloads finish, so a row never jumps under the pointer.
+    /// </summary>
     public void Refresh()
     {
         var local = _service.Snapshot.Catalogue.Where(model => model.Kind == ModelKind.Local).ToList();
-        if (!local.Select(model => model.Name).SequenceEqual(Items.Select(item => item.Name)))
+        if (!local.Select(model => model.Name).Order(StringComparer.Ordinal).SequenceEqual(Items.Select(item => item.Name).Order(StringComparer.Ordinal)))
         {
             Items.Clear();
-            foreach (var model in local)
+            var ordered = local
+                .Select((model, index) => (Model: model, Index: index))
+                .OrderBy(entry => entry.Model.State == ModelState.Cached ? 0 : entry.Model.InDefaultSet ? 1 : 2)
+                .ThenBy(entry => entry.Model.State == ModelState.Cached ? 0 : entry.Model.SizeBytes)
+                .ThenBy(entry => entry.Index);
+            foreach (var (model, _) in ordered)
                 Items.Add(new DownloadChoiceViewModel(model, Recount));
         }
         else
         {
-            foreach (var (item, model) in Items.Zip(local))
-                item.Update(model);
+            foreach (var item in Items)
+                item.Update(local.First(model => model.Name == item.Name));
         }
 
         HasPending = Items.Any(item => item.IsEnabled);
