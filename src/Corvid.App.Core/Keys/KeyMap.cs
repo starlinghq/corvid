@@ -105,7 +105,17 @@ public sealed class KeyMap
 
     /// <summary>The app binding a gesture fires, if any; what the shell looks up when a key arrives.</summary>
     public KeyBinding? Find(KeyGesture gesture) =>
-        _bindings.FirstOrDefault(binding => binding.Context == App && binding.Gesture == gesture);
+        _bindings.FirstOrDefault(binding => binding.Context == App && gesture.SameKeysAs(binding.Gesture));
+
+    /// <summary>
+    /// The platform's editing and window keys: text fields copy, paste, cut, undo and select all with them, and the window
+    /// closes on Alt+F4, so none of the window's own commands may take one.
+    /// </summary>
+    public static IReadOnlyList<(KeyGesture Gesture, string Does)> Reserved { get; } =
+    [
+        (KeyGesture.Parse("Ctrl+C"), "copies"), (KeyGesture.Parse("Ctrl+V"), "pastes"), (KeyGesture.Parse("Ctrl+X"), "cuts"),
+        (KeyGesture.Parse("Ctrl+Z"), "undoes"), (KeyGesture.Parse("Ctrl+A"), "selects all"), (KeyGesture.Parse("Alt+F4"), "closes the window"),
+    ];
 
     /// <summary>Bindings in the same context on the same gesture as this one.</summary>
     public IReadOnlyList<KeyBinding> ConflictsOf(KeyBinding binding) => Others(binding, sameContext: true);
@@ -154,6 +164,8 @@ public sealed class KeyMap
             return new KeyRebind(false, $"{current.Action} is the page's own key; it is listed here but not remapped.", [], []);
         if (!KeyGesture.TryParse(text, out var gesture, out var problem))
             return new KeyRebind(false, problem, [], []);
+        if (Reserved.FirstOrDefault(reserved => reserved.Gesture.SameKeysAs(gesture)) is { Gesture: not null } taken)
+            return new KeyRebind(false, $"{gesture} {taken.Does} in text fields and the window; pick another key.", [], []);
         var proposed = current with { Gesture = gesture };
         var conflicts = Others(proposed, sameContext: true);
         if (conflicts.Count > 0)
@@ -162,16 +174,29 @@ public sealed class KeyMap
         return new KeyRebind(true, "", [], Others(proposed, sameContext: false));
     }
 
-    /// <summary>Puts one binding back to its default.</summary>
+    /// <summary>
+    /// Puts one binding back to its default. A default can be taken meanwhile by another binding's remapping: that one
+    /// goes back to its own default too, whose default may in turn be taken, and so on. Defaults never share a key, so
+    /// each binding moves at most once and no two bindings in a context end on one key.
+    /// </summary>
     public void Reset(string id)
     {
-        var standard = _defaults[id];
-        if (this[id].Gesture == standard.Gesture)
+        if (this[id].Gesture == _defaults[id].Gesture)
             return;
-        // A default can be taken meanwhile by another binding's remapping: that one goes back too.
-        foreach (var taker in _bindings.Where(binding => binding.Id != id && binding.Context == standard.Context && binding.Gesture == standard.Gesture).ToList())
-            Replace(_defaults[taker.Id]);
-        Replace(standard);
+        var pending = new Queue<string>([id]);
+        var moved = new HashSet<string>(StringComparer.Ordinal);
+        while (pending.TryDequeue(out var next))
+        {
+            if (!moved.Add(next))
+                continue;
+            var standard = _defaults[next];
+            foreach (var taker in _bindings.Where(binding => binding.Id != next && binding.Context == standard.Context
+                         && standard.Gesture is { } key && key.SameKeysAs(binding.Gesture)))
+                pending.Enqueue(taker.Id);
+            _bindings[_bindings.FindIndex(item => item.Id == next)] = standard;
+        }
+
+        Changed?.Invoke(this, EventArgs.Empty);
     }
 
     public void ResetAll()
@@ -193,7 +218,7 @@ public sealed class KeyMap
         foreach (var binding in _bindings.Where(binding => binding.IsRemappable && binding.Gesture != _defaults[binding.Id].Gesture))
         {
             var standard = _defaults[binding.Id].Gesture!.ToString();
-            if (!_bindings.Any(other => other.Gesture?.ToString() == standard))
+            if (!_bindings.Any(other => _defaults[binding.Id].Gesture!.SameKeysAs(other.Gesture)))
                 app[standard] = null;
             app[binding.Gesture!.ToString()] = binding.Id;
         }
@@ -204,12 +229,12 @@ public sealed class KeyMap
 
     private IReadOnlyList<KeyBinding> Others(KeyBinding binding, bool sameContext)
     {
-        var gestures = binding.AllGestures.ToHashSet();
+        var gestures = binding.AllGestures.Select(gesture => gesture.Physical).ToHashSet();
         if (gestures.Count == 0)
             return [];
         return [.. _bindings.Where(other => other.Id != binding.Id
             && (other.Context == binding.Context) == sameContext
-            && other.AllGestures.Any(gestures.Contains))];
+            && other.AllGestures.Any(gesture => gestures.Contains(gesture.Physical)))];
     }
 
     private void Replace(KeyBinding binding)

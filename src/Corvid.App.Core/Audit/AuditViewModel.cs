@@ -610,6 +610,9 @@ public sealed class AuditViewModel : AreaViewModel
             if (_myFields.Count > 0 && ReferenceEquals(bar.AreaFields, _myFields))
                 bar.AreaFields = [];
             _myFields = [];
+            // The log's size is Audit's own: an area with no right-hand item (Settings, Secrets) shows the session's.
+            if (_statusLog.Length > 0 && string.Equals(bar.Trailing, _statusLog, StringComparison.Ordinal))
+                bar.Trailing = "";
             // The picker may have shown the whole log (no session id); the session the window shows comes back.
             if (bar.SessionId.Length == 0)
                 bar.SessionId = _shell.CurrentSession?.Id ?? "";

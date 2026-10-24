@@ -217,6 +217,86 @@ public sealed class ShellViewModelTests
     }
 
     [Fact]
+    public void ThePhoneTopBarShowsTaintWhateverComesBeforeIt()
+    {
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar) { Layout = ShellLayout.Phone };
+
+        // A read-only (a job's) session that read outside content: taint always shows (ui.md §7).
+        bar.Tags = [new StatusTag("read-only", Tone.Grey), new StatusTag("tainted", Tone.Amber)];
+        Assert.Equal(["tainted"], shell.PhoneTags.Select(tag => tag.Text));
+
+        bar.Tags = [new StatusTag("sessions unavailable", Tone.Red), new StatusTag("read-only", Tone.Grey), new StatusTag("tainted", Tone.Amber)];
+        Assert.Equal(["tainted"], shell.PhoneTags.Select(tag => tag.Text));
+
+        // Without taint the first tag shows, as before.
+        bar.Tags = [new StatusTag("read-only", Tone.Grey), new StatusTag("2 approvals", Tone.Amber)];
+        Assert.Equal(["read-only"], shell.PhoneTags.Select(tag => tag.Text));
+    }
+
+    [Fact]
+    public void ThePhoneTitleIsTheLevelOneHeadingOnlyWherePagesDropTheirOwn()
+    {
+        var shell = new ShellViewModel(new StatusBarViewModel()) { Layout = ShellLayout.Phone };
+        var changed = new List<string?>();
+        ((INotifyPropertyChanged)shell).PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        Assert.True(shell.PhoneTitleIsHeading);
+        foreach (var area in new[] { Area.Review, Area.Rewind, Area.Models, Area.Audit, Area.FirstRun })
+        {
+            shell.Navigate(area);
+            Assert.False(shell.PhoneTitleIsHeading);
+        }
+
+        foreach (var area in new[] { Area.Settings, Area.Jobs, Area.Mcp, Area.Gateway, Area.Skills, Area.Safety, Area.Secrets, Area.Memory, Area.Board, Area.Sessions })
+        {
+            shell.Navigate(area);
+            Assert.True(shell.PhoneTitleIsHeading);
+        }
+
+        Assert.Contains(nameof(ShellViewModel.PhoneTitleIsHeading), changed);
+    }
+
+    [Fact]
+    public void TheLastItemIsTheSessionsWhereAnAreaHasNoneOfItsOwn()
+    {
+        Assert.True(AppOptions.TryParse(["--demo"], out var options, out var error), error);
+        using var composition = new AppComposition(options, new InlineDispatcher(), ManualTimeProvider.DemoLocal());
+        var shell = composition.Shell;
+        var bar = composition.StatusBar;
+        var session = bar.SessionTrailing;
+        Assert.StartsWith("turn ", session, StringComparison.Ordinal);
+        Assert.Equal(session, bar.ShownTrailing);
+
+        // An area's own item wins while it shows; leaving it never leaves the item behind.
+        _ = composition.Audit;
+        shell.Navigate(Area.Audit);
+        Assert.StartsWith("log ", bar.ShownTrailing, StringComparison.Ordinal);
+        shell.Navigate(Area.Settings);
+        Assert.Equal(session, bar.ShownTrailing);
+        shell.Navigate(Area.Audit);
+        shell.Navigate(Area.Secrets);
+        Assert.Equal(session, bar.ShownTrailing);
+        foreach (var area in new[] { Area.Jobs, Area.Mcp, Area.Gateway, Area.Models, Area.Settings })
+        {
+            if (area == Area.Models)
+                _ = composition.Models;
+            shell.Navigate(area);
+            Assert.Equal(session, bar.ShownTrailing);
+        }
+
+        // A session's item left on a page without its own follows the session rather than standing frozen.
+        bar.SessionTrailing = "turn 50 s";
+        Assert.Equal("turn 50 s", bar.ShownTrailing);
+
+        // An area's "idle" says only that it knows of no turn: the running turn shows over it.
+        bar.Trailing = "idle";
+        Assert.Equal("turn 50 s", bar.ShownTrailing);
+        bar.SessionTrailing = "";
+        Assert.Equal("idle", bar.ShownTrailing);
+    }
+
+    [Fact]
     public void TheSetupHasNoBottomBarMenuBellOrWorkspaceOnThePhone()
     {
         var shell = new ShellViewModel(new StatusBarViewModel()) { Layout = ShellLayout.Phone, Workspace = "corvid · main" };

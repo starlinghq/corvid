@@ -237,6 +237,9 @@ public sealed partial class SessionViewModel
         StashDraftCommand.NotifyCanExecuteChanged();
     }
 
+    /// <summary>Whether a draft waits put aside (Ctrl+S); there is room for one.</summary>
+    public bool HasStashedDraft => _stash is not null;
+
     /// <summary>Puts a draft aside as Ctrl+S does (the demo opens with one, as Main.png shows "draft saved").</summary>
     public void StashDraft(string text)
     {

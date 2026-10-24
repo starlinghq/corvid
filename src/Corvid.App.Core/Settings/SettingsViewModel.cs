@@ -338,11 +338,20 @@ public sealed class SettingsViewModel : AreaViewModel
             foreach (var item in changed)
                 item.MarkSaved(write.RestartKeys.Contains(item.Definition.Key));
             var snapshot = await _service.LoadAsync(cancellationToken);
+            // Edits typed in the raw editor and not yet saved stay there: the editor now differs from the saved file
+            // (which holds this save), and the notice says so rather than dropping what was typed.
+            var keepRaw = IsJsonChanged;
             _savedJson = snapshot.Json;
-            _json = snapshot.Json;
-            OnPropertyChanged(nameof(JsonText));
+            if (!keepRaw)
+            {
+                _json = snapshot.Json;
+                OnPropertyChanged(nameof(JsonText));
+            }
+
             CheckJson();
-            Show(write.Message, Tone.Green);
+            Show(keepRaw
+                ? $"{write.Message} The corvid.json tab keeps your unsaved edits, typed before this save; Revert there shows the saved file."
+                : write.Message, Tone.Green);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {

@@ -2,6 +2,7 @@ using System.ComponentModel;
 using Corvid.App.Core;
 using Corvid.App.Core.Palette;
 using Corvid.App.Core.Sessions;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Input;
 using Windows.System;
 
@@ -63,6 +64,26 @@ public sealed partial class CommandPalette : UserControl
             case nameof(PaletteViewModel.SelectedIndex):
                 DispatcherQueue.TryEnqueue(BringSelectedIntoView);
                 break;
+            case nameof(PaletteViewModel.SelectionText):
+                Announce(ViewModel.SelectionText);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Says the selected row politely: focus stays in the field while the arrows move the selection, so no focus change
+    /// announces it.
+    /// </summary>
+    private void Announce(string text)
+    {
+        if (SelectionAnnouncer.Text == text)
+            return;
+        SelectionAnnouncer.Text = text;
+        AutomationProperties.SetName(SelectionAnnouncer, text.Length > 0 ? text : "Palette selection");
+        if (text.Length > 0)
+        {
+            Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(SelectionAnnouncer)
+                ?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged);
         }
     }
 

@@ -54,8 +54,18 @@ public sealed class DemoSettingsService : ISettingsService
         var problems = new List<SettingProblem>();
         var line = HiddenLine(json);
         if (line > 0)
+        {
             problems.Add(new SettingProblem(null, $"Line {line.ToString(CultureInfo.InvariantCulture)} holds hidden characters: " +
                 $"{SafeText.Reveal(json.Split('\n')[line - 1].Trim())}. Remove them before saving."));
+        }
+        else if (Strings(root!, "").FirstOrDefault() is { Path: not null } escaped)
+        {
+            // A JSON escape for a hidden character (backslash, u, four hex digits) passes the scan of the text above and
+            // arrives in the value, so every name and string is checked again as parsed.
+            problems.Add(new SettingProblem(null, $"{SafeText.Reveal(escaped.Path)} holds hidden characters written as an escape: " +
+                $"{SafeText.Reveal(escaped.Text)}. Remove them before saving."));
+        }
+
         problems.AddRange(SettingsCatalogue.Validate(values));
         return new SettingsParse(values, problems);
     }
@@ -184,6 +194,14 @@ public sealed class DemoSettingsService : ISettingsService
         problem = null;
         try
         {
+            // JsonNode takes a key twice and then throws on the first read of that object; the engine's configuration
+            // would keep the last silently. Neither is what the person meant, so a repeated key is a problem to fix.
+            if (DuplicateKey(json ?? "") is { } duplicate)
+            {
+                problem = duplicate;
+                return false;
+            }
+
             if (JsonNode.Parse(json ?? "", documentOptions: Reading) is JsonObject obj)
             {
                 root = obj;
@@ -201,6 +219,90 @@ public sealed class DemoSettingsService : ISettingsService
             problem = new SettingProblem(null,
                 $"corvid.json does not parse at line {line.ToString(CultureInfo.InvariantCulture)}, position {position.ToString(CultureInfo.InvariantCulture)}: {SafeText.Clean(reason)}");
             return false;
+        }
+        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+        {
+            // Typed on every keystroke: whatever the parser throws is a message under the editor, never a crash.
+            root = null;
+            problem = new SettingProblem(null, $"corvid.json could not be read: {SafeText.Clean(exception.Message)}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The first key an object holds twice ("duplicate key \"Workspace\" at line 4"), or null. Keys are compared ignoring
+    /// case, as the engine's configuration reads them. A text that does not parse is left to the parser's message.
+    /// </summary>
+    private static SettingProblem? DuplicateKey(string json)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(json);
+        var reader = new Utf8JsonReader(bytes, new JsonReaderOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+        var objects = new Stack<HashSet<string>?>();
+        try
+        {
+            while (reader.Read())
+            {
+                switch (reader.TokenType)
+                {
+                    case JsonTokenType.StartObject:
+                        objects.Push(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+                        break;
+                    case JsonTokenType.StartArray:
+                        objects.Push(null);
+                        break;
+                    case JsonTokenType.EndObject or JsonTokenType.EndArray:
+                        objects.Pop();
+                        break;
+                    case JsonTokenType.PropertyName when objects.Count > 0 && objects.Peek() is { } keys:
+                        var name = reader.GetString() ?? "";
+                        if (!keys.Add(name))
+                        {
+                            var line = 1 + bytes.AsSpan(0, (int)reader.TokenStartIndex).Count((byte)'\n');
+                            return new SettingProblem(null, $"corvid.json has a duplicate key {Quote(name)} at line {line.ToString(CultureInfo.InvariantCulture)}: " +
+                                "an object names each key once (ignoring case). Remove or rename one.");
+                        }
+
+                        break;
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // Not well-formed: JsonNode's message says where.
+        }
+
+        return null;
+    }
+
+    private static string Quote(string name) => $"\"{SafeText.Reveal(name)}\"";
+
+    /// <summary>Every property name and string value holding hidden characters, with its path ("Corvid:Mcp:Servers:notes:Command").</summary>
+    private static IEnumerable<(string Path, string Text)> Strings(JsonNode? node, string path)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                foreach (var (name, child) in obj)
+                {
+                    var at = path.Length == 0 ? name : $"{path}:{name}";
+                    if (SafeText.HasHidden(name))
+                        yield return (at, name);
+                    foreach (var found in Strings(child, at))
+                        yield return found;
+                }
+
+                break;
+            case JsonArray array:
+                for (var i = 0; i < array.Count; i++)
+                {
+                    foreach (var found in Strings(array[i], $"{path}:{i.ToString(CultureInfo.InvariantCulture)}"))
+                        yield return found;
+                }
+
+                break;
+            case JsonValue value when value.TryGetValue<string>(out var text) && SafeText.HasHidden(text):
+                yield return (path, text);
+                break;
         }
     }
 

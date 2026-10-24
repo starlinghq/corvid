@@ -90,10 +90,23 @@ public sealed class ShellViewModel : ObservableObject
     public string PhoneSubtitle => _setupShowing ? "" : _workspace;
 
     /// <summary>
-    /// The phone top bar's tags: the status bar's first ("tainted", Phone.png), since a phone has room for one beside the
-    /// title and the bell already counts approvals. The status bar keeps them all at desktop widths.
+    /// The phone top bar's tag: one, since a phone has room for one beside the title and the bell already counts
+    /// approvals. Taint always shows (ui.md §7), so "tainted" is the one whenever the bar has it, whatever comes before it
+    /// ("read-only", "sessions unavailable"); otherwise the bar's first. The status bar keeps them all at desktop widths.
     /// </summary>
-    public IReadOnlyList<StatusTag> PhoneTags => StatusBar.Tags.Count > 1 ? [StatusBar.Tags[0]] : StatusBar.Tags;
+    public IReadOnlyList<StatusTag> PhoneTags => StatusBar.Tags.Count <= 1
+        ? StatusBar.Tags
+        : [StatusBar.Tags.FirstOrDefault(IsTaint) ?? StatusBar.Tags[0]];
+
+    /// <summary>The taint tag ("tainted"), which the status bar and the phone keep in view whatever else gives way.</summary>
+    public static bool IsTaint(StatusTag? tag) => tag is not null && string.Equals(tag.Text, "tainted", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether the phone top bar's title is the page's level-1 heading. It is wherever the page drops its own title on the
+    /// phone (Sessions and the A2 pages); Review, Rewind, Models, Audit and the first run keep their own, so there the top
+    /// bar's title is not a heading, and a screen reader finds one level-1 heading per page.
+    /// </summary>
+    public bool PhoneTitleIsHeading => _area is not (Area.Review or Area.Rewind or Area.Models or Area.Audit or Area.FirstRun);
 
     /// <summary>
     /// How many items wait in the attention tray, across sessions (the bell's count): the sum of what each source reports
@@ -276,6 +289,7 @@ public sealed class ShellViewModel : ObservableObject
             return;
         _area = area;
         OnPropertyChanged(nameof(CurrentArea));
+        OnPropertyChanged(nameof(PhoneTitleIsHeading));
         OnPropertyChanged(nameof(CurrentTitle));
         OnPropertyChanged(nameof(PhoneTitle));
         UpdateSelection();

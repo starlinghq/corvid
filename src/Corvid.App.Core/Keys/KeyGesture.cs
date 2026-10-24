@@ -47,6 +47,20 @@ public sealed record KeyGesture(KeyModifiers Modifiers, string Key)
     public IReadOnlyList<string> Caps => [.. SplitCaps(ToString())];
 
     /// <summary>
+    /// The keys actually pressed, as the head maps them (US layout): "?" is Shift and the slash key, "+" Shift and the
+    /// equals key. So "Ctrl+?" and "Ctrl+Shift+/" are one gesture, and the conflict checks compare this, not the text.
+    /// </summary>
+    public KeyGesture Physical => Key switch
+    {
+        "?" => new KeyGesture(Modifiers | KeyModifiers.Shift, "/"),
+        "+" => new KeyGesture(Modifiers | KeyModifiers.Shift, "="),
+        _ => this,
+    };
+
+    /// <summary>Whether both gestures press the same keys (<see cref="Physical"/>).</summary>
+    public bool SameKeysAs(KeyGesture? other) => other is not null && Physical == other.Physical;
+
+    /// <summary>
     /// Reads a gesture; false with a sentence saying why when the text is not one. A bare letter or digit with no Ctrl or
     /// Alt is refused, since it would fire while a person types (only "?" and the function keys stand alone).
     /// </summary>

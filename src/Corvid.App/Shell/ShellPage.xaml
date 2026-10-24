@@ -41,7 +41,8 @@
                              Visibility="{x:Bind infra:Ui.VisibleIf(ViewModel.ShowPhoneTabs), Mode=OneWay}"
                              AutomationProperties.Name="Sessions and areas" ToolTipService.ToolTip="Sessions and areas" />
         <StackPanel Grid.Column="1" VerticalAlignment="Center">
-          <TextBlock Text="{x:Bind ViewModel.PhoneTitle, Mode=OneWay}" Style="{StaticResource CorvidSessionTitle}" FontSize="14"
+          <!-- The level-1 heading where the page drops its own title on the phone (ShellViewModel.PhoneTitleIsHeading). -->
+          <TextBlock x:Name="PhoneTitleText" Text="{x:Bind ViewModel.PhoneTitle, Mode=OneWay}" Style="{StaticResource CorvidSessionTitle}" FontSize="14"
                      LineHeight="20.3" AutomationProperties.HeadingLevel="Level1" />
           <TextBlock Text="{x:Bind ViewModel.PhoneSubtitle, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" TextWrapping="NoWrap"
                      TextTrimming="CharacterEllipsis" Visibility="{x:Bind infra:Ui.VisibleIfText(ViewModel.PhoneSubtitle), Mode=OneWay}" />

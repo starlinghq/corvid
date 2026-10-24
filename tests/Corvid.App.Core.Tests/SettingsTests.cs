@@ -171,6 +171,75 @@ public sealed class SettingsTests
     }
 
     [Fact]
+    public async Task ADuplicateKeyInTheRawEditorIsAProblemNotACrash()
+    {
+        var service = new DemoSettingsService();
+        var (settings, _, _) = await Open(service);
+        var json = "{\n  \"Corvid\": {\n    \"Workspace\": \"a\",\n    \"Workspace\": \"b\"\n  }\n}";
+
+        // The editor's setter runs on every keystroke; JsonNode used to throw ArgumentException out of it here.
+        settings.JsonText = json;
+
+        Assert.Equal("corvid.json has a duplicate key \"Workspace\" at line 4: an object names each key once (ignoring case). Remove or rename one.",
+            Assert.Single(settings.JsonProblems));
+        Assert.False(settings.CanApplyJson);
+        Assert.Equal(Tone.Red, settings.JsonTone);
+        Assert.False((await service.SaveJsonAsync(json, TestContext.Current.CancellationToken)).Written);
+
+        // The engine's configuration reads keys ignoring case, so "workspace" repeats "Workspace" too.
+        settings.JsonText = "{ \"Corvid\": { \"Turn\": { \"MaxSteps\": 5, \"maxsteps\": 6 } } }";
+        Assert.Contains("duplicate key \"maxsteps\" at line 1", Assert.Single(settings.JsonProblems), StringComparison.Ordinal);
+
+        // The same name in two objects is not a repeat.
+        settings.JsonText = "{ \"Corvid\": { \"Mcp\": { \"Servers\": { \"a\": { \"Command\": \"x\" }, \"b\": { \"Command\": \"y\" } } } } }";
+        Assert.Empty(settings.JsonProblems);
+    }
+
+    [Fact]
+    public async Task AHiddenCharacterWrittenAsAJsonEscapeIsCaughtAndNeverSaved()
+    {
+        var service = new DemoSettingsService();
+        var (settings, _, _) = await Open(service);
+        // Six characters in the file (a backslash, u, 202E): the text holds nothing hidden, the parsed value does.
+        var escape = (char)92 + "u202E";
+        var json = settings.JsonText.Replace("\"notes-mcp\"", $"\"notes{escape}-mcp\"", StringComparison.Ordinal);
+        Assert.NotEqual(settings.JsonText, json);
+        Assert.False(SafeText.HasHidden(json));
+
+        settings.JsonText = json;
+
+        Assert.Contains(settings.JsonProblems, problem => problem.StartsWith("Corvid:Mcp:Servers:notes:Command holds hidden characters written as an escape: notes⟨U+202E⟩-mcp", StringComparison.Ordinal));
+        Assert.False(settings.CanApplyJson);
+        Assert.False((await service.SaveJsonAsync(json, TestContext.Current.CancellationToken)).Written);
+
+        // A property name is checked as well as a value.
+        settings.JsonText = $"{{ \"Corvid\": {{ \"Gateway\": {{ \"Adapters\": {{ \"tele{escape}gram\": {{ \"Enabled\": true }} }} }} }} }}";
+        Assert.Contains(settings.JsonProblems, problem => problem.StartsWith("Corvid:Gateway:Adapters:tele⟨U+202E⟩gram holds hidden characters", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ATypedSaveKeepsUnsavedEditsInTheRawEditorAndSaysSo()
+    {
+        var (settings, _, _) = await Open();
+        var edited = settings.JsonText.Replace("\"CpuThreads\": 4", "\"CpuThreads\": 6", StringComparison.Ordinal);
+        Assert.NotEqual(settings.JsonText, edited);
+        settings.JsonText = edited;
+        Field(settings, "Turn:MaxSteps").Value = "7";
+
+        await settings.SaveCommand.ExecuteAsync();
+
+        Assert.Equal(Tone.Green, settings.NoticeTone);
+        Assert.Contains("keeps your unsaved edits", settings.Notice, StringComparison.Ordinal);
+        Assert.Equal(edited, settings.JsonText);
+        Assert.Equal("Valid · not saved", settings.JsonStatus);
+
+        // Revert there shows the saved file, which holds the typed save.
+        settings.RevertJsonCommand.Execute(null);
+        Assert.Contains("\"MaxSteps\": 7", settings.JsonText, StringComparison.Ordinal);
+        Assert.Contains("\"CpuThreads\": 4", settings.JsonText, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task TheRawEditorParsesAsYouTypeAndSavesIntoTheTypedPage()
     {
         var (settings, _, _) = await Open();

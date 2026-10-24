@@ -11,11 +11,11 @@
   <!--
     .statusbar: 28 px, a line above, bg-2, 0 14px padding, 12 px text-2 with labels in text and weight 500, 14 px gaps,
     one line like the mockup's overflow:hidden, but what does not fit gives way whole and by priority (FitRowPanel.GiveWay, higher first):
-    the area's items, the mode, the session id, the gateway, the engine and ctx, the decider, the generator, the scheduler, the branch,
-    and the tags last, so "tainted" and the approval count stay in view. A label and its value are two text blocks 3.37 px
-    apart (Inter's space at 12 px), not two runs: Uno does not repaint a run's theme colour when the theme changes. Items are hidden when empty and keep one order:
-    engine, generator, decider, ctx, the area's items, the mode, tags, scheduler, gateway, branch, session, then the
-    trailing item at the right. The toggles appear only while the rail or the dock is hidden.
+    the area's items, the mode, the session id, the gateway, the engine and ctx, the turn's time, the decider, the generator, the scheduler,
+    the branch, and the tags last, each tag on its own; "tainted" never gives way (ui.md §7). A label and its value are two text blocks
+    3.37 px apart (Inter's space at 12 px), not two runs: Uno does not repaint a run's theme colour when the theme changes. Items are
+    hidden when empty and keep one order: engine, generator, decider, ctx, the area's items, the mode, tags, scheduler, gateway, branch,
+    session, then the trailing item at the right edge. The toggles appear only while the rail or the dock is hidden.
   -->
   <Grid Height="28" Background="{ThemeResource CorvidBg2}" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,1,0,0"
         Padding="14,0,14,0">
@@ -30,104 +30,86 @@
                          Command="{x:Bind Shell.ToggleRailCommand}"
                          AutomationProperties.Name="Show the rail (Ctrl+Shift+B)" ToolTipService.ToolTip="Show the rail (Ctrl+Shift+B)" />
 
-    <Grid Grid.Column="1">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="*" />
-        <ColumnDefinition Width="Auto" />
-      </Grid.ColumnDefinitions>
-      <!-- The items that fit whole; the rest give way by priority rather than being cut mid-word. -->
-      <local:FitRowPanel Spacing="14" VerticalAlignment="Center" HorizontalAlignment="Left">
-        <StackPanel Orientation="Horizontal" Spacing="3.37" VerticalAlignment="Center"
-                    local:FitRowPanel.GiveWay="5" Visibility="{x:Bind infra:Ui.VisibleIfText(Shell.StatusBar.Engine), Mode=OneWay}">
-          <TextBlock Text="engine" FontWeight="Medium" Foreground="{ThemeResource CorvidText}" TextWrapping="NoWrap" />
-          <TextBlock Text="{x:Bind Shell.StatusBar.Engine, Mode=OneWay}" TextWrapping="NoWrap" />
-        </StackPanel>
-        <StackPanel Orientation="Horizontal" Spacing="3.37" VerticalAlignment="Center"
-                    local:FitRowPanel.GiveWay="3" Visibility="{x:Bind infra:Ui.VisibleIfText(Shell.StatusBar.Generator), Mode=OneWay}"
-                   ToolTipService.ToolTip="The generator slot: model, device, queue depth and median latency">
-          <TextBlock Text="generator" FontWeight="Medium" Foreground="{ThemeResource CorvidText}" TextWrapping="NoWrap" />
-          <TextBlock Text="{x:Bind Shell.StatusBar.Generator, Mode=OneWay}" TextWrapping="NoWrap" />
-        </StackPanel>
-        <StackPanel Orientation="Horizontal" Spacing="3.37" VerticalAlignment="Center"
-                    local:FitRowPanel.GiveWay="4" Visibility="{x:Bind infra:Ui.VisibleIfText(Shell.StatusBar.Decider), Mode=OneWay}"
-                   ToolTipService.ToolTip="The decider (Kev) and its tier">
-          <TextBlock Text="decider" FontWeight="Medium" Foreground="{ThemeResource CorvidText}" TextWrapping="NoWrap" />
-          <TextBlock Text="{x:Bind Shell.StatusBar.Decider, Mode=OneWay}" TextWrapping="NoWrap" />
-        </StackPanel>
-        <StackPanel Orientation="Horizontal" Spacing="3.37" VerticalAlignment="Center"
-                    local:FitRowPanel.GiveWay="5" Visibility="{x:Bind infra:Ui.VisibleIfText(Shell.StatusBar.Context), Mode=OneWay}"
-                   ToolTipService.ToolTip="Context: the prompt's tokens over the model's window">
-          <TextBlock Text="ctx" FontWeight="Medium" Foreground="{ThemeResource CorvidText}" TextWrapping="NoWrap" />
-          <TextBlock Text="{x:Bind Shell.StatusBar.Context, Mode=OneWay}" TextWrapping="NoWrap" />
-        </StackPanel>
-        <ItemsControl ItemsSource="{x:Bind Shell.StatusBar.AreaFields, Mode=OneWay}" IsTabStop="False" VerticalAlignment="Center" local:FitRowPanel.GiveWay="9"
-                      Visibility="{x:Bind infra:Ui.VisibleIfAny(Shell.StatusBar.AreaFields), Mode=OneWay}">
+    <!-- The items that fit whole; the rest give way by priority rather than being cut mid-word. -->
+    <local:FitRowPanel x:Name="Row" Grid.Column="1" Spacing="14" VerticalAlignment="Center" HorizontalAlignment="Stretch">
+      <StackPanel Orientation="Horizontal" Spacing="3.37" VerticalAlignment="Center"
+                  local:FitRowPanel.GiveWay="5" Visibility="{x:Bind infra:Ui.VisibleIfText(Shell.StatusBar.Engine), Mode=OneWay}">
+        <TextBlock Text="engine" FontWeight="Medium" Foreground="{ThemeResource CorvidText}" TextWrapping="NoWrap" />
+        <TextBlock Text="{x:Bind Shell.StatusBar.Engine, Mode=OneWay}" TextWrapping="NoWrap" />
+      </StackPanel>
+      <StackPanel Orientation="Horizontal" Spacing="3.37" VerticalAlignment="Center"
+                  local:FitRowPanel.GiveWay="3" Visibility="{x:Bind infra:Ui.VisibleIfText(Shell.StatusBar.Generator), Mode=OneWay}"
+                 ToolTipService.ToolTip="The generator slot: model, device, queue depth and median latency">
+        <TextBlock Text="generator" FontWeight="Medium" Foreground="{ThemeResource CorvidText}" TextWrapping="NoWrap" />
+        <TextBlock Text="{x:Bind Shell.StatusBar.Generator, Mode=OneWay}" TextWrapping="NoWrap" />
+      </StackPanel>
+      <StackPanel Orientation="Horizontal" Spacing="3.37" VerticalAlignment="Center"
+                  local:FitRowPanel.GiveWay="4" Visibility="{x:Bind infra:Ui.VisibleIfText(Shell.StatusBar.Decider), Mode=OneWay}"
+                 ToolTipService.ToolTip="The decider (Kev) and its tier">
+        <TextBlock Text="decider" FontWeight="Medium" Foreground="{ThemeResource CorvidText}" TextWrapping="NoWrap" />
+        <TextBlock Text="{x:Bind Shell.StatusBar.Decider, Mode=OneWay}" TextWrapping="NoWrap" />
+      </StackPanel>
+      <StackPanel Orientation="Horizontal" Spacing="3.37" VerticalAlignment="Center"
+                  local:FitRowPanel.GiveWay="5" Visibility="{x:Bind infra:Ui.VisibleIfText(Shell.StatusBar.Context), Mode=OneWay}"
+                 ToolTipService.ToolTip="Context: the prompt's tokens over the model's window">
+        <TextBlock Text="ctx" FontWeight="Medium" Foreground="{ThemeResource CorvidText}" TextWrapping="NoWrap" />
+        <TextBlock Text="{x:Bind Shell.StatusBar.Context, Mode=OneWay}" TextWrapping="NoWrap" />
+      </StackPanel>
+      <ItemsControl ItemsSource="{x:Bind Shell.StatusBar.AreaFields, Mode=OneWay}" IsTabStop="False" VerticalAlignment="Center" local:FitRowPanel.GiveWay="9"
+                    Visibility="{x:Bind infra:Ui.VisibleIfAny(Shell.StatusBar.AreaFields), Mode=OneWay}">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate>
+            <StackPanel Orientation="Horizontal" Spacing="14" />
+          </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="coreshell:StatusField">
+            <StackPanel Orientation="Horizontal" Spacing="3.37" VerticalAlignment="Center">
+              <TextBlock Text="{x:Bind Label}" FontWeight="Medium" Foreground="{ThemeResource CorvidText}" TextWrapping="NoWrap" />
+              <TextBlock Text="{x:Bind Value}" TextWrapping="NoWrap" />
+            </StackPanel>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+
+      <!-- .seg: the approval mode, one segment pressed. -->
+      <Border x:Name="ModeSegments" Height="20" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1" CornerRadius="6" VerticalAlignment="Center" local:FitRowPanel.GiveWay="8"
+              Visibility="{x:Bind infra:Ui.VisibleIfBoth(Shell.StatusBar.HasMode, Shell.ShowModeControl), Mode=OneWay}">
+        <ItemsControl ItemsSource="{x:Bind Shell.StatusBar.Modes}" IsTabStop="False" AutomationProperties.Name="Approval mode">
           <ItemsControl.ItemsPanel>
             <ItemsPanelTemplate>
-              <StackPanel Orientation="Horizontal" Spacing="14" />
+              <StackPanel Orientation="Horizontal" />
             </ItemsPanelTemplate>
           </ItemsControl.ItemsPanel>
           <ItemsControl.ItemTemplate>
-            <DataTemplate x:DataType="coreshell:StatusField">
-              <StackPanel Orientation="Horizontal" Spacing="3.37" VerticalAlignment="Center">
-                <TextBlock Text="{x:Bind Label}" FontWeight="Medium" Foreground="{ThemeResource CorvidText}" TextWrapping="NoWrap" />
-                <TextBlock Text="{x:Bind Value}" TextWrapping="NoWrap" />
-              </StackPanel>
+            <DataTemplate x:DataType="mvvm:Choice">
+              <controls:SegmentButton Content="{x:Bind Label}" IsChecked="{x:Bind IsSelected, Mode=OneWay}" Command="{x:Bind Choose}"
+                                      AutomationProperties.HelpText="{x:Bind Description}" ToolTipService.ToolTip="{x:Bind Description}" />
             </DataTemplate>
           </ItemsControl.ItemTemplate>
         </ItemsControl>
+      </Border>
 
-        <!-- .seg: the approval mode, one segment pressed. -->
-        <Border Height="20" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1" CornerRadius="6" VerticalAlignment="Center" local:FitRowPanel.GiveWay="8"
-                Visibility="{x:Bind infra:Ui.VisibleIfBoth(Shell.StatusBar.HasMode, Shell.ShowModeControl), Mode=OneWay}">
-          <ItemsControl ItemsSource="{x:Bind Shell.StatusBar.Modes}" IsTabStop="False" AutomationProperties.Name="Approval mode">
-            <ItemsControl.ItemsPanel>
-              <ItemsPanelTemplate>
-                <StackPanel Orientation="Horizontal" />
-              </ItemsPanelTemplate>
-            </ItemsControl.ItemsPanel>
-            <ItemsControl.ItemTemplate>
-              <DataTemplate x:DataType="mvvm:Choice">
-                <controls:SegmentButton Content="{x:Bind Label}" IsChecked="{x:Bind IsSelected, Mode=OneWay}" Command="{x:Bind Choose}"
-                                        AutomationProperties.HelpText="{x:Bind Description}" ToolTipService.ToolTip="{x:Bind Description}" />
-              </DataTemplate>
-            </ItemsControl.ItemTemplate>
-          </ItemsControl>
-        </Border>
+      <!-- The tags go here, each its own item (StatusBarView.xaml.cs): "tainted" never gives way, the others last of all. -->
 
-        <ItemsControl ItemsSource="{x:Bind Shell.StatusBar.Tags, Mode=OneWay}" IsTabStop="False" VerticalAlignment="Center"
-                      Visibility="{x:Bind infra:Ui.VisibleIfAny(Shell.StatusBar.Tags), Mode=OneWay}">
-          <ItemsControl.ItemsPanel>
-            <ItemsPanelTemplate>
-              <StackPanel Orientation="Horizontal" Spacing="14" />
-            </ItemsPanelTemplate>
-          </ItemsControl.ItemsPanel>
-          <ItemsControl.ItemTemplate>
-            <DataTemplate x:DataType="coreshell:StatusTag">
-              <controls:TagChip Text="{x:Bind Text}" Tone="{x:Bind Tone}" ToolTipService.ToolTip="{x:Bind Detail}"
-                                AutomationProperties.Name="{x:Bind Text}" AutomationProperties.HelpText="{x:Bind Detail}" />
-            </DataTemplate>
-          </ItemsControl.ItemTemplate>
-        </ItemsControl>
-
-        <StackPanel Orientation="Horizontal" Spacing="3.37" VerticalAlignment="Center"
-                    local:FitRowPanel.GiveWay="2" Visibility="{x:Bind infra:Ui.VisibleIfText(Shell.StatusBar.Scheduler), Mode=OneWay}">
-          <TextBlock Text="scheduler" FontWeight="Medium" Foreground="{ThemeResource CorvidText}" TextWrapping="NoWrap" />
-          <TextBlock Text="{x:Bind Shell.StatusBar.Scheduler, Mode=OneWay}" TextWrapping="NoWrap" />
-        </StackPanel>
-        <StackPanel Orientation="Horizontal" Spacing="3.37" VerticalAlignment="Center"
-                    local:FitRowPanel.GiveWay="6" Visibility="{x:Bind infra:Ui.VisibleIfText(Shell.StatusBar.Gateway), Mode=OneWay}">
-          <TextBlock Text="gateway" FontWeight="Medium" Foreground="{ThemeResource CorvidText}" TextWrapping="NoWrap" />
-          <TextBlock Text="{x:Bind Shell.StatusBar.Gateway, Mode=OneWay}" TextWrapping="NoWrap" />
-        </StackPanel>
-        <TextBlock local:FitRowPanel.GiveWay="1" Text="{x:Bind Shell.StatusBar.Branch, Mode=OneWay}" Visibility="{x:Bind infra:Ui.VisibleIfText(Shell.StatusBar.Branch), Mode=OneWay}"
-                   TextWrapping="NoWrap" VerticalAlignment="Center" ToolTipService.ToolTip="The workspace's git branch" />
-        <TextBlock local:FitRowPanel.GiveWay="7" Text="{x:Bind Shell.StatusBar.SessionId, Mode=OneWay}" Visibility="{x:Bind infra:Ui.VisibleIfText(Shell.StatusBar.SessionId), Mode=OneWay}"
-                   TextWrapping="NoWrap" VerticalAlignment="Center" ToolTipService.ToolTip="The session's id in the event log" />
-      </local:FitRowPanel>
-      <TextBlock Grid.Column="1" Text="{x:Bind Shell.StatusBar.Trailing, Mode=OneWay}" Margin="14,0,0,0" TextWrapping="NoWrap" VerticalAlignment="Center"
-                 Visibility="{x:Bind infra:Ui.VisibleIfText(Shell.StatusBar.Trailing), Mode=OneWay}" />
-    </Grid>
+      <StackPanel Orientation="Horizontal" Spacing="3.37" VerticalAlignment="Center"
+                  local:FitRowPanel.GiveWay="2" Visibility="{x:Bind infra:Ui.VisibleIfText(Shell.StatusBar.Scheduler), Mode=OneWay}">
+        <TextBlock Text="scheduler" FontWeight="Medium" Foreground="{ThemeResource CorvidText}" TextWrapping="NoWrap" />
+        <TextBlock Text="{x:Bind Shell.StatusBar.Scheduler, Mode=OneWay}" TextWrapping="NoWrap" />
+      </StackPanel>
+      <StackPanel Orientation="Horizontal" Spacing="3.37" VerticalAlignment="Center"
+                  local:FitRowPanel.GiveWay="6" Visibility="{x:Bind infra:Ui.VisibleIfText(Shell.StatusBar.Gateway), Mode=OneWay}">
+        <TextBlock Text="gateway" FontWeight="Medium" Foreground="{ThemeResource CorvidText}" TextWrapping="NoWrap" />
+        <TextBlock Text="{x:Bind Shell.StatusBar.Gateway, Mode=OneWay}" TextWrapping="NoWrap" />
+      </StackPanel>
+      <TextBlock local:FitRowPanel.GiveWay="1" Text="{x:Bind Shell.StatusBar.Branch, Mode=OneWay}" Visibility="{x:Bind infra:Ui.VisibleIfText(Shell.StatusBar.Branch), Mode=OneWay}"
+                 TextWrapping="NoWrap" VerticalAlignment="Center" ToolTipService.ToolTip="The workspace's git branch" />
+      <TextBlock local:FitRowPanel.GiveWay="7" Text="{x:Bind Shell.StatusBar.SessionId, Mode=OneWay}" Visibility="{x:Bind infra:Ui.VisibleIfText(Shell.StatusBar.SessionId), Mode=OneWay}"
+                 TextWrapping="NoWrap" VerticalAlignment="Center" ToolTipService.ToolTip="The session's id in the event log" />
+      <!-- The turn's time (or the area's own item) at the right edge: it gives way after ctx, before the decider. -->
+      <TextBlock local:FitRowPanel.IsTrailing="True" local:FitRowPanel.GiveWay="4" Text="{x:Bind Shell.StatusBar.ShownTrailing, Mode=OneWay}"
+                 TextWrapping="NoWrap" VerticalAlignment="Center" Visibility="{x:Bind infra:Ui.VisibleIfText(Shell.StatusBar.ShownTrailing), Mode=OneWay}" />
+    </local:FitRowPanel>
 
     <controls:IconButton Grid.Column="2" Width="22" Height="22" Margin="8,0,-6,0" Icon="PanelRight" VerticalAlignment="Center"
                          Visibility="{x:Bind infra:Ui.VisibleIf(Shell.ShowDockToggle), Mode=OneWay}"
