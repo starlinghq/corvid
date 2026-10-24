@@ -53,7 +53,9 @@ approval mode, `Ctrl+S` puts the draft aside; on an open approval card the first
 answer and the arrows move; `Ctrl+1` to `Ctrl+7` pick dock tabs; `Ctrl+O`, `Ctrl+T` and `Ctrl+Shift+D` expand the
 latest output, the thoughts and every checkpoint's chips. On Models: `Alt+P` opens the generator's Switch… picker,
 `Alt+Left` and `Alt+Right` move a focused escalation-ladder step (or drag it by its grip), and `Esc` closes a picker or the
-placement editor. The rest of the keyboard map (`docs/plan/ui.md` §6) comes with
+placement editor. `Ctrl+Shift+C` opens Review from anywhere. On Audit: `Up` and `Down` move between event rows, `Enter`
+and `Space` open the focused row, `Ctrl+F` puts the caret in the "path or tool" filter, and `Esc` first shows every event
+again after a detection's link narrowed the log, then closes the open event. The rest of the keyboard map (`docs/plan/ui.md` §6) comes with
 the screens it drives.
 
 ## The harness check
@@ -161,6 +163,24 @@ More Uno gotchas found building the Sessions page:
   in `BeforeTextChanging`.
 - The page's own `x:Bind` paths do not follow a static source's `PropertyChanged`; templates created later do read it.
 - `x:Bind` function arguments are paths or literals, not other function calls.
+
+And from the A1 screens:
+
+- With `UseSystemFocusVisuals=True`, a row whose `Button` template was visited by keyboard can stay drawn faded after
+  focus moves on. Rewind's ledger rows and the side-by-side diff's lines draw their own 2 px accent ring instead.
+- A text run made only of spaces measures as zero width, so indentation before a changed word disappears.
+  `SideBySideDiffView` pads such runs; the shared `DiffRowsView` still has the bug where leading whitespace is its own
+  segment.
+- Under `--theme light` on a system in dark, a control that takes keyboard focus (Tab, or `Focus(FocusState.Keyboard)`)
+  redraws in dark-theme brushes and stays so; pointer focus does not. Not fixed yet: it touches the shell or theme setup.
+- `ObservableCollection.Move` in an `ItemsControl` re-templated the moved item outside the page's theme; remove and
+  re-insert instead (the Board's sync does).
+- An `x:Bind` from a `DataTemplate`'s `ColumnDefinition.Width` (or a `ContentControl` header template) to a static
+  source's `GridLength` did not follow later `PropertyChanged`; set such widths in code (Memory's `MemoryTableRow`).
+- The window's first focus lands on the first `Button`, with a keyboard ring. A page that should not start there takes
+  focus itself on `Loaded` (`IsTabStop` and a programmatic `Focus`).
+- Closing an inline editor sends focus to the next item's first button, which then looks pressed: focus the page before
+  the command runs.
 
 ## Fonts
 
