@@ -371,7 +371,7 @@
           <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
         <controls:WrapRowPanel x:Name="HeadLeft" Spacing="12" LineSpacing="8" VerticalAlignment="Center">
-          <TextBlock Text="{x:Bind ViewModel.Title}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
+          <TextBlock x:Name="TitleText" Text="{x:Bind ViewModel.Title}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
                      AutomationProperties.HeadingLevel="Level1" />
           <Button x:Name="SessionPicker" Style="{StaticResource SelectButton}" AutomationProperties.Name="Session"
                   ToolTipService.ToolTip="The session whose events to read, or the whole log">
@@ -387,11 +387,10 @@
               <MenuFlyout x:Name="SessionMenu" Placement="BottomEdgeAlignedLeft" Opening="OnSessionMenuOpening" />
             </Button.Flyout>
           </Button>
-          <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-            <TextBlock Text="{x:Bind ViewModel.LogCount, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" TextWrapping="NoWrap" VerticalAlignment="Center" />
-            <TextBlock Text="{x:Bind ViewModel.LogPath, Mode=OneWay}" FontFamily="{StaticResource CorvidMono}" FontSize="12" Foreground="{ThemeResource CorvidText2}"
-                       TextWrapping="NoWrap" VerticalAlignment="Center" />
-          </StackPanel>
+          <TextBlock x:Name="LogText" Style="{StaticResource CorvidSmallText}" VerticalAlignment="Center">
+            <Run Text="{x:Bind ViewModel.LogCount, Mode=OneWay}" />
+            <Run Text="{x:Bind ViewModel.LogPath, Mode=OneWay}" FontFamily="{StaticResource CorvidMono}" />
+          </TextBlock>
         </controls:WrapRowPanel>
         <StackPanel x:Name="HeadActions" Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
           <controls:CorvidButton Content="Scan · fail on high" Command="{x:Bind ViewModel.ScanCommand}"
@@ -403,7 +402,8 @@
     </Border>
 
     <!-- .page-body: 18px 24px; the three columns 200px, 1.3fr and 1fr, 18 apart; one column on the phone. -->
-    <ScrollViewer x:Name="BodyScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled" HorizontalScrollBarVisibility="Disabled">
+    <ScrollViewer x:Name="BodyScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled" HorizontalScrollBarVisibility="Disabled"
+                  SizeChanged="OnBodySizeChanged">
       <Grid x:Name="Body" Padding="24,18" ColumnSpacing="18" RowSpacing="18">
         <Grid.ColumnDefinitions>
           <ColumnDefinition x:Name="FilterColumn" Width="200" />
@@ -476,12 +476,12 @@
                 <Grid BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,0,0,1">
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="50" />
-                    <ColumnDefinition Width="72" />
+                    <ColumnDefinition x:Name="HeadTimeColumn" Width="72" />
                     <ColumnDefinition Width="155" />
                     <ColumnDefinition Width="*" />
                   </Grid.ColumnDefinitions>
                   <TextBlock Text="seq" Style="{StaticResource HeadCell}" />
-                  <TextBlock Grid.Column="1" Text="time" Style="{StaticResource HeadCell}" />
+                  <TextBlock x:Name="HeadTimeCell" Grid.Column="1" Text="time" Style="{StaticResource HeadCell}" />
                   <TextBlock Grid.Column="2" Text="type" Style="{StaticResource HeadCell}" />
                   <TextBlock Grid.Column="3" Text="summary" Style="{StaticResource HeadCell}" />
                 </Grid>
@@ -489,18 +489,19 @@
                               KeyDown="OnRowsKeyDown">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="audit:AuditEventRow">
-                      <Button Style="{StaticResource EventRowButton}" Command="{x:Bind SelectCommand}" AutomationProperties.Name="{x:Bind AutomationName}"
+                      <Button Style="{StaticResource EventRowButton}" Command="{x:Bind SelectCommand}" AutomationProperties.Name="{x:Bind AutomationName}" Click="OnRowClick"
 >
                         <Grid BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,0,0,1">
                           <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="50" />
-                            <ColumnDefinition Width="72" />
+                            <ColumnDefinition Width="{x:Bind local:AuditPage.TimeWidth(local:AuditLayout.Current.IsPhone), Mode=OneWay}" />
                             <ColumnDefinition Width="155" />
                             <ColumnDefinition Width="*" />
                           </Grid.ColumnDefinitions>
                           <Border Grid.ColumnSpan="4" Background="{ThemeResource CorvidAccentBg}" Visibility="{x:Bind ui:Ui.VisibleIf(IsSelected), Mode=OneWay}" />
                           <TextBlock Text="{x:Bind SequenceText}" Style="{StaticResource MonoCell}" local:AuditRuns.Ink="CorvidText2" local:AuditRuns.Alert="{x:Bind IsAlert}" />
-                          <TextBlock Grid.Column="1" Text="{x:Bind TimeText}" Style="{StaticResource Cell}" local:AuditRuns.Ink="CorvidText2" local:AuditRuns.Alert="{x:Bind IsAlert}" />
+                          <TextBlock Grid.Column="1" Text="{x:Bind TimeText}" Style="{StaticResource Cell}" local:AuditRuns.Ink="CorvidText2" local:AuditRuns.Alert="{x:Bind IsAlert}"
+                                     Visibility="{x:Bind ui:Ui.CollapsedIf(local:AuditLayout.Current.IsPhone), Mode=OneWay}" />
                           <TextBlock Grid.Column="2" Text="{x:Bind Type}" Style="{StaticResource MonoCell}" TextTrimming="CharacterEllipsis"
                                      local:AuditRuns.Ink="CorvidText" local:AuditRuns.Alert="{x:Bind IsAlert}" />
                           <TextBlock Grid.Column="3" Style="{StaticResource Cell}" TextWrapping="Wrap" local:AuditRuns.Ink="CorvidText"
@@ -574,18 +575,22 @@
                                   IsTabStop="False" Padding="10,8" />
                   </ScrollViewer>
                 </Border>
-                <Grid ColumnSpacing="8">
+                <Grid x:Name="SentActions" ColumnSpacing="8" SizeChanged="OnSentActionsSizeChanged">
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                   </Grid.ColumnDefinitions>
-                  <controls:CorvidButton Content="{x:Bind ViewModel.Egress.ToggleLabel, Mode=OneWay, FallbackValue=''}" Style="{StaticResource CorvidSmallButton}"
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                  </Grid.RowDefinitions>
+                  <controls:CorvidButton x:Name="SentToggle" Content="{x:Bind ViewModel.Egress.ToggleLabel, Mode=OneWay, FallbackValue=''}" Style="{StaticResource CorvidSmallButton}"
                                          Command="{x:Bind ViewModel.Egress.ToggleFullCommand, Mode=OneWay, FallbackValue={x:Null}}"
                                          ToolTipService.ToolTip="The whole request as the gate sent it, rendered again on demand" />
                   <controls:CorvidButton x:Name="CopySentButton" Grid.Column="1" Content="Copy" Style="{StaticResource CorvidSmallButton}" Variant="Ghost"
                                          Click="OnCopySentClick" ToolTipService.ToolTip="Copy what is shown, with the redaction markers" />
-                  <TextBlock Grid.Column="2" Text="{x:Bind ViewModel.Egress.Note, Mode=OneWay, FallbackValue=''}" Style="{StaticResource CorvidSmallText}"
+                  <TextBlock x:Name="SentNote" Grid.Column="2" Text="{x:Bind ViewModel.Egress.Note, Mode=OneWay, FallbackValue=''}" Style="{StaticResource CorvidSmallText}"
                              VerticalAlignment="Center" />
                 </Grid>
               </StackPanel>

@@ -67,6 +67,9 @@ public sealed partial class AuditPage : Page
     /// <summary>The request as sent: .tail's 170 px for the excerpt, more once the whole request is open.</summary>
     public static double SentHeight(bool full) => full ? 360 : 170;
 
+    /// <summary>The table's time column: 72 px, none on the phone.</summary>
+    public static GridLength TimeWidth(bool phone) => new(phone ? 0 : 72);
+
     public static string EventLinkName(string sequence) => $"Event {sequence}: show the detection's events with it open";
 
     // ---- The view model ----
@@ -157,6 +160,22 @@ public sealed partial class AuditPage : Page
 
     // ---- Keys and focus ----
 
+    /// <summary>
+    /// Opening an event with the pointer when the right column's panels sit under the table (1024 wide, the phone): show
+    /// the opened event, since it is not beside the row.
+    /// </summary>
+    private void OnRowClick(object sender, RoutedEventArgs e)
+    {
+        if (Grid.GetColumn(SideStack) == 2)
+            return;
+        // At low priority: the click's focus first brings the row into view, and this must come after it.
+        _ = DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            var top = SideStack.TransformToVisual(Body).TransformPoint(default).Y;
+            BodyScroll.ChangeView(null, Math.Max(0, top - 12), null, true);
+        });
+    }
+
     private void OnRowsKeyDown(object sender, KeyRoutedEventArgs e)
     {
         var delta = e.Key switch
@@ -224,7 +243,7 @@ public sealed partial class AuditPage : Page
     private void OnTableScrollSizeChanged(object sender, SizeChangedEventArgs e) =>
         Table.Width = Math.Max(TableMinWidth, e.NewSize.Width);
 
-    private const double TableMinWidth = 460;
+    private static double TableMinWidth => AuditLayout.Current.IsPhone ? 0 : 460;
 
     private static Button? FindButton(DependencyObject root)
     {
@@ -247,22 +266,59 @@ public sealed partial class AuditPage : Page
             ApplyLayout();
     }
 
+    private void OnBodySizeChanged(object sender, SizeChangedEventArgs e) => ApplyLayout();
+
     /// <summary>
-    /// Three columns down to the narrow layout (Audit-narrow.png keeps them, the table clipped and scrolling sideways);
-    /// on the phone the panels stack in reading order with 14 px gutters.
+    /// Three columns while the page is at least 800 wide (Audit.png, and Audit-narrow.png at 820, where the table runs
+    /// past its panel and scrolls sideways). Narrower beside the rail (1024 wide), the right column's panels go under the
+    /// table, which keeps its width; on the phone everything stacks in reading order with 14 px gutters.
     /// </summary>
     private void ApplyLayout()
     {
         var phone = _composition?.Shell.Layout == ShellLayout.Phone;
-        FilterColumn.Width = phone ? new GridLength(1, GridUnitType.Star) : new GridLength(200);
-        EventsColumn.Width = phone ? new GridLength(0) : new GridLength(1.3, GridUnitType.Star);
-        SideColumn.Width = phone ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+        var width = BodyScroll.ActualWidth;
+        var three = !phone && (width <= 0 || width >= ThreeColumnWidth);
+        var star = new GridLength(1, GridUnitType.Star);
+        FilterColumn.Width = phone ? star : new GridLength(200);
+        EventsColumn.Width = phone ? new GridLength(0) : three ? new GridLength(1.3, GridUnitType.Star) : star;
+        SideColumn.Width = three ? star : new GridLength(0);
         Body.ColumnSpacing = phone ? 0 : 18;
         Place(FilterPanel, 0, 0);
         Place(EventsPanel, phone ? 1 : 0, phone ? 0 : 1);
-        Place(SideStack, phone ? 2 : 0, phone ? 0 : 2);
+        Place(SideStack, phone ? 2 : three ? 0 : 1, phone ? 0 : three ? 2 : 1);
         Body.Padding = phone ? new Thickness(14, 12, 14, 12) : new Thickness(24, 18, 24, 18);
         Head.Padding = phone ? new Thickness(14, 10, 14, 10) : new Thickness(24, 12, 24, 12);
+        // The phone's top bar has the title; its table drops the time and wraps its summaries in the screen's width.
+        TitleText.Visibility = phone ? Visibility.Collapsed : Visibility.Visible;
+        if (AuditLayout.Current.IsPhone != phone)
+        {
+            AuditLayout.Current.IsPhone = phone;
+            // Rows made before the switch keep their columns (a template's static-rooted x:Bind is read when the row is
+            // made), so make them again.
+            if (ViewModel is not null)
+            {
+                EventRows.ItemsSource = null;
+                EventRows.ItemsSource = ViewModel.Rows;
+            }
+        }
+        HeadTimeColumn.Width = AuditLayout.Current.TimeWidth;
+        HeadTimeCell.Visibility = AuditLayout.Current.TimeVisibility;
+        Table.Width = Math.Max(TableMinWidth, TableScroll.ActualWidth);
+    }
+
+    private const double ThreeColumnWidth = 800;
+
+    /// <summary>
+    /// The egress panel's actions: the note sits beside the two buttons while it has room for a few words a line (it
+    /// wraps there in Audit.png), and goes under them when the column is narrow.
+    /// </summary>
+    private void OnSentActionsSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        var below = e.NewSize.Width - SentToggle.ActualWidth - CopySentButton.ActualWidth - 16 < 110;
+        Grid.SetRow(SentNote, below ? 1 : 0);
+        Grid.SetColumn(SentNote, below ? 0 : 2);
+        Grid.SetColumnSpan(SentNote, below ? 3 : 1);
+        SentActions.RowSpacing = below ? 6 : 0;
     }
 
     private static void Place(FrameworkElement element, int row, int column)
@@ -288,4 +344,36 @@ public sealed partial class AuditPage : Page
         HeadGrid.RowSpacing = fits ? 0 : 12;
         HeadActions.HorizontalAlignment = HorizontalAlignment.Left;
     }
+}
+
+/// <summary>
+/// The Audit page's width class, for its row template: on the phone the table drops its time column. Templates bind to
+/// <see cref="Current"/>; the page sets it from the shell's layout.
+/// </summary>
+public sealed class AuditLayout : INotifyPropertyChanged
+{
+    private bool _isPhone;
+
+    public static AuditLayout Current { get; } = new();
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public bool IsPhone
+    {
+        get => _isPhone;
+        set
+        {
+            if (_isPhone == value)
+                return;
+            _isPhone = value;
+            // By name: x:Bind's static-rooted paths do not refresh on an empty property name.
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPhone)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TimeWidth)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TimeVisibility)));
+        }
+    }
+
+    public GridLength TimeWidth => new(_isPhone ? 0 : 72);
+
+    public Visibility TimeVisibility => _isPhone ? Visibility.Collapsed : Visibility.Visible;
 }
