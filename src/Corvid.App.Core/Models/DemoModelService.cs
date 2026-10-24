@@ -154,6 +154,9 @@ public sealed class DemoModelService : IModelService, IDisposable
             var p50 = device == "cpu" ? at.P50Milliseconds * 4 : Math.Max(1, at.P50Milliseconds / 4);
             return slot with { Placement = at with { Device = device == "cuda" ? _snapshot.Gpus[0].Id : "cpu", P50Milliseconds = p50 } };
         }).ToList();
+        // Where a slot last ran the model no longer holds: a slot that goes back to it follows the new placement.
+        foreach (var key in _localPlacements.Keys.Where(key => key.Model == model).ToList())
+            _localPlacements.Remove(key);
         Set(_snapshot with { Placements = placements, Slots = slots });
         return Written($"Written to `{ConfigPath}`: {E(model)} on {device}, falling back to {E(current.Fallback)}. Applies when it next loads.");
     }

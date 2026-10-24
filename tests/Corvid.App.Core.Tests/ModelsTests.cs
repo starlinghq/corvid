@@ -445,6 +445,12 @@ public sealed class ModelsTests
 
         Assert.Equal(before, service.Snapshot.Slot(ModelSlotNames.Generator)!.Placement);
         Assert.Equal(new SlotPlacement("cuda:0", 0, 180), before);
+
+        // Moved to the CPU while the slot ran another model: back on it, the slot follows the new placement.
+        Assert.True((await service.SwitchAsync(ModelSlotNames.Generator, "qwen-27b", token)).Written);
+        Assert.True((await service.SetPlacementAsync("qwen3.5-0.8b", "cpu", token)).Written);
+        Assert.True((await service.SwitchAsync(ModelSlotNames.Generator, "qwen3.5-0.8b", token)).Written);
+        Assert.Equal("cpu", service.Snapshot.Slot(ModelSlotNames.Generator)!.Placement!.Device);
     }
 
     [Fact]
