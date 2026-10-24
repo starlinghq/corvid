@@ -321,11 +321,27 @@ public sealed class SkillsReviewTests
     }
 
     [Fact]
+    public async Task ARunOfSelectorsOrJoinersAfterAnEmojiIsShownAndBlocksApproval()
+    {
+        var service = new ScriptedSkillsService();
+        // A message hidden in variation selectors after one emoji, and two joiners in a row: they do no work.
+        var content = "---\nname: tidy\n---\n\nSay \U0001F600\U000E0101\U000E0102 and \U0001F468\u200D\u200D\U0001F469.\n";
+        service.Drafts.Add(Draft("d-12", "tidy", content));
+        var skills = await Open(service);
+        var draft = skills.Drafts[0];
+
+        Assert.True(draft.HasHiddenText);
+        Assert.Contains("⟨U+E0101⟩⟨U+E0102⟩", draft.Source, StringComparison.Ordinal);
+        Assert.Contains("⟨U+200D⟩⟨U+200D⟩", draft.Source, StringComparison.Ordinal);
+        Assert.False(draft.ApproveCommand.CanExecute(null));
+    }
+
+    [Fact]
     public async Task JoinersStayAsTheDiffShowsThemAndDoNotBlockApproval()
     {
         var service = new ScriptedSkillsService();
         // An emoji family (joined by U+200D) and a Persian word with a non-joiner (U+200C): ordinary text.
-        var content = "---\nname: tidy\n---\n\nSay \U0001F468‍\U0001F469‍\U0001F467 and می‌خواهم.\n";
+        var content = "---\nname: tidy\n---\n\nSay \U0001F468\u200D\U0001F469\u200D\U0001F467 and می\u200Cخواهم.\n";
         service.Drafts.Add(Draft("d-11", "tidy", content));
         var skills = await Open(service);
         var draft = skills.Drafts[0];

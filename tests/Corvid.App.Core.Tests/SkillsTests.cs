@@ -496,22 +496,22 @@ public sealed class SkillsTests
         Assert.True(skills.ScanCommand.CanExecute(null));
 
         // The hub name becomes the author written into git.
-        skills.ImportSource = "te​am";
+        skills.ImportSource = "te\u200Bam";
         Assert.False(skills.ScanCommand.CanExecute(null));
         Assert.Equal("The hub name holds hidden characters: “te⟨U+200B⟩am”. Delete them to run the dry run.", skills.ImportProblem);
         await skills.ScanCommand.ExecuteAsync();
         Assert.False(skills.HasScan);
 
         skills.ImportSource = "team";
-        skills.ImportFolder = "~/ski‮lls";
+        skills.ImportFolder = "~/ski\u202Ells";
         Assert.False(skills.ScanCommand.CanExecute(null));
         Assert.StartsWith("The folder holds hidden characters: “~/ski⟨U+202E⟩lls”.", skills.ImportProblem, StringComparison.Ordinal);
 
         // The demo store refuses them too.
         await Assert.ThrowsAsync<ArgumentException>(() =>
-            service.ScanImportAsync(SkillImportKind.Folder, "~/skills", "te​am", TestContext.Current.CancellationToken));
+            service.ScanImportAsync(SkillImportKind.Folder, "~/skills", "te\u200Bam", TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<ArgumentException>(() =>
-            service.ImportAsync(new ImportScan(SkillImportKind.Folder, "~/skills", "hub:te​am", []), [], TestContext.Current.CancellationToken));
+            service.ImportAsync(new ImportScan(SkillImportKind.Folder, "~/skills", "hub:te\u200Bam", []), [], TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -543,7 +543,7 @@ public sealed class SkillsTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.ApproveDraftAsync(draft.Id,
             draft.Content.Replace("name: vault-service-policy", "name: release-notes", StringComparison.Ordinal), TestContext.Current.CancellationToken));
-        await Assert.ThrowsAsync<ArgumentException>(() => service.RejectDraftAsync(draft.Id, "no‮", TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<ArgumentException>(() => service.RejectDraftAsync(draft.Id, "no\u202E", TestContext.Current.CancellationToken));
         Assert.Single((await service.LoadAsync(TestContext.Current.CancellationToken)).Drafts);
     }
 

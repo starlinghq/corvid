@@ -69,8 +69,8 @@ public sealed partial class GatewayPage : Page
     }
 
     /// <summary>
-    /// Brings the linked request's card into view once it is laid out, and focuses the owner question's answer when the
-    /// link opened it (so Enter answers and Esc cancels), else the card's first answer.
+    /// Brings the linked request's card into view once it is laid out, and focuses the owner question's Cancel when the
+    /// link opened it, else the card's Ignore: the person reads the card and chooses a grant themselves.
     /// </summary>
     private void LandOnCard()
     {
@@ -88,7 +88,8 @@ public sealed partial class GatewayPage : Page
                 done = true;
                 RequestCards.LayoutUpdated -= handler;
                 container.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false, VerticalAlignmentRatio = 0 });
-                var label = card.IsConfirmingOwner ? "Pair as owner" : card.CanPair ? "Pair as guest" : "Ignore";
+                // Never on a grant: a link from the tray must not leave one Enter away from pairing.
+                var label = card.IsConfirmingOwner ? "Cancel" : "Ignore";
                 OpsLayout.FocusWhenShown(container, () => Find(container, label), FocusState.Keyboard);
             }
             else if (++passes > 60)

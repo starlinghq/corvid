@@ -28,6 +28,25 @@ public sealed class SafeTextTests
         Assert.Equal("rm -rf build", SafeText.Clean("rm\u200B -rf\u2060 bu\uFEFFild\u202E"));
 
     [Fact]
+    public void JoinersAndSelectorsAreKeptOnlyWhereTheyDoTheirWork()
+    {
+        // Ordinary text: a keycap, a red heart, a heart on fire, a skin tone, a Han glyph variant, Persian.
+        foreach (var text in new[] { "1\uFE0F\u20E3", "\u2764\uFE0F", "\u2764\uFE0F\u200D\U0001F525", "\U0001F44D\U0001F3FD", "\u845B\U000E0100", "\u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645" })
+        {
+            Assert.Equal(text, SafeText.Reveal(text, keepJoiners: true));
+            Assert.Equal(text, SafeText.Clean(text));
+        }
+
+        // A run of selectors after an emoji (a message hidden in them), selectors and joiners between Latin letters,
+        // joiners at an edge or beside a space: each is shown.
+        Assert.Equal("\U0001F600\uFE0F⟨U+E0101⟩⟨U+E0102⟩", SafeText.Reveal("\U0001F600\uFE0F\U000E0101\U000E0102", keepJoiners: true));
+        Assert.Equal("a⟨U+FE00⟩b⟨U+FE0F⟩", SafeText.Reveal("a\uFE00b\uFE0F", keepJoiners: true));
+        Assert.Equal("a⟨U+200D⟩b⟨U+200C⟩c", SafeText.Reveal("a\u200Db\u200Cc", keepJoiners: true));
+        Assert.Equal("⟨U+200D⟩\U0001F600 ⟨U+200D⟩\U0001F600⟨U+200D⟩", SafeText.Reveal("\u200D\U0001F600 \u200D\U0001F600\u200D", keepJoiners: true));
+        Assert.Equal("\U0001F600\U0001F600", SafeText.Clean("\U0001F600\U000E0101\U000E0102\u200D\u200D\U0001F600"));
+    }
+
+    [Fact]
     public void CleanKeepsTheJoinersThatPersianAndEmojiNeed()
     {
         const string persian = "می\u200Cخواهم";

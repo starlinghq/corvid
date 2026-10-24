@@ -77,6 +77,7 @@ public sealed partial class FitRowPanel : Panel
         double x = 0;
         var right = finalSize.Width - trailingWidth;
         var any = false;
+        ForgetRemoved();
         for (var i = 0; i < Children.Count; i++)
         {
             var child = Children[i];
@@ -170,6 +171,16 @@ public sealed partial class FitRowPanel : Panel
             if (_parked.Remove(control, out var was))
                 control.IsTabStop = was;
         }
+    }
+
+    /// <summary>Drops the controls of children taken out of the row (the status bar rebuilds its tag chips).</summary>
+    private void ForgetRemoved()
+    {
+        if (_parked.Count == 0)
+            return;
+        var present = Children.SelectMany(Controls).ToHashSet();
+        foreach (var control in _parked.Keys.Where(c => !present.Contains(c)).ToList())
+            _parked.Remove(control);
     }
 
     private static IEnumerable<Control> Controls(DependencyObject root)

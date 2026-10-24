@@ -16,6 +16,9 @@ public sealed class StatusBarLease
     private readonly Dictionary<string, object?> _mine = new(StringComparer.Ordinal);
     private bool _writing;
 
+    /// <summary>Saved in place of <see cref="StatusBarViewModel.Trailing"/> when it held the session's item.</summary>
+    private static readonly object FollowSession = new();
+
     public StatusBarLease(StatusBarViewModel bar)
     {
         ArgumentNullException.ThrowIfNull(bar);
@@ -50,6 +53,10 @@ public sealed class StatusBarLease
         {
             foreach (var (name, value) in Read())
                 _saved[name] = value;
+            // The session's item, left on the bar by a session's page, is put back as the session's item then, not as
+            // the turn time it read now: the turn has moved on, or ended, by the time the area goes.
+            if (_bar.SessionTrailing.Length > 0 && string.Equals(_bar.Trailing, _bar.SessionTrailing, StringComparison.Ordinal))
+                _saved[nameof(StatusBarViewModel.Trailing)] = FollowSession;
         }
 
         Holders.GetOrCreateValue(_bar).Lease = this;
@@ -79,7 +86,7 @@ public sealed class StatusBarLease
             foreach (var (name, value) in Read())
             {
                 if (_mine.TryGetValue(name, out var mine) && Equals(value, mine) && _saved.TryGetValue(name, out var saved))
-                    Set(name, saved);
+                    Set(name, ReferenceEquals(saved, FollowSession) ? _bar.SessionTrailing : saved);
             }
         }
 

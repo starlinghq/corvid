@@ -176,6 +176,8 @@ tests are 642. Decisions taken in that round:
 - The phone's turn strip shows while a turn works or has a queue, since the phone has no status bar.
 - "Record only" asks first, naming the enforcing rules; turning enforcement back on is one click.
 - SKILL.md content uses a joiner-tolerant hidden-character check, as Memory does; names and fields stay strict.
+  `SafeText` keeps a joiner or variation selector only where it does its work (between two characters outside ASCII,
+  once after a base it can change), so a run of them, which can carry a hidden message, is shown and blocks approval.
 - Safety's demo names the detection `credential-read-then-egress` v3 as Audit's demo does; the real pack calls it
   `secret-read-then-egress` v1, so Audit's demo should change when A3 reads the engine.
 - Uno drew no sideways scroll bar at 390, so wide ops tables show a "scroll it sideways" hint.

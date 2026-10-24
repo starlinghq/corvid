@@ -339,8 +339,8 @@ public sealed class SafetyTests
     {
         var service = new FakeSafetyService
         {
-            Pack = [new DetectionRule("evil‮rule", 1, "t​itle", DetectionSeverity.Low, false) { Category = "c\u001B[31mat" }],
-            Hardline = [new HardlineCode("co‮de", "sen⁦tence")],
+            Pack = [new DetectionRule("evil\u202Erule", 1, "t\u200Bitle", DetectionSeverity.Low, false) { Category = "c\u001B[31mat" }],
+            Hardline = [new HardlineCode("co\u202Ede", "sen\u2066tence")],
         };
         var bar = new StatusBarViewModel();
         using var safety = new SafetyViewModel(service, new FakeSession(), new ShellViewModel(bar), bar, ManualTimeProvider.DemoLocal());

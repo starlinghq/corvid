@@ -16,7 +16,8 @@ public static partial class SafeText
 {
     /// <summary>
     /// The text with escapes and invisible characters removed; the same instance when there was nothing to remove. The
-    /// joiners (U+200C, U+200D) and variation selectors stay: Persian, Indic scripts and emoji need them to read right.
+    /// joiners (U+200C, U+200D) and variation selectors stay where they do their work: Persian, Indic scripts and emoji
+    /// need them to read right.
     /// </summary>
     public static string Clean(string? text)
     {
@@ -26,9 +27,9 @@ public static partial class SafeText
             return text;
         var withoutEscapes = text.Contains('\u001b', StringComparison.Ordinal) ? EscapeSequence().Replace(text, "") : text;
         var clean = new StringBuilder(withoutEscapes.Length);
-        foreach (var rune in withoutEscapes.EnumerateRunes())
+        foreach (var (rune, hidden) in Scan(withoutEscapes, keepJoiners: true))
         {
-            if (rune.Value is '\n' or '\t' || !IsHidden(rune, keepJoiners: true))
+            if (!hidden)
                 clean.Append(rune.ToString());
         }
 
@@ -39,7 +40,8 @@ public static partial class SafeText
     /// For text a person approves (a command, a path, a proposed edit): nothing is removed, so what is shown is what will
     /// run. Controls become their visible pictures (␍, ␛, ␇) and every other hidden character a code in brackets
     /// (⟨U+202E⟩, ⟨U+E0041⟩), so it is seen rather than silently dropped. With <paramref name="keepJoiners"/> the joiners
-    /// and variation selectors are left as they are (diff lines of ordinary Persian or emoji text stay readable).
+    /// and variation selectors that do their work are left as they are (diff lines of ordinary Persian or emoji text stay
+    /// readable); a stray or repeated one is still shown.
     /// </summary>
     public static string Reveal(string? text, bool keepJoiners = false)
     {
@@ -48,10 +50,10 @@ public static partial class SafeText
         if (!Needs(text, keepJoiners))
             return text;
         var shown = new StringBuilder(text.Length + 8);
-        foreach (var rune in text.EnumerateRunes())
+        foreach (var (rune, hidden) in Scan(text, keepJoiners))
         {
             var value = rune.Value;
-            if (value is '\n' or '\t' || !IsHidden(rune, keepJoiners))
+            if (!hidden)
                 shown.Append(rune.ToString());
             else if (value < 0x20)
                 shown.Append((char)(0x2400 + value));
@@ -69,14 +71,66 @@ public static partial class SafeText
 
     private static bool Needs(string text, bool keepJoiners)
     {
-        foreach (var rune in text.EnumerateRunes())
+        foreach (var (_, hidden) in Scan(text, keepJoiners))
         {
-            if (rune.Value is not ('\n' or '\t') && IsHidden(rune, keepJoiners))
+            if (hidden)
                 return true;
         }
 
         return false;
     }
+
+    /// <summary>
+    /// Each rune with whether it is hidden. With <paramref name="keepJoiners"/> a joiner or selector is kept only where it
+    /// does its work, so a run of them cannot carry a message nobody sees: one variation selector straight after a
+    /// character it can change, a joiner between two characters outside ASCII (or after the selector of an emoji it
+    /// joins). A selector after a selector or after a Latin letter, a joiner at an edge, beside a space, beside ASCII
+    /// or beside another joiner is hidden.
+    /// </summary>
+    private static IEnumerable<(Rune Rune, bool Hidden)> Scan(string text, bool keepJoiners)
+    {
+        if (!keepJoiners)
+        {
+            foreach (var rune in text.EnumerateRunes())
+                yield return (rune, rune.Value is not ('\n' or '\t') && IsHidden(rune, keepJoiners: false));
+            yield break;
+        }
+
+        var runes = new List<Rune>(text.Length);
+        foreach (var rune in text.EnumerateRunes())
+            runes.Add(rune);
+        var keptSelector = false;
+        for (var i = 0; i < runes.Count; i++)
+        {
+            var value = runes[i].Value;
+            bool hidden;
+            if (value is '\n' or '\t')
+                hidden = false;
+            else if (!IsJoinerOrSelector(value))
+                hidden = IsHidden(runes[i], keepJoiners: true);
+            else if (value is 0x200c or 0x200d)
+                hidden = !(i > 0 && ((IsBase(runes[i - 1]) && runes[i - 1].Value > 0x7f) || keptSelector)
+                    && i + 1 < runes.Count && IsBase(runes[i + 1]) && runes[i + 1].Value > 0x7f);
+            else
+                hidden = !(i > 0 && IsBase(runes[i - 1]) && Selects(value, runes[i - 1].Value));
+            keptSelector = !hidden && value is not (0x200c or 0x200d) && IsJoinerOrSelector(value);
+            yield return (runes[i], hidden);
+        }
+    }
+
+    // Text and emoji presentation (U+FE0E, U+FE0F) after a character outside ASCII or a keycap's digit, # or *; the
+    // other selectors only after a character outside ASCII, and the ideographic ones (U+E0100 on) only after a CJK
+    // ideograph.
+    private static bool Selects(int selector, int previous) => selector switch
+    {
+        0xfe0e or 0xfe0f => previous > 0x7f || previous is (>= '0' and <= '9') or '#' or '*',
+        <= 0xfe0d => previous > 0x7f,
+        _ => previous is (>= 0x2e80 and <= 0x9fff) or (>= 0xf900 and <= 0xfaff) or (>= 0x20000 and <= 0x3ffff),
+    };
+
+    // A character a joiner or selector can work on: something drawn, not a space, a control or another joiner.
+    private static bool IsBase(Rune rune) =>
+        !IsJoinerOrSelector(rune.Value) && !Rune.IsWhiteSpace(rune) && !IsHidden(rune, keepJoiners: true);
 
     /// <summary>
     /// Characters that draw as nothing, or move other text: C0 and C1 controls (but line feed and tab), DEL, every format
