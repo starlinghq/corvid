@@ -643,6 +643,48 @@ public sealed class CorvidSession
                 : CheckpointService.Rewind(_runtime.Log, Id, chosen, token);
         }, cancellationToken);
 
+    /// <summary>
+    /// What going back to before the ledger entry whose before checkpoint is <paramref name="checkpointId"/> would revert
+    /// (the plan <c>/rollback</c> makes for it, with the same check for calls that changed files unrecorded). Null when
+    /// no visible ledger entry has that checkpoint.
+    /// </summary>
+    public RestorePlan? PlanRollbackTo(string checkpointId) => CheckpointService.PlanRollbackTo(Snapshot(), checkpointId, ChangesFiles);
+
+    /// <summary>
+    /// What a rollback to before <paramref name="checkpointId"/> would do to the files, worked out without writing (the
+    /// Rewind preview and plan). Null when no ledger entry has the checkpoint or checkpoints are off.
+    /// </summary>
+    public async Task<RestoreDraft?> DraftRollbackToAsync(string checkpointId, IReadOnlyCollection<string>? only = null,
+        CancellationToken cancellationToken = default) =>
+        PlanRollbackTo(checkpointId) is { } plan && _runtime.Checkpoints is { } checkpoints
+            ? await checkpoints.DraftAsync(plan, only, cancellationToken).ConfigureAwait(false)
+            : null;
+
+    /// <summary>
+    /// Rolls back to before <paramref name="checkpointId"/> with a scope (the windowed app's Rewind and Review): files and
+    /// conversation as <c>/rollback</c> does, the conversation only, or the files only, or with <paramref name="only"/>
+    /// just those files (G-3). On the actor, like <see cref="RollbackAsync"/>. Null when no ledger entry has the checkpoint.
+    /// </summary>
+    public Task<RestoreResult?> RollbackToAsync(string checkpointId, RestoreScope scope, IReadOnlyCollection<string>? only = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpointId);
+        return Actor.RunExclusiveAsync<RestoreResult?>(async token =>
+        {
+            if (CheckpointService.PlanRollbackTo(SessionProjection.Load(_runtime.Log, Id, cancellationToken: token), checkpointId, ChangesFiles) is not { } plan)
+                return null;
+            if (_runtime.Checkpoints is { } checkpoints)
+                return await checkpoints.RestoreAsync(_runtime.Log, Id, plan, scope, only, token).ConfigureAwait(false);
+            // Without checkpoints only the transcript can move.
+            return scope switch
+            {
+                RestoreScope.FilesAndConversation => CheckpointService.Rewind(_runtime.Log, Id, plan, token),
+                RestoreScope.ConversationOnly => CheckpointService.RewindConversation(_runtime.Log, Id, plan, token),
+                _ => new RestoreResult(RestoreStatus.Refused, plan, [], [], [], "checkpoints are off, so no file can be put back"),
+            };
+        }, cancellationToken);
+    }
+
     /// <summary>A call that would have taken a checkpoint: a tool that changes files, running something other than a read-only command.</summary>
     private bool ChangesFiles(ToolCallIssued call)
     {

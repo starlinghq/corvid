@@ -681,4 +681,174 @@ public sealed class CheckpointTurnTests : IDisposable
         Assert.Equal(["call_0", "call_0-2"], calls);
         Assert.Equal("y", _fixture.Read("b.txt"));
     }
+
+    // ---- Scopes, the draft and rollback by checkpoint (the windowed app's Rewind and Review, G-3) ----
+
+    private const string A0 = "one\ntwo\nthree\nfour\nfive\n";
+
+    private const string A1 = "ONE\ntwo\nthree\nfour\nfive\n";
+
+    private async Task<TurnHarness> TwoWritesAsync()
+    {
+        _fixture.Write("a.txt", A0);
+        var harness = Harness(new FakeGenerator(Write("a.txt", A1), Reply.Say("One."), Write("b.txt", "b1\n"), Reply.Say("Two.")));
+        var runner = harness.Runner();
+        await harness.RunAsync(runner, "first");
+        await harness.RunAsync(runner, "second");
+        return harness;
+    }
+
+    [Fact]
+    public async Task Rollback_to_a_checkpoint_plans_what_rollback_n_plans_for_that_entry()
+    {
+        using var harness = await TwoWritesAsync();
+        var snapshot = Snapshot(harness);
+        var ledger = CheckpointService.Ledger(snapshot);
+
+        var byId = CheckpointService.PlanRollbackTo(snapshot, ledger[0].Before.Checkpoint.CheckpointId)!;
+        var byNumber = CheckpointService.PlanRollback(snapshot, 2)!;
+
+        Assert.Equal(byNumber.Position, byId.Position);
+        Assert.Equal(byNumber.Entries, byId.Entries);
+        Assert.Null(CheckpointService.PlanRollbackTo(snapshot, "cp-unknown"));
+        // An after checkpoint names no entry: an entry is named by the checkpoint it goes back to.
+        Assert.Null(CheckpointService.PlanRollbackTo(snapshot, ledger[0].After!.Checkpoint.CheckpointId));
+    }
+
+    [Fact]
+    public async Task A_draft_says_what_a_restore_would_do_and_writes_nothing_to_the_workspace_or_the_log()
+    {
+        using var harness = await TwoWritesAsync();
+        _fixture.Write("a.txt", "ONE\ntwo\nthree\nfour\nfive, mine\n");
+        var plan = CheckpointService.PlanRollback(Snapshot(harness), 2)!;
+        var head = harness.Log.GetHead(TurnHarness.Session, TestContext.Current.CancellationToken);
+        var before = CheckpointFixture.Fingerprint(_fixture.Workspace);
+
+        var draft = await _fixture.Service.DraftAsync(plan, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.True(draft.CanRestore);
+        Assert.Equal(["a.txt", "b.txt"], draft.Files.Select(file => file.Path));
+        var a = draft.Files[0];
+        Assert.True(a.Merged);
+        Assert.Equal("one\ntwo\nthree\nfour\nfive, mine\n", Encoding.UTF8.GetString(await _fixture.Store.ReadBlobAsync(a.Restored!.Value.Blob)));
+        Assert.Equal("ONE\ntwo\nthree\nfour\nfive, mine\n", Encoding.UTF8.GetString(await _fixture.Store.ReadBlobAsync(a.Now!.Value.Blob)));
+        var b = draft.Files[1];
+        Assert.False(b.Merged);
+        Assert.Null(b.Restored);
+        Assert.Equal(before, CheckpointFixture.Fingerprint(_fixture.Workspace));
+        Assert.Equal(head, harness.Log.GetHead(TurnHarness.Session, TestContext.Current.CancellationToken));
+
+        // The restore does what the draft said.
+        var result = await _fixture.Service.RestoreAsync(harness.Log, TurnHarness.Session, plan, TestContext.Current.CancellationToken);
+        Assert.Equal(["a.txt", "b.txt"], result.Restored);
+        Assert.Equal(["a.txt"], result.Merged);
+    }
+
+    [Fact]
+    public async Task A_draft_lists_the_conflicts_that_would_refuse_the_restore()
+    {
+        using var harness = await TwoWritesAsync();
+        _fixture.Write("b.txt", "the user's b\n");
+        var plan = CheckpointService.PlanRollback(Snapshot(harness), 1)!;
+
+        var draft = await _fixture.Service.DraftAsync(plan, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.False(draft.CanRestore);
+        var conflict = Assert.Single(draft.Conflicts);
+        Assert.Equal("b.txt", conflict.Path);
+        Assert.Contains("created it", conflict.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_conversation_only_restore_moves_the_transcript_and_keeps_every_file()
+    {
+        using var harness = await TwoWritesAsync();
+        var plan = CheckpointService.PlanRollback(Snapshot(harness), 1)!;
+
+        var result = await _fixture.Service.RestoreAsync(harness.Log, TurnHarness.Session, plan, RestoreScope.ConversationOnly, null,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(RestoreStatus.Restored, result.Status);
+        Assert.Empty(result.Restored);
+        Assert.Equal("b1\n", _fixture.Read("b.txt"));
+        var rewound = Assert.IsType<SessionRewound>(harness.Events()[^1].Payload);
+        Assert.Equal((plan.Position, "rollback"), (rewound.ThroughSequence, rewound.Reason));
+        Assert.Empty(rewound.Restored);
+        Assert.Single(CheckpointService.Ledger(Snapshot(harness)));
+    }
+
+    [Fact]
+    public async Task A_files_only_restore_puts_the_files_back_and_leaves_the_transcript()
+    {
+        using var harness = await TwoWritesAsync();
+        var plan = CheckpointService.PlanRollback(Snapshot(harness), 2)!;
+        var transcript = Snapshot(harness).Transcript.Length;
+
+        var result = await _fixture.Service.RestoreAsync(harness.Log, TurnHarness.Session, plan, RestoreScope.FilesOnly, null,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(RestoreStatus.Restored, result.Status);
+        Assert.Equal(["a.txt", "b.txt"], result.Restored);
+        Assert.Equal(A0, _fixture.Read("a.txt"));
+        Assert.False(File.Exists(_fixture.PathOf("b.txt")));
+        var last = Assert.IsType<CheckpointTaken>(harness.Events()[^1].Payload);
+        Assert.Equal((CheckpointKinds.Restore, result.CheckpointId), (last.Kind, last.CheckpointId));
+        Assert.DoesNotContain(harness.Payloads(), payload => payload is SessionRewound);
+        var snapshot = Snapshot(harness);
+        Assert.Equal(transcript, snapshot.Transcript.Length);
+        Assert.Equal(2, CheckpointService.Ledger(snapshot).Length);
+
+        // A later full rollback across the same calls finds the files already as they were and puts nothing back.
+        var again = await _fixture.Service.RestoreAsync(harness.Log, TurnHarness.Session, CheckpointService.PlanRollback(snapshot, 2)!,
+            TestContext.Current.CancellationToken);
+        Assert.Equal(RestoreStatus.Restored, again.Status);
+        Assert.Empty(again.Restored);
+    }
+
+    [Fact]
+    public async Task One_file_goes_back_alone_and_the_others_keep_corvids_changes()
+    {
+        using var harness = await TwoWritesAsync();
+        var plan = CheckpointService.PlanRollback(Snapshot(harness), 2)!;
+
+        var result = await _fixture.Service.RestoreAsync(harness.Log, TurnHarness.Session, plan, RestoreScope.FilesOnly, ["a.txt"],
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(["a.txt"], result.Restored);
+        Assert.Equal(A0, _fixture.Read("a.txt"));
+        Assert.Equal("b1\n", _fixture.Read("b.txt"));
+        var restore = Assert.IsType<CheckpointTaken>(harness.Events()[^1].Payload);
+        Assert.Equal(["a.txt"], restore.Paths!.Value);
+
+        // The same file again: already as it was, so nothing is written and nothing recorded.
+        var head = harness.Log.GetHead(TurnHarness.Session, TestContext.Current.CancellationToken);
+        var again = await _fixture.Service.RestoreAsync(harness.Log, TurnHarness.Session, plan, RestoreScope.FilesOnly, ["a.txt"],
+            TestContext.Current.CancellationToken);
+        Assert.Equal((RestoreStatus.Restored, 0), (again.Status, again.Restored.Length));
+        Assert.Equal(head, harness.Log.GetHead(TurnHarness.Session, TestContext.Current.CancellationToken));
+
+        // A path no call after the point changed is refused, and only a files-only restore takes paths.
+        var none = await _fixture.Service.RestoreAsync(harness.Log, TurnHarness.Session, plan, RestoreScope.FilesOnly, ["c.txt"],
+            TestContext.Current.CancellationToken);
+        Assert.Equal(RestoreStatus.Refused, none.Status);
+        Assert.Contains("c.txt", none.Detail, StringComparison.Ordinal);
+        await Assert.ThrowsAsync<ArgumentException>(() => _fixture.Service.RestoreAsync(harness.Log, TurnHarness.Session, plan,
+            RestoreScope.FilesAndConversation, ["a.txt"], TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task A_files_only_restore_that_conflicts_with_the_users_edit_changes_nothing()
+    {
+        using var harness = await TwoWritesAsync();
+        _fixture.Write("b.txt", "the user's b\n");
+        var head = harness.Log.GetHead(TurnHarness.Session, TestContext.Current.CancellationToken);
+
+        var result = await _fixture.Service.RestoreAsync(harness.Log, TurnHarness.Session, CheckpointService.PlanRollback(Snapshot(harness), 2)!,
+            RestoreScope.FilesOnly, null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(RestoreStatus.Refused, result.Status);
+        Assert.Equal("b.txt", Assert.Single(result.Conflicts).Path);
+        Assert.Equal(A1, _fixture.Read("a.txt"));
+        Assert.Equal(head, harness.Log.GetHead(TurnHarness.Session, TestContext.Current.CancellationToken));
+    }
 }
