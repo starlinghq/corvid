@@ -20,8 +20,8 @@ namespace Corvid.App.Engine.Memory;
 /// write, through the store's own writer (<see cref="MemoryWriter"/>, <see cref="LessonWriter"/>), so the gate's decision
 /// records its outcome; a corrected text is written as corrected (G-8).
 /// <para>
-/// Shown as the engine keeps it, not guessed: the nearest facts of a staged write without their scores (the pending row
-/// keeps only their ids), who wrote a block (only the persona is the user's alone), and a block update as the line it adds
+/// Shown as the engine keeps it, not guessed: the nearest facts of a staged write, scored by the store's search as it
+/// stands now (the pending row keeps only their ids), who wrote a block (only the persona is the user's alone), and a block update as the line it adds
 /// when it appends to the block, or as the whole block when it rewrites it. Consolidation is refused: the rewrite job
 /// (plan §9.5) is not built.
 /// </para>
@@ -37,6 +37,8 @@ public sealed class EngineMemoryService : IMemoryService
 
     private const int FactLimit = 200;
     private const int SearchTokens = 4_000;
+    private const int NeighbourTokens = 400;
+    private const int ScoredFacts = 20;
 
     private readonly AppEngine _engine;
     private readonly TimeProvider _time;
@@ -69,7 +71,7 @@ public sealed class EngineMemoryService : IMemoryService
     public async Task<MemorySnapshot> LoadAsync(CancellationToken cancellationToken)
     {
         var (runtime, memory) = await MemoryAsync().ConfigureAwait(false);
-        return await Task.Run(() => Snapshot(runtime, memory, cancellationToken), cancellationToken).ConfigureAwait(false);
+        return await Task.Run(() => SnapshotAsync(runtime, memory, cancellationToken), cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<FactWrite> ApproveFactAsync(string id, MemoryOperation operation, string text, string? targetFactId, CancellationToken cancellationToken)
@@ -242,20 +244,23 @@ public sealed class EngineMemoryService : IMemoryService
         return Directory.Exists(directory) ? directory : throw new InvalidOperationException($"There is no Hermes memories directory at {directory}.");
     }
 
-    private MemorySnapshot Snapshot(CorvidRuntime runtime, MemoryServices memory, CancellationToken cancellationToken)
+    private async Task<MemorySnapshot> SnapshotAsync(CorvidRuntime runtime, MemoryServices memory, CancellationToken cancellationToken)
     {
         var facts = new FactGraph(memory.Database);
         var pending = memory.Writer?.ListPending() ?? [];
-        cancellationToken.ThrowIfCancellationRequested();
+        var stagedFacts = new List<StagedFact>();
+        foreach (var write in pending.Where(write => write.Kind == PendingKind.Fact))
+            stagedFacts.Add(Staged(facts, write, stagedFacts.Count < ScoredFacts ? await ScoresAsync(memory, write, cancellationToken).ConfigureAwait(false) : null));
         var blocks = memory.Blocks.Snapshot().Blocks;
         var location = _hermes();
         var project = runtime.Project;
         var lessons = memory.Lessons is { } writer && project is not null ? writer.Store.List(project.Id) : [];
         return new MemorySnapshot
         {
-            StagedFacts = [.. pending.Where(write => write.Kind == PendingKind.Fact).Select(write => Staged(facts, write))],
+            StagedFacts = stagedFacts,
             BlockUpdates = [.. pending.Where(write => write.Kind == PendingKind.Block).Select(write => Update(memory.Blocks, write))],
-            Blocks = [.. blocks.Select(block => Block(memory.Blocks, block))],
+            // In the store's order of importance (user, agent, persona), as the page lists them.
+            Blocks = [.. blocks.OrderBy(block => CoreBlockNames.All.IndexOf(block.Name)).Select(block => Block(memory.Blocks, block))],
             Facts = [.. facts.Recent(FactLimit).Select(Record)],
             PendingLessons = [.. lessons.Where(lesson => lesson.State == LessonStates.Candidate).Select(lesson => Candidate(project!, lesson))],
             Lessons = [.. lessons.Where(lesson => lesson.State is LessonStates.Approved or LessonStates.Superseded)
@@ -266,7 +271,23 @@ public sealed class EngineMemoryService : IMemoryService
         };
     }
 
-    private StagedFact Staged(FactGraph facts, PendingWrite write)
+    /// <summary>
+    /// How near each staged neighbour is now: the pending row keeps which facts were nearest, not how near, so the store's
+    /// own hybrid search is asked again with the staged text and entities. A neighbour it no longer finds scores 0.
+    /// </summary>
+    private static async Task<IReadOnlyDictionary<string, double>?> ScoresAsync(MemoryServices memory, PendingWrite write, CancellationToken cancellationToken)
+    {
+        var proposal = write.Proposal;
+        if (proposal.NeighbourIds.IsDefaultOrEmpty || proposal.Text is not { Length: > 0 } text)
+            return null;
+        var entities = proposal.Entities.IsDefault ? [] : proposal.Entities.Select(entity => new EntityRef(entity.Label, entity.Name)).ToImmutableArray();
+        var found = await memory.Retriever.RetrieveAsync(new RetrievalRequest(text, NeighbourTokens, entities, [MemoryItemKind.Fact]), cancellationToken)
+            .ConfigureAwait(false);
+        return found.Items.Where(item => item.Fact is not null).GroupBy(item => item.Fact!.FactId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Max(item => item.Score), StringComparer.Ordinal);
+    }
+
+    private StagedFact Staged(FactGraph facts, PendingWrite write, IReadOnlyDictionary<string, double>? scores = null)
     {
         var proposal = write.Proposal;
         var neighbours = proposal.NeighbourIds.IsDefaultOrEmpty ? [] : facts.Get(proposal.NeighbourIds);
@@ -285,9 +306,9 @@ public sealed class EngineMemoryService : IMemoryService
                 MemoryOperations.Noop => MemoryOperation.Noop,
                 _ => MemoryOperation.Add,
             },
-            // The pending row keeps which facts were nearest, not how near: no score is shown rather than one made up.
-            Nearest = [.. neighbours.Select(fact => new NearbyFact(fact.FactId, fact.Text, Date(fact.ValidFrom), 0))],
-            SearchKind = "hybrid search · scores not kept",
+            Nearest = [.. neighbours.Select(fact => new NearbyFact(fact.FactId, fact.Text, Date(fact.ValidFrom),
+                scores is not null && scores.TryGetValue(fact.FactId, out var score) ? score : 0))],
+            SearchKind = scores is null ? "hybrid search" : "hybrid search · scored now",
             Evidence = proposal.SourceSequence is { } sequence ? $"{write.SessionId} event {sequence}" : "",
         };
     }

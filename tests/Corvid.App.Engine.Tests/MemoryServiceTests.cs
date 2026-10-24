@@ -75,6 +75,11 @@ public sealed class MemoryServiceTests
         await writer.WriteAsync(new MemoryWriteRequest(Session, "The user likes rain"), Ct);
         var staged = (await service.LoadAsync(Ct)).StagedFacts;
         var leeds = staged.Single(fact => fact.Text.EndsWith("Leeds", StringComparison.Ordinal));
+        // The neighbour the writer found, scored by the store's search again (the pending row keeps no score).
+        var near = Assert.Single(leeds.Nearest);
+        Assert.Equal(old.Id, near.FactId);
+        Assert.True(near.Score > 0);
+        Assert.Equal("hybrid search · scored now", leeds.SearchKind);
         var update = await service.ApproveFactAsync(leeds.Id, MemoryOperation.Update, leeds.Text, old.Id, Ct);
         Assert.Equal(old.Id, update.Closed!.Id);
         Assert.True(update.Closed.Invalidated);
