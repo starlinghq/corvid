@@ -102,6 +102,56 @@ public sealed class CorvidConfigWriter(CorvidConfigFile file, IConfiguration con
         }
     }
 
+    /// <summary>
+    /// The configuration the next start of this process would read: the file as it is now (an empty object when it does
+    /// not exist), with this process's environment and <c>--set</c> values over it. The host's own configuration is read
+    /// once, at start, so after a write only this shows what was written.
+    /// </summary>
+    /// <exception cref="InvalidDataException">The file cannot be read as JSON.</exception>
+    public IConfiguration NextStart()
+    {
+        Gate.Wait();
+        try
+        {
+            string text;
+            try
+            {
+                text = File.Exists(file.Path) ? File.ReadAllText(file.Path) : "{}";
+                return Candidate(text);
+            }
+            catch (Exception exception) when (exception is JsonException or FormatException or IOException or UnauthorizedAccessException)
+            {
+                throw new InvalidDataException($"{file.Path} cannot be read as JSON: {exception.Message}", exception);
+            }
+        }
+        finally
+        {
+            Gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// The value a source over the file gives <paramref name="key"/> for this run (an environment variable, <c>--set</c>):
+    /// the file can say otherwise, but this process, and the next start with the same environment, sees this one.
+    /// </summary>
+    public bool TryGetOverride(string key, out string? value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        value = null;
+        if (configuration is not IConfigurationRoot root)
+            return false;
+        var providers = root.Providers.ToList();
+        var index = providers.FindIndex(provider => provider is JsonConfigurationProvider json && IsThisFile(json.Source));
+        if (index < 0)
+            return false;
+        // The last source that has the key wins, as configuration reads it.
+        for (var i = providers.Count - 1; i > index; i--)
+            if (providers[i].TryGet(key, out value))
+                return true;
+        value = null;
+        return false;
+    }
+
     private ConfigWriteResult Apply(IReadOnlyList<ConfigEdit> edits, bool write)
     {
         ArgumentNullException.ThrowIfNull(edits);

@@ -32,6 +32,30 @@ public sealed class AcquisitionTests : IDisposable
     }
 
     [Fact]
+    public void Removing_partial_downloads_deletes_only_the_partial_files_of_that_model()
+    {
+        var store = new StarlingModelStore(_cache);
+        var snapshot = store.GetSnapshotDirectory(StarlingModel.Gliner2);
+        var downloads = Path.Combine(_cache, StarlingModelStore.PartialDirectory, Path.GetRelativePath(_cache, snapshot));
+        Directory.CreateDirectory(Path.Combine(downloads, "onnx"));
+        File.WriteAllText(Path.Combine(downloads, "onnx", "model.onnx.partial"), "half");
+        File.WriteAllText(Path.Combine(downloads, "tokenizer.json.partial"), "half");
+        File.WriteAllText(Path.Combine(downloads, "tokenizer.json.lock"), "");
+        var other = Path.Combine(_cache, StarlingModelStore.PartialDirectory,
+            Path.GetRelativePath(_cache, store.GetSnapshotDirectory(StarlingModel.E5)));
+        Directory.CreateDirectory(other);
+        File.WriteAllText(Path.Combine(other, "model.onnx.partial"), "half");
+
+        Assert.Equal(2, store.RemovePartialDownloads(StarlingModel.Gliner2));
+
+        Assert.Empty(Directory.EnumerateFiles(downloads, "*.partial", SearchOption.AllDirectories));
+        Assert.True(File.Exists(Path.Combine(downloads, "tokenizer.json.lock")));
+        Assert.True(File.Exists(Path.Combine(other, "model.onnx.partial")));
+        Assert.Equal(StarlingModelState.Missing, store.Check(StarlingModel.Gliner2, CacheVerification.Size).State);
+        Assert.Equal(0, store.RemovePartialDownloads(StarlingModel.Qwen35));
+    }
+
+    [Fact]
     public void Opening_a_missing_model_says_what_is_missing_and_how_to_get_it()
     {
         var store = new StarlingModelStore(_cache);

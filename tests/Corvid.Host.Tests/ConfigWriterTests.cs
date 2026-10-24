@@ -172,4 +172,46 @@ public sealed class ConfigWriterTests
         var written = JsonNode.Parse(await ReadAsync(host))!;
         Assert.Equal("fake-embed-alt", (string?)written["Corvid"]!["Models"]!["Slots"]!["embedder.text"]!["Fallbacks"]![0]);
     }
+
+    [Fact]
+    public async Task NextStartReadsTheFileAsWrittenWithThisRunsOverridesOverIt()
+    {
+        await using var host = TestHost.Create(settings: new Dictionary<string, string?> { ["Corvid:Turn:MaxSteps"] = "6" });
+        var writer = Writer(host);
+
+        Assert.Null(writer.NextStart()[Summarizer]);
+        Assert.True(writer.Apply(ConfigEdit.Set(Summarizer, "fake-gen"), new ConfigEdit("Corvid:Turn:MaxSteps", JsonValue.Create(4))).Written);
+
+        var next = writer.NextStart();
+        Assert.Equal("fake-gen", next[Summarizer]);
+        // --set (the test host's overrides) still wins over the file.
+        Assert.Equal("6", next["Corvid:Turn:MaxSteps"]);
+        // The host's own configuration was read at start and does not follow the file.
+        Assert.Null(host.Services.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>()[Summarizer]);
+    }
+
+    [Fact]
+    public async Task AnOverrideIsFoundOnlyForKeysASourceOverTheFileSets()
+    {
+        await using var host = TestHost.Create(settings: new Dictionary<string, string?> { ["Corvid:Turn:MaxSteps"] = "6" });
+        await System.IO.File.WriteAllTextAsync(File(host), """{ "Corvid": { "Turn": { "MaxSteps": 4, "MaxOutputTokens": 512 } } }""",
+            TestContext.Current.CancellationToken);
+        var writer = Writer(host);
+
+        Assert.True(writer.TryGetOverride("corvid:turn:maxsteps", out var steps));
+        Assert.Equal("6", steps);
+        Assert.False(writer.TryGetOverride("Corvid:Turn:MaxOutputTokens", out var tokens));
+        Assert.Null(tokens);
+    }
+
+    [Fact]
+    public async Task NextStartOfAFileThatIsNotJsonSaysSo()
+    {
+        await using var host = TestHost.Create();
+        await System.IO.File.WriteAllTextAsync(File(host), "{ not json", TestContext.Current.CancellationToken);
+
+        var exception = Assert.Throws<InvalidDataException>(() => Writer(host).NextStart());
+
+        Assert.Contains(File(host), exception.Message, StringComparison.Ordinal);
+    }
 }
