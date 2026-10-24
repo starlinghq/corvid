@@ -572,10 +572,15 @@ public static class SessionFold
         if (paths.Count == 0)
             return state;
         var ledger = state.Ledger;
+        // From the row the restore point names (the ledger runs oldest first), so a call earlier in the same turn keeps
+        // its change; without a point, from the turn's first call.
+        var start = rewound.RestorePoint is { } point
+            ? ledger.FindIndex(row => row.BeforeId == point || row.Id == point)
+            : -1;
         for (var i = 0; i < ledger.Count; i++)
         {
             var row = ledger[i];
-            if (row.Kind == CheckpointKind.Restore || row.Turn < rewound.Turn)
+            if (row.Kind == CheckpointKind.Restore || (start >= 0 ? i < start : row.Turn < rewound.Turn))
                 continue;
             var undone = row.LiveChanges.Where(change => paths.Contains(change.Path)).Select(change => change.Path).ToList();
             if (undone.Count > 0)

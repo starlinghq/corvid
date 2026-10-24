@@ -141,6 +141,9 @@ Left:
   redactions should come as structure from the engine and the gate (G-9), and a trace's "full content" writes only the
   summary today (documented on `IAuditService.ExportAsync`).
 - The Sessions page opens with the jump pill over the streaming answer (A0's behaviour, by design in `ui.md` §2).
+- After a restore lowers the turn, the next prompt reuses the rolled-back turn's number, so a conversation-only
+  rollback's still-live changes count in Review's "this turn". Turns need an identity beyond their number.
+- The Board's revealed question option (with the raw option sent) has no test: the demo cannot inject a question.
 
 Each builder's own list of differences from its mockup is in the workflow run's report; the verifier judged them
 acceptable.

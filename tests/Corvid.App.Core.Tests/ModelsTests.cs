@@ -394,20 +394,20 @@ public sealed class ModelsTests
         var (service, _) = Demo();
         var models = ViewModel(service);
 
-        models.ServerName = "evil‮gpj.exe";
+        models.ServerName = "evil\u202Egpj.exe";
         models.ServerUrl = "http://127.0.0.1:11434/v1";
         models.AddServerCommand.Execute(null);
 
         // The catalogue row's one button acts on the model: its name shows the override.
         Assert.Equal("evil⟨U+202E⟩gpj.exe", models.Catalogue[^1].Name);
-        Assert.Equal("evil‮gpj.exe", models.Catalogue[^1].Model.Name);
+        Assert.Equal("evil\u202Egpj.exe", models.Catalogue[^1].Model.Name);
         // The notice only reports it: drawn without the override.
         var notice = string.Concat(models.Notice.Select(run => run.Text));
-        Assert.DoesNotContain('‮', notice);
+        Assert.DoesNotContain('\u202E', notice);
         Assert.Contains("evilgpj.exe", notice, StringComparison.Ordinal);
 
         var choice = new DownloadChoiceViewModel(
-            new CatalogueModel("kev‮-9b", ModelKind.Local, "decider", "decider", "Starling", "1 GB", 1_000_000_000, ModelState.Missing, [ModelSlotNames.Decider]),
+            new CatalogueModel("kev\u202E-9b", ModelKind.Local, "decider", "decider", "Starling", "1 GB", 1_000_000_000, ModelState.Missing, [ModelSlotNames.Decider]),
             () => { });
         Assert.Equal("kev⟨U+202E⟩-9b", choice.Text[0].Text);
         Assert.True(choice.Text[0].Code);
@@ -429,7 +429,7 @@ public sealed class ModelsTests
         Assert.Equal("qwen`~**x", models.Catalogue[^1].Name);
         Assert.Equal([new TextRun("a`b~c**d\\e")], Spans.Parse(Spans.Escape("a`b~c**d\\e")));
         Assert.Equal([new TextRun("x"), new TextRun("p`q", Code: true)], Spans.Parse($"x`{Spans.Escape("p`q")}`"));
-        Assert.Equal("ab", Spans.Plain("a‮b"));
+        Assert.Equal("ab", Spans.Plain("a\u202Eb"));
     }
 
     [Fact]

@@ -25,12 +25,12 @@ public sealed class AuditReviewTests
     [Fact]
     public void WhatLeftTheMachineShowsEveryHiddenCharacterAndCopiesTheRawText()
     {
-        var full = "zero​width\n" + "tag\U000E0041char\n" + "‮evil\r\n" + "GH_TOKEN=[redacted:credential]\n" + "joined ‍ kept";
+        var full = "zero\u200Bwidth\n" + "tag\U000E0041char\n" + "\u202Eevil\r\n" + "GH_TOKEN=[redacted:credential]\n" + "joined \u200D kept";
         var request = new EgressRequest(1, 10, "s", At, "model") { Excerpt = full, Full = full, Redacted = 1 };
 
         var egress = new EgressView(request, TimeZoneInfo.Utc);
 
-        Assert.Equal(["zero⟨U+200B⟩width", "tag⟨U+E0041⟩char", "⟨U+202E⟩evil", "GH_TOKEN=[redacted:credential]", "joined ‍ kept"],
+        Assert.Equal(["zero⟨U+200B⟩width", "tag⟨U+E0041⟩char", "⟨U+202E⟩evil", "GH_TOKEN=[redacted:credential]", "joined \u200D kept"],
             egress.Lines.Select(Shown));
         Assert.True(egress.Lines[3].Segments[1].IsRedaction);
         // Copy keeps what was sent, nothing revealed or removed.
@@ -55,9 +55,9 @@ public sealed class AuditReviewTests
     [Fact]
     public void TheRawEventShowsHiddenCharactersAndTheNamesAreCleaned()
     {
-        var auditEvent = new AuditEvent(5, "s-1", At, "tool‮_result", AuditEventGroup.Tools)
+        var auditEvent = new AuditEvent(5, "s-1", At, "tool\u202E_result", AuditEventGroup.Tools)
         {
-            Json = "{\r\n  \"text\": \"over‮ride\"\r\n}",
+            Json = "{\r\n  \"text\": \"over\u202Eride\"\r\n}",
         };
 
         var detail = new EventDetailView(auditEvent, TimeZoneInfo.Utc, "s-1 · title\U000E0041");
@@ -68,10 +68,10 @@ public sealed class AuditReviewTests
         Assert.Equal("s-1 · title", AuditText.Plain(detail.Fields[1].Value));
         Assert.Equal("tool_result", row.Type);
 
-        var match = new DetectionMatch("rule‮-x", 1, "high​", "enforce", 5, [4]) { Pack = "pack\U000E0041" };
+        var match = new DetectionMatch("rule\u202E-x", 1, "high\u200B", "enforce", 5, [4]) { Pack = "pack\U000E0041" };
         var detection = new AuditDetectionView(match, []);
         Assert.Equal(("Detection · rule-x", "high · enforce", "v1 · pack", "rule-x"), (detection.Title, detection.Tag, detection.RuleDetail, detection.Rule));
-        var egress = new EgressView(new EgressRequest(1, 10, "s", At, "claude‮") { Host = "api​.example", Secret = "key`x" }, TimeZoneInfo.Utc);
+        var egress = new EgressView(new EgressRequest(1, 10, "s", At, "claude\u202E") { Host = "api\u200B.example", Secret = "key`x" }, TimeZoneInfo.Utc);
         Assert.Equal("claude", egress.Model);
         Assert.Equal([new AuditSpan("via Vault "), new AuditSpan("key`x", AuditSpanStyle.Mono), new AuditSpan(", api.example")], egress.Route);
     }

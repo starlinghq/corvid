@@ -53,7 +53,7 @@ public sealed class PlacementRowViewModel : ObservableObject
         Fallback = SafeText.Clean(placement.NoticeOnFallback ? $"fallback {placement.Fallback}, with a notice" : $"fallback {placement.Fallback}");
         Checks = gpu is null
             ? []
-            : [.. gpu.Checks.Select(check => new ModelFact(SafeText.Clean(check.Name), Spans.Parse($"{(check.Ok ? "**ok**" : "**failed**")} · {check.Detail}")))];
+            : [.. gpu.Checks.Select(check => new ModelFact(SafeText.Clean(check.Name), Spans.Parse($"{(check.Ok ? "**ok**" : "**failed**")} · {Spans.Escape(check.Detail)}")))];
         Devices = gpu is null ? ["cpu"] : ["cuda", "cpu"];
         Choices = [.. Devices.Select(device => new Choice(device, device == "cuda" ? SafeText.Clean($"{gpu!.Id}: {gpu.Summary}") : "the CPU",
             new RelayCommand(() => Device = device)) { IsSelected = device == _device })];
@@ -298,11 +298,11 @@ public sealed class ModelsViewModel : AreaViewModel
         {
             var reason = model.IsAvailable ? ""
                 : model.Kind == ModelKind.Local ? (model.State is ModelState.Downloading or ModelState.Queued ? "downloading" : "not downloaded")
-                : model.Secret is { } secret ? $"set {secret} in Vault" : "unavailable";
+                : model.Secret is { } secret ? $"set {SafeText.Clean(secret)} in Vault" : "unavailable";
             var name = model.Name;
             // Revealed: choosing it switches the slot in one click, so a hidden character in the name must show.
-            SwitchChoices.Add(new SwitchChoiceViewModel(SafeText.Reveal(name), $"{Spans.Plain(model.Where)} · {SafeText.Clean(model.Serves)}", name == slot.Model,
-                model.IsAvailable, reason, new RelayCommand(() => Run(() => SwitchAsync(slot.Name, name)), () => model.IsAvailable && name != slot.Model)));
+            SwitchChoices.Add(new SwitchChoiceViewModel(SafeText.Reveal(name), $"{Spans.Plain(model.Where)} · {SafeText.Clean(model.Serves)}", name == slot.BoundModel,
+                model.IsAvailable, reason, new RelayCommand(() => Run(() => SwitchAsync(slot.Name, name)), () => model.IsAvailable && name != slot.BoundModel)));
         }
 
         _switchSlot = slot.Name;
@@ -523,10 +523,10 @@ public sealed class ModelsViewModel : AreaViewModel
 
         PlacementFacts =
         [
-            .. snapshot.Gpus.Select(gpu => Fact(gpu.Id, gpu.Summary)),
+            .. snapshot.Gpus.Select(gpu => Fact(gpu.Id, Spans.Escape(gpu.Summary))),
             .. snapshot.Placements.Select(placement => Fact(placement.Model,
                 $"device {Spans.Escape(placement.Device)} · fallback {Spans.Escape(placement.Fallback)}{(placement.NoticeOnFallback ? ", with a notice" : "")}")),
-            Fact("cpu", snapshot.Cpu),
+            Fact("cpu", Spans.Escape(snapshot.Cpu)),
         ];
     }
 

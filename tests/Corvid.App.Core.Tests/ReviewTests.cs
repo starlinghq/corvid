@@ -160,7 +160,7 @@ public sealed class ReviewTests
     [Fact]
     public void ReviewShowsTheHiddenCharactersOfAPathItActsOn()
     {
-        const string Path = "src/evil‮cs.txt";
+        const string Path = "src/evil\u202Ecs.txt";
         var composition = Compose("--page", "review");
         var review = new ReviewViewModel(new OneFileReview(new ReviewFile(Path, 1, 0) { Readable = false }), composition.Shell, composition.SessionHub, composition.Time);
 
@@ -172,7 +172,7 @@ public sealed class ReviewTests
     [Fact]
     public async Task TheRevertNoticeShowsTheHiddenCharactersOfTheName()
     {
-        const string Path = "src/evil‮cs.txt";
+        const string Path = "src/evil\u202Ecs.txt";
         var composition = Compose("--page", "review");
         var review = new ReviewViewModel(new OneFileReview(new ReviewFile(Path, 1, 0) { NewText = "x\n", CheckpointId = "c-1" }), composition.Shell, composition.SessionHub, composition.Time);
 

@@ -10,7 +10,7 @@ namespace Corvid.App.Core.Tests;
 public sealed class MemoryReviewTests
 {
     private const string Tag = "\U000E0041";
-    private const string Override = "‮";
+    private const string Override = "\u202E";
 
     private static readonly DateOnly Day = new(2026, 10, 24);
 
@@ -235,6 +235,21 @@ public sealed class MemoryReviewTests
 
         var left = Assert.Single(memory.BlockUpdates);
         Assert.Equal(("Line two.", "104 of 350 tokens"), (left.Context, left.BudgetText));
+    }
+
+    [Fact]
+    public async Task ABlockUpdateWithAHiddenCharacterShowsItAndCannotBeApproved()
+    {
+        var service = new ScriptedMemoryService
+        {
+            Blocks = { new CoreBlock("user", 100, 350) { Text = "Line one." } },
+            BlockUpdates = { new StagedBlockUpdate("b-1", "user") { Context = "Line one.", Added = "Line \U000E0041two.", TokensNow = 100, TokensAfter = 102, Budget = 350 } },
+        };
+        var memory = await Open(service);
+
+        var update = Assert.Single(memory.BlockUpdates);
+        Assert.True(update.HasHiddenText);
+        Assert.False(update.ApproveCommand.CanExecute(null));
     }
 
     [Fact]

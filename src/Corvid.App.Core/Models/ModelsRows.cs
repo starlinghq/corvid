@@ -85,6 +85,9 @@ public sealed class SlotRowViewModel : ObservableObject
     /// <summary>The bound model, or "unbound".</summary>
     public string Model { get => _model; private set => SetProperty(ref _model, value); }
 
+    /// <summary>The bound model's name as configured (not cleaned), for comparing with the catalogue's names; null when unbound.</summary>
+    public string? BoundModel { get; private set; }
+
     public bool IsBound { get => _isBound; private set => SetProperty(ref _isBound, value); }
 
     /// <summary>Under the model: "default", "pinned".</summary>
@@ -182,6 +185,7 @@ public sealed class SlotRowViewModel : ObservableObject
         IsBound = slot.IsBound;
         // Names from the configuration are data: drawn cleaned; what is written back uses the configured names.
         Model = slot.Model is { } bound ? SafeText.Clean(bound) : "unbound";
+        BoundModel = slot.Model;
         IsPinned = slot.Pinned;
         IsShared = slot.Shared;
         CurrentNote = (slot.IsDefault, slot.Pinned) switch

@@ -218,12 +218,12 @@ public sealed class FirstRunTests
     public void AFixsHiddenCharactersShowWhileTheClipboardGetsTheCommandAsGiven()
     {
         var row = new CheckRowViewModel(
-            new DoctorCheck(CheckSections.Sandbox, "vault‮", CheckStatus.Warning, "no answer", "Fix: `rm -rf ~‮`", "rm -rf ~‮"),
+            new DoctorCheck(CheckSections.Sandbox, "vault\u202E", CheckStatus.Warning, "no answer", "Fix: `rm -rf ~\u202E`", "rm -rf ~\u202E"),
             _ => { });
 
         Assert.Equal("vault", row.Name);
         Assert.Contains(row.Fix, run => run.Code && run.Text == "rm -rf ~⟨U+202E⟩");
-        Assert.Equal("rm -rf ~‮", row.FixCommand);
+        Assert.Equal("rm -rf ~\u202E", row.FixCommand);
     }
 
     [Fact]

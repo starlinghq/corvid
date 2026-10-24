@@ -305,18 +305,18 @@ public sealed class BoardViewModelTests
     [Fact]
     public void ASessionsWordsAreDrawnWithoutTheirHiddenCharacters()
     {
-        var summary = new SessionSummary("cli-1", "Fix the ‮tset kaep‬ build")
+        var summary = new SessionSummary("cli-1", "Fix the \u202Etset kaep\u202C build")
         {
             State = SessionState.Waiting,
-            Question = "which ​version?",
-            Workspace = "corvid⁦",
+            Question = "which \u200Bversion?",
+            Workspace = "corvid\u2066",
         };
 
         Assert.Equal("Fix the tset kaep build", BoardText.Title(summary, TimeZoneInfo.Utc));
         Assert.Equal("Fix the tset kaep build", BoardText.ShortTitle(summary.Title));
         Assert.Equal("question · which version?", Text(BoardText.StateDetail(summary, null, DateTimeOffset.UnixEpoch, TimeZoneInfo.Utc)));
         Assert.StartsWith("corvid · cli-1", Text(BoardText.Meta(summary)), StringComparison.Ordinal);
-        var running = summary with { State = SessionState.Running, Activity = "shell rm‮ -rf", Model = "qwen‮" };
+        var running = summary with { State = SessionState.Running, Activity = "shell rm\u202E -rf", Model = "qwen\u202E" };
         Assert.Equal("shell rm -rf", Text(BoardText.StateDetail(running, null, DateTimeOffset.UnixEpoch, TimeZoneInfo.Utc)));
         Assert.Equal("qwen", BoardText.Detail(running, null, DateTimeOffset.UnixEpoch));
     }

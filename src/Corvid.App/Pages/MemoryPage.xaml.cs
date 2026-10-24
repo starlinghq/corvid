@@ -61,7 +61,7 @@ public sealed partial class MemoryPage : Page
     public static string Dotted(string? text) => string.IsNullOrEmpty(text) ? "" : "· " + text;
 
     /// <summary>A date that may break after its hyphens, as the browser breaks the mockup's table cells ("2026-10-" over "16").</summary>
-    public static string Breakable(string? text) => (text ?? "").Replace("-", "-​", StringComparison.Ordinal);
+    public static string Breakable(string? text) => (text ?? "").Replace("-", "-\u200B", StringComparison.Ordinal);
 
     // ---- layout ----
 

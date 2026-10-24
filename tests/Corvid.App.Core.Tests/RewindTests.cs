@@ -152,7 +152,7 @@ public sealed class RewindTests
     [Fact]
     public void ARestoreShowsTheHiddenCharactersOfThePathsItActsOn()
     {
-        const string Path = "src/evil‮cs.txt";
+        const string Path = "src/evil\u202Ecs.txt";
         var restore = new LedgerEntryView(new LedgerEntry("c-50", LedgerEntryKind.Restore, DateTimeOffset.UnixEpoch, 3) { Target = $"revert {Path} to c-1" },
             TimeZoneInfo.Utc, new RelayCommand(() => { }));
         Assert.Equal("revert src/evil⟨U+202E⟩cs.txt to c-1 · c-50", restore.Detail);

@@ -39,7 +39,7 @@ public sealed class StagedFactView : ObservableObject
             : [.. MemoryText.Spans(fact.Subject, MemorySpanStyle.Bold), new(" "), .. MemoryText.Spans(fact.Predicate, MemorySpanStyle.Muted),
                 new(" "), .. MemoryText.Spans(fact.Object, MemorySpanStyle.Bold)];
         HasHiddenText = MemoryText.HasHidden(fact.Text);
-        Entities = [.. fact.Entities.Select(e => SafeText.Clean(e.Label))];
+        Entities = [.. fact.Entities.Select(e => SafeText.Reveal(e.Label, keepJoiners: true))];
         ValidText = "valid from " + MemoryText.Date(fact.ValidFrom);
         Nearest = [.. fact.Nearest.Select(n => new NearbyFactView(this, n))];
         Evidence = fact.Evidence.Length == 0 ? "" : "evidence: " + SafeText.Clean(fact.Evidence);
@@ -229,7 +229,9 @@ public sealed class StagedFactView : ObservableObject
             return false;
         // Nothing hidden is written, nor a ⟨U+…⟩ code the editor showed in place of a hidden character.
         var text = TextToWrite;
-        return !MemoryText.HasHidden(text) && !(HasHiddenText && MemoryText.HasRevealedMarks(text));
+        // The fact's entities are stored with it; one with a hidden character is not approved unseen either.
+        return !MemoryText.HasHidden(text) && !(HasHiddenText && MemoryText.HasRevealedMarks(text))
+            && !Fact.Entities.Any(entity => MemoryText.HasHidden(entity.Label));
     }
 
     private async Task RunAsync(Func<Task> action)

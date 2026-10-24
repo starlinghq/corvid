@@ -284,6 +284,28 @@ public sealed class SessionFoldTests
     }
 
     [Fact]
+    public void ARestoreToAPointInsideATurnLeavesTheTurnsEarlierCallsChanges()
+    {
+        var state = SessionFold.Replay("s",
+        [
+            At(new TurnStarted(10, "qwen3.5-0.8b"), 0),
+            At(new CheckpointRecorded("c-1", CheckpointKind.Before) { CallId = "call-a", Tool = "write_file", Turn = 10 }, 1),
+            At(new CheckpointRecorded("c-2", CheckpointKind.After) { CallId = "call-a", Turn = 10, Changes = [new FileChange("a.cs", 3, 0)] }, 2),
+            At(new CheckpointRecorded("c-3", CheckpointKind.Before) { CallId = "call-b", Tool = "patch_file", Turn = 10 }, 3),
+            At(new CheckpointRecorded("c-4", CheckpointKind.After) { CallId = "call-b", Turn = 10, Changes = [new FileChange("a.cs", 2, 1)] }, 4),
+            At(new ChangesUpdate { Turn = [new FileChange("a.cs", 5, 1)], Session = [new FileChange("a.cs", 5, 1)] }, 4),
+            At(new CheckpointRecorded("c-5", CheckpointKind.Restore) { Target = "revert a.cs to c-3", Turn = 10 }, 5),
+            At(new SessionRewound(10, RewindScope.FilesOnly, "revert") { Restored = ["a.cs"], CheckpointId = "c-5", RestorePoint = "c-3" }, 6),
+        ]);
+
+        // Back to before call-b: call-a's change to a.cs is still in the file, call-b's is not.
+        Assert.Empty(state.Ledger[0].UndonePaths);
+        Assert.Equal(["a.cs"], state.Ledger[1].UndonePaths);
+        Assert.Equal([new FileChange("a.cs", 3, 0)], state.TurnChanges);
+        Assert.Equal([new FileChange("a.cs", 3, 0)], state.SessionChanges);
+    }
+
+    [Fact]
     public void AFilesOnlyRestoreKeepsTheTurnAndARefusedOneChangesNothing()
     {
         var filesOnly = SessionFold.Replay("s",

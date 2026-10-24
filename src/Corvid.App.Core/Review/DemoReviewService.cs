@@ -134,6 +134,7 @@ public sealed class DemoReviewService : IReviewService
                 Restored = merged ? [] : [path],
                 Merged = merged ? [path] : [],
                 CheckpointId = restorePoint,
+                RestorePoint = checkpointId,
             },
             stopRunningTurn: false);
         return Task.FromResult(new FileRevertResult(path, checkpointId, merged, false));

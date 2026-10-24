@@ -124,6 +124,7 @@ public sealed class DemoRewindService : IRewindService
                 Restored = outcome.Restored,
                 Merged = outcome.Merged,
                 CheckpointId = restorePoint,
+                RestorePoint = plan.CheckpointId,
             });
         Raise(sessionId);
         return Task.FromResult(outcome);

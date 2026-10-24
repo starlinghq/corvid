@@ -611,8 +611,8 @@ public sealed class FirstRunViewModel : AreaViewModel
     {
         var snapshot = _models.Snapshot;
         var decider = snapshot.Decider.Tier == DeciderTier.Calibrated
-            ? $"{snapshot.Decider.DisplayName}, calibrated"
-            : $"degraded until {snapshot.Decider.Model} is downloaded";
+            ? $"{SafeText.Clean(snapshot.Decider.DisplayName)}, calibrated"
+            : $"degraded until {SafeText.Clean(snapshot.Decider.Model)} is downloaded";
         var downloads = ModelsViewModel.StatusDownloads(snapshot);
         _lease.Engine = "not started · models load after this page";
         _lease.Generator = "";
@@ -647,7 +647,7 @@ public sealed class FirstRunViewModel : AreaViewModel
         var tags = new List<StatusTag>();
         if (missing.Count > 0)
         {
-            tags.Add(new StatusTag($"degraded · {string.Join(", ", missing)} missing", Tone.Amber,
+            tags.Add(new StatusTag($"degraded · {string.Join(", ", missing.Select(name => SafeText.Clean(name)))} missing", Tone.Amber,
                 "Corvid runs with what it has: decisions use the degraded tier and memory writes wait for review until these models are downloaded."));
         }
 
