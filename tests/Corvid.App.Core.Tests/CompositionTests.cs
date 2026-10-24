@@ -69,10 +69,15 @@ public sealed class CompositionTests
 
         Assert.Equal("Fix the flaky sandbox test on CI", sessions.SessionTitle);
         Assert.Equal("cli-9f2e · running", sessions.SessionDetail);
+        Assert.Equal("cli-9f2e", sessions.Session?.SessionId);
+        // The tabs' badges are the session's: three files changed, two tasks open.
+        Assert.Equal(["Changes|3", "Files|", "Tasks|2", "Decisions|", "Context|", "Output|", "Session|"],
+            sessions.Panels.Select(panel => $"{panel.Label}|{panel.BadgeText}"));
+
         composition.Shell.FindSession("cli-a410")!.Open.Execute(null);
         Assert.Equal("Draft release notes for v0.2", sessions.SessionTitle);
-
-        Assert.Equal(["Changes|3", "Files|", "Tasks|2", "Decisions|", "Context|", "Output|", "Session|"],
+        Assert.Equal("cli-a410", sessions.Session?.SessionId);
+        Assert.Equal(["Changes|", "Files|", "Tasks|", "Decisions|", "Context|", "Output|", "Session|"],
             sessions.Panels.Select(panel => $"{panel.Label}|{panel.BadgeText}"));
         Assert.Equal("Changes", sessions.SelectedPanel.Label);
         sessions.Panels[4].Open.Execute(null);

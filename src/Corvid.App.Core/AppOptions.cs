@@ -1,3 +1,5 @@
+using Corvid.App.Core.Sessions;
+
 namespace Corvid.App.Core;
 
 /// <summary>
@@ -7,7 +9,7 @@ namespace Corvid.App.Core;
 public sealed record AppOptions
 {
     public const string Usage = """
-        Usage: Corvid.App [--demo] [--theme light|dark|system] [--page <area>] [--session <id>]
+        Usage: Corvid.App [--demo] [--theme light|dark|system] [--page <area>] [--session <id>] [--scene main|approval]
 
           --demo              demo services and the scripted scenario, with the clock frozen at 2026-10-24 14:05
                               local (the default until the engine is wired in)
@@ -15,6 +17,8 @@ public sealed record AppOptions
           --page <area>       the area to open: sessions, board, review, rewind, memory, skills, jobs, models,
                               safety, mcp, gateway, secrets, audit, settings or first-run
           --session <id>      the session to open, such as cli-9f2e
+          --scene <moment>    the demo scenario's moment to open at: main (turn 12 running, the default) or
+                              approval (turn 13 waiting on approval a-32)
           --help              this text
         """;
 
@@ -28,6 +32,9 @@ public sealed record AppOptions
 
     /// <summary>The session to select and open, by id.</summary>
     public string? Session { get; init; }
+
+    /// <summary>The demo scenario's moment to open at: Main.png's (the default) or Approval.png's.</summary>
+    public DemoScene Scene { get; init; } = DemoScene.Main;
 
     /// <summary>The caller asked for <see cref="Usage"/>; the app prints it and exits.</summary>
     public bool Help { get; init; }
@@ -91,6 +98,19 @@ public sealed record AppOptions
                     if (!TakeValue(args, ref i, name, inline, out var session, out error))
                         return false;
                     options = options with { Session = session };
+                    break;
+                case "--scene":
+                    if (!TakeValue(args, ref i, name, inline, out var scene, out error))
+                        return false;
+                    // Names only: Enum.TryParse also accepts a number such as "1".
+                    if (!Enum.GetNames<DemoScene>().Contains(scene, StringComparer.OrdinalIgnoreCase)
+                        || !Enum.TryParse<DemoScene>(scene, ignoreCase: true, out var moment))
+                    {
+                        error = $"--scene takes main or approval, not \"{scene}\".";
+                        return false;
+                    }
+
+                    options = options with { Scene = moment };
                     break;
                 default:
                     error = $"Unknown argument \"{args[i]}\".";

@@ -13,6 +13,7 @@ namespace Corvid.App.Core.Shell;
 public sealed class ShellViewModel : ObservableObject
 {
     private readonly Dictionary<Area, NavItem> _rail;
+    private readonly Dictionary<string, int> _attentionSources = new(StringComparer.Ordinal);
     private readonly PhoneTab _chatTab;
     private readonly PhoneTab _changesTab;
     private readonly PhoneTab _attentionTab;
@@ -70,18 +71,29 @@ public sealed class ShellViewModel : ObservableObject
         set => SetProperty(ref _workspace, value ?? "");
     }
 
-    /// <summary>How many items wait in the attention tray, across sessions (the bell's count).</summary>
+    /// <summary>
+    /// How many items wait in the attention tray, across sessions (the bell's count): the sum of what each source reports
+    /// with <see cref="SetAttention"/>. Setting it replaces the count of the unnamed source.
+    /// </summary>
     public int AttentionCount
     {
         get => _attention;
-        set
-        {
-            if (!SetProperty(ref _attention, Math.Max(0, value)))
-                return;
-            _attentionTab.Count = _attention;
-            OnPropertyChanged(nameof(AttentionText));
-            OnPropertyChanged(nameof(AttentionName));
-        }
+        set => SetAttention("", value);
+    }
+
+    /// <summary>
+    /// Sets how many attention items one source has: the sessions (approval queues and questions), and as their areas
+    /// are built, memory reviews, held MCP tools, pairing codes, finished jobs.
+    /// </summary>
+    public void SetAttention(string source, int count)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        _attentionSources[source] = Math.Max(0, count);
+        if (!SetProperty(ref _attention, _attentionSources.Values.Sum(), nameof(AttentionCount)))
+            return;
+        _attentionTab.Count = _attention;
+        OnPropertyChanged(nameof(AttentionText));
+        OnPropertyChanged(nameof(AttentionName));
     }
 
     /// <summary>The bell's count as drawn; empty when nothing waits.</summary>

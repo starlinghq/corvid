@@ -28,13 +28,12 @@ public sealed partial class AppComposition
         if (options.Demo)
         {
             DemoShell.Fill(StatusBar);
-            DemoShell.Fill(Shell, Time);
-            // The demo has no engine to ask, so a requested mode is in force at once.
-            StatusBar.ModeRequested += (_, mode) => StatusBar.Mode = mode;
+            DemoShell.Fill(Shell);
         }
 
-        if (options.Session is { } session && Shell.FindSession(session) is { } listed)
-            Shell.SelectSession(listed);
+        // The session service feeds the rail, the attention count and the status bar from here on, and selects the
+        // session the command line named.
+        StartSessions();
         Shell.Navigate(options.Page ?? Area.Sessions);
     }
 

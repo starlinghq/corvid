@@ -1,4 +1,5 @@
 using Corvid.App.Core;
+using Corvid.App.Core.Sessions;
 
 namespace Corvid.App.Core.Tests;
 
@@ -25,7 +26,17 @@ public sealed class AppOptionsTests
         Assert.Equal(AppTheme.System, options.Theme);
         Assert.Null(options.Page);
         Assert.Null(options.Session);
+        Assert.Equal(DemoScene.Main, options.Scene);
         Assert.False(options.Help);
+    }
+
+    [Fact]
+    public void TheSceneIsTheMockupsMomentToOpenAt()
+    {
+        Assert.Equal(DemoScene.Approval, Parse("--scene", "approval").Scene);
+        Assert.Equal(DemoScene.Main, Parse("--scene=MAIN").Scene);
+        Assert.Equal("--scene takes main or approval, not \"board\".", Fail("--scene", "board"));
+        Assert.Equal("--scene takes main or approval, not \"1\".", Fail("--scene", "1"));
     }
 
     [Theory]

@@ -1,18 +1,20 @@
 using System.ComponentModel;
 using Corvid.App.Core;
+using Corvid.App.Core.Composition;
+using Corvid.App.Core.Mvvm;
 using Corvid.App.Core.Shell;
 
 namespace Corvid.App.Core.Tests;
 
 public sealed class ShellViewModelTests
 {
+    /// <summary>The demo's shell as the window gets it: the Main mockup's values, with the rail fed by the demo sessions.</summary>
     private static ShellViewModel DemoShellViewModel(out StatusBarViewModel bar)
     {
-        bar = new StatusBarViewModel();
-        var shell = new ShellViewModel(bar);
-        DemoShell.Fill(bar);
-        DemoShell.Fill(shell, FrozenTimeProvider.Demo());
-        return shell;
+        Assert.True(AppOptions.TryParse([], out var options, out var error), error);
+        var composition = new AppComposition(options, new InlineDispatcher());
+        bar = composition.StatusBar;
+        return composition.Shell;
     }
 
     [Fact]
