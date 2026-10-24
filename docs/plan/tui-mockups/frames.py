@@ -21,6 +21,8 @@ S = {
     "bwhite": "97",
     "addbg": "48;5;22", "delbg": "48;5;52", "addword": "48;5;28", "delword": "48;5;88",
     "selbg": "48;5;237", "chip": "48;5;236", "barbg": "48;5;235",
+    # identity: Corvid's blue label, the composer band, the user-turn band, shell mode
+    "idbg": "44", "idfg": "30", "band": "48;5;235", "cbar": "48;5;236", "shbg": "43",
 }
 
 
@@ -38,6 +40,16 @@ class Line:
 
     def __init__(self, *runs):
         self.runs = [r if isinstance(r, tuple) else (r, "") for r in runs]
+        self.fill = None
+
+    def on(self, bg):
+        """Put the line on a background band. The rest of the row is filled with CSI K (background colour erase),
+        so the terminal paints it without the line containing trailing spaces that a selection would copy."""
+        backgrounds = {"idbg", "shbg", "band", "cbar", "chip", "selbg", "barbg", "addbg", "delbg", "addword", "delword",
+                       "inv"}
+        self.runs = [(t, st if backgrounds & set(st.split()) else (st + " " + bg).strip()) for t, st in self.runs]
+        self.fill = bg
+        return self
 
     @property
     def width(self):
@@ -52,6 +64,8 @@ class Line:
         out = []
         for text, style in self.runs:
             out.append(sgr(style) + text + (RESET if style else ""))
+        if self.fill:
+            out.append(sgr(self.fill) + ESC + "[K")
         return "".join(out) + RESET
 
 
@@ -96,7 +110,9 @@ def shell_prompt(cmd="corvid"):
 
 
 def banner(width, model="qwen3.5-0.8b", tools=19, session="cli-7f3a2c", resumed=None):
-    lines = [rule(width, "corvid", "grey", right=f"session {session}")]
+    right = f" session {session} ─"
+    lines = [Line(seg("╭─ ", "bblue"), seg("corvid", "bblue b"), seg(" ", ""),
+                  seg("─" * (width - 10 - len(right)), "bblue"), seg(right, "grey"))]
     lines.append(L(seg("  generator ", "grey"), seg(model), seg(" · decider ", "grey"), seg("kev-0.8b"),
                    seg(f" · {tools} tools · ", "grey"), seg("smart", "cyan"), seg(" approvals · ", "grey"),
                    seg("/help", "bcyan"), seg(" · ", "grey"), seg("ctrl+p", "bcyan"), seg(" palette", "grey")))
@@ -106,7 +122,16 @@ def banner(width, model="qwen3.5-0.8b", tools=19, session="cli-7f3a2c", resumed=
 
 
 def user(text):
-    return L(seg("› ", "bblue b"), seg(text, "b"))
+    return L(seg("› ", "bblue b"), seg(text, "b")).on("band")
+
+
+def farewell(width, session, turns, minutes):
+    """The rule printed into scrollback when the user leaves, so the end of the conversation is visible later."""
+    left = f"╰─ left corvid · {turns} turns · {minutes} min "
+    right = f" corvid chat --session {session} ─"
+    return Line(seg("╰─ ", "bblue"), seg("left corvid", "bblue b"), seg(f" · {turns} turns · {minutes} min ", "grey"),
+                seg("─" * (width - len(left) - len(right)), "bblue"), seg(" corvid chat --session ", "grey"),
+                seg(session, "bcyan"), seg(" ─", "grey"))
 
 
 def say(text, style=""):
@@ -143,19 +168,28 @@ def gauge(used, total, cells=8):
     return "▮" * filled + "▯" * (cells - filled)
 
 
-def composer(width, text="", hint="", placeholder="Message Corvid · @ files · ! shell · / commands"):
-    lines = [Line(seg("─" * width, "grey"))]
-    if text:
-        lines.append(L(seg("› ", "bblue b"), seg(text), seg(" ", "inv")))
+def composer(width, text="", hint=None, placeholder="Message Corvid · @ files · ! shell · / commands", mode="chat"):
+    """The input surface: two rows on a band, labelled corvid, so it never reads as a shell prompt."""
+    if mode == "shell":
+        label = [seg(" corvid ", "shbg idfg b"), seg(" ! ", "byellow b")]
     else:
-        lines.append(L(seg("› ", "bblue b"), seg(" ", "inv"), seg(placeholder, "grey")))
-    if hint:
-        lines.append(L(seg("  " + hint, "grey")))
-    return lines
+        label = [seg(" corvid ", "idbg idfg b"), seg(" › ", "bblue b")]
+    if text:
+        row = L(*label, seg(text), seg(" ", "inv"))
+    else:
+        row = L(*label, seg(" ", "inv"), seg(placeholder, "grey"))
+    if hint is None:
+        hint = ("enter send · ctrl+j newline · esc interrupt · ctrl+d twice leaves corvid" if width >= 80
+                else "enter send · ctrl+d twice leaves")
+    return [row.on("cbar"), L(seg("         " + hint, "grey")).on("cbar")]
 
 
-def default_status(width, ctx=(5100, 8192), mode="smart", taint=False, extra_right=None, elapsed="0:42"):
-    items = [(f"qwen3.5-0.8b@cpu", ""), ("p50 410 ms", "grey"), ("kev-0.8b", "grey"),
+STATES = {"ready": ("● ready", "green"), "working": ("◐ working", "yellow"), "needs": ("◆ needs you", "byellow b"),
+          "starting": ("○ starting", "yellow")}
+
+
+def default_status(width, ctx=(5100, 8192), mode="smart", taint=False, extra_right=None, elapsed="0:42", state="ready"):
+    items = [STATES[state], (f"qwen3.5-0.8b@cpu", ""), ("p50 410 ms", "grey"), ("kev-0.8b", "grey"),
              (f"ctx {ctx[0] / 1000:.1f}k/{ctx[1] / 1000:.1f}k {gauge(*ctx)}", "")]
     items.append((mode, "cyan"))
     if taint:
@@ -196,7 +230,7 @@ def screen_streaming(W, H):
         L(seg("  ⠹ ", "yellow"), seg("writing", "grey"), seg(" · 2.1 s · 214 tokens · ", "grey"), seg("esc", "bcyan"),
           seg(" interrupt · ", "grey"), seg("enter", "bcyan"), seg(" queue a message", "grey")),
         *composer(W, "and how do I keep my edit and take the rest"),
-        default_status(W),
+        default_status(W, state="working"),
     ]
     return scroll, live
 
@@ -225,7 +259,7 @@ def screen_approval(W, H):
     ]
     live = [*box(W, "approval needed", body, "byellow", right="denied at 14:32:10 · 1:48 left"),
             *composer(W, "", placeholder="Your draft stays here; the prompt takes the next Enter only after it opened"),
-            default_status(W, mode="smart", taint=True)]
+            default_status(W, mode="smart", taint=True, state="needs")]
     return scroll, live
 
 
@@ -306,8 +340,7 @@ def screen_fabric(W, H):
                 seg(" to open it", "grey")),
               ]
     live = [*composer(W), default_status(W, ctx=(6900, 8192), taint=True,
-                                         extra_right=[seg(" claude-opus-5-5 ↗", "magenta"), seg("  main", "magenta"),
-                                                      seg("  0:12", "grey")])]
+                                         extra_right=[seg(" claude-opus-5-5 ↗", "magenta"), seg("  0:12", "grey")])]
     return scroll, live
 
 
@@ -465,7 +498,7 @@ def screen_narrow(W, H):
     live = [L(seg("  ⠹ ", "yellow"), seg("writing · 2.1 s · ", "grey"), seg("esc", "bcyan"),
               seg(" interrupt", "grey")),
             *composer(W, "and how do I keep my edit"),
-            status(W, [("qwen3.5-0.8b", ""), (f"ctx {gauge(5100, 8192)}", ""), ("smart", "cyan")],
+            status(W, [STATES["working"], ("qwen3.5-0.8b", ""), (f"ctx {gauge(5100, 8192)}", "")],
                    [seg("0:42", "grey")])]
     return scroll, live
 
@@ -476,10 +509,42 @@ def screen_startup(W, H):
              user("why does /rollback refuse to restore src/Corvid.Cli/Program.cs?"),
              L(seg("  · answered · 3 steps, 2 tool calls · 9.4 s", "grey")), blank()]
     live = [*composer(W, "/model generator qwen-27b", hint="/model <slot> <model> [--pin]   switch a slot for this session"),
-            status(W, [("loading models", "yellow"), ("embedder ✓", "green"), ("gliner2 ✓", "green"),
+            status(W, [STATES["starting"], ("embedder ✓", "green"), ("gliner2 ✓", "green"),
                        ("qwen3.5-0.8b 62%", "yellow"), ("kev-0.8b queued", "grey")],
                    [seg("first paint 48 ms", "grey")])]
     return lines, live
+
+
+def screen_leaving(W, H):
+    """Leaving: the closing rule marks the end of the conversation in scrollback, then the shell is back."""
+    lines = [user("commit the rename once the build is green"), blank(),
+             card("!", "byellow", "you ran", "git status --short", "✓ 4 files", "green", "in corvid's sandbox", width=W),
+             card("$", "red", "shell", "dotnet build Corvid.slnx", "✓ 0 errors", "green", "38.4 s", width=W),
+             card("$", "red", "shell", 'git commit -am "Rename MaxSteps to StepBudget"', "✓ 4f2a9e1", "green",
+                  "approved once", width=W),
+             blank(),
+             say("Committed as 4f2a9e1 on main. The build is green and the four files are in the commit."),
+             L(seg("  · answered · 3 steps, 3 tool calls · 52 s", "grey")),
+             blank(),
+             farewell(W, "cli-7f3a2c", 14, 23),
+             L(seg("mark@omarchy", "bgreen b"), seg(":", "grey"), seg("~/src/corvid", "bblue b"), seg(" $ ", "grey"),
+               seg("git log --oneline -2")),
+             L(seg("4f2a9e1", "yellow"), seg(" Rename MaxSteps to StepBudget")),
+             L(seg("9fa8081", "yellow"), seg(" Credential-value detector shared by the egress gate (#48)")),
+             L(seg("mark@omarchy", "bgreen b"), seg(":", "grey"), seg("~/src/corvid", "bblue b"), seg(" $ ", "grey"),
+               seg(" ", "inv")),
+             ]
+    return lines, []
+
+
+def screen_shell_mode(W, H):
+    """! switches the composer to shell mode: a yellow label, and a hint that says where the command runs."""
+    scroll = [user("what is taking space in the build output?"), blank(),
+              say("Mostly obj/: the ONNX natives are copied into every test project's output."), blank()]
+    live = [*composer(W, "du -sh tests/*/bin | sort -h | tail -3", mode="shell",
+                      hint="runs in corvid's sandbox, through approvals · output goes to the model · esc leaves"),
+            default_status(W, ctx=(2900, 8192))]
+    return scroll, live
 
 
 SCREENS = [
@@ -493,7 +558,25 @@ SCREENS = [
     ("08-fullscreen", "Fullscreen renderer, scrolled up", screen_fullscreen, 100, 30, "fullscreen"),
     ("09-linear", "Screen-reader (linear) renderer", screen_linear, 100, 21, "linear"),
     ("10-narrow", "The streaming screen at 60 columns", screen_narrow, 60, 24, "inline"),
+    ("11-leaving", "Leaving Corvid: the closing rule, then the shell", screen_leaving, 100, 20, "inline"),
+    ("12-shell-mode", "Shell mode inside Corvid", screen_shell_mode, 100, 12, "inline"),
 ]
+
+# The terminal title Corvid sets (OSC 2), shown above each screenshot; the shell's own title comes back on exit.
+TITLES = {
+    "01-streaming": "◐ corvid · Rollback refuses Program.cs",
+    "02-approval": "◆ corvid · needs you · Clean build and rerun tests",
+    "03-diff": "● corvid · Turn limit to 12 steps",
+    "04-fabric": "● corvid · Synchronized output in tmux",
+    "05-rewind": "● corvid · Rename MaxSteps",
+    "06-resume": "● corvid · resume",
+    "07-startup": "○ corvid · starting",
+    "08-fullscreen": "● corvid · Gateway delivery retries",
+    "09-linear": "● corvid · Clean build and rerun tests",
+    "10-narrow": "◐ corvid · Rollback refuses…",
+    "11-leaving": "~/src/corvid — bash",
+    "12-shell-mode": "● corvid · Build output size",
+}
 
 
 def check(name, lines, live, W, H, mode):
@@ -531,7 +614,7 @@ def main():
             raise SystemExit(f"{name}: an inline frame clears the screen or scrollback")
         with open(os.path.join(OUT, name + ".ans"), "w", encoding="utf-8") as f:
             f.write(data)
-        manifest.append({"name": name, "caption": caption, "cols": W, "rows": H, "mode": mode,
+        manifest.append({"name": name, "caption": caption, "cols": W, "rows": H, "mode": mode, "title": TITLES[name],
                          "live": len(live), "total": len(scroll) + len(live)})
     with open(os.path.join(OUT, "manifest.json"), "w") as f:
         json.dump(manifest, f, indent=1)
