@@ -1,0 +1,179 @@
+using Corvid.App.Core;
+using Corvid.App.Core.Board;
+using Corvid.App.Core.Composition;
+using Corvid.App.Core.Gateway;
+using Corvid.App.Core.Models;
+using Corvid.App.Core.Mvvm;
+using Corvid.App.Core.Shell;
+
+namespace Corvid.App.Core.Tests;
+
+public sealed class GatewayTests
+{
+    private sealed record Rig(GatewayViewModel Gateway, DemoGatewayService Service, DemoBoardService Board, ShellViewModel Shell, StatusBarViewModel Bar);
+
+    private static Rig Build()
+    {
+        var time = ManualTimeProvider.Demo();
+        var board = new DemoBoardService(time);
+        var service = new DemoGatewayService(time, board);
+        var bar = new StatusBarViewModel { Gateway = "before" };
+        var shell = new ShellViewModel(bar);
+        shell.Navigate(Area.Gateway);
+        return new Rig(new GatewayViewModel(service, shell, bar, time), service, board, shell, bar);
+    }
+
+    private static string Text(IEnumerable<TextRun> runs) => string.Concat(runs.Select(run => run.Text));
+
+    [Fact]
+    public void ItShowsTheBoardsPairingRequestTheUsersAndTheChannels()
+    {
+        var rig = Build();
+        var gateway = rig.Gateway;
+
+        var request = Assert.Single(gateway.Requests);
+        Assert.Equal("Pairing · Telegram · @dana", request.Title);
+        Assert.Equal("ABCD-EFGH", request.Code);
+        Assert.Equal("today 08:40 · direct message · approved on this machine only, never from a chat", request.Note);
+        Assert.True(request.CanPair);
+        Assert.True(request.GuestCommand.CanExecute(null));
+
+        Assert.Equal(["@kestrel", "river#2210"], gateway.Users.Select(user => user.Handle));
+        Assert.Equal("every tool, and approvals", gateway.Users[0].ToolsText);
+        Assert.Equal("memory_search", gateway.Users[1].ToolsText);
+        Assert.Equal(["Telegram", "Discord", "Slack"], gateway.Adapters.Select(adapter => adapter.Name));
+        Assert.Equal(["up", "up", "off"], gateway.Adapters.Select(adapter => adapter.StateText));
+        Assert.Contains("slack.bot-token", gateway.Adapters[2].Detail, StringComparison.Ordinal);
+        Assert.Equal("cli-a410's release-notes summary → Slack #release", Assert.Single(gateway.Deliveries).What);
+        Assert.Equal("in this app", gateway.HostTag);
+        Assert.Equal("hosted in this app · telegram up · discord up · slack off", Text(gateway.Subtitle));
+        Assert.Equal("telegram up · discord up · slack off", rig.Bar.Gateway);
+
+        rig.Shell.Navigate(Area.Board);
+        Assert.Equal("before", rig.Bar.Gateway);
+    }
+
+    [Fact]
+    public async Task PairingAsAGuestGivesNoToolsAndAnswersTheBoardsItem()
+    {
+        var rig = Build();
+
+        await ((AsyncRelayCommand)rig.Gateway.Requests[0].GuestCommand).ExecuteAsync();
+
+        Assert.Empty(rig.Gateway.Requests);
+        var dana = Assert.Single(rig.Gateway.Users, user => user.Handle == "@dana");
+        Assert.Equal("guest", dana.RoleText);
+        Assert.Equal("none: it can only talk", dana.ToolsText);
+        Assert.True(dana.ToolsEmpty);
+        Assert.Equal("Paired @dana as a guest, with no tools: they can talk to Corvid. Widen… gives them tools.", Text(rig.Gateway.Notice));
+        Assert.DoesNotContain(await rig.Board.ListAttentionAsync(TestContext.Current.CancellationToken), item => item.Id == DemoBoardService.PairingItemId);
+    }
+
+    [Fact]
+    public async Task APairingAnsweredFromTheBoardsTrayIsAnsweredHere()
+    {
+        var rig = Build();
+
+        await rig.Board.ResolveAsync(DemoBoardService.PairingItemId, "owner", TestContext.Current.CancellationToken);
+
+        Assert.Empty(rig.Gateway.Requests);
+        Assert.Equal("owner", rig.Gateway.Users.Single(user => user.Handle == "@dana").RoleText);
+    }
+
+    [Fact]
+    public async Task IgnoreDropsTheCode()
+    {
+        var rig = Build();
+
+        await ((AsyncRelayCommand)rig.Gateway.Requests[0].IgnoreCommand).ExecuteAsync();
+
+        Assert.Empty(rig.Gateway.Requests);
+        Assert.DoesNotContain(rig.Gateway.Users, user => user.Handle == "@dana");
+        Assert.True(rig.Gateway.HasUsers);
+        Assert.Equal("Ignored the code from @dana: they stay unpaired.", Text(rig.Gateway.Notice));
+        Assert.Contains(("pairing:telegram:ABCD-EFGH", "ignore"), rig.Board.Resolved);
+    }
+
+    [Fact]
+    public void PairingAsOwnerAsksFirst()
+    {
+        var rig = Build();
+        var request = rig.Gateway.Requests[0];
+
+        request.AskOwnerCommand.Execute(null);
+
+        Assert.True(request.IsConfirmingOwner);
+        Assert.Equal("Pair @dana as an owner? An owner answers approvals and runs commands from Telegram, as you do here.", Text(request.OwnerQuestion));
+        Assert.True(rig.Gateway.Close());
+        Assert.False(request.IsConfirmingOwner);
+    }
+
+    [Fact]
+    public async Task AHandleHoldingHiddenCharactersIsRevealedAndCanOnlyBeIgnored()
+    {
+        var rig = Build();
+        var sent = rig.Service.Request("telegram", "@kes‮trel\U000E0041", "WXYZ-1234");
+
+        var card = Assert.Single(rig.Gateway.Requests, card => card.Code == "WXYZ-1234");
+        Assert.Equal("@kes⟨U+202E⟩trel⟨U+E0041⟩", card.Handle);
+        Assert.False(card.CanPair);
+        Assert.Contains("hidden characters", card.Warning, StringComparison.Ordinal);
+        Assert.False(card.GuestCommand.CanExecute(null));
+        Assert.False(card.OwnerCommand.CanExecute(null));
+        Assert.False(card.AskOwnerCommand.CanExecute(null));
+        Assert.True(card.IgnoreCommand.CanExecute(null));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => rig.Service.PairAsync(sent.Id, PairingRole.Guest, TestContext.Current.CancellationToken));
+
+        await ((AsyncRelayCommand)card.IgnoreCommand).ExecuteAsync();
+        Assert.Equal("Ignored the code from @kestrel: they stay unpaired.", Text(rig.Gateway.Notice));
+    }
+
+    [Fact]
+    public async Task WidenGivesAGuestTheToolsTicked()
+    {
+        var rig = Build();
+        var river = rig.Gateway.Users.Single(user => user.Handle == "river#2210");
+
+        river.EditCommand.Execute(null);
+        Assert.True(river.IsEditing);
+        Assert.Equal(["memory_search", "session_list", "web_fetch", "read_file", "notes__read"], river.Choices.Select(choice => choice.Name));
+        Assert.True(river.Choices[0].IsChecked);
+        river.Choices[2].IsChecked = true;
+        await river.SaveCommand.ExecuteAsync();
+
+        var updated = rig.Gateway.Users.Single(user => user.Handle == "river#2210");
+        Assert.Equal("memory_search, web_fetch", updated.ToolsText);
+        Assert.False(updated.IsEditing);
+        Assert.Equal("river#2210 can now use memory_search, web_fetch.", Text(rig.Gateway.Notice));
+        Assert.False(rig.Gateway.Users[0].EditCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task RevokingTheOnlyOwnerIsRefusedInRed()
+    {
+        var rig = Build();
+        var owner = rig.Gateway.Users[0];
+
+        owner.AskRevokeCommand.Execute(null);
+        Assert.True(owner.IsConfirmingRevoke);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => owner.RevokeCommand.ExecuteAsync());
+
+        Assert.Equal(Tone.Red, rig.Gateway.NoticeTone);
+        Assert.Equal("That did not work: That is the only owner; pair another owner before revoking this one.", Text(rig.Gateway.Notice));
+        Assert.Equal(2, rig.Gateway.Users.Count);
+
+        await rig.Gateway.Users[1].RevokeCommand.ExecuteAsync();
+        Assert.Single(rig.Gateway.Users);
+        Assert.Equal("Revoked river#2210: their next message gets a new code.", Text(rig.Gateway.Notice));
+    }
+
+    [Fact]
+    public void TheCompositionBuildsGatewayOnTheDemoAndDisposesIt()
+    {
+        Assert.True(AppOptions.TryParse(["--page", "gateway"], out var options, out var error), error);
+        using var composition = new AppComposition(options, new InlineDispatcher(), ManualTimeProvider.DemoLocal());
+
+        Assert.Single(composition.Gateway.Requests);
+        Assert.Equal("telegram up · discord up · slack off", composition.StatusBar.Gateway);
+    }
+}

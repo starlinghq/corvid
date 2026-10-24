@@ -61,6 +61,12 @@ public sealed partial class AppComposition : IDisposable
     {
         _board?.Dispose();
         (_modelService as IDisposable)?.Dispose();
+        // A2 ops: the Jobs, MCP and Gateway view models and the demo services that follow the Board's.
+        _jobs?.Dispose();
+        _mcp?.Dispose();
+        _gateway?.Dispose();
+        (_mcpService as IDisposable)?.Dispose();
+        (_gatewayService as IDisposable)?.Dispose();
         SessionHub.Dispose();
         (SessionService as IDisposable)?.Dispose();
     }

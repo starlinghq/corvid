@@ -1,22 +1,431 @@
 <Page x:Class="Corvid.App.Pages.McpPage"
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:controls="using:Corvid.App.Controls"
+      xmlns:mcp="using:Corvid.App.Core.Mcp"
+      xmlns:models="using:Corvid.App.Core.Models"
+      xmlns:mvvm="using:Corvid.App.Core.Mvvm"
+      xmlns:local="using:Corvid.App.Pages"
+      xmlns:ui="using:Corvid.App.Infrastructure"
       Background="{ThemeResource CorvidBg}"
       Foreground="{ThemeResource CorvidText}"
       FontSize="13.5">
-  <!-- .page: the page head with the area's title, then the body. A placeholder until the area is built. -->
-  <Grid>
+  <!--
+    The MCP area (docs/plan/ui.md §4.10, F15; no mockup: drawn in the mocked pages' language). The head with the pins line
+    and Add a server…; the held definitions across the page, each with its diff against the pin (Review's side-by-side view,
+    which needs the width) and Accept, Allow or Keep blocked; then two columns (1.4fr and 1fr): the servers, and the selected
+    server with trust and forget, the tools it added with their pinned hashes, and corvid mcp serve. Up and Down move between servers, Esc closes
+    a question or the form.
+  -->
+  <Page.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="ms-appx:///Pages/ModelsStyles.xaml" />
+        <ResourceDictionary Source="ms-appx:///Pages/OpsStyles.xaml" />
+      </ResourceDictionary.MergedDictionaries>
+
+      <DataTemplate x:Key="FactTemplate" x:DataType="models:ModelFact">
+        <controls:WrapRowPanel Spacing="8" LineSpacing="4" AutomationProperties.Name="{x:Bind AutomationName}">
+          <TextBlock Text="{x:Bind Key}" Style="{StaticResource KvKey}" MinWidth="70" LineHeight="18" />
+          <TextBlock local:SpanText.Runs="{x:Bind Value}" Style="{StaticResource Cell}" LineHeight="18" />
+        </controls:WrapRowPanel>
+      </DataTemplate>
+    </ResourceDictionary>
+  </Page.Resources>
+
+  <Grid x:Name="Root">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto" />
       <RowDefinition Height="*" />
     </Grid.RowDefinitions>
-    <Border Style="{StaticResource CorvidPageHead}">
-      <TextBlock Text="{x:Bind ViewModel.Title}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
-                 AutomationProperties.HeadingLevel="Level1" />
+
+    <Border x:Name="HeadHost" Style="{StaticResource CorvidPageHead}">
+      <Grid ColumnSpacing="12">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <controls:WrapRowPanel x:Name="HeadTitle" Spacing="12" LineSpacing="12" VerticalAlignment="Center">
+          <TextBlock Text="{x:Bind ViewModel.Title}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
+                     AutomationProperties.HeadingLevel="Level1" />
+          <TextBlock local:SpanText.Runs="{x:Bind ViewModel.Subtitle, Mode=OneWay}" Style="{StaticResource CorvidMutedText}" VerticalAlignment="Center" />
+        </controls:WrapRowPanel>
+        <StackPanel x:Name="HeadButtons" Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <controls:CorvidButton Content="Add a server…" Command="{x:Bind ViewModel.AddServerCommand}"
+                                 ToolTipService.ToolTip="A command this machine runs, or an address; it starts with the next session" />
+        </StackPanel>
+      </Grid>
     </Border>
-    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-      <StackPanel Padding="24,18,24,18" Spacing="18" MaxWidth="960" HorizontalAlignment="Left">
-        <TextBlock Text="{x:Bind ViewModel.Summary}" Style="{StaticResource CorvidMutedText}" />
+
+    <ScrollViewer x:Name="BodyScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled" HorizontalScrollBarVisibility="Disabled">
+      <StackPanel x:Name="Body" Padding="24,18,24,18" Spacing="18">
+        <controls:ToneRow Tone="{x:Bind ViewModel.NoticeTone, Mode=OneWay}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasNotice), Mode=OneWay}"
+                          AutomationProperties.LiveSetting="Polite">
+          <Grid ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock local:SpanText.Runs="{x:Bind ViewModel.Notice, Mode=OneWay}" TextWrapping="Wrap" VerticalAlignment="Center"
+                       LineHeight="18.125" LineStackingStrategy="BlockLineHeight" />
+            <controls:CorvidButton Grid.Column="1" Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Dismiss"
+                                   Foreground="{ThemeResource CorvidText2}" Command="{x:Bind ViewModel.DismissNoticeCommand}" />
+          </Grid>
+        </controls:ToneRow>
+
+        <!-- Add a server: checked, then written to the configuration; it starts with the next session. -->
+        <Border Style="{StaticResource CorvidPanel}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsAdding), Mode=OneWay}">
+          <StackPanel>
+            <Border Style="{StaticResource PanelHead}">
+              <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                <TextBlock Text="Add a server" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                <TextBlock Text="its tools are pinned as it first lists them" Style="{StaticResource PanelNote}" />
+              </controls:WrapRowPanel>
+            </Border>
+            <Grid Padding="14,12" ColumnSpacing="12" RowSpacing="10">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+              </Grid.ColumnDefinitions>
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+              </Grid.RowDefinitions>
+              <TextBlock Text="name" Style="{StaticResource OpsLabel}" Margin="0,8,0,0" />
+              <Grid Grid.Column="1">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" MaxWidth="280" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="DraftNameBox" Style="{StaticResource FieldBox}" PlaceholderText="files"
+                       Text="{x:Bind ViewModel.DraftName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="Server name" />
+              </Grid>
+              <TextBlock Grid.Row="1" Text="transport" Style="{StaticResource OpsLabel}" Margin="0,4,0,0" />
+              <Border Grid.Row="1" Grid.Column="1" Height="24" HorizontalAlignment="Left" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1" CornerRadius="6">
+                <ItemsControl ItemsSource="{x:Bind ViewModel.Transports}" IsTabStop="False" AutomationProperties.Name="Transport">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                      <StackPanel Orientation="Horizontal" />
+                    </ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="mvvm:Choice">
+                      <controls:SegmentButton Content="{x:Bind Label}" IsChecked="{x:Bind IsSelected, Mode=OneWay}" Command="{x:Bind Choose}"
+                                              ToolTipService.ToolTip="{x:Bind Description}" AutomationProperties.HelpText="{x:Bind Description}" />
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </Border>
+              <TextBlock Grid.Row="2" Text="{x:Bind ViewModel.TargetLabel, Mode=OneWay}" Style="{StaticResource OpsLabel}" Margin="0,8,0,0" />
+              <Grid Grid.Row="2" Grid.Column="1">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" MaxWidth="520" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBox Style="{StaticResource FieldBox}"
+                       PlaceholderText="{x:Bind ViewModel.TargetPlaceholder, Mode=OneWay}"
+                       Text="{x:Bind ViewModel.DraftTarget, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="Command or address" />
+              </Grid>
+              <TextBlock Grid.Row="3" Text="trust" Style="{StaticResource OpsLabel}" Margin="0,2,0,0" />
+              <CheckBox Grid.Row="3" Grid.Column="1" Style="{StaticResource SetupCheckBox}" IsChecked="{x:Bind ViewModel.DraftTrusted, Mode=TwoWay}"
+                        AutomationProperties.Name="Trust this server">
+                <TextBlock Text="trusted: honour its hints. Untrusted (the default) asks before every call, and its results taint the session."
+                           Style="{StaticResource Cell}" />
+              </CheckBox>
+              <controls:ToneRow Grid.Row="4" Grid.ColumnSpan="2" Tone="Red" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasDraftWarning), Mode=OneWay}">
+                <TextBlock Text="{x:Bind ViewModel.DraftWarning, Mode=OneWay}" TextWrapping="Wrap" LineHeight="18.125" LineStackingStrategy="BlockLineHeight" />
+              </controls:ToneRow>
+              <StackPanel Grid.Row="5" Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Primary" Content="Check and add"
+                                       Command="{x:Bind ViewModel.SaveServerCommand}" />
+                <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Cancel"
+                                       Command="{x:Bind ViewModel.CancelAddCommand}" />
+              </StackPanel>
+            </Grid>
+          </StackPanel>
+        </Border>
+
+        <!-- The held definitions (F15): each with its diff against the pin. -->
+        <ItemsControl x:Name="HeldCards" ItemsSource="{x:Bind ViewModel.Held}" IsTabStop="False" AutomationProperties.Name="Held tools"
+                      Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasHeld), Mode=OneWay}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <StackPanel Spacing="18" />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="mcp:McpHeldViewModel">
+              <Border Style="{StaticResource CorvidPanel}">
+                <StackPanel>
+                  <Border Style="{StaticResource PanelHead}">
+                    <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                      <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="Auto" />
+                          <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <controls:Icon Kind="Plug" Width="15" Height="15" Foreground="{ThemeResource CorvidRed}" VerticalAlignment="Top" Margin="0,2,0,0" />
+                        <TextBlock Grid.Column="1" Text="{x:Bind Title}" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                      </Grid>
+                      <TextBlock Text="{x:Bind Note}" Style="{StaticResource PanelNote}" />
+                    </controls:WrapRowPanel>
+                  </Border>
+                  <StackPanel Padding="14,12" Spacing="10">
+                    <TextBlock local:SpanText.Runs="{x:Bind Why}" Style="{StaticResource PanelText}" />
+                    <controls:ToneRow Tone="Red" Visibility="{x:Bind ui:Ui.VisibleIf(HasHidden)}">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <controls:Icon Kind="Warning" Width="14" Height="14" Foreground="{ThemeResource CorvidRed}" VerticalAlignment="Top" Margin="0,2,0,0" />
+                        <TextBlock Text="{x:Bind HiddenWarning}" TextWrapping="Wrap" LineHeight="18.125" LineStackingStrategy="BlockLineHeight" />
+                      </StackPanel>
+                    </controls:ToneRow>
+                    <Border BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1" CornerRadius="8" Padding="0,4"
+                            Visibility="{x:Bind ui:Ui.VisibleIf(ShowDiff), Mode=OneWay}">
+                      <StackPanel>
+                        <Grid Padding="10,2,10,6" ColumnSpacing="8">
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                          </Grid.ColumnDefinitions>
+                          <TextBlock Text="pinned · now" Style="{StaticResource CellSmall}" />
+                          <TextBlock Grid.Column="1" Text="{x:Bind Counts}" Style="{StaticResource CellSmall}" FontFamily="{StaticResource CorvidMono}" />
+                        </Grid>
+                        <controls:SideBySideDiffView Rows="{x:Bind Rows}" UnifiedRows="{x:Bind UnifiedRows}"
+                                                     AutomationProperties.Name="{x:Bind local:McpPage.DiffName(Tool)}" />
+                      </StackPanel>
+                    </Border>
+                    <controls:WrapRowPanel Spacing="8" LineSpacing="8">
+                      <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Primary" Content="Accept" Command="{x:Bind AcceptCommand}"
+                                             Visibility="{x:Bind ui:Ui.VisibleIf(ShowAccept)}" AutomationProperties.Name="{x:Bind AcceptName}"
+                                             ToolTipService.ToolTip="Pin exactly this definition (its hash) and offer the tool from the next turn" />
+                      <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Content="Allow, asking every call" Command="{x:Bind AllowCommand}"
+                                             Visibility="{x:Bind ui:Ui.VisibleIf(ShowAllow)}" AutomationProperties.Name="{x:Bind AllowName}"
+                                             ToolTipService.ToolTip="Offer it as an untrusted server's tool: it asks before every call" />
+                      <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Keep blocked" Command="{x:Bind KeepBlockedCommand}"
+                                             Visibility="{x:Bind ui:Ui.CollapsedIf(KeptBlocked)}" AutomationProperties.Name="{x:Bind KeepName}"
+                                             ToolTipService.ToolTip="It stays held and is not offered; you can accept it later" />
+                      <controls:LinkButton Text="{x:Bind DiffToggleText, Mode=OneWay}" Command="{x:Bind ToggleDiffCommand}"
+                                           Visibility="{x:Bind ui:Ui.VisibleIf(KeptBlocked)}" />
+                      <TextBlock Text="{x:Bind local:McpPage.HashLine(HashText)}" Style="{StaticResource CellMuted}" FontFamily="{StaticResource CorvidMono}"
+                                 VerticalAlignment="Center" FontSize="12" />
+                    </controls:WrapRowPanel>
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+        <TextBlock Text="{x:Bind ViewModel.HeldMore, Mode=OneWay}" Style="{StaticResource CellMuted}"
+                   Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasHeldMore), Mode=OneWay}" />
+
+        <Grid x:Name="Columns" ColumnSpacing="18" RowSpacing="18">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="1.4*" />
+            <ColumnDefinition x:Name="RightColumn" Width="1*" />
+          </Grid.ColumnDefinitions>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+          </Grid.RowDefinitions>
+
+          <StackPanel Spacing="18">
+
+            <!-- Servers: transport, trust, state, the tools each added. -->
+            <Border Style="{StaticResource CorvidPanel}">
+              <StackPanel>
+                <Border Style="{StaticResource PanelHead}">
+                  <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                    <TextBlock Text="Servers" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                    <TextBlock Text="untrusted servers' tools ask before every call and taint the session" Style="{StaticResource PanelNote}" />
+                  </controls:WrapRowPanel>
+                </Border>
+                <ScrollViewer HorizontalScrollMode="Auto" HorizontalScrollBarVisibility="Auto" VerticalScrollMode="Disabled"
+                              VerticalScrollBarVisibility="Disabled" SizeChanged="OnTableSized">
+                  <StackPanel MinWidth="560" AutomationProperties.Name="Servers">
+                    <Grid>
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="1.3*" />
+                        <ColumnDefinition Width="84" />
+                        <ColumnDefinition Width="96" />
+                        <ColumnDefinition Width="100" />
+                        <ColumnDefinition Width="1*" />
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Text="server" Style="{StaticResource TableHead}" />
+                      <TextBlock Grid.Column="1" Text="transport" Style="{StaticResource TableHead}" />
+                      <TextBlock Grid.Column="2" Text="trust" Style="{StaticResource TableHead}" />
+                      <TextBlock Grid.Column="3" Text="state" Style="{StaticResource TableHead}" />
+                      <TextBlock Grid.Column="4" Text="tools" Style="{StaticResource TableHead}" />
+                    </Grid>
+                    <ItemsControl x:Name="ServerRows" ItemsSource="{x:Bind ViewModel.Servers}" IsTabStop="False" KeyDown="OnRowsKeyDown">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="mcp:McpServerRowViewModel">
+                          <Button Style="{StaticResource OpsRowButton}" Command="{x:Bind SelectCommand}" AutomationProperties.Name="{x:Bind AutomationName, Mode=OneWay}">
+                            <Grid BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,1,0,0">
+                              <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="1.3*" />
+                                <ColumnDefinition Width="84" />
+                                <ColumnDefinition Width="96" />
+                                <ColumnDefinition Width="100" />
+                                <ColumnDefinition Width="1*" />
+                              </Grid.ColumnDefinitions>
+                              <Border Grid.ColumnSpan="5" Background="{ThemeResource CorvidAccentBg}" Visibility="{x:Bind ui:Ui.VisibleIf(IsSelected), Mode=OneWay}" />
+                              <TextBlock Margin="10,5.5,10,8.5" Text="{x:Bind Name, Mode=OneWay}" Style="{StaticResource CellMono}" FontWeight="Medium" />
+                              <TextBlock Grid.Column="1" Margin="10,5.5,10,8.5" Text="{x:Bind Transport, Mode=OneWay}" Style="{StaticResource CellMuted}" />
+                              <controls:TagChip Grid.Column="2" Margin="10,7" HorizontalAlignment="Left" VerticalAlignment="Top"
+                                                Text="{x:Bind TrustText, Mode=OneWay}" Tone="{x:Bind TrustTone, Mode=OneWay}" />
+                              <controls:TagChip Grid.Column="3" Margin="10,7" HorizontalAlignment="Left" VerticalAlignment="Top"
+                                                Text="{x:Bind StateText, Mode=OneWay}" Tone="{x:Bind StateTone, Mode=OneWay}" />
+                              <controls:WrapRowPanel Grid.Column="4" Margin="10,5.5,10,8.5" Spacing="6" LineSpacing="4">
+                                <TextBlock Text="{x:Bind ToolsText, Mode=OneWay}" Style="{StaticResource Cell}" />
+                                <controls:TagChip Text="{x:Bind HeldText, Mode=OneWay}" Tone="Red" Visibility="{x:Bind ui:Ui.VisibleIf(HasHeld), Mode=OneWay}" />
+                              </controls:WrapRowPanel>
+                            </Grid>
+                          </Button>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </ScrollViewer>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+
+          <StackPanel x:Name="RightStack" Grid.Column="1" Spacing="18">
+            <!-- The selected server: what it runs, trust and forget. -->
+            <Border Style="{StaticResource CorvidPanel}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasSelection), Mode=OneWay}">
+              <StackPanel>
+                <Border Style="{StaticResource PanelHead}">
+                  <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                    <TextBlock Text="{x:Bind ViewModel.DetailTitle, Mode=OneWay}" Style="{StaticResource PanelTitle}" FontFamily="{StaticResource CorvidMono}"
+                               AutomationProperties.HeadingLevel="Level2" />
+                    <controls:TagChip Text="{x:Bind ViewModel.DetailTrust, Mode=OneWay}" Tone="{x:Bind ViewModel.DetailTrustTone, Mode=OneWay}" />
+                  </controls:WrapRowPanel>
+                </Border>
+                <StackPanel Padding="14,12" Spacing="12">
+                  <ItemsControl ItemsSource="{x:Bind ViewModel.Detail, Mode=OneWay}" IsTabStop="False" ItemTemplate="{StaticResource FactTemplate}">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate>
+                        <StackPanel Spacing="8" />
+                      </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                  </ItemsControl>
+                  <controls:WrapRowPanel Spacing="8" LineSpacing="8" Visibility="{x:Bind ui:Ui.VisibleIfBoth(ViewModel.IsNotConfirming, ViewModel.HasSelection), Mode=OneWay}">
+                    <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Content="Trust…" Command="{x:Bind ViewModel.AskTrustCommand}"
+                                           Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.CanTrust), Mode=OneWay}"
+                                           ToolTipService.ToolTip="Honour its hints; its results stop tainting the session. Asks first." />
+                    <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Content="Make untrusted" Command="{x:Bind ViewModel.UntrustCommand}"
+                                           Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.CanUntrust), Mode=OneWay}"
+                                           ToolTipService.ToolTip="Each of its calls asks, and its results taint the session" />
+                    <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Forget pins…" Foreground="{ThemeResource CorvidRed}"
+                                           Command="{x:Bind ViewModel.AskForgetCommand}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.CanForget), Mode=OneWay}"
+                                           ToolTipService.ToolTip="Its next start pins whatever it lists (trust on first use). Asks first." />
+                  </controls:WrapRowPanel>
+                  <controls:ToneRow Tone="Amber" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsConfirmingTrust), Mode=OneWay}">
+                    <StackPanel Spacing="8">
+                      <TextBlock local:SpanText.Runs="{x:Bind ViewModel.ConfirmText, Mode=OneWay}" TextWrapping="Wrap" LineHeight="18.125"
+                                 LineStackingStrategy="BlockLineHeight" />
+                      <TextBlock Text="{x:Bind ViewModel.ConfirmWarning, Mode=OneWay}" TextWrapping="Wrap" Foreground="{ThemeResource CorvidRed}"
+                                 Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasConfirmWarning), Mode=OneWay}" />
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <controls:CorvidButton x:Name="ConfirmTrustButton" Style="{StaticResource CorvidSmallButton}" Variant="Primary" Content="Trust"
+                                               Command="{x:Bind ViewModel.TrustCommand}" />
+                        <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Cancel"
+                                               Command="{x:Bind ViewModel.CancelConfirmCommand}" />
+                      </StackPanel>
+                    </StackPanel>
+                  </controls:ToneRow>
+                  <controls:ToneRow Tone="Red" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsConfirmingForget), Mode=OneWay}">
+                    <StackPanel Spacing="8">
+                      <TextBlock local:SpanText.Runs="{x:Bind ViewModel.ConfirmText, Mode=OneWay}" TextWrapping="Wrap" LineHeight="18.125"
+                                 LineStackingStrategy="BlockLineHeight" />
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <controls:CorvidButton x:Name="ConfirmForgetButton" Style="{StaticResource CorvidSmallButton}" Content="Forget pins"
+                                               Foreground="{ThemeResource CorvidRed}" Command="{x:Bind ViewModel.ForgetCommand}" />
+                        <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Cancel"
+                                               Command="{x:Bind ViewModel.CancelConfirmCommand}" />
+                      </StackPanel>
+                    </StackPanel>
+                  </controls:ToneRow>
+                </StackPanel>
+              </StackPanel>
+            </Border>
+
+            <!-- The tools the selected server added, with their pinned hashes. -->
+            <Border Style="{StaticResource CorvidPanel}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasSelection), Mode=OneWay}">
+              <StackPanel>
+                <Border Style="{StaticResource PanelHead}">
+                  <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                    <TextBlock Text="{x:Bind ViewModel.ToolsTitle, Mode=OneWay}" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                    <TextBlock Text="pinned hash" Style="{StaticResource PanelNote}" />
+                  </controls:WrapRowPanel>
+                </Border>
+                <ItemsControl ItemsSource="{x:Bind ViewModel.Tools, Mode=OneWay}" IsTabStop="False" AutomationProperties.Name="Tools">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="mcp:McpToolRowViewModel">
+                      <Grid Padding="14,7" ColumnSpacing="10" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,0,0,1"
+                            AutomationProperties.Name="{x:Bind AutomationName}">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="*" />
+                          <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="3">
+                          <TextBlock Text="{x:Bind Name}" Style="{StaticResource CellMono}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                          <controls:WrapRowPanel Spacing="8" LineSpacing="4">
+                            <controls:TagChip Text="{x:Bind StateText}" Tone="{x:Bind StateTone}" />
+                            <TextBlock Text="{x:Bind Hash}" Style="{StaticResource CellSmall}" FontFamily="{StaticResource CorvidMono}" VerticalAlignment="Center" />
+                          </controls:WrapRowPanel>
+                        </StackPanel>
+                        <controls:CorvidButton Grid.Column="1" Style="{StaticResource CorvidSmallButton}" Content="Review" VerticalAlignment="Center"
+                                               Command="{x:Bind ReviewCommand}" Visibility="{x:Bind ui:Ui.VisibleIf(IsHeld)}"
+                                               ToolTipService.ToolTip="Show its diff against the pin" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock Text="{x:Bind ViewModel.NoToolsText, Mode=OneWay}" Style="{StaticResource CellMuted}" Margin="14,10"
+                           Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.HasTools), Mode=OneWay}" />
+              </StackPanel>
+            </Border>
+
+            <!-- corvid mcp serve: Corvid as a server for another client. -->
+            <Border Style="{StaticResource CorvidPanel}">
+              <StackPanel>
+                <Border Style="{StaticResource PanelHead}">
+                  <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                    <TextBlock Text="corvid mcp serve" Style="{StaticResource PanelTitle}" FontFamily="{StaticResource CorvidMono}"
+                               AutomationProperties.HeadingLevel="Level2" />
+                    <controls:TagChip Text="{x:Bind ViewModel.ServeTag, Mode=OneWay}" Tone="Grey" />
+                  </controls:WrapRowPanel>
+                </Border>
+                <StackPanel Padding="14,12" Spacing="8">
+                  <TextBlock local:SpanText.Runs="{x:Bind ViewModel.Serve, Mode=OneWay}" Style="{StaticResource PanelText}" />
+                  <TextBlock Text="exposes" Style="{StaticResource KvKey}" />
+                  <ItemsControl ItemsSource="{x:Bind ViewModel.ServeExposes, Mode=OneWay}" IsTabStop="False">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate>
+                        <controls:WrapRowPanel Spacing="6" LineSpacing="6" />
+                      </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="x:String">
+                        <Border Background="{ThemeResource CorvidBg3}" CornerRadius="5" Padding="7,1">
+                          <TextBlock Text="{x:Bind}" FontFamily="{StaticResource CorvidMono}" FontSize="12" />
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </Grid>
       </StackPanel>
     </ScrollViewer>
   </Grid>

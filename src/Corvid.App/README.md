@@ -59,7 +59,9 @@ and `Space` open the focused row, `Ctrl+F` puts the caret in the "path or tool" 
 event again after a detection's link narrowed the log, then closes the open event. On Skills: `Ctrl+1` to `Ctrl+4` pick
 Review, Library, History and Import, `Ctrl+F` puts the caret in the filter (`Esc` there clears it), `Up` and `Down` in
 the library or the history open the next or previous row, `Esc` closes the open skill or commit; in a draft's editor
-`Ctrl+Enter` approves as edited and `Esc` undoes the edit, in a reason `Enter` rejects. The rest of the keyboard map
+`Ctrl+Enter` approves as edited and `Esc` undoes the edit, in a reason `Enter` rejects. On Jobs and MCP, `Up` and `Down`
+move between jobs or servers from a focused row and `Enter` opens it; on Jobs, MCP and Gateway, `Esc` closes an open
+question (remove, trust, forget, pair as owner, revoke), then the form or allowlist editor. The rest of the keyboard map
 (`docs/plan/ui.md` §6) comes with the screens it drives.
 
 ## The harness check
@@ -109,7 +111,9 @@ src/Corvid.App/
   Shell/                     ShellPage (the window's content), RailView, StatusBarView, AreaPages, IDockProvider,
                              EqualColumnsPanel
   Pages/                     one <Area>Page.xaml per area; SessionsDock and BoardDock are those areas' dock panels;
-                             ModelsStyles.xaml and SpanText are the Models and First run pages' shared parts
+                             ModelsStyles.xaml and SpanText are the Models and First run pages' shared parts;
+                             Jobs, MCP and Gateway also merge ModelsStyles.xaml, and share OpsStyles.xaml (row button,
+                             fields, pairing code) and OpsLayout (head, columns, tables, focus after a change)
   Infrastructure/            UiDispatcher (the core's IDispatcher), Ui (x:Bind helpers), AppLogging
 src/Corvid.App.Core/
   Mvvm/                      ObservableObject, RelayCommand(<T>), AsyncRelayCommand, Choice, IDispatcher, InlineDispatcher
