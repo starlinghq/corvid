@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Corvid audit and the egress ledger</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="corvid.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#8ab4f8}a:hover{color:#b3cdfb}
+</style>
+</helmet>
+<div class="app shell {{theme}}" style="height: 100vh; min-height: 720px; display: grid; grid-template-columns: 260px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 28px;">
+
+<nav class="rail" aria-label="Main">
+  <div class="brand">
+    <span class="logo" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M2 9c2-4 5-6 9-6l3 1-2 1c-1 3-3 5-6 6l-1 2-1-2H2z"/></svg></span>
+    <div style="flex: 1; min-width: 0;">
+      <div class="brand-name">Corvid</div>
+      <div class="muted small">corvid · main</div>
+    </div>
+    <button class="iconbtn" type="button" aria-label="Attention: 3 items waiting"><span class="ic"><svg viewBox="0 0 16 16"><path d="M4 11V7a4 4 0 0 1 8 0v4l1 1H3zM6.5 13.5a1.5 1.5 0 0 0 3 0"/></svg></span><span class="count">3</span></button>
+  </div>
+  <ul class="nav">
+    <li><a href="Main.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><path d="M2.5 3.5h11v7h-7l-3 2.5v-2.5h-1z"/></svg></span>Sessions<span class="badge">2</span></a></li>
+    <li><a href="Board.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><path d="M2.5 2.5h4v6h-4zM9.5 2.5h4v3h-4zM9.5 8.5h4v5h-4zM2.5 11.5h4v2h-4z"/></svg></span>Board</a></li>
+    <li><a href="Review.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><path d="M4 2.5v11M2 6h4M10 2.5v11M12 10H8"/></svg></span>Review<span class="badge">3</span></a></li>
+    <li><a href="Memory.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><path d="M8 2.5l5.5 3L8 8.5l-5.5-3zM2.5 8.5L8 11.5l5.5-3M2.5 11L8 14l5.5-3"/></svg></span>Memory<span class="badge">1</span></a></li>
+    <li><a href="#skills"><span class="ic"><svg viewBox="0 0 16 16"><path d="M8 2l1.5 4L14 7.5 9.5 9 8 13 6.5 9 2 7.5 6.5 6z"/></svg></span>Skills</a></li>
+    <li><a href="#jobs"><span class="ic"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 5v3l2 1.5"/></svg></span>Jobs</a></li>
+    <li><a href="Models.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5"/><path d="M6.5 1.5v2.5M9.5 1.5v2.5M6.5 12v2.5M9.5 12v2.5M1.5 6.5H4M1.5 9.5H4M12 6.5h2.5M12 9.5h2.5"/></svg></span>Models</a></li>
+    <li><a href="#safety"><span class="ic"><svg viewBox="0 0 16 16"><path d="M8 1.5l5 2v4c0 3-2.2 5.3-5 6.5-2.8-1.2-5-3.5-5-6.5v-4z"/></svg></span>Safety<span class="badge">1</span></a></li>
+    <li><a href="#mcp"><span class="ic"><svg viewBox="0 0 16 16"><path d="M5 2v4M11 2v4M3.5 6h9v2a4.5 4.5 0 0 1-9 0zM8 12.5V15"/></svg></span>MCP<span class="badge">1</span></a></li>
+    <li><a href="#gateway"><span class="ic"><svg viewBox="0 0 16 16"><path d="M14 2L2 7l5 2 2 5z"/></svg></span>Gateway</a></li>
+    <li><a href="#secrets"><span class="ic"><svg viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg></span>Secrets</a></li>
+    <li><a href="Audit.dc.html" aria-current="page"><span class="ic"><svg viewBox="0 0 16 16"><path d="M3 3h10M3 6.5h10M3 10h6M3 13.5h4"/></svg></span>Audit</a></li>
+  </ul>
+  <div class="section-title">Pinned</div>
+  <ul class="sessions">
+    <li><a href="Main.dc.html"><span class="dot run"></span><span class="name">Fix the flaky sandbox test on CI</span><span class="muted small">12 s</span></a></li>
+  </ul>
+  <div class="section-title">Recent</div>
+  <ul class="sessions">
+    <li><a href="#s2"><span class="dot run"></span><span class="name">Draft release notes for v0.2</span><span class="muted small">2 m</span></a></li>
+    <li><a href="#s3"><span class="dot"></span><span class="name">Vault policy for ntfy</span><span class="muted small">1 h</span></a></li>
+    <li><a href="#s4"><span class="dot job"></span><span class="name">nightly-tidy run</span><span class="muted small">09:00</span></a></li>
+  </ul>
+  <div class="rail-foot"><a href="FirstRun.dc.html">Settings</a><a href="FirstRun.dc.html">Doctor</a></div>
+</nav>
+
+<main class="page">
+  <header class="page-head">
+    <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+      <h1>Audit</h1>
+      <label class="sr" for="aud-session">Session</label>
+      <select id="aud-session" class="select"><option selected="selected">cli-9f2e · Fix the flaky sandbox test on CI</option><option>cli-a410 · Draft release notes for v0.2</option><option>whole log</option></select>
+      <span class="muted small">1,214 events · append-only · <span class="mono">~/.local/share/corvid/events.db</span></span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <button class="btn" type="button">Scan · fail on high</button>
+      <button class="btn" type="button">Export trace…</button>
+    </div>
+  </header>
+
+  <div class="page-body" style="display: grid; grid-template-columns: 200px minmax(0, 1.3fr) minmax(0, 1fr); gap: 18px; align-content: start;">
+    <div class="panel" style="align-self: start;">
+      <div class="panel-head"><span>Filter</span><button class="linkbtn" type="button">reset</button></div>
+      <div class="panel-body" style="display: flex; flex-direction: column; gap: 6px; font-size: 12.5px;">
+        <label class="radio"><input type="checkbox" checked="checked"><span>messages</span></label>
+        <label class="radio"><input type="checkbox" checked="checked"><span>tool calls and results</span></label>
+        <label class="radio"><input type="checkbox" checked="checked"><span>approvals</span></label>
+        <label class="radio"><input type="checkbox" checked="checked"><span>decisions</span></label>
+        <label class="radio"><input type="checkbox" checked="checked"><span>model switches</span></label>
+        <label class="radio"><input type="checkbox" checked="checked"><span>detections</span></label>
+        <label class="radio"><input type="checkbox"><span>checkpoints</span></label>
+        <label class="radio"><input type="checkbox"><span>memory and skills</span></label>
+        <label class="radio"><input type="checkbox"><span>compaction</span></label>
+        <div class="muted small" style="margin-top: 6px;">path or tool</div>
+        <label class="sr" for="aud-path">Path or tool filter</label>
+        <input id="aud-path" class="select" type="text" placeholder="e.g. web_fetch" style="width: 100%;">
+      </div>
+    </div>
+
+    <div class="panel" style="min-width: 0;">
+      <div class="panel-head"><span>Events</span><span class="muted small">newest first · any transcript row jumps here</span></div>
+      <table class="table" aria-label="Events">
+        <thead><tr><th>seq</th><th>time</th><th>type</th><th>summary</th></tr></thead>
+        <tbody>
+          <tr><td class="mono muted">1203</td><td class="muted">14:04:12</td><td><span class="mono">approval_requested</span></td><td>a-32 · shell <span class="mono">rm -rf build/ &amp;&amp; dotnet test</span> · risk 3</td></tr>
+          <tr><td class="mono muted">1202</td><td class="muted">14:04:12</td><td><span class="mono">decision</span></td><td>pre-execute · risk → 3, ask (0.86) · Kev-0.8B · catalogue 2026-10-21</td></tr>
+          <tr><td class="mono muted">1201</td><td class="muted">14:04:11</td><td><span class="mono">tool_call_issued</span></td><td>call-9 · shell · round 2</td></tr>
+          <tr><td class="mono muted">1196</td><td class="muted">14:03:58</td><td><span class="mono">tool_result</span></td><td>call-8 · patch_file · ok · scrubbed: 0</td></tr>
+          <tr class="sel"><td class="mono muted">1194</td><td class="muted">14:03:52</td><td><span class="mono">model_switched</span></td><td>generator · qwen3.5-0.8b → claude · step budget · <a href="#egress">request 7 in the egress ledger</a></td></tr>
+          <tr><td class="mono muted">1191</td><td class="muted">14:03:50</td><td><span class="mono">approval_resolved</span></td><td>a-31 · denied by you · "not from a tainted session"</td></tr>
+          <tr style="color: var(--red);"><td class="mono">1190</td><td>14:03:49</td><td><span class="mono">detection_matched</span></td><td><span class="mono">credential-read-then-egress</span> v3 · high · enforce → forced an ask · events 1182, 1189</td></tr>
+          <tr><td class="mono muted">1189</td><td class="muted">14:03:49</td><td><span class="mono">tool_call_issued</span></td><td>call-7 · web_fetch · POST https://hooks.example.org/ci · tainted</td></tr>
+          <tr><td class="mono muted">1182</td><td class="muted">14:03:31</td><td><span class="mono">tool_result</span></td><td>call-5 · shell <span class="mono">printenv</span> · ok · scrubbed: 1 value (<span class="mono">[secret:github.token]</span>)</td></tr>
+          <tr><td class="mono muted">1180</td><td class="muted">14:03:30</td><td><span class="mono">tool_call_issued</span></td><td>call-5 · shell · <span class="mono">printenv</span> · approved once</td></tr>
+          <tr><td class="mono muted">1177</td><td class="muted">14:03:12</td><td><span class="mono">tool_result</span></td><td>call-4 · web_fetch · docs.example.org · 48 KB · taints the session</td></tr>
+          <tr><td class="mono muted">1170</td><td class="muted">14:02:40</td><td><span class="mono">compacted</span></td><td>events 912 to 1104 · goal kept · 3 decisions · 2 open questions · summarizer qwen3.5-0.8b · 2 chunks</td></tr>
+          <tr><td class="mono muted">1168</td><td class="muted">14:01:05</td><td><span class="mono">user_message</span></td><td>the sandbox test fails on CI only…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 14px; min-width: 0;" id="egress">
+      <div class="panel">
+        <div class="panel-head"><span>Egress ledger · request 7 → claude</span><span class="tag violet">cloud</span></div>
+        <div class="panel-body" style="display: flex; flex-direction: column; gap: 8px;">
+          <div class="kv"><span class="k">when</span><span>14:03:52 · turn 12, step 3</span></div>
+          <div class="kv"><span class="k">model</span><span class="mono">claude-opus-5-5</span><span class="muted">via Vault <span class="mono">anthropic.key</span>, api.anthropic.com</span></div>
+          <div class="kv"><span class="k">sent</span><span>38.2 KB · 9,410 tokens · cached prefix 6,120</span></div>
+          <div class="kv"><span class="k">redacted</span><span><span class="tag amber">2 values</span> one email address, one credential (the <span class="mono">printenv</span> result)</span></div>
+          <div class="sect-head" style="margin-top: 4px;"><span>As sent, after the gate</span><span class="muted">excerpt</span></div>
+<pre class="tail" style="margin: 0; max-height: 170px;">[tool_result call-5 shell printenv]
+HOME=/home/mark
+GH_TOKEN=[redacted:credential]
+GIT_AUTHOR_EMAIL=[redacted:email]
+CI=true
+…
+[user] the sandbox test fails on CI only. find out why and fix it
+without touching the production launcher.</pre>
+          <div style="display: flex; gap: 8px;"><button class="btn sm" type="button">Open as sent</button><button class="btn sm ghost" type="button">Copy</button><span class="muted small" style="margin-left: auto; align-self: center;">rendered by the same gate, on demand (G-9)</span></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><span style="color: var(--red);">Detection · credential-read-then-egress</span><span class="tag red">high · enforce</span></div>
+        <div class="panel-body" style="display: flex; flex-direction: column; gap: 8px;">
+          <div>A credential value was read (event 1182, <span class="mono">printenv</span>) and the next network call would have sent data out (event 1189, POST to hooks.example.org). The rule forced an ask; you denied it.</div>
+          <div class="kv"><span class="k">rule</span><span class="mono">credential-read-then-egress</span><span class="muted">v3 · built-in pack</span></div>
+          <div class="kv"><span class="k">events</span><a href="#e1182">1182</a><a href="#e1189">1189</a><a href="#e1190">1190</a></div>
+          <div class="kv"><span class="k">last scan</span><span>14:10 · 1 high, 0 medium · would exit 4 with <span class="mono">--fail-on high</span></span></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><span>Export</span><span class="muted small">Beacon JSONL</span></div>
+        <div class="panel-body" style="display: flex; flex-direction: column; gap: 8px; font-size: 12.5px;">
+          <label class="radio"><input type="radio" name="ret" checked="checked"><span>full content, secrets redacted, strings cut at 4 KiB</span></label>
+          <label class="radio"><input type="radio" name="ret"><span>metadata only: names, paths, commands and decisions</span></label>
+          <label class="radio"><input type="checkbox"><span>include local-only memory content</span></label>
+          <button class="btn sm" type="button" style="align-self: flex-start;">Write trace.jsonl (owner-only file)</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer class="statusbar">
+  <span><b>generator</b> claude <span>(escalated)</span> · cuda:0 · q0 · 410 ms</span>
+  <span><b>decider</b> Kev-0.8B, calibrated</span>
+  <span><b>detections</b> 1 high this session</span>
+  <span class="seg" role="group" aria-label="Approval mode"><button type="button" aria-pressed="false">manual</button><button type="button" aria-pressed="true">smart</button><button type="button" aria-pressed="false">permissive</button></span>
+  <span class="tag amber">tainted</span>
+  <span>cli-9f2e</span>
+  <span style="margin-left: auto;">log 1,214 events</span>
+</footer>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","default":"dark","options":["light","dark"],"section":"Look"},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { theme: this.props.theme ?? 'dark' };
+  }
+}
+</script>
+</body>
+</html>

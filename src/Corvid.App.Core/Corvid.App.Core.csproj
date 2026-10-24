@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>The windowed app's headless half (docs/plan/ui.md §8): view models, the fold from session updates to view state, per-area service contracts and their demo services. No Uno types, so it builds and tests without a display.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The checker's one package for this project: markdown from the model is parsed into a block model here, and the
+         head draws the blocks as native text (U-5), so HTML from a model never executes. -->
+    <PackageReference Include="Markdig" />
+    <InternalsVisibleTo Include="Corvid.App.Core.Tests" />
+  </ItemGroup>
+</Project>

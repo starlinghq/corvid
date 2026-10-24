@@ -1,0 +1,35 @@
+<Page x:Class="Corvid.App.Pages.RewindPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:controls="using:Corvid.App.Controls"
+      Background="{ThemeResource CorvidBg}"
+      Foreground="{ThemeResource CorvidText}"
+      FontSize="13.5">
+  <!-- .page: the page head with the area's title, then the body. A placeholder until the area is built. -->
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+    </Grid.RowDefinitions>
+    <Border Style="{StaticResource CorvidPageHead}">
+      <Grid ColumnSpacing="12" VerticalAlignment="Center">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <TextBlock Text="{x:Bind ViewModel.Title}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
+                   AutomationProperties.HeadingLevel="Level1" />
+        <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.SessionTitle, Mode=OneWay}" Style="{StaticResource CorvidMutedText}"
+                   TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+        <controls:LinkButton Grid.Column="2" Text="Back to the session" Command="{x:Bind ViewModel.BackToSessionCommand}"
+                             VerticalAlignment="Center" />
+      </Grid>
+    </Border>
+    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+      <StackPanel Padding="24,18,24,18" Spacing="18" MaxWidth="960" HorizontalAlignment="Left">
+        <TextBlock Text="{x:Bind ViewModel.Summary}" Style="{StaticResource CorvidMutedText}" />
+      </StackPanel>
+    </ScrollViewer>
+  </Grid>
+</Page>

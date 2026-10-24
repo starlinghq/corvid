@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Corvid review: changes with line comments</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="corvid.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#2f5fa8}a:hover{color:#1d4a8a}
+</style>
+</helmet>
+<div class="app shell {{theme}}" style="height: 100vh; min-height: 720px; display: grid; grid-template-columns: 260px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 28px;">
+
+<nav class="rail" aria-label="Main">
+  <div class="brand">
+    <span class="logo" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M2 9c2-4 5-6 9-6l3 1-2 1c-1 3-3 5-6 6l-1 2-1-2H2z"/></svg></span>
+    <div style="flex: 1; min-width: 0;">
+      <div class="brand-name">Corvid</div>
+      <div class="muted small">corvid · main</div>
+    </div>
+    <button class="iconbtn" type="button" aria-label="Attention: 3 items waiting"><span class="ic"><svg viewBox="0 0 16 16"><path d="M4 11V7a4 4 0 0 1 8 0v4l1 1H3zM6.5 13.5a1.5 1.5 0 0 0 3 0"/></svg></span><span class="count">3</span></button>
+  </div>
+  <ul class="nav">
+    <li><a href="Main.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><path d="M2.5 3.5h11v7h-7l-3 2.5v-2.5h-1z"/></svg></span>Sessions<span class="badge">2</span></a></li>
+    <li><a href="Board.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><path d="M2.5 2.5h4v6h-4zM9.5 2.5h4v3h-4zM9.5 8.5h4v5h-4zM2.5 11.5h4v2h-4z"/></svg></span>Board</a></li>
+    <li><a href="Review.dc.html" aria-current="page"><span class="ic"><svg viewBox="0 0 16 16"><path d="M4 2.5v11M2 6h4M10 2.5v11M12 10H8"/></svg></span>Review<span class="badge">3</span></a></li>
+    <li><a href="Memory.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><path d="M8 2.5l5.5 3L8 8.5l-5.5-3zM2.5 8.5L8 11.5l5.5-3M2.5 11L8 14l5.5-3"/></svg></span>Memory<span class="badge">1</span></a></li>
+    <li><a href="#skills"><span class="ic"><svg viewBox="0 0 16 16"><path d="M8 2l1.5 4L14 7.5 9.5 9 8 13 6.5 9 2 7.5 6.5 6z"/></svg></span>Skills</a></li>
+    <li><a href="#jobs"><span class="ic"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 5v3l2 1.5"/></svg></span>Jobs</a></li>
+    <li><a href="Models.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5"/><path d="M6.5 1.5v2.5M9.5 1.5v2.5M6.5 12v2.5M9.5 12v2.5M1.5 6.5H4M1.5 9.5H4M12 6.5h2.5M12 9.5h2.5"/></svg></span>Models</a></li>
+    <li><a href="#safety"><span class="ic"><svg viewBox="0 0 16 16"><path d="M8 1.5l5 2v4c0 3-2.2 5.3-5 6.5-2.8-1.2-5-3.5-5-6.5v-4z"/></svg></span>Safety</a></li>
+    <li><a href="#mcp"><span class="ic"><svg viewBox="0 0 16 16"><path d="M5 2v4M11 2v4M3.5 6h9v2a4.5 4.5 0 0 1-9 0zM8 12.5V15"/></svg></span>MCP<span class="badge">1</span></a></li>
+    <li><a href="#gateway"><span class="ic"><svg viewBox="0 0 16 16"><path d="M14 2L2 7l5 2 2 5z"/></svg></span>Gateway</a></li>
+    <li><a href="#secrets"><span class="ic"><svg viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg></span>Secrets</a></li>
+    <li><a href="Audit.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><path d="M3 3h10M3 6.5h10M3 10h6M3 13.5h4"/></svg></span>Audit</a></li>
+  </ul>
+  <div class="section-title">Pinned</div>
+  <ul class="sessions">
+    <li><a href="Main.dc.html"><span class="dot run"></span><span class="name">Fix the flaky sandbox test on CI</span><span class="muted small">12 s</span></a></li>
+  </ul>
+  <div class="section-title">Recent</div>
+  <ul class="sessions">
+    <li><a href="#s2"><span class="dot run"></span><span class="name">Draft release notes for v0.2</span><span class="muted small">2 m</span></a></li>
+    <li><a href="#s3"><span class="dot"></span><span class="name">Vault policy for ntfy</span><span class="muted small">1 h</span></a></li>
+    <li><a href="#s4"><span class="dot job"></span><span class="name">nightly-tidy run</span><span class="muted small">09:00</span></a></li>
+  </ul>
+  <div class="rail-foot"><a href="FirstRun.dc.html">Settings</a><a href="FirstRun.dc.html">Doctor</a></div>
+</nav>
+
+<main class="page">
+  <header class="page-head">
+    <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+      <h1>Review</h1>
+      <span class="muted">Fix the flaky sandbox test on CI</span>
+      <label class="sr" for="scope">Changes to review</label>
+      <select id="scope" class="select"><option>This turn (turn 12)</option><option selected="selected">Since last review (turn 11)</option><option>This session</option></select>
+    </div>
+    <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+      <span class="muted small">last review point: turn 11 · 2 comments sent at 14:02</span>
+      <button class="btn ghost" type="button">Unified</button>
+      <button class="btn" type="button" aria-pressed="true">Side by side</button>
+    </div>
+  </header>
+
+  <div class="page-body" style="display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 18px; align-content: start;">
+    <div class="panel" style="align-self: start;">
+      <div class="panel-head"><span>Files</span><span class="muted small">3 changed · +31 −9</span></div>
+      <ul class="files" style="padding: 6px;">
+        <li><span class="path mono">src/Corvid.Sandbox/BubblewrapSandbox.cs</span><span class="delta"><b class="add">+19</b> <b class="del">−5</b></span></li>
+        <li style="background: var(--accent-bg);"><span class="path mono">tests/Corvid.Sandbox.Tests/SeccompTests.cs</span><span class="delta"><b class="add">+9</b> <b class="del">−4</b></span></li>
+        <li><span class="path mono">.github/workflows/ci.yml</span><span class="delta"><b class="add">+3</b> <b class="del">−0</b></span></li>
+        <li class="off"><span class="path mono">vault.json</span><span class="small">not readable by Corvid</span></li>
+      </ul>
+      <div class="panel-body" style="border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px;">
+        <div class="sect-head" style="margin: 0;"><span>Checkpoints in range</span><span class="muted">c-41 to c-44</span></div>
+        <div class="muted small">Every file here is restorable from its checkpoint; a restore merges three ways with your own edits.</div>
+        <a href="Rewind.dc.html" class="btn sm" style="align-self: flex-start;">Open Rewind</a>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 12px; min-width: 0;">
+      <div class="diff">
+        <div class="diff-head">
+          <span class="mono">tests/Corvid.Sandbox.Tests/SeccompTests.cs</span>
+          <span style="display: flex; gap: 6px; align-items: center;"><span class="tag green">reversible · c-44</span><span class="muted">patch_file · turn 12</span></span>
+        </div>
+        <div class="diff-grid">
+          <div class="side" aria-label="Before">
+            <div class="dl"><span class="ln">41</span>    [Fact]</div>
+            <div class="dl"><span class="ln">42</span>    public async Task Unshare_user_namespace_is_refused_inside()</div>
+            <div class="dl"><span class="ln">43</span>    {</div>
+            <div class="dl del"><span class="ln">44</span>        // Control: the host itself can create a user namespace<span class="w">.</span></div>
+            <div class="dl"><span class="ln">45</span>        var control = await Run("unshare", "-U", "true");</div>
+            <div class="dl del"><span class="ln">46</span>        <span class="w">Assert.Equal(0, control.ExitCode);</span></div>
+            <div class="dl"><span class="ln">47</span></div>
+            <div class="dl"><span class="ln">48</span>        var inside = await Sandbox.RunAsync("unshare -U true");</div>
+            <div class="dl"><span class="ln">49</span>        Assert.NotEqual(0, inside.ExitCode);</div>
+            <div class="dl"><span class="ln">50</span>        Assert.Contains("Operation not permitted", inside.StandardError);</div>
+            <div class="dl"><span class="ln">51</span>    }</div>
+            <div class="dl gap"><span class="ln"></span></div>
+            <div class="dl gap"><span class="ln"></span></div>
+            <div class="dl gap"><span class="ln"></span></div>
+            <div class="dl gap"><span class="ln"></span></div>
+          </div>
+          <div class="side" aria-label="After">
+            <div class="dl"><span class="ln">41</span>    [Fact]</div>
+            <div class="dl"><span class="ln">42</span>    public async Task Unshare_user_namespace_is_refused_inside()</div>
+            <div class="dl"><span class="ln">43</span>    {</div>
+            <div class="dl add"><span class="ln">44</span>        // Control: the host itself can create a user namespace<span class="w">, unless the sysctl forbids it.</span></div>
+            <div class="dl"><span class="ln">45</span>        var control = await Run("unshare", "-U", "true");</div>
+            <div class="dl add"><span class="ln">46</span>        <span class="w">Assert.True(control.ExitCode == 0 || UserNamespacesAreOff(), control.StandardError);</span></div>
+            <div class="comment">
+              <div class="meta"><span>you · line 46 · draft</span><button class="linkbtn" type="button">remove</button></div>
+              <div>Keep the control strict on CI: when <span class="mono">CI=true</span> and the sysctl is off, fail with a clear message instead of passing, so a misconfigured runner stays visible.</div>
+            </div>
+            <div class="dl"><span class="ln">47</span></div>
+            <div class="dl"><span class="ln">48</span>        var inside = await Sandbox.RunAsync("unshare -U true");</div>
+            <div class="dl"><span class="ln">49</span>        Assert.NotEqual(0, inside.ExitCode);</div>
+            <div class="dl"><span class="ln">50</span>        Assert.Contains("Operation not permitted", inside.StandardError);</div>
+            <div class="dl"><span class="ln">51</span>    }</div>
+            <div class="dl add"><span class="ln">52</span></div>
+            <div class="dl add"><span class="ln">53</span>    private static bool UserNamespacesAreOff() =></div>
+            <div class="dl add"><span class="ln">54</span>        File.Exists("/proc/sys/kernel/unprivileged_userns_clone")</div>
+            <div class="dl add"><span class="ln">55</span>        &amp;&amp; File.ReadAllText("/proc/sys/kernel/unprivileged_userns_clone").Trim() == "0";</div>
+            <div class="comment">
+              <div class="meta"><span>you · line 54 · draft</span><button class="linkbtn" type="button">remove</button></div>
+              <div>Also treat <span class="mono">/proc/sys/user/max_user_namespaces == 0</span> as off. Arch sets that one, and the Debian sysctl is absent there.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+        <button class="btn primary" type="button">Send 2 comments</button>
+        <button class="btn" type="button">Ask about this file</button>
+        <button class="btn" type="button">Open in editor</button>
+        <button class="btn ghost danger" type="button">Revert this file to c-44</button>
+        <span class="muted small" style="margin-left: auto;">Comments go out as one message, quoting file and line. The next turn's diff shows against this review point.</span>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer class="statusbar">
+  <span><b>generator</b> claude <span>(escalated)</span> · cuda:0 · q0 · 410 ms</span>
+  <span><b>decider</b> Kev-0.8B, calibrated</span>
+  <span><b>ctx</b> 38%</span>
+  <span class="seg" role="group" aria-label="Approval mode"><button type="button" aria-pressed="false">manual</button><button type="button" aria-pressed="true">smart</button><button type="button" aria-pressed="false">permissive</button></span>
+  <span class="tag amber">tainted</span>
+  <span><b>scheduler</b> here · 2 jobs</span>
+  <span>main</span>
+  <span>cli-9f2e</span>
+  <span style="margin-left: auto;">idle</span>
+</footer>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","default":"light","options":["light","dark"],"section":"Look"},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { theme: this.props.theme ?? 'light' };
+  }
+}
+</script>
+</body>
+</html>

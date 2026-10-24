@@ -1,0 +1,8 @@
+{
+  "name": "corvid-ui-mockups",
+  "private": true,
+  "description": "Renders the windowed UI design's mockup artboards in headless Chromium.",
+  "type": "module",
+  "scripts": { "html": "python3 to-html.py", "render": "node render.mjs" },
+  "devDependencies": { "playwright": "1.56.1" }
+}

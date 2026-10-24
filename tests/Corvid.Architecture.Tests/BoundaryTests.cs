@@ -188,6 +188,40 @@ public sealed class BoundaryTests
     [InlineData("Corvid.Mcp", "Corvid.Http", "project", false)]
     [InlineData("Corvid.Acp", "Corvid.Mcp", "project", true)]
     [InlineData("Corvid.Http", "Corvid.Mcp", "project", true)]
+    // The windowed app (docs/plan/ui.md §8): the core takes Markdig and the contracts only; the engine sits on the composition
+    // root like a front end; Uno's packages stay in the head, even out of an adapter, which otherwise takes any package.
+    [InlineData("Corvid.App.Core", "Markdig", "package", true)]
+    [InlineData("Corvid.App.Core", "Corvid.Abstractions", "project", true)]
+    [InlineData("Corvid.App.Core", "Uno.WinUI", "package", false)]
+    [InlineData("Corvid.App.Core", "CommunityToolkit.Mvvm", "package", false)]
+    [InlineData("Corvid.App.Core", "Microsoft.Extensions.AI.Abstractions", "package", false)]
+    [InlineData("Corvid.App.Core", "Corvid.Kernel", "project", false)]
+    [InlineData("Corvid.App.Core", "Corvid.Host", "project", false)]
+    [InlineData("Corvid.App.Core", "Corvid.App.Engine", "project", false)]
+    [InlineData("Corvid.App.Core", "Corvid.App", "project", false)]
+    [InlineData("Corvid.App.Engine", "Corvid.Host", "project", true)]
+    [InlineData("Corvid.App.Engine", "Corvid.App.Core", "project", true)]
+    [InlineData("Corvid.App.Engine", "Corvid.Models.Starling", "project", true)]
+    [InlineData("Corvid.App.Engine", "Corvid.Mcp", "project", true)]
+    [InlineData("Corvid.App.Engine", "Markdig", "package", true)]
+    [InlineData("Corvid.App.Engine", "Microsoft.Extensions.Hosting", "package", true)]
+    [InlineData("Corvid.App.Engine", "Uno.WinUI", "package", false)]
+    [InlineData("Corvid.App.Engine", "Spectre.Console", "package", false)]
+    [InlineData("Corvid.App.Engine", "Corvid.App", "project", false)]
+    [InlineData("Corvid.App.Engine", "Corvid.Cli", "project", false)]
+    [InlineData("Corvid.App.Engine", "Corvid.Acp", "project", false)]
+    [InlineData("Corvid.Host", "Corvid.App.Engine", "project", false)]
+    [InlineData("Corvid.Host", "Corvid.App.Core", "project", false)]
+    [InlineData("Corvid.Host", "Uno.WinUI", "package", false)]
+    [InlineData("Corvid.Cli", "Corvid.App", "project", false)]
+    [InlineData("Corvid.Cli", "Corvid.App.Engine", "project", false)]
+    [InlineData("Corvid.Cli", "Corvid.App.Core", "project", false)]
+    [InlineData("Corvid.Acp", "Corvid.App.Engine", "project", false)]
+    [InlineData("Corvid.Kernel", "Corvid.App.Core", "project", false)]
+    [InlineData("Corvid.Kernel", "Uno.WinUI", "package", false)]
+    [InlineData("Corvid.Kernel", "Markdig", "package", false)]
+    [InlineData("Corvid.Models.Starling", "Uno.WinUI", "package", false)]
+    [InlineData("Corvid.Models.Starling", "Uno.Foundation", "package", false)]
     public void EnforcesLayerRules(string project, string dependency, string type, bool allowed)
     {
         using var assets = Assets(("net10.0", dependency, type));
@@ -195,6 +229,95 @@ public sealed class BoundaryTests
         Assert.Equal(allowed, errors.Count == 0);
         if (!allowed)
             Assert.Contains(dependency, Assert.Single(errors));
+    }
+
+    [Theory]
+    // Uno.Sdk's implicit packages in every target; the composition root only from the desktop target, through the engine.
+    [InlineData("net10.0-desktop", "Uno.WinUI", "package", true)]
+    [InlineData("net10.0-desktop", "Uno.WinUI.Runtime.Skia.X11", "package", true)]
+    [InlineData("net10.0-desktop", "SkiaSharp", "package", true)]
+    [InlineData("net10.0-desktop", "Microsoft.Extensions.Logging.Console", "package", true)]
+    [InlineData("net10.0-desktop", "Markdig", "package", true)]
+    [InlineData("net10.0-desktop", "Corvid.App.Core", "project", true)]
+    [InlineData("net10.0-desktop", "Corvid.Abstractions", "project", true)]
+    [InlineData("net10.0-desktop", "Corvid.App.Engine", "project", true)]
+    [InlineData("net10.0-desktop", "Corvid.Host", "project", true)]
+    [InlineData("net10.0-desktop", "Corvid.Kernel", "project", true)]
+    [InlineData("net10.0-desktop", "Corvid.Mcp", "project", true)]
+    [InlineData("net10.0-desktop", "Corvid.Models.Starling", "project", true)]
+    [InlineData("net10.0-desktop", "Microsoft.Extensions.Hosting", "package", true)]
+    [InlineData("net10.0-desktop/linux-x64", "Corvid.Host", "project", true)]
+    // No toolkit, MVUX, Uno.Extensions or Hot Design; nothing an Uno.Sdk WebAssembly head alone brings; no surface but the engine.
+    [InlineData("net10.0-desktop", "CommunityToolkit.Mvvm", "package", false)]
+    [InlineData("net10.0-desktop", "Uno.Toolkit.WinUI", "package", false)]
+    [InlineData("net10.0-desktop", "Uno.Themes.WinUI", "package", false)]
+    [InlineData("net10.0-desktop", "Uno.Extensions.Navigation", "package", false)]
+    [InlineData("net10.0-desktop", "Uno.Extensions.Reactive", "package", false)]
+    [InlineData("net10.0-desktop", "Uno.UI.HotDesign", "package", false)]
+    [InlineData("net10.0-desktop", "Uno.Fonts.OpenSans", "package", false)]
+    [InlineData("net10.0-desktop", "Microsoft.Windows.Compatibility", "package", false)]
+    [InlineData("net10.0-desktop", "Spectre.Console", "package", false)]
+    [InlineData("net10.0-desktop", "PreviouslyUnknown.Package", "package", false)]
+    [InlineData("net10.0-desktop", "Corvid.Cli", "project", false)]
+    [InlineData("net10.0-desktop", "Corvid.Acp", "project", false)]
+    [InlineData("net10.0-desktop", "Corvid.Vault", "project", false)]
+    [InlineData("net10.0-desktop", "Corvid.Sandbox.Launcher", "project", false)]
+    // The WebAssembly target runs attached: its own implicit packages and the core, never the engine or the host.
+    [InlineData("net10.0-browserwasm", "Uno.WinUI", "package", true)]
+    [InlineData("net10.0-browserwasm", "Uno.Wasm.Bootstrap", "package", true)]
+    [InlineData("net10.0-browserwasm", "Microsoft.Windows.Compatibility", "package", true)]
+    [InlineData("net10.0-browserwasm", "System.Security.Cryptography.Pkcs", "package", true)]
+    [InlineData("net10.0-browserwasm", "Corvid.App.Core", "project", true)]
+    [InlineData("net10.0-browserwasm", "Corvid.Abstractions", "project", true)]
+    [InlineData("net10.0-browserwasm", "Corvid.App.Engine", "project", false)]
+    [InlineData("net10.0-browserwasm", "Corvid.Host", "project", false)]
+    [InlineData("net10.0-browserwasm", "Corvid.Kernel", "project", false)]
+    [InlineData("net10.0-browserwasm", "Microsoft.Extensions.Hosting", "package", false)]
+    [InlineData("net10.0-browserwasm/browser-wasm", "Corvid.Host", "project", false)]
+    [InlineData("net10.0-browserwasm", "CommunityToolkit.Mvvm", "package", false)]
+    public void TheAppHeadReachesTheHostFromItsDesktopTargetOnly(string target, string dependency, string type, bool allowed)
+    {
+        using var assets = Assets((target, dependency, type));
+        var errors = BoundaryCheck.CheckAssets("Corvid.App", assets.RootElement);
+        Assert.Equal(allowed, errors.Count == 0);
+        if (!allowed)
+            Assert.Contains(dependency, Assert.Single(errors));
+    }
+
+    [Fact]
+    public void TheAppHeadResolvesWhatTheEngineBringsInItsDesktopTargetAlone()
+    {
+        // Starling reaches the head through the engine, the host and the adapter; the same graph in the browser target fails
+        // on every project and package the host brings.
+        static string Graph(string target) => $$"""
+            {
+              "targets": { "{{target}}": {
+                "Corvid.App.Core/1.0.0": { "type": "project", "dependencies": { "Markdig": "1.4.2" } },
+                "Corvid.App.Engine/1.0.0": { "type": "project", "dependencies": { "Corvid.Host": "1.0.0", "Corvid.App.Core": "1.0.0" } },
+                "Corvid.Host/1.0.0": { "type": "project", "dependencies": { "Corvid.Models.Starling": "1.0.0", "Microsoft.Extensions.Hosting": "10.0.13" } },
+                "Corvid.Models.Starling/1.0.0": { "type": "project", "dependencies": { "Starlings.Models.Qwen35": "0.3.0" } },
+                "Starlings.Models.Qwen35/0.3.0": { "type": "package", "dependencies": { "Microsoft.ML.OnnxRuntimeGenAI": "0.17.1" } },
+                "Microsoft.ML.OnnxRuntimeGenAI/0.17.1": { "type": "package" },
+                "Microsoft.Extensions.Hosting/10.0.13": { "type": "package" },
+                "Markdig/1.4.2": { "type": "package" },
+                "Uno.WinUI/6.7.135": { "type": "package" }
+              } },
+              "libraries": {
+                "Corvid.App.Core/1.0.0": { "msbuildProject": "../Corvid.App.Core/Corvid.App.Core.csproj" },
+                "Corvid.App.Engine/1.0.0": { "msbuildProject": "../Corvid.App.Engine/Corvid.App.Engine.csproj" },
+                "Corvid.Host/1.0.0": { "msbuildProject": "../Corvid.Host/Corvid.Host.csproj" },
+                "Corvid.Models.Starling/1.0.0": { "msbuildProject": "../Corvid.Models.Starling/Corvid.Models.Starling.csproj" }
+              }
+            }
+            """;
+        using var desktop = JsonDocument.Parse(Graph("net10.0-desktop"));
+        Assert.Empty(BoundaryCheck.CheckAssets("Corvid.App", desktop.RootElement));
+
+        using var browser = JsonDocument.Parse(Graph("net10.0-browserwasm"));
+        var errors = BoundaryCheck.CheckAssets("Corvid.App", browser.RootElement);
+        foreach (var refused in new[] { "Corvid.App.Engine", "Corvid.Host", "Corvid.Models.Starling", "Starlings.Models.Qwen35", "Microsoft.ML.OnnxRuntimeGenAI", "Microsoft.Extensions.Hosting" })
+            Assert.Contains(errors, error => error.Contains(refused + "/", StringComparison.Ordinal));
+        Assert.DoesNotContain(errors, error => error.Contains("Uno.WinUI", StringComparison.Ordinal) || error.Contains("Markdig", StringComparison.Ordinal));
     }
 
     [Fact]

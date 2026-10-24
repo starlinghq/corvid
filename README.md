@@ -335,8 +335,10 @@ exfiltration canary suite. The full list is in
 
 **Next:** the terminal UI redesign in [`docs/plan/tui.md`](docs/plan/tui.md). The mockups above and the rest in
 [`docs/plan/tui-mockups/`](docs/plan/tui-mockups/README.md) come from it. The plan has an inline renderer that never
-clears your scrollback by default, with fullscreen and screen-reader modes on one component model. The overall roadmap
-is [`docs/plan/corvid-agent.md`](docs/plan/corvid-agent.md), and Vault's is [`docs/plan/vault.md`](docs/plan/vault.md).
+clears your scrollback by default, with fullscreen and screen-reader modes on one component model. A windowed app on
+Uno Platform is designed in [`docs/plan/ui.md`](docs/plan/ui.md): its feature catalogue and flows, before any mockups.
+The overall roadmap is [`docs/plan/corvid-agent.md`](docs/plan/corvid-agent.md), and Vault's is
+[`docs/plan/vault.md`](docs/plan/vault.md).
 
 ## Build and test
 
@@ -354,7 +356,7 @@ Evaluation harnesses (replay, calibration, tool-calling) are described in [`eval
 
 | Directory | Contents |
 | --- | --- |
-| `docs/plan/` | the agent plan (`corvid-agent.md`), Vault (`vault.md`), and the TUI design (`tui.md`) with its mockups |
+| `docs/plan/` | the agent plan (`corvid-agent.md`), Vault (`vault.md`), the TUI design (`tui.md`) with its mockups, and the windowed UI design (`ui.md`) |
 | `docs/architecture.md` | how each built piece works, section by section |
 | `docs/spikes/`, `docs/research/` | measured spikes (S1 to S5) and the TUI research notes |
 | `src/Corvid.Abstractions` | dependency-free contracts: session events, `IEventLog`, `Envelope`, `IDecider`, `IExtractor`, `ITokenCounter` |

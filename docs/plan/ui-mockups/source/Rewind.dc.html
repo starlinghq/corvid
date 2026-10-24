@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Corvid rewind timeline</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="corvid.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#2f5fa8}a:hover{color:#1d4a8a}
+</style>
+</helmet>
+<div class="app shell {{theme}}" style="height: 100vh; min-height: 720px; display: grid; grid-template-columns: 260px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 28px;">
+
+<nav class="rail" aria-label="Main">
+  <div class="brand">
+    <span class="logo" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M2 9c2-4 5-6 9-6l3 1-2 1c-1 3-3 5-6 6l-1 2-1-2H2z"/></svg></span>
+    <div style="flex: 1; min-width: 0;">
+      <div class="brand-name">Corvid</div>
+      <div class="muted small">corvid · main</div>
+    </div>
+    <button class="iconbtn" type="button" aria-label="Attention: 3 items waiting"><span class="ic"><svg viewBox="0 0 16 16"><path d="M4 11V7a4 4 0 0 1 8 0v4l1 1H3zM6.5 13.5a1.5 1.5 0 0 0 3 0"/></svg></span><span class="count">3</span></button>
+  </div>
+  <ul class="nav">
+    <li><a href="Main.dc.html" aria-current="page"><span class="ic"><svg viewBox="0 0 16 16"><path d="M2.5 3.5h11v7h-7l-3 2.5v-2.5h-1z"/></svg></span>Sessions<span class="badge">2</span></a></li>
+    <li><a href="Board.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><path d="M2.5 2.5h4v6h-4zM9.5 2.5h4v3h-4zM9.5 8.5h4v5h-4zM2.5 11.5h4v2h-4z"/></svg></span>Board</a></li>
+    <li><a href="Review.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><path d="M4 2.5v11M2 6h4M10 2.5v11M12 10H8"/></svg></span>Review<span class="badge">3</span></a></li>
+    <li><a href="Memory.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><path d="M8 2.5l5.5 3L8 8.5l-5.5-3zM2.5 8.5L8 11.5l5.5-3M2.5 11L8 14l5.5-3"/></svg></span>Memory<span class="badge">1</span></a></li>
+    <li><a href="#skills"><span class="ic"><svg viewBox="0 0 16 16"><path d="M8 2l1.5 4L14 7.5 9.5 9 8 13 6.5 9 2 7.5 6.5 6z"/></svg></span>Skills</a></li>
+    <li><a href="#jobs"><span class="ic"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 5v3l2 1.5"/></svg></span>Jobs</a></li>
+    <li><a href="Models.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5"/><path d="M6.5 1.5v2.5M9.5 1.5v2.5M6.5 12v2.5M9.5 12v2.5M1.5 6.5H4M1.5 9.5H4M12 6.5h2.5M12 9.5h2.5"/></svg></span>Models</a></li>
+    <li><a href="#safety"><span class="ic"><svg viewBox="0 0 16 16"><path d="M8 1.5l5 2v4c0 3-2.2 5.3-5 6.5-2.8-1.2-5-3.5-5-6.5v-4z"/></svg></span>Safety</a></li>
+    <li><a href="#mcp"><span class="ic"><svg viewBox="0 0 16 16"><path d="M5 2v4M11 2v4M3.5 6h9v2a4.5 4.5 0 0 1-9 0zM8 12.5V15"/></svg></span>MCP<span class="badge">1</span></a></li>
+    <li><a href="#gateway"><span class="ic"><svg viewBox="0 0 16 16"><path d="M14 2L2 7l5 2 2 5z"/></svg></span>Gateway</a></li>
+    <li><a href="#secrets"><span class="ic"><svg viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg></span>Secrets</a></li>
+    <li><a href="Audit.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><path d="M3 3h10M3 6.5h10M3 10h6M3 13.5h4"/></svg></span>Audit</a></li>
+  </ul>
+  <div class="section-title">Pinned</div>
+  <ul class="sessions">
+    <li><a href="Main.dc.html" aria-current="true"><span class="dot"></span><span class="name">Fix the flaky sandbox test on CI</span><span class="muted small">idle</span></a></li>
+  </ul>
+  <div class="section-title">Recent</div>
+  <ul class="sessions">
+    <li><a href="#s2"><span class="dot run"></span><span class="name">Draft release notes for v0.2</span><span class="muted small">2 m</span></a></li>
+    <li><a href="#s3"><span class="dot"></span><span class="name">Vault policy for ntfy</span><span class="muted small">1 h</span></a></li>
+    <li><a href="#s4"><span class="dot job"></span><span class="name">nightly-tidy run</span><span class="muted small">09:00</span></a></li>
+  </ul>
+  <div class="rail-foot"><a href="FirstRun.dc.html">Settings</a><a href="FirstRun.dc.html">Doctor</a></div>
+</nav>
+
+<main class="page">
+  <header class="page-head">
+    <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+      <h1>Rewind</h1>
+      <span class="muted">Fix the flaky sandbox test on CI · 8 ledger entries</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <span class="muted small"><kbd>Esc</kbd> <kbd>Esc</kbd> on an empty composer opens this</span>
+      <a class="btn ghost" href="Main.dc.html">Back to the session</a>
+    </div>
+  </header>
+
+  <div class="page-body" style="display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 18px; align-content: start;">
+    <div class="panel">
+      <div class="panel-head"><span>Checkpoint ledger</span><span class="muted small">newest first · one entry per call</span></div>
+      <table class="table" aria-label="Checkpoint ledger">
+        <thead><tr><th>when</th><th>call</th><th>paths</th><th>change</th><th></th></tr></thead>
+        <tbody>
+          <tr><td class="muted">14:04</td><td><span class="mono">shell</span> rm -rf build/ &amp;&amp; dotnet test</td><td class="mono">build/</td><td><span class="tag amber">waiting on approval</span></td><td></td></tr>
+          <tr><td class="muted">14:03</td><td><span class="mono">patch_file</span> · c-42 → c-43</td><td class="mono">tests/Corvid.Sandbox.Tests/SeccompTests.cs</td><td><b class="add">+9</b> <b class="del">−4</b></td><td><button class="btn sm ghost" type="button">diff</button></td></tr>
+          <tr><td class="muted">14:02</td><td><span class="mono">patch_file</span> · c-40 → c-41</td><td class="mono">src/Corvid.Sandbox/BubblewrapSandbox.cs</td><td><b class="add">+19</b> <b class="del">−5</b></td><td><button class="btn sm ghost" type="button">diff</button></td></tr>
+          <tr class="sel"><td class="muted">13:59</td><td><span class="mono">write_file</span> · c-38 → c-39</td><td class="mono">.github/workflows/ci.yml</td><td><b class="add">+3</b> <b class="del">−0</b></td><td><button class="btn sm" type="button" aria-pressed="true">selected</button></td></tr>
+          <tr><td class="muted">13:52</td><td><span class="mono">patch_file</span> · c-36 → c-37</td><td class="mono">README.md</td><td><b class="add">+2</b> <b class="del">−1</b></td><td><button class="btn sm ghost" type="button">diff</button></td></tr>
+          <tr><td class="muted">13:41</td><td><span class="tag violet">restore</span> undo of turn 8 · c-35</td><td class="mono">2 put back, 1 merged</td><td class="muted">restore point</td><td><button class="btn sm ghost" type="button">details</button></td></tr>
+          <tr><td class="muted">13:30</td><td><span class="mono">shell</span> dotnet build · c-33 → c-34</td><td class="muted">no files changed</td><td class="muted">0</td><td></td></tr>
+          <tr><td class="muted">13:22</td><td><span class="mono">write_file</span> · c-31 → c-32</td><td class="mono">docs/notes.md</td><td><b class="add">+40</b> <b class="del">−0</b></td><td><button class="btn sm ghost" type="button">diff</button></td></tr>
+        </tbody>
+      </table>
+      <div class="panel-body muted small" style="border-top: 1px solid var(--line);">Every entry stays in the log after a restore. Audit keeps the full history; the transcript shows the session as it was at the restore point.</div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 14px; min-width: 0;">
+      <div class="panel">
+        <div class="panel-head"><span>Go back to before c-38 · turn 10, 13:59</span><span class="muted small">/rollback 4</span></div>
+        <div class="panel-body" style="display: flex; flex-direction: column; gap: 12px;">
+          <div>
+            <div class="sect-head"><span>Files put back</span><span class="muted">3</span></div>
+            <ul class="files">
+              <li><span class="path mono">.github/workflows/ci.yml</span><span class="delta">to c-38 · <b class="del">−3</b></span></li>
+              <li><span class="path mono">src/Corvid.Sandbox/BubblewrapSandbox.cs</span><span class="delta">to c-38 · <b class="del">−19</b> <b class="add">+5</b></span></li>
+              <li><span class="path mono">tests/Corvid.Sandbox.Tests/SeccompTests.cs</span><span class="delta">to c-38 · merge</span></li>
+            </ul>
+          </div>
+          <div class="row taint"><span class="ic"><svg viewBox="0 0 16 16"><path d="M8 2l6.5 11.5h-13zM8 6.5v3M8 11.8v.4"/></svg></span><span><span class="mono">SeccompTests.cs</span> was edited by you at 14:05, after c-43. The restore merges three ways and stops on a conflict rather than overwrite your edit.</span></div>
+          <div>
+            <div class="sect-head"><span>Conversation</span><span class="muted">turns 10 to 12</span></div>
+            <div class="muted small">Three turns leave the transcript. They stay in the log and in Audit, and the fork tree keeps a branch for them.</div>
+          </div>
+          <fieldset style="border: 0; padding: 0; margin: 0;">
+            <legend class="sect-head" style="padding: 0;">Restore</legend>
+            <label class="radio"><input type="radio" name="mode" checked="checked"><span><b>Files and conversation</b><span class="muted"> · the workspace and the transcript as they were at c-38</span></span></label>
+            <label class="radio"><input type="radio" name="mode"><span><b>Conversation only</b><span class="muted"> · keep the files, drop turns 10 to 12 from the context</span></span></label>
+            <label class="radio"><input type="radio" name="mode"><span><b>Files only</b><span class="muted"> · put the files back, keep the conversation</span></span></label>
+          </fieldset>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <button class="btn primary" type="button">Restore</button>
+            <button class="btn" type="button">Preview the full diff</button>
+            <a class="btn ghost" href="Main.dc.html">Cancel</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><span>Last restore · 13:41 · undo of turn 8</span><span class="tag green">done</span></div>
+        <div class="panel-body" style="display: flex; flex-direction: column; gap: 8px;">
+          <div class="toast"><span class="ic"><svg viewBox="0 0 16 16"><path d="M3 8.5l3 3 7-7"/></svg></span><span>restored 2 · merged 1 · refused 0 · restore checkpoint c-35</span></div>
+          <ul class="files">
+            <li><span class="path mono">src/Corvid.Cli/Chat/ChatRenderer.cs</span><span class="delta">restored</span></li>
+            <li><span class="path mono">tests/Corvid.Cli.Tests/RendererTests.cs</span><span class="delta">restored</span></li>
+            <li><span class="path mono">README.md</span><span class="delta">merged with your edit</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer class="statusbar">
+  <span><b>generator</b> qwen3.5-0.8b · cuda:0 · q0 · 180 ms</span>
+  <span><b>decider</b> Kev-0.8B, calibrated</span>
+  <span><b>ctx</b> 38%</span>
+  <span class="seg" role="group" aria-label="Approval mode"><button type="button" aria-pressed="false">manual</button><button type="button" aria-pressed="true">smart</button><button type="button" aria-pressed="false">permissive</button></span>
+  <span class="tag amber">tainted</span>
+  <span><b>scheduler</b> here · 2 jobs</span>
+  <span>main</span>
+  <span>cli-9f2e</span>
+  <span style="margin-left: auto;">idle</span>
+</footer>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","default":"light","options":["light","dark"],"section":"Look"},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { theme: this.props.theme ?? 'light' };
+  }
+}
+</script>
+</body>
+</html>

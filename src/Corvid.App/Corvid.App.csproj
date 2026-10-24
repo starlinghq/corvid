@@ -1,0 +1,45 @@
+<Project Sdk="Uno.Sdk">
+  <!--
+    The windowed Corvid (docs/plan/ui.md): the Uno single project. The Skia desktop target always builds; the WebAssembly
+    target only with -p:CorvidAppWasm=true, because it needs the wasm-tools workload (UNOWA0001), which CI does not
+    install. Uno.Sdk's version is pinned in global.json ("msbuild-sdks").
+  -->
+  <PropertyGroup>
+    <TargetFrameworks>net10.0-desktop</TargetFrameworks>
+    <TargetFrameworks Condition="'$(CorvidAppWasm)' == 'true'">$(TargetFrameworks);net10.0-browserwasm</TargetFrameworks>
+    <!-- Directory.Build.props gives every project net10.0; clearing it here makes this a multi-target outer build. -->
+    <TargetFramework />
+    <OutputType>Exe</OutputType>
+    <UnoSingleProject>true</UnoSingleProject>
+    <RootNamespace>Corvid.App</RootNamespace>
+
+    <ApplicationTitle>Corvid</ApplicationTitle>
+    <ApplicationId>com.starlinghq.corvid</ApplicationId>
+    <ApplicationDisplayVersion>0.2.0</ApplicationDisplayVersion>
+    <ApplicationVersion>1</ApplicationVersion>
+    <ApplicationPublisher>Corvid</ApplicationPublisher>
+    <Description>The windowed Corvid: the conversation, approvals, review and the rest of the kernel's evidence, on Uno Platform.</Description>
+
+    <!-- The Skia renderer on every target, so the desktop and the browser draw the same pixels. -->
+    <UnoFeatures>SkiaRenderer</UnoFeatures>
+    <!-- Inter and JetBrains Mono ship as assets (Assets/Fonts) and Inter is set as the default text font in Program.cs,
+         so Uno's Open Sans package is not needed. -->
+    <UnoDefaultFont>None</UnoDefaultFont>
+    <!-- Hot Design brings CommunityToolkit.Mvvm, Uno.Toolkit and Uno.Themes into the graph, which the app does not take
+         (the checker refuses them), and the in-app MCP endpoint is not wanted in a process that will host the engine. -->
+    <UnoDisableHotDesign>true</UnoDisableHotDesign>
+    <UnoDisableMCPSupport>true</UnoDisableMCPSupport>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Corvid.App.Core/Corvid.App.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(IsBrowserWasm)' == 'true'">
+    <!-- Security pins (Directory.Packages.props). Uno.Sdk gives a WebAssembly head Microsoft.Windows.Compatibility, which
+         resolves these at 10.0.12, a release with known advisories (NU1902, NU1903). Referencing the patched release
+         directly lifts the graph past them; NuGet audit stays on. The desktop graph has neither package. -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" />
+    <PackageReference Include="System.Security.Cryptography.Xml" />
+  </ItemGroup>
+</Project>

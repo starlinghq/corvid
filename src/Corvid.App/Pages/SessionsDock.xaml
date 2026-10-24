@@ -1,0 +1,236 @@
+<UserControl x:Class="Corvid.App.Pages.SessionsDock"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:Corvid.App.Controls"
+             xmlns:sessions="using:Corvid.App.Core.Sessions"
+             xmlns:local="using:Corvid.App.Pages"
+             xmlns:ui="using:Corvid.App.Infrastructure"
+             Foreground="{ThemeResource CorvidText}"
+             FontSize="13.5">
+  <!--
+    .dock: the tab strip (8px 10px, gap 2, a line below), then the selected panel's body (12px 14px, sections 14 apart)
+    with its actions at the bottom: Changes (this turn, the session, the context gauge; Open Review), Files, Tasks,
+    Decisions (each checkpoint's answers; Open in Audit), Context, Output and Session.
+  -->
+  <UserControl.Resources>
+    <!-- .sect-head: 12.5 px semibold, the detail muted on the right, 6 below. -->
+    <Style x:Key="SectTitle" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="12.5" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="TextWrapping" Value="NoWrap" />
+    </Style>
+    <Style x:Key="SectDetail" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="12.5" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="{ThemeResource CorvidText2}" />
+      <Setter Property="HorizontalAlignment" Value="Right" />
+      <Setter Property="TextWrapping" Value="NoWrap" />
+    </Style>
+
+    <!-- .files li: 5px 8px, radius 6; the path in mono cut at its start, the counts green and red. -->
+    <DataTemplate x:Key="FileRow" x:DataType="sessions:ChangedFileView">
+      <Grid Padding="8,5" CornerRadius="6" ColumnSpacing="10" AutomationProperties.Name="{x:Bind AutomationName}">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <TextBlock Text="{x:Bind local:SessionsDock.TrimPath(Path)}" FontFamily="{StaticResource CorvidMono}" FontSize="12.5" TextWrapping="NoWrap"
+                   Foreground="{ThemeResource CorvidText}" Visibility="{x:Bind ui:Ui.VisibleIf(IsReadable)}" ToolTipService.ToolTip="{x:Bind Path}" />
+        <TextBlock Text="{x:Bind local:SessionsDock.TrimPath(Path)}" FontFamily="{StaticResource CorvidMono}" FontSize="12.5" TextWrapping="NoWrap"
+                   Foreground="{ThemeResource CorvidText2}" Visibility="{x:Bind ui:Ui.CollapsedIf(IsReadable)}" ToolTipService.ToolTip="{x:Bind Path}" />
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center" Visibility="{x:Bind ui:Ui.VisibleIf(IsReadable)}">
+          <TextBlock Text="{x:Bind AddedText}" FontSize="12" FontWeight="SemiBold" Foreground="{ThemeResource CorvidGreen}" />
+          <TextBlock Text="{x:Bind RemovedText}" FontSize="12" FontWeight="SemiBold" Foreground="{ThemeResource CorvidRed}" />
+        </StackPanel>
+        <TextBlock Grid.Column="1" Text="{x:Bind Note}" FontSize="12" Foreground="{ThemeResource CorvidText2}" VerticalAlignment="Center"
+                   Visibility="{x:Bind ui:Ui.CollapsedIf(IsReadable)}" />
+      </Grid>
+    </DataTemplate>
+  </UserControl.Resources>
+
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+    <Border Padding="10,8,10,8" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,0,0,1">
+      <ItemsControl ItemsSource="{x:Bind ViewModel.Panels}" IsTabStop="False" AutomationProperties.Name="Panels">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate>
+            <controls:WrapRowPanel Spacing="2" LineSpacing="2" />
+          </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="sessions:SessionPanel">
+            <controls:DockTab Label="{x:Bind Label}" Badge="{x:Bind BadgeText, Mode=OneWay}" IsSelected="{x:Bind IsSelected, Mode=OneWay}"
+                              Command="{x:Bind Open}" AutomationProperties.Name="{x:Bind AutomationName, Mode=OneWay}" />
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </Border>
+
+    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+      <Grid Padding="14,12,14,12">
+        <!-- Changes: this turn, the session, the context. -->
+        <StackPanel Spacing="14" Visibility="{x:Bind local:SessionsDock.Is(ViewModel.SelectedPanel, 'Changes'), Mode=OneWay}">
+          <StackPanel Spacing="6">
+            <Grid>
+              <TextBlock Text="This turn" Style="{StaticResource SectTitle}" AutomationProperties.HeadingLevel="Level2" />
+              <TextBlock Text="{x:Bind ViewModel.Session.TurnFilesSummary, Mode=OneWay, FallbackValue=''}" Style="{StaticResource SectDetail}" />
+            </Grid>
+            <ItemsControl ItemsSource="{x:Bind ViewModel.Session.TurnFiles, Mode=OneWay}" ItemTemplate="{StaticResource FileRow}" IsTabStop="False" />
+            <TextBlock Text="No files changed this turn." Style="{StaticResource CorvidSmallText}" Margin="8,0"
+                       Visibility="{x:Bind local:SessionsDock.None(ViewModel.Session.TurnFiles), Mode=OneWay, FallbackValue=Visible}" />
+          </StackPanel>
+          <StackPanel Spacing="6">
+            <Grid>
+              <TextBlock Text="Session" Style="{StaticResource SectTitle}" AutomationProperties.HeadingLevel="Level2" />
+              <TextBlock Text="{x:Bind ViewModel.Session.SessionFilesSummary, Mode=OneWay, FallbackValue=''}" Style="{StaticResource SectDetail}" />
+            </Grid>
+            <ItemsControl ItemsSource="{x:Bind ViewModel.Session.SessionFiles, Mode=OneWay}" ItemTemplate="{StaticResource FileRow}" IsTabStop="False" />
+          </StackPanel>
+          <StackPanel Spacing="6" Visibility="{x:Bind ui:Ui.VisibleIfText(ViewModel.Session.ContextSummary), Mode=OneWay, FallbackValue=Collapsed}">
+            <Grid>
+              <TextBlock Text="Context" Style="{StaticResource SectTitle}" AutomationProperties.HeadingLevel="Level2" />
+              <TextBlock Text="{x:Bind ViewModel.Session.ContextSummary, Mode=OneWay, FallbackValue=''}" Style="{StaticResource SectDetail}" />
+            </Grid>
+            <controls:Meter Fraction="{x:Bind ViewModel.Session.ContextFraction, Mode=OneWay, FallbackValue=0}"
+                            IsWarning="{x:Bind ViewModel.Session.IsContextHigh, Mode=OneWay, FallbackValue=False}"
+                            AutomationProperties.Name="{x:Bind ViewModel.Session.ContextSummary, Mode=OneWay, FallbackValue=''}" />
+            <TextBlock Text="{x:Bind ViewModel.Session.ContextBreakdown, Mode=OneWay, FallbackValue=''}" Style="{StaticResource CorvidSmallText}" />
+          </StackPanel>
+        </StackPanel>
+
+        <!-- Files: the tree comes with the engine's file listing. -->
+        <TextBlock Text="{x:Bind local:SessionsDock.Label(ViewModel.Panels, 1), Mode=OneTime}" Style="{StaticResource CorvidSmallText}"
+                   Visibility="{x:Bind local:SessionsDock.Is(ViewModel.SelectedPanel, 'Files'), Mode=OneWay}" />
+
+        <!-- Tasks: the model's list, with each state in a mark and in words. -->
+        <StackPanel Spacing="2" Visibility="{x:Bind local:SessionsDock.Is(ViewModel.SelectedPanel, 'Tasks'), Mode=OneWay}">
+          <ItemsControl ItemsSource="{x:Bind ViewModel.Session.Tasks, Mode=OneWay}" IsTabStop="False">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="sessions:TaskView">
+                <Grid Padding="8,5" ColumnSpacing="10" AutomationProperties.Name="{x:Bind local:SessionsDock.TaskName(Text, StatusText)}">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Text="{x:Bind local:SessionsDock.TaskMark(IsDone, IsActive)}" FontFamily="{StaticResource CorvidMono}" FontSize="12.5"
+                             Foreground="{ThemeResource CorvidAccent}" VerticalAlignment="Top" />
+                  <TextBlock Grid.Column="1" Text="{x:Bind Text}" FontSize="12.5" TextWrapping="Wrap" Foreground="{ThemeResource CorvidText}"
+                             Visibility="{x:Bind ui:Ui.CollapsedIf(IsDone)}" />
+                  <TextBlock Grid.Column="1" Text="{x:Bind Text}" FontSize="12.5" TextWrapping="Wrap" Foreground="{ThemeResource CorvidText2}"
+                             TextDecorations="Strikethrough" Visibility="{x:Bind ui:Ui.VisibleIf(IsDone)}" />
+                  <TextBlock Grid.Column="2" Text="{x:Bind StatusText}" FontSize="12" Foreground="{ThemeResource CorvidText2}" VerticalAlignment="Top" />
+                </Grid>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <TextBlock Text="{x:Bind local:SessionsDock.Label(ViewModel.Panels, 2), Mode=OneTime}" Style="{StaticResource CorvidSmallText}"
+                     Visibility="{x:Bind local:SessionsDock.None(ViewModel.Session.Tasks), Mode=OneWay, FallbackValue=Visible}" />
+        </StackPanel>
+
+        <!-- Decisions: each checkpoint, newest first: "pre-execute · 14:04:12", "Kev-0.8B · 240 ms", its answers. -->
+        <StackPanel Spacing="14" Visibility="{x:Bind local:SessionsDock.Is(ViewModel.SelectedPanel, 'Decisions'), Mode=OneWay}">
+          <ItemsControl ItemsSource="{x:Bind ViewModel.Session.DecisionGroups, Mode=OneWay}" IsTabStop="False">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="sessions:DecisionGroupView">
+                <StackPanel Spacing="6" Margin="0,0,0,14">
+                  <Grid ColumnSpacing="8">
+                    <TextBlock Text="{x:Bind Header}" Style="{StaticResource SectTitle}" AutomationProperties.HeadingLevel="Level2" />
+                    <TextBlock Text="{x:Bind Detail}" Style="{StaticResource SectDetail}" />
+                  </Grid>
+                  <ItemsControl ItemsSource="{x:Bind Rows}" IsTabStop="False">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="sessions:DecisionRowView">
+                        <Grid Padding="8,5" ColumnSpacing="10" AutomationProperties.Name="{x:Bind AutomationName}">
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                          </Grid.ColumnDefinitions>
+                          <StackPanel Orientation="Horizontal" Spacing="4">
+                            <TextBlock Text="{x:Bind local:SessionsDock.Arrow(Question)}" FontSize="13.5" VerticalAlignment="Center" />
+                            <TextBlock Text="{x:Bind Answer}" FontFamily="{StaticResource CorvidMono}" FontSize="12.5" VerticalAlignment="Center"
+                                       Visibility="{x:Bind ui:Ui.VisibleIf(AnswerIsCode)}" />
+                            <TextBlock Text="{x:Bind Answer}" FontSize="13.5" FontWeight="SemiBold" Foreground="{ThemeResource CorvidAmber}" VerticalAlignment="Center"
+                                       Visibility="{x:Bind local:SessionsDock.AskVisible(IsAsk, AnswerIsCode)}" />
+                            <TextBlock Text="{x:Bind Answer}" FontSize="13.5" VerticalAlignment="Center"
+                                       Visibility="{x:Bind local:SessionsDock.PlainVisible(IsAsk, AnswerIsCode)}" />
+                          </StackPanel>
+                          <TextBlock Grid.Column="1" Text="{x:Bind Value}" FontSize="12" VerticalAlignment="Center" />
+                        </Grid>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <TextBlock Text="{x:Bind local:SessionsDock.Label(ViewModel.Panels, 3), Mode=OneTime}" Style="{StaticResource CorvidSmallText}"
+                     Visibility="{x:Bind local:SessionsDock.None(ViewModel.Session.DecisionGroups), Mode=OneWay, FallbackValue=Visible}" />
+          <TextBlock Text="{x:Bind ViewModel.Session.DecisionsNote, Mode=OneWay, FallbackValue=''}" Style="{StaticResource CorvidSmallText}" Margin="0,-14,0,0" />
+        </StackPanel>
+
+        <!-- Context: the gauge and what fills it. -->
+        <StackPanel Spacing="6" Visibility="{x:Bind local:SessionsDock.Is(ViewModel.SelectedPanel, 'Context'), Mode=OneWay}">
+          <Grid>
+            <TextBlock Text="Context" Style="{StaticResource SectTitle}" AutomationProperties.HeadingLevel="Level2" />
+            <TextBlock Text="{x:Bind ViewModel.Session.ContextSummary, Mode=OneWay, FallbackValue=''}" Style="{StaticResource SectDetail}" />
+          </Grid>
+          <controls:Meter Fraction="{x:Bind ViewModel.Session.ContextFraction, Mode=OneWay, FallbackValue=0}"
+                          IsWarning="{x:Bind ViewModel.Session.IsContextHigh, Mode=OneWay, FallbackValue=False}"
+                          AutomationProperties.Name="{x:Bind ViewModel.Session.ContextSummary, Mode=OneWay, FallbackValue=''}" />
+          <TextBlock Text="{x:Bind ViewModel.Session.ContextBreakdown, Mode=OneWay, FallbackValue=''}" Style="{StaticResource CorvidSmallText}" />
+          <TextBlock Text="{x:Bind local:SessionsDock.Label(ViewModel.Panels, 4), Mode=OneTime}" Style="{StaticResource CorvidSmallText}"
+                     Visibility="{x:Bind local:SessionsDock.NoText(ViewModel.Session.ContextSummary), Mode=OneWay, FallbackValue=Visible}" />
+        </StackPanel>
+
+        <!-- Output: the chosen (or latest) call's full output. -->
+        <StackPanel Spacing="8" Visibility="{x:Bind local:SessionsDock.Is(ViewModel.SelectedPanel, 'Output'), Mode=OneWay}">
+          <TextBlock Text="{x:Bind ViewModel.Session.OutputTitle, Mode=OneWay, FallbackValue=''}" FontFamily="{StaticResource CorvidMono}" FontSize="12.5"
+                     FontWeight="Medium" TextTrimming="CharacterEllipsis" AutomationProperties.HeadingLevel="Level2" />
+          <Border Padding="10,8" CornerRadius="6" Background="{ThemeResource CorvidCodeBg}"
+                  Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.Session.HasOutput), Mode=OneWay, FallbackValue=Collapsed}">
+            <ScrollViewer HorizontalScrollBarVisibility="Auto" HorizontalScrollMode="Auto" VerticalScrollBarVisibility="Disabled">
+              <TextBlock Text="{x:Bind ViewModel.Session.OutputText, Mode=OneWay, FallbackValue=''}" Style="{StaticResource CorvidMonoText}" FontSize="12"
+                         LineHeight="18" TextWrapping="NoWrap" IsTextSelectionEnabled="True" />
+            </ScrollViewer>
+          </Border>
+          <TextBlock Text="{x:Bind local:SessionsDock.Label(ViewModel.Panels, 5), Mode=OneTime}" Style="{StaticResource CorvidSmallText}"
+                     Visibility="{x:Bind local:SessionsDock.Not(ViewModel.Session.HasOutput), Mode=OneWay, FallbackValue=Visible}" />
+        </StackPanel>
+
+        <!-- Session: its facts, label and value. -->
+        <ItemsControl ItemsSource="{x:Bind ViewModel.Session.Facts, Mode=OneWay}" IsTabStop="False"
+                      Visibility="{x:Bind local:SessionsDock.Is(ViewModel.SelectedPanel, 'Session'), Mode=OneWay}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="sessions:SessionFact">
+              <Grid Padding="0,4" ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="104" />
+                  <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{x:Bind Label}" FontSize="12.5" Foreground="{ThemeResource CorvidText2}" />
+                <TextBlock Grid.Column="1" Text="{x:Bind Value}" FontSize="12.5" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+              </Grid>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </Grid>
+    </ScrollViewer>
+
+    <!-- .dock-actions: at the bottom of the body. -->
+    <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8" Padding="14,0,14,12"
+                Visibility="{x:Bind local:SessionsDock.Is(ViewModel.SelectedPanel, 'Changes'), Mode=OneWay}">
+      <controls:CorvidButton Content="Open Review" Foreground="{ThemeResource CorvidAccent}" Command="{x:Bind ViewModel.Session.OpenReviewCommand, Mode=OneWay, FallbackValue={x:Null}}" />
+      <controls:CorvidButton Content="Send comments (0)" Variant="Ghost" IsEnabled="False" ToolTipService.ToolTip="Comments are written in Review" />
+    </StackPanel>
+    <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8" Padding="14,0,14,12"
+                Visibility="{x:Bind local:SessionsDock.Is(ViewModel.SelectedPanel, 'Decisions'), Mode=OneWay}">
+      <controls:CorvidButton Content="Open in Audit" Foreground="{ThemeResource CorvidAccent}" Command="{x:Bind ViewModel.Session.OpenAuditCommand, Mode=OneWay, FallbackValue={x:Null}}" />
+      <controls:CorvidButton Content="Export decisions" Variant="Ghost" IsEnabled="False" ToolTipService.ToolTip="Export comes with Audit" />
+    </StackPanel>
+  </Grid>
+</UserControl>

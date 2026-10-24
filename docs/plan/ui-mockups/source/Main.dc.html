@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Corvid session, Work layout</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="corvid.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#2f5fa8}a:hover{color:#1d4a8a}
+</style>
+</helmet>
+<div class="app shell {{theme}}" style="height: 100vh; min-height: 720px; display: grid; grid-template-columns: 260px minmax(0, 1fr) 380px; grid-template-rows: minmax(0, 1fr) 28px;">
+
+<nav class="rail" aria-label="Main">
+  <div class="brand">
+    <span class="logo" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M2 9c2-4 5-6 9-6l3 1-2 1c-1 3-3 5-6 6l-1 2-1-2H2z"/></svg></span>
+    <div style="flex: 1; min-width: 0;">
+      <div class="brand-name">Corvid</div>
+      <div class="muted small">corvid · main</div>
+    </div>
+    <button class="iconbtn" type="button" aria-label="Attention: 3 items waiting"><span class="ic"><svg viewBox="0 0 16 16"><path d="M4 11V7a4 4 0 0 1 8 0v4l1 1H3zM6.5 13.5a1.5 1.5 0 0 0 3 0"/></svg></span><span class="count">3</span></button>
+  </div>
+  <ul class="nav">
+    <li><a href="Main.dc.html" aria-current="page"><span class="ic"><svg viewBox="0 0 16 16"><path d="M2.5 3.5h11v7h-7l-3 2.5v-2.5h-1z"/></svg></span>Sessions<span class="badge">2</span></a></li>
+    <li><a href="Board.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><path d="M2.5 2.5h4v6h-4zM9.5 2.5h4v3h-4zM9.5 8.5h4v5h-4zM2.5 11.5h4v2h-4z"/></svg></span>Board</a></li>
+    <li><a href="Review.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><path d="M4 2.5v11M2 6h4M10 2.5v11M12 10H8"/></svg></span>Review<span class="badge">3</span></a></li>
+    <li><a href="Memory.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><path d="M8 2.5l5.5 3L8 8.5l-5.5-3zM2.5 8.5L8 11.5l5.5-3M2.5 11L8 14l5.5-3"/></svg></span>Memory<span class="badge">1</span></a></li>
+    <li><a href="#skills"><span class="ic"><svg viewBox="0 0 16 16"><path d="M8 2l1.5 4L14 7.5 9.5 9 8 13 6.5 9 2 7.5 6.5 6z"/></svg></span>Skills</a></li>
+    <li><a href="#jobs"><span class="ic"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 5v3l2 1.5"/></svg></span>Jobs</a></li>
+    <li><a href="Models.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5"/><path d="M6.5 1.5v2.5M9.5 1.5v2.5M6.5 12v2.5M9.5 12v2.5M1.5 6.5H4M1.5 9.5H4M12 6.5h2.5M12 9.5h2.5"/></svg></span>Models</a></li>
+    <li><a href="#safety"><span class="ic"><svg viewBox="0 0 16 16"><path d="M8 1.5l5 2v4c0 3-2.2 5.3-5 6.5-2.8-1.2-5-3.5-5-6.5v-4z"/></svg></span>Safety</a></li>
+    <li><a href="#mcp"><span class="ic"><svg viewBox="0 0 16 16"><path d="M5 2v4M11 2v4M3.5 6h9v2a4.5 4.5 0 0 1-9 0zM8 12.5V15"/></svg></span>MCP<span class="badge">1</span></a></li>
+    <li><a href="#gateway"><span class="ic"><svg viewBox="0 0 16 16"><path d="M14 2L2 7l5 2 2 5z"/></svg></span>Gateway</a></li>
+    <li><a href="#secrets"><span class="ic"><svg viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg></span>Secrets</a></li>
+    <li><a href="Audit.dc.html"><span class="ic"><svg viewBox="0 0 16 16"><path d="M3 3h10M3 6.5h10M3 10h6M3 13.5h4"/></svg></span>Audit</a></li>
+  </ul>
+  <div class="section-title">Pinned</div>
+  <ul class="sessions">
+    <li><a href="Main.dc.html" aria-current="true"><span class="dot run"></span><span class="name">Fix the flaky sandbox test on CI</span><span class="muted small">12 s</span></a></li>
+  </ul>
+  <div class="section-title">Recent</div>
+  <ul class="sessions">
+    <li><a href="#s2"><span class="dot run"></span><span class="name">Draft release notes for v0.2</span><span class="muted small">2 m</span></a></li>
+    <li><a href="#s3"><span class="dot"></span><span class="name">Vault policy for ntfy</span><span class="muted small">1 h</span></a></li>
+    <li><a href="#s4"><span class="dot job"></span><span class="name">nightly-tidy run</span><span class="muted small">09:00</span></a></li>
+  </ul>
+  <div class="rail-foot"><a href="FirstRun.dc.html">Settings</a><a href="FirstRun.dc.html">Doctor</a></div>
+</nav>
+
+<main class="conv">
+  <header class="conv-head">
+    <div style="display: flex; align-items: center; gap: 10px; min-width: 0;">
+      <h1 class="title">Fix the flaky sandbox test on CI</h1>
+      <span class="pill">fork of cli-8c11 at turn 9</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <span class="pill goal">goal: keep CI green on main</span>
+      <button class="btn ghost" type="button">Aside</button>
+      <a class="btn ghost" href="Rewind.dc.html">Rewind</a>
+      <button class="btn ghost" type="button">Compact…</button>
+      <button class="iconbtn" type="button" aria-label="Pop out into its own window"><span class="ic"><svg viewBox="0 0 16 16"><path d="M6 3H3v10h10v-3M9 3h4v4M13 3L7.5 8.5"/></svg></span></button>
+    </div>
+  </header>
+
+  <section class="transcript" aria-label="Transcript">
+    <article class="msg user">
+      <div class="who">you · 14:01</div>
+      <p>the sandbox test fails on CI only. find out why and fix it without touching the production launcher.</p>
+    </article>
+
+    <article class="turn">
+      <div class="turn-head"><span class="who">corvid · turn 12</span><span class="muted small">qwen3.5-0.8b → claude · 1.2k tokens · 48 s · $0.04</span></div>
+
+      <div class="chips" aria-label="Ingress checkpoint, Kev-0.8B">
+        <span class="chip"><b>intent</b> 0.94 → task</span>
+        <span class="chip"><b>difficulty</b> 0.71 → escalate</span>
+        <span class="chip"><b>recall</b> 0.88 → yes</span>
+        <span class="chip"><b>tool</b> 0.91 → read_file</span>
+        <span class="chip unsure"><b>clarify</b> 0.41 → no, unsure</span>
+      </div>
+
+      <div class="row esc"><span class="ic"><svg viewBox="0 0 16 16"><path d="M5 12.5h7a3 3 0 0 0 .5-6A4.5 4.5 0 0 0 4 7.5 2.5 2.5 0 0 0 5 12.5z"/></svg></span><span>escalated to <b>claude</b>: step budget (difficulty 0.71)</span><span>· 2 values redacted ·</span><a href="Audit.dc.html">what left the machine</a></div>
+
+      <div class="card">
+        <div class="card-head"><span class="ic"><svg viewBox="0 0 16 16"><path d="M4 1.5h5l3 3v10H4z M9 1.5v3h3"/></svg></span><span class="card-title">read_file <span class="mono">.github/workflows/ci.yml</span></span><span class="muted small">auto: read-only · 0.3 s</span><button class="iconbtn" type="button" aria-label="Expand output"><span class="ic"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="ic"><svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg></span><span class="card-title">search_files <span class="mono">"unshare" in tests/</span> · 3 hits</span><span class="muted small">auto: read-only · 0.8 s</span><button class="iconbtn" type="button" aria-label="Expand output"><span class="ic"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="ic"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12"/></svg></span><span class="card-title">web_fetch <span class="mono">https://docs.example.org/bubblewrap/seccomp</span> · 48 KB</span><span class="muted small">approved once · 1.9 s</span><button class="iconbtn" type="button" aria-label="Expand output"><span class="ic"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button></div>
+      </div>
+
+      <div class="row taint"><span class="ic"><svg viewBox="0 0 16 16"><path d="M8 2l6.5 11.5h-13zM8 6.5v3M8 11.8v.4"/></svg></span><span><b>outside content in context</b>: web_fetch docs.example.org · network reads now ask; egress and new recipients offer only "once"</span></div>
+
+      <div class="card running">
+        <div class="card-head"><span class="ic"><svg viewBox="0 0 16 16"><rect x="1.5" y="3" width="13" height="10" rx="1.5"/><path d="M4.5 6.5l2 1.5-2 1.5M8 10h3.5"/></svg></span><span class="card-title">shell <span class="mono">dotnet test tests/Corvid.Sandbox.Tests --filter Seccomp</span></span><span class="muted small">running · 12 s</span><button class="btn sm ghost" type="button">Stop</button></div>
+        <div class="card-why">ran under a session rule: <span class="mono">dotnet test</span> in workspace (approval a-31, turn 10) · risk 1 (0.93) · checkpoint c-44 taken before the call</div>
+<pre class="tail">[xUnit.net 00:00:08.11]   SeccompTests.Unshare_user_namespace_is_refused_inside [FAIL]
+  Expected the control step to pass outside the sandbox: unshare -U returned 1
+  /proc/sys/kernel/unprivileged_userns_clone = 0 on this host
+Passed 11   Failed 1   Skipped 0   (12.4 s so far)</pre>
+      </div>
+
+      <div class="answer">
+        <p>The failure is the control step, and the sandbox itself is fine. On the runner <code>unshare -U</code> is refused because unprivileged user namespaces are off (<code>kernel.unprivileged_userns_clone = 0</code>), so the test's precondition fails before bubblewrap runs.</p>
+        <p>Two ways through, and I would take the first:</p>
+        <ol>
+          <li>Skip the control step when the sysctl is off and assert the sandbox's own refusal message instead.</li>
+          <li>Run the control under <span class="cursor" aria-hidden="true">▍</span></li>
+        </ol>
+      </div>
+      <div class="row thought"><button class="linkbtn" type="button">thought for 4 s</button></div>
+    </article>
+  </section>
+
+  <div class="turnstrip">
+    <span class="spinner" aria-hidden="true"></span><span>step 4 of 6 · shell running · 12 s</span>
+    <span class="queued"><span class="muted">queued</span>also check the retry count<button class="x" type="button" aria-label="Remove the queued message">×</button></span>
+    <span class="muted" style="margin-left: auto;"><kbd>Ctrl</kbd> <kbd>↵</kbd> steers at the next checkpoint · <kbd>Esc</kbd> interrupts</span>
+  </div>
+
+  <form class="composer" action="#" onsubmit="return false">
+    <label class="sr" for="prompt">Message to Corvid</label>
+    <textarea id="prompt" rows="2" placeholder="Ask Corvid…   / commands   @ files   ! shell   # memory"></textarea>
+    <div class="composer-bar">
+      <button class="iconbtn" type="button" aria-label="Attach a file"><span class="ic"><svg viewBox="0 0 16 16"><path d="M10.5 4.5L5.8 9.2a1.7 1.7 0 0 0 2.4 2.4l5-5a3.2 3.2 0 0 0-4.5-4.5L3.5 7.3a4.6 4.6 0 0 0 6.5 6.5l3.5-3.5"/></svg></span></button>
+      <span class="muted small">draft saved</span>
+      <span class="muted small" style="margin-left: auto;">about 40 tokens</span>
+      <button class="btn primary" type="button">Send <kbd>↵</kbd></button>
+    </div>
+  </form>
+</main>
+
+<aside class="dock" aria-label="Panels">
+  <div class="tabs" role="tablist">
+    <button role="tab" type="button" aria-selected="true">Changes<span class="badge">3</span></button>
+    <button role="tab" type="button" aria-selected="false">Files</button>
+    <button role="tab" type="button" aria-selected="false">Tasks<span class="badge">2</span></button>
+    <button role="tab" type="button" aria-selected="false">Decisions</button>
+    <button role="tab" type="button" aria-selected="false">Context</button>
+    <button role="tab" type="button" aria-selected="false">Output</button>
+    <button role="tab" type="button" aria-selected="false">Session</button>
+  </div>
+  <div class="dock-body">
+    <div>
+      <div class="sect-head"><span>This turn</span><span class="muted">2 files</span></div>
+      <ul class="files">
+        <li><span class="path mono">src/Corvid.Sandbox/BubblewrapSandbox.cs</span><span class="delta"><b class="add">+12</b> <b class="del">−3</b></span></li>
+        <li><span class="path mono">tests/Corvid.Sandbox.Tests/SeccompTests.cs</span><span class="delta"><b class="add">+4</b> <b class="del">−1</b></span></li>
+      </ul>
+    </div>
+    <div>
+      <div class="sect-head"><span>Session</span><span class="muted">since turn 1 · 3 files</span></div>
+      <ul class="files">
+        <li><span class="path mono">src/Corvid.Sandbox/BubblewrapSandbox.cs</span><span class="delta"><b class="add">+19</b> <b class="del">−5</b></span></li>
+        <li><span class="path mono">tests/Corvid.Sandbox.Tests/SeccompTests.cs</span><span class="delta"><b class="add">+9</b> <b class="del">−4</b></span></li>
+        <li><span class="path mono">.github/workflows/ci.yml</span><span class="delta"><b class="add">+3</b> <b class="del">−0</b></span></li>
+        <li class="off"><span class="path mono">vault.json</span><span class="small">not readable by Corvid</span></li>
+      </ul>
+    </div>
+    <div>
+      <div class="sect-head"><span>Context</span><span class="muted">38% of 200k</span></div>
+      <div class="meter"><span style="width: 38%;"></span></div>
+      <div class="muted small" style="margin-top: 6px;">system 2.1k · memory 1.4k · skills 0.9k · results 61k · stubs 3k · next compaction at 70%</div>
+    </div>
+    <div class="dock-actions">
+      <a class="btn" href="Review.dc.html">Open Review</a>
+      <button class="btn ghost" type="button">Send comments (0)</button>
+    </div>
+  </div>
+</aside>
+
+<footer class="statusbar">
+  <span><b>generator</b> claude <span>(escalated)</span> · cuda:0 · q0 · 410 ms</span>
+  <span><b>decider</b> Kev-0.8B, calibrated</span>
+  <span><b>ctx</b> 38%</span>
+  <span class="seg" role="group" aria-label="Approval mode"><button type="button" aria-pressed="false">manual</button><button type="button" aria-pressed="true">smart</button><button type="button" aria-pressed="false">permissive</button></span>
+  <span class="tag amber">tainted</span>
+  <span><b>scheduler</b> here · 2 jobs</span>
+  <span>main</span>
+  <span>cli-9f2e</span>
+  <span style="margin-left: auto;">turn 48 s</span>
+</footer>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","default":"light","options":["light","dark"],"section":"Look"},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { theme: this.props.theme ?? 'light' };
+  }
+}
+</script>
+</body>
+</html>
