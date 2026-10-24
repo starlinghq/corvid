@@ -332,7 +332,7 @@ public sealed class EngineMcpService : IMcpService, IDisposable
             else if (settings.Trust != status.Trust)
                 parts.Add($"{(settings.Trust == EngineTrust.Trusted ? "trusted" : "untrusted")} from the next start of Corvid (written to corvid.json)");
         }
-        return string.Join("; ", parts);
+        return string.Join("; ", parts.Select(part => part.TrimEnd('.', ' ')));
     }
 
     private static IReadOnlyList<string> Exposes(CorvidOptions options)

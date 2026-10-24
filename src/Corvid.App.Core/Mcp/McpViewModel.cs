@@ -33,6 +33,9 @@ public sealed class McpViewModel : AreaViewModel, IDisposable
     private bool _disposed;
     private int _refreshSequence;
 
+    /// <summary>A server just added whose row a later refresh brings (an engine's change arrives after the add returns).</summary>
+    private string? _selectWhenListed;
+
     /// <summary>The held tool a Review or a link asked for, as (server, tool): its card is drawn even past the cap.</summary>
     private (string Server, string Tool)? _review;
 
@@ -364,6 +367,11 @@ public sealed class McpViewModel : AreaViewModel, IDisposable
             _linkedTool = null;
             Land(linked);
         }
+        else if (_selectWhenListed is { } added && _rows.TryGetValue(added, out var listed))
+        {
+            _selectWhenListed = null;
+            Selected = listed;
+        }
         else if (_selected is null || !_rows.ContainsKey(_selected.Id))
         {
             Selected = Landing();
@@ -560,7 +568,7 @@ public sealed class McpViewModel : AreaViewModel, IDisposable
             return;
         Confirm = McpConfirm.None;
         await _service.SetTrustAsync(row.Id, McpTrust.Trusted, cancellationToken).ConfigureAwait(true);
-        Say(true, $"**{Spans.Escape(row.Name)}** is trusted: its hints are honoured from the next session.");
+        Say(true, $"**{Spans.Escape(row.Name)}** is trusted: its hints are honoured from the next start of Corvid, which reads it from corvid.json.");
     }
 
     private async Task UntrustAsync(CancellationToken cancellationToken)
@@ -604,9 +612,12 @@ public sealed class McpViewModel : AreaViewModel, IDisposable
         var server = await _service.AddServerAsync(new McpServerDraft(_draftName, _draftTransport, _draftTarget, McpTrust.Untrusted),
             cancellationToken).ConfigureAwait(true);
         IsAdding = false;
+        // The demo's change has rebuilt the rows already; an engine's arrives after this returns, and selects it then.
         if (_rows.TryGetValue(server.Name, out var row))
             Selected = row;
-        Say(true, $"Added **{Spans.Escape(SafeText.Clean(server.Name))}**, untrusted: it starts with the next session and its tools are pinned as it first lists them. Trust… asks before trusting it.");
+        else
+            _selectWhenListed = server.Name;
+        Say(true, $"Added **{Spans.Escape(SafeText.Clean(server.Name))}**, untrusted: it starts with the next start of Corvid and its tools are pinned as it first lists them. Trust… asks before trusting it.");
     }
 
     // ---- Shell, status bar, notices ----

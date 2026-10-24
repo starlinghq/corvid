@@ -59,6 +59,25 @@ public sealed class OpsEngineShapesTests
     }
 
     [Fact]
+    public async Task AServerAddedOnAnEngineIsSelectedWhenItsChangeArrivesAfterTheAddReturns()
+    {
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar);
+        shell.Navigate(Area.Mcp);
+        var service = new LateMcp();
+        using var mcp = new Mcp.McpViewModel(service, shell, bar, ManualTimeProvider.Demo());
+        mcp.AddServerCommand.Execute(null);
+        mcp.DraftName = "notes";
+        mcp.DraftTarget = "notes-mcp --root ./notes";
+
+        await mcp.SaveServerCommand.ExecuteAsync();
+        Assert.Equal("calendar", mcp.Selected?.Id);
+
+        service.Raise();
+        Assert.Equal("notes", mcp.Selected?.Id);
+    }
+
+    [Fact]
     public void AnAdapterThisAppDoesNotHostIsNotCalledOffOrUp()
     {
         Assert.Equal("not hosted here", GatewayText.State(AdapterState.Unknown));
@@ -138,6 +157,37 @@ public sealed class OpsEngineShapesTests
         public Task<JobRecord> ResumeAsync(string jobId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task RemoveAsync(string jobId, CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
+
+    /// <summary>An MCP service whose change, like an engine's, reaches the page only when it is posted later (<see cref="Raise"/>).</summary>
+    private sealed class LateMcp : Mcp.IMcpService
+    {
+        private readonly List<Mcp.McpServerRecord> _servers =
+            [new("calendar", Mcp.McpTransport.Stdio, Mcp.McpTrust.Untrusted, Mcp.McpServerState.Failed) { Target = "calendar-mcp" }];
+
+        public event EventHandler? Changed;
+
+        public void Raise() => Changed?.Invoke(this, EventArgs.Empty);
+
+        public Task<Mcp.McpSnapshot> LoadAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new Mcp.McpSnapshot([.. _servers], [], new Mcp.McpServeStatus(false, [], "note"), "pins.json"));
+
+        public Task<Mcp.McpServerRecord> AddServerAsync(Mcp.McpServerDraft draft, CancellationToken cancellationToken)
+        {
+            var record = new Mcp.McpServerRecord(draft.Name, draft.Transport, draft.Trust, Mcp.McpServerState.NotStarted) { Target = draft.Target };
+            _servers.Add(record);
+            return Task.FromResult(record);
+        }
+
+        public Task AcceptAsync(string server, string tool, string hash, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task AllowAsync(string server, string tool, string hash, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task KeepBlockedAsync(string server, string tool, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<int> ForgetAsync(string server, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task SetTrustAsync(string server, Mcp.McpTrust trust, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
     private sealed class Secrets(SecretsSnapshot snapshot) : ISecretsService
