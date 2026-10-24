@@ -151,6 +151,10 @@ public sealed partial class ModelsPage : Page
     private static void UpdateTableEdges(ScrollViewer scroller)
     {
         const double HiddenColumn = 60;
+        // A table that scrolls sideways keeps a strip under its last row for the scroll bar, which otherwise draws over it.
+        var room = new Thickness(0, 0, 0, scroller.ScrollableWidth > 1 ? 8 : 0);
+        if (scroller.Padding != room)
+            scroller.Padding = room;
         if (scroller.Parent is not Grid host)
             return;
         foreach (var edge in host.Children.OfType<Button>())
