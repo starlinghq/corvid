@@ -220,7 +220,7 @@ public sealed class SkillDetailView : ObservableObject
             : SkillsText.When(record.LastUsed, time) + (record.LastSession is { } session ? " in " + SafeText.Clean(session) : "");
         var facts = new List<SkillFact>
         {
-            new("author", $"{row.Author}: {row.AuthorMeaning}"),
+            new("author", $"{row.Author} · {row.AuthorMeaning}"),
             new("revision", row.Revision.Length == 0 ? "uncommitted" : row.Revision, IsCode: true),
             new("folder", SafeText.Reveal(record.Path.Length == 0 ? record.Name : record.Path) + "/", IsCode: true),
             new("last used", $"{used} · {SkillsText.Uses(record.Uses)}"),

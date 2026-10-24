@@ -461,7 +461,7 @@ public sealed class SkillsViewModel : AreaViewModel
         await ReloadLibraryAsync(cancellationToken).ConfigureAwait(true);
         var name = SafeText.Reveal(written.Name);
         SetOutcome(edited is null
-            ? $"Approved {name}: committed {SkillsText.Short(written.Revision)} as agent. Its evals run next; the library lists its uses from here on."
+            ? $"Approved {name}: committed {SkillsText.Short(written.Revision)} as agent. The library lists its uses and evals from here on."
             : $"Approved {name} as edited: committed {SkillsText.Short(written.Revision)} as {SafeText.Clean(written.Author)}, since the text is now yours.", Tone.Green);
         DraftsChanged();
         await RefreshHistoryAsync(cancellationToken).ConfigureAwait(true);
@@ -547,7 +547,7 @@ public sealed class SkillsViewModel : AreaViewModel
         }
 
         await ReloadLibraryAsync(cancellationToken).ConfigureAwait(true);
-        SetOutcome(archived.Count == 0 ? "Nothing to archive." : $"Archived {string.Join(", ", archived.Select(n => SafeText.Reveal(n)))} to .archive/; git keeps them.",
+        SetOutcome(archived.Count == 0 ? "Nothing to archive." : $"Archived {string.Join(", ", archived.Select(n => SafeText.Reveal(n)))} to .archive/; git keeps {(archived.Count == 1 ? "it" : "them")}.",
             archived.Count == 0 ? Tone.Grey : Tone.Green);
         await RefreshHistoryAsync(cancellationToken).ConfigureAwait(true);
     }

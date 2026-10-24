@@ -222,7 +222,7 @@
       <Grid BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,1,0,0">
         <Border Background="{ThemeResource CorvidAccentBg}" Visibility="{x:Bind ui:Ui.VisibleIf(IsSelected), Mode=OneWay}" />
         <Button Style="{StaticResource SkRowButton}" Command="{x:Bind SelectCommand}" Click="OnRowClick" AutomationProperties.Name="{x:Bind AutomationName}">
-          <local:SkillsTableRow Columns="*,100,86,52,60" NarrowColumns="*,100,0,0,60">
+          <local:SkillsTableRow Columns="*,100,100,52,60" NarrowColumns="*,100,0,0,60">
             <StackPanel Padding="10,7" Spacing="2">
               <controls:WrapRowPanel Spacing="6" LineSpacing="2">
                 <TextBlock Text="{x:Bind Name}" FontFamily="{StaticResource CorvidMono}" FontSize="12.5" FontWeight="Medium" TextWrapping="Wrap" VerticalAlignment="Center" />
@@ -250,7 +250,7 @@
       <Grid BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,1,0,0">
         <Border Background="{ThemeResource CorvidAccentBg}" Visibility="{x:Bind ui:Ui.VisibleIf(IsSelected), Mode=OneWay}" />
         <Button Style="{StaticResource SkRowButton}" Command="{x:Bind SelectCommand}" Click="OnRowClick" AutomationProperties.Name="{x:Bind AutomationName}">
-          <local:SkillsTableRow Columns="76,100,124,*" NarrowColumns="76,0,0,*">
+          <local:SkillsTableRow Columns="76,100,136,*" NarrowColumns="76,0,0,*">
             <TextBlock Text="{x:Bind Revision}" Style="{StaticResource SkMonoCell}" />
             <Border Grid.Column="1" Padding="10,8">
               <controls:TagChip Text="{x:Bind Author}" Tone="{x:Bind AuthorTone}" HorizontalAlignment="Left" VerticalAlignment="Top" />
@@ -442,7 +442,7 @@
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>
-            <local:SkillsTableRow Columns="*,100,86,52,60" NarrowColumns="*,100,0,0,60">
+            <local:SkillsTableRow Columns="*,100,100,52,60" NarrowColumns="*,100,0,0,60">
               <TextBlock Text="skill" Style="{StaticResource SkTh}" />
               <TextBlock Grid.Column="1" Text="author" Style="{StaticResource SkTh}" />
               <TextBlock Grid.Column="2" Text="last used" Style="{StaticResource SkTh}" />
@@ -541,7 +541,7 @@
                       <ItemsControl ItemsSource="{x:Bind EvalRuns}" IsTabStop="False" AutomationProperties.Name="Eval runs">
                         <ItemsControl.ItemTemplate>
                           <DataTemplate x:DataType="skills:EvalRunView">
-                            <local:SkillsTableRow Columns="*,124,60" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,0,0,1"
+                            <local:SkillsTableRow Columns="*,136,60" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,0,0,1"
                                                   AutomationProperties.Name="{x:Bind AutomationName}">
                               <TextBlock Text="{x:Bind Label}" Style="{StaticResource SkMonoCell}" />
                               <TextBlock Grid.Column="1" Text="{x:Bind When}" Style="{StaticResource SkMutedCell}" />
@@ -559,10 +559,10 @@
                             <DataTemplate x:DataType="skills:EvalCaseView">
                               <Grid ColumnSpacing="10" Padding="0,3">
                                 <Grid.ColumnDefinitions>
-                                  <ColumnDefinition Width="Auto" />
+                                  <ColumnDefinition Width="54" />
                                   <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
-                                <controls:TagChip Text="{x:Bind Verdict}" Tone="{x:Bind Tone}" VerticalAlignment="Top" />
+                                <controls:TagChip Text="{x:Bind Verdict}" Tone="{x:Bind Tone}" VerticalAlignment="Top" HorizontalAlignment="Left" />
                                 <StackPanel Grid.Column="1" Spacing="1">
                                   <TextBlock Text="{x:Bind Case}" FontFamily="{StaticResource CorvidMono}" FontSize="12" />
                                   <TextBlock Text="{x:Bind Detail}" Style="{StaticResource CorvidSmallText}" TextWrapping="Wrap" />
@@ -603,7 +603,7 @@
             </Border>
             <controls:LinkButton Text="Show every skill's history" FontSize="12.5" Margin="14,8,14,4" Command="{x:Bind ViewModel.ClearHistoryFilterCommand}"
                                  Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsHistoryNarrowed), Mode=OneWay}" HorizontalAlignment="Left" />
-            <local:SkillsTableRow Columns="76,100,124,*" NarrowColumns="76,0,0,*">
+            <local:SkillsTableRow Columns="76,100,136,*" NarrowColumns="76,0,0,*">
               <TextBlock Text="revision" Style="{StaticResource SkTh}" />
               <TextBlock Grid.Column="1" Text="author" Style="{StaticResource SkTh}" />
               <TextBlock Grid.Column="2" Text="when" Style="{StaticResource SkTh}" />

@@ -60,7 +60,7 @@ public static class SkillsText
     /// <summary>What an author means, for the tag's tooltip and the detail panel.</summary>
     public static string AuthorMeaning(string? author) => author switch
     {
-        "agent" => "written by the agent: the learning loop and the curator may change or archive it",
+        "agent" => "the learning loop and the curator may change or archive it",
         "user" => "yours: the agent never changes it",
         null or "" => "not committed yet",
         _ => "from a hub: outside content, so loading it taints the session",

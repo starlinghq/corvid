@@ -82,8 +82,9 @@ public sealed class DemoSkillsService : ISkillsService
     public Task<IReadOnlyList<SkillCommit>> LogAsync(string? skill, int limit, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        IReadOnlyList<SkillCommit> commits = [.. _log.Select(c => c.Commit).Where(c => skill is null || c.Skills.Contains(skill))
-            .OrderByDescending(c => c.Date).Take(limit)];
+        // Newest first; commits in the same minute (the frozen clock) by the order they were made.
+        IReadOnlyList<SkillCommit> commits = [.. _log.Select((c, index) => (c.Commit, index)).Where(c => skill is null || c.Commit.Skills.Contains(skill))
+            .OrderByDescending(c => c.Commit.Date).ThenByDescending(c => c.index).Select(c => c.Commit).Take(limit)];
         return Task.FromResult(commits);
     }
 
@@ -429,7 +430,9 @@ public sealed class DemoSkillsService : ISkillsService
 
     private void Commit(SkillCommit commit, params SkillCommitFile[] files) => _log.Add((commit, [.. files]));
 
-    private string NextRevision() => (0x5e0a3c00000 + _nextRevision++ * 0x1f3b5).ToString("x12", CultureInfo.InvariantCulture);
+    /// <summary>A made-up commit id: a counter scrambled so consecutive ones do not look alike.</summary>
+    private string NextRevision() =>
+        ((ulong)_nextRevision++ * 0x9E3779B97F4A7C15UL >> 16).ToString("x12", CultureInfo.InvariantCulture);
 
     private static string Short(string revision) => revision.Length > 7 ? revision[..7] : revision;
 

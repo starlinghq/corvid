@@ -61,7 +61,7 @@ public sealed class SkillDraftView : ObservableObject
         Origin = origin;
         Kind = draft.Replaces is { } replaces
             ? $"updates {Name} at {SkillsText.Short(replaces)}; written as agent"
-            : "new skill; written as agent, revision 1";
+            : "written as agent, revision 1";
         Why = "why staged: " + SafeText.Clean(draft.Reason);
         Description = SafeText.Clean(SkillsText.Description(draft.Content));
         Steps = ReplayStepView.Steps(draft.Replay);
