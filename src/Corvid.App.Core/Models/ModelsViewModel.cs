@@ -170,6 +170,21 @@ public sealed class ModelsViewModel : AreaViewModel
         _shell.PropertyChanged += OnShellChanged;
         Refresh();
         UpdateActive();
+        // The store reads the configuration and the cache on its first load (the demo's has its snapshot already); one that
+        // cannot (the engine's, before A3 setup) says why here rather than leaving an empty page unexplained.
+        _ = LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            await _service.LoadAsync().ConfigureAwait(true);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            Say(false, $"The models could not be read: {Spans.Escape(exception.Message)}");
+        }
     }
 
     public IReadOnlyList<TextRun> Subtitle { get => _subtitle; private set => SetRuns(ref _subtitle, value); }

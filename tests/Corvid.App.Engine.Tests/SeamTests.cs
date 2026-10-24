@@ -91,9 +91,11 @@ public sealed class SeamTests
             var refusal = await Assert.ThrowsAsync<ServiceUnavailableException>(() => Load(service));
             Assert.StartsWith($"This comes with A3 {group}:", refusal.Message, StringComparison.Ordinal);
         }
-        // A synchronous member answers with nothing rather than failing the page.
+        // A synchronous member answers with nothing rather than failing the page, and the page says why it is empty.
         Assert.Empty(composition.ModelService.Snapshot.Catalogue);
         Assert.Empty(composition.SettingsService.Definitions);
+        Assert.True(composition.Models.HasNotice);
+        Assert.Contains("This comes with A3 setup:", string.Concat(composition.Models.Notice.Select(run => run.Text)), StringComparison.Ordinal);
 
         composition.Dispose();
         Assert.True(source.Disposed);

@@ -44,7 +44,8 @@ internal static class Program
                 .GetAwaiter().GetResult();
             if (engine.StartFailure is { } failure)
                 Console.Error.WriteLine("corvid app: " + failure);
-            if (!engine.MissingModels.IsEmpty)
+            // Missing models open First run, unless the command line named a page (an area's builder looks at its own page).
+            if (!engine.MissingModels.IsEmpty && options.Page is null)
                 options = options with { Page = Area.FirstRun };
             services = new EngineAppServices(engine);
         }
