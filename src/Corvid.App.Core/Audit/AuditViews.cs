@@ -64,7 +64,7 @@ public sealed class AuditEventRow : ObservableObject
 
     public string Type => Event.Type;
 
-    public ImmutableArray<AuditSpan> Summary => Event.Summary;
+    public IReadOnlyList<AuditSpan> Summary => Event.Summary;
 
     /// <summary>A detection match: the whole row in red.</summary>
     public bool IsAlert => Event.IsAlert;
@@ -84,7 +84,7 @@ public sealed class AuditEventRow : ObservableObject
 public sealed record AuditLine(ImmutableArray<RedactedSegment> Segments);
 
 /// <summary>A labelled value of a detail panel (<c>.kv</c>): "when 14:03:52 · turn 12, step 3".</summary>
-public sealed record AuditField(string Label, ImmutableArray<AuditSpan> Value);
+public sealed record AuditField(string Label, IReadOnlyList<AuditSpan> Value);
 
 /// <summary>The egress ledger's panel for one request (Audit.png's right column, docs/plan/ui.md F8).</summary>
 public sealed class EgressView : ObservableObject
@@ -112,7 +112,7 @@ public sealed class EgressView : ObservableObject
     public string Model => Request.Model;
 
     /// <summary>"via Vault <c>anthropic.key</c>, api.anthropic.com".</summary>
-    public ImmutableArray<AuditSpan> Route { get; }
+    public IReadOnlyList<AuditSpan> Route { get; }
 
     /// <summary>"38.2 KB · 9,410 tokens · cached prefix 6,120".</summary>
     public string Sent { get; }
@@ -122,7 +122,7 @@ public sealed class EgressView : ObservableObject
 
     public bool HasRedactions => Request.Redacted > 0;
 
-    public ImmutableArray<AuditSpan> RedactedSummary => Request.RedactedSummary;
+    public IReadOnlyList<AuditSpan> RedactedSummary => Request.RedactedSummary;
 
     /// <summary>Showing the whole request ("Open as sent") rather than its excerpt.</summary>
     public bool IsFull
@@ -181,7 +181,7 @@ public sealed class EventDetailView
 
     public IReadOnlyList<AuditField> Fields { get; }
 
-    public ImmutableArray<AuditSpan> Summary => Event.Summary;
+    public IReadOnlyList<AuditSpan> Summary => Event.Summary;
 
     /// <summary>The raw event as stored, as indented JSON.</summary>
     public string Json => Event.Json;
@@ -212,7 +212,7 @@ public sealed class AuditDetectionView
     /// <summary>"high · enforce".</summary>
     public string Tag { get; }
 
-    public ImmutableArray<AuditSpan> Explanation => Match.Explanation;
+    public IReadOnlyList<AuditSpan> Explanation => Match.Explanation;
 
     public string Rule => Match.RuleId;
 
