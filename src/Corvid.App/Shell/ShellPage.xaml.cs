@@ -10,7 +10,7 @@ namespace Corvid.App.Shell;
 /// <summary>
 /// The window's content: tells the shell's view model the window's width, shows the current area's page in the content
 /// frame, puts the page's dock panels in the column or the overlay, applies the theme, and binds the shell's keys
-/// (Ctrl+B the dock, Ctrl+Shift+B the rail, Ctrl+, Settings, Esc closes an overlay).
+/// (Ctrl+B the dock, Ctrl+Shift+B the rail, Ctrl+, Settings, Ctrl+Shift+C the changes in Review, Esc closes an overlay).
 /// </summary>
 public sealed partial class ShellPage : Page
 {
@@ -30,6 +30,8 @@ public sealed partial class ShellPage : Page
         AddKey(VirtualKey.B, VirtualKeyModifiers.Control, ViewModel.ToggleDockCommand.Execute);
         AddKey(VirtualKey.B, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, ViewModel.ToggleRailCommand.Execute);
         AddKey((VirtualKey)188, VirtualKeyModifiers.Control, ViewModel.OpenSettingsCommand.Execute);
+        // Ctrl+Shift+C: Changes, the session's changes in Review (docs/plan/ui.md §6).
+        AddKey(VirtualKey.C, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, _ => ViewModel.Navigate(Area.Review));
         AddKey(VirtualKey.Escape, VirtualKeyModifiers.None, CloseOverlay);
         Show(ViewModel.CurrentArea);
     }

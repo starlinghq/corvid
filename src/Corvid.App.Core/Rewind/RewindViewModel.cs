@@ -97,6 +97,8 @@ public sealed class RewindViewModel : AreaViewModel
 
     public ObservableCollection<RestoreNoteView> PlanNotes { get; } = [];
 
+    public bool HasPlanNotes => PlanNotes.Count > 0;
+
     /// <summary>"turns 10 to 12".</summary>
     public string ConversationRange => _plan is { TurnsLeaving: > 0 } plan ? ConversationRangeOf(plan) : "no turns";
 
@@ -340,6 +342,7 @@ public sealed class RewindViewModel : AreaViewModel
         OnPropertyChanged(nameof(PlanCommand));
         OnPropertyChanged(nameof(PlanFileCount));
         OnPropertyChanged(nameof(HasPlanFiles));
+        OnPropertyChanged(nameof(HasPlanNotes));
         OnPropertyChanged(nameof(ConversationRange));
         OnPropertyChanged(nameof(ConversationText));
         OnPropertyChanged(nameof(PreviewTitle));

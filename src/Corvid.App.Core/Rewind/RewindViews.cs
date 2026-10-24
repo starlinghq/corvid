@@ -121,9 +121,9 @@ public sealed class PutBackFileView(PutBackFile file, string checkpointId)
     /// <summary>The lines going back undo the call's: its added lines are removed ("−19") and its removed ones return ("+5").</summary>
     public bool ShowCounts => File.Kind == PutBackKind.Restore;
 
-    public string RemoveText => File.Added > 0 ? string.Create(CultureInfo.InvariantCulture, $"−{File.Added}") : "";
+    public string RemoveText => ShowCounts && File.Added > 0 ? string.Create(CultureInfo.InvariantCulture, $"−{File.Added}") : "";
 
-    public string AddText => File.Removed > 0 ? string.Create(CultureInfo.InvariantCulture, $"+{File.Removed}") : "";
+    public string AddText => ShowCounts && File.Removed > 0 ? string.Create(CultureInfo.InvariantCulture, $"+{File.Removed}") : "";
 
     /// <summary>"merge" or "conflict"; empty for a plain restore.</summary>
     public string Word => File.Kind switch
