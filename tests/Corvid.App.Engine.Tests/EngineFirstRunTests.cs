@@ -178,6 +178,19 @@ public sealed class EngineFirstRunTests : IDisposable
 
         await WaitForAsync(page, () => page.Sections.Count > 0 && page.Workspace.Length > 0);
 
+        var models = composition.ModelService;
+        var loaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        models.Changed += (_, _) =>
+        {
+            if (models.Snapshot.IsLoaded)
+                loaded.TrySetResult();
+        };
+        if (models.Snapshot.IsLoaded)
+            loaded.TrySetResult();
+        await loaded.Task.WaitAsync(TimeSpan.FromSeconds(30), Token);
+
+        // The models step lists the catalogue's local models from the engine, the missing generator picked.
+        Assert.Contains(page.Downloads.Items, item => item is { Name: "fake-gen", IsEnabled: true, IsSelected: true });
         Assert.Equal(Path.Combine(host.Root, "work"), page.Workspace);
         Assert.Equal("not started · 1 model missing", composition.StatusBar.Engine);
         Assert.False(page.HasNotice, string.Concat(page.Notice.Select(run => run.Text)));

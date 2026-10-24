@@ -469,7 +469,30 @@ public sealed class FirstRunViewModel : AreaViewModel
         ApplyRunningStatus();
     }
 
+    /// <summary>
+    /// The model store reads the configuration and the cache on its first load (the demo's has its snapshot already); the
+    /// first run can be the first page to show it, so it asks too. A failure is said here, beside the checks.
+    /// </summary>
+    private async Task LoadModelsAsync()
+    {
+        try
+        {
+            await _models.LoadAsync().ConfigureAwait(true);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            Fail($"The models could not be read: {Spans.Escape(exception.Message)}");
+        }
+    }
+
     private async Task LoadAsync()
+    {
+        var models = LoadModelsAsync();
+        await LoadChecksAsync().ConfigureAwait(true);
+        await models.ConfigureAwait(true);
+    }
+
+    private async Task LoadChecksAsync()
     {
         try
         {
