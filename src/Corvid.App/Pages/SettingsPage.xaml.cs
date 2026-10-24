@@ -32,7 +32,7 @@ public sealed partial class SettingsPage : Page
     public SettingsViewModel ViewModel { get; private set; } = null!;
 
     /// <summary>The app's own preferences' note: kept for this run until ui.db keeps them.</summary>
-    public static string PreferencesNote => "kept for this run · ui.db keeps them later (G-7)";
+    public static string PreferencesNote => "kept for this run · the window follows them once ui.db keeps them (G-7)";
 
     public static string OnOff(bool on) => on ? "On" : "Off";
 
@@ -61,6 +61,8 @@ public sealed partial class SettingsPage : Page
         Head.Padding = phone ? new Thickness(14, 12, 14, 12) : new Thickness(24, 12, 24, 12);
         SaveBar.Padding = phone ? new Thickness(14, 8, 14, 8) : new Thickness(24, 8, 24, 8);
         NoticeHost.Padding = phone ? new Thickness(14, 10, 14, 0) : new Thickness(24, 12, 24, 0);
+        // As wide as the panels under it (the body's 980 less its gutters), or the window's width less them.
+        NoticeRow.Width = Math.Max(0, Math.Min(Body.MaxWidth, ActualWidth) - Body.Padding.Left - Body.Padding.Right);
     }
 
     private void OnKeyDown(object sender, KeyRoutedEventArgs e)

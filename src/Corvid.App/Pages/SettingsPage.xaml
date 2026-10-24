@@ -182,7 +182,7 @@
       </Grid>
     </Border>
     <Border x:Name="NoticeHost" Padding="24,12,24,0" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasNotice), Mode=OneWay}">
-      <controls:ToneRow MaxWidth="932" HorizontalAlignment="Left" Tone="{x:Bind ViewModel.NoticeTone, Mode=OneWay}" AutomationProperties.LiveSetting="Polite">
+      <controls:ToneRow x:Name="NoticeRow" HorizontalAlignment="Left" Tone="{x:Bind ViewModel.NoticeTone, Mode=OneWay}" AutomationProperties.LiveSetting="Polite">
         <Grid ColumnSpacing="8">
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*" />
@@ -236,11 +236,11 @@
             <StackPanel Padding="14,12" Spacing="10">
               <TextBlock Text="The whole file, as the host reads it: comments and trailing commas are allowed, and every edit is parsed and checked by the validator as you type."
                          Style="{StaticResource PanelSmall}" />
-              <ScrollViewer HorizontalScrollMode="Auto" HorizontalScrollBarVisibility="Auto" VerticalScrollMode="Disabled" VerticalScrollBarVisibility="Disabled">
-                <TextBox x:Name="JsonBox" Style="{StaticResource FieldBox}" AcceptsReturn="True" TextWrapping="NoWrap" MinHeight="420" MinWidth="560"
-                         Background="{ThemeResource CorvidCodeBg}" IsSpellCheckEnabled="False"
-                         Text="{x:Bind ViewModel.JsonText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="corvid.json" />
-              </ScrollViewer>
+              <!-- A fixed height that scrolls inside, so the validator's messages under it stay in view as you type. -->
+              <TextBox x:Name="JsonBox" Style="{StaticResource FieldBox}" AcceptsReturn="True" TextWrapping="NoWrap" Height="420"
+                       ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                       Background="{ThemeResource CorvidCodeBg}" IsSpellCheckEnabled="False"
+                       Text="{x:Bind ViewModel.JsonText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="corvid.json" />
               <controls:ToneRow Tone="Red" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasJsonProblems), Mode=OneWay}" AutomationProperties.LiveSetting="Polite">
                 <ItemsControl ItemsSource="{x:Bind ViewModel.JsonProblems, Mode=OneWay}" IsTabStop="False">
                   <ItemsControl.ItemTemplate>
