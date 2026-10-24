@@ -276,4 +276,65 @@ public sealed class FirstRunTests
         Assert.Equal("step 1 of 6", composition.StatusBar.Trailing);
         Assert.Equal("1 warning", composition.FirstRun.Sections[1].Summary);
     }
+
+    [Fact]
+    public void AModelStoreThatHasNotLoadedClaimsNeitherVaultsAbsenceNorADegradedDecider()
+    {
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar);
+        shell.Navigate(Area.FirstRun);
+        var models = new Unavailable.Models("not yet");
+        Assert.False(models.Snapshot.IsLoaded);
+
+        var firstRun = new FirstRunViewModel(new DemoFirstRunService(freshMachine: true), models, shell, bar, isSetup: true);
+
+        Assert.True(firstRun.VaultPresent);
+        Assert.False(firstRun.HasDeciderWarning);
+        Assert.Empty(bar.Tags);
+        Assert.Equal("", bar.Decider);
+        Assert.Equal("", ModelsViewModel.StatusDecider(models.Snapshot));
+        // The workspace is the service's first suggestion.
+        Assert.Equal(DemoFirstRunService.Workspace, firstRun.Workspace);
+    }
+
+    [Fact]
+    public void AServiceThatReportsTheEnginesStartWritesTheSetupsEngineLine()
+    {
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar);
+        shell.Navigate(Area.FirstRun);
+        var service = new ReportingFirstRun { EngineStatus = "starting · Loading kev-0.8b" };
+        var models = new DemoModelService(new InlineDispatcher(), ManualTimeProvider.Demo(), DemoModelScene.FirstRun);
+
+        _ = new FirstRunViewModel(service, models, shell, bar, isSetup: true);
+        Assert.Equal("starting · Loading kev-0.8b", bar.Engine);
+
+        service.Report("in-process");
+        Assert.Equal("in-process", bar.Engine);
+    }
+
+    private sealed class ReportingFirstRun : IFirstRunService
+    {
+        private readonly DemoFirstRunService _demo = new(freshMachine: true);
+
+        public string? EngineStatus { get; set; }
+
+        public event EventHandler? EngineStatusChanged;
+
+        public void Report(string status)
+        {
+            EngineStatus = status;
+            EngineStatusChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        public Task<DoctorReport> RunChecksAsync(CancellationToken cancellationToken = default) => _demo.RunChecksAsync(cancellationToken);
+
+        public Task<IReadOnlyList<string>> SuggestWorkspacesAsync(CancellationToken cancellationToken = default) => _demo.SuggestWorkspacesAsync(cancellationToken);
+
+        public Task<WorkspaceInfo> DescribeWorkspaceAsync(string path, CancellationToken cancellationToken = default) => _demo.DescribeWorkspaceAsync(path, cancellationToken);
+
+        public Task<HermesImport?> FindHermesAsync(CancellationToken cancellationToken = default) => _demo.FindHermesAsync(cancellationToken);
+
+        public Task SaveAsync(SetupChoices choices, CancellationToken cancellationToken = default) => _demo.SaveAsync(choices, cancellationToken);
+    }
 }

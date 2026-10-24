@@ -276,8 +276,9 @@ public static class Unavailable
     {
         public event EventHandler? Changed { add { } remove { } }
 
+        // Not loaded: the pages then claim neither Vault's absence nor a degraded decider from its empty values.
         public ModelsSnapshot Snapshot { get; } = new("", false, [], [], new CloudPrivacy("", false, false, 0, 0, 0),
-            new DeciderStatus("", "", DeciderTier.Degraded, "", "", "", ""), [], [], "");
+            new DeciderStatus("", "", DeciderTier.Degraded, "", "", "", ""), [], [], "") { IsLoaded = false };
 
         public Task<ModelsSnapshot> LoadAsync(CancellationToken cancellationToken = default) => Fail<ModelsSnapshot>(message);
 

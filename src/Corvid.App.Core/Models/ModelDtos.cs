@@ -134,7 +134,14 @@ public sealed record DeciderStatus(string Model, string DisplayName, DeciderTier
 /// is bound (without one every cloud request is refused), whether Vault answers (without it cloud slots disappear), and
 /// today's counts.
 /// </summary>
-public sealed record CloudPrivacy(string Posture, bool ExtractorBound, bool VaultPresent, int RequestsToday, int RedactedToday, int RefusedToday);
+public sealed record CloudPrivacy(string Posture, bool ExtractorBound, bool VaultPresent, int RequestsToday, int RedactedToday, int RefusedToday)
+{
+    /// <summary>
+    /// What the "today" line says in place of the counts when they are not known (the engine's, until the egress ledger
+    /// counts requests, G-9); null when the counts are real.
+    /// </summary>
+    public string? TodayUnknown { get; init; }
+}
 
 /// <summary>One of the doctor's checks for a GPU (the driver, the CUDA runtime), shown beside a model placed on it.</summary>
 public sealed record DeviceCheck(string Name, bool Ok, string Detail);
@@ -157,6 +164,12 @@ public sealed record ModelsSnapshot(
     IReadOnlyList<ModelPlacement> Placements,
     string Cpu)
 {
+    /// <summary>
+    /// False for a snapshot standing in until the first load (or for a store that cannot load): its empty lists and
+    /// flags say nothing, so the pages claim neither Vault's absence nor a degraded decider from it.
+    /// </summary>
+    public bool IsLoaded { get; init; } = true;
+
     public CatalogueModel? Find(string name) => Catalogue.FirstOrDefault(model => string.Equals(model.Name, name, StringComparison.Ordinal));
 
     public ModelSlot? Slot(string name) => Slots.FirstOrDefault(slot => string.Equals(slot.Name, name, StringComparison.Ordinal));

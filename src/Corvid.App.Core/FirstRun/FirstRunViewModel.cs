@@ -212,7 +212,9 @@ public sealed class FirstRunViewModel : AreaViewModel
     private bool _active;
     private bool _finished;
     private int _step;
-    private string _workspace = DemoFirstRunService.Workspace;
+    // The service's first suggestion (the configured workspace) once the page loads, unless the person typed one first.
+    private string _workspace = "";
+    private bool _workspaceTyped;
     private IReadOnlyList<TextRun> _workspaceNote = [];
     private bool _choosingWorkspace;
     private ApprovalMode _mode = ApprovalMode.Smart;
@@ -265,6 +267,13 @@ public sealed class FirstRunViewModel : AreaViewModel
             ReportFailures(command);
 
         _models.Changed += (_, _) => RefreshModels();
+        _service.EngineStatusChanged += (_, _) =>
+        {
+            if (_active)
+                ApplyStatus();
+            else
+                ApplyRunningStatus();
+        };
         _shell.PropertyChanged += OnShellChanged;
         _bar.ModeRequested += OnModeRequested;
         SetMode(_mode);
@@ -343,6 +352,7 @@ public sealed class FirstRunViewModel : AreaViewModel
         get => _workspace;
         set
         {
+            _workspaceTyped = true;
             if (SetProperty(ref _workspace, value ?? ""))
                 _ = DescribeWorkspaceAsync();
         }
@@ -463,9 +473,17 @@ public sealed class FirstRunViewModel : AreaViewModel
     {
         try
         {
+            // The suggestions first: their first is the workspace the configuration names, which the page starts on.
+            var suggestions = await _service.SuggestWorkspacesAsync().ConfigureAwait(true);
+            if (!_workspaceTyped && suggestions.Count > 0)
+            {
+                _workspace = suggestions[0];
+                OnPropertyChanged(nameof(Workspace));
+            }
+
             await RunChecksAsync(CancellationToken.None).ConfigureAwait(true);
             await DescribeWorkspaceAsync().ConfigureAwait(true);
-            foreach (var path in await _service.SuggestWorkspacesAsync().ConfigureAwait(true))
+            foreach (var path in suggestions)
             {
                 var folder = path;
                 WorkspaceChoices.Add(new Choice(SafeText.Reveal(folder), SafeText.Reveal(folder), new RelayCommand(() =>
@@ -563,8 +581,9 @@ public sealed class FirstRunViewModel : AreaViewModel
     {
         var snapshot = _models.Snapshot;
         Downloads.Refresh();
-        VaultPresent = snapshot.Privacy.VaultPresent;
-        var decider = snapshot.Find(snapshot.Decider.Model);
+        // A snapshot not loaded yet says nothing about Vault or the decider.
+        VaultPresent = !snapshot.IsLoaded || snapshot.Privacy.VaultPresent;
+        var decider = snapshot.IsLoaded ? snapshot.Find(snapshot.Decider.Model) : null;
         DeciderWarning = decider is { State: not ModelState.Cached }
             ? Spans.Parse($"Without `{Spans.Escape(decider.Name)}`, decisions run on the degraded tier and every chat says so. Memory writes then wait for your review.")
             : [];
@@ -614,17 +633,18 @@ public sealed class FirstRunViewModel : AreaViewModel
     private void ApplyStatus()
     {
         var snapshot = _models.Snapshot;
-        var decider = snapshot.Decider.Tier == DeciderTier.Calibrated
+        var decider = !snapshot.IsLoaded ? ""
+            : snapshot.Decider.Tier == DeciderTier.Calibrated
             ? $"{SafeText.Clean(snapshot.Decider.DisplayName)}, calibrated"
             : $"degraded until {SafeText.Clean(snapshot.Decider.Model)} is downloaded";
         var downloads = ModelsViewModel.StatusDownloads(snapshot);
-        _lease.Engine = "not started · models load after this page";
+        _lease.Engine = _service.EngineStatus ?? "not started · models load after this page";
         _lease.Generator = "";
         _lease.Decider = decider;
         _lease.Context = "";
         _lease.AreaFields = downloads;
         _lease.Mode = null;
-        _lease.Tags = snapshot.Privacy.VaultPresent
+        _lease.Tags = !snapshot.IsLoaded || snapshot.Privacy.VaultPresent
             ? []
             : [new StatusTag("Vault absent", Tone.Amber, "No answer at $XDG_RUNTIME_DIR/corvid-vault.sock: cloud models and gateway bots are unavailable.")];
         _lease.Scheduler = "";
@@ -645,7 +665,7 @@ public sealed class FirstRunViewModel : AreaViewModel
             return;
         var snapshot = _models.Snapshot;
         var missing = snapshot.Catalogue
-            .Where(model => model.InDefaultSet && model.Kind == ModelKind.Local && model.State != ModelState.Cached)
+            .Where(model => snapshot.IsLoaded && model.InDefaultSet && model.Kind == ModelKind.Local && model.State != ModelState.Cached)
             .Select(model => model.Name)
             .ToList();
         var tags = new List<StatusTag>();
@@ -655,9 +675,9 @@ public sealed class FirstRunViewModel : AreaViewModel
                 "Corvid runs with what it has: decisions use the degraded tier and memory writes wait for review until these models are downloaded."));
         }
 
-        if (!snapshot.Privacy.VaultPresent)
+        if (snapshot.IsLoaded && !snapshot.Privacy.VaultPresent)
             tags.Add(new StatusTag("Vault absent", Tone.Amber, "No answer at $XDG_RUNTIME_DIR/corvid-vault.sock: cloud models and gateway bots are unavailable."));
-        _bar.Engine = "in-process";
+        _bar.Engine = _service.EngineStatus ?? "in-process";
         _bar.Generator = "";
         _bar.Decider = ModelsViewModel.StatusDecider(snapshot);
         _bar.Context = "";
