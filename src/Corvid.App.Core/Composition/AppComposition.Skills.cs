@@ -9,7 +9,7 @@ public sealed partial class AppComposition
     private ISkillsService? _skillsService;
 
     /// <summary>
-    /// The skills store as the views see it. Demo mode (the only mode until Corvid.App.Engine exists) serves the scenario's
+    /// The skills store as the views see it. Demo mode (the engine's comes from <see cref="Services"/> instead) serves the scenario's
     /// library, one draft and the store's history on the frozen clock, in memory: it reads no folder and runs no git.
     /// <para>
     /// It is made as the composition starts, and counts the drafts waiting for the rail's Skills badge then, so the badge
@@ -22,7 +22,7 @@ public sealed partial class AppComposition
         {
             if (_skillsService is not null)
                 return _skillsService;
-            _skillsService = new DemoSkillsService(Time);
+            _skillsService = Services.CreateSkillsService(this);
             _ = CountSkillDraftsAsync(_skillsService);
             return _skillsService;
         }

@@ -10,10 +10,10 @@ public sealed partial class AppComposition
     private AuditViewModel? _audit;
 
     /// <summary>
-    /// The Audit area's service: the event log, the egress ledger, scans and trace export. Demo mode (the only mode until
-    /// Corvid.App.Engine exists) serves Audit.png's moment on the frozen clock.
+    /// The Audit area's service: the event log, the egress ledger, scans and trace export. Demo mode serves Audit.png's
+    /// moment on the frozen clock; engine mode gets it from <see cref="Services"/>.
     /// </summary>
-    public IAuditService AuditService => _auditService ??= new DemoAuditService(Time);
+    public IAuditService AuditService => _auditService ??= Services.CreateAuditService(this);
 
     /// <summary>The Audit area: the event log, scans and the egress ledger. Links from Sessions land through the shell.</summary>
     public AuditViewModel Audit => _audit ??= new AuditViewModel(AuditService, Time, Shell, new HubAuditSessionStatus(SessionHub));

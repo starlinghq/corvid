@@ -13,10 +13,10 @@ public sealed partial class AppComposition
     private HubSafetySession? _safetySession;
 
     /// <summary>
-    /// The Safety area's service: remembered rules, detections, the hardline list and taint. Demo mode (the only mode until
-    /// Corvid.App.Engine exists) reads the rules the sessions' approval answers wrote from the sessions themselves.
+    /// The Safety area's service: remembered rules, detections, the hardline list and taint. Demo mode (the engine's comes from
+    /// <see cref="Services"/> instead) reads the rules the sessions' approval answers wrote from the sessions themselves.
     /// </summary>
-    public ISafetyService SafetyService => _safetyService ??= new DemoSafetyService(Time, SessionService, new SessionServiceWatcher(SessionService));
+    public ISafetyService SafetyService => _safetyService ??= Services.CreateSafetyService(this);
 
     /// <summary>The Safety area: modes, rules and detections. Created on first use; disposed with the composition.</summary>
     public SafetyViewModel Safety => _safety ??= new SafetyViewModel(SafetyService, _safetySession ??= new HubSafetySession(SessionHub), Shell, StatusBar, Time);

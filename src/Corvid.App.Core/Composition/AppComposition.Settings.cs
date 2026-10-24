@@ -8,10 +8,10 @@ public sealed partial class AppComposition
     private ISettingsService? _settingsService;
 
     /// <summary>
-    /// The configuration as the views see it. Demo mode (the only mode until Corvid.App.Engine exists) edits an in-memory
+    /// The configuration as the views see it. Demo mode (the engine's comes from <see cref="Services"/> instead) edits an in-memory
     /// corvid.json and writes nothing.
     /// </summary>
-    public ISettingsService SettingsService => _settingsService ??= new DemoSettingsService();
+    public ISettingsService SettingsService => _settingsService ??= Services.CreateSettingsService(this);
 
     /// <summary>The Settings area: corvid.json typed and raw, keybindings, themes, notifications and layout.</summary>
     public SettingsViewModel Settings => _settings ??= new SettingsViewModel(Shell, SettingsService, Keys);

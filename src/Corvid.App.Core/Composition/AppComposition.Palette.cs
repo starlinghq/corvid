@@ -14,7 +14,7 @@ public sealed partial class AppComposition
     public KeyMap Keys => _keys ??= new KeyMap();
 
     /// <summary>The workspace's prompts, newest first; the demo's on the frozen clock.</summary>
-    public IPromptHistory PromptHistory => _promptHistory ??= new DemoPromptHistory(Time);
+    public IPromptHistory PromptHistory => _promptHistory ??= Services.CreatePromptHistory(this);
 
     /// <summary>
     /// The command palette and the surfaces that share it (Ctrl+K, Ctrl+Tab, Ctrl+R, Ctrl+F, Ctrl+Shift+F, Alt+P, F1). The

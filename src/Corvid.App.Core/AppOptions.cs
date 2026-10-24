@@ -9,10 +9,13 @@ namespace Corvid.App.Core;
 public sealed record AppOptions
 {
     public const string Usage = """
-        Usage: Corvid.App [--demo] [--theme light|dark|system] [--page <area>] [--session <id>] [--scene main|approval]
+        Usage: Corvid.App [--demo | --engine] [--theme light|dark|system] [--page <area>] [--session <id>]
+                          [--scene main|approval]
 
           --demo              demo services and the scripted scenario, with the clock frozen at 2026-10-24 14:05
-                              local (the default until the engine is wired in)
+                              local (the default)
+          --engine            Corvid's engine in-process, over the configuration, models and event log the CLI
+                              uses (corvid.json; CORVID_CONFIG and the XDG directories move them)
           --theme <theme>     light, dark or system (the default)
           --page <area>       the area to open: sessions, board, review, rewind, memory, skills, jobs, models,
                               safety, mcp, gateway, secrets, audit, settings or first-run
@@ -22,7 +25,10 @@ public sealed record AppOptions
           --help              this text
         """;
 
-    /// <summary>Demo services and the scripted scenario, with the clock frozen. The default until Corvid.App.Engine exists.</summary>
+    /// <summary>
+    /// Demo services and the scripted scenario, with the clock frozen: the default. False with <c>--engine</c>, which runs
+    /// the engine in-process (Corvid.App.Engine) on the system clock.
+    /// </summary>
     public bool Demo { get; init; } = true;
 
     public AppTheme Theme { get; init; } = AppTheme.System;
@@ -45,6 +51,7 @@ public sealed record AppOptions
         ArgumentNullException.ThrowIfNull(args);
         options = new AppOptions();
         error = "";
+        bool? demo = null;
         for (var i = 0; i < args.Count; i++)
         {
             // "--page models" and "--page=models" are the same.
@@ -59,8 +66,17 @@ public sealed record AppOptions
 
             switch (name)
             {
-                case "--demo" when inline is null:
-                    options = options with { Demo = true };
+                case "--demo" or "--engine" when inline is null:
+                    // One or the other: an engine run that quietly showed the demo (or the reverse) would mislead.
+                    var wanted = name == "--demo";
+                    if (demo is { } earlier && earlier != wanted)
+                    {
+                        error = "--demo and --engine cannot be used together.";
+                        return false;
+                    }
+
+                    demo = wanted;
+                    options = options with { Demo = wanted };
                     break;
                 case "--help" or "-h" or "-?" when inline is null:
                     options = options with { Help = true };

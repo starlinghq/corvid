@@ -31,6 +31,18 @@ public sealed class AppOptionsTests
     }
 
     [Fact]
+    public void EngineLeavesTheDemoAndDemoStaysTheDefault()
+    {
+        Assert.False(Parse("--engine").Demo);
+        Assert.False(Parse("--engine", "--page", "first-run").Demo);
+        Assert.True(Parse("--demo").Demo);
+        Assert.True(Parse("--demo", "--demo").Demo);
+        Assert.Equal("--demo and --engine cannot be used together.", Fail("--demo", "--engine"));
+        Assert.Equal("--demo and --engine cannot be used together.", Fail("--engine", "--demo"));
+        Assert.Contains("Unknown argument \"--engine=yes\"", Fail("--engine=yes"), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TheSceneIsTheMockupsMomentToOpenAt()
     {
         Assert.Equal(DemoScene.Approval, Parse("--scene", "approval").Scene);
@@ -82,7 +94,7 @@ public sealed class AppOptionsTests
     [Fact]
     public void TheUsageNamesEveryOption()
     {
-        foreach (var option in new[] { "--demo", "--theme", "--page", "--session", "--help" })
+        foreach (var option in new[] { "--demo", "--engine", "--theme", "--page", "--session", "--help" })
             Assert.Contains(option, AppOptions.Usage, StringComparison.Ordinal);
     }
 }

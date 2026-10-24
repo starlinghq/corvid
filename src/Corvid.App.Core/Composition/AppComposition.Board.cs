@@ -11,8 +11,8 @@ public sealed partial class AppComposition
     private int _bellGeneration;
 
     /// <summary>
-    /// The Board's service: the other areas' attention items and the engine's state. Demo mode (the only mode until
-    /// Corvid.App.Engine exists) serves Board.dc.html's moment on the frozen clock.
+    /// The Board's service: the other areas' attention items and the engine's state. Demo mode (the engine's comes from
+    /// <see cref="Services"/> instead) serves Board.dc.html's moment on the frozen clock.
     /// <para>
     /// From the moment it exists, the bell counts its items whichever page answers them (MCP accepting a tool, Gateway
     /// pairing), not only once the Board's view model is made.
@@ -24,7 +24,7 @@ public sealed partial class AppComposition
         {
             if (_boardService is not null)
                 return _boardService;
-            _boardService = new DemoBoardService(Time);
+            _boardService = Services.CreateBoardService(this);
             _boardService.AttentionChanged += OnBoardAttentionChanged;
             _ = CountBoardAttentionAsync();
             return _boardService;

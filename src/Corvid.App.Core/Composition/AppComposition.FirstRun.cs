@@ -11,7 +11,7 @@ public sealed partial class AppComposition
     /// The doctor and the setup's choices. Demo mode answers for FirstRun.png's fresh machine when the window opens on the
     /// first run (<c>--page first-run</c>), and for the configured machine of the other mockups when Doctor opens it.
     /// </summary>
-    public IFirstRunService FirstRunService => _firstRunService ??= new DemoFirstRunService(freshMachine: Options.Page == Area.FirstRun);
+    public IFirstRunService FirstRunService => _firstRunService ??= Services.CreateFirstRunService(this);
 
     /// <summary>
     /// The first run area: the doctor's checks and the setup. Opening the window on it is the setup, with its own column of

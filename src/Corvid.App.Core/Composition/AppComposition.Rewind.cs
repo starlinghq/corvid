@@ -8,8 +8,8 @@ public sealed partial class AppComposition
     private RewindViewModel? _rewind;
     private IRewindService? _rewindService;
 
-    /// <summary>Rewind's seam: the demo's over the demo sessions until Corvid.App.Engine brings the runtime's ledger and rollback.</summary>
-    public IRewindService RewindService => _rewindService ??= new DemoRewindService(SessionHub, (DemoSessionService)SessionService, Time);
+    /// <summary>Rewind's seam: the demo's over the demo sessions, or the engine's over the runtime's ledger and rollback (<see cref="Services"/>).</summary>
+    public IRewindService RewindService => _rewindService ??= Services.CreateRewindService(this);
 
     /// <summary>The Rewind area: the checkpoint timeline of the selected session.</summary>
     public RewindViewModel Rewind => _rewind ??= CreateRewind();
