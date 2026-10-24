@@ -54,7 +54,7 @@ public sealed record ParsedCommandView(
             dangerous ? Tone.Red : Tone.Grey,
             SafeText.Reveal(command.Verb),
             SafeText.Reveal(command.Subcommand),
-            string.Join(" ", command.Flags.Select(SafeText.Reveal)),
+            string.Join(" ", command.Flags.Select(flag => SafeText.Reveal(flag))),
             [.. command.Targets.Select(Chip)],
             [.. command.Notes.Select(note => new CommandNoteView(note.Label, SessionText.Runs(note.Text)))]);
     }
@@ -150,8 +150,17 @@ public sealed class RuleRowView : ObservableObject
         Command = SafeText.Reveal(rule.Command);
         Scope = SafeText.Clean(rule.Scope);
         _original = rule.Paths;
-        _paths = string.Join(" ", rule.Paths.Select(SafeText.Reveal));
+        _paths = string.Join(" ", rule.Paths.Select(path => SafeText.Reveal(path)));
+        // A path or command with a character the reader cannot see would be saved as something other than what is
+        // shown, so such a rule is refused outright; "once" and "session" still answer the call.
+        _hidden = SafeText.HasHidden(rule.Command) || rule.Paths.Any(SafeText.HasHidden);
+        if (_hidden)
+            _error = HiddenError;
     }
+
+    private const string HiddenError = "this rule holds characters you cannot see (shown as ⟨U+…⟩), so it cannot be written";
+
+    private readonly bool _hidden;
 
     /// <summary>"allow" (a green tag) or "deny".</summary>
     public string Decision { get; }
@@ -199,6 +208,12 @@ public sealed class RuleRowView : ObservableObject
 
     private void Validate()
     {
+        if (_hidden)
+        {
+            PathsError = HiddenError;
+            return;
+        }
+
         var edited = EditedPaths();
         if (edited.IsEmpty)
         {

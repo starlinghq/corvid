@@ -19,7 +19,13 @@ for (const file of fs.readdirSync(html).filter(name => name.endsWith(".html"))) 
   // fonts overwriting the references the app is compared against, so the fonts are checked before any screenshot.
   await page.goto(`file://${path.join(html, file)}`, { waitUntil: "networkidle" }).catch(() => {});
   await page.waitForTimeout(500);
-  const fonts = await page.evaluate(() => document.fonts.check('13px Inter') && document.fonts.check('13px "JetBrains Mono"'));
+  // document.fonts.check() is true when no face of the family exists at all, so ask for the faces and count them.
+  const fonts = await page.evaluate(async () => {
+    await document.fonts.ready;
+    const inter = await document.fonts.load('13px Inter');
+    const mono = await document.fonts.load('13px "JetBrains Mono"');
+    return inter.length > 0 && mono.length > 0;
+  });
   if (!fonts)
     throw new Error(`${file}: Inter or JetBrains Mono did not load (offline?); no PNG was written`);
   await page.screenshot({ path: path.join(out, `${name}.png`) });

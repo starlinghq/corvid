@@ -47,10 +47,10 @@ public static class SessionFold
             UsageUpdate usage => OnUsage(state, usage),
             PlanUpdate plan => state with { Plan = plan.Entries.IsDefault ? [] : plan.Entries },
             TitleChanged title => state with { Title = SafeText.Clean(title.Title) },
-            GoalChanged goal => state with { Goal = string.IsNullOrWhiteSpace(goal.Goal) ? null : SafeText.Clean(goal.Goal.Trim()) },
+            GoalChanged goal => state with { Goal = NonBlank(SafeText.Clean(goal.Goal)) },
             ApprovalModeChanged mode => state with { Mode = mode.Mode },
             SessionForked fork => state with { ForkOf = fork.FromSession, ForkTurn = fork.AtTurn },
-            DriverChanged driver => state with { ReadOnly = driver.ReadOnly, Holder = driver.ReadOnly && driver.Holder is { } holder ? SafeText.Clean(holder) : null },
+            DriverChanged driver => state with { ReadOnly = driver.ReadOnly, Holder = driver.ReadOnly ? NonBlank(SafeText.Clean(driver.Holder)) : null },
             AvailableCommandsUpdate commands => state with { Commands = commands.Commands.IsDefault ? [] : commands.Commands },
             QueueChanged queue => state with { Queue = queue.Items.IsDefault ? [] : queue.Items },
             CommandResult result => AddNew(state, "command", id => new CommandEntry(id, result)),
@@ -101,6 +101,9 @@ public static class SessionFold
 
     /// <summary>A cleaned engine string, or null when the update did not carry one (so the old value stays).</summary>
     private static string? Cleaned(string? text) => text is null ? null : SafeText.Clean(text);
+
+    /// <summary>Cleaned text, trimmed; null when nothing visible is left (a goal of only zero-width characters is no goal).</summary>
+    private static string? NonBlank(string cleaned) => string.IsNullOrWhiteSpace(cleaned) ? null : cleaned.Trim();
 
     private static SessionView OnUserMessage(SessionView state, UserMessage message)
     {

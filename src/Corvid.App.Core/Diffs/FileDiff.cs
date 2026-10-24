@@ -55,6 +55,9 @@ public sealed class FileDiff
     /// <summary>Old and new lines together beyond which the texts are not compared line by line.</summary>
     public const int MaxDiffLines = 20_000;
 
+    /// <summary>The word highlights' budget for one diff: the sum, over paired lines, of their lengths multiplied.</summary>
+    public const long MaxWordWork = 4_000_000;
+
     private readonly List<Line> _lines;
 
     private FileDiff(string path, string? oldText, string newText, List<Line> lines, bool wholeFile)
@@ -98,6 +101,7 @@ public sealed class FileDiff
         var newLines = SplitLines(newText);
         bool[] removed, added;
         var wholeFile = false;
+        var wordBudget = MaxWordWork;
         if (oldLines.Count + newLines.Count > MaxDiffLines)
         {
             // The line diff's time grows with the lines times the changes, and it runs when a card is drawn: past the cap
@@ -127,6 +131,18 @@ public sealed class FileDiff
                     come.Add(j++);
                 // Past the cap nothing is paired: word highlights would cost as much as the diff saved.
                 var pairs = wholeFile ? 0 : Math.Min(gone.Count, come.Count);
+                // Word highlights cost each pair's lengths multiplied: past a total budget for the whole diff the lines
+                // keep their colours but lose the highlights, so drawing a card stays fast however the edit looks.
+                for (var p = 0; p < pairs; p++)
+                {
+                    wordBudget -= (long)oldLines[gone[p]].Length * newLines[come[p]].Length;
+                    if (wordBudget < 0)
+                    {
+                        pairs = p;
+                        break;
+                    }
+                }
+
                 var oldSegments = new IReadOnlyList<DiffSegment>[gone.Count];
                 var newSegments = new IReadOnlyList<DiffSegment>[come.Count];
                 for (var p = 0; p < pairs; p++)
@@ -230,7 +246,7 @@ public sealed class FileDiff
         var result = new string[count];
         for (var i = 0; i < count; i++)
             // Revealed, not cleaned: a proposed edit is approved as shown, so a hidden character must show (SafeText.Reveal).
-            result[i] = SafeText.Reveal(lines[i].EndsWith('\r') ? lines[i][..^1] : lines[i]);
+            result[i] = SafeText.Reveal(lines[i].EndsWith('\r') ? lines[i][..^1] : lines[i], keepJoiners: true);
         return result;
     }
 

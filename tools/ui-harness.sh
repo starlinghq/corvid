@@ -24,13 +24,14 @@
 set -euo pipefail
 
 STATE="${UI_HARNESS_STATE:-${XDG_RUNTIME_DIR:-/tmp}/ui-harness-$UID}"
-mkdir -p -m 700 "$STATE"
+mkdir -p -m 700 "$STATE"; chmod 700 "$STATE"
 [[ -O "$STATE" ]] || { echo "state directory $STATE is not owned by you" >&2; exit 2; }
 cmd="${1:-}"; shift || true
 n="${1:-}"; shift || true
 [[ -n "$cmd" && -n "$n" ]] || { sed -n '2,23p' "$0"; exit 2; }
 [[ "$n" =~ ^[0-9]+$ ]] || { echo "the display must be a number: $n" >&2; exit 2; }
 int() { [[ "$1" =~ ^-?[0-9]+$ ]] || { echo "not a whole number: $1" >&2; exit 2; }; }
+count() { [[ "$1" =~ ^[1-9][0-9]*$ ]] || { echo "not a positive count: $1" >&2; exit 2; }; }
 wxh() { [[ "$1" =~ ^[0-9]+x[0-9]+$ ]] || { echo "not a size like 1440x900: $1" >&2; exit 2; }; }
 export DISPLAY=":$n"
 
@@ -87,7 +88,7 @@ case "$cmd" in
     echo "$out (${w}x${h})"
     ;;
   click)
-    int "$1"; int "$2"; int "${3:-1}"
+    int "$1"; int "$2"; count "${3:-1}"
     read -r x y _ _ < <(geometry)
     xdotool mousemove $((x + $1)) $((y + $2)) click "${3:-1}"; sleep 0.4
     ;;
@@ -97,9 +98,9 @@ case "$cmd" in
     xdotool mousemove $((x + $1)) $((y + $2)); sleep 0.4
     ;;
   scroll)
-    int "$1"; int "$2"; int "${4:-3}"
+    int "$1"; int "$2"; count "${4:-3}"
     read -r x y _ _ < <(geometry)
-    b=5; [[ "$3" == "up" ]] && b=4
+    b=5; [[ "${3:-down}" == "up" ]] && b=4
     xdotool mousemove $((x + $1)) $((y + $2)) click --repeat "${4:-3}" --delay 60 "$b"; sleep 0.4
     ;;
   type)

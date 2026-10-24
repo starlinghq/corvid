@@ -71,7 +71,7 @@ public sealed class SessionHub : IDisposable
         {
             summaries = await _service.ListAsync(cancellationToken).ConfigureAwait(true);
         }
-        catch (Exception exception) when (exception is not OutOfMemoryException)
+        catch (Exception exception) when (exception is not (OutOfMemoryException or OperationCanceledException))
         {
             // Called without awaiting at start-up: a failure must show, not vanish with the task.
             StartError = $"Sessions could not be listed: {SafeText.Clean(exception.Message)}";

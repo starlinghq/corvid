@@ -30,7 +30,7 @@ public enum DemoScene
 /// dispatcher, so requests and steps never race.
 /// </para>
 /// </summary>
-public sealed partial class DemoSessionService : ISessionService
+public sealed partial class DemoSessionService : ISessionService, IDisposable
 {
     private readonly IDispatcher _dispatcher;
     private readonly TimeProvider _time;
@@ -38,6 +38,13 @@ public sealed partial class DemoSessionService : ISessionService
     private readonly DateTimeOffset _start;
     private DateTimeOffset _clock;
     private int _forks;
+
+    /// <summary>Ends every scripted turn, so none of their timers fires after the window (or a test) is done.</summary>
+    public void Dispose()
+    {
+        foreach (var session in _sessions.Values)
+            session.Script?.End();
+    }
 
     public DemoSessionService(IDispatcher dispatcher, TimeProvider time, DemoScene scene = DemoScene.Main)
     {
@@ -151,9 +158,9 @@ public sealed partial class DemoSessionService : ISessionService
         if (session.State.Approvals.All(open => open.ApprovalId != approvalId))
             return Task.CompletedTask;
         // The script answers its prompts in order; an answer to a later one first would leave the earlier handler waiting
-        // on a prompt that is gone, so the demo takes answers to the current prompt only.
+        // on a prompt that is gone. Refused rather than ignored, so the card shows why and can be answered later.
         if (session.State.CurrentApproval?.ApprovalId != approvalId)
-            return Task.CompletedTask;
+            return Task.FromException(new InvalidOperationException("Answer the earlier approval first: prompts are answered in order."));
         if (session.Script?.Approvals.Remove(approvalId, out var handler) == true)
             handler(answer, false);
         else

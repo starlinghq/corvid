@@ -34,7 +34,7 @@ public sealed class FileDiffView
     {
         ArgumentNullException.ThrowIfNull(edit);
         Edit = edit;
-        Path = SafeText.Clean(edit.Path);
+        Path = SafeText.Reveal(edit.Path);
         _diff = new Lazy<FileDiff>(() => FileDiff.Compute(edit.Path, edit.OldText, edit.NewText));
     }
 

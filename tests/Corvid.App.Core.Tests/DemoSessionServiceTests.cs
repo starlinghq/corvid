@@ -126,6 +126,19 @@ public sealed class DemoSessionServiceTests
     }
 
     [Fact]
+    public async Task AnApprovalAnsweredOutOfTurnIsRefusedAndStaysOpen()
+    {
+        var (service, _) = Demo(DemoScene.Approval);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.AnswerApprovalAsync(Main, "a-33", ApprovalAnswer.Deny, TestContext.Current.CancellationToken));
+
+        var state = service.StateOf(Main);
+        Assert.Equal("a-32", state.CurrentApproval?.ApprovalId);
+        Assert.Contains(state.Approvals, open => open.ApprovalId == "a-33");
+    }
+
+    [Fact]
     public void AnsweringForTheSessionRunsTheShellThenTheDeniedPatchSendsTheReasonNext()
     {
         var (service, time) = Demo(DemoScene.Approval);

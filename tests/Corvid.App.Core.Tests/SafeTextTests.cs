@@ -14,9 +14,58 @@ public sealed class SafeTextTests
     public void RevealShowsWhatCleanWouldHide(string text, string expected) =>
         Assert.Equal(expected, SafeText.Reveal(text));
 
+    [Theory]
+    [InlineData("rm -rf /tm­p", "rm -rf /tm⟨U+00AD⟩p")]
+    [InlineData("ls \U000E0041x", "ls ⟨U+E0041⟩x")]
+    [InlineData("aㅤb", "a⟨U+3164⟩b")]
+    [InlineData("a͏b", "a⟨U+034F⟩b")]
+    [InlineData("x⁢y", "x⟨U+2062⟩y")]
+    public void RevealShowsFormatCharactersFillersAndTagsToo(string text, string expected) =>
+        Assert.Equal(expected, SafeText.Reveal(text));
+
     [Fact]
     public void CleanDropsZeroWidthCharactersAsWellAsBidiOverrides() =>
         Assert.Equal("rm -rf build", SafeText.Clean("rm​ -rf⁠ bu﻿ild‮"));
+
+    [Fact]
+    public void CleanKeepsTheJoinersThatPersianAndEmojiNeed()
+    {
+        const string persian = "می‌خواهم";
+        const string family = "👩‍👩‍👦";
+        Assert.Same(persian, SafeText.Clean(persian));
+        Assert.Same(family, SafeText.Clean(family));
+        Assert.Equal(family, SafeText.Reveal(family, keepJoiners: true));
+        Assert.Contains("⟨U+200D⟩", SafeText.Reveal(family), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ARuleWithAHiddenCharacterInAPathCannotBeWritten()
+    {
+        var hidden = new Sessions.RuleRowView(new Sessions.RulePreview("allow", "rm -r") { Paths = ["bu­ild/"] });
+        var plain = new Sessions.RuleRowView(new Sessions.RulePreview("allow", "rm -r") { Paths = ["build/"] });
+
+        Assert.True(hidden.HasPathsError);
+        Assert.Contains("cannot see", hidden.PathsError, StringComparison.Ordinal);
+        hidden.Paths = "build/";
+        Assert.True(hidden.HasPathsError);
+        Assert.False(plain.HasPathsError);
+        Assert.Equal("build/", plain.Paths);
+    }
+
+    [Fact]
+    public void WordHighlightsStopAtTheirBudgetAndTheLinesKeepTheirColours()
+    {
+        var line = new string('a', 1000);
+        var old = string.Concat(Enumerable.Range(0, 100).Select(i => $"{line} old {i}\n"));
+        var @new = string.Concat(Enumerable.Range(0, 100).Select(i => $"{line} new {i}\n"));
+
+        var rows = FileDiff.Compute("long.txt", old, @new).Unified();
+
+        var added = rows.Where(row => row.Kind == DiffRowKind.Added).ToList();
+        Assert.Equal(100, added.Count);
+        Assert.Contains(added[0].Segments, segment => segment.Changed);
+        Assert.DoesNotContain(added[^1].Segments, segment => segment.Changed);
+    }
 
     [Fact]
     public void AProposedEditShowsAHiddenOverrideInItsDiff()
