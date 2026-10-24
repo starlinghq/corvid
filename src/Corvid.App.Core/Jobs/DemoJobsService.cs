@@ -20,6 +20,9 @@ public sealed class DemoJobsService : IJobsService
     private readonly TimeZoneInfo _zone;
     private readonly List<JobRecord> _jobs = [];
     private readonly Dictionary<string, List<JobRunRecord>> _runs = new(StringComparer.Ordinal);
+
+    /// <summary>A one-off job's time, kept through a pause: resuming it after that time finishes it.</summary>
+    private readonly Dictionary<string, DateTimeOffset> _due = new(StringComparer.Ordinal);
     private readonly SchedulerStatus _scheduler;
     private int _next = 1;
 
@@ -94,6 +97,8 @@ public sealed class DemoJobsService : IJobsService
         };
         _jobs.Add(job);
         _runs[job.Id] = [];
+        if (preview.Parsed.StartsWith("once", StringComparison.Ordinal))
+            _due[job.Id] = preview.Next[0];
         Changed?.Invoke(this, EventArgs.Empty);
         return Task.FromResult(job);
     }
@@ -113,7 +118,9 @@ public sealed class DemoJobsService : IJobsService
         var job = Find(jobId);
         if (job.State != JobState.Paused)
             throw new InvalidOperationException($"{job.Name} is not paused.");
-        var next = Next(job.Parsed);
+        if (JobsText.HiddenPart(job) is { } part)
+            throw new InvalidOperationException($"{SafeText.Clean(job.Name)}'s {part} holds hidden characters; it cannot be resumed.");
+        var next = Next(job);
         return Task.FromResult(Replace(job with { State = next is null ? JobState.Finished : JobState.Active, NextRun = next }));
     }
 
@@ -127,6 +134,19 @@ public sealed class DemoJobsService : IJobsService
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// What <c>cron_create</c> does from a chat: the agent's job joins the store as it was made, unchecked (its prompt or
+    /// script may hide characters). Tests and scenes call it.
+    /// </summary>
+    public JobRecord Add(JobRecord job)
+    {
+        ArgumentNullException.ThrowIfNull(job);
+        _jobs.Add(job);
+        _runs[job.Id] = [];
+        Changed?.Invoke(this, EventArgs.Empty);
+        return job;
+    }
+
     private JobRecord Find(string jobId) =>
         _jobs.Find(job => job.Id == jobId) ?? throw new InvalidOperationException($"There is no job {jobId}.");
 
@@ -138,12 +158,23 @@ public sealed class DemoJobsService : IJobsService
         return job;
     }
 
-    /// <summary>The next run of a schedule as the scheduler reads it; a one-off has none once it is due.</summary>
-    private DateTimeOffset? Next(string parsed)
+    /// <summary>
+    /// The next run of a job's schedule from now, as the scheduler reads it: a cron line's or an interval's next run; a
+    /// one-off's own time while it is still ahead, and none once it has passed (the job is then finished).
+    /// </summary>
+    private DateTimeOffset? Next(JobRecord job)
     {
-        if (!parsed.StartsWith("cron ", StringComparison.Ordinal))
-            return null;
-        var preview = ScheduleGrammar.Cron(parsed[5..], _time.GetUtcNow(), _zone, 1);
+        var now = _time.GetUtcNow();
+        if (_due.TryGetValue(job.Id, out var due))
+            return due > now ? due : null;
+        if (job.Parsed.StartsWith("cron ", StringComparison.Ordinal))
+        {
+            var cron = ScheduleGrammar.Cron(job.Parsed[5..], now, _zone, 1);
+            return cron.Valid ? cron.Next[0] : null;
+        }
+
+        // An interval ("every 2h") runs on from now; an ISO one-off reads again as its time, or as passed.
+        var preview = ScheduleGrammar.Read(job.Schedule, now, _zone, 1);
         return preview.Valid ? preview.Next[0] : null;
     }
 

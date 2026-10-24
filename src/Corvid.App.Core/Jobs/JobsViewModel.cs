@@ -15,6 +15,9 @@ namespace Corvid.App.Core.Jobs;
 /// </summary>
 public sealed class JobsViewModel : AreaViewModel, IDisposable
 {
+    /// <summary>At most this many jobs are listed; the rest are counted under the table.</summary>
+    public const int MaxRows = 50;
+
     private readonly IJobsService _service;
     private readonly ShellViewModel _shell;
     private readonly StatusBarLease _lease;
@@ -26,6 +29,8 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
     private bool _active;
     private bool _disposed;
     private int _previewSequence;
+    private int _refreshSequence;
+    private string _jobsMore = "";
 
     private IReadOnlyList<TextRun> _subtitle = [];
     private IReadOnlyList<TextRun> _notice = [];
@@ -48,6 +53,9 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
     private string _draftWarning = "";
     private IReadOnlyList<Choice> _destinations = [];
 
+    /// <summary>Each destination's choice with the destination as the snapshot gave it: a choice is matched by that, not its cleaned label.</summary>
+    private IReadOnlyList<(string Raw, Choice Choice)> _destinationChoices = [];
+
     public JobsViewModel(IJobsService service, ShellViewModel shell, StatusBarViewModel statusBar, TimeProvider time)
         : base(Area.Jobs, "Scheduled jobs with their next run and history, and the scheduler's state.")
     {
@@ -61,7 +69,7 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
         _lease = new StatusBarLease(statusBar);
 
         PauseCommand = new AsyncRelayCommand(PauseAsync, () => _selected?.Record.State == JobState.Active);
-        ResumeCommand = new AsyncRelayCommand(ResumeAsync, () => _selected is { Record: { State: JobState.Paused } job } && HiddenIn(job) is null);
+        ResumeCommand = new AsyncRelayCommand(ResumeAsync, () => _selected is { Record: { State: JobState.Paused } job } && JobsText.HiddenPart(job) is null);
         AskRemoveCommand = new RelayCommand(() => IsConfirmingRemove = true, () => _selected is not null);
         RemoveCommand = new AsyncRelayCommand(RemoveAsync, () => _selected is not null);
         CancelRemoveCommand = new RelayCommand(() => IsConfirmingRemove = false);
@@ -74,6 +82,9 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
 
         _service.Changed += OnServiceChanged;
         _shell.PropertyChanged += OnShellChanged;
+        // A link followed before this area was first opened (the Board's job card) is read here: the page is made after it.
+        if (_shell.CurrentArea == Area.Jobs && _shell.Link is { Area: Area.Jobs, SessionId: { } session })
+            _highlightSession = session;
         _ = RefreshAsync();
         UpdateActive();
     }
@@ -84,6 +95,11 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
     public ObservableCollection<JobRowViewModel> Jobs { get; } = [];
 
     public bool HasJobs => Jobs.Count > 0;
+
+    /// <summary>"and 3 more jobs", when there are more than <see cref="MaxRows"/>.</summary>
+    public string JobsMore { get => _jobsMore; private set { if (SetProperty(ref _jobsMore, value)) OnPropertyChanged(nameof(HasJobsMore)); } }
+
+    public bool HasJobsMore => _jobsMore.Length > 0;
 
     public string EmptyText => "No jobs yet. New job… schedules one; in a chat, ask Corvid to (cron_create asks you first).";
 
@@ -126,7 +142,7 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
     /// (they are shown above as codes in brackets). A job comes from the agent through cron_create, so what would run is
     /// not set running in one click while part of it is hidden.
     /// </summary>
-    public string HiddenWarning => _selected is { Record: { State: JobState.Paused } job } && HiddenIn(job) is { } part
+    public string HiddenWarning => _selected is { Record: { State: JobState.Paused } job } && JobsText.HiddenPart(job) is { } part
         ? $"Its {part} holds hidden characters, shown above as codes in brackets, so it cannot be resumed from here. Remove the job, or fix it where it was made."
         : "";
 
@@ -291,23 +307,31 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
 
     private async Task RefreshAsync()
     {
+        // A later change's snapshot wins over an earlier one that finished after it.
+        var sequence = ++_refreshSequence;
+        JobsSnapshot snapshot;
         try
         {
-            _snapshot = await _service.LoadAsync(CancellationToken.None).ConfigureAwait(true);
+            snapshot = await _service.LoadAsync(CancellationToken.None).ConfigureAwait(true);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            Say(false, $"The jobs could not be loaded: {Spans.Escape(exception.Message)}");
+            if (sequence == _refreshSequence && !_disposed)
+                Say(false, $"The jobs could not be loaded: {Spans.Escape(exception.Message)}");
             return;
         }
 
-        if (_disposed)
+        if (_disposed || sequence != _refreshSequence)
             return;
+        _snapshot = snapshot;
         Sync(_snapshot);
         ShowScheduler(_snapshot.Scheduler);
         if (_destinations.Count == 0)
-            Destinations = [.. _snapshot.Destinations.Select(destination =>
-                new Choice(SafeText.Clean(destination), $"Deliver the result to {SafeText.Clean(destination)}", new RelayCommand(() => Deliver(destination))))];
+        {
+            _destinationChoices = [.. _snapshot.Destinations.Select(destination => (destination,
+                new Choice(SafeText.Clean(destination), $"Deliver the result to {SafeText.Clean(destination)}", new RelayCommand(() => Deliver(destination)))))];
+            Destinations = [.. _destinationChoices.Select(pair => pair.Choice)];
+        }
         Subtitle = Spans.Parse(SubtitleText(_snapshot));
         if (_active)
             ApplyStatus();
@@ -326,8 +350,9 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
         var now = _time.GetUtcNow();
         var zone = _time.LocalTimeZone;
         var wanted = new List<JobRowViewModel>();
-        foreach (var job in snapshot.Jobs.Where(job => job.State != JobState.Removed)
-                     .OrderBy(job => job.State == JobState.Active ? 0 : 1).ThenBy(job => job.NextRun ?? DateTimeOffset.MaxValue))
+        var jobs = snapshot.Jobs.Where(job => job.State != JobState.Removed)
+            .OrderBy(job => job.State == JobState.Active ? 0 : 1).ThenBy(job => job.NextRun ?? DateTimeOffset.MaxValue).ToList();
+        foreach (var job in jobs.Take(MaxRows))
         {
             if (!_rows.TryGetValue(job.Id, out var row))
                 _rows[job.Id] = row = new JobRowViewModel(job, select => Selected = select);
@@ -344,6 +369,8 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
                 Jobs.Add(row);
         }
 
+        var more = jobs.Count - wanted.Count;
+        JobsMore = more > 0 ? $"and {more} more job{(more == 1 ? "" : "s")}: /cron in a chat lists them all" : "";
         OnPropertyChanged(nameof(HasJobs));
     }
 
@@ -430,14 +457,6 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
         OnPropertyChanged(nameof(RemoveQuestion));
     }
 
-    /// <summary>The first part of the job that would run and holds a hidden character, or null.</summary>
-    private static string? HiddenIn(JobRecord job) =>
-        SafeText.HasHidden(job.Prompt) && !job.NoAgent ? "prompt"
-        : SafeText.HasHidden(job.Script) ? (job.NoAgent ? "command" : "pre-run script")
-        : SafeText.HasHidden(job.Schedule) || SafeText.HasHidden(job.Parsed) || SafeText.HasHidden(job.Zone) ? "schedule"
-        : SafeText.HasHidden(job.Deliver) ? "delivery target"
-        : null;
-
     private static ModelFact Fact(string key, string markup) => new(key, Spans.Parse(markup));
 
     private void ShowScheduler(SchedulerStatus status)
@@ -481,7 +500,7 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
 
     private async Task ResumeAsync(CancellationToken cancellationToken)
     {
-        if (_selected is not { } row || HiddenIn(row.Record) is not null)
+        if (_selected is not { } row || JobsText.HiddenPart(row.Record) is not null)
             return;
         var job = await _service.ResumeAsync(row.Id, cancellationToken).ConfigureAwait(true);
         var name = Spans.Escape(SafeText.Clean(job.Name));
@@ -526,8 +545,8 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
     private void Deliver(string destination)
     {
         _draftDeliver = destination;
-        foreach (var choice in _destinations)
-            choice.IsSelected = choice.Label == SafeText.Clean(destination);
+        foreach (var (raw, choice) in _destinationChoices)
+            choice.IsSelected = raw == destination;
         OnPropertyChanged(nameof(DraftDeliver));
     }
 

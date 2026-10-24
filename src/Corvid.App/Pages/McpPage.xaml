@@ -135,11 +135,9 @@
                        Text="{x:Bind ViewModel.DraftTarget, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="Command or address" />
               </Grid>
               <TextBlock Grid.Row="3" Text="trust" Style="{StaticResource OpsLabel}" Margin="0,2,0,0" />
-              <CheckBox Grid.Row="3" Grid.Column="1" Style="{StaticResource SetupCheckBox}" IsChecked="{x:Bind ViewModel.DraftTrusted, Mode=TwoWay}"
-                        AutomationProperties.Name="Trust this server">
-                <TextBlock Text="trusted: honour its hints. Untrusted (the default) asks before every call, and its results taint the session."
-                           Style="{StaticResource Cell}" />
-              </CheckBox>
+              <!-- A server is added untrusted; trusting it is asked on its panel, where its command is shown revealed. -->
+              <TextBlock Grid.Row="3" Grid.Column="1" Margin="0,2,0,0" TextWrapping="Wrap" Style="{StaticResource Cell}"
+                         Text="untrusted to start: each call asks, and its results taint the session. Trust… on its panel asks before trusting it." />
               <controls:ToneRow Grid.Row="4" Grid.ColumnSpan="2" Tone="Red" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasDraftWarning), Mode=OneWay}">
                 <TextBlock Text="{x:Bind ViewModel.DraftWarning, Mode=OneWay}" TextWrapping="Wrap" LineHeight="18.125" LineStackingStrategy="BlockLineHeight" />
               </controls:ToneRow>
@@ -293,6 +291,8 @@
                     </ItemsControl>
                   </StackPanel>
                 </ScrollViewer>
+                <TextBlock Tag="scroll-hint" Visibility="Collapsed" Text="The table is wider than the window: scroll it sideways for the rest →"
+                           Style="{StaticResource CellSmall}" Margin="14,2,14,6" TextWrapping="Wrap" />
               </StackPanel>
             </Border>
           </StackPanel>
@@ -391,6 +391,8 @@
                 </ItemsControl>
                 <TextBlock Text="{x:Bind ViewModel.NoToolsText, Mode=OneWay}" Style="{StaticResource CellMuted}" Margin="14,10"
                            Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.HasTools), Mode=OneWay}" />
+                <TextBlock Text="{x:Bind ViewModel.ToolsMore, Mode=OneWay}" Style="{StaticResource CellMuted}" Margin="14,8"
+                           Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasToolsMore), Mode=OneWay}" />
               </StackPanel>
             </Border>
 

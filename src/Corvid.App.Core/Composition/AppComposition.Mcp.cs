@@ -9,7 +9,7 @@ public sealed partial class AppComposition
 
     /// <summary>
     /// The MCP area's service: servers, pins and held definitions. Demo mode (the only mode until Corvid.App.Engine exists)
-    /// holds the Board's notes__search; it follows the Board's service, so an accept in either place is one accept.
+    /// holds the Board's notes__search; accepting it here answers the Board's item, whose Review… only leads here.
     /// </summary>
     public IMcpService McpService => _mcpService ??= new DemoMcpService(Time, BoardService);
 

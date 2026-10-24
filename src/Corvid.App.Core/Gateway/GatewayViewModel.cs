@@ -26,6 +26,10 @@ public sealed class GatewayViewModel : AreaViewModel, IDisposable
     private GatewaySnapshot? _snapshot;
     private bool _active;
     private bool _disposed;
+    private int _refreshSequence;
+
+    /// <summary>A link named a request before the snapshot listed it: landed on when it arrives.</summary>
+    private string? _linked;
 
     private IReadOnlyList<TextRun> _subtitle = [];
     private IReadOnlyList<TextRun> _notice = [];
@@ -52,6 +56,9 @@ public sealed class GatewayViewModel : AreaViewModel, IDisposable
 
         _service.Changed += OnServiceChanged;
         _shell.PropertyChanged += OnShellChanged;
+        // A link followed before this area was first opened (the Board's "Pair as owner…") is read here: the page is made after it.
+        if (_shell.CurrentArea == Area.Gateway && _shell.Link is { Area: Area.Gateway, Name: { } linked })
+            _linked = linked;
         _ = RefreshAsync();
         UpdateActive();
     }
@@ -93,6 +100,20 @@ public sealed class GatewayViewModel : AreaViewModel, IDisposable
 
     public RelayCommand DismissNoticeCommand { get; }
 
+    /// <summary>
+    /// The request card a link landed on, for the page to bring into view (and focus its owner question's answer when the
+    /// link opened it). Set before the page exists when the link opened the area; <see cref="TakePendingLanding"/> hands it
+    /// over once.
+    /// </summary>
+    public PairingRequestViewModel? PendingLanding { get; private set; }
+
+    public PairingRequestViewModel? TakePendingLanding()
+    {
+        var card = PendingLanding;
+        PendingLanding = null;
+        return card;
+    }
+
     /// <summary>Esc: closes an open question or allowlist editor. False when there was nothing to close.</summary>
     public bool Close()
     {
@@ -124,6 +145,8 @@ public sealed class GatewayViewModel : AreaViewModel, IDisposable
 
     private async Task RefreshAsync()
     {
+        // A later change's snapshot wins over an earlier one that finished after it.
+        var sequence = ++_refreshSequence;
         GatewaySnapshot snapshot;
         try
         {
@@ -131,11 +154,12 @@ public sealed class GatewayViewModel : AreaViewModel, IDisposable
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            Say(false, $"The gateway's state could not be loaded: {Spans.Escape(exception.Message)}");
+            if (sequence == _refreshSequence && !_disposed)
+                Say(false, $"The gateway's state could not be loaded: {Spans.Escape(exception.Message)}");
             return;
         }
 
-        if (_disposed)
+        if (_disposed || sequence != _refreshSequence)
             return;
         _snapshot = snapshot;
         var now = _time.GetUtcNow();
@@ -168,26 +192,61 @@ public sealed class GatewayViewModel : AreaViewModel, IDisposable
         Subtitle = Spans.Parse(SubtitleText(snapshot));
         if (_active)
             _lease.Gateway = GatewayText.Summary(snapshot.Adapters);
+        if (_linked is { } linked)
+        {
+            _linked = null;
+            Land(linked);
+        }
     }
 
+    /// <summary>
+    /// Inserts, moves and removes only what changed, so a row that stays keeps its element (and an open editor its focus).
+    /// A move is a removal and an insertion, as the Board's sync does it, for Uno's theme.
+    /// </summary>
     private static void Sync<TRow, TRecord>(ObservableCollection<TRow> rows, List<TRecord> records, Func<TRow, TRecord, bool> same, Func<TRecord, TRow> make)
+        where TRow : class
     {
         var wanted = records.Select(record => rows.FirstOrDefault(row => same(row, record)) is { } kept ? kept : make(record)).ToList();
-        if (wanted.SequenceEqual(rows))
+        for (var i = 0; i < wanted.Count; i++)
+        {
+            var at = rows.IndexOf(wanted[i]);
+            if (at == i)
+                continue;
+            if (at >= 0)
+                rows.RemoveAt(at);
+            rows.Insert(i, wanted[i]);
+        }
+
+        while (rows.Count > wanted.Count)
+            rows.RemoveAt(rows.Count - 1);
+    }
+
+    /// <summary>
+    /// A link into Gateway naming a pairing request (the Board's tray): its card comes into view, with the owner question
+    /// open when the link asked for it. A handle that hides a character never gets the question.
+    /// </summary>
+    private void Land(string name)
+    {
+        var (id, owner) = GatewayLinks.Read(name);
+        if (Requests.FirstOrDefault(card => card.Request.Id == id) is not { } card)
+        {
+            Say(false, "That pairing request was already answered.");
             return;
-        rows.Clear();
-        foreach (var row in wanted)
-            rows.Add(row);
+        }
+
+        if (owner)
+            card.IsConfirmingOwner = card.CanPair;
+        PendingLanding = card;
+        OnPropertyChanged(nameof(PendingLanding));
     }
 
     private PairingRequestViewModel RequestCard(PairingRequest request, DateTimeOffset now, TimeZoneInfo zone)
     {
         var guest = new AsyncRelayCommand(token => PairAsync(request, PairingRole.Guest, token), () => !SafeText.HasHidden(request.Handle));
-        var owner = new AsyncRelayCommand(token => PairAsync(request, PairingRole.Owner, token), () => !SafeText.HasHidden(request.Handle));
         var ignore = new AsyncRelayCommand(token => IgnoreAsync(request, token));
-        foreach (var command in new[] { guest, owner, ignore })
+        foreach (var command in new[] { guest, ignore })
             ReportFailures(command);
-        return new PairingRequestViewModel(request, now, zone, guest, owner, ignore);
+        return new PairingRequestViewModel(request, now, zone, guest, token => PairAsync(request, PairingRole.Owner, token), ignore, ReportFailures);
     }
 
     private static string SubtitleText(GatewaySnapshot snapshot)
@@ -232,7 +291,16 @@ public sealed class GatewayViewModel : AreaViewModel, IDisposable
     private void OnShellChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(ShellViewModel.CurrentArea))
+        {
             UpdateActive();
+        }
+        else if (e.PropertyName == nameof(ShellViewModel.Link) && _shell.Link is { Area: Area.Gateway, Name: { } name })
+        {
+            if (_snapshot is null)
+                _linked = name;
+            else
+                Land(name);
+        }
     }
 
     private void UpdateActive()

@@ -15,8 +15,9 @@ public interface IBoardService
     event EventHandler? AttentionChanged;
 
     /// <summary>
-    /// Answers an item with one of its <see cref="AttentionActionKind.Resolve"/> actions (accept the pin, pair as guest,
-    /// ignore). The item leaves the list and <see cref="AttentionChanged"/> is raised; an unknown item or action is ignored.
+    /// Answers an item with one of its <see cref="AttentionActionKind.Resolve"/> actions (ignore a pairing code). The item
+    /// leaves the list and <see cref="AttentionChanged"/> is raised; an unknown item or action is ignored. A refused answer
+    /// throws, and the item stays.
     /// </summary>
     Task ResolveAsync(string itemId, string actionId, CancellationToken cancellationToken = default);
 

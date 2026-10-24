@@ -19,6 +19,9 @@ public sealed class McpViewModel : AreaViewModel, IDisposable
     /// <summary>At most this many held cards are drawn at once; the rest wait in the tools table.</summary>
     public const int MaxHeldCards = 12;
 
+    /// <summary>At most this many of a server's tools are listed; the rest are counted under the table.</summary>
+    public const int MaxToolRows = 50;
+
     private readonly IMcpService _service;
     private readonly ShellViewModel _shell;
     private readonly StatusBarLease _lease;
@@ -28,6 +31,14 @@ public sealed class McpViewModel : AreaViewModel, IDisposable
     private McpServerRowViewModel? _selected;
     private bool _active;
     private bool _disposed;
+    private int _refreshSequence;
+
+    /// <summary>The held tool a Review or a link asked for, as (server, tool): its card is drawn even past the cap.</summary>
+    private (string Server, string Tool)? _review;
+
+    /// <summary>A link named a held tool before the snapshot listed it: landed on when it arrives.</summary>
+    private string? _linkedTool;
+    private string _toolsMore = "";
 
     private IReadOnlyList<TextRun> _subtitle = [];
     private IReadOnlyList<TextRun> _notice = [];
@@ -40,7 +51,6 @@ public sealed class McpViewModel : AreaViewModel, IDisposable
     private string _draftName = "";
     private string _draftTarget = "";
     private McpTransport _draftTransport = McpTransport.Stdio;
-    private bool _draftTrusted;
     private string _draftWarning = "";
     private IReadOnlyList<TextRun> _serve = [];
     private IReadOnlyList<string> _serveExposes = [];
@@ -77,6 +87,9 @@ public sealed class McpViewModel : AreaViewModel, IDisposable
 
         _service.Changed += OnServiceChanged;
         _shell.PropertyChanged += OnShellChanged;
+        // A link followed before this area was first opened (the Board's Review…) is read here: the page is made after it.
+        if (_shell.CurrentArea == Area.Mcp && _shell.Link is { Area: Area.Mcp, Name: { } linked })
+            _linkedTool = linked;
         _ = RefreshAsync();
         UpdateActive();
     }
@@ -130,6 +143,11 @@ public sealed class McpViewModel : AreaViewModel, IDisposable
     public IReadOnlyList<McpToolRowViewModel> Tools { get => _tools; private set { if (SetProperty(ref _tools, value)) OnPropertyChanged(nameof(HasTools)); } }
 
     public bool HasTools => _tools.Count > 0;
+
+    /// <summary>"and 12 more tools", when the server lists more than <see cref="MaxToolRows"/>.</summary>
+    public string ToolsMore { get => _toolsMore; private set { if (SetProperty(ref _toolsMore, value)) OnPropertyChanged(nameof(HasToolsMore)); } }
+
+    public bool HasToolsMore => _toolsMore.Length > 0;
 
     public string ToolsTitle => _selected is null ? "Tools" : $"Tools · {_selected.Name}";
 
@@ -255,9 +273,6 @@ public sealed class McpViewModel : AreaViewModel, IDisposable
 
     public string TargetPlaceholder => _draftTransport == McpTransport.Stdio ? "notes-mcp --root ./notes" : "https://mcp.example.com/tools";
 
-    /// <summary>Trusted from the start; untrusted (the default) asks before every call and taints.</summary>
-    public bool DraftTrusted { get => _draftTrusted; set => SetProperty(ref _draftTrusted, value); }
-
     public string DraftWarning { get => _draftWarning; private set { if (SetProperty(ref _draftWarning, value)) OnPropertyChanged(nameof(HasDraftWarning)); } }
 
     public bool HasDraftWarning => _draftWarning.Length > 0;
@@ -317,6 +332,8 @@ public sealed class McpViewModel : AreaViewModel, IDisposable
 
     private async Task RefreshAsync()
     {
+        // A later change's snapshot wins over an earlier one that finished after it.
+        var sequence = ++_refreshSequence;
         McpSnapshot snapshot;
         try
         {
@@ -324,11 +341,12 @@ public sealed class McpViewModel : AreaViewModel, IDisposable
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            Say(false, $"The MCP servers could not be loaded: {Spans.Escape(exception.Message)}");
+            if (sequence == _refreshSequence && !_disposed)
+                Say(false, $"The MCP servers could not be loaded: {Spans.Escape(exception.Message)}");
             return;
         }
 
-        if (_disposed)
+        if (_disposed || sequence != _refreshSequence)
             return;
         _snapshot = snapshot;
         SyncServers(snapshot);
@@ -337,13 +355,23 @@ public sealed class McpViewModel : AreaViewModel, IDisposable
         Serve = Spans.Parse(snapshot.Serve.Note);
         ServeExposes = [.. snapshot.Serve.Exposes.Select(SafeText.Clean)];
         OnPropertyChanged(nameof(ServeTag));
+        // The rail's badge is this service's count alone: the Board's tray leads here and pins nothing.
         _shell.SetBadge(Area.Mcp, snapshot.Held.Count);
         if (_active)
             ApplyStatus();
-        if (_selected is null || !_rows.ContainsKey(_selected.Id))
+        if (_linkedTool is { } linked && snapshot.Held.Any(held => held.Tool == linked))
+        {
+            _linkedTool = null;
+            Land(linked);
+        }
+        else if (_selected is null || !_rows.ContainsKey(_selected.Id))
+        {
             Selected = Landing();
+        }
         else
+        {
             ShowDetail();
+        }
     }
 
     private void SyncServers(McpSnapshot snapshot)
@@ -373,7 +401,11 @@ public sealed class McpViewModel : AreaViewModel, IDisposable
     {
         var now = _time.GetUtcNow();
         var zone = _time.LocalTimeZone;
-        var wanted = snapshot.Held.OrderBy(held => held.KeptBlocked).ThenBy(held => held.HeldAt).Take(MaxHeldCards).ToList();
+        var ordered = snapshot.Held.OrderBy(held => held.KeptBlocked).ThenBy(held => held.HeldAt).ToList();
+        var wanted = ordered.Take(MaxHeldCards).ToList();
+        // A tool asked for by Review or a link comes first when the cap would leave it out.
+        if (_review is { } key && !wanted.Any(held => Is(held, key)) && ordered.FirstOrDefault(held => Is(held, key)) is { } asked)
+            wanted = [asked, .. ordered.Where(held => !Is(held, key)).Take(MaxHeldCards - 1)];
         var cards = wanted.Select(held => Held.FirstOrDefault(card => card.Held == held) ?? Card(held, now, zone)).ToList();
         if (!cards.SequenceEqual(Held))
         {
@@ -389,15 +421,16 @@ public sealed class McpViewModel : AreaViewModel, IDisposable
 
     private McpHeldViewModel Card(McpHeldTool held, DateTimeOffset now, TimeZoneInfo zone)
     {
-        var accept = new AsyncRelayCommand(token => AcceptAsync(held, token), () => !held.NeedsAllow && !SafeText.HasHidden(held.Definition.All));
-        var allow = new AsyncRelayCommand(token => AllowAsync(held, token), () => held.NeedsAllow && !SafeText.HasHidden(held.Definition.All));
+        // The tool's and server's names are part of what is pinned, so a hidden character in either refuses it too.
+        var accept = new AsyncRelayCommand(token => AcceptAsync(held, token), () => !held.NeedsAllow && !McpText.HasHidden(held));
+        var allow = new AsyncRelayCommand(token => AllowAsync(held, token), () => held.NeedsAllow && !McpText.HasHidden(held));
         var keep = new AsyncRelayCommand(token => KeepAsync(held, token), () => !held.KeptBlocked);
         foreach (var command in new[] { accept, allow, keep })
             ReportFailures(command);
         return new McpHeldViewModel(held, now, zone, accept, allow, keep);
     }
 
-    /// <summary>Where the page lands: the server of the first held tool (the Board's "Diff"), else the first server.</summary>
+    /// <summary>Where the page lands: the server of the first held tool, else the first server (a link lands on its own tool instead).</summary>
     private McpServerRowViewModel? Landing()
     {
         if (Held.FirstOrDefault() is { } card && _rows.TryGetValue(card.Held.Server, out var row))
@@ -442,23 +475,56 @@ public sealed class McpViewModel : AreaViewModel, IDisposable
             ? "trusted: its hints are honoured; calls follow the approval mode"
             : "untrusted: each call asks, and its descriptions and results taint the session"));
         Detail = facts;
-        Tools = [.. server.Tools.Select(tool => new McpToolRowViewModel(tool, Review))];
+        Tools = [.. server.Tools.Take(MaxToolRows).Select(tool => new McpToolRowViewModel(tool, Review))];
+        var more = server.Tools.Count - MaxToolRows;
+        ToolsMore = more > 0 ? $"and {more} more tool{(more == 1 ? "" : "s")}" : "";
     }
 
     private static ModelFact Fact(string key, string markup) => new(key, Spans.Parse(markup));
 
-    /// <summary>A held tool's Review: its card shows its diff again, first.</summary>
-    private void Review(McpToolRecord tool)
+    /// <summary>A held card should come into view (the tools table's Review, a link); the page scrolls to it.</summary>
+    public event EventHandler<McpHeldViewModel>? ReviewRequested;
+
+    /// <summary>
+    /// The card last asked to come into view, for a page that attaches after the ask (a link opens the page after this
+    /// view model handled it). <see cref="TakePendingReview"/> hands it over once.
+    /// </summary>
+    public McpHeldViewModel? PendingReview { get; private set; }
+
+    public McpHeldViewModel? TakePendingReview()
     {
-        if (Held.FirstOrDefault(card => card.Held.Server == tool.Server && card.Held.Tool == tool.Name) is { } card)
+        var card = PendingReview;
+        PendingReview = null;
+        return card;
+    }
+
+    /// <summary>A held tool's Review: its card shows its diff again, drawn even past the cap, and comes into view.</summary>
+    private void Review(McpToolRecord tool) => Review(tool.Server, tool.Name);
+
+    private void Review(string server, string tool)
+    {
+        _review = (server, tool);
+        if (_snapshot is not null && !Held.Any(card => Is(card.Held, (server, tool))))
+            SyncHeld(_snapshot);
+        if (Held.FirstOrDefault(card => Is(card.Held, (server, tool))) is { } card)
         {
             card.ShowDiff = true;
+            PendingReview = card;
             ReviewRequested?.Invoke(this, card);
         }
     }
 
-    /// <summary>A held card should come into view (the tools table's Review); the page scrolls to it.</summary>
-    public event EventHandler<McpHeldViewModel>? ReviewRequested;
+    /// <summary>A link into MCP naming a held tool (the Board's Review…): its server is selected and its card comes into view.</summary>
+    private void Land(string tool)
+    {
+        if (_snapshot?.Held.FirstOrDefault(held => held.Tool == tool) is not { } held)
+            return;
+        if (_rows.TryGetValue(held.Server, out var row))
+            Selected = row;
+        Review(held.Server, held.Tool);
+    }
+
+    private static bool Is(McpHeldTool held, (string Server, string Tool) key) => held.Server == key.Server && held.Tool == key.Tool;
 
     private static string SubtitleText(McpSnapshot snapshot)
     {
@@ -519,7 +585,6 @@ public sealed class McpViewModel : AreaViewModel, IDisposable
         DraftName = "";
         DraftTarget = "";
         DraftTransport = McpTransport.Stdio;
-        DraftTrusted = false;
         IsAdding = true;
     }
 
@@ -535,12 +600,13 @@ public sealed class McpViewModel : AreaViewModel, IDisposable
 
     private async Task SaveServerAsync(CancellationToken cancellationToken)
     {
-        var server = await _service.AddServerAsync(new McpServerDraft(_draftName, _draftTransport, _draftTarget,
-            _draftTrusted ? McpTrust.Trusted : McpTrust.Untrusted), cancellationToken).ConfigureAwait(true);
+        // A new server starts untrusted: trust is given from its panel, after the question that shows its command.
+        var server = await _service.AddServerAsync(new McpServerDraft(_draftName, _draftTransport, _draftTarget, McpTrust.Untrusted),
+            cancellationToken).ConfigureAwait(true);
         IsAdding = false;
         if (_rows.TryGetValue(server.Name, out var row))
             Selected = row;
-        Say(true, $"Added **{Spans.Escape(SafeText.Clean(server.Name))}**: it starts with the next session, and its tools are pinned as it first lists them.");
+        Say(true, $"Added **{Spans.Escape(SafeText.Clean(server.Name))}**, untrusted: it starts with the next session and its tools are pinned as it first lists them. Trust… asks before trusting it.");
     }
 
     // ---- Shell, status bar, notices ----
@@ -548,7 +614,16 @@ public sealed class McpViewModel : AreaViewModel, IDisposable
     private void OnShellChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(ShellViewModel.CurrentArea))
+        {
             UpdateActive();
+        }
+        else if (e.PropertyName == nameof(ShellViewModel.Link) && _shell.Link is { Area: Area.Mcp, Name: { } tool })
+        {
+            if (_snapshot is null)
+                _linkedTool = tool;
+            else
+                Land(tool);
+        }
     }
 
     private void UpdateActive()
@@ -561,9 +636,10 @@ public sealed class McpViewModel : AreaViewModel, IDisposable
         {
             _lease.Take();
             ApplyStatus();
-            // Arriving (from the rail or the Board's "Diff") lands on the held tool's server.
-            if (Held.Count > 0 && _rows.TryGetValue(Held[0].Held.Server, out var row))
-                Selected = row;
+            // Arriving from the rail lands on the first held tool's server only when no server is picked yet: a server
+            // picked before, or by a link, stays.
+            if (_selected is null && _snapshot is not null)
+                Selected = Landing();
             return;
         }
 
