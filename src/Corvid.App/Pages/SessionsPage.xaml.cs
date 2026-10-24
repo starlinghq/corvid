@@ -250,7 +250,11 @@ public sealed partial class SessionsPage : Page, IDockProvider
     private void OnFocusRequested(object? sender, SessionFocusTarget target)
     {
         if (target == SessionFocusTarget.Composer)
+        {
             Composer.Focus(FocusState.Programmatic);
+            // With the caret after the draft, so typing goes on from it (a prompt put back from the history).
+            Composer.SelectionStart = Composer.Text.Length;
+        }
         else
             FocusApproval();
     }

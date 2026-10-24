@@ -15,8 +15,8 @@ namespace Corvid.App.Shell;
 /// switcher, Ctrl+R the prompt history, Ctrl+F find in the session, Ctrl+Shift+F search across sessions, Alt+P the
 /// generator, F1 and ? the shortcuts, Ctrl+N, Ctrl+Shift+N and Ctrl+; the surfaces of what comes later, Ctrl+B the dock,
 /// Ctrl+Shift+B the rail, Ctrl+, Settings, Ctrl+Shift+C the changes in Review; Esc closes an overlay. A remapping in
-/// Settings rebinds them at once. A page's own key (Audit's and Memory's Ctrl+F, Models' Alt+P) wins while focus is in
-/// the page, since its accelerator is nearer the focus.
+/// Settings rebinds them at once. A page's own key on the same gesture (Audit's and Memory's Ctrl+F, Models' Alt+P) wins
+/// while its area shows: the window leaves that gesture unbound there (<see cref="KeyMap.IsPagesKey"/>).
 /// </summary>
 public sealed partial class ShellPage : Page
 {
@@ -84,8 +84,13 @@ public sealed partial class ShellPage : Page
         foreach (var accelerator in _mapped)
             KeyboardAccelerators.Remove(accelerator);
         _mapped.Clear();
-        foreach (var binding in _composition.Keys.Bindings.Where(binding => binding.Context == KeyMap.App && binding.Gesture is not null))
+        var keys = _composition.Keys;
+        foreach (var binding in keys.Bindings.Where(binding => binding.Context == KeyMap.App && binding.Gesture is not null))
         {
+            // A gesture the showing page binds too is left out while that page shows: Uno stops at the first accelerator
+            // that matches, whether it handles the key or not, and the window's would hide the page's.
+            if (keys.IsPagesKey(binding, ViewModel.CurrentArea))
+                continue;
             if (!KeyGestures.TryMap(binding.Gesture!, out var key, out var modifiers))
                 continue;
             var id = binding.Id;
@@ -111,6 +116,7 @@ public sealed partial class ShellPage : Page
         switch (e.PropertyName)
         {
             case nameof(ShellViewModel.CurrentArea):
+                BindKeys();
                 Show(ViewModel.CurrentArea);
                 break;
             case nameof(ShellViewModel.Theme):

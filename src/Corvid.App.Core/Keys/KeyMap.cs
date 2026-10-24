@@ -112,6 +112,30 @@ public sealed class KeyMap
     /// <summary>For an app binding: page bindings on the same gesture, which win while their page has focus.</summary>
     public IReadOnlyList<KeyBinding> ShadowsOf(KeyBinding binding) => binding.Context == App ? Others(binding, sameContext: false) : [];
 
+    /// <summary>The contexts whose keys a page binds while its area shows.</summary>
+    public static IReadOnlyList<string> ContextsOf(Area area) => area switch
+    {
+        Area.Sessions => ["composer", "transcript", "approval", "dock"],
+        Area.Review => ["review"],
+        Area.Models => ["models"],
+        Area.Audit => ["audit"],
+        Area.Memory => ["memory"],
+        Area.Board => ["board"],
+        Area.Rewind => ["rewind"],
+        _ => [],
+    };
+
+    /// <summary>
+    /// Whether a window key's gesture is also a key of the page that shows: there the page's key wins, so the window
+    /// leaves the gesture to it (Ctrl+F filters Audit's log, Alt+P opens Models' Switch… picker).
+    /// </summary>
+    public bool IsPagesKey(KeyBinding binding, Area area)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        var contexts = ContextsOf(area);
+        return contexts.Count > 0 && ShadowsOf(binding).Any(shadow => contexts.Contains(shadow.Context));
+    }
+
     /// <summary>
     /// Proposes a gesture for a remappable binding. A gesture that does not parse, or one another app binding uses, is
     /// refused and nothing changes; one a page uses is accepted with the pages named, since there the page's key wins.

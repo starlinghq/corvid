@@ -314,6 +314,8 @@ public sealed class PaletteViewModel : ObservableObject
         {
             if (item.Note.Length > 0)
                 Show(item.Note, Tone.Amber);
+            else if (_mode == PaletteMode.Help)
+                Show($"{item.KeyText} belongs to {item.Group}: it works while the focus is there.", Tone.Blue);
             return;
         }
 
@@ -531,7 +533,13 @@ public sealed class PaletteViewModel : ObservableObject
         {
             var inUse = string.Equals(slot?.Model, model.Name, StringComparison.Ordinal);
             var where = SafeText.Clean(Spans.Plain(model.Where));
-            var note = model.IsAvailable ? "" : model.Kind == ModelKind.Local ? "Not downloaded: Models › Download… fetches it." : $"Unavailable: {SafeText.Clean(Spans.Plain(model.Fit))}";
+            var note = model.IsAvailable ? "" : model.Kind switch
+            {
+                ModelKind.Local => "Not downloaded: Models › Download… fetches it.",
+                ModelKind.Cloud when model.Secret is { } secret => $"No key: set {SafeText.Clean(secret)} in Vault first (Secrets).",
+                ModelKind.Server => "Not answering: Models checks the server.",
+                _ => "Unavailable now: Models says why.",
+            };
             var name = model.Name;
             return new PaletteItem(SafeText.Clean(name), inUse ? $"{where} · in use" : where,
                 model.IsAvailable && !inUse ? () => Switch(models, name) : null, "", "", model.Kind == ModelKind.Cloud ? IconKind.Cloud : IconKind.Chip)
@@ -545,15 +553,15 @@ public sealed class PaletteViewModel : ObservableObject
     private void Switch(IModelService models, string model) => Load(async cancellationToken =>
     {
         var result = await models.SwitchAsync(ModelSlotNames.Generator, model, cancellationToken);
-        var message = SafeText.Clean(Spans.Plain(result.Message));
         if (!result.Written)
         {
-            Show(message, Tone.Red);
+            Show(SafeText.Clean(Spans.Plain(result.Message)), Tone.Red);
             return;
         }
 
         await LoadGeneratorAsync(cancellationToken);
-        Show(message, Tone.Green);
+        // Said here rather than in the service's words, which name the file it writes; Models shows those.
+        Show($"The generator is now {SafeText.Clean(model)}: new sessions start on it, and this one switches after its issued tool calls.", Tone.Green);
     });
 
     // ---- Choosing ----

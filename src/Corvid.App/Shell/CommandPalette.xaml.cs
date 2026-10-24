@@ -16,7 +16,6 @@ namespace Corvid.App.Shell;
 public sealed partial class CommandPalette : UserControl
 {
     private UIElement? _returnFocus;
-    private bool _restoreFocus;
 
     public CommandPalette(PaletteViewModel viewModel)
     {
@@ -47,16 +46,16 @@ public sealed partial class CommandPalette : UserControl
         {
             case nameof(PaletteViewModel.IsOpen) when ViewModel.IsOpen:
                 _returnFocus ??= XamlRoot is { } root ? FocusManager.GetFocusedElement(root) as UIElement : null;
-                _restoreFocus = false;
                 Fit();
                 // The field draws in the next layout pass; focus waits for it.
                 DispatcherQueue.TryEnqueue(TakeFocus);
                 break;
             case nameof(PaletteViewModel.IsOpen):
-                if (_restoreFocus && _returnFocus is { } back)
-                    back.Focus(FocusState.Programmatic);
+                // Focus goes back to where it was before the card hides it, or the window would hand it to its first
+                // button. A choice that puts it somewhere (the composer, after a prompt from the history) does so after
+                // this, through the dispatcher, and wins.
+                _returnFocus?.Focus(FocusState.Programmatic);
                 _returnFocus = null;
-                _restoreFocus = false;
                 break;
             case nameof(PaletteViewModel.Mode) when ViewModel.IsOpen:
                 DispatcherQueue.TryEnqueue(TakeFocus);
@@ -136,7 +135,6 @@ public sealed partial class CommandPalette : UserControl
 
     private void Cancel()
     {
-        _restoreFocus = true;
         ViewModel.Close();
     }
 
