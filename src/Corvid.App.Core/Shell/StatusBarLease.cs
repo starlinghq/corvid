@@ -5,7 +5,7 @@ namespace Corvid.App.Core.Shell;
 /// <summary>
 /// An area's hold on the status bar while it shows (the Board, Models, the first run): it remembers what the bar showed
 /// when the area took it, writes the area's items, and when the area goes puts back what it replaced, so an area that
-/// writes nothing of its own (Skills, Settings) does not inherit the last area's items. An item someone else wrote
+/// writes nothing of its own (Settings) does not inherit the last area's items. An item someone else wrote
 /// meanwhile is theirs and stays. An empty list is written as a fresh instance, so it is never mistaken for another
 /// writer's empty list (<c>[]</c> is one shared instance).
 /// </summary>
@@ -29,8 +29,8 @@ public sealed class StatusBarLease
     /// <summary>
     /// Takes the bar, remembering what it shows; taking it again while held changes nothing. If another area still holds
     /// the bar (areas hear a navigation in the order they were created, so the next one can take before the last lets
-    /// go), the bar passes over: this lease keeps what that one saved, so leaving puts back the bar as it was before
-    /// either area, and the other lease ends without restoring.
+    /// go), the bar passes over: the other lease puts back what it wrote and ends, and this lease keeps what that one
+    /// saved, so leaving puts back the bar as it was before either area.
     /// </summary>
     public void Take()
     {
@@ -43,10 +43,8 @@ public sealed class StatusBarLease
         {
             foreach (var (name, value) in other._saved)
                 _saved[name] = value;
-            // What the other area wrote and still owns is this lease's to put back too.
-            foreach (var (name, value) in other._mine)
-                _mine[name] = value;
-            other.Release(restore: false);
+            // The other area's items go back now, so an area that writes only part of the bar never shows them.
+            other.Release(restore: true);
         }
         else
         {

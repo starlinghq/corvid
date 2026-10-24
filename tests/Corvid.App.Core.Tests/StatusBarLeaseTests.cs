@@ -39,4 +39,24 @@ public sealed class StatusBarLeaseTests
         Assert.Equal(("", "turn 9 s"), (bar.Engine, bar.Trailing));
         Assert.False(board.IsHeld);
     }
+
+    [Fact]
+    public void ANextAreaThatWritesPartOfTheBarDoesNotShowTheLastAreasItems()
+    {
+        var bar = new StatusBarViewModel { Engine = "", Scheduler = "here", AreaFields = [] };
+        var mcp = new StatusBarLease(bar);
+        var gateway = new StatusBarLease(bar);
+
+        mcp.Take();
+        mcp.AreaFields = [new StatusField("mcp", "3 of 4 running")];
+        mcp.Scheduler = "here · next: nightly-tidy";
+        // Gateway takes the bar before MCP hears the navigation, and writes only the gateway item.
+        gateway.Take();
+        gateway.Gateway = "telegram up";
+        mcp.Release();
+
+        Assert.Empty(bar.AreaFields);
+        Assert.Equal("here", bar.Scheduler);
+        Assert.Equal("telegram up", bar.Gateway);
+    }
 }
