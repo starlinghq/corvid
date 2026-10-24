@@ -50,9 +50,14 @@ Keys so far: `Ctrl+B` the dock, `Ctrl+Shift+B` the rail, `Ctrl+,` Settings, `Esc
 page: `Enter` sends (queued while a turn runs), `Shift+Enter` breaks the line, `Ctrl+Enter` steers, `Esc` interrupts,
 `Esc Esc` on an idle empty composer opens Rewind, `Up` takes the last queued message back, `Shift+Tab` cycles the
 approval mode, `Ctrl+S` puts the draft aside; on an open approval card the first `Enter` focuses it, then `1` to `5`
-answer and the arrows move; `Ctrl+1` to `Ctrl+7` pick dock tabs; `Ctrl+O`, `Ctrl+T` and `Ctrl+Shift+D` expand the
-latest output, the thoughts and every checkpoint's chips. The rest of the keyboard map (`docs/plan/ui.md` §6) comes with
-the screens it drives.
+answer and the arrows move; `Ctrl+1` to `Ctrl+7` pick dock tabs; `Ctrl+O`, `Ctrl+T` and `Ctrl+Shift+D` expand the latest
+output, the thoughts and every checkpoint's chips. On Models: `Alt+P` opens the generator's Switch… picker, `Alt+Left`
+and `Alt+Right` move a focused escalation-ladder step (or drag it by its grip), and `Esc` closes a picker or the
+placement editor. `Ctrl+Shift+C` opens Review from anywhere; on Review `Up` and `Down` move through the file list. On
+Audit: `Up` and `Down` move between event rows, `Enter`
+and `Space` open the focused row, `Ctrl+F` puts the caret in the "path or tool" filter, and `Esc` first shows every
+event again after a detection's link narrowed the log, then closes the open event. The rest of the keyboard map
+(`docs/plan/ui.md` §6) comes with the screens it drives.
 
 ## The harness check
 
@@ -100,7 +105,8 @@ src/Corvid.App/
                              DiffRowsView, HintLine (key caps)
   Shell/                     ShellPage (the window's content), RailView, StatusBarView, AreaPages, IDockProvider,
                              EqualColumnsPanel
-  Pages/                     one <Area>Page.xaml per area; SessionsDock and BoardDock are those areas' dock panels
+  Pages/                     one <Area>Page.xaml per area; SessionsDock and BoardDock are those areas' dock panels;
+                             ModelsStyles.xaml and SpanText are the Models and First run pages' shared parts
   Infrastructure/            UiDispatcher (the core's IDispatcher), Ui (x:Bind helpers), AppLogging
 src/Corvid.App.Core/
   Mvvm/                      ObservableObject, RelayCommand(<T>), AsyncRelayCommand, Choice, IDispatcher, InlineDispatcher
@@ -115,21 +121,23 @@ src/Corvid.App.Core/
 Each rail destination is an area: Sessions, Board, Review, Rewind, Memory, Skills, Jobs, Models, Safety, Mcp, Gateway,
 Secrets, Audit, Settings, FirstRun (`Area` in the core). An area owns, and only its builder edits:
 
-- `src/Corvid.App.Core/<Area>/`: `I<Area>Service`, its DTO records, `Demo<Area>Service`, `<Area>ViewModel` (deriving from
-  `AreaViewModel`, which gives the page its title).
+- `src/Corvid.App.Core/<Area>/`: `I<Area>Service`, its DTO records, `Demo<Area>Service`, `<Area>ViewModel` (deriving
+  from `AreaViewModel`, which gives the page its title).
 - `src/Corvid.App.Core/Composition/AppComposition.<Area>.cs`: the property named after the area that creates its service
-  and view model on first use. Demo mode passes the demo service and `Time` (the frozen clock); the engine's service comes
-  with `Corvid.App.Engine`.
-- `src/Corvid.App/Pages/<Area>Page.xaml(.cs)`: the page. It takes its view model from the composition the shell navigates
-  with (`OnNavigatedTo`: `((AppComposition)e.Parameter).<Area>`, then `Bindings.Update()`) and binds with `x:Bind`.
+  and view model on first use. Demo mode passes the demo service and `Time` (the frozen clock); the engine's service
+  comes with `Corvid.App.Engine`.
+- `src/Corvid.App/Pages/<Area>Page.xaml(.cs)`: the page. It takes its view model from the composition the shell
+  navigates with (`OnNavigatedTo`: `((AppComposition)e.Parameter).<Area>`, then `Bindings.Update()`) and binds with
+  `x:Bind`.
 
 A page that has dock panels implements `IDockProvider`; the shell shows its `Dock` as the 380 px column at wide widths
 and over the content from the status bar's toggle below 1180 px. Create the dock with the page: the frame raises
 `Navigated` (where the shell takes the dock) before `OnNavigatedTo` gives the page its view model.
 
-The shell itself (rail, status bar, layout, theme) is `ShellViewModel` and `StatusBarViewModel`; the demo fills them with
-the Main mockup's values (`DemoShell`), and live data sets the same members: `SetBadge`, `SetSessions`, `AttentionCount`,
-`Workspace`, the status bar's strings, `Mode` (a person's choice raises `ModeRequested`; the engine's answer sets `Mode`).
+The shell itself (rail, status bar, layout, theme) is `ShellViewModel` and `StatusBarViewModel`; the demo fills them
+with the Main mockup's values (`DemoShell`), and live data sets the same members: `SetBadge`, `SetSessions`,
+`AttentionCount`, `Workspace`, the status bar's strings, `Mode` (a person's choice raises `ModeRequested`; the engine's
+answer sets `Mode`).
 
 ## Theme, type and icons
 
@@ -137,13 +145,13 @@ the Main mockup's values (`DemoShell`), and live data sets the same members: `Se
   templates' visual states rather than computing colours in code, so a theme switch repaints. Uno does not repaint a
   `Run`'s theme brush when the theme changes, so give differently coloured words their own `TextBlock`.
 - Inter is the default text font (`ms-appx:///Assets/Fonts/Inter`, a manifest choosing 400, 500 or 600 by `FontWeight`);
-  `CorvidMono` is JetBrains Mono. CSS centres a line in its line height; XAML puts the extra space above. For one line in
-  a CSS line box, centre the text at its natural height (Inter: 1.21 em) or pad it by half the leading; rows of a
+  `CorvidMono` is JetBrains Mono. CSS centres a line in its line height; XAML puts the extra space above. For one line
+  in a CSS line box, centre the text at its natural height (Inter: 1.21 em) or pad it by half the leading; rows of a
   fractional height stack in a `PitchedStackPanel` so they land on the mockup's pixels.
-- `Icon Kind="..."` draws one of the mockups' icons in its `Foreground`. Kinds: Logo, Bell, Chat, Board, Sliders, Layers,
-  Sparkle, Clock, Chip, Shield, Plug, Send, Lock, Lines, Terminal, Paperclip, Question, Warning, PopOut, Cloud, File,
-  ChevronDown, Search, Globe, Menu, More, Check, and PanelRight (the dock toggle, which the mockups lack). To add one,
-  copy the 16 px path from the `.dc.html`, write circles and rectangles as arcs, and add it to `IconPaths`.
+- `Icon Kind="..."` draws one of the mockups' icons in its `Foreground`. Kinds: Logo, Bell, Chat, Board, Sliders,
+  Layers, Sparkle, Clock, Chip, Shield, Plug, Send, Lock, Lines, Terminal, Paperclip, Question, Warning, PopOut, Cloud,
+  File, ChevronDown, Search, Globe, Menu, More, Check, and PanelRight (the dock toggle, which the mockups lack). To add
+  one, copy the 16 px path from the `.dc.html`, write circles and rectangles as arcs, and add it to `IconPaths`.
 - Views built in code (`MarkdownView`, `DiffRowsView`, `HintLine`, `RichText`) look brushes up with `ThemeBrushes.Get`
   for the element's theme and rebuild on `ActualThemeChanged`.
 
@@ -159,6 +167,27 @@ More Uno gotchas found building the Sessions page:
 - The page's own `x:Bind` paths do not follow a static source's `PropertyChanged`; templates created later do read it.
 - `x:Bind` function arguments are paths or literals, not other function calls.
 
+And from the A1 screens:
+
+- With `UseSystemFocusVisuals=True`, a row whose `Button` template was visited by keyboard can stay drawn faded after
+  focus moves on. Rewind's ledger rows and the side-by-side diff's lines draw their own 2 px accent ring instead.
+- A text run made only of spaces measures as zero width, so indentation before a changed word disappears.
+  `SideBySideDiffView` pads such runs; the shared `DiffRowsView` still has the bug where leading whitespace is its own
+  segment.
+- Under `--theme light` on a system in dark, a control that took keyboard focus (Tab, or `Focus(FocusState.Keyboard)`)
+  redrew in dark-theme brushes and stayed so: Uno resolves a focused control's visual-state brushes against the
+  application's theme, not the root page's. `App` now sets `Application.RequestedTheme` from `--theme` before start-up,
+  which fixes it for a theme chosen on the command line. A theme switched at run time (Settings) can still mismatch,
+  since Uno takes the application's theme only before start-up.
+- `ObservableCollection.Move` in an `ItemsControl` re-templated the moved item outside the page's theme; remove and
+  re-insert instead (the Board's sync does).
+- An `x:Bind` from a `DataTemplate`'s `ColumnDefinition.Width` (or a `ContentControl` header template) to a static
+  source's `GridLength` did not follow later `PropertyChanged`; set such widths in code (Memory's `MemoryTableRow`).
+- The window's first focus lands on the first `Button`, with a keyboard ring. A page that should not start there takes
+  focus itself on `Loaded` (`IsTabStop` and a programmatic `Focus`).
+- Closing an inline editor sends focus to the next item's first button, which then looks pressed: focus the page before
+  the command runs.
+
 ## Fonts
 
 | Files | Family | Source | Licence |
@@ -168,10 +197,11 @@ More Uno gotchas found building the Sessions page:
 
 ## Boundaries
 
-`tools/Corvid.Architecture` holds the app's rules, with tests in `tests/Corvid.Architecture.Tests`: Uno's packages appear
-in `Corvid.App` only, from an explicit list of what Uno.Sdk's implicit packages resolve (another list for the WebAssembly
-target); `Corvid.App.Core` takes no package but Markdig and no project but `Corvid.Abstractions`; only the head's desktop
-target and `Corvid.App.Engine` reach `Corvid.Host`, and the WebAssembly target never does. No CommunityToolkit, MVUX,
-Uno.Extensions or Uno Toolkit: Hot Design (which brings them) and the in-app MCP endpoint are turned off in the project.
-The WebAssembly target pins `System.Security.Cryptography.Pkcs` and `.Xml` to the patched release over the 10.0.12 that
-Uno.Sdk's `Microsoft.Windows.Compatibility` brings (Directory.Packages.props); the desktop graph has neither.
+`tools/Corvid.Architecture` holds the app's rules, with tests in `tests/Corvid.Architecture.Tests`: Uno's packages
+appear in `Corvid.App` only, from an explicit list of what Uno.Sdk's implicit packages resolve (another list for the
+WebAssembly target); `Corvid.App.Core` takes no package but Markdig and no project but `Corvid.Abstractions`; only the
+head's desktop target and `Corvid.App.Engine` reach `Corvid.Host`, and the WebAssembly target never does. No
+CommunityToolkit, MVUX, Uno.Extensions or Uno Toolkit: Hot Design (which brings them) and the in-app MCP endpoint are
+turned off in the project. The WebAssembly target pins `System.Security.Cryptography.Pkcs` and `.Xml` to the patched
+release over the 10.0.12 that Uno.Sdk's `Microsoft.Windows.Compatibility` brings (Directory.Packages.props); the desktop
+graph has neither.

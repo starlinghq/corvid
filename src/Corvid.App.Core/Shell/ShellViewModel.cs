@@ -29,6 +29,7 @@ public sealed class ShellViewModel : ObservableObject
     private bool _railOpen = true;
     private bool _dockOverlayOpen;
     private bool _railOverlayOpen;
+    private bool _pageDrawsRail;
 
     public ShellViewModel(StatusBarViewModel statusBar)
     {
@@ -150,8 +151,23 @@ public sealed class ShellViewModel : ObservableObject
         }
     }
 
-    /// <summary>The rail as a column (wide and medium widths, unless collapsed with Ctrl+Shift+B).</summary>
-    public bool ShowRail => _layout is ShellLayout.Wide or ShellLayout.Medium && _railOpen;
+    /// <summary>
+    /// The current page draws its own left column instead of the rail (the first run's setup steps, FirstRun.dc.html), so
+    /// the rail's column and its status-bar toggle stay away while it shows. The page's view model sets it while its area
+    /// is current and clears it when the area goes.
+    /// </summary>
+    public bool PageDrawsRail
+    {
+        get => _pageDrawsRail;
+        set
+        {
+            if (SetProperty(ref _pageDrawsRail, value))
+                RaiseLayout();
+        }
+    }
+
+    /// <summary>The rail as a column (wide and medium widths, unless collapsed with Ctrl+Shift+B or the page draws its own).</summary>
+    public bool ShowRail => _layout is ShellLayout.Wide or ShellLayout.Medium && _railOpen && !_pageDrawsRail;
 
     /// <summary>The rail over the content (narrow and phone widths, after its toggle, the phone's menu or More).</summary>
     public bool ShowRailOverlay => _layout is ShellLayout.Narrow or ShellLayout.Phone && _railOverlayOpen;
@@ -177,7 +193,7 @@ public sealed class ShellViewModel : ObservableObject
     public bool ShowPhoneBars => _layout == ShellLayout.Phone;
 
     /// <summary>The status bar's rail toggle, shown whenever the rail is hidden on a desktop width.</summary>
-    public bool ShowRailToggle => _layout != ShellLayout.Phone && !ShowRail;
+    public bool ShowRailToggle => _layout != ShellLayout.Phone && !ShowRail && !_pageDrawsRail;
 
     /// <summary>The status bar's dock toggle, shown whenever the page has panels the width or Ctrl+B hid.</summary>
     public bool ShowDockToggle => _hasDock && _layout != ShellLayout.Phone && !ShowDock;
@@ -214,6 +230,21 @@ public sealed class ShellViewModel : ObservableObject
         OnPropertyChanged(nameof(CurrentTitle));
         OnPropertyChanged(nameof(PhoneTitle));
         UpdateSelection();
+    }
+
+    /// <summary>The link last followed into an area (<see cref="Follow"/>); the area it names reads it to land on its target.</summary>
+    public AreaLink? Link { get; private set; }
+
+    /// <summary>
+    /// Follows a link into an area: publishes it as <see cref="Link"/> (raised even when the link is the same or the area
+    /// already shows, so following it again lands again), then shows the area.
+    /// </summary>
+    public void Follow(AreaLink link)
+    {
+        ArgumentNullException.ThrowIfNull(link);
+        Link = link;
+        OnPropertyChanged(nameof(Link));
+        Navigate(link.Area);
     }
 
     /// <summary>Selects a session by id and shows it; false (and no change) when the rail lists no such session.</summary>

@@ -53,9 +53,14 @@ public sealed partial class AppComposition : IDisposable
 
     public StatusBarViewModel StatusBar { get; }
 
-    /// <summary>Stops the session feeds, the service behind them and every timer they started.</summary>
+    /// <summary>
+    /// Stops the session feeds, the service behind them and every timer they started: the Board's tick and session
+    /// watches, and the model store's downloads.
+    /// </summary>
     public void Dispose()
     {
+        _board?.Dispose();
+        (_modelService as IDisposable)?.Dispose();
         SessionHub.Dispose();
         (SessionService as IDisposable)?.Dispose();
     }

@@ -434,6 +434,10 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
 
     internal void Navigate(Area area) => _shell?.Navigate(area);
 
+    /// <summary>Follows a link into another area about this session (Audit's egress ledger, a detection's events).</summary>
+    internal void Follow(AreaLinkTarget target, IReadOnlyList<long>? events = null, string? name = null) =>
+        _shell?.Follow(new AreaLink(Area.Audit, SessionId, target) { Events = events ?? [], Name = name });
+
     internal void OpenOtherSession(string sessionId) => _shell?.OpenSession(sessionId);
 
     internal void Interrupt() => Run(() => _service.InterruptAsync(SessionId));

@@ -147,6 +147,13 @@ public sealed record SessionRewound(int Turn, RewindScope Scope, string Reason) 
     /// <summary>The restore checkpoint taken just before the files changed.</summary>
     public string? CheckpointId { get; init; }
 
+    /// <summary>
+    /// The checkpoint the files go back to: a call's before checkpoint or a restore point. The calls from it on are the
+    /// ones whose changes were put back, which may start part-way through <see cref="Turn"/>; null means every call of
+    /// that turn and after.
+    /// </summary>
+    public string? RestorePoint { get; init; }
+
     /// <summary>Nothing changed: a conflict, or the plan could not be applied (<see cref="Detail"/> says why).</summary>
     public bool Refused { get; init; }
 

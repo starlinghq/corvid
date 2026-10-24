@@ -2,34 +2,449 @@
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:controls="using:Corvid.App.Controls"
+      xmlns:rewind="using:Corvid.App.Core.Rewind"
+      xmlns:ui="using:Corvid.App.Infrastructure"
       Background="{ThemeResource CorvidBg}"
       Foreground="{ThemeResource CorvidText}"
       FontSize="13.5">
-  <!-- .page: the page head with the area's title, then the body. A placeholder until the area is built. -->
+  <!--
+    Rewind.dc.html: the page head (title, the session and its entry count; the Esc Esc hint and Back to the session), then
+    the checkpoint ledger (1.1 parts) beside the restore plan and the last restore (1 part). Under 720 px they stack.
+  -->
+  <Page.Resources>
+    <Style x:Key="PanelHead" TargetType="Border">
+      <Setter Property="Padding" Value="14,10" />
+      <Setter Property="BorderBrush" Value="{ThemeResource CorvidLine}" />
+      <Setter Property="BorderThickness" Value="0,0,0,1" />
+      <Setter Property="MinHeight" Value="40.6" />
+    </Style>
+    <Style x:Key="PanelHeadDetail" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="{ThemeResource CorvidText2}" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="TextWrapping" Value="NoWrap" />
+    </Style>
+    <!-- .sect-head: 12.5 px semibold, the detail muted on the right, 6 below. -->
+    <Style x:Key="SectTitle" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="12.5" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="LineHeight" Value="18.1" />
+      <Setter Property="TextWrapping" Value="NoWrap" />
+    </Style>
+    <Style x:Key="SectDetail" TargetType="TextBlock" BasedOn="{StaticResource SectTitle}">
+      <Setter Property="Foreground" Value="{ThemeResource CorvidText2}" />
+      <Setter Property="HorizontalAlignment" Value="Right" />
+    </Style>
+    <!-- .table td: 12.5 px, 7px 10px. -->
+    <Style x:Key="Cell" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="12.5" />
+      <Setter Property="LineHeight" Value="18.1" />
+      <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+      <Setter Property="Margin" Value="10,0" />
+    </Style>
+    <Style x:Key="HeadCell" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="12.5" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="{ThemeResource CorvidText2}" />
+      <Setter Property="Margin" Value="10,0" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <!-- A ledger row as a button: the whole row selects it; bg-3 film while hovered. -->
+    <Style x:Key="RowButton" TargetType="Button">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="Foreground" Value="{ThemeResource CorvidText}" />
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <!-- The system focus visual left keyboard-visited rows drawn faded here; the template draws its own outline. -->
+      <Setter Property="UseSystemFocusVisuals" Value="False" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Grid x:Name="Root" Background="Transparent">
+              <Border x:Name="Film" Background="{ThemeResource CorvidText}" Opacity="0.04" Visibility="Collapsed" />
+              <ContentPresenter Content="{TemplateBinding Content}" Padding="{TemplateBinding Padding}" HorizontalContentAlignment="Stretch" />
+              <Border x:Name="FocusRing" BorderBrush="{ThemeResource CorvidAccent}" BorderThickness="2" Visibility="Collapsed" />
+              <VisualStateManager.VisualStateGroups>
+                <VisualStateGroup x:Name="FocusStates">
+                  <VisualState x:Name="Focused">
+                    <VisualState.Setters>
+                      <Setter Target="FocusRing.Visibility" Value="Visible" />
+                    </VisualState.Setters>
+                  </VisualState>
+                  <VisualState x:Name="PointerFocused" />
+                  <VisualState x:Name="Unfocused" />
+                </VisualStateGroup>
+                <VisualStateGroup x:Name="CommonStates">
+                  <VisualState x:Name="Normal" />
+                  <VisualState x:Name="PointerOver">
+                    <VisualState.Setters>
+                      <Setter Target="Film.Visibility" Value="Visible" />
+                    </VisualState.Setters>
+                  </VisualState>
+                  <VisualState x:Name="Pressed">
+                    <VisualState.Setters>
+                      <Setter Target="Film.Visibility" Value="Visible" />
+                    </VisualState.Setters>
+                  </VisualState>
+                  <VisualState x:Name="Disabled" />
+                </VisualStateGroup>
+              </VisualStateManager.VisualStateGroups>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- .radio: a 13 px circle, the accent dot when chosen; 6px 0, gap 8; the title bold, the detail muted. -->
+    <Style x:Key="RestoreRadio" TargetType="RadioButton">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="UseSystemFocusVisuals" Value="True" />
+      <Setter Property="FocusVisualPrimaryBrush" Value="{ThemeResource CorvidAccent}" />
+      <Setter Property="FocusVisualSecondaryBrush" Value="{ThemeResource CorvidBg}" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="RadioButton">
+            <Grid Background="Transparent" Padding="0,6" ColumnSpacing="8">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+              </Grid.ColumnDefinitions>
+              <Grid Width="13" Height="13" Margin="4,3,0,0" VerticalAlignment="Top">
+                <Ellipse x:Name="Ring" Stroke="{ThemeResource CorvidText2}" StrokeThickness="1" Fill="{ThemeResource CorvidBg}" />
+                <Ellipse x:Name="Dot" Width="7" Height="7" Fill="{ThemeResource CorvidAccent}" Visibility="Collapsed" />
+              </Grid>
+              <ContentPresenter Grid.Column="1" Content="{TemplateBinding Content}" />
+              <VisualStateManager.VisualStateGroups>
+                <VisualStateGroup x:Name="CheckStates">
+                  <VisualState x:Name="Checked">
+                    <VisualState.Setters>
+                      <Setter Target="Ring.Stroke" Value="{ThemeResource CorvidAccent}" />
+                      <Setter Target="Dot.Visibility" Value="Visible" />
+                    </VisualState.Setters>
+                  </VisualState>
+                  <VisualState x:Name="Unchecked" />
+                  <VisualState x:Name="Indeterminate" />
+                </VisualStateGroup>
+              </VisualStateManager.VisualStateGroups>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <DataTemplate x:Key="LedgerRow" x:DataType="rewind:LedgerEntryView">
+      <Grid BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,0,0,1">
+        <Border Background="{ThemeResource CorvidAccentBg}" Visibility="{x:Bind ui:Ui.VisibleIf(IsSelected), Mode=OneWay}" />
+        <Button Style="{StaticResource RowButton}" Command="{x:Bind Select}" IsEnabled="{x:Bind IsSelectable}"
+                AutomationProperties.Name="{x:Bind AutomationName}" Padding="0,7">
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="53" />
+              <ColumnDefinition Width="95" />
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="99" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="{x:Bind When}" Style="{StaticResource Cell}" Foreground="{ThemeResource CorvidText2}" TextWrapping="NoWrap" />
+            <TextBlock Grid.Column="1" Style="{StaticResource Cell}" Foreground="{ThemeResource CorvidText}" MaxLines="4" TextTrimming="CharacterEllipsis"
+                       ToolTipService.ToolTip="{x:Bind Detail}" Visibility="{x:Bind ui:Ui.VisibleIf(IsCall)}">
+              <Run Text="{x:Bind Tool}" FontFamily="{StaticResource CorvidMono}" /> <Run Text="{x:Bind Detail}" />
+            </TextBlock>
+            <StackPanel Grid.Column="1" Margin="10,0" Visibility="{x:Bind ui:Ui.VisibleIf(IsRestore)}">
+              <controls:TagChip Text="restore" Tone="Violet" HorizontalAlignment="Left" />
+              <TextBlock Text="{x:Bind Detail}" FontSize="12.5" LineHeight="18.1" TextWrapping="Wrap" Foreground="{ThemeResource CorvidText}" />
+            </StackPanel>
+            <TextBlock Grid.Column="2" Text="{x:Bind Paths}" Style="{StaticResource Cell}" FontFamily="{StaticResource CorvidMono}"
+                       Foreground="{ThemeResource CorvidText}" Visibility="{x:Bind ui:Ui.VisibleIf(PathsAreFiles)}" />
+            <TextBlock Grid.Column="2" Text="{x:Bind Paths}" Style="{StaticResource Cell}" Foreground="{ThemeResource CorvidText2}"
+                       Visibility="{x:Bind ui:Ui.VisibleIf(PathsAreNote)}" />
+            <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4" Margin="10,0" VerticalAlignment="Top" Visibility="{x:Bind ui:Ui.VisibleIf(ShowCounts)}">
+              <TextBlock Text="{x:Bind AddedText}" FontSize="12.5" LineHeight="18.1" FontWeight="SemiBold" Foreground="{ThemeResource CorvidGreen}" />
+              <TextBlock Text="{x:Bind RemovedText}" FontSize="12.5" LineHeight="18.1" FontWeight="SemiBold" Foreground="{ThemeResource CorvidRed}" />
+            </StackPanel>
+            <TextBlock Grid.Column="3" Text="{x:Bind ChangeNote}" Style="{StaticResource Cell}" Foreground="{ThemeResource CorvidText2}" />
+            <controls:TagChip Grid.Column="3" Text="{x:Bind ChangeTag}" Tone="{x:Bind ChangeTagTone}" Margin="6,0,0,0" HorizontalAlignment="Left"
+                              VerticalAlignment="Top" Visibility="{x:Bind ui:Ui.VisibleIf(HasChangeTag)}" />
+          </Grid>
+        </Button>
+      </Grid>
+    </DataTemplate>
+  </Page.Resources>
+
   <Grid>
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto" />
       <RowDefinition Height="*" />
     </Grid.RowDefinitions>
-    <Border Style="{StaticResource CorvidPageHead}">
-      <Grid ColumnSpacing="12" VerticalAlignment="Center">
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="Auto" />
-          <ColumnDefinition Width="*" />
-          <ColumnDefinition Width="Auto" />
-        </Grid.ColumnDefinitions>
-        <TextBlock Text="{x:Bind ViewModel.Title}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
-                   AutomationProperties.HeadingLevel="Level1" />
-        <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.SessionTitle, Mode=OneWay}" Style="{StaticResource CorvidMutedText}"
-                   TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-        <controls:LinkButton Grid.Column="2" Text="Back to the session" Command="{x:Bind ViewModel.BackToSessionCommand}"
-                             VerticalAlignment="Center" />
-      </Grid>
+
+    <Border x:Name="Head" Style="{StaticResource CorvidPageHead}">
+      <controls:WrapRowPanel Spacing="12" LineSpacing="12" PushLastRight="True" VerticalAlignment="Center">
+        <controls:WrapRowPanel Spacing="12" LineSpacing="8" VerticalAlignment="Center">
+          <TextBlock Text="{x:Bind ViewModel.Title}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
+                     AutomationProperties.HeadingLevel="Level1" />
+          <TextBlock x:Name="SubtitleText" Text="{x:Bind ViewModel.Subtitle, Mode=OneWay}" Style="{StaticResource CorvidMutedText}" TextWrapping="NoWrap"
+                     VerticalAlignment="Center" />
+        </controls:WrapRowPanel>
+        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <StackPanel x:Name="EscHint" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+            <Border Style="{StaticResource CorvidKeyCap}">
+              <TextBlock Text="Esc" Style="{StaticResource CorvidKeyCapText}" />
+            </Border>
+            <Border Style="{StaticResource CorvidKeyCap}">
+              <TextBlock Text="Esc" Style="{StaticResource CorvidKeyCapText}" />
+            </Border>
+            <TextBlock Text="on an empty composer opens this" Style="{StaticResource CorvidSmallText}" TextWrapping="NoWrap" VerticalAlignment="Center"
+                       Margin="2,0,0,0" />
+          </StackPanel>
+          <controls:CorvidButton Content="Back to the session" Variant="Ghost" Foreground="{ThemeResource CorvidAccent}"
+                                 Command="{x:Bind ViewModel.BackToSessionCommand}" />
+        </StackPanel>
+      </controls:WrapRowPanel>
     </Border>
-    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-      <StackPanel Padding="24,18,24,18" Spacing="18" MaxWidth="960" HorizontalAlignment="Left">
-        <TextBlock Text="{x:Bind ViewModel.Summary}" Style="{StaticResource CorvidMutedText}" />
-      </StackPanel>
+
+    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+      <Grid x:Name="Body" Padding="24,18,24,18" ColumnSpacing="18" RowSpacing="14">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="1.1*" />
+          <ColumnDefinition x:Name="RightColumn" Width="*" />
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- The checkpoint ledger. -->
+        <Border Style="{StaticResource CorvidPanel}" VerticalAlignment="Top">
+          <StackPanel>
+            <Border Style="{StaticResource PanelHead}">
+              <Grid ColumnSpacing="10" VerticalAlignment="Center">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Checkpoint ledger" FontWeight="SemiBold" VerticalAlignment="Center" AutomationProperties.HeadingLevel="Level2" />
+                <TextBlock Grid.Column="1" Text="newest first · one entry per call" Style="{StaticResource PanelHeadDetail}" />
+              </Grid>
+            </Border>
+            <Grid Padding="0,6" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,0,0,1">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="53" />
+                <ColumnDefinition Width="95" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="99" />
+              </Grid.ColumnDefinitions>
+              <TextBlock Text="when" Style="{StaticResource HeadCell}" />
+              <TextBlock Grid.Column="1" Text="call" Style="{StaticResource HeadCell}" />
+              <TextBlock Grid.Column="2" Text="paths" Style="{StaticResource HeadCell}" />
+              <TextBlock Grid.Column="3" Text="change" Style="{StaticResource HeadCell}" />
+            </Grid>
+            <ItemsControl x:Name="Ledger" ItemsSource="{x:Bind ViewModel.Entries}" ItemTemplate="{StaticResource LedgerRow}" IsTabStop="False"
+                          AutomationProperties.Name="Checkpoint ledger" TabFocusNavigation="Once" XYFocusKeyboardNavigation="Enabled"
+                          Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasEntries), Mode=OneWay}" />
+            <TextBlock Text="{x:Bind ViewModel.EmptyText, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" Margin="14,12"
+                       Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.HasEntries), Mode=OneWay}" />
+            <Border Padding="14,12" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,1,0,0" Margin="0,-1,0,0">
+              <TextBlock Text="Every entry stays in the log after a restore. Audit keeps the full history; the transcript shows the session as it was at the restore point."
+                         Style="{StaticResource CorvidSmallText}" />
+            </Border>
+          </StackPanel>
+        </Border>
+
+        <!-- The plan (or the preview), then the last restore. -->
+        <StackPanel x:Name="Right" Grid.Column="1" Spacing="14">
+          <Border x:Name="PlanPanel" Style="{StaticResource CorvidPanel}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.ShowPlan), Mode=OneWay}">
+            <StackPanel>
+              <Border Style="{StaticResource PanelHead}">
+                <Grid ColumnSpacing="10" VerticalAlignment="Center">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Text="{x:Bind ViewModel.PlanTitle, Mode=OneWay}" FontWeight="SemiBold" TextWrapping="Wrap" VerticalAlignment="Center"
+                             AutomationProperties.HeadingLevel="Level2" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasPlan), Mode=OneWay}" />
+                  <TextBlock Text="Restore point" FontWeight="SemiBold" VerticalAlignment="Center" AutomationProperties.HeadingLevel="Level2"
+                             Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.HasPlan), Mode=OneWay}" />
+                  <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.PlanCommand, Mode=OneWay}" Style="{StaticResource PanelHeadDetail}" />
+                </Grid>
+              </Border>
+              <TextBlock Text="{x:Bind ViewModel.PlanEmptyText, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" Margin="14,12"
+                         Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.HasPlan), Mode=OneWay}" />
+              <StackPanel Padding="14,12" Spacing="12" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasPlan), Mode=OneWay}">
+                <StackPanel Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasPlanFiles), Mode=OneWay}">
+                  <Grid Margin="0,0,0,6">
+                    <TextBlock Text="Files put back" Style="{StaticResource SectTitle}" />
+                    <TextBlock Text="{x:Bind ViewModel.PlanFileCount, Mode=OneWay}" Style="{StaticResource SectDetail}" />
+                  </Grid>
+                  <ItemsControl ItemsSource="{x:Bind ViewModel.PlanFiles}" IsTabStop="False" AutomationProperties.Name="Files put back">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="rewind:PutBackFileView">
+                        <Grid Padding="8,5" ColumnSpacing="10" MinHeight="28.1" AutomationProperties.Name="{x:Bind AutomationName}">
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                          </Grid.ColumnDefinitions>
+                          <controls:PathText Path="{x:Bind Path}" Foreground="{ThemeResource CorvidText}" VerticalAlignment="Center" />
+                          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                            <TextBlock Text="{x:Bind Prefix}" FontSize="12" Visibility="{x:Bind ui:Ui.VisibleIfText(Prefix)}" />
+                            <TextBlock Text="{x:Bind RemoveText}" FontSize="12" FontWeight="SemiBold" Foreground="{ThemeResource CorvidRed}"
+                                       Visibility="{x:Bind ui:Ui.VisibleIfText(RemoveText)}" />
+                            <TextBlock Text="{x:Bind AddText}" FontSize="12" FontWeight="SemiBold" Foreground="{ThemeResource CorvidGreen}"
+                                       Visibility="{x:Bind ui:Ui.VisibleIfText(AddText)}" />
+                            <TextBlock Text="{x:Bind Word}" FontSize="12" Visibility="{x:Bind ui:Ui.VisibleIf(ShowWord)}" />
+                          </StackPanel>
+                        </Grid>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+                <ItemsControl ItemsSource="{x:Bind ViewModel.PlanNotes}" IsTabStop="False"
+                              Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasPlanNotes), Mode=OneWay}">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                      <StackPanel Spacing="6" />
+                    </ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="rewind:RestoreNoteView">
+                      <controls:ToneRow Tone="{x:Bind Tone}" AutomationProperties.Name="{x:Bind AutomationName}">
+                        <StackPanel Spacing="6">
+                          <controls:Icon Kind="Warning" Width="16" Height="16" HorizontalAlignment="Left" />
+                          <TextBlock TextWrapping="Wrap" LineHeight="18.1">
+                            <Run Text="{x:Bind FileName}" FontFamily="{StaticResource CorvidMono}" /> <Run Text="{x:Bind Text}" />
+                          </TextBlock>
+                        </StackPanel>
+                      </controls:ToneRow>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <StackPanel>
+                  <Grid Margin="0,0,0,6">
+                    <TextBlock Text="Conversation" Style="{StaticResource SectTitle}" />
+                    <TextBlock Text="{x:Bind ViewModel.ConversationRange, Mode=OneWay}" Style="{StaticResource SectDetail}" />
+                  </Grid>
+                  <TextBlock Text="{x:Bind ViewModel.ConversationText, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" />
+                </StackPanel>
+                <StackPanel>
+                  <TextBlock Text="Restore" Style="{StaticResource SectTitle}" Margin="0,0,0,6" />
+                  <ItemsControl ItemsSource="{x:Bind ViewModel.Options}" IsTabStop="False" AutomationProperties.Name="Restore">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="rewind:RestoreOptionView">
+                        <RadioButton Style="{StaticResource RestoreRadio}" GroupName="RestoreScope" IsChecked="{x:Bind IsSelected, Mode=OneWay}"
+                                     Command="{x:Bind Choose}" AutomationProperties.Name="{x:Bind AutomationName, Mode=OneWay}">
+                          <TextBlock TextWrapping="Wrap" LineHeight="19.6">
+                            <Run Text="{x:Bind Title}" FontWeight="SemiBold" /><Run Text=" · " Foreground="{ThemeResource CorvidText2}" /><Run Text="{x:Bind Detail, Mode=OneWay}" Foreground="{ThemeResource CorvidText2}" />
+                          </TextBlock>
+                        </RadioButton>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+                <controls:WrapRowPanel Spacing="6" LineSpacing="8">
+                  <controls:CorvidButton x:Name="RestoreButton" Content="Restore" Variant="Primary" Command="{x:Bind ViewModel.RestoreCommand}" />
+                  <controls:CorvidButton Content="Preview the full diff" Command="{x:Bind ViewModel.PreviewCommand}" />
+                  <controls:CorvidButton Content="Cancel" Variant="Ghost" Padding="8,0" Foreground="{ThemeResource CorvidAccent}"
+                                         Command="{x:Bind ViewModel.BackToSessionCommand}" />
+                </controls:WrapRowPanel>
+              </StackPanel>
+            </StackPanel>
+          </Border>
+
+          <!-- The preview: each file from now to restored, in the shared diff view. -->
+          <Border x:Name="PreviewPanel" Style="{StaticResource CorvidPanel}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsPreviewing), Mode=OneWay}">
+            <StackPanel>
+              <Border Style="{StaticResource PanelHead}">
+                <Grid ColumnSpacing="10" VerticalAlignment="Center">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Text="{x:Bind ViewModel.PreviewTitle, Mode=OneWay}" FontWeight="SemiBold" TextWrapping="Wrap" VerticalAlignment="Center"
+                             AutomationProperties.HeadingLevel="Level2" />
+                  <controls:CorvidButton x:Name="ClosePreviewButton" Grid.Column="1" Content="Back to the plan" Style="{StaticResource CorvidSmallButton}"
+                                         Command="{x:Bind ViewModel.ClosePreviewCommand}" />
+                </Grid>
+              </Border>
+              <ItemsControl ItemsSource="{x:Bind ViewModel.PreviewFiles}" IsTabStop="False" Padding="14,12">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="rewind:PreviewFileView">
+                    <Border CornerRadius="8" BorderThickness="1" BorderBrush="{ThemeResource CorvidLine}" Margin="0,0,0,12">
+                      <StackPanel>
+                        <Border Padding="12,8" Background="{ThemeResource CorvidBg2}" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,0,0,1"
+                                CornerRadius="7,7,0,0">
+                          <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                              <ColumnDefinition Width="*" />
+                              <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <controls:PathText Path="{x:Bind Path}" Foreground="{ThemeResource CorvidText}" VerticalAlignment="Center" />
+                            <TextBlock Grid.Column="1" Text="{x:Bind What}" FontSize="12.5" Foreground="{ThemeResource CorvidText2}" VerticalAlignment="Center" />
+                          </Grid>
+                        </Border>
+                        <controls:SideBySideDiffView Rows="{x:Bind Rows}"
+                                                     Visibility="{x:Bind ui:Ui.VisibleIf(HasDiff)}" />
+                        <TextBlock Text="{x:Bind Note}" Style="{StaticResource CorvidSmallText}" Margin="12,10" Visibility="{x:Bind ui:Ui.VisibleIfText(Note)}" />
+                      </StackPanel>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </Border>
+
+          <!-- The last restore, exactly as the result reports it. -->
+          <Border Style="{StaticResource CorvidPanel}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasLastRestore), Mode=OneWay}">
+            <StackPanel>
+              <Border Style="{StaticResource PanelHead}">
+                <Grid ColumnSpacing="10" VerticalAlignment="Center">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Text="{x:Bind ViewModel.LastRestoreTitle, Mode=OneWay}" FontWeight="SemiBold" TextWrapping="Wrap" VerticalAlignment="Center"
+                             AutomationProperties.HeadingLevel="Level2" />
+                  <controls:TagChip Grid.Column="1" Text="{x:Bind ViewModel.LastRestoreTag, Mode=OneWay}" Tone="{x:Bind ViewModel.LastRestoreTone, Mode=OneWay}"
+                                    VerticalAlignment="Center" />
+                </Grid>
+              </Border>
+              <StackPanel Padding="14,12" Spacing="8">
+                <controls:ToneRow Tone="{x:Bind ViewModel.LastRestoreTone, Mode=OneWay}" Padding="12,8" CornerRadius="8">
+                  <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto" />
+                      <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <controls:Icon Kind="Check" Width="16" Height="16" VerticalAlignment="Center" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.LastRestoreDone), Mode=OneWay}" />
+                    <controls:Icon Kind="Warning" Width="16" Height="16" VerticalAlignment="Center" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.LastRestoreRefused), Mode=OneWay}" />
+                    <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.LastRestoreSummary, Mode=OneWay}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                  </Grid>
+                </controls:ToneRow>
+                <ItemsControl ItemsSource="{x:Bind ViewModel.LastRestoreFiles, Mode=OneWay}" IsTabStop="False" AutomationProperties.Name="Last restore's files">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="rewind:OutcomeFileView">
+                      <Grid Padding="8,5" ColumnSpacing="10" MinHeight="28.1" AutomationProperties.Name="{x:Bind AutomationName}">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="*" />
+                          <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <controls:PathText Path="{x:Bind Path}" Foreground="{ThemeResource CorvidText}" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1" Text="{x:Bind What}" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="260"
+                                   TextAlignment="Right" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </Grid>
     </ScrollViewer>
   </Grid>
 </Page>

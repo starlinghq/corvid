@@ -530,6 +530,8 @@ public static class SessionFold
 
     private static SessionView OnRewound(SessionView state, SessionRewound rewound)
     {
+        if (!rewound.Refused && rewound.Scope != RewindScope.ConversationOnly)
+            state = UndoFiles(state, rewound);
         if (!rewound.Refused && rewound.Scope != RewindScope.FilesOnly)
         {
             var transcript = state.Transcript.RemoveAll(entry => entry.Turn >= rewound.Turn);
@@ -543,9 +545,92 @@ public static class SessionFold
                 Approvals = removedTurn ? [] : state.Approvals,
                 Running = state.Running && !removedTurn,
             };
+            if (removedTurn)
+            {
+                // The latest turn is now the one before the first that left; its changes are what the ledger still has of it.
+                var turn = Math.Max(0, rewound.Turn - 1);
+                state = state with
+                {
+                    Turn = turn,
+                    TurnHeaderId = null,
+                    TurnChanges = LedgerChanges(state.Ledger, row => row.Turn == turn),
+                };
+            }
         }
 
         return AddNew(state, "rewind", id => new RewindEntry(id, rewound) { Turn = 0 });
+    }
+
+    /// <summary>
+    /// The files a restore put back: the ledger's calls from <see cref="SessionRewound.Turn"/> on that changed them keep
+    /// their rows but mark those paths undone, and the turn's and the session's change lists count each such path again
+    /// from what the ledger still has of it (gone when nothing does).
+    /// </summary>
+    private static SessionView UndoFiles(SessionView state, SessionRewound rewound)
+    {
+        var paths = rewound.Restored.Concat(rewound.Merged).ToHashSet(StringComparer.Ordinal);
+        if (paths.Count == 0)
+            return state;
+        var ledger = state.Ledger;
+        // From the row the restore point names (the ledger runs oldest first), so a call earlier in the same turn keeps
+        // its change; without a point, from the turn's first call.
+        var start = rewound.RestorePoint is { } point
+            ? ledger.FindIndex(row => row.BeforeId == point || row.Id == point)
+            : -1;
+        for (var i = 0; i < ledger.Count; i++)
+        {
+            var row = ledger[i];
+            if (row.Kind == CheckpointKind.Restore || (start >= 0 ? i < start : row.Turn < rewound.Turn))
+                continue;
+            var undone = row.LiveChanges.Where(change => paths.Contains(change.Path)).Select(change => change.Path).ToList();
+            if (undone.Count > 0)
+                ledger = ledger.SetItem(i, row with { UndonePaths = row.UndonePaths.IsDefault ? [.. undone] : row.UndonePaths.AddRange(undone) });
+        }
+
+        var live = LedgerChanges(ledger, _ => true);
+        var turnLive = LedgerChanges(ledger, row => row.Turn == state.Turn);
+        return state with
+        {
+            Ledger = ledger,
+            TurnChanges = Recount(state.TurnChanges, paths, turnLive),
+            SessionChanges = Recount(state.SessionChanges, paths, live),
+        };
+    }
+
+    /// <summary>A change list with each put-back path counted again from the ledger, or left out when the ledger has none of it.</summary>
+    private static ImmutableArray<FileChange> Recount(ImmutableArray<FileChange> changes, HashSet<string> paths, ImmutableArray<FileChange> live)
+    {
+        if (changes.IsDefaultOrEmpty)
+            return [];
+        var builder = ImmutableArray.CreateBuilder<FileChange>(changes.Length);
+        foreach (var change in changes)
+        {
+            if (!paths.Contains(change.Path))
+                builder.Add(change);
+            else if (live.FirstOrDefault(candidate => candidate.Path == change.Path) is { } left)
+                builder.Add(change with { Added = left.Added, Removed = left.Removed });
+        }
+
+        return builder.ToImmutable();
+    }
+
+    /// <summary>What the ledger's finished calls still have in the files, each path's counts summed, in the order first changed.</summary>
+    private static ImmutableArray<FileChange> LedgerChanges(ImmutableList<LedgerRow> ledger, Func<LedgerRow, bool> include)
+    {
+        var files = new List<FileChange>();
+        foreach (var row in ledger.Where(row => row.Kind == CheckpointKind.After && include(row)))
+        {
+            foreach (var change in row.LiveChanges)
+            {
+                var index = files.FindIndex(file => file.Path == change.Path);
+                if (index < 0)
+                    files.Add(change);
+                else
+                    files[index] = files[index] with { Added = files[index].Added + change.Added, Removed = files[index].Removed + change.Removed };
+            }
+        }
+
+        return [.. files];
     }
 
     private static SessionView OnEngine(SessionView state, EngineStatus engine) => state with
