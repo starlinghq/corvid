@@ -109,7 +109,7 @@ public sealed class BoardViewModelTests
         var card = Card(Start(), DemoSessionService.JobSessionId);
 
         Assert.Equal("nightly-tidy · run of 09:00", card.Title);
-        Assert.Equal("job:nightly-tidy:2026-10-24 · weekdays at 9am", Text(card.Meta));
+        Assert.Equal("job:nightly-tidy:2026-10-24 · every day at 9am", Text(card.Meta));
         Assert.Equal(Tone.Violet, card.StateTone);
         Assert.Equal("finished", card.StateLabel);
         Assert.Equal("09:00:41 · 3 tool calls", Text(card.StateDetail));
