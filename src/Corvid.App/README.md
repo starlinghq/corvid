@@ -215,6 +215,28 @@ And from A2:
   scrims, as `CommandPalette` does. Tab gestures never reach accelerators; the shell handles them in `PreviewKeyDown`.
 - Uno refuses focus to a control that has not been laid out since it became visible; `OpsLayout.FocusWhenShown` waits
   for its layout.
+- A template's `x:Bind` to a static source (`SessionsLayout.Current.IsPhone`) is read when the template is made and not
+  again: the window starts at one width and is resized, so the Sessions page makes its transcript again when the width
+  class changes. A row that must follow the width (First run's checks) sets itself on its own `SizeChanged`.
+- An `ItemsRepeater` let Tab reach only its first focusable control; the transcript sets `TabFocusNavigation="Local"`.
+
+## The phone layout and accessibility
+
+Under 720 px (Phone.png): the top bar (the menu, the session's or area's title, the status bar's first tag, the bell)
+and the bottom bar (Chat to Sessions, Changes to Review, Attention to the Board and its tray, More to the rail). The
+first run's setup has neither the bottom bar nor the menu, bell and workspace line (`ShellViewModel.SetupShowing`). On
+the session the header, the key hint and the composer's bar go; the turn strip shows only for a queue; the composer is
+one line with a 44 px send button; the approval card leaves the command to the tool card above it, shows compact parsed
+rows (the command, its effects, each target), the short reasons, and full-width answers with the denials side by side
+(`PhoneAnswersPanel`). Other areas lay out in one column; their wide tables scroll sideways inside their panels.
+
+Accessibility (`ui.md` §4.15), as built: icon-only buttons are named and every page has a level-1 heading (both checked
+over every XAML file by `AccessibilityMarkupTests`, with notice and error rows as live regions); the rail's areas and
+sessions, the dock's tabs and the phone's tabs report which is current through `SelectableButtonAutomationPeer`; diffs
+draw `+` and `−` in the gutter as well as their colours; the Sessions page announces the turn's step politely (without
+its ticking time, `TurnStripStatus`) and an approval, a question or a finished turn assertively. Uno's X11 head has no
+AT-SPI bridge, so on Linux no screen reader sees the app; the peers and live regions are for the Windows and macOS
+heads and are unverified with a real screen reader.
 
 ## Fonts
 
