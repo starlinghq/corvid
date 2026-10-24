@@ -459,7 +459,11 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             Track(StartQueuedAsync(channel, next));
         }
         if (_engine.Runtime.IsCompletedSuccessfully)
+        {
             Refresh(_engine.Runtime.Result, channel.SessionId);
+            // The dock's Changes and the Review badge: what the turn's calls changed, from the write ledger.
+            PublishChanges(_engine.Runtime.Result, channel);
+        }
     }
 
     /// <summary>Starts the queued message's turn; one that cannot start goes back to the head of the queue, and the transcript says why.</summary>
@@ -552,6 +556,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         var summary = Summarize(runtime, id) ?? Empty(runtime, id, _time.GetUtcNow());
         var commands = Commands();
         var mode = Mode(open ? session.ApprovalMode : runtime.Options.Approvals.Mode);
+        var changes = await ChangesAsync(runtime, id, CancellationToken.None).ConfigureAwait(false);
         lock (channel.Gate)
         {
             var at = summary.LastActivity;
@@ -559,6 +564,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             foreach (var update in history.Updates)
                 updates.AddRange(channel.Translator.Translate(update));
             updates.AddRange(channel.Translator.EndReplay(running: channel.Running));
+            updates.Add(changes);
             // What the session is beside its transcript: where it was forked from (this window's forks only), its goal,
             // its approval mode, whether outside content is in its context, and the commands the composer offers.
             if (_forks.TryGetValue(id, out var fork))

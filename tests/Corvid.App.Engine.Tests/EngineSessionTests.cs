@@ -22,8 +22,9 @@ public sealed class EngineSessionTests
         using var service = fixture.Sessions();
         var recorder = new Recorder();
         using var subscription = await service.OpenAsync(id, recorder.Add, TestContext.Current.CancellationToken);
-        // A new session has no transcript yet: only what it is beside one (its approval mode, the commands it offers).
-        Assert.All(subscription.History, update => Assert.True(update is ApprovalModeChanged or AvailableCommandsUpdate, update.GetType().Name));
+        // A new session has no transcript yet: only what it is beside one (its approval mode, the commands it offers, no changed files).
+        Assert.All(subscription.History, update => Assert.True(update is ApprovalModeChanged or AvailableCommandsUpdate or ChangesUpdate { Session.IsEmpty: true },
+            update.GetType().Name));
 
         await service.SendAsync(id, Prompt, TestContext.Current.CancellationToken);
         await service.IdleAsync();
@@ -43,7 +44,8 @@ public sealed class EngineSessionTests
         // The prompt opens turn 1 on the generator; the call is announced running, then finished with its input and output.
         var kinds = string.Join(" ", updates.Select(update => update.GetType().Name).Where((name, i) =>
             i == 0 || name != "AgentMessageChunk" || updates[i - 1] is not AgentMessageChunk));
-        Assert.Equal("UserMessage TurnStarted ToolCall ToolCall ToolCallUpdate AgentMessageChunk TurnEnded", kinds);
+        // After the turn, the dock's change lists from the write ledger (empty: list_notes writes nothing).
+        Assert.Equal("UserMessage TurnStarted ToolCall ToolCall ToolCallUpdate AgentMessageChunk TurnEnded ChangesUpdate", kinds);
 
         var prompt = Assert.IsType<UserMessage>(updates[0]);
         Assert.Equal(Prompt, prompt.Text);
@@ -68,7 +70,7 @@ public sealed class EngineSessionTests
         // The answer streamed word by word, and nothing was sent twice.
         Assert.True(updates.OfType<AgentMessageChunk>().Count() > 1);
         Assert.Equal(Answer, string.Concat(updates.OfType<AgentMessageChunk>().Select(chunk => chunk.Text)));
-        var ended = Assert.IsType<TurnEnded>(updates[^1]);
+        var ended = Assert.IsType<TurnEnded>(updates[^2]);
         Assert.Equal(1, ended.Turn);
         Assert.Equal(TurnOutcome.Answered, ended.Outcome);
         Assert.Null(ended.Error);
