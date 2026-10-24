@@ -213,8 +213,8 @@ public sealed class DemoModelService : IModelService, IDisposable
             [ModelSlotNames.Generator, ModelSlotNames.Summarizer]);
         Set(_snapshot with { Catalogue = [.. _snapshot.Catalogue, server] });
         return answers
-            ? Written($"Written to `{ConfigPath}`: {name} at {uri} answered and can serve the generator.")
-            : Written($"Written to `{ConfigPath}`: {name} at {uri}, which did not answer; it stays unavailable until it does.");
+            ? Written($"Written to `{ConfigPath}`: {name} at `{uri}` answered and can serve the generator.")
+            : Written($"Written to `{ConfigPath}`: {name} at `{uri}`, which did not answer; it stays unavailable until it does.");
     }
 
     public void Dispose()
