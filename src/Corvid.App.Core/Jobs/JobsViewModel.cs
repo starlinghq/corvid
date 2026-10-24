@@ -192,7 +192,20 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
     public string DraftScript { get => _draftScript; set { if (SetProperty(ref _draftScript, value ?? "")) DraftChanged(); } }
 
     /// <summary>A no-agent job runs only its script, with no model turn.</summary>
-    public bool DraftNoAgent { get => _draftNoAgent; set { if (SetProperty(ref _draftNoAgent, value)) DraftChanged(); } }
+    public bool DraftNoAgent
+    {
+        get => _draftNoAgent;
+        set
+        {
+            if (!SetProperty(ref _draftNoAgent, value))
+                return;
+            OnPropertyChanged(nameof(CanEditPrompt));
+            DraftChanged();
+        }
+    }
+
+    /// <summary>A no-agent job has no prompt to write.</summary>
+    public bool CanEditPrompt => !_draftNoAgent;
 
     /// <summary>Where the result goes: one of the snapshot's destinations.</summary>
     public IReadOnlyList<Choice> Destinations { get => _destinations; private set => SetProperty(ref _destinations, value); }

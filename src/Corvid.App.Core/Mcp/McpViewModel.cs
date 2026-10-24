@@ -153,6 +153,7 @@ public sealed class McpViewModel : AreaViewModel, IDisposable
             if (SetProperty(ref _confirm, value))
             {
                 OnPropertyChanged(nameof(IsConfirmingTrust));
+                OnPropertyChanged(nameof(IsNotConfirming));
                 OnPropertyChanged(nameof(IsConfirmingForget));
                 OnPropertyChanged(nameof(ConfirmText));
                 OnPropertyChanged(nameof(ConfirmWarning));
@@ -163,6 +164,9 @@ public sealed class McpViewModel : AreaViewModel, IDisposable
     }
 
     public bool IsConfirmingTrust => _confirm == McpConfirm.Trust;
+
+    /// <summary>No question is open: the panel's buttons show.</summary>
+    public bool IsNotConfirming => _confirm == McpConfirm.None;
 
     public bool IsConfirmingForget => _confirm == McpConfirm.Forget;
 

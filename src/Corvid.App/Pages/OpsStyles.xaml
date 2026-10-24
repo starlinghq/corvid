@@ -1,0 +1,84 @@
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <!--
+    The Jobs, MCP and Gateway pages' own parts, beside ModelsStyles.xaml's panel and table styles (which they merge too): a
+    selectable table row (corvid.css .table tr, .sel on the accent background), a form's text field in the prose font, and
+    the pairing code. Kept with the three pages rather than in Themes, which every area shares.
+  -->
+
+  <!-- A table row that selects on click or Enter: no face of its own; hover lays a 3 % film; focus draws the accent ring. -->
+  <Style x:Key="OpsRowButton" TargetType="Button">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="HorizontalAlignment" Value="Stretch" />
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    <Setter Property="UseSystemFocusVisuals" Value="True" />
+    <Setter Property="FocusVisualPrimaryBrush" Value="{ThemeResource CorvidAccent}" />
+    <Setter Property="FocusVisualMargin" Value="0" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Grid Background="Transparent">
+            <Border x:Name="Film" Background="{ThemeResource CorvidText}" Opacity="0.03" Visibility="Collapsed" />
+            <ContentPresenter Content="{TemplateBinding Content}" HorizontalContentAlignment="Stretch" />
+            <VisualStateManager.VisualStateGroups>
+              <VisualStateGroup x:Name="CommonStates">
+                <VisualState x:Name="Normal" />
+                <VisualState x:Name="PointerOver">
+                  <VisualState.Setters>
+                    <Setter Target="Film.Visibility" Value="Visible" />
+                  </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Pressed">
+                  <VisualState.Setters>
+                    <Setter Target="Film.Visibility" Value="Visible" />
+                  </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Disabled" />
+              </VisualStateGroup>
+            </VisualStateManager.VisualStateGroups>
+          </Grid>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- A form field in the prose font (names, prompts); FieldBox (ModelsStyles) is the mono one for schedules and commands. -->
+  <Style x:Key="OpsField" TargetType="TextBox">
+    <Setter Property="FontSize" Value="13" />
+    <Setter Property="Foreground" Value="{ThemeResource CorvidText}" />
+    <Setter Property="Background" Value="{ThemeResource CorvidBg}" />
+    <Setter Property="BorderBrush" Value="{ThemeResource CorvidLine}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="Padding" Value="10,6" />
+    <Setter Property="MinHeight" Value="32" />
+  </Style>
+
+  <!-- A form's label: .kv .k, 12.5 px text-2. -->
+  <Style x:Key="OpsLabel" TargetType="TextBlock">
+    <Setter Property="FontSize" Value="12.5" />
+    <Setter Property="Foreground" Value="{ThemeResource CorvidText2}" />
+    <Setter Property="Margin" Value="0,2,0,0" />
+  </Style>
+
+  <!-- The pairing code: JetBrains Mono at 15 px on the code background, so it reads against the one the bot sent. -->
+  <Style x:Key="OpsCode" TargetType="TextBlock">
+    <Setter Property="FontFamily" Value="{StaticResource CorvidMono}" />
+    <Setter Property="FontSize" Value="15" />
+    <Setter Property="FontWeight" Value="Medium" />
+    <Setter Property="Foreground" Value="{ThemeResource CorvidText}" />
+    <Setter Property="CharacterSpacing" Value="60" />
+  </Style>
+
+  <!-- A card inside a panel's body (a held tool, a pairing request): bg-2 with the line, radius 8. -->
+  <Style x:Key="OpsCard" TargetType="Border">
+    <Setter Property="Background" Value="{ThemeResource CorvidBg2}" />
+    <Setter Property="BorderBrush" Value="{ThemeResource CorvidLine}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="Padding" Value="12,10" />
+  </Style>
+</ResourceDictionary>
