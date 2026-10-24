@@ -28,6 +28,9 @@ public sealed record LedgerEntry(string CheckpointId, LedgerEntryKind Kind, Date
 
     public ImmutableArray<FileChange> Changes { get; init; } = [];
 
+    /// <summary>The call ended with no after checkpoint: cancelled, or its turn went back.</summary>
+    public bool Stopped { get; init; }
+
     /// <summary>A pending call waits on an approval rather than running.</summary>
     public bool WaitingOnApproval { get; init; }
 

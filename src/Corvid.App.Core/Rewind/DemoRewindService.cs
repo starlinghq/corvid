@@ -134,7 +134,7 @@ public sealed class DemoRewindService : IRewindService
         if (index < 0)
             throw new KeyNotFoundException($"No checkpoint {checkpointId} in the ledger of {state.SessionId}.");
         var row = ledger[index];
-        if (row.Kind == CheckpointKind.Before)
+        if (row.Kind == CheckpointKind.Before && IsPending(row, state))
             throw new InvalidOperationException($"The call at {checkpointId} has not finished; there is nothing of it to go back from yet.");
 
         // Every file a later call changed goes back, in the order the calls first touched it; its counts are undone.
@@ -184,11 +184,18 @@ public sealed class DemoRewindService : IRewindService
             Target = row.Target,
             Outcome = _outcomes.GetValueOrDefault(row.Id),
         },
-        CheckpointKind.Before => new LedgerEntry(row.BeforeId ?? row.Id, LedgerEntryKind.Pending, row.At, row.Turn)
+        CheckpointKind.Before when IsPending(row, state) => new LedgerEntry(row.BeforeId ?? row.Id, LedgerEntryKind.Pending, row.At, row.Turn)
         {
             Tool = row.Tool,
             Target = row.Target,
             WaitingOnApproval = row.CallId is not null && state.Approvals.Any(open => open.CallId == row.CallId),
+        },
+        // A call that ended without an after checkpoint (cancelled, or its turn rewound) changed nothing it recorded.
+        CheckpointKind.Before => new LedgerEntry(row.BeforeId ?? row.Id, LedgerEntryKind.Call, row.At, row.Turn)
+        {
+            Tool = row.Tool,
+            Target = row.Target,
+            Stopped = true,
         },
         _ => new LedgerEntry(row.BeforeId ?? row.Id, LedgerEntryKind.Call, row.At, row.Turn)
         {
@@ -198,6 +205,12 @@ public sealed class DemoRewindService : IRewindService
             Changes = row.Changes,
         },
     };
+
+    /// <summary>A call with only its before checkpoint is pending while it runs or waits on an approval.</summary>
+    private static bool IsPending(LedgerRow row, SessionView state) =>
+        row.CallId is { } callId
+        && (state.Approvals.Any(open => open.CallId == callId)
+            || state.Transcript.OfType<ToolEntry>().Any(tool => tool.CallId == callId && tool.Status is ToolCallStatus.InProgress or ToolCallStatus.Pending));
 
     private SessionViewModel Session(string sessionId)
     {

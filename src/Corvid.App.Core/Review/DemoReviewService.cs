@@ -23,7 +23,7 @@ public sealed class DemoReviewService : IReviewService
     private readonly Dictionary<string, ReviewPoint> _points = new(StringComparer.Ordinal);
     private readonly HashSet<string> _sentFrom = new(StringComparer.Ordinal);
     private readonly Dictionary<string, HashSet<string>> _reverted = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, (ImmutableArray<FileChange> Turn, ImmutableArray<FileChange> Session)> _watched = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (ImmutableArray<FileChange> Turn, ImmutableArray<FileChange> Session, ImmutableList<LedgerRow> Ledger)> _watched = new(StringComparer.Ordinal);
 
     public DemoReviewService(SessionHub sessions, TimeProvider time)
     {
@@ -51,8 +51,8 @@ public sealed class DemoReviewService : IReviewService
             // Until comments are sent from here, the seeded point stands for the session's list (Review.png); after a
             // send, only turns after the point count.
             _ when !_sentFrom.Contains(sessionId) => state.SessionChanges,
-            _ when point is not null && state.Turn > point.Turn => state.TurnChanges,
-            _ => [],
+            // After a send: what the ledger's calls changed in the turns after the point.
+            _ => Since(state, point?.Turn ?? 0),
         };
         _reverted.TryGetValue(sessionId, out var reverted);
         var files = changes.IsDefault ? [] : changes.Select(change => File(change, reverted)).ToImmutableArray();
@@ -105,17 +105,36 @@ public sealed class DemoReviewService : IReviewService
     /// <summary>Hears a session's state and tells Review when its lists of changed files are new ones, not on every chunk.</summary>
     private void Watch(SessionViewModel session)
     {
-        if (!_watched.TryAdd(session.SessionId, (session.State.TurnChanges, session.State.SessionChanges)))
+        if (!_watched.TryAdd(session.SessionId, (session.State.TurnChanges, session.State.SessionChanges, session.State.Ledger)))
             return;
         session.StateChanged += (_, _) =>
         {
-            var now = (session.State.TurnChanges, session.State.SessionChanges);
+            var now = (session.State.TurnChanges, session.State.SessionChanges, session.State.Ledger);
             var before = _watched[session.SessionId];
-            if (now.TurnChanges == before.Turn && now.SessionChanges == before.Session)
+            if (now.TurnChanges == before.Turn && now.SessionChanges == before.Session && now.Ledger == before.Ledger)
                 return;
             _watched[session.SessionId] = now;
             ChangesChanged?.Invoke(this, session.SessionId);
         };
+    }
+
+    /// <summary>The files the ledger's calls changed after a turn, each with its counts summed, in the order first changed.</summary>
+    private static ImmutableArray<FileChange> Since(SessionView state, int turn)
+    {
+        var files = new List<FileChange>();
+        foreach (var row in state.Ledger.Where(row => row.Kind == CheckpointKind.After && row.Turn > turn))
+        {
+            foreach (var change in row.Changes)
+            {
+                var index = files.FindIndex(file => file.Path == change.Path);
+                if (index < 0)
+                    files.Add(change);
+                else
+                    files[index] = files[index] with { Added = files[index].Added + change.Added, Removed = files[index].Removed + change.Removed };
+            }
+        }
+
+        return [.. files];
     }
 
     private static ReviewFile File(FileChange change, HashSet<string>? reverted)

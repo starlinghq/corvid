@@ -245,6 +245,7 @@ public sealed partial class SideBySideDiffView : UserControl
         private readonly ScrollViewer _scroller;
         private readonly List<FrameworkElement> _cards = [];
         private readonly FontFamily _mono = (FontFamily)Application.Current.Resources["CorvidMono"];
+        private double _cell;
 
         public Column(SideBySideDiffView owner, string name)
         {
@@ -482,7 +483,31 @@ public sealed partial class SideBySideDiffView : UserControl
             },
         };
 
-        private Border Segment(string text, Brush? highlight) => new()
+        private Border Segment(string text, Brush? highlight)
+        {
+            // A run of only spaces would measure as nothing (Uno trims trailing white space, no-break or not), so the
+            // indentation before a changed word keeps its width as an empty box of so many mono cells.
+            if (text.Length > 0 && text.All(c => c is ' ' or '\t'))
+            {
+                var cells = text.Sum(c => c == '\t' ? 4 : 1);
+                return new Border { Background = highlight, CornerRadius = new CornerRadius(2), Width = cells * CellWidth(), Height = 1 };
+            }
+
+            return Text(text, highlight);
+        }
+
+        /// <summary>The width of one JetBrains Mono cell at 12 px, measured once.</summary>
+        private double CellWidth()
+        {
+            if (_cell > 0)
+                return _cell;
+            var probe = new TextBlock { Text = "0000000000", FontFamily = _mono, FontSize = 12 };
+            probe.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+            _cell = probe.DesiredSize.Width > 0 ? probe.DesiredSize.Width / 10 : 7.2;
+            return _cell;
+        }
+
+        private Border Text(string text, Brush? highlight) => new()
         {
             Background = highlight,
             CornerRadius = new CornerRadius(2),

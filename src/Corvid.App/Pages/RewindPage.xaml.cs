@@ -28,7 +28,10 @@ public sealed partial class RewindPage : Page
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
         var composition = (AppComposition)e.Parameter;
+        if (ViewModel is not null)
+            ViewModel.PropertyChanged -= OnViewModelChanged;
         ViewModel = composition.Rewind;
+        ViewModel.PropertyChanged += OnViewModelChanged;
         _shell = composition.Shell;
         _shell.PropertyChanged += OnShellChanged;
         ViewModel.Refresh();
@@ -41,7 +44,20 @@ public sealed partial class RewindPage : Page
     {
         if (_shell is not null)
             _shell.PropertyChanged -= OnShellChanged;
+        ViewModel.PropertyChanged -= OnViewModelChanged;
         base.OnNavigatedFrom(e);
+    }
+
+    /// <summary>
+    /// The button that opened or closed the preview is collapsed with its panel, which would leave focus nowhere and Esc
+    /// unheard: focus moves to the other panel's first button instead.
+    /// </summary>
+    private void OnViewModelChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(RewindViewModel.IsPreviewing))
+            return;
+        Control target = ViewModel.IsPreviewing ? ClosePreviewButton : RestoreButton;
+        DispatcherQueue.TryEnqueue(() => target.Focus(FocusState.Keyboard));
     }
 
     private void OnKeyDown(object sender, KeyRoutedEventArgs e)

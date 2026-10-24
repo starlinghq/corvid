@@ -213,10 +213,12 @@
           <controls:WrapRowPanel Spacing="8" LineSpacing="8">
             <controls:CorvidButton x:Name="SendButton" Content="{x:Bind ViewModel.SendCommentsText, Mode=OneWay}" Variant="Primary"
                                    Command="{x:Bind ViewModel.SendCommentsCommand}" />
-            <controls:CorvidButton Content="Ask about this file" Command="{x:Bind ViewModel.AskAboutFileCommand}" />
-            <controls:CorvidButton Content="Open in editor" Command="{x:Bind ViewModel.OpenInEditorCommand}" />
+            <controls:CorvidButton Content="Ask about this file" Command="{x:Bind ViewModel.AskAboutFileCommand}"
+                                   Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasSelection), Mode=OneWay}" />
+            <controls:CorvidButton Content="Open in editor" Command="{x:Bind ViewModel.OpenInEditorCommand}"
+                                   Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasSelection), Mode=OneWay}" />
             <controls:CorvidButton Content="{x:Bind ViewModel.RevertText, Mode=OneWay}" Variant="Ghost" Foreground="{ThemeResource CorvidRed}"
-                                   Command="{x:Bind ViewModel.RevertFileCommand}" />
+                                   Command="{x:Bind ViewModel.RevertFileCommand}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasSelection), Mode=OneWay}" />
           </controls:WrapRowPanel>
           <TextBlock Text="Comments go out as one message, quoting file and line. The next turn's diff shows against this review point."
                      Style="{StaticResource CorvidSmallText}" HorizontalAlignment="Right" TextAlignment="Right" Margin="0,-4,0,0" />

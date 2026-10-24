@@ -75,6 +75,7 @@ public sealed class LedgerEntryView : ObservableObject
     public string ChangeNote => Entry switch
     {
         { Kind: LedgerEntryKind.Restore } => "restore point",
+        { Kind: LedgerEntryKind.Call, Stopped: true } => "stopped",
         { Kind: LedgerEntryKind.Call, Changes.IsEmpty: true } => "0",
         _ => "",
     };
