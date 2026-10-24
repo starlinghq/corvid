@@ -6,8 +6,8 @@ public sealed class SafeTextTests
 {
     [Theory]
     [InlineData("echo hi\rrm -rf x", "echo hi␍rm -rf x")]
-    [InlineData("cat a‮txt.exe", "cat a⟨U+202E⟩txt.exe")]
-    [InlineData("rm​ -rf", "rm⟨U+200B⟩ -rf")]
+    [InlineData("cat a\u202Etxt.exe", "cat a⟨U+202E⟩txt.exe")]
+    [InlineData("rm\u200B -rf", "rm⟨U+200B⟩ -rf")]
     [InlineData("\u001b[2Jclear", "␛[2Jclear")]
     [InlineData("two\nlines\tand a tab", "two\nlines\tand a tab")]
     [InlineData("plain", "plain")]
@@ -15,23 +15,23 @@ public sealed class SafeTextTests
         Assert.Equal(expected, SafeText.Reveal(text));
 
     [Theory]
-    [InlineData("rm -rf /tm­p", "rm -rf /tm⟨U+00AD⟩p")]
+    [InlineData("rm -rf /tm\u00ADp", "rm -rf /tm⟨U+00AD⟩p")]
     [InlineData("ls \U000E0041x", "ls ⟨U+E0041⟩x")]
-    [InlineData("aㅤb", "a⟨U+3164⟩b")]
-    [InlineData("a͏b", "a⟨U+034F⟩b")]
-    [InlineData("x⁢y", "x⟨U+2062⟩y")]
+    [InlineData("a\u3164b", "a⟨U+3164⟩b")]
+    [InlineData("a\u034Fb", "a⟨U+034F⟩b")]
+    [InlineData("x\u2062y", "x⟨U+2062⟩y")]
     public void RevealShowsFormatCharactersFillersAndTagsToo(string text, string expected) =>
         Assert.Equal(expected, SafeText.Reveal(text));
 
     [Fact]
     public void CleanDropsZeroWidthCharactersAsWellAsBidiOverrides() =>
-        Assert.Equal("rm -rf build", SafeText.Clean("rm​ -rf⁠ bu﻿ild‮"));
+        Assert.Equal("rm -rf build", SafeText.Clean("rm\u200B -rf\u2060 bu\uFEFFild\u202E"));
 
     [Fact]
     public void CleanKeepsTheJoinersThatPersianAndEmojiNeed()
     {
-        const string persian = "می‌خواهم";
-        const string family = "👩‍👩‍👦";
+        const string persian = "می\u200Cخواهم";
+        const string family = "👩\u200D👩\u200D👦";
         Assert.Same(persian, SafeText.Clean(persian));
         Assert.Same(family, SafeText.Clean(family));
         Assert.Equal(family, SafeText.Reveal(family, keepJoiners: true));
@@ -41,7 +41,7 @@ public sealed class SafeTextTests
     [Fact]
     public void ARuleWithAHiddenCharacterInAPathCannotBeWritten()
     {
-        var hidden = new Sessions.RuleRowView(new Sessions.RulePreview("allow", "rm -r") { Paths = ["bu­ild/"] });
+        var hidden = new Sessions.RuleRowView(new Sessions.RulePreview("allow", "rm -r") { Paths = ["bu\u00ADild/"] });
         var plain = new Sessions.RuleRowView(new Sessions.RulePreview("allow", "rm -r") { Paths = ["build/"] });
 
         Assert.True(hidden.HasPathsError);
@@ -70,7 +70,7 @@ public sealed class SafeTextTests
     [Fact]
     public void AProposedEditShowsAHiddenOverrideInItsDiff()
     {
-        var diff = FileDiff.Compute("a.cs", "var ok = true;\n", "var ok = true; // ‮eslaf\n");
+        var diff = FileDiff.Compute("a.cs", "var ok = true;\n", "var ok = true; // \u202Eeslaf\n");
 
         var added = diff.Unified().Single(row => row.Kind == DiffRowKind.Added);
         Assert.Contains("⟨U+202E⟩", added.Text, StringComparison.Ordinal);
