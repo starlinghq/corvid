@@ -171,6 +171,65 @@ public sealed class KeyMapTests
     }
 
     [Fact]
+    public void PuttingBackADefaultFollowsTheChainSoNoTwoKeysShareAGesture()
+    {
+        var keys = new KeyMap();
+        Assert.True(keys.Rebind(KeyCommands.Palette, "Ctrl+Y").Accepted);
+        Assert.True(keys.Rebind(KeyCommands.PaletteAlias, "Ctrl+K").Accepted);
+        Assert.True(keys.Rebind(KeyCommands.NewSession, "Ctrl+P").Accepted);
+        var changes = 0;
+        keys.Changed += (_, _) => changes++;
+
+        keys.Reset(KeyCommands.Palette);
+
+        // The palette's Ctrl+K was the alias's, whose Ctrl+P was the new session's: each goes back in turn.
+        Assert.Equal("Ctrl+K", keys[KeyCommands.Palette].KeyText);
+        Assert.Equal("Ctrl+P", keys[KeyCommands.PaletteAlias].KeyText);
+        Assert.Equal("Ctrl+N", keys[KeyCommands.NewSession].KeyText);
+        Assert.All(keys.Bindings, binding => Assert.Empty(keys.ConflictsOf(binding)));
+        Assert.False(keys.IsChanged);
+        Assert.Equal(1, changes);
+    }
+
+    [Theory]
+    [InlineData("Ctrl+Shift+/", "Ctrl+?")]
+    [InlineData("Ctrl+Shift+=", "Ctrl++")]
+    [InlineData("Ctrl+?", "Ctrl+Shift+/")]
+    public void TwoSpellingsOfTheSameKeysConflict(string first, string second)
+    {
+        var keys = new KeyMap();
+        Assert.True(keys.Rebind(KeyCommands.History, first).Accepted);
+
+        var refused = keys.Rebind(KeyCommands.Search, second);
+
+        Assert.False(refused.Accepted);
+        Assert.Contains("searches the prompt history", refused.Problem, StringComparison.Ordinal);
+        Assert.Equal(KeyCommands.History, Assert.Single(refused.Conflicts).Id);
+        Assert.Same(keys[KeyCommands.History], keys.Find(KeyGesture.Parse(second)));
+        Assert.True(KeyGesture.Parse(first).SameKeysAs(KeyGesture.Parse(second)));
+    }
+
+    [Theory]
+    [InlineData("Ctrl+C", "copies")]
+    [InlineData("ctrl+v", "pastes")]
+    [InlineData("Ctrl+X", "cuts")]
+    [InlineData("Ctrl+Z", "undoes")]
+    [InlineData("Ctrl+A", "selects all")]
+    [InlineData("Alt+F4", "closes the window")]
+    public void ThePlatformsEditingAndWindowKeysAreRefused(string text, string does)
+    {
+        var keys = new KeyMap();
+
+        var refused = keys.Rebind(KeyCommands.History, text);
+
+        Assert.False(refused.Accepted);
+        Assert.Contains(does, refused.Problem, StringComparison.Ordinal);
+        Assert.Equal("Ctrl+R", keys[KeyCommands.History].KeyText);
+        // Ctrl+Shift+C (Review) is a default, not a reserved key.
+        Assert.True(keys.Rebind(KeyCommands.History, "Ctrl+Shift+X").Accepted);
+    }
+
+    [Fact]
     public void KeyTextBecomesCapsForTheHintLine()
     {
         Assert.Equal("[Ctrl] [Shift] [F]", Render(KeyParts.For("Ctrl+Shift+F")));

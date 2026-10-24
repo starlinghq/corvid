@@ -3,6 +3,7 @@ using Corvid.App.Core;
 using Corvid.App.Core.Composition;
 using Corvid.App.Core.Keys;
 using Corvid.App.Core.Shell;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Input;
 using Windows.System;
 
@@ -42,6 +43,7 @@ public sealed partial class ShellPage : Page
         // Tab moves focus before any accelerator sees it, so gestures on Tab (Ctrl+Tab, the switcher) are caught first.
         AddHandler(PreviewKeyDownEvent, new KeyEventHandler(OnPreviewKeyDown), true);
         Show(ViewModel.CurrentArea);
+        ApplyPhoneHeading();
     }
 
     private void OnPreviewKeyDown(object sender, KeyRoutedEventArgs e)
@@ -125,8 +127,15 @@ public sealed partial class ShellPage : Page
             case nameof(ShellViewModel.ShowDock) or nameof(ShellViewModel.ShowDockOverlay):
                 PlaceDock();
                 break;
+            case nameof(ShellViewModel.PhoneTitleIsHeading):
+                ApplyPhoneHeading();
+                break;
         }
     }
+
+    /// <summary>The phone top bar's title is the level-1 heading only where the page drops its own (one per page).</summary>
+    private void ApplyPhoneHeading() =>
+        AutomationProperties.SetHeadingLevel(PhoneTitleText, ViewModel.PhoneTitleIsHeading ? Microsoft.UI.Xaml.Automation.Peers.AutomationHeadingLevel.Level1 : Microsoft.UI.Xaml.Automation.Peers.AutomationHeadingLevel.None);
 
     private void Show(Area area)
     {

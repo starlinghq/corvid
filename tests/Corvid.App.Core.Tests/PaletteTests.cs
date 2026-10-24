@@ -361,9 +361,163 @@ public sealed class PaletteTests
         Assert.Equal("Ctrl+Shift+H", composition.Palette.Items.Single(item => item.Title == "Prompt history…").KeyText);
     }
 
+    [Fact]
+    public async Task AGeneratorWhoseNameHidesCharactersIsRevealedAndCannotBePicked()
+    {
+        using var composition = Compose();
+        var demo = composition.ModelService;
+        await demo.LoadAsync(TestContext.Current.CancellationToken);
+        var models = new HiddenNameModels(demo, $"qwen{Override}b72");
+        var palette = new PaletteViewModel(new PaletteHost(composition.Shell, new KeyMap(), ManualTimeProvider.DemoLocal(), new InlineDispatcher())
+        {
+            Models = () => models,
+        });
+
+        palette.Execute(KeyCommands.SwitchGenerator);
+
+        var row = Assert.Single(palette.Items, item => item.Title.StartsWith("qwen", StringComparison.Ordinal) && item.Title.Contains("b72", StringComparison.Ordinal));
+        Assert.Equal(SafeText.Reveal(models.Hidden), row.Title);
+        Assert.NotEqual("qwenb72", row.Title);
+        Assert.False(row.IsEnabled);
+        Assert.Contains("hidden characters", row.Note, StringComparison.Ordinal);
+        var before = demo.Snapshot.Slot(ModelSlotNames.Generator)!.Model;
+        palette.Choose(row);
+        Assert.Equal(before, demo.Snapshot.Slot(ModelSlotNames.Generator)!.Model);
+        Assert.Equal(0, models.Switches);
+    }
+
+    [Fact]
+    public void ALoadThatEndsAfterANewerSurfaceOpenedLeavesThatSurfacesList()
+    {
+        var history = new PendingHistory();
+        var palette = Standalone(new ShellViewModel(new StatusBarViewModel()), history);
+
+        palette.Execute(KeyCommands.History);
+        Assert.True(palette.IsLoading);
+        palette.Execute(KeyCommands.Help);
+        var help = palette.Items;
+        history.Finish([new PromptHistoryEntry("an old prompt", "cli-1", DateTimeOffset.UnixEpoch)]);
+
+        Assert.Equal(PaletteMode.Help, palette.Mode);
+        Assert.Same(help, palette.Items);
+        Assert.DoesNotContain(palette.Items, item => item.Title == "an old prompt");
+        Assert.False(palette.HasNote && palette.NoteTone == Tone.Red);
+    }
+
+    [Fact]
+    public void ASlashCommandPutsAnUnsentDraftAsideAndNeverDropsOne()
+    {
+        using var composition = Compose();
+        var palette = composition.Palette;
+        var session = composition.Sessions.Session!;
+        // The demo opens with a draft already put aside (Main.png's "draft saved"): there is no room for another.
+        Assert.True(session.HasStashedDraft);
+        session.Draft = "half a thought";
+
+        palette.Execute(KeyCommands.Palette);
+        palette.Choose(palette.Items.Single(item => item.Title == "/compact…"));
+
+        Assert.True(palette.IsOpen);
+        Assert.Equal(Tone.Amber, palette.NoteTone);
+        Assert.Contains("Send or clear one of them first", palette.Note, StringComparison.Ordinal);
+        Assert.Equal("half a thought", session.Draft);
+
+        session.StashDraft("");
+        palette.Choose(palette.Items.Single(item => item.Title == "/compact…"));
+
+        Assert.False(palette.IsOpen);
+        Assert.Equal("/compact ", session.Draft);
+        Assert.True(session.HasStashedDraft);
+        session.Draft = "";
+        session.StashDraftCommand.Execute(null);
+        Assert.Equal("half a thought", session.Draft);
+    }
+
+    [Fact]
+    public void TheSelectedRowIsAnnouncedWithItsPlace()
+    {
+        using var composition = Compose();
+        var palette = composition.Palette;
+
+        palette.Execute(KeyCommands.Palette);
+        Assert.StartsWith($"{palette.Items[0].AutomationName}, 1 of {palette.Items.Count}", palette.SelectionText, StringComparison.Ordinal);
+        palette.MoveSelection(1);
+        Assert.Equal($"{palette.Items[1].AutomationName}, 2 of {palette.Items.Count}", palette.SelectionText);
+        palette.Close();
+        Assert.Equal("", palette.SelectionText);
+    }
+
+    [Fact]
+    public void TheSwitcherCleansHiddenCharactersFromSessionIds()
+    {
+        var shell = new ShellViewModel(new StatusBarViewModel());
+        shell.SetSessions([new SessionGroup("Recent", [shell.CreateSession($"cli{Override}-1", "plain", SessionState.Idle, "1 m")])]);
+        var palette = Standalone(shell);
+
+        palette.Execute(KeyCommands.SessionSwitcher);
+
+        var row = Assert.Single(palette.Items);
+        Assert.StartsWith("cli-1 · ", row.Detail, StringComparison.Ordinal);
+        Assert.Equal("cli-1", row.Keywords);
+    }
+
     private sealed class ScriptedHistory(IReadOnlyList<PromptHistoryEntry>? entries = null, Exception? failure = null) : IPromptHistory
     {
         public Task<IReadOnlyList<PromptHistoryEntry>> LoadAsync(CancellationToken cancellationToken = default) =>
             failure is not null ? Task.FromException<IReadOnlyList<PromptHistoryEntry>>(failure) : Task.FromResult(entries ?? []);
+    }
+
+    /// <summary>A history that answers only when told, and ignores cancellation, as a slow log might.</summary>
+    private sealed class PendingHistory : IPromptHistory
+    {
+        private readonly TaskCompletionSource<IReadOnlyList<PromptHistoryEntry>> _answer = new();
+
+        public Task<IReadOnlyList<PromptHistoryEntry>> LoadAsync(CancellationToken cancellationToken = default) => _answer.Task;
+
+        public void Finish(IReadOnlyList<PromptHistoryEntry> entries) => _answer.SetResult(entries);
+    }
+
+    /// <summary>The demo's models with one more generator whose name holds a hidden character.</summary>
+    private sealed class HiddenNameModels(IModelService inner, string hidden) : IModelService
+    {
+        public string Hidden { get; } = hidden;
+
+        public int Switches { get; private set; }
+
+        public event EventHandler? Changed
+        {
+            add => inner.Changed += value;
+            remove => inner.Changed -= value;
+        }
+
+        public ModelsSnapshot Snapshot => With(inner.Snapshot);
+
+        public async Task<ModelsSnapshot> LoadAsync(CancellationToken cancellationToken = default) => With(await inner.LoadAsync(cancellationToken));
+
+        public Task<ConfigWrite> SwitchAsync(string slot, string model, CancellationToken cancellationToken = default)
+        {
+            Switches++;
+            return inner.SwitchAsync(slot, model, cancellationToken);
+        }
+
+        public Task<ConfigWrite> SetLadderAsync(string slot, IReadOnlyList<string> ladder, CancellationToken cancellationToken = default) => inner.SetLadderAsync(slot, ladder, cancellationToken);
+
+        public Task<ConfigWrite> SetPinnedAsync(string slot, bool pinned, CancellationToken cancellationToken = default) => inner.SetPinnedAsync(slot, pinned, cancellationToken);
+
+        public Task<ConfigWrite> SetPlacementAsync(string model, string device, CancellationToken cancellationToken = default) => inner.SetPlacementAsync(model, device, cancellationToken);
+
+        public Task DownloadAsync(IEnumerable<string> models, CancellationToken cancellationToken = default) => inner.DownloadAsync(models, cancellationToken);
+
+        public Task CancelDownloadAsync(string model, CancellationToken cancellationToken = default) => inner.CancelDownloadAsync(model, cancellationToken);
+
+        public Task<ServerCheck> CheckServerAsync(string model, CancellationToken cancellationToken = default) => inner.CheckServerAsync(model, cancellationToken);
+
+        public Task<ConfigWrite> AddServerAsync(string name, string url, CancellationToken cancellationToken = default) => inner.AddServerAsync(name, url, cancellationToken);
+
+        private ModelsSnapshot With(ModelsSnapshot snapshot)
+        {
+            var available = snapshot.Catalogue.First(model => model.CanServe.Contains(ModelSlotNames.Generator) && model.IsAvailable);
+            return snapshot with { Catalogue = [.. snapshot.Catalogue, available with { Name = Hidden }] };
+        }
     }
 }

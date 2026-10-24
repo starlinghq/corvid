@@ -278,13 +278,36 @@ public sealed partial class SessionsPage : Page, IDockProvider
     private const string PhonePlaceholder = "Ask Corvid…";
 
     /// <summary>
-    /// The turn strip shows while a turn runs, waits or has a queue; on the phone only for a queue, since the turn head
-    /// already says the step and the strip would take a line from the transcript (Phone.png has none).
+    /// The turn strip shows while a turn runs, waits or has a queue. On the phone it shows while the turn works or has a
+    /// queue, but not while it waits on an answer (Phone.png: the open card says so and takes the room). The phone has
+    /// no status bar, so without the strip nothing would say a turn is running, or for how long.
     /// </summary>
     private void UpdateTurnStrip()
     {
-        var show = _session is { ShowTurnStrip: true } session && (!SessionsLayout.Current.IsPhone || session.HasQueue);
+        var show = _session is { ShowTurnStrip: true } session && (!SessionsLayout.Current.IsPhone || session.HasQueue || session.IsWorking);
         TurnStrip.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// A read-only session (a job's, one another window drives) asks nothing, compacts nothing and is not rewound from
+    /// here: the header's Aside, Rewind and Compact… draw disabled and say why.
+    /// </summary>
+    private void UpdateReadOnly()
+    {
+        var readOnly = _session is { IsReadOnly: true };
+        foreach (var button in new Control[] { AsideButton, RewindButton, CompactButton })
+        {
+            button.IsEnabled = !readOnly;
+            if (readOnly)
+                ToolTipService.SetToolTip(button, "This session is read-only here.");
+        }
+
+        if (!readOnly)
+        {
+            ToolTipService.SetToolTip(AsideButton, "A side question in a scratch fork (Ctrl+;); it comes with flow F7, and this says so");
+            ToolTipService.SetToolTip(RewindButton, "The session's checkpoint timeline (Esc Esc)");
+            ToolTipService.SetToolTip(CompactButton, "Summarise older context now, with an optional focus");
+        }
     }
 
     // ---- The session ----
@@ -308,6 +331,7 @@ public sealed partial class SessionsPage : Page, IDockProvider
         {
             UpdateJump();
             UpdateTurnStrip();
+            UpdateReadOnly();
             ResetAnnouncements(null);
             return;
         }
@@ -317,6 +341,7 @@ public sealed partial class SessionsPage : Page, IDockProvider
         _session.Blocks.CollectionChanged += OnBlocksChanged;
         ResetAnnouncements(_session);
         UpdateTurnStrip();
+        UpdateReadOnly();
         UpdateSpinner();
         UpdateJump();
         WatchApproval();
@@ -346,8 +371,10 @@ public sealed partial class SessionsPage : Page, IDockProvider
 
         if (e.PropertyName is nameof(SessionViewModel.CurrentApproval) or null or "")
             WatchApproval();
-        if (e.PropertyName is nameof(SessionViewModel.ShowTurnStrip) or nameof(SessionViewModel.HasQueue) or null or "")
+        if (e.PropertyName is nameof(SessionViewModel.ShowTurnStrip) or nameof(SessionViewModel.HasQueue) or nameof(SessionViewModel.IsWorking) or null or "")
             UpdateTurnStrip();
+        if (e.PropertyName is nameof(SessionViewModel.IsReadOnly) or null or "")
+            UpdateReadOnly();
         UpdateAnnouncements(e.PropertyName);
     }
 
@@ -543,7 +570,8 @@ public sealed partial class SessionsPage : Page, IDockProvider
         }
 
         var now = DateTimeOffset.UtcNow;
-        if (session.Draft.Length == 0 && now - _lastEscape < DoubleEscape)
+        // A read-only session is not rewound from here, as its header's Rewind says.
+        if (session.Draft.Length == 0 && !session.IsReadOnly && now - _lastEscape < DoubleEscape)
         {
             _lastEscape = default;
             ViewModel.OpenRewindCommand.Execute(null);

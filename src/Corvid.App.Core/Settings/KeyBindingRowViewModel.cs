@@ -44,7 +44,10 @@ public sealed class KeyBindingRowViewModel : ObservableObject
 
     public bool HasComesWith => ComesWith.Length > 0;
 
-    /// <summary>The gesture as typed in the field (two-way); Enter or leaving the field applies it.</summary>
+    /// <summary>
+    /// The gesture as typed in the field (two-way). Enter or the row's Set applies it and Esc puts the key in force back;
+    /// leaving the field keeps the text unapplied, so a half-typed gesture never rebinds a key.
+    /// </summary>
     public string EditText
     {
         get => _editText;
@@ -93,7 +96,7 @@ public sealed class KeyBindingRowViewModel : ObservableObject
     {
         if (!IsRemappable)
             return;
-        if (KeyGesture.TryParse(_editText, out var typed, out _) && typed == Binding.Gesture)
+        if (KeyGesture.TryParse(_editText, out var typed, out _) && typed.SameKeysAs(Binding.Gesture))
         {
             Problem = "";
             EditText = Binding.KeyText;

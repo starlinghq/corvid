@@ -115,6 +115,9 @@
                       <Grid>
                         <Border CornerRadius="6" Background="{ThemeResource CorvidAccentBg}"
                                 Visibility="{x:Bind ui:Ui.VisibleIf(IsSelected), Mode=OneWay}" />
+                        <!-- The selected row's mark as a shape, not colour alone: a bar at its left edge (Enter runs this row). -->
+                        <Border Width="3" Margin="2,8,0,8" HorizontalAlignment="Left" CornerRadius="1.5" Background="{ThemeResource CorvidAccent}"
+                                IsHitTestVisible="False" Visibility="{x:Bind ui:Ui.VisibleIf(IsSelected), Mode=OneWay}" />
                         <Button Style="{StaticResource PaletteRow}" Command="{x:Bind Choose, Mode=OneWay}" CommandParameter="{x:Bind}"
                                 AutomationProperties.Name="{x:Bind AutomationName}">
                           <Grid ColumnSpacing="10" Opacity="{x:Bind shell:CommandPalette.RowOpacity(IsEnabled)}">
@@ -146,6 +149,9 @@
                        Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.ShowEmpty), Mode=OneWay}" />
             <TextBlock Margin="20,16,20,18" Text="Loading…" Style="{StaticResource CorvidMutedText}"
                        Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsLoading), Mode=OneWay}" />
+            <!-- The selected row, said politely as the arrows move it (PaletteViewModel.SelectionText). -->
+            <TextBlock x:Name="SelectionAnnouncer" Width="1" Height="1" Opacity="0" IsHitTestVisible="False" HorizontalAlignment="Left"
+                       VerticalAlignment="Top" AutomationProperties.LiveSetting="Polite" AutomationProperties.Name="Palette selection" />
           </Grid>
 
           <!-- The count, and the keys that work here. -->

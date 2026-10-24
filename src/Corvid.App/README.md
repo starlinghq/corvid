@@ -223,13 +223,25 @@ And from A2:
   lists, one shown per width (the card's reasons). A row that must follow the width (First run's checks) sets itself on
   its own `SizeChanged`.
 - An `ItemsRepeater` let Tab reach only its first focusable control; the transcript sets `TabFocusNavigation="Local"`.
+- The status bar's row (`FitRowPanel`) gives way whole and by priority: each tag is its own item, "tainted" never gives
+  way, and the right-hand item is in the same contest. An item that gave way leaves the tab order until it shows again.
+  The right-hand item is the area's own (the Board's activity, Audit's log size, the first run's step) or else the open
+  session's (`StatusBarViewModel.ShownTrailing`), so every page says the same while a turn runs; an area that writes one
+  gives it back when it goes.
+- The bell counts every attention item across sources (`ShellViewModel.SetAttention`: the sessions' approvals and
+  questions, and the tray's other items, such as a memory review or a pairing request): 5 in the demo, where `Main.png`
+  and `Phone.png` draw 3 (the mockups disagree among themselves). The sum is the right count for a tray that lists all
+  of them, so it stays.
 
 ## The phone layout and accessibility
 
-Under 720 px (Phone.png): the top bar (the menu, the session's or area's title, the status bar's first tag, the bell)
-and the bottom bar (Chat to Sessions, Changes to Review, Attention to the Board and its tray, More to the rail). The
-first run's setup has neither the bottom bar nor the menu, bell and workspace line (`ShellViewModel.SetupShowing`). On
-the session the header, the key hint and the composer's bar go; the turn strip shows only for a queue; the composer is
+Under 720 px (Phone.png): the top bar (the menu, the session's or area's title, one tag of the status bar's, the bell)
+and the bottom bar (Chat to Sessions, Changes to Review, Attention to the Board and its tray, More to the rail). The tag
+is "tainted" whenever the bar has it (taint always shows), otherwise the first. The top bar's title is the page's
+level-1 heading where the page drops its own title on the phone, and not a heading where it keeps it (Review, Rewind,
+Models, Audit, the first run). The first run's setup has neither the bottom bar nor the menu, bell and workspace line
+(`ShellViewModel.SetupShowing`). On the session the header, the key hint and the composer's bar go; the turn strip
+shows while the turn works or has a queue, not while it waits on an answer (the card says so); the composer is
 one line with a 44 px send button; the approval card leaves the command to the tool card above it, shows compact parsed
 rows (the command, its effects, each target), the short reasons, and full-width answers with the denials side by side
 (`PhoneAnswersPanel`). Other areas lay out in one column; their wide tables scroll sideways inside their panels.
@@ -238,7 +250,9 @@ Accessibility (`ui.md` §4.15), as built: icon-only buttons are named and every 
 over every XAML file by `AccessibilityMarkupTests`, with notice and error rows as live regions); the rail's areas and
 sessions, the dock's tabs and the phone's tabs report which is current through `SelectableButtonAutomationPeer`; diffs
 draw `+` and `−` in the gutter as well as their colours; the Sessions page announces the turn's step politely (without
-its ticking time, `TurnStripStatus`) and an approval, a question or a finished turn assertively. Uno's X11 head has no
+its ticking time, `TurnStripStatus`) and an approval, a question or a finished turn assertively; the command palette
+marks its selected row with a bar as well as its colour and says it politely as the arrows move it ("Go to Board, 2 of
+42"). Uno's X11 head has no
 AT-SPI bridge, so on Linux no screen reader sees the app; the peers and live regions are for the Windows and macOS
 heads and are unverified with a real screen reader.
 

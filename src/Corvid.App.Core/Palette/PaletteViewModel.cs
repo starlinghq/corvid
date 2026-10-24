@@ -373,12 +373,16 @@ public sealed class PaletteViewModel : ObservableObject
         if (_host.CurrentSession() is { } session)
         {
             var title = SafeText.Clean(session.Title);
-            items.Add(new PaletteItem("Rewind…", $"The checkpoint timeline of {title}", Then(() => shell.Navigate(Area.Rewind)), "Session", "Esc Esc", IconKind.Clock));
+            // A read-only session (a job's, another window's) is not restored from here, as its header's Rewind says.
+            items.Add(new PaletteItem("Rewind…", $"The checkpoint timeline of {title}", session.IsReadOnly ? null : Then(() => shell.Navigate(Area.Rewind)), "Session", "Esc Esc", IconKind.Clock)
+            {
+                Note = session.IsReadOnly ? "This session is read-only here." : "",
+            });
             items.Add(new PaletteItem("Expand the latest output", title, Then(() => { shell.Navigate(Area.Sessions); session.ExpandLatestOutputCommand.Execute(null); }), "Session", "Ctrl+O", IconKind.Terminal));
             items.Add(new PaletteItem("Show the thoughts", title, Then(() => { shell.Navigate(Area.Sessions); session.ToggleThoughtsCommand.Execute(null); }), "Session", "Ctrl+T", IconKind.Sparkle));
             foreach (var (slash, what) in new[] { ("/compact ", "Summarise older context, with a focus"), ("/model ", "Switch a slot's model"), ("/rollback ", "Roll back N turns"), ("/goal ", "Set the standing goal") })
             {
-                items.Add(new PaletteItem($"{slash.Trim()}…", what, session.IsReadOnly ? null : Then(() => Compose(session, slash)), "Slash commands", "", IconKind.Terminal)
+                items.Add(new PaletteItem($"{slash.Trim()}…", what, session.IsReadOnly ? null : () => Compose(session, slash), "Slash commands", "", IconKind.Terminal)
                 {
                     Note = session.IsReadOnly ? "This session is read-only here." : "",
                     Keywords = slash,
@@ -406,9 +410,10 @@ public sealed class PaletteViewModel : ObservableObject
         var current = shell.CurrentSession?.Id;
         var items = shell.SessionGroups.SelectMany(group => group.Sessions).Select(session =>
         {
-            var detail = $"{session.Id} · {session.StateLabel} · {session.When}";
+            var id = SafeText.Clean(session.Id);
+            var detail = $"{id} · {session.StateLabel} · {session.When}";
             return new PaletteItem(SafeText.Clean(session.Title), session.Id == current ? $"{detail} · open" : detail,
-                Then(() => shell.OpenSession(session.Id)), "", "", IconKind.Chat) { Keywords = session.Id };
+                Then(() => shell.OpenSession(session.Id)), "", "", IconKind.Chat) { Keywords = id };
         }).ToList();
         Present("Switch session", "Type a session's title or id…", "No session matches.", items);
         // Ctrl+Tab lands on the session before this one, as switching windows does.
@@ -438,7 +443,7 @@ public sealed class PaletteViewModel : ObservableObject
         IReadOnlyList<PaletteItem> items = session is null
             ? [Go("Open Sessions", "Pick a session in the rail", Area.Sessions)]
             : [new PaletteItem("Put the question in the composer", "Ask it in the session itself for now",
-                session.IsReadOnly ? null : Then(() => Compose(session, "")), "", "", IconKind.Chat)
+                session.IsReadOnly ? null : () => Compose(session, ""), "", "", IconKind.Chat)
                 { Note = session.IsReadOnly ? "This session is read-only here." : "" }];
         OpenPending("Aside", note, items);
     }
@@ -476,6 +481,8 @@ public sealed class PaletteViewModel : ObservableObject
         }
 
         var entries = await history.LoadAsync(cancellationToken);
+        // A newer surface (or Esc) cancelled this load while it waited: its list is not this one's to replace.
+        cancellationToken.ThrowIfCancellationRequested();
         var zone = _host.Time.LocalTimeZone;
         var today = TimeZoneInfo.ConvertTime(_host.Time.GetUtcNow(), zone).Date;
         _source = [.. entries.Select(entry =>
@@ -484,7 +491,7 @@ public sealed class PaletteViewModel : ObservableObject
             var when = local.Date == today ? local.ToString("HH:mm", CultureInfo.InvariantCulture) : local.ToString("d MMM HH:mm", CultureInfo.InvariantCulture);
             var hidden = SafeText.HasHidden(entry.Text);
             return new PaletteItem(TranscriptText.Snippet(SafeText.Clean(entry.Text), "", 120), $"{SafeText.Clean(entry.SessionId)} · {when}",
-                hidden ? null : Then(() => UsePrompt(entry.Text)), "", "", IconKind.Lines)
+                hidden ? null : () => UsePrompt(entry.Text), "", "", IconKind.Lines)
             {
                 Note = hidden ? "This prompt holds hidden characters, so it is not put back; type it again." : "",
             };
@@ -502,6 +509,7 @@ public sealed class PaletteViewModel : ObservableObject
 
         var shell = _host.Shell;
         var summaries = await sessions.ListAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         _source = [.. summaries.Select(summary =>
         {
             var title = SafeText.Clean(summary.Title);
@@ -528,6 +536,7 @@ public sealed class PaletteViewModel : ObservableObject
         }
 
         var snapshot = await models.LoadAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         var slot = snapshot.Slot(ModelSlotNames.Generator);
         _source = [.. snapshot.Catalogue.Where(model => model.CanServe.Contains(ModelSlotNames.Generator)).Select(model =>
         {
@@ -541,6 +550,16 @@ public sealed class PaletteViewModel : ObservableObject
                 _ => "Unavailable now: Models says why.",
             };
             var name = model.Name;
+            // Enter switches in one step, so a name holding hidden characters is shown with them made visible and
+            // cannot be picked here: it could read as another model's name.
+            if (SafeText.HasHidden(name))
+            {
+                return new PaletteItem(SafeText.Reveal(name), where, null, "", "", model.Kind == ModelKind.Cloud ? IconKind.Cloud : IconKind.Chip)
+                {
+                    Note = "This name holds hidden characters, shown marked, so it is not switched to here. Check it in Models.",
+                };
+            }
+
             return new PaletteItem(SafeText.Clean(name), inUse ? $"{where} · in use" : where,
                 model.IsAvailable && !inUse ? () => Switch(models, name) : null, "", "", model.Kind == ModelKind.Cloud ? IconKind.Cloud : IconKind.Chip)
             {
@@ -553,6 +572,7 @@ public sealed class PaletteViewModel : ObservableObject
     private void Switch(IModelService models, string model) => Load(async cancellationToken =>
     {
         var result = await models.SwitchAsync(ModelSlotNames.Generator, model, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         if (!result.Written)
         {
             Show(SafeText.Clean(Spans.Plain(result.Message)), Tone.Red);
@@ -560,6 +580,7 @@ public sealed class PaletteViewModel : ObservableObject
         }
 
         await LoadGeneratorAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         // Said here rather than in the service's words, which name the file it writes; Models shows those.
         Show($"The generator is now {SafeText.Clean(model)}: new sessions start on it, and this one switches after its issued tool calls.", Tone.Green);
     });
@@ -583,10 +604,25 @@ public sealed class PaletteViewModel : ObservableObject
         Compose(session, text);
     }
 
+    /// <summary>
+    /// Puts text in the session's composer and focuses it. An unsent draft is never lost: it is put aside as Ctrl+S does
+    /// (the composer then says "draft saved", and Ctrl+S brings it back); when a draft is already put aside there is no
+    /// room for another, so the palette stays open and asks for one of them to be sent or cleared first.
+    /// </summary>
     private void Compose(SessionViewModel session, string text)
     {
+        var draft = session.Draft;
+        var replaces = text.Length > 0 && draft.Trim().Length > 0 && !string.Equals(draft, text, StringComparison.Ordinal);
+        if (replaces && session.HasStashedDraft)
+        {
+            Show("The composer holds an unsent draft and another put aside (Ctrl+S). Send or clear one of them first; this would replace the draft.", Tone.Amber);
+            return;
+        }
+
         Close();
         _host.Shell.Navigate(Area.Sessions);
+        if (replaces)
+            session.StashDraft(draft);
         if (text.Length > 0)
             session.Draft = text;
         // After the page has drawn: the frame creates it in this call, but it focuses once loaded.
@@ -700,7 +736,16 @@ public sealed class PaletteViewModel : ObservableObject
             now.IsSelected = true;
         OnPropertyChanged(nameof(SelectedIndex));
         OnPropertyChanged(nameof(Selected));
+        OnPropertyChanged(nameof(SelectionText));
     }
+
+    /// <summary>
+    /// The selected row as a screen reader hears it, politely, as the arrows move ("Go to Board, 2 of 31"): focus stays in
+    /// the field, so the row itself is never focused and would not be announced otherwise.
+    /// </summary>
+    public string SelectionText => Selected is { } item
+        ? $"{item.AutomationName}, {(_selected + 1).ToString(CultureInfo.InvariantCulture)} of {_items.Count.ToString(CultureInfo.InvariantCulture)}"
+        : "";
 
     private int IndexOf(PaletteItem item)
     {
