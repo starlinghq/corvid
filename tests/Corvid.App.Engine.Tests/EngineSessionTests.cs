@@ -71,6 +71,13 @@ public sealed class EngineSessionTests
         Assert.Equal(1, ended.Turn);
         Assert.Equal(TurnOutcome.Answered, ended.Outcome);
         Assert.Null(ended.Error);
+
+        // The checkpoints' decisions fall inside the turn, ingress's included, so the chips sit under its header.
+        var all = live.ToList();
+        var decisions = all.OfType<CheckpointDecided>().ToList();
+        Assert.NotEmpty(decisions);
+        Assert.All(decisions, decided => Assert.InRange(all.IndexOf(decided), all.FindIndex(u => u is TurnStarted) + 1, all.FindIndex(u => u is TurnEnded) - 1));
+        Assert.Contains(decisions, decided => decided.Checkpoint == "ingress");
     }
 
     [Fact]

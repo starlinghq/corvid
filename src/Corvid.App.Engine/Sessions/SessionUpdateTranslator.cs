@@ -21,6 +21,7 @@ namespace Corvid.App.Engine.Sessions;
 public sealed class SessionUpdateTranslator(string workspace)
 {
     private readonly string _workspace = Path.TrimEndingDirectorySeparator(Path.GetFullPath(workspace));
+    private readonly List<SessionUpdate> _early = [];
     private bool _answered;
     private DateTimeOffset _turnStarted;
     private DateTimeOffset _last;
@@ -51,6 +52,8 @@ public sealed class SessionUpdateTranslator(string workspace)
                 _turnStarted = at;
                 output.Add(new UserMessage(prompt.Text) { Position = prompt.Sequence, At = at });
                 output.Add(new TurnStarted(Turn, Model) { At = at });
+                output.AddRange(_early);
+                _early.Clear();
                 break;
             case AnswerChunk chunk:
                 _answered |= chunk.Text.Length > 0;
@@ -95,11 +98,16 @@ public sealed class SessionUpdateTranslator(string workspace)
                 });
                 break;
             case DecisionsMade made:
-                output.Add(new CheckpointDecided(made.Decisions.Checkpoint, made.Decisions.Decider,
+                var decided = new CheckpointDecided(made.Decisions.Checkpoint, made.Decisions.Decider,
                     [.. made.Decisions.Questions.Select(question => new DecisionAnswer(question.Question, question.Confidence, question.Action, question.Acted))])
                 {
                     At = at,
-                });
+                };
+                // A checkpoint that decides before the turn's prompt is in the log (ingress) belongs to the turn it opens.
+                if (TurnOpen)
+                    output.Add(decided);
+                else
+                    _early.Add(decided);
                 break;
             // CheckpointLogged: Rewind's timeline reads the ledger itself (A3 history); the transcript shows no row for it.
         }
@@ -109,8 +117,14 @@ public sealed class SessionUpdateTranslator(string workspace)
     }
 
     /// <summary>Ends the live turn with its delivery's outcome; nothing when no turn is open (its message never arrived).</summary>
-    public IReadOnlyList<SessionUpdate> EndTurn(TurnOutcome outcome, DateTimeOffset at, TimeSpan? elapsed = null, string? error = null) =>
-        TurnOpen ? Close(outcome, at, elapsed, error) : [];
+    public IReadOnlyList<SessionUpdate> EndTurn(TurnOutcome outcome, DateTimeOffset at, TimeSpan? elapsed = null, string? error = null)
+    {
+        if (TurnOpen)
+            return Close(outcome, at, elapsed, error);
+        // Decisions held for a prompt that never came belong to no turn.
+        _early.Clear();
+        return [];
+    }
 
     /// <summary>Ends the last replayed turn, unless it is still running in this process (<paramref name="running"/>).</summary>
     public IReadOnlyList<SessionUpdate> EndReplay(bool running = false) => TurnOpen && !running ? Close(null, _last, null, null) : [];

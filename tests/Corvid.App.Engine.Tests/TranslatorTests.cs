@@ -129,6 +129,7 @@ public sealed class TranslatorTests
     public void ThePlanAndTheDecisionsMapOntoTheirUpdatesAndCheckpointsAreLeftToRewind()
     {
         var translator = new SessionUpdateTranslator(Workspace);
+        translator.Translate(new PromptSent("plan it", 1));
 
         var plan = Assert.IsType<PlanUpdate>(Assert.Single(translator.Translate(
             new HostPlan([new TodoItem("1", "read the test", true), new TodoItem("2", "fix it", false)]))));
@@ -140,6 +141,23 @@ public sealed class TranslatorTests
         Assert.Equal(new DecisionAnswer("intent", 0.93, "task", true), Assert.Single(decided.Answers));
 
         Assert.Empty(translator.Translate(new CheckpointLogged(new Corvid.Abstractions.Events.CheckpointTaken("k1", "rev"), 4)));
+    }
+
+    [Fact]
+    public void DecisionsMadeBeforeThePromptIsLoggedBelongToTheTurnItOpens()
+    {
+        var translator = new SessionUpdateTranslator(Workspace);
+        var ingress = new DecisionsMade(new CheckpointDecisions("ingress", "degraded", [new QuestionDecision("intent", 0.5, "task", false)]));
+
+        Assert.Empty(translator.Translate(ingress));
+        var opened = translator.Translate(new PromptSent("hi", 1));
+
+        Assert.Equal(["UserMessage", "TurnStarted", "CheckpointDecided"], opened.Select(update => update.GetType().Name));
+        // Held decisions of a prompt that never arrived are dropped with the turn that did not open.
+        translator.EndTurn(TurnOutcome.Answered, T0);
+        Assert.Empty(translator.Translate(ingress));
+        Assert.Empty(translator.EndTurn(TurnOutcome.Failed, T0));
+        Assert.Equal(["UserMessage", "TurnStarted"], translator.Translate(new PromptSent("again", 2)).Select(update => update.GetType().Name));
     }
 
     [Fact]

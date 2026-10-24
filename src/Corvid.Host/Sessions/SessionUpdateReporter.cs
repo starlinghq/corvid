@@ -109,7 +109,12 @@ public sealed class SessionUpdateReporter : ITurnObserver
         });
     });
 
-    public void Decided(CheckpointDecisions decisions) => Then(() => Emit(new DecisionsMade(decisions)));
+    public void Decided(CheckpointDecisions decisions) => Then(() =>
+    {
+        // The ingress checkpoint decides around the moment the prompt is logged: the prompt goes first when it is there.
+        CatchUp();
+        Emit(new DecisionsMade(decisions));
+    });
 
     /// <summary>
     /// Makes sure a call is known before a permission request names it: a prompt for a call the feed has not announced (or
