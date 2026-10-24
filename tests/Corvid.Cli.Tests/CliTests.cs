@@ -113,6 +113,34 @@ public sealed class ChatTests
     }
 
     [Fact]
+    public async Task ModelListsNumberedModelsAndANumberOnTheNextLineSwitches()
+    {
+        using var run = new CliRun(new FakeModels(new FakeGenerator(Reply.Say("Hello."))));
+        var exit = await run.RunAsync(["chat"], "/model", "2", "/exit");
+
+        Assert.Equal(ExitCodes.Success, exit);
+        var output = run.Output;
+        Assert.Contains("/model picks a model", output, StringComparison.Ordinal);
+        Assert.Contains("generator: fake-gen@cpu", output, StringComparison.Ordinal);
+        Assert.Contains("Switch generator to 2 fake-gen-large (Enter keeps it) ›", output, StringComparison.Ordinal);
+        Assert.Contains("generator: fake-gen@cpu → fake-gen-large@cpu.", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AnythingButANumberAtThePickIsAnOrdinaryLine()
+    {
+        using var run = new CliRun(new FakeModels(new FakeGenerator(Reply.Say("Hello."))));
+        var exit = await run.RunAsync(["chat"], "/model", "/status", "/model", "", "/exit");
+
+        Assert.Equal(ExitCodes.Success, exit);
+        var output = run.Output;
+        // The command typed at the pick ran, and nothing switched.
+        Assert.Contains("fake-gen@cpu", output[output.IndexOf("Status", StringComparison.Ordinal)..], StringComparison.Ordinal);
+        Assert.DoesNotContain("→", output, StringComparison.Ordinal);
+        Assert.Contains("Leaving session", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ADeniedCallDoesNotRun()
     {
         using var run = new CliRun(new FakeModels(new FakeGenerator(Reply.Call("add_note", """{"text":"feed cat"}"""), Reply.Say("I did not add it."))));

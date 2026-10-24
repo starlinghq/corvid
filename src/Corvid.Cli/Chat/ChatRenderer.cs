@@ -48,7 +48,7 @@ internal sealed class ChatRenderer : ITurnObserver
         {
             _console.Write(new Rule($"[bold]corvid[/] [grey]· {Markup.Escape(generator)} · {tools} tool(s) · session {Markup.Escape(session)}[/]")
                 .LeftJustified().RuleStyle("grey"));
-            _console.MarkupLine("[grey]/help lists commands · Ctrl-C cancels a turn · /exit leaves[/]");
+            _console.MarkupLine("[grey]/help lists commands · /model picks a model · Ctrl-C cancels a turn · /exit leaves[/]");
         }
     }
 
@@ -220,6 +220,15 @@ internal sealed class ChatRenderer : ITurnObserver
             EndText();
             Render(_console, output);
         }
+    }
+
+    /// <summary>Asks for one of a command's numbered choices, answered on the next line like an approval.</summary>
+    public void Choose(CommandOutput output)
+    {
+        lock (_gate)
+            _console.Markup($"{Markup.Escape(output.ChoicePrompt ?? "Pick")} " +
+                string.Join(" · ", output.Choices.Select(choice => $"[green]{Markup.Escape(choice.Key)}[/] {Markup.Escape(choice.Label)}")) +
+                " [grey](Enter keeps it)[/] › ");
     }
 
     public void Notice(string markup)

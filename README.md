@@ -169,7 +169,8 @@ any other agent. OpenTelemetry spans cover the rest.
 | In chat | |
 | --- | --- |
 | `/help` `/status` `/tools` `/todos` | the commands, slots with device and latency, the tools with their risk, the session's todo list |
-| `/model [slot] <model> [--pin]` | list the model slots, or switch one for this session |
+| `/model` `/model <slot>` | the generator's (or a slot's) models, numbered, with the current one and what each needs; type a number on the next line to switch |
+| `/model [slot] <number \| name> [--pin]` | switch a slot for this session; `--pin` keeps it past escalation |
 | `/goal [text \| clear]` | the standing goal, re-injected across compaction |
 | `/approvals` | pending approvals and remembered approval rules |
 | `/memory` `/skills` | review staged memory, lessons and skill drafts; import from Hermes |

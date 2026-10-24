@@ -107,6 +107,7 @@ public sealed class CoreCommandTests
             var output = await Run(runtime, session, commands, "/mod");
             Assert.Equal(OutputTone.Error, output.Tone);
             Assert.Contains("Did you mean /model?", output.Lines[0], StringComparison.Ordinal);
+            Assert.Contains("Did you mean /quit?", (await Run(runtime, session, commands, "/qu")).Lines[0], StringComparison.Ordinal);
         }
     }
 
@@ -144,20 +145,33 @@ public sealed class CoreCommandTests
         await using (host)
         await using (runtime)
         {
+            // The generator's models, numbered by name, with the current one marked; only the others are offered.
             var list = await Run(runtime, session, commands, "/model");
-            Assert.Contains(list.Table!.Rows, row => row[0] == ModelSlots.Generator && row[1] == "fake-gen@cpu" && row[3] == "fake-gen-large@cpu");
-            Assert.Contains(list.Table.Rows, row => row[0] == ModelSlots.Decider && row[1] == "degraded tier");
+            Assert.Equal("generator: fake-gen@cpu", list.Title);
+            Assert.Equal(["#", "model", "runs", "status", "role"], list.Table!.Columns);
+            Assert.Equal(["1", "fake-gen", "local", "● current", "default"], list.Table.Rows[0]);
+            Assert.Equal(["2", "fake-gen-large", "local", "ready", "escalation"], list.Table.Rows[1]);
+            Assert.Equal([new CommandChoice("2", "fake-gen-large", "/model 2")], list.Choices);
+            Assert.Contains(list.Lines, line => line.Contains("decider degraded tier", StringComparison.Ordinal));
 
-            var switched = await Run(runtime, session, commands, "/model fake-gen-large --pin");
+            var decider = await Run(runtime, session, commands, "/model decider");
+            Assert.Equal("decider: degraded tier", decider.Title);
+            Assert.Empty(decider.Choices);
+            var embedder = await Run(runtime, session, commands, "/models embedder.text");
+            Assert.Equal([new CommandChoice("2", "fake-embed-alt", "/model embedder.text 2")], embedder.Choices);
+
+            var switched = await Run(runtime, session, commands, "/model 2 --pin");
             Assert.Equal(OutputTone.Success, switched.Tone);
             Assert.Equal("fake-gen-large@cpu", session.Slots.Current(ModelSlots.Generator).Profile.Id);
             Assert.True(session.Slots.IsPinned(ModelSlots.Generator));
+            Assert.Equal("● current (pinned)", (await Run(runtime, session, commands, "/model")).Table!.Rows[1][3]);
             Assert.Contains(runtime.Log.Read(session.Id, cancellationToken: TestContext.Current.CancellationToken), item => item.Payload is ModelSwitched { Slot: ModelSlots.Generator, Reason: "user" });
 
             var delivery = await session.SendAsync("hi", TestContext.Current.CancellationToken);
             Assert.Equal("Hello from the larger model.", delivery.Result!.Text);
 
             Assert.Contains("already uses", (await Run(runtime, session, commands, "/model generator fake-gen-large")).Lines[0], StringComparison.Ordinal);
+            Assert.Contains("already uses", (await Run(runtime, session, commands, "/model generator 2")).Lines[0], StringComparison.Ordinal);
             Assert.Equal(OutputTone.Success, (await Run(runtime, session, commands, "/model unpin generator")).Tone);
             Assert.False(session.Slots.IsPinned(ModelSlots.Generator));
         }
@@ -174,6 +188,8 @@ public sealed class CoreCommandTests
             Assert.Contains("cannot serve extractor", (await Run(runtime, session, commands, "/model extractor fake-gen")).Lines[0], StringComparison.Ordinal);
             Assert.Contains("Unknown model slot", (await Run(runtime, session, commands, "/model nonslot fake-gen")).Lines[0], StringComparison.Ordinal);
             Assert.Contains("Usage", (await Run(runtime, session, commands, "/model a b c")).Lines[0], StringComparison.Ordinal);
+            Assert.Contains("numbered 1 to 2", (await Run(runtime, session, commands, "/model 9")).Lines[0], StringComparison.Ordinal);
+            Assert.Contains("numbered 1 to 1", (await Run(runtime, session, commands, "/model extractor 0")).Lines[0], StringComparison.Ordinal);
         }
     }
 
