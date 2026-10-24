@@ -38,7 +38,7 @@ It restores and passes the boundary checker here, but has not been built or run,
 | Option | Effect |
 | --- | --- |
 | `--demo` | Demo services and the scripted scenario, with the clock frozen at 2026-10-24 14:05 local so every relative time and screenshot is stable. The default. |
-| `--engine` | Corvid's engine in-process (`Corvid.App.Engine`, desktop head only), over the same `corvid.json`, models and event log as the CLI; `CORVID_CONFIG` and `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR` move them (a test home sets them all, and `Corvid:Models:Cache`, to temporary directories). The host starts and the model cache is checked before the window opens; the models load in the background. With models missing it opens First run. Areas whose engine service is not built yet open on a red "This comes with A3 <group>: …" notice. Not with `--demo`. |
+| `--engine` | Corvid's engine in-process (`Corvid.App.Engine`, desktop head only), over the same `corvid.json`, models and event log as the CLI; `CORVID_CONFIG` and `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR` move them (a test home sets them all, and `Corvid:Models:Cache`, to temporary directories). The host starts and the model cache is checked before the window opens; the models load in the background. With models missing it opens First run. Every area runs on the engine; a member the engine cannot honour yet refuses with the work item that brings it ("comes with G-3: …", shown as a red notice or a disabled action). Not with `--demo`. |
 | `--theme light\|dark\|system` | The theme to start in; `system` by default. Settings switches it at run time. |
 | `--page <area>` | The area to open: `sessions`, `board`, `review`, `rewind`, `memory`, `skills`, `jobs`, `models`, `safety`, `mcp`, `gateway`, `secrets`, `audit`, `settings`, `first-run` (any case; `=` works too: `--page=models`). |
 | `--session <id>` | The session to select and open, such as `cli-9f2e`; with `--page`, it is selected and the page shows. |
@@ -126,8 +126,13 @@ src/Corvid.App/
                              fields, pairing code) and OpsLayout (head, columns, tables, focus after a change)
   Infrastructure/            UiDispatcher (the core's IDispatcher), Ui (x:Bind helpers), AppLogging
 src/Corvid.App.Engine/       the in-process engine (desktop head only): AppEngine (the host and the runtime starting in the
-                             background), EngineAppServices (one partial file per area), Sessions/ (EngineSessionService,
-                             SessionUpdateTranslator from the host's K-10 stream to the app's updates)
+                             background), EngineAppServices (one partial file per area), and one folder per area's service:
+                             Sessions/ (EngineSessionService with its approvals and commands, CardPrompter, ApprovalCards,
+                             SessionUpdateTranslator from the host's K-10 stream to the app's updates), Review/, Rewind/,
+                             Audit/ and History/ (the ledger and the signal they share), Models/, FirstRun/, Settings/,
+                             Memory/, Skills/, Safety/, Jobs/, Mcp/, Gateway/, Secrets/ and Ops/ (their shared change
+                             signal), Board/ (the tray and status over the MCP, Gateway, Memory and Jobs services) and
+                             PromptHistory/ (the event log's user messages)
 src/Corvid.App.Core/
   Mvvm/                      ObservableObject, RelayCommand(<T>), AsyncRelayCommand, Choice, IDispatcher, InlineDispatcher
   Shell/                     ShellViewModel, StatusBarViewModel, NavItem, SessionListItem, PhoneTab, ShellLayout, DemoShell
