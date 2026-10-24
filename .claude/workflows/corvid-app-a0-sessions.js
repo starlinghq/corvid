@@ -24,7 +24,10 @@ const LOOK = method === 'desktop'
 const COMMON = `You are one agent in a workflow that builds the windowed Corvid app on Uno Platform, looking at the running app at every step.
 Read docs/plan/ui-build.md first and follow it: the shared rules, the architecture and the verification protocol. Then read docs/plan/ui-handoff.md (where the build stands, including the session core's API) and src/Corvid.App/README.md (the app's conventions and gotchas).
 ${LOOK} Save screenshots under ${shots}/ and never commit them.
-Work only in the files your step owns, keep the solution building with no warnings, and commit your work at the end. Do not push.`
+Work only in the files your step owns, keep the solution building with no warnings, and commit your work at the end. Do not push.
+Before every dotnet build or test, run \`agent-budget level\`: if it prints critical, wait with \`agent-budget alert --from critical --timeout 300\`; if tight, pass -m:2. Commit messages carry no Claude attribution (no Co-Authored-By, Claude-Session or Generated-with lines).`
+// The agents run one at a time, so this script needs no concurrency limiter; a workflow that fans out takes its
+// maxConcurrent from agent-budget (see docs/plan/ui-build.md, "Memory").
 
 const STEP = {
   type: 'object',

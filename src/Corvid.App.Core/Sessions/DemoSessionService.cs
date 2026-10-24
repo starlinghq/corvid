@@ -30,7 +30,7 @@ public enum DemoScene
 /// dispatcher, so requests and steps never race.
 /// </para>
 /// </summary>
-public sealed partial class DemoSessionService : ISessionService
+public sealed partial class DemoSessionService : ISessionService, IDisposable
 {
     private readonly IDispatcher _dispatcher;
     private readonly TimeProvider _time;
@@ -38,6 +38,13 @@ public sealed partial class DemoSessionService : ISessionService
     private readonly DateTimeOffset _start;
     private DateTimeOffset _clock;
     private int _forks;
+
+    /// <summary>Ends every scripted turn, so none of their timers fires after the window (or a test) is done.</summary>
+    public void Dispose()
+    {
+        foreach (var session in _sessions.Values)
+            session.Script?.End();
+    }
 
     public DemoSessionService(IDispatcher dispatcher, TimeProvider time, DemoScene scene = DemoScene.Main)
     {
@@ -150,6 +157,10 @@ public sealed partial class DemoSessionService : ISessionService
         // Nothing runs on a stale prompt: an answer to one that has closed changes nothing.
         if (session.State.Approvals.All(open => open.ApprovalId != approvalId))
             return Task.CompletedTask;
+        // The script answers its prompts in order; an answer to a later one first would leave the earlier handler waiting
+        // on a prompt that is gone. Refused rather than ignored, so the card shows why and can be answered later.
+        if (session.State.CurrentApproval?.ApprovalId != approvalId)
+            return Task.FromException(new InvalidOperationException("Answer the earlier approval first: prompts are answered in order."));
         if (session.Script?.Approvals.Remove(approvalId, out var handler) == true)
             handler(answer, false);
         else
@@ -341,7 +352,12 @@ public sealed partial class DemoSessionService : ISessionService
         starter.Then(delay, () =>
         {
             if (session.State.Running || session.Queue.IsEmpty)
+            {
+                // The message was taken back or removed in the meantime: end, so a later message can start a turn.
+                starter.End();
                 return;
+            }
+
             var next = session.Queue[0];
             SetQueue(session, session.Queue.RemoveAt(0));
             starter.End();

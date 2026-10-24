@@ -49,6 +49,8 @@ public sealed partial class MarkdownView : UserControl
         _last = null;
         foreach (var block in Document?.Blocks ?? [])
             _root.Children.Add(Block(block));
+        // A recycled element must not keep announcing a finished answer as streaming.
+        ClearValue(AutomationProperties.NameProperty);
         if (!IsStreaming)
             return;
         if (_last is null)

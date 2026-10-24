@@ -18,15 +18,22 @@
 # For the Corvid app, launch with CORVID_APP_RENDERER=software: under Xvfb, Uno's OpenGL path can keep a stale frame
 # after a shrinking resize. Needs Xvfb, xdotool, xdpyinfo, xwininfo and ImageMagick (apt: xvfb xdotool x11-utils imagemagick).
 #
-# State lives in $UI_HARNESS_STATE (default /tmp/ui-harness): xvfb-<n>.pid, app-<n>.pid, win-<n>.id, app-<n>.log.
-# Processes are stopped by the PID recorded at launch, never by pattern, so a stop can never kill the calling shell.
+# State lives in $UI_HARNESS_STATE (default $XDG_RUNTIME_DIR/ui-harness-$UID, private to the user): xvfb-<n>.pid,
+# app-<n>.pid, win-<n>.id, app-<n>.log. Processes are stopped by the PID recorded at launch, never by pattern, so a stop
+# can never kill the calling shell. Numbers are checked before they reach arithmetic or paths.
 set -euo pipefail
 
-STATE="${UI_HARNESS_STATE:-/tmp/ui-harness}"
-mkdir -p "$STATE"
+STATE="${UI_HARNESS_STATE:-${XDG_RUNTIME_DIR:-/tmp}/ui-harness-$UID}"
+mkdir -p -m 700 "$STATE"
+[[ ! -L "$STATE" && -O "$STATE" ]] || { echo "state directory $STATE is a link or not owned by you" >&2; exit 2; }
+chmod 700 "$STATE"
 cmd="${1:-}"; shift || true
 n="${1:-}"; shift || true
 [[ -n "$cmd" && -n "$n" ]] || { sed -n '2,23p' "$0"; exit 2; }
+[[ "$n" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "the display must be a number: $n" >&2; exit 2; }
+int() { [[ "$1" =~ ^-?(0|[1-9][0-9]*)$ ]] || { echo "not a whole number: $1" >&2; exit 2; }; }
+count() { [[ "$1" =~ ^[1-9][0-9]*$ ]] || { echo "not a positive count: $1" >&2; exit 2; }; }
+wxh() { [[ "$1" =~ ^[0-9]+x[0-9]+$ ]] || { echo "not a size like 1440x900: $1" >&2; exit 2; }; }
 export DISPLAY=":$n"
 
 alive_pid() { [[ -f "$1" ]] && kill -0 "$(cat "$1")" 2>/dev/null; }
@@ -50,7 +57,7 @@ case "$cmd" in
     echo "display :$n ready"
     ;;
   launch)
-    size="$1"; shift
+    size="$1"; shift; wxh "$size"
     [[ "${1:-}" == "--" ]] && shift
     alive_pid "$STATE/xvfb-$n.pid" || "$0" start "$n" >/dev/null
     if alive_pid "$STATE/app-$n.pid"; then echo "an app is already running on :$n; stop it first" >&2; exit 1; fi
@@ -62,7 +69,8 @@ case "$cmd" in
     for _ in $(seq 1 120); do
       kill -0 "$pid" 2>/dev/null || { echo "the app exited during start-up; its log:" >&2; tail -40 "$STATE/app-$n.log" >&2; exit 1; }
       w=$(xdotool search --onlyvisible --pid "$pid" 2>/dev/null | tail -1 || true)
-      [[ -z "$w" ]] && w=$(xdotool search --onlyvisible --name '.+' 2>/dev/null | tail -1 || true)
+      # A launcher (dotnet run) owns no window itself: fall back to the window titled Corvid, never any window.
+      [[ -z "$w" ]] && w=$(xdotool search --onlyvisible --name '^Corvid$' 2>/dev/null | tail -1 || true)
       [[ -n "$w" ]] && break
       sleep 0.5
     done
@@ -73,7 +81,7 @@ case "$cmd" in
     echo "pid $pid window $w size $size on :$n"
     ;;
   resize)
-    w=$(win); xdotool windowsize "$w" "${1%x*}" "${1#*x}"; sleep 1.5; echo "resized to $1"
+    wxh "$1"; w=$(win); xdotool windowsize "$w" "${1%x*}" "${1#*x}"; sleep 1.5; echo "resized to $1"
     ;;
   shot)
     out="$1"; read -r x y w h < <(geometry)
@@ -81,16 +89,19 @@ case "$cmd" in
     echo "$out (${w}x${h})"
     ;;
   click)
+    int "$1"; int "$2"; count "${3:-1}"
     read -r x y _ _ < <(geometry)
     xdotool mousemove $((x + $1)) $((y + $2)) click "${3:-1}"; sleep 0.4
     ;;
   move)
+    int "$1"; int "$2"
     read -r x y _ _ < <(geometry)
     xdotool mousemove $((x + $1)) $((y + $2)); sleep 0.4
     ;;
   scroll)
+    int "$1"; int "$2"; count "${4:-3}"
     read -r x y _ _ < <(geometry)
-    b=5; [[ "$3" == "up" ]] && b=4
+    b=5; [[ "${3:-down}" == "up" ]] && b=4
     xdotool mousemove $((x + $1)) $((y + $2)) click --repeat "${4:-3}" --delay 60 "$b"; sleep 0.4
     ;;
   type)

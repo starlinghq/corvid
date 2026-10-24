@@ -109,13 +109,13 @@ public sealed class MarkdownTests
     [Fact]
     public void HtmlIsTextAndControlCharactersAreRemoved()
     {
-        var document = MarkdownDocument.Parse("<script>alert(1)</script> and \u001b[31mred\u001b[0m and ‮evil");
+        var document = MarkdownDocument.Parse("<script>alert(1)</script> and \u001b[31mred\u001b[0m and \u202Eevil");
 
         var text = string.Concat(Assert.IsType<MarkdownParagraph>(Assert.Single(document.Blocks)).Runs.Select(run => run.Text));
         Assert.Contains("<script>", text, StringComparison.Ordinal);
         Assert.Contains("red", text, StringComparison.Ordinal);
         Assert.DoesNotContain('\u001b', text);
-        Assert.DoesNotContain('‮', text);
+        Assert.DoesNotContain('\u202E', text);
     }
 
     [Fact]

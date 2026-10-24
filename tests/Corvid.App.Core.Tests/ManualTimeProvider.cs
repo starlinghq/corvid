@@ -20,6 +20,9 @@ internal sealed class ManualTimeProvider : TimeProvider
     /// <summary>The demo's moment, 2026-10-24 14:05, in UTC so the scenario's wall-clock times are the mockups'.</summary>
     public static ManualTimeProvider Demo() => new(FrozenTimeProvider.Demo(TimeZoneInfo.Utc).GetUtcNow(), TimeZoneInfo.Utc);
 
+    /// <summary>The demo's moment in the machine's zone, as the app's frozen clock has it, but with timers that only fire on <see cref="Advance"/>.</summary>
+    public static ManualTimeProvider DemoLocal() => new(FrozenTimeProvider.Demo().GetUtcNow(), TimeZoneInfo.Local);
+
     public override DateTimeOffset GetUtcNow() => _now;
 
     public override TimeZoneInfo LocalTimeZone => _zone;

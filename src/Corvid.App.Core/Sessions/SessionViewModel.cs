@@ -65,7 +65,7 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
         ClearGoalCommand = new RelayCommand(() => Run(() => _service.SetGoalAsync(SessionId, null)), () => !IsReadOnly && HasGoal);
         CompactCommand = new RelayCommand<string>(focus => Run(() => _service.CompactAsync(SessionId, string.IsNullOrWhiteSpace(focus) ? null : focus.Trim())), _ => !IsReadOnly && !IsRunning);
         RenameCommand = new RelayCommand<string>(title => Run(() => _service.RenameAsync(SessionId, title.Trim())), title => !string.IsNullOrWhiteSpace(title));
-        ForkCommand = new RelayCommand<UserMessageBlock>(block => Fork(block.Position));
+        ForkCommand = new RelayCommand<UserMessageBlock>(block => Fork(block.Position), block => block is not null);
         SetModeCommand = new RelayCommand<ApprovalMode>(mode => Run(() => _service.SetApprovalModeAsync(SessionId, mode)), _ => !IsReadOnly);
         InitializeComposer();
         InitializePanels();
