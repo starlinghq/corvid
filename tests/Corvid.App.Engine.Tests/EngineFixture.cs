@@ -36,6 +36,15 @@ internal sealed class EngineFixture : IAsyncDisposable
         return new EngineFixture(host, runtime, AppEngine.ForRuntime(host.Host, runtime));
     }
 
+    /// <summary>A started runtime with more settings over the test host's ("{root}" is its directory) and more services (another model provider).</summary>
+    public static async Task<EngineFixture> StartAsync(FakeModels? models, IReadOnlyDictionary<string, string?>? settings,
+        Action<Microsoft.Extensions.DependencyInjection.IServiceCollection>? services = null)
+    {
+        var host = TestHost.Create(models, settings, services);
+        var runtime = await host.StartAsync();
+        return new EngineFixture(host, runtime, AppEngine.ForRuntime(host.Host, runtime));
+    }
+
     /// <summary>A session service over the engine, reporting inline on the caller's thread.</summary>
     public EngineSessionService Sessions(IDispatcher? dispatcher = null) => new(Engine, dispatcher ?? new InlineDispatcher(), Time);
 

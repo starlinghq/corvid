@@ -95,6 +95,7 @@ public sealed record CatalogueModel(
 }
 
 /// <summary>Where a slot's model runs and how fast: device, queue depth (for generating slots) and median latency.</summary>
+/// <param name="P50Milliseconds">The median latency; negative before the slot's first call, when there is none to show.</param>
 public sealed record SlotPlacement(string Device, int? Queue, int P50Milliseconds);
 
 /// <summary>
@@ -231,10 +232,17 @@ public static class ModelText
             : string.Create(CultureInfo.InvariantCulture, $"about {minutes} minutes at {Rate(bytesPerSecond)}");
     }
 
-    /// <summary>"cuda:0 · q0 · 180 ms", "cpu · 38 ms".</summary>
+    /// <summary>"cuda:0 · q0 · 180 ms", "cpu · 38 ms"; "cpu · q0 · no calls yet" before the slot's first call (a negative median).</summary>
     public static string Placement(SlotPlacement placement)
     {
         ArgumentNullException.ThrowIfNull(placement);
+        if (placement.P50Milliseconds < 0)
+        {
+            return placement.Queue is { } waiting
+                ? string.Create(CultureInfo.InvariantCulture, $"{placement.Device} · q{waiting} · no calls yet")
+                : $"{placement.Device} · no calls yet";
+        }
+
         return placement.Queue is { } queue
             ? string.Create(CultureInfo.InvariantCulture, $"{placement.Device} · q{queue} · {placement.P50Milliseconds} ms")
             : string.Create(CultureInfo.InvariantCulture, $"{placement.Device} · {placement.P50Milliseconds} ms");
