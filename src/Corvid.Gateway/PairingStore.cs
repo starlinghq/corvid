@@ -234,6 +234,22 @@ public sealed class PairingStore
         return new PairedUser(adapter, user, name, role, now);
     }
 
+    /// <summary>
+    /// Drops a waiting code without pairing anyone (G-14, the app's Ignore): the sender stays unpaired, and their next
+    /// message gets a new code. Case and the dash do not matter. Returns whether such a code was waiting.
+    /// </summary>
+    public bool Dismiss(string code)
+    {
+        ArgumentNullException.ThrowIfNull(code);
+        if (Normalize(code) is not { } normalized)
+            return false;
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM codes WHERE code = $code;";
+        command.Parameters.AddWithValue("$code", normalized);
+        return command.ExecuteNonQuery() > 0;
+    }
+
     /// <summary>Removes a pairing (configuration allowlists are not affected). Returns whether one existed.</summary>
     public bool Revoke(string adapter, string userId)
     {

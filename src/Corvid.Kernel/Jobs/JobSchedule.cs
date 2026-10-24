@@ -107,6 +107,24 @@ public sealed partial class JobSchedule
         }
     }
 
+    /// <summary>
+    /// G-13's preview: the next <paramref name="count"/> runs a job with this schedule would have if it were created at
+    /// <paramref name="now"/>, as <see cref="JobStore.Add"/> and the scheduler would time them (the first run, then each
+    /// following one). Fewer for a one-shot (one) or a cron line that stops matching; nothing is written.
+    /// </summary>
+    public IReadOnlyList<DateTimeOffset> Upcoming(DateTimeOffset now, int count)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);
+        var runs = new List<DateTimeOffset>(count);
+        var next = First(now);
+        while (next is { } at && runs.Count < count)
+        {
+            runs.Add(at);
+            next = Following(at, at);
+        }
+        return runs;
+    }
+
     /// <summary>Reads a canonical form back. Throws <see cref="FormatException"/> for anything else.</summary>
     public static JobSchedule FromCanonical(string canonical, TimeZoneInfo zone)
     {

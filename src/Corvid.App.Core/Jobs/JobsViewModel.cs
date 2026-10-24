@@ -470,6 +470,10 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
             SchedulerHost.Elsewhere => ("held elsewhere", Tone.Amber,
                 $"**{Spans.Escape(SafeText.Clean(status.Holder))}** holds the scheduler's lock{since}, so jobs run there, not here. "
                 + "Pause, resume and remove still work: it picks the change up within its poll interval."),
+            // The engine knows only its own process: it says why it does not run the scheduler, not whether another does.
+            _ when status.Holder.Length > 0 => ("off here", Tone.Grey,
+                $"{Spans.Escape(SafeText.Clean(status.Holder))}. Jobs run only in a process that runs the scheduler (`corvid serve`, "
+                + "or this app with Corvid:Scheduler:Enabled)."),
             _ => ("off", Tone.Grey,
                 "No process runs the scheduler, so no job runs. Start `corvid serve`, or let this app run it from Settings."),
         };

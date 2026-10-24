@@ -162,4 +162,23 @@ public sealed class JobScheduleTests
         // A date that never comes.
         Assert.Null(CronExpression.Parse("0 0 30 feb *").Next(start, TimeZoneInfo.Utc));
     }
+
+    /// <summary>G-13: the preview lists the runs a new job would have, timed as the store and scheduler time them.</summary>
+    [Fact]
+    public void Upcoming_lists_the_runs_a_new_job_would_have()
+    {
+        var weekdays = JobSchedule.Parse("weekdays at 9am", Now, London);
+        Assert.Equal(
+            [LondonTime(2026, 10, 20, 9, 0), LondonTime(2026, 10, 21, 9, 0), LondonTime(2026, 10, 22, 9, 0), LondonTime(2026, 10, 23, 9, 0),
+             LondonTime(2026, 10, 26, 9, 0)],
+            weekdays.Upcoming(Now, 5));
+
+        var every = JobSchedule.Parse("every 2 hours", Now, London);
+        Assert.Equal([Now.AddHours(2), Now.AddHours(4), Now.AddHours(6)], every.Upcoming(Now, 3));
+
+        // A one-shot runs once, however many are asked for.
+        var once = JobSchedule.Parse("in 30m", Now, London);
+        Assert.Equal([Now.AddMinutes(30)], once.Upcoming(Now, 3));
+        Assert.Throws<ArgumentOutOfRangeException>(() => once.Upcoming(Now, 0));
+    }
 }
