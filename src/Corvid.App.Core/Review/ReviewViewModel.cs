@@ -463,15 +463,32 @@ public sealed class ReviewViewModel : AreaViewModel
         if (_selected is null)
             return;
         var line = FileComments.FirstOrDefault()?.Line ?? FirstChangedLine();
-        var ran = await _service.OpenInEditorAsync(_selected.Path, line).ConfigureAwait(true);
-        Say($"Opened in the editor: {SafeText.Reveal(ran)}", Tone.Grey);
+        try
+        {
+            var ran = await _service.OpenInEditorAsync(_selected.Path, line).ConfigureAwait(true);
+            Say($"Opened in the editor: {SafeText.Reveal(ran)}", Tone.Grey);
+        }
+        catch (InvalidOperationException exception)
+        {
+            // No editor configured, or one the window cannot run: the reason is the notice.
+            Say(SafeText.Clean(exception.Message), Tone.Red);
+        }
     }
 
     private async Task RevertFileAsync()
     {
         if (_selected?.File is not { CheckpointId: { } checkpoint } file || _sessionId is not { } sessionId)
             return;
-        var result = await _service.RevertFileAsync(sessionId, file.Path, checkpoint).ConfigureAwait(true);
+        FileRevertResult result;
+        try
+        {
+            result = await _service.RevertFileAsync(sessionId, file.Path, checkpoint).ConfigureAwait(true);
+        }
+        catch (InvalidOperationException exception)
+        {
+            Say(SafeText.Clean(exception.Message), Tone.Red);
+            return;
+        }
         // The name the person acted on, with any hidden character in it shown.
         var name = SafeText.Reveal(System.IO.Path.GetFileName(result.Path));
         if (result.Refused)

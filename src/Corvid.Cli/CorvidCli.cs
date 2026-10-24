@@ -49,7 +49,7 @@ public static class ExitCodes
     /// <summary>A configured model is not in the model cache; the message says how to fetch it.</summary>
     public const int ModelsMissing = 3;
     /// <summary><c>corvid scan</c> found a match at or above <c>--fail-on</c> (C-023).</summary>
-    public const int Findings = 4;
+    public const int Findings = Corvid.Host.Audit.LogScan.FindingsExitCode;
 }
 
 /// <summary>

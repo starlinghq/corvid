@@ -26,6 +26,8 @@ public sealed class RewindViewModel : AreaViewModel
     private RewindScope _scope = RewindScope.FilesAndConversation;
     private bool _previewing;
     private string _error = "";
+    /// <summary>Why the ledger could not be read (the engine could not start); empty when it was.</summary>
+    private string _loadError = "";
 
     public RewindViewModel(IRewindService service, ShellViewModel shell, TimeProvider time)
         : base(Area.Rewind, "The checkpoint ledger as a timeline: preview a restore point, then put back the files, the conversation or both.")
@@ -68,9 +70,11 @@ public sealed class RewindViewModel : AreaViewModel
 
     public bool HasEntries => Entries.Count > 0;
 
-    public string EmptyText => HasSession
-        ? "No checkpoints yet. Every call that changes files takes one, and it shows here."
-        : "Open a session to see its checkpoint ledger.";
+    public string EmptyText => !HasSession
+        ? "Open a session to see its checkpoint ledger."
+        : _loadError.Length > 0
+            ? $"The checkpoint ledger could not be read: {_loadError}"
+            : "No checkpoints yet. Every call that changes files takes one, and it shows here.";
 
     public LedgerEntryView? Selected => _selected;
 
@@ -230,10 +234,16 @@ public sealed class RewindViewModel : AreaViewModel
         {
             var timeline = await _service.GetTimelineAsync(sessionId).ConfigureAwait(true);
             if (sessionId == _sessionId)
+            {
+                _loadError = "";
                 Apply(timeline);
+            }
         }
         catch (Exception exception) when (exception is KeyNotFoundException or InvalidOperationException)
         {
+            if (sessionId != _sessionId)
+                return;
+            _loadError = SafeText.Clean(exception.Message);
             Apply(null);
         }
     }
@@ -321,6 +331,10 @@ public sealed class RewindViewModel : AreaViewModel
         foreach (var file in plan?.Files ?? [])
         {
             PlanFiles.Add(new PutBackFileView(file, plan!.CheckpointId));
+            // A conflict the engine cannot tie to a dated edit of the person's still says why it stops the restore.
+            if (file is { Kind: PutBackKind.Conflict, Edit: null, Reason: { } reason })
+                PlanNotes.Add(new RestoreNoteView(SafeText.Reveal(Path.GetFileName(file.Path)),
+                    $"{SafeText.Clean(reason)}. A restore of the files stops here and changes nothing.", Tone.Red));
             if (file.Edit is { } edit)
             {
                 // The file a restore will merge with or stop on: any hidden character in its name is shown.
