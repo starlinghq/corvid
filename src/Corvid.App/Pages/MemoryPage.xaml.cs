@@ -34,6 +34,16 @@ public sealed partial class MemoryPage : Page
         foreach (var tab in Enum.GetValues<MemoryTabKind>())
             AddKey(VirtualKey.Number1 + (int)tab, VirtualKeyModifiers.Control, () => ViewModel?.Select(tab));
         Root.SizeChanged += (_, e) => ApplyWidth(e.NewSize.Width);
+        // The window's first focus would otherwise land on the first card's Approve and draw its ring (Memory.png has
+        // none); the page itself takes it, which draws nothing, and Tab goes on to the tabs from there.
+        Loaded += (_, _) =>
+        {
+            if (XamlRoot is { } root && FocusManager.GetFocusedElement(root) is null or Button)
+            {
+                IsTabStop = true;
+                Focus(FocusState.Programmatic);
+            }
+        };
     }
 
     public MemoryViewModel ViewModel { get; private set; } = null!;
@@ -58,7 +68,10 @@ public sealed partial class MemoryPage : Page
     private void ApplyWidth(double width)
     {
         var oneColumn = width < OneColumnWidth;
-        var gutter = width < PhoneWidth ? 14 : 24;
+        var phone = width < PhoneWidth;
+        var gutter = phone ? 14 : 24;
+        // The phone's top bar names the page already.
+        PageTitle.Visibility = phone ? Visibility.Collapsed : Visibility.Visible;
         Body.Padding = new Thickness(gutter, 18, gutter, 18);
         Head.Padding = new Thickness(gutter, 12, gutter, 12);
         LeftColumn.Width = new GridLength(oneColumn ? 1 : 1.4, GridUnitType.Star);

@@ -224,6 +224,24 @@ public sealed class MemoryViewModelTests
     }
 
     [Fact]
+    public async Task TheCoreBlocksTabOffersConsolidationForABlockNearItsBudget()
+    {
+        var (memory, _, _, _) = Create();
+        memory.Select(MemoryTabKind.CoreBlocks);
+
+        var user = memory.CoreBlocks[0];
+        Assert.True(user.CanOpenReview);
+        Assert.StartsWith("Near its budget: consolidation is offered with the update waiting", user.ConsolidationOffer, StringComparison.Ordinal);
+        Assert.Equal("", memory.CoreBlocks[1].ConsolidationOffer);
+        user.OpenReview!.Execute(null);
+        Assert.Equal(MemoryTabKind.Review, memory.SelectedTab);
+
+        await memory.RejectBlockAsync(memory.BlockUpdates[0], TestContext.Current.CancellationToken);
+        Assert.False(memory.CoreBlocks[0].CanOpenReview);
+        Assert.EndsWith("with the next staged write to it.", memory.CoreBlocks[0].ConsolidationOffer, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ALessonApprovedSupersedingMarksTheOldOne()
     {
         var (memory, _, _, _) = Create();

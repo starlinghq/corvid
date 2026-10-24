@@ -589,6 +589,11 @@
               <Border Style="{StaticResource CorvidPanel}">
                 <StackPanel Padding="14,12" Spacing="10">
                   <ContentControl Content="{x:Bind}" ContentTemplate="{StaticResource BlockMeter}" HorizontalContentAlignment="Stretch" IsTabStop="False" />
+                  <controls:WrapRowPanel Spacing="10" LineSpacing="4" Visibility="{x:Bind ui:Ui.VisibleIf(ShowsConsolidationOffer)}">
+                    <TextBlock Text="{x:Bind ConsolidationOffer}" FontSize="12.5" Foreground="{ThemeResource CorvidAmber}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                    <controls:LinkButton Text="Consolidate in Review" FontSize="12.5" Command="{x:Bind OpenReview}" VerticalAlignment="Center"
+                                         Visibility="{x:Bind ui:Ui.VisibleIf(CanOpenReview)}" />
+                  </controls:WrapRowPanel>
                   <Border Background="{ThemeResource CorvidCodeBg}" CornerRadius="6" Padding="10,8">
                     <TextBlock Text="{x:Bind Text}" Style="{StaticResource CorvidBodyText}" IsTextSelectionEnabled="True" />
                   </Border>

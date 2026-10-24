@@ -47,6 +47,7 @@ public sealed class MemoryViewModel : AreaViewModel
     private ImportSource? _import;
     private bool _hasPreview;
     private string _loadError = "";
+    private readonly RelayCommand _openReview;
 
     public MemoryViewModel(IMemoryService service, TimeProvider time, ShellViewModel? shell = null, StatusBarViewModel? statusBar = null,
         MemoryEngineStatus? engine = null)
@@ -68,6 +69,7 @@ public sealed class MemoryViewModel : AreaViewModel
             new MemoryTab(MemoryTabKind.Import, "Import", Select),
         ];
         Tabs[0].IsSelected = true;
+        _openReview = new RelayCommand(() => Select(MemoryTabKind.Review));
         SearchCommand = new AsyncRelayCommand(SearchAsync);
         ClearSearchCommand = new AsyncRelayCommand(ct => { SearchText = ""; return SearchAsync(ct); });
         EditBlocksCommand = new RelayCommand(() => Select(MemoryTabKind.CoreBlocks));
@@ -246,7 +248,7 @@ public sealed class MemoryViewModel : AreaViewModel
         Reset(StagedFacts, snapshot.StagedFacts.Select(f => new StagedFactView(this, f, zone)));
         Reset(BlockUpdates, snapshot.BlockUpdates.Select(u => new BlockUpdateView(this, u, zone)));
         Reset(LessonCandidates, snapshot.PendingLessons.Select(l => new LessonCandidateView(this, l, _lessons)));
-        Reset(CoreBlocks, snapshot.Blocks.Select(b => new CoreBlockView(b, _time)));
+        Reset(CoreBlocks, snapshot.Blocks.Select(BlockView));
         _import = snapshot.Import;
         _stats = snapshot.Stats;
         RefreshFacts();
@@ -317,7 +319,7 @@ public sealed class MemoryViewModel : AreaViewModel
         var block = await _service.ApproveBlockUpdateAsync(update.Id, text, replaces, cancellationToken).ConfigureAwait(true);
         BlockUpdates.Remove(update);
         var index = CoreBlocks.ToList().FindIndex(b => b.Name == block.Name);
-        var view = new CoreBlockView(block, _time);
+        var view = BlockView(block);
         if (index >= 0)
             CoreBlocks[index] = view;
         else
@@ -438,8 +440,15 @@ public sealed class MemoryViewModel : AreaViewModel
         bar.Trailing = engine.Trailing;
     }
 
+    private CoreBlockView BlockView(CoreBlock block) => new(block, _time)
+    {
+        HasPendingUpdate = BlockUpdates.Any(u => u.Update.Block == block.Name),
+        OpenReview = _openReview,
+    };
+
     private void QueueChanged()
     {
+        Reset(CoreBlocks, CoreBlocks.Select(b => BlockView(b.Block)).ToList());
         Tabs[(int)MemoryTabKind.Review].Count = ReviewCount;
         Tabs[(int)MemoryTabKind.Lessons].Count = LessonCandidates.Count;
         _shell?.SetBadge(Area.Memory, ReviewCount);
