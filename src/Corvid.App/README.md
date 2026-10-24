@@ -61,7 +61,9 @@ Review, Library, History and Import, `Ctrl+F` puts the caret in the filter (`Esc
 the library or the history open the next or previous row, `Esc` closes the open skill or commit; in a draft's editor
 `Ctrl+Enter` approves as edited and `Esc` undoes the edit, in a reason `Enter` rejects. On Jobs and MCP, `Up` and `Down`
 move between jobs or servers from a focused row and `Enter` opens it; on Jobs, MCP and Gateway, `Esc` closes an open
-question (remove, trust, forget, pair as owner, revoke), then the form or allowlist editor. The rest of the keyboard map
+question (remove, trust, forget, pair as owner, revoke), then the form or allowlist editor. On Safety: `Delete` on a rule's
+Remove… asks to remove it, the question's Remove takes focus, and `Esc` stops asking. On Secrets: `Enter` in Set a
+secret…'s name field starts the set, and `Esc` closes the picker. The rest of the keyboard map
 (`docs/plan/ui.md` §6) comes with the screens it drives.
 
 ## The harness check
