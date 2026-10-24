@@ -275,6 +275,19 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         return id;
     }
 
+    public bool CanCreate => true;
+
+    /// <summary>A new, empty session in the runtime's workspace, listed as a new session until it holds a message.</summary>
+    public async Task<string> CreateAsync(CancellationToken cancellationToken = default)
+    {
+        var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        var id = runtime.OpenSession(surface: Surface).Id;
+        _created[id] = _time.GetUtcNow();
+        Refresh(runtime, id);
+        return id;
+    }
+
     public Task RenameAsync(string sessionId, string title, CancellationToken cancellationToken = default) =>
         Task.FromException(new ServiceUnavailableException(
             "Renaming comes with G-6: the event log has no title event yet, so a session's title is its first message."));

@@ -188,4 +188,19 @@ public interface ISessionService
 
     /// <summary>Renames the session (G-6).</summary>
     Task RenameAsync(string sessionId, string title, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Whether <see cref="CreateAsync"/> starts sessions here: the engine does, the demo's scripted scenario does not (its
+    /// Board and Ctrl+N say what a new session comes with instead). Added for the A3 end-to-end pass, as a default member
+    /// so every other implementation keeps refusing.
+    /// </summary>
+    bool CanCreate => false;
+
+    /// <summary>
+    /// Starts a new, empty session in the window's workspace and returns its id; the rail lists it as a new session until
+    /// its first message gives it a title.
+    /// </summary>
+    Task<string> CreateAsync(CancellationToken cancellationToken = default) =>
+        Task.FromException<string>(new Composition.ServiceUnavailableException(
+            "New sessions come with the engine, which opens one in the window's workspace."));
 }

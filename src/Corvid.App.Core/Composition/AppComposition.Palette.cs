@@ -33,5 +33,6 @@ public sealed partial class AppComposition
             Shell.Navigate(Area.Settings);
         },
         RevealBlock = block => Sessions.Reveal(block),
+        NewSession = SessionHub.CanCreate ? SessionHub.StartNew : null,
     });
 }

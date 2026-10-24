@@ -77,7 +77,8 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         Filters = [.. Enum.GetValues<BoardFilter>().Select(filter =>
             new Choice(FilterLabel(filter), FilterHelp(filter), new RelayCommand(() => Filter = filter)))];
         Filters[0].IsSelected = true;
-        NewSessionCommand = new RelayCommand(() => { }, () => false);
+        // The engine starts a session in the window's workspace; the demo's scenario cannot, so there it stays disabled.
+        NewSessionCommand = new RelayCommand(_hub.StartNew, () => _hub.CanCreate);
         OpenWorkspaceCommand = new RelayCommand(() => { }, () => false);
         ClosePeekCommand = new RelayCommand(ClosePeek, () => _peek is not null);
         // Nothing sends native notifications yet, so the toggle is off and says why, as New session does.

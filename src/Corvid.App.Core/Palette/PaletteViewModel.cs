@@ -29,6 +29,9 @@ public sealed record PaletteHost(ShellViewModel Shell, KeyMap Keys, TimeProvider
 
     /// <summary>Brings a transcript block into view on the Sessions page (find in the session).</summary>
     public Action<string>? RevealBlock { get; init; }
+
+    /// <summary>Starts a new session (Ctrl+N), where the engine can; null where it cannot (the demo).</summary>
+    public Action? NewSession { get; init; }
 }
 
 /// <summary>
@@ -190,6 +193,10 @@ public sealed class PaletteViewModel : ObservableObject
                 break;
             case KeyCommands.Help or KeyCommands.HelpAlias:
                 Open(PaletteMode.Help);
+                break;
+            case KeyCommands.NewSession when _host.NewSession is { } start:
+                Close();
+                start();
                 break;
             case KeyCommands.NewSession:
                 OpenPending("New session",
@@ -354,7 +361,8 @@ public sealed class PaletteViewModel : ObservableObject
         items.Add(Command("Search across sessions…", "Titles, previews and ids", KeyCommands.Search, IconKind.Search));
         items.Add(Command("Prompt history…", "Prompts sent in this workspace", KeyCommands.History, IconKind.Lines));
         items.Add(Command("Switch the generator…", "Without leaving the composer", KeyCommands.SwitchGenerator, IconKind.Chip));
-        items.Add(Command("New session", "Comes with the engine (A3)", KeyCommands.NewSession, IconKind.Chat));
+        items.Add(Command("New session", _host.NewSession is null ? "Comes with the engine (A3)" : "An empty session in the window's workspace",
+            KeyCommands.NewSession, IconKind.Chat));
         items.Add(Command("New window", "Comes with pop-out windows", KeyCommands.NewWindow, IconKind.PopOut));
         items.Add(Command("Aside…", "A side question in a scratch fork; comes with F7", KeyCommands.Aside, IconKind.Question));
         items.Add(Command("Keyboard shortcuts", "Every key and where it works", KeyCommands.Help, IconKind.Question));

@@ -124,6 +124,47 @@ public sealed class SessionHub : IDisposable
         _shell.Navigate(Area.Sessions);
     }
 
+    /// <summary>Whether <see cref="CreateAsync"/> can start a session (the engine; not the demo).</summary>
+    public bool CanCreate => _service.CanCreate;
+
+    /// <summary>
+    /// Starts a new, empty session, lists it in the rail at once (the engine's own summary follows) and opens it in the
+    /// Sessions area. Throws what the service refused with.
+    /// </summary>
+    public async Task<string> CreateAsync(CancellationToken cancellationToken = default)
+    {
+        var id = await _service.CreateAsync(cancellationToken).ConfigureAwait(true);
+        if (!_summaries.ContainsKey(id))
+        {
+            _summaries[id] = new SessionSummary(id, "New session")
+            {
+                Workspace = _shell.Workspace,
+                Surface = "app",
+                State = SessionState.Idle,
+                LastActivity = _time.GetUtcNow(),
+            };
+            RebuildRail();
+        }
+        _shell.OpenSession(id);
+        return id;
+    }
+
+    /// <summary>
+    /// <see cref="CreateAsync"/> from a button or a key, which cannot await it: a refusal shows as a red status bar tag
+    /// rather than vanishing with the task.
+    /// </summary>
+    public async void StartNew()
+    {
+        try
+        {
+            await CreateAsync().ConfigureAwait(true);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            _statusBar.Tags = [.. _statusBar.Tags, new StatusTag("no new session", Tone.Red, $"A new session could not start: {SafeText.Clean(exception.Message)}")];
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed)
