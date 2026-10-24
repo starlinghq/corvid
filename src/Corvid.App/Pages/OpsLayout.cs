@@ -64,17 +64,26 @@ internal static class OpsLayout
     /// Focuses a control that a change has just shown: now if it takes focus, otherwise after the next layout passes (at
     /// most a few). Uno refuses focus to a control that has not been laid out since it became visible.
     /// </summary>
-    public static void FocusWhenShown(Control control, FocusState state)
+    public static void FocusWhenShown(Control control, FocusState state) => FocusWhenShown(control, () => control, state);
+
+    /// <summary>
+    /// Focuses the control <paramref name="find"/> returns once it exists and has a size: for a control inside a template
+    /// that is only made when the change shows it.
+    /// </summary>
+    public static void FocusWhenShown(FrameworkElement scope, Func<Control?> find, FocusState state)
     {
-        if (control.Focus(state))
+        if (find() is { ActualWidth: > 0 } now && now.Focus(state))
             return;
-        var tries = 0;
+        var passes = 0;
         EventHandler<object>? handler = null;
         handler = (_, _) =>
         {
-            if (control.Focus(state) || ++tries >= 5)
-                control.LayoutUpdated -= handler;
+            // Layout passes come for every element; wait for the control to have a size, then try a few times.
+            var control = find();
+            var done = ++passes > 60 || control is { ActualWidth: > 0 } && (control.Focus(state) || passes > 10);
+            if (done)
+                scope.LayoutUpdated -= handler;
         };
-        control.LayoutUpdated += handler;
+        scope.LayoutUpdated += handler;
     }
 }

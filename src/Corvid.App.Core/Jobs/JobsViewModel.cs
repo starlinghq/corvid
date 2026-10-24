@@ -623,6 +623,9 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
             _ => "off",
         };
         var jobs = count == 1 ? "1 job" : $"{count} jobs";
+        // The Board's own items (the engine line, how many sessions run) are not this page's to show.
+        _lease.Engine = "";
+        _lease.Trailing = "";
         _lease.Scheduler = SafeText.Clean(next is { NextRun: { } at }
             ? $"{where} · {jobs} · next: {next.Name}, {JobsText.When(at, _time.GetUtcNow(), _time.LocalTimeZone)}"
             : $"{where} · {jobs}");

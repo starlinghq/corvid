@@ -55,8 +55,7 @@ public sealed partial class GatewayPage : Page
             parent = VisualTreeHelper.GetParent(parent);
         if (parent is not Border card)
             return;
-        if (Find(card, "Pair as owner") is { } answer)
-            OpsLayout.FocusWhenShown(answer, FocusState.Keyboard);
+        OpsLayout.FocusWhenShown(card, () => Find(card, "Pair as owner"), FocusState.Keyboard);
     }
 
     private static Button? Find(DependencyObject parent, string label)

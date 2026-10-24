@@ -244,6 +244,9 @@ public sealed class GatewayViewModel : AreaViewModel, IDisposable
         if (active)
         {
             _lease.Take();
+            // The Board's own items (the engine line, how many sessions run) are not this page's to show.
+            _lease.Engine = "";
+            _lease.Trailing = "";
             if (_snapshot is not null)
                 _lease.Gateway = GatewayText.Summary(_snapshot.Adapters);
             return;

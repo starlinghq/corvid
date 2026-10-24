@@ -166,10 +166,10 @@
                   <StackPanel MinWidth="600" AutomationProperties.Name="Paired users">
                     <Grid>
                       <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="1.1*" />
-                        <ColumnDefinition Width="70" />
                         <ColumnDefinition Width="1*" />
-                        <ColumnDefinition Width="1.4*" />
+                        <ColumnDefinition Width="70" />
+                        <ColumnDefinition Width="1.15*" />
+                        <ColumnDefinition Width="1.35*" />
                         <ColumnDefinition Width="168" />
                       </Grid.ColumnDefinitions>
                       <TextBlock Text="user" Style="{StaticResource TableHead}" />
@@ -183,10 +183,10 @@
                           <StackPanel BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,1,0,0" AutomationProperties.Name="{x:Bind AutomationName}">
                             <Grid>
                               <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="1.1*" />
-                                <ColumnDefinition Width="70" />
                                 <ColumnDefinition Width="1*" />
-                                <ColumnDefinition Width="1.4*" />
+                                <ColumnDefinition Width="70" />
+                                <ColumnDefinition Width="1.15*" />
+                                <ColumnDefinition Width="1.35*" />
                                 <ColumnDefinition Width="168" />
                               </Grid.ColumnDefinitions>
                               <StackPanel Margin="10,5.5,10,8.5">

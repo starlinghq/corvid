@@ -576,6 +576,9 @@ public sealed class McpViewModel : AreaViewModel, IDisposable
         if (_snapshot is not { } snapshot)
             return;
         var running = snapshot.Servers.Count(server => server.State == McpServerState.Running);
+        // The Board's own items (the engine line, how many sessions run) are not this page's to show.
+        _lease.Engine = "";
+        _lease.Trailing = "";
         _lease.AreaFields =
         [
             new StatusField("mcp", $"{running} of {snapshot.Servers.Count} running · {snapshot.Held.Count} held"),
