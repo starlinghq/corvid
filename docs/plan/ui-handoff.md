@@ -13,8 +13,8 @@ pull request starlinghq/corvid#71.
 | Design (`ui.md`): features, flows, keys, architecture, work items G-1 to G-15, decisions U-1 to U-11 | done | `1f5e478` |
 | Mockups (`ui-mockups/`): ten artboards, approved | done | with this handoff |
 | A0.1 Scaffold: projects, checker rules, theme, fonts, icons, the shell with every area, responsive layouts | done, verified on the running app, CI green | `83d77f9` |
-| A0.2 Session core: update contract, fold, demo scenario, view models, markdown and diff | built and tested headless; not yet seen through a page | `a143605` |
-| A0.3 Sessions page: transcript, composer, approval card, dock, keyboard | not started: **next** | |
+| A0.2 Session core: update contract, fold, demo scenario, view models, markdown and diff | done, tested headless and through the Sessions page | `a143605` |
+| A0.3 Sessions page: transcript, composer, approval card, dock, keyboard | done, flows F2, F3, F6 and F9 driven on the running app (§1.1) | `93d6c02` |
 | A0 verify loop | not started | |
 | A1 the seven other mocked screens | not started | |
 | A2 the pages without mockups, the palette, the rest of the keys | not started | |
@@ -33,12 +33,48 @@ work was finished on stopping:
 The whole solution then built with no warnings. The checker passed, along with 134 of 134 App.Core tests and 267 of 267
 architecture tests, and the app launched with the live session list.
 
+### 1.1 The Sessions page (A0.3)
+
+Built on this machine (Linux, no desktop session for the app) after the move, as one builder rather than the saved
+workflow, against `Main.png` and `Approval.png`. It matches both at 1440x900 in light and dark, `Main-narrow.png` at
+820, and keeps working at 1024 and 390. What was checked on the running app, by screenshot after each step:
+
+- **F2.** From an idle session a message sends and its turn streams in: chips, a tool card, the answer's markdown with a
+  list and a code block, "thought for 0 s"; the view follows while at the bottom; the status bar goes back to idle.
+- **F3.** Enter in the composer focuses the card and sends nothing; 2 answers "this session" and the next card (a
+  `patch_file` with its diff) takes over with the draft kept. 3 opens the rule preview; widening the paths to `src/` is
+  refused ("src/ is not under build/; a rule can only be narrowed") and disables the button; "Write the rule and allow"
+  answers, and the card reads "approved always (rule: …)". 4 denies the next card.
+- **F6.** Enter while the turn runs queues a chip; Up on an empty composer takes it back (caret at its end); Shift+Enter
+  breaks the line; Ctrl+Enter adds a "steer" chip; Esc interrupts ("· interrupted" on the turn header) and the queue
+  goes next.
+- **F9.** The amber taint row in the transcript and the "tainted" tag in the status bar.
+- **Keys.** Ctrl+1 to Ctrl+7 pick dock tabs, Ctrl+B hides the dock, Shift+Tab cycles the approval mode, Esc Esc on an
+  idle empty composer opens Rewind, digits answer only a focused card.
+- The whole solution builds in Release with no warnings; the checker passes; App.Core 138 of 138 and architecture 267
+  of 267 tests pass.
+
+Decisions and differences that remain:
+
+- A session opens scrolled to its latest message (Main.png's moment). Streaming never moves the view unless it is at
+  the bottom; scrolled up during a working turn, a "Jump to bottom · N new" pill shows (`ui.md` §2).
+- Aside (F7) and pop-out (more windows) are present but disabled with tooltips, as are the attach button, "Send comments
+  (0)" and "Export decisions": the flows behind them come later.
+- Inline code in answers has no grey background: native text runs cannot carry one (U-5). Code blocks have it.
+- The Files tab shows its one-line empty text: the model has no file tree yet (it comes with the engine's listing).
+- At 390 px the page drops its header (the phone top bar has the title) and the key hint, and the approval card uses
+  the phone's head ("Approval 1 of 2", "4:12 left") and full-width answers. Phone.png's compact parsed rows, short
+  reasons and one-line composer are A2's phone screens.
+- Uno's TextBox types the line break of an Enter the page has handled, so the page cancels that one change
+  (`BeforeTextChanging`). x:Bind paths on the page itself do not follow a static source, so the phone switches set the
+  header's and hint's visibility in code; templates do bind to `SessionsLayout.Current`.
+
 ### What the running app shows today
 
 The shell matches `Main.png` outside the conversation: rail, badges, sessions with their dots and times, status bar,
 mode control, dock tab strip. It also matches in dark, and at 1024, 820 and 390 px wide, where the phone layout and its
-bottom bar take over. Every rail item navigates. Each area is a placeholder page with its title, including the Sessions
-conversation and the dock panels' bodies. The scaffold's report lists these remaining differences:
+bottom bar take over. Every rail item navigates. The Sessions area is built (§1.1); every other area is a placeholder
+page with its title. The scaffold's report lists these remaining differences:
 
 - The status bar has toggles for the rail and the dock, shown only while that panel is hidden. The mockups lack them.
   Without them a mouse user could not bring a hidden panel back.
@@ -85,6 +121,19 @@ app, then has an independent verifier report defects. Up to two fix rounds follo
 
 With computer use, run one UI agent at a time: parallel agents would fight over one screen. Parallel screen builders
 need the harness's private displays, and their own git worktrees so their builds do not collide.
+
+A0.3 and its verifier have since been done by hand (§1.1), so this workflow is spent; it stays as the template for A1's.
+
+### Harness notes from a machine without Xvfb
+
+- TigerVNC's `Xvnc` is a headless X server too: `Xvnc :n -geometry 2560x1600 -depth 24 -SecurityTypes None -rfbport 0
+  -rfbunixpath <socket> -nolisten tcp` stands in for Xvfb. It refuses to start with no listening endpoint at all, hence
+  the Unix socket. Without `xdotool`, a few lines of python-xlib with XTest cover the harness's `search`, `windowsize`,
+  `mousemove`, `click`, `type` and `key`.
+- Uno sets its window to 1024x640 a few seconds after start-up, which can undo the harness's resize. Wait about 3 s,
+  resize, check the size with `xwininfo`, then resize one pixel wider and back: Uno sometimes keeps drawing at its first
+  size until the window changes again. A screenshot with the app in the top-left 1024x640 and black elsewhere is this,
+  not a defect.
 
 ### The plan after A0
 
@@ -165,8 +214,8 @@ U-1 (in-process first, the update stream as the only seam) is followed. U-6 to U
 
 ## 6. Risks to watch
 
-- The session core has only been exercised by tests and the rail's session list. A0.3 is its first real consumer; expect
-  changes to its API.
+- The session core's API held for the Sessions page with one wording fix ("about 1 token"). It has only ever been fed
+  by the demo service; `Corvid.App.Engine` is its first real producer.
 - Uno quirks found so far are in the app README's gotchas: theme brushes on `Run`s, line-height maths, the order of
   `Navigated` and `OnNavigatedTo`, stroke widths rounded to whole pixels. Read them before writing XAML.
 - CI builds the desktop head on a self-hosted runner with no display. Nothing in the app's build may need one.

@@ -6,9 +6,10 @@ and the WebAssembly head only on request. Its view models live in [`Corvid.App.C
 Uno types and is tested headless in [`tests/Corvid.App.Core.Tests`](../../tests/Corvid.App.Core.Tests).
 
 So far: the A0 scaffold (the shell as the Main mockup draws it, the theme, the fonts, the icons, navigation to every
-area, a placeholder page per area) and the session core in `Corvid.App.Core/Sessions` that the Sessions page will bind
-to. Where the build stands and what comes next: [`docs/plan/ui-handoff.md`](../../docs/plan/ui-handoff.md); the rules
-every builder follows: [`docs/plan/ui-build.md`](../../docs/plan/ui-build.md).
+area, a placeholder page per area), the session core in `Corvid.App.Core/Sessions`, and the Sessions page on it (A0.3:
+the transcript, the approval card, the turn strip, the composer and the dock's panels). Where the build stands and what
+comes next: [`docs/plan/ui-handoff.md`](../../docs/plan/ui-handoff.md); the rules every builder follows:
+[`docs/plan/ui-build.md`](../../docs/plan/ui-build.md).
 
 ## Build and run
 
@@ -45,8 +46,13 @@ It restores and passes the boundary checker here, but has not been built or run,
 
 `CORVID_APP_RENDERER=software` draws with Skia on the CPU instead of OpenGL (see the harness check below).
 
-Keys so far: `Ctrl+B` the dock, `Ctrl+Shift+B` the rail, `Ctrl+,` Settings, `Esc` closes an overlay. The rest of the
-keyboard map (`docs/plan/ui.md` §6) comes with the screens it drives.
+Keys so far: `Ctrl+B` the dock, `Ctrl+Shift+B` the rail, `Ctrl+,` Settings, `Esc` closes an overlay. On the Sessions
+page: `Enter` sends (queued while a turn runs), `Shift+Enter` breaks the line, `Ctrl+Enter` steers, `Esc` interrupts,
+`Esc Esc` on an idle empty composer opens Rewind, `Up` takes the last queued message back, `Shift+Tab` cycles the
+approval mode, `Ctrl+S` puts the draft aside; on an open approval card the first `Enter` focuses it, then `1` to `5`
+answer and the arrows move; `Ctrl+1` to `Ctrl+7` pick dock tabs; `Ctrl+O`, `Ctrl+T` and `Ctrl+Shift+D` expand the
+latest output, the thoughts and every checkpoint's chips. The rest of the keyboard map (`docs/plan/ui.md` §6) comes with
+the screens it drives.
 
 ## The harness check
 
@@ -89,7 +95,9 @@ src/Corvid.App/
   Themes/Controls.xaml       templates for the controls below, from the mockups' CSS
   Assets/Fonts/              Inter and JetBrains Mono, their Uno font manifests and OFL licences
   Controls/                  Icon (+ IconPaths), RailNavItem, RailSessionItem, IconButton, SegmentButton, TagChip,
-                             PhoneTabItem, DockTab, LinkButton, PitchedStackPanel, WrapRowPanel
+                             PhoneTabItem, DockTab, LinkButton, PitchedStackPanel, WrapRowPanel, CorvidButton (.btn),
+                             ToneRow (.row), ColumnsPanel, Meter, RichText (runs from the markdown model), MarkdownView,
+                             DiffRowsView, HintLine (key caps)
   Shell/                     ShellPage (the window's content), RailView, StatusBarView, AreaPages, IDockProvider,
                              EqualColumnsPanel
   Pages/                     one <Area>Page.xaml per area; SessionsDock and BoardDock are those areas' dock panels
@@ -136,6 +144,20 @@ the Main mockup's values (`DemoShell`), and live data sets the same members: `Se
   Sparkle, Clock, Chip, Shield, Plug, Send, Lock, Lines, Terminal, Paperclip, Question, Warning, PopOut, Cloud, File,
   ChevronDown, Search, Globe, Menu, More, Check, and PanelRight (the dock toggle, which the mockups lack). To add one,
   copy the 16 px path from the `.dc.html`, write circles and rectangles as arcs, and add it to `IconPaths`.
+- Views built in code (`MarkdownView`, `DiffRowsView`, `HintLine`, `RichText`) look brushes up with `ThemeBrushes.Get`
+  for the element's theme and rebuild on `ActualThemeChanged`.
+
+More Uno gotchas found building the Sessions page:
+
+- An explicit `Style` replaces the implicit one rather than adding to it. Base keyed styles on a keyed base
+  (`CorvidSmallButton` on `CorvidButtonBase`), or the control loses its template.
+- A trailing space, even a no-break one, is trimmed from a measured `TextBlock`; put gaps in the panel's `Spacing`.
+- A horizontal `StackPanel` reports its content's width, not its column's: measure the column instead (the session
+  title gives way to the fork pill this way).
+- `TextBox` with `AcceptsReturn` still types the line break of an Enter whose key event was handled; cancel that change
+  in `BeforeTextChanging`.
+- The page's own `x:Bind` paths do not follow a static source's `PropertyChanged`; templates created later do read it.
+- `x:Bind` function arguments are paths or literals, not other function calls.
 
 ## Fonts
 
