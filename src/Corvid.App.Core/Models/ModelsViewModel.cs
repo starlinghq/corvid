@@ -538,7 +538,9 @@ public sealed class ModelsViewModel : AreaViewModel
 
         var decider = snapshot.Decider;
         var calibrated = decider.Tier == DeciderTier.Calibrated;
-        DeciderTag = !snapshot.IsLoaded ? "checking" : calibrated ? $"{decider.DisplayName}, calibrated" : $"{decider.DisplayName} missing: degraded";
+        DeciderTag = !snapshot.IsLoaded ? "checking" : calibrated ? $"{decider.DisplayName}, calibrated"
+            // No decider configured at all (the slot is unbound): nothing is missing, the tier is simply degraded.
+            : decider.Model.Length == 0 ? "no decider: degraded" : $"{decider.DisplayName} missing: degraded";
         DeciderTone = !snapshot.IsLoaded ? Tone.Grey : calibrated ? Tone.Green : Tone.Amber;
         DeciderFacts =
         [
@@ -632,7 +634,10 @@ public sealed class ModelsViewModel : AreaViewModel
         _lease.Trailing = "idle";
     }
 
-    /// <summary>"Kev-0.8B, calibrated", or "degraded until kev-0.8b is downloaded".</summary>
+    /// <summary>
+    /// "Kev-0.8B, calibrated", "degraded until kev-0.8b is downloaded", or "degraded tier (no decider configured)" when the
+    /// decider slot is unbound.
+    /// </summary>
     public static string StatusDecider(ModelsSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
@@ -640,6 +645,7 @@ public sealed class ModelsViewModel : AreaViewModel
             return "";
         return SafeText.Clean(snapshot.Decider.Tier == DeciderTier.Calibrated
             ? $"{snapshot.Decider.DisplayName}, calibrated"
+            : snapshot.Decider.Model.Length == 0 ? "degraded tier (no decider configured)"
             : $"degraded until {snapshot.Decider.Model} is downloaded");
     }
 

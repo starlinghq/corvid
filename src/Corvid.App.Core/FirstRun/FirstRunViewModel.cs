@@ -658,10 +658,7 @@ public sealed class FirstRunViewModel : AreaViewModel
     private void ApplyStatus()
     {
         var snapshot = _models.Snapshot;
-        var decider = !snapshot.IsLoaded ? ""
-            : snapshot.Decider.Tier == DeciderTier.Calibrated
-            ? $"{SafeText.Clean(snapshot.Decider.DisplayName)}, calibrated"
-            : $"degraded until {SafeText.Clean(snapshot.Decider.Model)} is downloaded";
+        var decider = ModelsViewModel.StatusDecider(snapshot);
         var downloads = ModelsViewModel.StatusDownloads(snapshot);
         _lease.Engine = _service.EngineStatus ?? "not started · models load after this page";
         _lease.Generator = "";
