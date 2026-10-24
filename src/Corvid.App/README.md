@@ -56,7 +56,10 @@ and `Alt+Right` move a focused escalation-ladder step (or drag it by its grip), 
 placement editor. `Ctrl+Shift+C` opens Review from anywhere; on Review `Up` and `Down` move through the file list. On
 Audit: `Up` and `Down` move between event rows, `Enter`
 and `Space` open the focused row, `Ctrl+F` puts the caret in the "path or tool" filter, and `Esc` first shows every
-event again after a detection's link narrowed the log, then closes the open event. The rest of the keyboard map
+event again after a detection's link narrowed the log, then closes the open event. On Skills: `Ctrl+1` to `Ctrl+4` pick
+Review, Library, History and Import, `Ctrl+F` puts the caret in the filter (`Esc` there clears it), `Up` and `Down` in
+the library or the history open the next or previous row, `Esc` closes the open skill or commit; in a draft's editor
+`Ctrl+Enter` approves as edited and `Esc` undoes the edit, in a reason `Enter` rejects. The rest of the keyboard map
 (`docs/plan/ui.md` §6) comes with the screens it drives.
 
 ## The harness check
