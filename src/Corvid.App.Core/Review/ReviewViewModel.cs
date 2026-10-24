@@ -129,6 +129,9 @@ public sealed class ReviewViewModel : AreaViewModel
             ? "Nothing changed since the last review point. The next turn's changes show here."
             : "No files changed in this scope.";
 
+    /// <summary>What the diff column says while no file is picked: the list's own empty text, or how to pick one.</summary>
+    public string NoSelectionText => HasFiles ? "Pick a file in the list to see its diff." : EmptyText;
+
     /// <summary>"c-41 to c-44": the checkpoints the listed files can be put back from.</summary>
     public string CheckpointRange => _changes is { FirstCheckpoint: { } first, LastCheckpoint: { } last }
         ? first == last ? first : $"{first} to {last}"
@@ -306,11 +309,17 @@ public sealed class ReviewViewModel : AreaViewModel
         OnPropertyChanged(nameof(FilesSummary));
         OnPropertyChanged(nameof(HasFiles));
         OnPropertyChanged(nameof(EmptyText));
+        OnPropertyChanged(nameof(NoSelectionText));
         OnPropertyChanged(nameof(CheckpointRange));
         OnPropertyChanged(nameof(HasCheckpoints));
         OnPropertyChanged(nameof(ReviewPointText));
         CommentsChanged();
+        if (changes is { Scope: ReviewScope.SinceLastReview } && changes.SessionId == _shell.CurrentSession?.Id)
+            SetBadge(changes);
     }
+
+    /// <summary>The rail's Review badge: the open session's readable files changed since its last review point.</summary>
+    private void SetBadge(ReviewChanges changes) => _shell.SetBadge(Area.Review, changes.Files.Count(file => file.Readable));
 
     private void Select(ReviewFileView? file, bool force = false)
     {
@@ -407,6 +416,9 @@ public sealed class ReviewViewModel : AreaViewModel
             Say(string.Create(CultureInfo.InvariantCulture,
                 $"Sent {Plural(comments.Count, "comment")} to the session as one message at {Local(point.At):HH:mm}. The review point is now turn {point.Turn}."), Tone.Green);
             await RefreshAsync().ConfigureAwait(true);
+            // The badge counts what is new since the review point the comments just set, whatever scope the list shows.
+            if (Scope != ReviewScope.SinceLastReview && sessionId == _shell.CurrentSession?.Id)
+                SetBadge(await _service.GetChangesAsync(sessionId, ReviewScope.SinceLastReview).ConfigureAwait(true));
         }
         catch (InvalidOperationException exception)
         {

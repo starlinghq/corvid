@@ -201,25 +201,51 @@ public sealed partial class SideBySideDiffView : UserControl
                 continue;
             }
 
-            Add(before, row.Left, DiffSide.Old, comments);
-            Add(after, row.Right, DiffSide.New, comments);
+            var left = Add(before, row.Left, DiffSide.Old, comments);
+            var right = Add(after, row.Right, DiffSide.New, comments);
+            if (!Stacked && (left.Count > 0 || right.Count > 0))
+                Mirror(before, left, after, right);
         }
 
         Place(before, 0);
         Place(after, 1);
     }
 
-    private static void Add(Column column, DiffCell? cell, DiffSide side, List<ReviewCommentView> comments)
+    private static List<FrameworkElement> Add(Column column, DiffCell? cell, DiffSide side, List<ReviewCommentView> comments)
     {
         if (cell is null)
         {
             column.AddGap();
-            return;
+            return [];
         }
 
         column.AddLine(side, cell.Number, cell.Kind, cell.Segments, cell.Text);
-        column.AddNotes(comments, side, cell.Number);
+        return column.AddNotes(comments, side, cell.Number);
     }
+
+    /// <summary>
+    /// Side by side, the cards under a row take height in one column only; a blank of the same height in the other keeps
+    /// the lines after them opposite their counterparts (old 52 beside new 56, not beside the lines the cards pushed down).
+    /// </summary>
+    private static void Mirror(Column before, List<FrameworkElement> left, Column after, List<FrameworkElement> right)
+    {
+        var leftSpace = before.AddSpace();
+        var rightSpace = after.AddSpace();
+        void Update()
+        {
+            var l = left.Sum(Outer);
+            var r = right.Sum(Outer);
+            leftSpace.Height = Math.Max(0, r - l);
+            rightSpace.Height = Math.Max(0, l - r);
+        }
+
+        foreach (var card in left.Concat(right))
+            card.SizeChanged += (_, _) => Update();
+        Update();
+    }
+
+    private static double Outer(FrameworkElement element) =>
+        element.Visibility == Visibility.Visible ? element.ActualHeight + element.Margin.Top + element.Margin.Bottom : 0;
 
     private void Place(Column column, int index)
     {
@@ -345,16 +371,26 @@ public sealed partial class SideBySideDiffView : UserControl
             _lines.Children.Add(fold);
         }
 
-        /// <summary>The comments on this side's line, then the open field if it is on this line.</summary>
-        public void AddNotes(List<ReviewCommentView> comments, DiffSide side, int number)
+        /// <summary>The comments on this side's line, then the open field if it is on this line; the cards added.</summary>
+        public List<FrameworkElement> AddNotes(List<ReviewCommentView> comments, DiffSide side, int number)
         {
+            var added = new List<FrameworkElement>();
             foreach (var comment in comments.Where(comment => comment.Side == side && comment.Line == number))
-                AddCard(CommentCard(comment));
+                added.Add(AddCard(CommentCard(comment)));
             if (_owner.Editor is { } editor && editor.Side == side && editor.Number == number)
-                AddCard(EditorCard(editor));
+                added.Add(AddCard(EditorCard(editor)));
+            return added;
         }
 
-        private void AddCard(Border card)
+        /// <summary>A blank as tall as the other column's cards beside it (<see cref="Mirror"/> sets its height).</summary>
+        public FrameworkElement AddSpace()
+        {
+            var space = new Border { Height = 0, IsHitTestVisible = false };
+            _lines.Children.Add(space);
+            return space;
+        }
+
+        private Border AddCard(Border card)
         {
             // .comment: margin 4px 10px 8px 46px.
             card.Margin = new Thickness(46, 4, 10, 8);
@@ -362,6 +398,7 @@ public sealed partial class SideBySideDiffView : UserControl
             card.RenderTransform = new TranslateTransform();
             _cards.Add(card);
             _lines.Children.Add(card);
+            return card;
         }
 
         private Border Card() => new()

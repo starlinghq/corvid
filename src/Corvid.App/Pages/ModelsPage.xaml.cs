@@ -26,6 +26,7 @@ public sealed partial class ModelsPage : Page
     private Button? _dragged;
     private Point _dragStart;
     private bool _dragging;
+    private bool _hintTaken;
 
     public ModelsPage()
     {
@@ -114,8 +115,46 @@ public sealed partial class ModelsPage : Page
     /// </summary>
     private void OnTableScrollSized(object sender, SizeChangedEventArgs e)
     {
-        if (sender is ScrollViewer { Content: FrameworkElement table } && e.NewSize.Width > 0)
+        if (sender is ScrollViewer { Content: FrameworkElement table } scroller && e.NewSize.Width > 0)
+        {
             table.Width = Math.Max(table.MinWidth, e.NewSize.Width);
+            table.SizeChanged -= OnTableContentSized;
+            table.SizeChanged += OnTableContentSized;
+            DispatcherQueue.TryEnqueue(() => UpdateTableEdges(scroller));
+        }
+    }
+
+    private void OnTableContentSized(object sender, SizeChangedEventArgs e)
+    {
+        if (sender is FrameworkElement { Parent: ScrollViewer scroller })
+            DispatcherQueue.TryEnqueue(() => UpdateTableEdges(scroller));
+    }
+
+    private void OnTableScrolled(object? sender, ScrollViewerViewChangedEventArgs e)
+    {
+        if (sender is ScrollViewer scroller)
+            UpdateTableEdges(scroller);
+    }
+
+    /// <summary>An edge strip scrolls its table all the way that way (the hidden columns hold Switch… and Pin).</summary>
+    private void OnTableEdge(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: ScrollViewer scroller } edge)
+            scroller.ChangeView(edge.HorizontalAlignment == HorizontalAlignment.Right ? scroller.ScrollableWidth : 0, null, null);
+    }
+
+    /// <summary>Shows an edge strip on each side the table has columns scrolled out of view.</summary>
+    private static void UpdateTableEdges(ScrollViewer scroller)
+    {
+        if (scroller.Parent is not Grid host)
+            return;
+        foreach (var edge in host.Children.OfType<Button>())
+        {
+            var hidden = edge.HorizontalAlignment == HorizontalAlignment.Right
+                ? scroller.ScrollableWidth - scroller.HorizontalOffset > 1
+                : scroller.HorizontalOffset > 1;
+            edge.Visibility = hidden ? Visibility.Visible : Visibility.Collapsed;
+        }
     }
 
     private void OnPageKeyDown(object sender, KeyRoutedEventArgs e)
@@ -144,6 +183,10 @@ public sealed partial class ModelsPage : Page
         if (command is null)
             return;
         e.Handled = true;
+        // The hint ("Drag to reorder, or Alt+Left and Alt+Right") has been taken: close it rather than leave it over the
+        // column head after the chip moves away from under it.
+        _hintTaken = true;
+        CloseToolTips();
         if (!command.CanExecute(null))
             return;
         var slot = step.Slot;
@@ -157,6 +200,9 @@ public sealed partial class ModelsPage : Page
     {
         if (sender is not Button button)
             return;
+        // Once a key has moved a step, the hint has done its work: the re-created chips go without it.
+        if (_hintTaken)
+            ToolTipService.SetToolTip(button, null);
         // Loaded comes again when a row is re-entered; take the handlers off first so each is added once.
         button.RemoveHandler(PointerPressedEvent, _pressed);
         button.RemoveHandler(PointerReleasedEvent, _released);
@@ -248,10 +294,25 @@ public sealed partial class ModelsPage : Page
         return before;
     }
 
+    private void CloseToolTips()
+    {
+        if (XamlRoot is null)
+            return;
+        foreach (var popup in VisualTreeHelper.GetOpenPopupsForXamlRoot(XamlRoot))
+        {
+            if (popup.Child is ToolTip tip)
+                tip.IsOpen = false;
+        }
+    }
+
     private void FocusStep(SlotRowViewModel slot, int index) => DispatcherQueue.TryEnqueue(() =>
     {
-        var button = StepButtons(slot).FirstOrDefault(candidate => candidate.Tag is LadderStepViewModel step && step.Index == index);
+        var buttons = StepButtons(slot);
+        foreach (var each in buttons)
+            ToolTipService.SetToolTip(each, null);
+        var button = buttons.FirstOrDefault(candidate => candidate.Tag is LadderStepViewModel step && step.Index == index);
         button?.Focus(FocusState.Keyboard);
+        CloseToolTips();
     });
 
     private List<Button> StepButtons(SlotRowViewModel slot)

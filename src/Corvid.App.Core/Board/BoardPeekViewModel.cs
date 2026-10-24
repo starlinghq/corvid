@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Corvid.App.Core.Markdown;
 using Corvid.App.Core.Mvvm;
 using Corvid.App.Core.Sessions;
 
@@ -8,6 +9,27 @@ namespace Corvid.App.Core.Board;
 public sealed record PeekLine(string Label, string Text, bool IsCode = false)
 {
     public string AutomationName => $"{Label}: {Text}";
+
+    /// <summary>The text as styled runs: an answer's code spans and bold, without the markdown's backticks and stars.</summary>
+    public IReadOnlyList<MarkdownRun> Runs { get; init; } = [new MarkdownRun(Text)];
+
+    /// <summary>An answer's line: its markdown flattened to one paragraph of runs, the plain text for reading aloud.</summary>
+    public static PeekLine Answer(string label, string markdown)
+    {
+        var runs = Flatten(MarkdownDocument.Parse(markdown).Blocks).ToList();
+        if (runs.Count == 0)
+            return new PeekLine(label, markdown);
+        return new PeekLine(label, string.Concat(runs.Select(run => run.Text))) { Runs = runs };
+    }
+
+    private static IEnumerable<MarkdownRun> Flatten(IEnumerable<MarkdownBlock> blocks) => blocks.SelectMany(block => block switch
+    {
+        MarkdownParagraph paragraph => paragraph.Runs,
+        MarkdownHeading heading => heading.Runs,
+        MarkdownList list => list.Items.SelectMany(item => Flatten(item.Blocks)),
+        MarkdownQuote quote => Flatten(quote.Blocks),
+        _ => [],
+    });
 }
 
 /// <summary>
@@ -60,7 +82,7 @@ public sealed class BoardPeekViewModel : ObservableObject, IDisposable
             {
                 UserEntry user => new PeekLine("you", Clip(user.Text)),
                 ToolEntry tool => new PeekLine(tool.Tool, BoardText.Join(tool.Target, Status(tool)), IsCode: true),
-                AnswerEntry answer when answer.Text.Length > 0 => new PeekLine("corvid", Clip(answer.Text.Replace("**", "", StringComparison.Ordinal))),
+                AnswerEntry answer when answer.Text.Length > 0 => PeekLine.Answer("corvid", Clip(answer.Text)),
                 ApprovalEntry approval => new PeekLine("approval", BoardText.Join(Clip(approval.Request.Text), $"{approval.Position} of {approval.Count}")),
                 QuestionEntry question => new PeekLine("question", question.Answer is { } given
                     ? $"{Clip(question.Question.Text)} → {given}"

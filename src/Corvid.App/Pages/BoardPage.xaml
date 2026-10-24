@@ -167,6 +167,30 @@
         </ItemsControl>
         <TextBlock Text="{x:Bind ViewModel.EmptyText, Mode=OneWay}" Style="{StaticResource CorvidMutedText}"
                    Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsEmpty), Mode=OneWay}" />
+        <!-- Under 1180 px the dock is an overlay; Board-narrow.png lays the tray out below the cards instead. -->
+        <Border x:Name="InlineAttention" Visibility="Collapsed" Style="{StaticResource CorvidPanel}" Background="{ThemeResource CorvidBg2}"
+                AutomationProperties.Name="Attention">
+          <StackPanel>
+            <Grid Padding="14,12" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,0,0,1" ColumnSpacing="10">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+              </Grid.ColumnDefinitions>
+              <TextBlock Text="{x:Bind ViewModel.AttentionHead, Mode=OneWay}" FontWeight="SemiBold" VerticalAlignment="Center" TextWrapping="NoWrap"
+                         TextTrimming="CharacterEllipsis" AutomationProperties.HeadingLevel="Level2" />
+              <controls:CorvidButton Grid.Column="1" Content="{x:Bind ViewModel.NotifyLabel, Mode=OneWay}" Style="{StaticResource CorvidSmallButton}"
+                                     Variant="Ghost" Command="{x:Bind ViewModel.ToggleNotifyCommand}"
+                                     ToolTipService.ToolTip="A native notification for each new item while the window is unfocused" />
+            </Grid>
+            <local:AttentionList Items="{x:Bind ViewModel.Attention, Mode=OneWay}" />
+            <TextBlock Margin="14,12" Style="{StaticResource CorvidSmallText}" Text="Nothing waits on you."
+                       Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.HasAttention), Mode=OneWay}" />
+            <Border Padding="14,12" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,1,0,0">
+              <TextBlock Style="{StaticResource CorvidSmallText}" TextWrapping="Wrap"
+                         Text="Nothing here is answered from a bare button: approvals open their full card, with the parsed command, reasons and diff." />
+            </Border>
+          </StackPanel>
+        </Border>
       </StackPanel>
     </ScrollViewer>
 
@@ -217,7 +241,7 @@
                       </Grid.ColumnDefinitions>
                       <TextBlock Text="{x:Bind Label}" FontSize="12" FontWeight="SemiBold" Foreground="{ThemeResource CorvidText2}"
                                  TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" LineHeight="18.1" LineStackingStrategy="BlockLineHeight" />
-                      <TextBlock Grid.Column="1" Text="{x:Bind Text}" FontSize="12.5" LineHeight="18.1" LineStackingStrategy="BlockLineHeight"
+                      <TextBlock Grid.Column="1" controls:RichText.Runs="{x:Bind Runs}" FontSize="12.5" LineHeight="18.1" LineStackingStrategy="BlockLineHeight"
                                  TextWrapping="Wrap" IsTextSelectionEnabled="True" Visibility="{x:Bind ui:Ui.CollapsedIf(IsCode)}" />
                       <TextBlock Grid.Column="1" Text="{x:Bind Text}" Style="{StaticResource CorvidMonoText}" TextWrapping="Wrap"
                                  IsTextSelectionEnabled="True" Visibility="{x:Bind ui:Ui.VisibleIf(IsCode)}" />

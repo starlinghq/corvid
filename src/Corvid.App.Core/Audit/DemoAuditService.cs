@@ -100,7 +100,8 @@ public sealed class DemoAuditService : IAuditService
         var bytes = events.Sum(e => (long)Encoding.UTF8.GetByteCount(TraceLine(e, options.Retention)) + 1);
         var stamp = _time.GetLocalNow().ToString("yyyyMMdd-HHmm", CultureInfo.InvariantCulture);
         var path = $"~/.local/share/corvid/traces/{sessionId ?? "all"}-{stamp}.jsonl";
-        return Task.FromResult(new TraceExportResult(path, events.Count, bytes, options.Retention));
+        // The demo touches nothing on the person's machine: it reports the trace without writing it.
+        return Task.FromResult(new TraceExportResult(path, events.Count, bytes, options.Retention, Written: false));
     }
 
     /// <summary>

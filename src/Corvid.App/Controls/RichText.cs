@@ -27,8 +27,33 @@ public static class RichText
     {
         ArgumentNullException.ThrowIfNull(inlines);
         ArgumentNullException.ThrowIfNull(runs);
-        foreach (var run in runs)
+        var list = runs.ToList();
+        for (var i = 1; i < list.Count; i++)
+        {
+            if (list[i].IsCode && !list[i - 1].IsCode && !list[i - 1].IsLink && Glue(list[i - 1].Text, list[i].Text) is var (before, code)
+                && before.Length != list[i - 1].Text.Length)
+            {
+                list[i - 1] = list[i - 1] with { Text = before };
+                list[i] = list[i] with { Text = code };
+            }
+        }
+
+        foreach (var run in list)
             inlines.Add(Inline(run, owner));
+    }
+
+    /// <summary>
+    /// Uno may break a line where one run meets the next, so prose ending in an opening bracket or quote right before a
+    /// code span ("value (" then <c>[secret:github.token]</c>) could leave the bracket alone at a line's end. The bracket
+    /// moves into the code span's run, so the two wrap together.
+    /// </summary>
+    public static (string Before, string Code) Glue(string before, string code)
+    {
+        ArgumentNullException.ThrowIfNull(before);
+        ArgumentNullException.ThrowIfNull(code);
+        return before.Length > 0 && code.Length > 0 && before[^1] is '(' or '[' or '{' or '“' or '‘' or '"' or '\''
+            ? (before[..^1], string.Concat(before.AsSpan(before.Length - 1), code))
+            : (before, code);
     }
 
     private static Inline Inline(MarkdownRun run, FrameworkElement owner)

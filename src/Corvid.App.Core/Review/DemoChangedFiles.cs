@@ -40,10 +40,68 @@ internal static class DemoChangedFiles
 
         """;
 
+    // The launcher as turn 11's patch (c-40 to c-41) found and left it: the session counts that patch +19 −5, so Review's
+    // diff draws those lines. The Sessions demo's two-line a-33 patch (DemoFiles) is the preflight's last step of it.
+    private static readonly string BubblewrapBefore = """
+        namespace Corvid.Sandbox;
+
+        public sealed partial class BubblewrapSandbox
+        {
+            /// <summary>What the host must allow before a sandbox starts.</summary>
+            internal static IReadOnlyList<string> Preflight(HostFacts host)
+            {
+                var problems = new List<string>();
+                if (!host.HasBubblewrap)
+                    problems.Add("bubblewrap is not installed");
+                if (!host.SeccompAvailable)
+                    problems.Add("seccomp is unavailable");
+                // User namespaces are not checked yet: bwrap fails later with
+                // "No permissions to create new namespace".
+                return problems;
+            }
+        }
+
+        """;
+
+    private static readonly string BubblewrapAfter = """
+        namespace Corvid.Sandbox;
+
+        public sealed partial class BubblewrapSandbox
+        {
+            /// <summary>What the host must allow before a sandbox starts; each failure names its fix.</summary>
+            internal static IReadOnlyList<string> Preflight(HostFacts host)
+            {
+                var problems = new List<string>();
+                if (!host.HasBubblewrap)
+                    problems.Add("bubblewrap is not installed: install the bubblewrap package");
+                if (!host.SeccompAvailable)
+                    problems.Add("seccomp is unavailable: the kernel was built without CONFIG_SECCOMP_FILTER");
+                if (host.UnprivilegedUserNamespaces == false)
+                    problems.Add("unprivileged user namespaces are off: set kernel.unprivileged_userns_clone=1, or run the setuid bwrap");
+                return problems;
+            }
+
+            /// <summary>Whether unprivileged user namespaces are on; null when the kernel does not say.</summary>
+            internal static bool? ReadUserNamespaces(string root = "/")
+            {
+                var path = Path.Combine(root, "proc/sys/kernel/unprivileged_userns_clone");
+                if (!File.Exists(path))
+                    return null;
+                return File.ReadAllText(path).Trim() switch
+                {
+                    "1" => true,
+                    "0" => false,
+                    _ => null,
+                };
+            }
+        }
+
+        """;
+
     /// <summary>What the demo knows of each path: its texts and the call and checkpoint that cover it.</summary>
     public static readonly Dictionary<string, (string? Old, string New, string Tool, int Turn, string Checkpoint)> Known = new(StringComparer.Ordinal)
     {
-        [DemoFiles.BubblewrapPath] = (DemoFiles.BubblewrapBefore, DemoFiles.BubblewrapAfter, "patch_file", 11, "c-41"),
+        [DemoFiles.BubblewrapPath] = (BubblewrapBefore, BubblewrapAfter, "patch_file", 11, "c-41"),
         [DemoFiles.SeccompTestsPath] = (DemoFiles.SeccompTestsBefore, DemoFiles.SeccompTestsAfter, "patch_file", 12, "c-44"),
         [CiPath] = (CiBefore, CiAfter, "write_file", 10, "c-41"),
         [DemoFiles.ReleaseNotesPath] = (null, DemoFiles.ReleaseNotes, "write_file", 1, "c-12"),

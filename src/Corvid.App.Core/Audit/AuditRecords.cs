@@ -161,4 +161,5 @@ public enum TraceRetention
 public sealed record TraceExportOptions(TraceRetention Retention, bool IncludeLocalMemory);
 
 /// <summary>A written trace: where, how many events, how large, with which retention.</summary>
-public sealed record TraceExportResult(string Path, int Events, long Bytes, TraceRetention Retention);
+/// <param name="Written">False when nothing was written to disk (the demo only says what the engine would write).</param>
+public sealed record TraceExportResult(string Path, int Events, long Bytes, TraceRetention Retention, bool Written = true);

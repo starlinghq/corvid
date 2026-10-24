@@ -44,8 +44,12 @@ public sealed class AuditViewModel : AreaViewModel
     private bool _includeMemory;
     private string _exportResult = "";
     private int _loads;
+    private readonly IAuditSessionStatus? _sessionStatus;
+    private string _statusDetections = "";
+    private string _statusLog = "";
+    private IReadOnlyList<StatusField> _myFields = [];
 
-    public AuditViewModel(IAuditService service, TimeProvider time, ShellViewModel? shell = null)
+    public AuditViewModel(IAuditService service, TimeProvider time, ShellViewModel? shell = null, IAuditSessionStatus? sessionStatus = null)
         : base(Area.Audit, "The event log per session, scans with the detection rules, trace export and the egress ledger.")
     {
         ArgumentNullException.ThrowIfNull(service);
@@ -53,6 +57,7 @@ public sealed class AuditViewModel : AreaViewModel
         _service = service;
         _time = time;
         _shell = shell;
+        _sessionStatus = sessionStatus;
         Filters =
         [
             .. Enum.GetValues<AuditEventGroup>().Select(group => new AuditFilterItem(group,
@@ -368,6 +373,7 @@ public sealed class AuditViewModel : AreaViewModel
         {
             var log = await _service.GetLogAsync(CancellationToken.None);
             LogCount = $"{AuditText.Count(log.TotalEvents)} events · append-only ·";
+            _statusLog = $"log {AuditText.Count(log.TotalEvents)} events";
             LogPath = log.Path;
             foreach (var session in await _service.ListSessionsAsync(CancellationToken.None))
                 SessionOptions.Add(new AuditSessionOption(session.Id, $"{session.Id} · {session.Title}"));
@@ -437,6 +443,8 @@ public sealed class AuditViewModel : AreaViewModel
             [.. match.Events.Append(match.Sequence).Select(sequence => new AuditEventLink(sequence,
                 sequence.ToString(CultureInfo.InvariantCulture), new RelayCommand(() => ShowMatch(match, sequence))))]);
         OnPropertyChanged(nameof(HasDetection));
+        _statusDetections = AuditText.DetectionSummary(detections.Select(detection => detection.Severity), sessionId is not null);
+        ApplyStatus();
         SetScan(scan);
 
         _selected = null;
@@ -496,8 +504,11 @@ public sealed class AuditViewModel : AreaViewModel
             var options = new TraceExportOptions(MetadataOnly ? TraceRetention.MetadataOnly : TraceRetention.Full, IncludeMemory);
             var result = await _service.ExportAsync(SessionId, options, cancellationToken);
             var retention = result.Retention == TraceRetention.MetadataOnly ? "metadata only" : "full content, secrets redacted";
-            ExportResult = string.Create(CultureInfo.InvariantCulture,
-                $"Wrote {result.Events} events ({AuditText.Size(result.Bytes)}, {retention}) to {result.Path}, readable by you only.");
+            ExportResult = result.Written
+                ? string.Create(CultureInfo.InvariantCulture,
+                    $"Wrote {result.Events} events ({AuditText.Size(result.Bytes)}, {retention}) to {result.Path}, readable by you only.")
+                : string.Create(CultureInfo.InvariantCulture,
+                    $"Demo: no file was written. The engine would write {result.Events} events ({AuditText.Size(result.Bytes)}, {retention}) to {result.Path}, readable by you only.");
             Error = "";
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -510,5 +521,44 @@ public sealed class AuditViewModel : AreaViewModel
     {
         if (e.PropertyName == nameof(ShellViewModel.Link) && _shell?.Link is { Area: Area.Audit } link && SessionOptions.Count > 0)
             _ = FollowAsync(link);
+        else if (e.PropertyName == nameof(ShellViewModel.CurrentArea))
+            ApplyStatus();
+    }
+
+    /// <summary>
+    /// Audit's status bar (Audit.dc.html): the open session's generator, decider, mode and tags, then the log's detections
+    /// ("1 high this session") and, at the right, the log's size. Written only while Audit shows; leaving takes back the
+    /// detections field so the next area does not inherit it.
+    /// </summary>
+    private void ApplyStatus()
+    {
+        if (_shell is null)
+            return;
+        var bar = _shell.StatusBar;
+        if (_shell.CurrentArea != Area.Audit)
+        {
+            if (_myFields.Count > 0 && ReferenceEquals(bar.AreaFields, _myFields))
+                bar.AreaFields = [];
+            _myFields = [];
+            return;
+        }
+
+        if (_sessionStatus is { } session)
+        {
+            bar.Generator = session.Generator;
+            bar.Decider = session.Decider;
+            bar.Mode = session.Mode;
+            bar.Tags = session.Tags;
+        }
+
+        bar.Engine = "";
+        bar.Gateway = "";
+        bar.Context = "";
+        bar.Scheduler = "";
+        bar.Branch = "";
+        _myFields = _statusDetections.Length > 0 ? [new StatusField("detections", _statusDetections)] : [];
+        bar.AreaFields = _myFields;
+        bar.SessionId = SessionId ?? "";
+        bar.Trailing = _statusLog;
     }
 }

@@ -219,7 +219,12 @@
             </StackPanel>
           </Border>
 
-          <controls:WrapRowPanel Spacing="8" LineSpacing="8">
+          <!-- Nothing picked (nothing changed since the review point, say): the list's empty text, not a lone disabled button. -->
+          <Border CornerRadius="8" BorderThickness="1" BorderBrush="{ThemeResource CorvidLine}" Background="{ThemeResource CorvidBg}" Padding="14,12"
+                  Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.HasSelection), Mode=OneWay}">
+            <TextBlock Text="{x:Bind ViewModel.NoSelectionText, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" TextWrapping="Wrap" />
+          </Border>
+          <controls:WrapRowPanel Spacing="8" LineSpacing="8" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasSelection), Mode=OneWay}">
             <controls:CorvidButton x:Name="SendButton" Content="{x:Bind ViewModel.SendCommentsText, Mode=OneWay}" Variant="Primary"
                                    Command="{x:Bind ViewModel.SendCommentsCommand}" />
             <controls:CorvidButton Content="Ask about this file" Command="{x:Bind ViewModel.AskAboutFileCommand}"
@@ -230,7 +235,8 @@
                                    Command="{x:Bind ViewModel.RevertFileCommand}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasSelection), Mode=OneWay}" />
           </controls:WrapRowPanel>
           <TextBlock Text="Comments go out as one message, quoting file and line. The next turn's diff shows against this review point."
-                     Style="{StaticResource CorvidSmallText}" HorizontalAlignment="Right" TextAlignment="Right" Margin="0,-4,0,0" />
+                     Style="{StaticResource CorvidSmallText}" HorizontalAlignment="Right" TextAlignment="Right" Margin="0,-4,0,0"
+                     Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasSelection), Mode=OneWay}" />
           <controls:ToneRow Tone="{x:Bind ViewModel.NoticeTone, Mode=OneWay}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasNotice), Mode=OneWay}">
             <TextBlock Text="{x:Bind ViewModel.Notice, Mode=OneWay}" TextWrapping="Wrap" />
           </controls:ToneRow>

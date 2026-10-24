@@ -189,10 +189,15 @@ public sealed class MemoryViewModelTests
         await memory.RejectFactAsync(memory.StagedFacts[0], token);
 
         Assert.Equal(0, memory.ReviewCount);
-        Assert.Equal(0, RailBadge(shell));
-        Assert.Equal("", memory.Tabs[0].BadgeText);
+        // The lesson candidate still waits in the Review list, so the tab and the rail keep counting it.
+        Assert.Equal(1, memory.WaitingCount);
+        Assert.Equal(1, RailBadge(shell));
+        Assert.Equal("1", memory.Tabs[0].BadgeText);
         Assert.Equal(["b-14", "s-41"], service.Rejections.Keys.Order());
         Assert.False(memory.HasNothingToReview);
+        await memory.RejectLessonAsync(memory.LessonCandidates[0], "not a rule", token);
+        Assert.Equal(0, RailBadge(shell));
+        Assert.Equal("", memory.Tabs[0].BadgeText);
         Assert.Equal(318, memory.CoreBlocks[0].Block.Tokens);
     }
 

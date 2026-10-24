@@ -119,8 +119,15 @@ public sealed class MemoryViewModel : AreaViewModel
 
     public ObservableCollection<LessonCandidateView> LessonCandidates { get; } = [];
 
-    /// <summary>Staged facts and block updates waiting: the Review tab's and the rail's count.</summary>
+    /// <summary>Staged facts and block updates waiting.</summary>
     public int ReviewCount => StagedFacts.Count + BlockUpdates.Count;
+
+    /// <summary>
+    /// The Review tab's and the rail's count. Memory.png counts the memory writes there and the lesson candidate under
+    /// Lessons; once the writes are answered, a candidate still waits in the Review list, so the count becomes the
+    /// candidates' and the badge never goes while something waits on you.
+    /// </summary>
+    public int WaitingCount => ReviewCount > 0 ? ReviewCount : LessonCandidates.Count;
 
     public bool HasNothingToReview => ReviewCount == 0 && LessonCandidates.Count == 0;
 
@@ -455,10 +462,11 @@ public sealed class MemoryViewModel : AreaViewModel
     private void QueueChanged()
     {
         Reset(CoreBlocks, CoreBlocks.Select(b => BlockView(b.Block)).ToList());
-        Tabs[(int)MemoryTabKind.Review].Count = ReviewCount;
+        Tabs[(int)MemoryTabKind.Review].Count = WaitingCount;
         Tabs[(int)MemoryTabKind.Lessons].Count = LessonCandidates.Count;
-        _shell?.SetBadge(Area.Memory, ReviewCount);
+        _shell?.SetBadge(Area.Memory, WaitingCount);
         OnPropertyChanged(nameof(ReviewCount));
+        OnPropertyChanged(nameof(WaitingCount));
         OnPropertyChanged(nameof(HasNothingToReview));
         OnPropertyChanged(nameof(HasNoLessonCandidates));
         OnPropertyChanged(nameof(HasStagedFacts));

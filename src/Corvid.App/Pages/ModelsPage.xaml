@@ -137,9 +137,10 @@
                     <TextBlock Text="this session · switching mid-turn waits for issued tool calls" Style="{StaticResource PanelNote}" />
                   </controls:WrapRowPanel>
                 </Border>
+                <Grid>
                 <ScrollViewer x:Name="SlotsScroll" HorizontalScrollMode="Auto" HorizontalScrollBarVisibility="Auto" VerticalScrollMode="Disabled"
-                              VerticalScrollBarVisibility="Disabled" SizeChanged="OnTableScrollSized">
-                  <StackPanel MinWidth="646" AutomationProperties.Name="Model slots">
+                              VerticalScrollBarVisibility="Disabled" SizeChanged="OnTableScrollSized" ViewChanged="OnTableScrolled">
+                  <StackPanel MinWidth="679" AutomationProperties.Name="Model slots">
                     <Grid>
                       <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="123" />
@@ -243,6 +244,19 @@
                     </ItemsControl>
                   </StackPanel>
                 </ScrollViewer>
+                  <Button x:Name="SlotsBack" Style="{StaticResource TableEdge}" HorizontalAlignment="Left" BorderThickness="0,0,1,0"
+                          Click="OnTableEdge" Tag="{x:Bind SlotsScroll}" AutomationProperties.Name="Scroll the table back to its first columns">
+                    <controls:Icon Kind="ChevronDown" Width="12" Height="12" Foreground="{ThemeResource CorvidText2}" RenderTransformOrigin="0.5,0.5">
+                      <controls:Icon.RenderTransform><RotateTransform Angle="90" /></controls:Icon.RenderTransform>
+                    </controls:Icon>
+                  </Button>
+                  <Button x:Name="SlotsMore" Style="{StaticResource TableEdge}" HorizontalAlignment="Right" BorderThickness="1,0,0,0"
+                          Click="OnTableEdge" Tag="{x:Bind SlotsScroll}" AutomationProperties.Name="Scroll the table to its last columns">
+                    <controls:Icon Kind="ChevronDown" Width="12" Height="12" Foreground="{ThemeResource CorvidText2}" RenderTransformOrigin="0.5,0.5">
+                      <controls:Icon.RenderTransform><RotateTransform Angle="-90" /></controls:Icon.RenderTransform>
+                    </controls:Icon>
+                  </Button>
+                </Grid>
               </StackPanel>
             </Border>
 
@@ -255,8 +269,9 @@
                     <TextBlock Text="nothing downloads implicitly · default set about 10 GB" Style="{StaticResource PanelNote}" />
                   </controls:WrapRowPanel>
                 </Border>
+                <Grid>
                 <ScrollViewer x:Name="CatalogueScroll" HorizontalScrollMode="Auto" HorizontalScrollBarVisibility="Auto" VerticalScrollMode="Disabled"
-                              VerticalScrollBarVisibility="Disabled" SizeChanged="OnTableScrollSized">
+                              VerticalScrollBarVisibility="Disabled" SizeChanged="OnTableScrollSized" ViewChanged="OnTableScrolled">
                   <StackPanel MinWidth="700" AutomationProperties.Name="Catalogue">
                     <Grid>
                       <Grid.ColumnDefinitions>
@@ -328,6 +343,19 @@
                     </ItemsControl>
                   </StackPanel>
                 </ScrollViewer>
+                  <Button x:Name="CatalogueBack" Style="{StaticResource TableEdge}" HorizontalAlignment="Left" BorderThickness="0,0,1,0"
+                          Click="OnTableEdge" Tag="{x:Bind CatalogueScroll}" AutomationProperties.Name="Scroll the table back to its first columns">
+                    <controls:Icon Kind="ChevronDown" Width="12" Height="12" Foreground="{ThemeResource CorvidText2}" RenderTransformOrigin="0.5,0.5">
+                      <controls:Icon.RenderTransform><RotateTransform Angle="90" /></controls:Icon.RenderTransform>
+                    </controls:Icon>
+                  </Button>
+                  <Button x:Name="CatalogueMore" Style="{StaticResource TableEdge}" HorizontalAlignment="Right" BorderThickness="1,0,0,0"
+                          Click="OnTableEdge" Tag="{x:Bind CatalogueScroll}" AutomationProperties.Name="Scroll the table to its last columns">
+                    <controls:Icon Kind="ChevronDown" Width="12" Height="12" Foreground="{ThemeResource CorvidText2}" RenderTransformOrigin="0.5,0.5">
+                      <controls:Icon.RenderTransform><RotateTransform Angle="-90" /></controls:Icon.RenderTransform>
+                    </controls:Icon>
+                  </Button>
+                </Grid>
               </StackPanel>
             </Border>
           </StackPanel>

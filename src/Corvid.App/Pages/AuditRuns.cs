@@ -71,7 +71,19 @@ public static class AuditRuns
         block.Inlines.Clear();
         if (spans is not null)
         {
-            foreach (var span in spans)
+            // An opening bracket right before a mono span wraps with it, never alone at a line's end (RichText.Glue).
+            var list = spans.ToList();
+            for (var i = 1; i < list.Count; i++)
+            {
+                if (list[i].Style == AuditSpanStyle.Mono && list[i - 1].Style == AuditSpanStyle.Plain
+                    && Controls.RichText.Glue(list[i - 1].Text, list[i].Text) is var (before, code) && before.Length != list[i - 1].Text.Length)
+                {
+                    list[i - 1] = list[i - 1] with { Text = before };
+                    list[i] = list[i] with { Text = code };
+                }
+            }
+
+            foreach (var span in list)
                 block.Inlines.Add(Run(block, span, alert));
         }
 

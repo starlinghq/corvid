@@ -89,7 +89,7 @@ public sealed partial class BoardPage : Page, IDockProvider
 
     private void OnShellChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(ShellViewModel.Layout))
+        if (e.PropertyName is nameof(ShellViewModel.Layout) or nameof(ShellViewModel.ShowDock))
             ApplyLayout();
     }
 
@@ -104,6 +104,8 @@ public sealed partial class BoardPage : Page, IDockProvider
         var phone = layout == ShellLayout.Phone;
         PageTitle.Visibility = phone ? Visibility.Collapsed : Visibility.Visible;
         PhoneAttention.Visibility = phone ? Visibility.Visible : Visibility.Collapsed;
+        // Without the dock column (under 1180 px, or hidden with Ctrl+B), the tray flows below the cards (Board-narrow.png).
+        InlineAttention.Visibility = !phone && _composition?.Shell.ShowDock == false ? Visibility.Visible : Visibility.Collapsed;
         BodyPanel.Padding = phone ? new Thickness(14, 12, 14, 18) : new Thickness(24, 18, 24, 18);
         HeadBorder.Padding = phone ? new Thickness(14, 10, 14, 10) : new Thickness(24, 12, 24, 12);
     }

@@ -346,10 +346,10 @@
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
                 </StackPanel>
-                <controls:WrapRowPanel Spacing="8" LineSpacing="8">
+                <controls:WrapRowPanel Spacing="6" LineSpacing="8">
                   <controls:CorvidButton x:Name="RestoreButton" Content="Restore" Variant="Primary" Command="{x:Bind ViewModel.RestoreCommand}" />
                   <controls:CorvidButton Content="Preview the full diff" Command="{x:Bind ViewModel.PreviewCommand}" />
-                  <controls:CorvidButton Content="Cancel" Variant="Ghost" Foreground="{ThemeResource CorvidAccent}"
+                  <controls:CorvidButton Content="Cancel" Variant="Ghost" Padding="8,0" Foreground="{ThemeResource CorvidAccent}"
                                          Command="{x:Bind ViewModel.BackToSessionCommand}" />
                 </controls:WrapRowPanel>
               </StackPanel>

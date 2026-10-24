@@ -315,6 +315,41 @@
     </Setter>
   </Style>
 
+  <!-- The edge of a table that scrolls sideways: a 22 px strip on bg-2 with a chevron, shown while columns are hidden that
+       way. Clicking it scrolls there; Uno's own scroll bar shows only under the pointer, so this is the visible affordance. -->
+  <Style x:Key="TableEdge" TargetType="Button">
+    <Setter Property="Width" Value="22" />
+    <Setter Property="VerticalAlignment" Value="Stretch" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="Visibility" Value="Collapsed" />
+    <Setter Property="UseSystemFocusVisuals" Value="True" />
+    <Setter Property="FocusVisualPrimaryBrush" Value="{ThemeResource CorvidAccent}" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="Face" Background="{ThemeResource CorvidBg2}" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="{TemplateBinding BorderThickness}">
+            <ContentPresenter Content="{TemplateBinding Content}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            <VisualStateManager.VisualStateGroups>
+              <VisualStateGroup x:Name="CommonStates">
+                <VisualState x:Name="Normal" />
+                <VisualState x:Name="PointerOver">
+                  <VisualState.Setters>
+                    <Setter Target="Face.Background" Value="{ThemeResource CorvidBg3}" />
+                  </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Pressed">
+                  <VisualState.Setters>
+                    <Setter Target="Face.Background" Value="{ThemeResource CorvidBg3}" />
+                  </VisualState.Setters>
+                </VisualState>
+              </VisualStateGroup>
+            </VisualStateManager.VisualStateGroups>
+          </Border>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
   <!-- A text box as the first run's workspace field: mono, 6px 10px, a line border, radius 6. -->
   <Style x:Key="FieldBox" TargetType="TextBox">
     <Setter Property="FontFamily" Value="{StaticResource CorvidMono}" />

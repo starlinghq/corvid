@@ -17,6 +17,29 @@ public sealed class AuditViewModelTests
     }
 
     [Fact]
+    public async Task TheStatusBarIsAuditPngs()
+    {
+        Assert.True(AppOptions.TryParse(["--page", "audit"], out var options, out var error), error);
+        var composition = new AppComposition(options, new InlineDispatcher());
+        await composition.Audit.Loaded;
+        var bar = composition.StatusBar;
+
+        Assert.Equal("claude (escalated) · cuda:0 · q0 · 410 ms", bar.Generator);
+        Assert.Equal("Kev-0.8B, calibrated", bar.Decider);
+        Assert.Equal(("detections", "1 high this session"), (Assert.Single(bar.AreaFields).Label, bar.AreaFields[0].Value));
+        Assert.Equal(ApprovalMode.Smart, bar.Mode);
+        Assert.Contains(bar.Tags, tag => tag.Text == "tainted");
+        Assert.Equal(("", "", ""), (bar.Context, bar.Scheduler, bar.Branch));
+        Assert.Equal("cli-9f2e", bar.SessionId);
+        Assert.Equal("log 1,214 events", bar.Trailing);
+
+        // Leaving takes the detections back; a session's area writes its own bar again.
+        composition.Shell.Navigate(Area.Sessions);
+        Assert.Empty(bar.AreaFields);
+        Assert.Equal("38%", bar.Context);
+    }
+
+    [Fact]
     public async Task ItOpensAtAuditPngsMoment()
     {
         var audit = await Open();
@@ -158,7 +181,8 @@ public sealed class AuditViewModelTests
         audit.ShowMetadataRetentionCommand.Execute(null);
         Assert.False(audit.FullRetention);
         await audit.ExportCommand.ExecuteAsync();
-        Assert.StartsWith("Wrote 18 events (", audit.ExportResult, StringComparison.Ordinal);
+        // The demo writes nothing, and says so rather than claim a file.
+        Assert.StartsWith("Demo: no file was written. The engine would write 18 events (", audit.ExportResult, StringComparison.Ordinal);
         Assert.Contains("metadata only) to ~/.local/share/corvid/traces/cli-9f2e-20261024-1405.jsonl", audit.ExportResult, StringComparison.Ordinal);
     }
 

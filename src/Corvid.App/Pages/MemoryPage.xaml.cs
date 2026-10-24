@@ -2,6 +2,7 @@ using System.ComponentModel;
 using Corvid.App.Core.Composition;
 using Corvid.App.Core.Memory;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using Windows.System;
 
 namespace Corvid.App.Pages;
@@ -84,6 +85,30 @@ public sealed partial class MemoryPage : Page
         // does; below that it takes a line of its own, never wider than the head.
         var left = inner - PageTitle.ActualWidth - TabStrip.ActualWidth - 24;
         SearchBox.Width = left >= 220 ? Math.Min(300, left) : Math.Min(300, Math.Max(160, inner));
+        _tabPadding = phone ? new Thickness(6, 0, 6, 0) : new Thickness(9, 0, 9, 0);
+        PadTabs();
+    }
+
+    private Thickness _tabPadding = new(9, 0, 9, 0);
+
+    /// <summary>On a phone the five tabs keep to one line (362 px between the gutters) with 6 px sides instead of 9.</summary>
+    private void PadTabs() => PadTabs(TabStrip);
+
+    private void PadTabs(DependencyObject parent)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is Controls.DockTab tab)
+            {
+                if (tab.Padding != _tabPadding)
+                    tab.Padding = _tabPadding;
+            }
+            else
+            {
+                PadTabs(child);
+            }
+        }
     }
 
     // ---- keys ----

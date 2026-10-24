@@ -71,10 +71,14 @@ public sealed class FirstRunTests
         Assert.False(setup.FirstRun.IsSetup);
         Assert.False(setup.Shell.PageDrawsRail);
         Assert.True(setup.Shell.ShowRail);
-        Assert.Equal("", bar.Engine);
+        // F1 ends on an empty session, and the bar keeps what the setup found: degraded, what is missing, Vault absent.
+        Assert.Null(setup.Shell.CurrentSession);
+        Assert.Equal("in-process", bar.Engine);
         Assert.Equal(ApprovalMode.Smart, bar.Mode);
-        Assert.Equal("cli-9f2e", bar.SessionId);
-        Assert.Equal("turn 48 s", bar.Trailing);
+        Assert.Equal("", bar.SessionId);
+        Assert.Equal("idle", bar.Trailing);
+        Assert.Equal("degraded until kev-0.8b is downloaded", bar.Decider);
+        Assert.Equal(["degraded · kev-0.8b, embeddinggemma-2 missing", "Vault absent"], bar.Tags.Select(tag => tag.Text));
         // The app runs with what it has, and the Models badge says how many default models are missing.
         Assert.Equal(2, setup.Shell.RailItem(Area.Models).Badge);
         Assert.Equal(new SetupChoices("~/src/corvid", ApprovalMode.Smart, "redact"), setup.Service.Saved);

@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Globalization;
 using Corvid.App.Core.Models;
 using Corvid.App.Core.Mvvm;
+using Corvid.App.Core.Sessions;
 using Corvid.App.Core.Shell;
 
 namespace Corvid.App.Core.FirstRun;
@@ -195,6 +196,7 @@ public sealed class FirstRunViewModel : AreaViewModel
     private readonly Dictionary<string, object?> _myStatus = [];
     private bool _isSetup;
     private bool _active;
+    private bool _finished;
     private int _step;
     private string _workspace = DemoFirstRunService.Workspace;
     private IReadOnlyList<TextRun> _workspaceNote = [];
@@ -406,8 +408,13 @@ public sealed class FirstRunViewModel : AreaViewModel
         await _service.SaveAsync(new SetupChoices(_workspace, _mode, _posture), cancellationToken).ConfigureAwait(true);
         // The app now runs with what it has; the Models badge says how many default models are still missing (F23).
         _shell.SetBadge(Area.Models, _models.Snapshot.Catalogue.Count(model => model.InDefaultSet && model.IsMissing));
+        // F1 ends on an empty session, not on whichever session the rail lists first, and the status bar keeps what the
+        // setup found: the degraded decider, what is still missing, Vault's absence and the downloads it started.
+        _finished = true;
+        _shell.SelectSession(null);
         IsSetup = false;
         _shell.Navigate(Area.Sessions);
+        ApplyRunningStatus();
     }
 
     private async Task LoadAsync()
@@ -491,6 +498,8 @@ public sealed class FirstRunViewModel : AreaViewModel
             : [];
         if (_active)
             ApplyStatus();
+        else
+            ApplyRunningStatus();
     }
 
     // The shell around the setup: its own left column of steps, and the setup's status bar (FirstRun.dc.html).
@@ -498,7 +507,10 @@ public sealed class FirstRunViewModel : AreaViewModel
     private void OnShellChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(ShellViewModel.CurrentArea))
+        {
             UpdateActive();
+            ApplyRunningStatus();
+        }
     }
 
     private void UpdateActive()
@@ -545,6 +557,43 @@ public sealed class FirstRunViewModel : AreaViewModel
         Write(nameof(StatusBarViewModel.Branch), "");
         Write(nameof(StatusBarViewModel.SessionId), "");
         Write(nameof(StatusBarViewModel.Trailing), StatusTrailing);
+    }
+
+    /// <summary>
+    /// After the setup, while a session area shows no session yet (F1's empty session), the status bar is the app running
+    /// degraded: the decider's tier, an amber tag naming the default models still missing, Vault's absence, and the
+    /// downloads in flight, which keep moving as they progress. Once a session is open its own status takes over.
+    /// </summary>
+    private void ApplyRunningStatus()
+    {
+        if (!_finished || _isSetup || _shell.CurrentSession is not null || !SessionHub.ShowsSessionStatus(_shell.CurrentArea))
+            return;
+        var snapshot = _models.Snapshot;
+        var missing = snapshot.Catalogue
+            .Where(model => model.InDefaultSet && model.Kind == ModelKind.Local && model.State != ModelState.Cached)
+            .Select(model => model.Name)
+            .ToList();
+        var tags = new List<StatusTag>();
+        if (missing.Count > 0)
+        {
+            tags.Add(new StatusTag($"degraded · {string.Join(", ", missing)} missing", Tone.Amber,
+                "Corvid runs with what it has: decisions use the degraded tier and memory writes wait for review until these models are downloaded."));
+        }
+
+        if (!snapshot.Privacy.VaultPresent)
+            tags.Add(new StatusTag("Vault absent", Tone.Amber, "No answer at $XDG_RUNTIME_DIR/corvid-vault.sock: cloud models and gateway bots are unavailable."));
+        _bar.Engine = "in-process";
+        _bar.Generator = "";
+        _bar.Decider = ModelsViewModel.StatusDecider(snapshot);
+        _bar.Context = "";
+        _bar.AreaFields = ModelsViewModel.StatusDownloads(snapshot);
+        _bar.Mode = _mode;
+        _bar.Tags = tags;
+        _bar.Scheduler = "";
+        _bar.Gateway = "";
+        _bar.Branch = "";
+        _bar.SessionId = "";
+        _bar.Trailing = "idle";
     }
 
     /// <summary>Puts back what the setup's status bar replaced, where nothing else has written since.</summary>

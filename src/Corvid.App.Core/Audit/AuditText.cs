@@ -92,6 +92,22 @@ public static class AuditText
         _ => string.Create(CultureInfo.InvariantCulture, $"{bytes / 1_000_000.0:0.0} MB"),
     };
 
+    /// <summary>
+    /// The status bar's detections: "1 high this session", "2 high, 1 medium in the log", "none this session". Severities
+    /// are counted most severe first, in the order high, medium, low, then any other the rules name.
+    /// </summary>
+    public static string DetectionSummary(IEnumerable<string> severities, bool session)
+    {
+        ArgumentNullException.ThrowIfNull(severities);
+        var scope = session ? "this session" : "in the log";
+        string[] order = ["high", "medium", "low"];
+        var counts = severities.GroupBy(severity => severity, StringComparer.Ordinal)
+            .OrderBy(group => Array.IndexOf(order, group.Key) is var index && index >= 0 ? index : order.Length)
+            .Select(group => string.Create(CultureInfo.InvariantCulture, $"{group.Count()} {group.Key}"))
+            .ToList();
+        return counts.Count == 0 ? $"none {scope}" : $"{string.Join(", ", counts)} {scope}";
+    }
+
     /// <summary>"1,214", "9,410": thousands separated by commas whatever the machine's culture.</summary>
     public static string Count(long value) => value.ToString("N0", CultureInfo.InvariantCulture);
 

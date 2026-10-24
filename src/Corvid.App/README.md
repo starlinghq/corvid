@@ -171,8 +171,11 @@ And from the A1 screens:
 - A text run made only of spaces measures as zero width, so indentation before a changed word disappears.
   `SideBySideDiffView` pads such runs; the shared `DiffRowsView` still has the bug where leading whitespace is its own
   segment.
-- Under `--theme light` on a system in dark, a control that takes keyboard focus (Tab, or `Focus(FocusState.Keyboard)`)
-  redraws in dark-theme brushes and stays so; pointer focus does not. Not fixed yet: it touches the shell or theme setup.
+- Under `--theme light` on a system in dark, a control that took keyboard focus (Tab, or `Focus(FocusState.Keyboard)`)
+  redrew in dark-theme brushes and stayed so: Uno resolves a focused control's visual-state brushes against the
+  application's theme, not the root page's. `App` now sets `Application.RequestedTheme` from `--theme` before start-up,
+  which fixes it for a theme chosen on the command line. A theme switched at run time (Settings) can still mismatch,
+  since Uno takes the application's theme only before start-up.
 - `ObservableCollection.Move` in an `ItemsControl` re-templated the moved item outside the page's theme; remove and
   re-insert instead (the Board's sync does).
 - An `x:Bind` from a `DataTemplate`'s `ColumnDefinition.Width` (or a `ContentControl` header template) to a static

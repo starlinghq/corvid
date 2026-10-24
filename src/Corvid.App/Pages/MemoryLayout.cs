@@ -32,7 +32,7 @@ public sealed class MemoryLayout : INotifyPropertyChanged
         }
     }
 
-    public GridLength FactColumn => new(_narrowTable ? 2.2 : 2.1, GridUnitType.Star);
+    public GridLength FactColumn => new(_narrowTable ? 2.2 : 2.3, GridUnitType.Star);
 
     public GridLength ValidColumn => new(_narrowTable ? 1 : 1.1, GridUnitType.Star);
 

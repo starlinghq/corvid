@@ -43,6 +43,20 @@ public sealed class ReviewTests
     }
 
     [Fact]
+    public void EachFilesCountsAgreeWithTheDiffItDraws()
+    {
+        var review = Compose("--page", "review").Review;
+
+        // SeccompTests.cs is left out: Review.png itself lists it +9 −4 beside the +6 −2 hunk it draws, and the session
+        // demo's text is that hunk, which the side-by-side rows are pinned to.
+        foreach (var file in review.Files.Where(file => file.File.NewText is not null && file.Path != Seccomp))
+        {
+            var diff = FileDiff.Compute(file.Path, file.File.OldText, file.File.NewText!);
+            Assert.Equal((file.File.Added, file.File.Removed), (diff.Added, diff.Removed));
+        }
+    }
+
+    [Fact]
     public void TheSideBySideRowsAreReviewPngsLines()
     {
         var review = Compose("--page", "review").Review;
@@ -113,6 +127,20 @@ public sealed class ReviewTests
         // Nothing changed after the new review point yet.
         Assert.Empty(review.Files);
         Assert.Equal("Nothing changed since the last review point. The next turn's changes show here.", review.EmptyText);
+        // The diff column says so too, and the rail's badge follows the cleared range.
+        Assert.False(review.HasSelection);
+        Assert.Equal(review.EmptyText, review.NoSelectionText);
+        Assert.Equal(0, composition.Shell.RailItem(Area.Review).Badge);
+    }
+
+    [Fact]
+    public void TheBadgeCountsTheReadableFilesSinceTheLastReview()
+    {
+        var composition = Compose("--page", "review");
+
+        Assert.Equal(3, composition.Shell.RailItem(Area.Review).Badge);
+        composition.Review.ScopeIndex = 2;
+        Assert.Equal(3, composition.Shell.RailItem(Area.Review).Badge);
     }
 
     [Fact]
