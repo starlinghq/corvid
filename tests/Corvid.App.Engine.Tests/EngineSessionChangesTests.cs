@@ -33,6 +33,28 @@ public sealed class EngineSessionChangesTests
     }
 
     [Fact]
+    public async Task ARestoreListsTheFilesAsTheLedgerNowStands()
+    {
+        await using var fixture = await HistoryFixture.StartAsync();
+        fixture.Write("story.txt", "one\ntwo\n");
+        var id = fixture.Session();
+        await fixture.WriteTurnAsync(id, "call-1", "story.txt", "ONE\ntwo\n", "capitalise the story");
+        await fixture.WriteTurnAsync(id, "call-2", "notes.md", "a note\n", "make notes");
+        using var rewind = fixture.Rewind();
+        var live = new Recorder();
+        using var subscription = await fixture.Sessions.OpenAsync(id, live.Add, Ct);
+        var notes = (await rewind.GetTimelineAsync(id, Ct)).Entries[0];
+
+        var outcome = await rewind.RestoreAsync(id, notes.CheckpointId, RewindScope.FilesAndConversation, Ct);
+        await fixture.Sessions.IdleAsync();
+
+        Assert.False(outcome.Refused);
+        // notes.md went back; story.txt, changed by the turn before, is still the session's.
+        var changes = live.Updates.OfType<ChangesUpdate>().Last();
+        Assert.Equal([new FileChange("story.txt", 1, 1)], changes.Session);
+    }
+
+    [Fact]
     public async Task ASessionWithoutWritesListsNoFiles()
     {
         await using var fixture = await HistoryFixture.StartAsync();

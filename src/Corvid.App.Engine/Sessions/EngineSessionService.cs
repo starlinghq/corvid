@@ -621,6 +621,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 translator.RewindTo(rewound.Turn);
             return [rewound];
         });
+        // The change lists as the ledger now stands: a file the restore put back drops out, one an earlier call changed stays.
+        if (!rewound.Refused && _engine.Runtime.IsCompletedSuccessfully)
+            PublishChanges(_engine.Runtime.Result, channel);
     }
 
     private void PublishQueue(Channel channel) => Publish(channel, _ => [new QueueChanged(channel.Queue) { At = _time.GetUtcNow() }]);
