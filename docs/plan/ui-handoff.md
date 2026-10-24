@@ -15,7 +15,7 @@ pull request starlinghq/corvid#71.
 | A0.1 Scaffold: projects, checker rules, theme, fonts, icons, the shell with every area, responsive layouts | done, verified on the running app, CI green | `83d77f9` |
 | A0.2 Session core: update contract, fold, demo scenario, view models, markdown and diff | done, tested headless and through the Sessions page | `a143605` |
 | A0.3 Sessions page: transcript, composer, approval card, dock, keyboard | done, flows F2, F3, F6 and F9 driven on the running app (§1.1) | `93d6c02` |
-| A0 verify loop | done: one independent verifier, one fix round (§1.1) | this commit |
+| A0 verify loop | done: one independent verifier, one fix round (§1.1) | `60e90fd` |
 | A1 the seven other mocked screens | not started | |
 | A2 the pages without mockups, the palette, the rest of the keys | not started | |
 | A3 `Corvid.App.Engine`: the real runtime behind the services | not started | |
@@ -65,6 +65,10 @@ running app:
   turn heads end in an ellipsis or wrap rather than being clipped; the opening scroll position is taken twice so the
   repeater's height estimates cannot move it; "Deny and say why" puts the caret in the reason field; the answers lost
   their tooltips, which covered the reasons on keyboard focus; a thought renders its code spans.
+- Each item above was looked at again on the running app after the fix: the approval scene at 820 and 390, four launches
+  in a row opening at the same place, F3 with the next card's chip, the arrival of a card while scrolled up, 5 then
+  typing, Ctrl+T. `WrapRowPanel` now fits each item to its line and centres it on the line; the dock's tab strip, its
+  other user, draws as before.
 
 Left for later, from that report: an inline code span wraps as a unit and can leave "(" at a line's end; after Back,
 the focused answer keeps its outline; Esc Esc leaves focus (and its tooltip) on the attention bell; the demo's idle
