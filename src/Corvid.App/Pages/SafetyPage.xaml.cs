@@ -101,8 +101,17 @@ public sealed partial class SafetyPage : Page
     /// <summary>A rule's question opened: its "Remove the rule" takes focus, so Enter removes and Esc keeps.</summary>
     private void OnViewModelChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName != nameof(SafetyViewModel.Confirming) || ViewModel.Confirming is not { } row)
+        if (e.PropertyName != nameof(SafetyViewModel.Confirming))
             return;
+        if (ViewModel.Confirming is not { } row)
+        {
+            // A removal rebuilt the list under the focused button; focus would land on the window's first button (the
+            // bell) with a ring. The page takes it instead.
+            if (XamlRoot is { } root && FocusManager.GetFocusedElement(root) is DependencyObject focused && !IsInside(focused, RulesList))
+                Focus(FocusState.Programmatic);
+            return;
+        }
+
         // The question's buttons are drawn in the next layout pass.
         DispatcherQueue.TryEnqueue(() =>
         {
@@ -125,6 +134,17 @@ public sealed partial class SafetyPage : Page
             else
                 Focus(FocusState.Programmatic);
         });
+    }
+
+    private static bool IsInside(DependencyObject element, DependencyObject ancestor)
+    {
+        for (var at = element; at is not null; at = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(at))
+        {
+            if (ReferenceEquals(at, ancestor))
+                return true;
+        }
+
+        return false;
     }
 
     private static T? Find<T>(DependencyObject parent, Func<T, bool> match) where T : class, DependencyObject
