@@ -173,7 +173,7 @@ public sealed class GatewayTests
     public async Task AToolNameHoldingHiddenCharactersIsRevealedAndCannotBeGranted()
     {
         var rig = Build();
-        rig.Service.OfferGuestTool("web_fetch‮\U000E0041");
+        rig.Service.OfferGuestTool("web_fetch\u202E\U000E0041");
         var river = rig.Gateway.Users.Single(user => user.Handle == "river#2210");
 
         river.EditCommand.Execute(null);
@@ -191,14 +191,14 @@ public sealed class GatewayTests
 
         // The service refuses it too, whoever asks.
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            rig.Service.SetAllowlistAsync("u-2", ["memory_search", "web_fetch‮\U000E0041"], TestContext.Current.CancellationToken));
+            rig.Service.SetAllowlistAsync("u-2", ["memory_search", "web_fetch\u202E\U000E0041"], TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task AHiddenToolAlreadyOnTheAllowlistMustBeUntickedBeforeSaving()
     {
         // Stored by another client, or before the check existed: the editor shows it ticked, and will not save it ticked.
-        const string Hidden = "notes‮__read\U000E0041";
+        const string Hidden = "notes\u202E__read\U000E0041";
         var time = ManualTimeProvider.Demo();
         var saved = new List<IReadOnlyList<string>>();
         var user = new PairedUser("u-9", "discord", "wren#1", PairingRole.Guest, time.GetUtcNow()) { Allowlist = ["memory_search", Hidden] };
