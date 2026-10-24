@@ -3,12 +3,15 @@ using Corvid.App.Controls;
 using Corvid.App.Core.Composition;
 using Corvid.App.Core.Review;
 using Corvid.App.Core.Shell;
+using Microsoft.UI.Xaml.Input;
+using Windows.System;
 
 namespace Corvid.App.Pages;
 
 /// <summary>
 /// The Review area's page (Review.png, F4). Its view model comes from the composition the shell navigates with. The
 /// diff's columns stack under 860 px, as Review-narrow.png shows, and under 720 px the Files panel goes above the diff.
+/// Keys: Up and Down on the file list move through the files.
 /// </summary>
 public sealed partial class ReviewPage : Page
 {
@@ -38,6 +41,33 @@ public sealed partial class ReviewPage : Page
         if (_shell is not null)
             _shell.PropertyChanged -= OnShellChanged;
         base.OnNavigatedFrom(e);
+    }
+
+    /// <summary>Up and Down on the file list select the previous or next file, and focus follows to its row.</summary>
+    private void OnFileListKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key is not (VirtualKey.Up or VirtualKey.Down))
+            return;
+        e.Handled = true;
+        if (ViewModel.MoveSelection(e.Key == VirtualKey.Down ? 1 : -1) is not { } file)
+            return;
+        var index = ViewModel.Files.IndexOf(file);
+        if (index >= 0 && FileList.ContainerFromIndex(index) is DependencyObject container && FindButton(container) is { } button)
+            button.Focus(FocusState.Keyboard);
+    }
+
+    private static Button? FindButton(DependencyObject root)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is Button button)
+                return button;
+            if (FindButton(child) is { } found)
+                return found;
+        }
+
+        return null;
     }
 
     private void OnShellChanged(object? sender, PropertyChangedEventArgs e)

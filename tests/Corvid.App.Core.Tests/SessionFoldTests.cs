@@ -238,6 +238,77 @@ public sealed class SessionFoldTests
         Assert.Contains(filesOnly.Transcript, entry => entry is TurnHeaderEntry);
     }
 
+    /// <summary>Two turns of calls in the ledger and the change lists the engine reported for them.</summary>
+    private static List<SessionUpdate> TwoTurnsOfChanges() =>
+    [
+        At(new TurnStarted(10, "qwen3.5-0.8b"), 0),
+        At(new CheckpointRecorded("c-1", CheckpointKind.Before) { CallId = "call-a", Tool = "write_file", Turn = 10 }, 1),
+        At(new CheckpointRecorded("c-2", CheckpointKind.After) { CallId = "call-a", Turn = 10, Changes = [new FileChange("a.cs", 3, 0)] }, 2),
+        At(new TurnEnded(10, TurnOutcome.Answered), 3),
+        At(new TurnStarted(11, "qwen3.5-0.8b"), 4),
+        At(new CheckpointRecorded("c-3", CheckpointKind.Before) { CallId = "call-b", Tool = "patch_file", Turn = 11 }, 5),
+        At(new CheckpointRecorded("c-4", CheckpointKind.After) { CallId = "call-b", Turn = 11, Changes = [new FileChange("a.cs", 2, 1), new FileChange("b.cs", 5, 5)] }, 6),
+        At(new ChangesUpdate
+        {
+            Turn = [new FileChange("a.cs", 2, 1), new FileChange("b.cs", 5, 5)],
+            Session = [new FileChange("a.cs", 5, 1), new FileChange("b.cs", 5, 5), new FileChange("vault.json", 0, 0) { Readable = false }],
+        }, 7),
+        At(new TurnEnded(11, TurnOutcome.Answered), 8),
+    ];
+
+    [Fact]
+    public void ARestoreTakesItsTurnsAndFilesOutOfTheChangeListsAndMarksTheLedger()
+    {
+        var state = SessionFold.Replay("s",
+        [
+            .. TwoTurnsOfChanges(),
+            At(new CheckpointRecorded("c-5", CheckpointKind.Restore) { Target = "rollback to before c-3", Turn = 11 }, 9),
+            At(new SessionRewound(11, RewindScope.FilesAndConversation, "rollback") { Restored = ["a.cs", "b.cs"], CheckpointId = "c-5" }, 10),
+        ]);
+
+        // Turn 11 left: the latest turn is 10 again, and its changes are what the ledger has of it.
+        Assert.Equal(10, state.Turn);
+        Assert.False(state.Running);
+        Assert.Equal([new FileChange("a.cs", 3, 0)], state.TurnChanges);
+        // a.cs is counted again from turn 10's call alone; b.cs went back entirely; the unreadable file is kept.
+        Assert.Equal([new FileChange("a.cs", 3, 0), new FileChange("vault.json", 0, 0) { Readable = false }], state.SessionChanges);
+        // Every row stays in the ledger; turn 11's changes are marked undone, turn 10's are not.
+        Assert.Equal(3, state.Ledger.Count);
+        Assert.Empty(state.Ledger[0].UndonePaths);
+        Assert.Equal(["a.cs", "b.cs"], state.Ledger[1].UndonePaths);
+        Assert.Empty(state.Ledger[1].LiveChanges);
+
+        // The next prompt is turn 11 again.
+        state = SessionFold.Apply(state, At(new UserMessage("again"), 11));
+        Assert.Equal(11, state.Transcript.OfType<UserEntry>().Last().Turn);
+    }
+
+    [Fact]
+    public void AFilesOnlyRestoreKeepsTheTurnAndARefusedOneChangesNothing()
+    {
+        var filesOnly = SessionFold.Replay("s",
+        [
+            .. TwoTurnsOfChanges(),
+            At(new SessionRewound(11, RewindScope.FilesOnly, "revert") { Merged = ["b.cs"], CheckpointId = "c-5" }, 9),
+        ]);
+
+        Assert.Equal(11, filesOnly.Turn);
+        Assert.Contains(filesOnly.Transcript, entry => entry is TurnHeaderEntry { Number: 11 });
+        Assert.Equal(["a.cs"], filesOnly.TurnChanges.Select(change => change.Path));
+        Assert.Equal(["a.cs", "vault.json"], filesOnly.SessionChanges.Select(change => change.Path));
+        Assert.Equal(["b.cs"], filesOnly.Ledger[1].UndonePaths);
+        Assert.Equal([new FileChange("a.cs", 2, 1)], filesOnly.Ledger[1].LiveChanges);
+
+        var conversationOnly = SessionFold.Replay("s", [.. TwoTurnsOfChanges(), At(new SessionRewound(11, RewindScope.ConversationOnly, "rollback"), 9)]);
+        Assert.Equal(10, conversationOnly.Turn);
+        Assert.Equal(3, conversationOnly.SessionChanges.Length);
+        Assert.All(conversationOnly.Ledger, row => Assert.Empty(row.UndonePaths));
+
+        var before = SessionFold.Replay("s", TwoTurnsOfChanges());
+        var refused = SessionFold.Apply(before, At(new SessionRewound(11, RewindScope.FilesAndConversation, "rollback") { Refused = true, Restored = ["a.cs"] }, 9));
+        Assert.Equal((before.Turn, before.Ledger, before.SessionChanges, before.TurnChanges), (refused.Turn, refused.Ledger, refused.SessionChanges, refused.TurnChanges));
+    }
+
     [Fact]
     public void PanelsAndTheStatusBarReadTheirStateFromTheStream()
     {

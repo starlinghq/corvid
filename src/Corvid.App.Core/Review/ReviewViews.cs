@@ -56,7 +56,7 @@ public sealed class ReviewFileView : ObservableObject
         {
             var what = ShowCounts ? $"{File.Added} added, {File.Removed} removed" : Note;
             var comments = _comments switch { 0 => "", 1 => ", 1 comment", _ => $", {_comments} comments" };
-            return $"{File.Path}, {what}{comments}";
+            return $"{SafeText.Reveal(File.Path)}, {what}{comments}";
         }
     }
 }

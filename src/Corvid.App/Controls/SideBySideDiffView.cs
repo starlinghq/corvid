@@ -21,6 +21,12 @@ namespace Corvid.App.Controls;
 /// removed ones on del-bg, changed words highlighted. Under 860 px (<see cref="IsStacked"/>), or when the view itself
 /// is under 640 px wide, the columns stack, before above after, as Review-narrow.png shows. With <see cref="IsUnified"/> it draws the unified rows in one column instead.
 /// <para>
+/// Building: every row is a few controls made on the UI thread, so at most <see cref="DiffRowsView.MaxRows"/> rows are
+/// drawn and the rest are counted in one row; only the mode shown is built; and a burst of changes (a file selected sets
+/// both row lists and the comments one by one) is drawn once, on the dispatcher's next turn. The comment field keeps its
+/// <see cref="TextBox"/>, and its focus and selection, across those rebuilds.
+/// </para>
+/// <para>
 /// Comments: a line is a focusable target (arrow keys move within a column, Enter or a click invokes
 /// <see cref="LineCommand"/> with a <see cref="DiffLineRef"/>); <see cref="Comments"/> draw as the mockup's
 /// <c>.comment</c> cards under their lines, and <see cref="Editor"/> as a field under its line. Without a
@@ -30,10 +36,10 @@ namespace Corvid.App.Controls;
 public sealed partial class SideBySideDiffView : UserControl
 {
     public static readonly DependencyProperty RowsProperty = DependencyProperty.Register(
-        nameof(Rows), typeof(IReadOnlyList<SideBySideRow>), typeof(SideBySideDiffView), new PropertyMetadata(null, OnChanged));
+        nameof(Rows), typeof(IReadOnlyList<SideBySideRow>), typeof(SideBySideDiffView), new PropertyMetadata(null, OnRowsChanged));
 
     public static readonly DependencyProperty UnifiedRowsProperty = DependencyProperty.Register(
-        nameof(UnifiedRows), typeof(IReadOnlyList<DiffRow>), typeof(SideBySideDiffView), new PropertyMetadata(null, OnChanged));
+        nameof(UnifiedRows), typeof(IReadOnlyList<DiffRow>), typeof(SideBySideDiffView), new PropertyMetadata(null, OnUnifiedRowsChanged));
 
     public static readonly DependencyProperty IsUnifiedProperty = DependencyProperty.Register(
         nameof(IsUnified), typeof(bool), typeof(SideBySideDiffView), new PropertyMetadata(false, OnChanged));
@@ -58,7 +64,10 @@ public sealed partial class SideBySideDiffView : UserControl
     private readonly List<Column> _columns = [];
     private INotifyCollectionChanged? _observed;
     private TextBox? _editorBox;
+    private CommentEditor? _editorBoxFor;
     private bool _narrow;
+    private bool _rebuildPending;
+    private bool _focusEditor;
 
     private bool Stacked => IsStacked || _narrow;
 
@@ -66,7 +75,7 @@ public sealed partial class SideBySideDiffView : UserControl
     {
         IsTabStop = false;
         Content = _root;
-        ActualThemeChanged += (_, _) => Rebuild();
+        ActualThemeChanged += (_, _) => RequestRebuild();
         // Two columns under 640 px would show a few characters each; they stack instead, as under 860 px.
         SizeChanged += (_, e) =>
         {
@@ -74,8 +83,16 @@ public sealed partial class SideBySideDiffView : UserControl
             if (narrow == _narrow)
                 return;
             _narrow = narrow;
-            Rebuild();
+            RequestRebuild();
         };
+        // The comments collection outlives the page (it is the view model's); the view listens only while it is shown,
+        // so a page left behind is not kept alive by it.
+        Loaded += (_, _) =>
+        {
+            Observe(Comments);
+            RequestRebuild();
+        };
+        Unloaded += (_, _) => Observe(null);
     }
 
     public IReadOnlyList<SideBySideRow>? Rows
@@ -123,51 +140,108 @@ public sealed partial class SideBySideDiffView : UserControl
         set => SetValue(LineCommandProperty, value);
     }
 
-    private static void OnChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) => ((SideBySideDiffView)d).Rebuild();
+    private static void OnChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) => ((SideBySideDiffView)d).RequestRebuild();
+
+    /// <summary>The side-by-side rows: drawn only while they are the mode shown.</summary>
+    private static void OnRowsChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        var view = (SideBySideDiffView)d;
+        if (!view.IsUnified)
+            view.RequestRebuild();
+    }
+
+    /// <summary>The unified rows: drawn only while they are the mode shown.</summary>
+    private static void OnUnifiedRowsChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        var view = (SideBySideDiffView)d;
+        if (view.IsUnified)
+            view.RequestRebuild();
+    }
 
     private static void OnCommentsChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var view = (SideBySideDiffView)d;
-        if (view._observed is not null)
-            view._observed.CollectionChanged -= view.OnCommentsCollectionChanged;
-        view._observed = e.NewValue as INotifyCollectionChanged;
-        if (view._observed is not null)
-            view._observed.CollectionChanged += view.OnCommentsCollectionChanged;
-        view.Rebuild();
+        // Set before the view is loaded (x:Bind's first update), it is observed from Loaded on.
+        view.Observe(view.IsLoaded ? e.NewValue as IEnumerable : null);
+        view.RequestRebuild();
     }
 
     private static void OnEditorChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var view = (SideBySideDiffView)d;
-        view.Rebuild();
-        if (e.NewValue is not null)
-            view.FocusEditor();
+        // A new field takes focus once it is drawn.
+        view._focusEditor = e.NewValue is not null;
+        view.RequestRebuild();
     }
 
-    private void OnCommentsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e) => Rebuild();
-
-    private void FocusEditor()
+    /// <summary>Listens to the comments collection's changes, or (with null) to none.</summary>
+    private void Observe(IEnumerable? comments)
     {
-        var box = _editorBox;
-        if (box is null)
+        var next = comments as INotifyCollectionChanged;
+        if (ReferenceEquals(next, _observed))
             return;
-        // The field is in the tree after this layout pass.
-        DispatcherQueue.TryEnqueue(() => box.Focus(FocusState.Programmatic));
+        if (_observed is not null)
+            _observed.CollectionChanged -= OnCommentsCollectionChanged;
+        _observed = next;
+        if (_observed is not null)
+            _observed.CollectionChanged += OnCommentsCollectionChanged;
+    }
+
+    private void OnCommentsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e) => RequestRebuild();
+
+    /// <summary>Draws the view again on the dispatcher's next turn, once however many changes ask for it before then.</summary>
+    private void RequestRebuild()
+    {
+        if (_rebuildPending)
+            return;
+        _rebuildPending = true;
+        if (DispatcherQueue?.TryEnqueue(Rebuild) != true)
+            Rebuild();
     }
 
     private void Rebuild()
+    {
+        _rebuildPending = false;
+        // The field being typed in survives the rebuild (a file reloaded under it, a resize, a theme switch): the same
+        // box goes into the new tree, and its focus and selection come back.
+        var box = _editorBox;
+        var hadFocus = box is not null && box.FocusState != FocusState.Unfocused;
+        var (start, length) = box is null ? (0, 0) : (box.SelectionStart, box.SelectionLength);
+        if (!ReferenceEquals(_editorBoxFor, Editor))
+        {
+            _editorBox = null;
+            _editorBoxFor = null;
+        }
+
+        Build();
+
+        var focus = _focusEditor || hadFocus;
+        _focusEditor = false;
+        if (focus && _editorBox is { } field)
+        {
+            // The field is in the tree after this layout pass.
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                field.Focus(FocusState.Programmatic);
+                if (hadFocus && ReferenceEquals(field, box))
+                    field.Select(Math.Min(start, field.Text.Length), Math.Min(length, Math.Max(0, field.Text.Length - start)));
+            });
+        }
+    }
+
+    private void Build()
     {
         _root.Children.Clear();
         _root.ColumnDefinitions.Clear();
         _root.RowDefinitions.Clear();
         _columns.Clear();
-        _editorBox = null;
         var comments = (Comments ?? Array.Empty<ReviewCommentView>()).OfType<ReviewCommentView>().ToList();
 
         if (IsUnified)
         {
             var column = new Column(this, "Changes");
-            foreach (var row in UnifiedRows ?? [])
+            var unified = UnifiedRows ?? [];
+            foreach (var row in unified.Take(DiffRowsView.MaxRows))
             {
                 if (row.Kind == DiffRowKind.Skip)
                 {
@@ -185,13 +259,16 @@ public sealed partial class SideBySideDiffView : UserControl
                     column.AddNotes(comments, DiffSide.New, current);
             }
 
+            if (unified.Count > DiffRowsView.MaxRows)
+                column.AddFold(MoreLines(unified.Skip(DiffRowsView.MaxRows).Count(row => row.Kind != DiffRowKind.Skip)));
             Place(column, 0);
             return;
         }
 
         var before = new Column(this, "Before");
         var after = new Column(this, "After");
-        foreach (var row in Rows ?? [])
+        var rows = Rows ?? [];
+        foreach (var row in rows.Take(DiffRowsView.MaxRows))
         {
             if (row.IsSkip)
             {
@@ -207,9 +284,19 @@ public sealed partial class SideBySideDiffView : UserControl
                 Mirror(before, left, after, right);
         }
 
+        if (rows.Count > DiffRowsView.MaxRows)
+        {
+            var rest = rows.Skip(DiffRowsView.MaxRows).ToList();
+            before.AddFold(MoreLines(rest.Count(row => row.Left is not null)));
+            after.AddFold(MoreLines(rest.Count(row => row.Right is not null)));
+        }
+
         Place(before, 0);
         Place(after, 1);
     }
+
+    private static string MoreLines(int count) =>
+        string.Create(CultureInfo.InvariantCulture, $"… {count} more line{(count == 1 ? "" : "s")}, not drawn here");
 
     private static List<FrameworkElement> Add(Column column, DiffCell? cell, DiffSide side, List<ReviewCommentView> comments)
     {
@@ -451,6 +538,26 @@ public sealed partial class SideBySideDiffView : UserControl
         {
             var body = new StackPanel { Spacing = 8 };
             body.Children.Add(new TextBlock { Text = editor.Title, FontSize = 11.5, Foreground = ThemeBrushes.Get(_owner, "CorvidText2") });
+            body.Children.Add(EditorBox(editor));
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            buttons.Children.Add(new CorvidButton { Content = "Add comment", Variant = ButtonVariant.Primary, Style = SmallButton(), Command = editor.Save });
+            buttons.Children.Add(new CorvidButton { Content = "Cancel", Variant = ButtonVariant.Ghost, Style = SmallButton(), Command = editor.Cancel });
+            body.Children.Add(buttons);
+            var card = Card();
+            card.Child = body;
+            return card;
+        }
+
+        /// <summary>The field of this comment: the one already made for it (taken out of the old tree), or a new one.</summary>
+        private TextBox EditorBox(CommentEditor editor)
+        {
+            if (ReferenceEquals(_owner._editorBoxFor, editor) && _owner._editorBox is { } existing)
+            {
+                if (existing.Parent is Panel parent)
+                    parent.Children.Remove(existing);
+                return existing;
+            }
+
             var box = new TextBox
             {
                 Text = editor.Text,
@@ -485,14 +592,8 @@ public sealed partial class SideBySideDiffView : UserControl
                     e.Cancel = true;
             };
             _owner._editorBox = box;
-            body.Children.Add(box);
-            var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-            buttons.Children.Add(new CorvidButton { Content = "Add comment", Variant = ButtonVariant.Primary, Style = SmallButton(), Command = editor.Save });
-            buttons.Children.Add(new CorvidButton { Content = "Cancel", Variant = ButtonVariant.Ghost, Style = SmallButton(), Command = editor.Cancel });
-            body.Children.Add(buttons);
-            var card = Card();
-            card.Child = body;
-            return card;
+            _owner._editorBoxFor = editor;
+            return box;
         }
 
         private static Style SmallButton() => (Style)Application.Current.Resources["CorvidSmallButton"];

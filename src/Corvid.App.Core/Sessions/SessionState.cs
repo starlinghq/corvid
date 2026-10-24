@@ -149,6 +149,16 @@ public sealed record LedgerRow(string Id, CheckpointKind Kind, DateTimeOffset At
     public string? AfterId { get; init; }
 
     public ImmutableArray<FileChange> Changes { get; init; } = [];
+
+    /// <summary>
+    /// The paths of <see cref="Changes"/> a later restore put back (<see cref="SessionRewound"/>): the row stays in the
+    /// ledger, as every entry does, but those changes are no longer in the files, so a plan does not put them back again
+    /// and the session's change lists leave them out.
+    /// </summary>
+    public ImmutableArray<string> UndonePaths { get; init; } = [];
+
+    /// <summary>The changes still in the files: <see cref="Changes"/> less those a restore put back.</summary>
+    public IEnumerable<FileChange> LiveChanges => UndonePaths.IsDefaultOrEmpty ? Changes : Changes.Where(change => !UndonePaths.Contains(change.Path));
 }
 
 /// <summary>

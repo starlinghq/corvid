@@ -159,7 +159,7 @@ public sealed class RewindViewModel : AreaViewModel
 
     /// <summary>"Last restore · 13:41 · undo of turn 8".</summary>
     public string LastRestoreTitle => LastRestore is { } last
-        ? string.Create(CultureInfo.InvariantCulture, $"Last restore · {Local(last.At):HH:mm} · {last.Label}")
+        ? string.Create(CultureInfo.InvariantCulture, $"Last restore · {Local(last.At):HH:mm} · {SafeText.Reveal(last.Label)}")
         : "";
 
     public string LastRestoreTag => LastRestore?.Refused == true ? "refused" : "done";
@@ -289,7 +289,7 @@ public sealed class RewindViewModel : AreaViewModel
     private async Task PlanAsync(LedgerEntryView? entry)
     {
         RestorePlan? plan = null;
-        _error = "";
+        var error = "";
         if (entry is not null && _sessionId is { } sessionId)
         {
             try
@@ -298,13 +298,15 @@ public sealed class RewindViewModel : AreaViewModel
             }
             catch (Exception exception) when (exception is KeyNotFoundException or InvalidOperationException)
             {
-                _error = exception.Message;
+                error = exception.Message;
             }
 
+            // Another entry was selected meanwhile: its own plan (or error) is the one to show.
             if (!ReferenceEquals(entry, _selected))
                 return;
         }
 
+        _error = error;
         SetPlan(plan);
     }
 
@@ -321,7 +323,8 @@ public sealed class RewindViewModel : AreaViewModel
             PlanFiles.Add(new PutBackFileView(file, plan!.CheckpointId));
             if (file.Edit is { } edit)
             {
-                var name = Path.GetFileName(file.Path);
+                // The file a restore will merge with or stop on: any hidden character in its name is shown.
+                var name = SafeText.Reveal(Path.GetFileName(file.Path));
                 PlanNotes.Add(file.Kind == PutBackKind.Conflict
                     ? new RestoreNoteView(name, string.Create(CultureInfo.InvariantCulture,
                         $"was edited by you at {Local(edit.At):HH:mm}, after {edit.AfterCheckpoint}, and going back to {plan.CheckpointId} would delete it. A restore of the files stops here and changes nothing."), Tone.Red)

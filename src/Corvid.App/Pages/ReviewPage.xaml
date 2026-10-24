@@ -164,8 +164,8 @@
                 <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.FilesSummary, Mode=OneWay}" Style="{StaticResource PanelHeadDetail}" />
               </Grid>
             </Border>
-            <ItemsControl ItemsSource="{x:Bind ViewModel.Files}" ItemTemplate="{StaticResource FileRow}" Padding="6" IsTabStop="False"
-                          AutomationProperties.Name="Changed files" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasFiles), Mode=OneWay}" />
+            <ItemsControl x:Name="FileList" ItemsSource="{x:Bind ViewModel.Files}" ItemTemplate="{StaticResource FileRow}" Padding="6" IsTabStop="False"
+                          KeyDown="OnFileListKeyDown" AutomationProperties.Name="Changed files" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasFiles), Mode=OneWay}" />
             <TextBlock Text="{x:Bind ViewModel.EmptyText, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" Margin="14,12"
                        Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.HasFiles), Mode=OneWay}" />
             <Border Padding="14,12" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,1,0,0">
