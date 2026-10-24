@@ -97,6 +97,7 @@ public sealed class SessionUpdateReporter : ITurnObserver
         {
             Title = ToolPresentation.Title(tool, call?.Arguments),
             Tool = tool,
+            Kind = _tools.Kind(tool),
             Status = outcome == "succeeded" ? ToolCallState.Completed : ToolCallState.Failed,
             Outcome = outcome,
             Input = call?.Arguments,

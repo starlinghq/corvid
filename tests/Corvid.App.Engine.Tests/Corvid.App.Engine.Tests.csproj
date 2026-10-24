@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <Using Include="Xunit" />
+    <ProjectReference Include="../../src/Corvid.App.Engine/Corvid.App.Engine.csproj" />
+    <!-- The host tests' fake slots and test host, so the engine is driven on the fakes every host suite uses. -->
+    <Compile Include="../Corvid.Host.Tests/Fakes.cs" Link="Fakes.cs" />
+  </ItemGroup>
+</Project>

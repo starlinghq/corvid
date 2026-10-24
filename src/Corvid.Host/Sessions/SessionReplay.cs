@@ -80,6 +80,7 @@ public static class SessionReplay
                     {
                         At = at,
                         Tool = calls.GetValueOrDefault(result.CallId)?.ToolName,
+                        Kind = calls.GetValueOrDefault(result.CallId) is { } issued ? tools.Kind(issued.ToolName) : null,
                         Status = result.IsError ? ToolCallState.Failed : ToolCallState.Completed,
                         Output = result.Result,
                         OutputText = ToolPresentation.ResultText(result.Result),

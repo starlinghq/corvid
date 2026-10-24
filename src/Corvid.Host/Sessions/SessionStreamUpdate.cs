@@ -59,6 +59,9 @@ public sealed record ToolCallChanged(string CallId) : SessionStreamUpdate
 
     public string? Tool { get; init; }
 
+    /// <summary>One of <see cref="ToolCallKinds"/>, when <see cref="Tool"/> is known.</summary>
+    public string? Kind { get; init; }
+
     public ToolCallState? Status { get; init; }
 
     /// <summary>
