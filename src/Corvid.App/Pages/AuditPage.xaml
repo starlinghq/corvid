@@ -66,7 +66,7 @@
     <!-- .table td: 7px 10px, 12.5 px, top-aligned. -->
     <Style x:Key="Cell" TargetType="TextBlock">
       <Setter Property="FontSize" Value="12.5" />
-      <Setter Property="LineHeight" Value="18.1" />
+      <Setter Property="LineHeight" Value="18" />
       <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
       <Setter Property="Margin" Value="10,7" />
       <Setter Property="VerticalAlignment" Value="Top" />
@@ -88,7 +88,7 @@
       <Setter Property="IsTextSelectionEnabled" Value="True" />
     </Style>
 
-    <!-- .linkbtn in a panel head: no fill, underlined, text-2, 12.5 px at the head's weight. -->
+    <!-- .linkbtn in a panel head: no fill, a dotted underline; .app button's font and colour win, so the head's 13.5 px semibold text. -->
     <Style x:Key="HeadLinkButton" TargetType="Button">
       <Setter Property="Background" Value="Transparent" />
       <Setter Property="BorderThickness" Value="0" />
@@ -100,14 +100,16 @@
         <Setter.Value>
           <ControlTemplate TargetType="Button">
             <Grid Background="Transparent">
-              <TextBlock x:Name="LabelText" Text="{TemplateBinding Content}" FontSize="12.5" FontWeight="SemiBold"
-                         Foreground="{ThemeResource CorvidText2}" TextDecorations="Underline" TextWrapping="NoWrap" />
+              <TextBlock x:Name="LabelText" Text="{TemplateBinding Content}" FontSize="13.5" FontWeight="SemiBold"
+                         Foreground="{ThemeResource CorvidText}" TextWrapping="NoWrap" />
+              <!-- text-decoration: underline dotted, drawn as a faint 1 px rule the text's width. -->
+              <Border Height="1" Margin="0,0,0,1" VerticalAlignment="Bottom" Background="{ThemeResource CorvidText}" Opacity="0.55" />
               <VisualStateManager.VisualStateGroups>
                 <VisualStateGroup x:Name="CommonStates">
                   <VisualState x:Name="Normal" />
                   <VisualState x:Name="PointerOver">
                     <VisualState.Setters>
-                      <Setter Target="LabelText.Foreground" Value="{ThemeResource CorvidText}" />
+                      <Setter Target="LabelText.Foreground" Value="{ThemeResource CorvidAccent}" />
                     </VisualState.Setters>
                   </VisualState>
                   <VisualState x:Name="Pressed" />
@@ -225,7 +227,7 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
               </Grid.ColumnDefinitions>
-              <Grid Width="13" Height="13" VerticalAlignment="Top" Margin="0,3,0,0">
+              <Grid Width="13" Height="13" VerticalAlignment="Top" Margin="4,3,3,0">
                 <Border x:Name="Box" CornerRadius="2.5" BorderThickness="1" BorderBrush="{ThemeResource CorvidText2}" Background="{ThemeResource CorvidBg}" />
                 <Border x:Name="Fill" CornerRadius="2.5" Background="{ThemeResource CorvidAccent}" Visibility="Collapsed" />
                 <Path x:Name="Mark" Data="M2.8,6.6 L5.4,9.2 L10.2,3.9" Stroke="{ThemeResource CorvidOnAccent}" StrokeThickness="1.7"
@@ -302,7 +304,7 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
               </Grid.ColumnDefinitions>
-              <Grid Width="13" Height="13" VerticalAlignment="Top" Margin="0,3,0,0">
+              <Grid Width="13" Height="13" VerticalAlignment="Top" Margin="5,3,3,0">
                 <Ellipse x:Name="Ring" Stroke="{ThemeResource CorvidText2}" StrokeThickness="1" Fill="{ThemeResource CorvidBg}" />
                 <Ellipse x:Name="Dot" Width="7" Height="7" Fill="{ThemeResource CorvidAccent}" Visibility="Collapsed" />
               </Grid>
@@ -344,7 +346,7 @@
 
     <!-- A .kv row: the label, then the value's spans. -->
     <DataTemplate x:Key="FieldTemplate" x:DataType="audit:AuditField">
-      <controls:WrapRowPanel Spacing="8">
+      <controls:WrapRowPanel Spacing="8" LineSpacing="8">
         <TextBlock Text="{x:Bind Label}" Style="{StaticResource KeyLabel}" />
         <TextBlock Style="{StaticResource KvText}" local:AuditRuns.Spans="{x:Bind Value}" />
       </controls:WrapRowPanel>
@@ -359,7 +361,7 @@
 
     <!-- .page-head: the title, the session picker and the log's size; Scan and Export at the right, wrapping below when narrow. -->
     <Border x:Name="Head" Style="{StaticResource CorvidPageHead}">
-      <Grid x:Name="HeadGrid" ColumnSpacing="12" RowSpacing="12" SizeChanged="OnHeadSizeChanged">
+      <Grid x:Name="HeadGrid" ColumnSpacing="12" SizeChanged="OnHeadSizeChanged">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="*" />
           <ColumnDefinition Width="Auto" />
@@ -467,8 +469,9 @@
                         Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasMatch), Mode=OneWay}" AutomationProperties.Name="Show every event again" />
               </Grid>
             </Border>
-            <ScrollViewer HorizontalScrollBarVisibility="Auto" HorizontalScrollMode="Auto" VerticalScrollBarVisibility="Disabled" VerticalScrollMode="Disabled">
-              <StackPanel x:Name="Table" MinWidth="460">
+            <ScrollViewer x:Name="TableScroll" HorizontalScrollBarVisibility="Auto" HorizontalScrollMode="Auto" VerticalScrollBarVisibility="Disabled"
+                          VerticalScrollMode="Disabled" SizeChanged="OnTableScrollSizeChanged">
+              <StackPanel x:Name="Table" HorizontalAlignment="Left">
                 <!-- thead -->
                 <Grid BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,0,0,1">
                   <Grid.ColumnDefinitions>
@@ -535,20 +538,20 @@
                 </Grid>
               </Border>
               <StackPanel Padding="14,12" Spacing="8">
-                <controls:WrapRowPanel Spacing="8">
+                <controls:WrapRowPanel Spacing="8" LineSpacing="8">
                   <TextBlock Text="when" Style="{StaticResource KeyLabel}" />
                   <TextBlock Text="{x:Bind ViewModel.Egress.When, Mode=OneWay, FallbackValue=''}" Style="{StaticResource KvText}" />
                 </controls:WrapRowPanel>
-                <controls:WrapRowPanel Spacing="8">
+                <controls:WrapRowPanel Spacing="8" LineSpacing="8">
                   <TextBlock Text="model" Style="{StaticResource KeyLabel}" />
                   <TextBlock Text="{x:Bind ViewModel.Egress.Model, Mode=OneWay, FallbackValue=''}" Style="{StaticResource KvMono}" />
                   <TextBlock Style="{StaticResource KvText}" local:AuditRuns.Ink="CorvidText2" local:AuditRuns.Spans="{x:Bind ViewModel.Egress.Route, Mode=OneWay, FallbackValue={x:Null}}" />
                 </controls:WrapRowPanel>
-                <controls:WrapRowPanel Spacing="8">
+                <controls:WrapRowPanel Spacing="8" LineSpacing="8">
                   <TextBlock Text="sent" Style="{StaticResource KeyLabel}" />
                   <TextBlock Text="{x:Bind ViewModel.Egress.Sent, Mode=OneWay, FallbackValue=''}" Style="{StaticResource KvText}" />
                 </controls:WrapRowPanel>
-                <controls:WrapRowPanel Spacing="8" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.Egress.HasRedactions), Mode=OneWay, FallbackValue=Collapsed}">
+                <controls:WrapRowPanel Spacing="8" LineSpacing="8" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.Egress.HasRedactions), Mode=OneWay, FallbackValue=Collapsed}">
                   <TextBlock Text="redacted" Style="{StaticResource KeyLabel}" />
                   <controls:TagChip Text="{x:Bind ViewModel.Egress.RedactedTag, Mode=OneWay, FallbackValue=''}" Tone="Amber" />
                   <TextBlock Style="{StaticResource KvText}" local:AuditRuns.Spans="{x:Bind ViewModel.Egress.RedactedSummary, Mode=OneWay, FallbackValue={x:Null}}" />
@@ -667,12 +670,12 @@
                            Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasDetection), Mode=OneWay}" />
                 <TextBlock Text="No detection rule matched in this log." Style="{StaticResource CorvidMutedText}"
                            Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.HasDetection), Mode=OneWay}" />
-                <controls:WrapRowPanel Spacing="8" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasDetection), Mode=OneWay}">
+                <controls:WrapRowPanel Spacing="8" LineSpacing="8" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasDetection), Mode=OneWay}">
                   <TextBlock Text="rule" Style="{StaticResource KeyLabel}" />
                   <TextBlock Text="{x:Bind ViewModel.Detection.Rule, Mode=OneWay, FallbackValue=''}" Style="{StaticResource KvMono}" />
                   <TextBlock Text="{x:Bind ViewModel.Detection.RuleDetail, Mode=OneWay, FallbackValue=''}" Style="{StaticResource KvText}" Foreground="{ThemeResource CorvidText2}" />
                 </controls:WrapRowPanel>
-                <controls:WrapRowPanel Spacing="8" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasDetection), Mode=OneWay}">
+                <controls:WrapRowPanel Spacing="8" LineSpacing="8" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasDetection), Mode=OneWay}">
                   <TextBlock Text="events" Style="{StaticResource KeyLabel}" />
                   <ItemsControl ItemsSource="{x:Bind ViewModel.Detection.Events, Mode=OneWay, FallbackValue={x:Null}}" IsTabStop="False"
                                 AutomationProperties.Name="The matched events">
@@ -690,7 +693,7 @@
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
                 </controls:WrapRowPanel>
-                <controls:WrapRowPanel Spacing="8" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasLastScan), Mode=OneWay}">
+                <controls:WrapRowPanel Spacing="8" LineSpacing="8" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasLastScan), Mode=OneWay}">
                   <TextBlock Text="last scan" Style="{StaticResource KeyLabel}" />
                   <TextBlock Text="{x:Bind ViewModel.LastScan, Mode=OneWay}" Style="{StaticResource KvText}" />
                 </controls:WrapRowPanel>
@@ -721,7 +724,7 @@
                 <controls:CorvidButton Content="Write trace.jsonl (owner-only file)" Style="{StaticResource CorvidSmallButton}" HorizontalAlignment="Left"
                                        Command="{x:Bind ViewModel.ExportCommand}" />
                 <!-- .toast: green, 8px 12px, radius 8, 12.5 px. -->
-                <Border Background="{ThemeResource CorvidGreenBg}" CornerRadius="8" Padding="12,8"
+                <Border x:Name="ExportToast" Background="{ThemeResource CorvidGreenBg}" CornerRadius="8" Padding="12,8"
                         Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasExportResult), Mode=OneWay}">
                   <TextBlock Text="{x:Bind ViewModel.ExportResult, Mode=OneWay}" FontSize="12.5" Foreground="{ThemeResource CorvidGreen}" TextWrapping="Wrap" />
                 </Border>

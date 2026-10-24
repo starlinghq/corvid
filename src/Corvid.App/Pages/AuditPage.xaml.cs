@@ -78,6 +78,10 @@ public sealed partial class AuditPage : Page
             case nameof(AuditViewModel.SessionIndex) or nameof(AuditViewModel.SessionId):
                 UpdateSessionLabel();
                 break;
+            case nameof(AuditViewModel.ExportResult) when ViewModel.HasExportResult:
+                // The result appears below the button, maybe under the window's edge: show it.
+                _ = DispatcherQueue.TryEnqueue(() => ExportToast.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false }));
+                break;
             case nameof(AuditViewModel.SelectedRow):
                 ResetCopyButtons();
                 _ = DispatcherQueue.TryEnqueue(BringSelectionIntoView);
@@ -199,12 +203,28 @@ public sealed partial class AuditPage : Page
         }
     }
 
-    /// <summary>A link that landed here (a detection's events, the latest egress) shows its row, however far down.</summary>
+    /// <summary>
+    /// A link that landed here (a detection's events, the latest egress) shows its row when it is out of sight; a row in
+    /// view stays where it is, so the page opens at its top as Audit.png does.
+    /// </summary>
     private void BringSelectionIntoView()
     {
-        if (ViewModel?.SelectedRow is { } row && RowButton(row) is { } button)
-            button.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false, VerticalAlignmentRatio = 0.3 });
+        if (ViewModel?.SelectedRow is not { } row || RowButton(row) is not { } button || button.ActualHeight <= 0)
+            return;
+        var top = button.TransformToVisual(BodyScroll).TransformPoint(default).Y;
+        if (top >= 0 && top + button.ActualHeight <= BodyScroll.ViewportHeight)
+            return;
+        button.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false, VerticalAlignmentRatio = 0.3 });
     }
+
+    /// <summary>
+    /// The table fills the panel and wraps its summaries; below 460 px it keeps that width and scrolls sideways, as
+    /// Audit-narrow.png's table runs past its panel.
+    /// </summary>
+    private void OnTableScrollSizeChanged(object sender, SizeChangedEventArgs e) =>
+        Table.Width = Math.Max(TableMinWidth, e.NewSize.Width);
+
+    private const double TableMinWidth = 460;
 
     private static Button? FindButton(DependencyObject root)
     {
@@ -264,6 +284,8 @@ public sealed partial class AuditPage : Page
             return;
         Grid.SetRow(HeadActions, row);
         Grid.SetColumn(HeadActions, column);
+        // An empty second row would still add its gap.
+        HeadGrid.RowSpacing = fits ? 0 : 12;
         HeadActions.HorizontalAlignment = HorizontalAlignment.Left;
     }
 }
