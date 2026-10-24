@@ -1,23 +1,420 @@
 <Page x:Class="Corvid.App.Pages.FirstRunPage"
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:controls="using:Corvid.App.Controls"
+      xmlns:firstrun="using:Corvid.App.Core.FirstRun"
+      xmlns:models="using:Corvid.App.Core.Models"
+      xmlns:mvvm="using:Corvid.App.Core.Mvvm"
+      xmlns:local="using:Corvid.App.Pages"
+      xmlns:ui="using:Corvid.App.Infrastructure"
       Background="{ThemeResource CorvidBg}"
       Foreground="{ThemeResource CorvidText}"
       FontSize="13.5">
-  <!-- .page: the page head with the area's title, then the body. A placeholder until the area is built. -->
+  <!--
+    The first run (FirstRun.png, FirstRun-narrow.png; docs/plan/ui.md F1): during the setup, its own left column of six
+    steps in place of the rail (260 px, hidden under 860 px as the narrow mockup has none); then the page head with the
+    step's title and two buttons, and two columns (1.3fr and 1fr, 18 apart, panels 14 apart): the doctor's checks on the
+    left, one panel per section; the models to download, the workspace, the approval mode, cloud privacy and the Hermes
+    import on the right. Opened from the rail's Doctor, the same page without the steps.
+  -->
+  <Page.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="ms-appx:///Pages/ModelsStyles.xaml" />
+      </ResourceDictionary.MergedDictionaries>
+
+      <!-- A step in the left column: the number as a tag (green when current) and the name; the current one on accent-bg. -->
+      <Style x:Key="StepRow" TargetType="Button">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="Padding" Value="8,0" />
+        <Setter Property="Height" Value="31" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="UseSystemFocusVisuals" Value="True" />
+        <Setter Property="FocusVisualPrimaryBrush" Value="{ThemeResource CorvidAccent}" />
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="Button">
+              <Grid x:Name="Root" CornerRadius="6" Background="Transparent">
+                <Border x:Name="Hover" CornerRadius="6" Background="{ThemeResource CorvidBg3}" Opacity="0" />
+                <ContentPresenter Content="{TemplateBinding Content}" Padding="{TemplateBinding Padding}" HorizontalContentAlignment="Stretch"
+                                  VerticalContentAlignment="Center" />
+                <VisualStateManager.VisualStateGroups>
+                  <VisualStateGroup x:Name="CommonStates">
+                    <VisualState x:Name="Normal" />
+                    <VisualState x:Name="PointerOver">
+                      <VisualState.Setters>
+                        <Setter Target="Hover.Opacity" Value="1" />
+                      </VisualState.Setters>
+                    </VisualState>
+                    <VisualState x:Name="Pressed">
+                      <VisualState.Setters>
+                        <Setter Target="Hover.Opacity" Value="1" />
+                      </VisualState.Setters>
+                    </VisualState>
+                    <VisualState x:Name="Disabled" />
+                  </VisualStateGroup>
+                </VisualStateManager.VisualStateGroups>
+              </Grid>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
+      </Style>
+
+      <!-- A model to download: the check box, its line and tag, and while it downloads, its gauge and progress. -->
+      <DataTemplate x:Key="DownloadChoiceTemplate" x:DataType="models:DownloadChoiceViewModel">
+        <StackPanel>
+          <CheckBox Style="{StaticResource SetupCheckBox}" Margin="0,6" IsChecked="{x:Bind IsSelected, Mode=TwoWay}"
+                    IsEnabled="{x:Bind IsEnabled, Mode=OneWay}" AutomationProperties.Name="{x:Bind AutomationName, Mode=OneWay}">
+            <controls:WrapRowPanel Spacing="4" LineSpacing="2">
+              <TextBlock local:SpanText.Runs="{x:Bind Text, Mode=OneWay}" Style="{StaticResource PanelText}" />
+              <controls:TagChip Text="{x:Bind StateTag, Mode=OneWay}" Tone="Green" Visibility="{x:Bind ui:Ui.VisibleIf(HasStateTag), Mode=OneWay}" />
+            </controls:WrapRowPanel>
+          </CheckBox>
+          <StackPanel Margin="21,0,0,4" Spacing="4" Visibility="{x:Bind ui:Ui.VisibleIf(IsDownloading), Mode=OneWay}">
+            <controls:Meter Width="160" HorizontalAlignment="Left" Fraction="{x:Bind Fraction, Mode=OneWay}"
+                            AutomationProperties.Name="Download progress" />
+            <TextBlock Text="{x:Bind Progress, Mode=OneWay}" Style="{StaticResource CellSmall}" />
+          </StackPanel>
+        </StackPanel>
+      </DataTemplate>
+    </ResourceDictionary>
+  </Page.Resources>
+
   <Grid>
-    <Grid.RowDefinitions>
-      <RowDefinition Height="Auto" />
-      <RowDefinition Height="*" />
-    </Grid.RowDefinitions>
-    <Border Style="{StaticResource CorvidPageHead}">
-      <TextBlock Text="{x:Bind ViewModel.Title}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
-                 AutomationProperties.HeadingLevel="Level1" />
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="Auto" />
+      <ColumnDefinition Width="*" />
+    </Grid.ColumnDefinitions>
+
+    <!-- The setup's left column (FirstRun.dc.html's .rail): brand, the six steps, about this setup, Skip setup. -->
+    <Border x:Name="StepsRail" Width="260" Background="{ThemeResource CorvidBg2}" BorderBrush="{ThemeResource CorvidLine}"
+            BorderThickness="0,0,1,0" AutomationProperties.Name="Setup steps">
+      <Grid Padding="10,12,10,12">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="*" />
+          <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <Grid Padding="6,4,6,12" ColumnSpacing="10">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="*" />
+          </Grid.ColumnDefinitions>
+          <Border Width="28" Height="28" CornerRadius="8" Background="{ThemeResource CorvidText}" VerticalAlignment="Center">
+            <controls:Icon Kind="Logo" Foreground="{ThemeResource CorvidBg}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <StackPanel Grid.Column="1" VerticalAlignment="Center">
+            <TextBlock Text="Corvid" FontSize="14" FontWeight="SemiBold" Foreground="{ThemeResource CorvidText}" />
+            <TextBlock Text="first run · 0.2.0" FontSize="12" Padding="0,1.44" Foreground="{ThemeResource CorvidText2}" TextWrapping="NoWrap" />
+          </StackPanel>
+        </Grid>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled" HorizontalScrollBarVisibility="Disabled">
+          <StackPanel>
+            <ItemsControl ItemsSource="{x:Bind ViewModel.Steps}" IsTabStop="False" AutomationProperties.Name="Steps">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                  <controls:PitchedStackPanel Pitch="31.575" />
+                </ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="firstrun:FirstRunStepViewModel">
+                  <Grid>
+                    <Border CornerRadius="6" Background="{ThemeResource CorvidAccentBg}" Visibility="{x:Bind ui:Ui.VisibleIf(IsCurrent), Mode=OneWay}" />
+                    <Button Style="{StaticResource StepRow}" Command="{x:Bind Open}" AutomationProperties.Name="{x:Bind AutomationName, Mode=OneWay}">
+                      <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Grid MinWidth="21">
+                          <controls:TagChip Text="{x:Bind Number}" Tone="Green" Visibility="{x:Bind ui:Ui.VisibleIf(IsCurrent), Mode=OneWay}" />
+                          <controls:TagChip Text="{x:Bind Number}" Tone="Grey" Visibility="{x:Bind ui:Ui.CollapsedIf(IsCurrent), Mode=OneWay}" />
+                        </Grid>
+                        <TextBlock Text="{x:Bind Name}" FontSize="13.5" FontWeight="Medium" Foreground="{ThemeResource CorvidAccent}"
+                                   VerticalAlignment="Center" Visibility="{x:Bind ui:Ui.VisibleIf(IsCurrent), Mode=OneWay}" />
+                        <TextBlock Text="{x:Bind Name}" FontSize="13.5" Foreground="{ThemeResource CorvidText}" VerticalAlignment="Center"
+                                   Visibility="{x:Bind ui:Ui.CollapsedIf(IsCurrent), Mode=OneWay}" />
+                      </StackPanel>
+                    </Button>
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <TextBlock Text="ABOUT THIS SETUP" Style="{StaticResource CorvidSectionTitle}" Padding="8,15.32,8,5.32"
+                       AutomationProperties.Name="About this setup" AutomationProperties.HeadingLevel="Level2" />
+            <StackPanel Padding="8,0" Spacing="8">
+              <TextBlock Text="Every step can be skipped. The app runs with what it has and says what is missing." Style="{StaticResource CorvidSmallText}" />
+              <TextBlock Text="No account, no telemetry, no background process until you turn one on." Style="{StaticResource CorvidSmallText}" />
+            </StackPanel>
+          </StackPanel>
+        </ScrollViewer>
+
+        <Border Grid.Row="2" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,1,0,0" Padding="8,12,8,0">
+          <controls:LinkButton Text="Skip setup" Command="{x:Bind ViewModel.SkipSetupCommand}" HorizontalAlignment="Left"
+                               ToolTipService.ToolTip="Keep what is chosen so far and start; every step can be done later" />
+        </Border>
+      </Grid>
     </Border>
-    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-      <StackPanel Padding="24,18,24,18" Spacing="18" MaxWidth="960" HorizontalAlignment="Left">
-        <TextBlock Text="{x:Bind ViewModel.Summary}" Style="{StaticResource CorvidMutedText}" />
-      </StackPanel>
-    </ScrollViewer>
+
+    <Grid Grid.Column="1">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="*" />
+      </Grid.RowDefinitions>
+
+      <Border x:Name="HeadHost" Style="{StaticResource CorvidPageHead}">
+        <Grid x:Name="Head" ColumnSpacing="12">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+          </Grid.ColumnDefinitions>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+          </Grid.RowDefinitions>
+          <controls:WrapRowPanel x:Name="HeadTitle" Spacing="12" LineSpacing="12" VerticalAlignment="Center">
+            <TextBlock Text="{x:Bind ViewModel.Heading, Mode=OneWay}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
+                       AutomationProperties.HeadingLevel="Level1" />
+            <TextBlock local:SpanText.Runs="{x:Bind ViewModel.Subtitle, Mode=OneWay}" Style="{StaticResource CorvidMutedText}" VerticalAlignment="Center" />
+          </controls:WrapRowPanel>
+          <StackPanel x:Name="HeadButtons" Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+            <controls:CorvidButton Content="Run again" Command="{x:Bind ViewModel.RunAgainCommand}"
+                                   ToolTipService.ToolTip="Run every check again, after a fix" />
+            <controls:CorvidButton Content="{x:Bind ViewModel.NextLabel, Mode=OneWay}" Variant="Primary" Command="{x:Bind ViewModel.NextCommand}" />
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <ScrollViewer x:Name="BodyScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel x:Name="Body" Padding="24,18,24,18" Spacing="14">
+          <controls:ToneRow Tone="Green" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasNotice), Mode=OneWay}" AutomationProperties.LiveSetting="Polite">
+            <Grid ColumnSpacing="8">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+              </Grid.ColumnDefinitions>
+              <TextBlock local:SpanText.Runs="{x:Bind ViewModel.Notice, Mode=OneWay}" TextWrapping="Wrap" VerticalAlignment="Center" />
+              <controls:CorvidButton Grid.Column="1" Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Dismiss"
+                                     Foreground="{ThemeResource CorvidText2}" Command="{x:Bind ViewModel.DismissNoticeCommand}" />
+            </Grid>
+          </controls:ToneRow>
+
+          <Grid x:Name="Columns" ColumnSpacing="18" RowSpacing="14">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition x:Name="LeftColumn" Width="1.3*" />
+              <ColumnDefinition x:Name="RightColumn" Width="1*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- The doctor's checks, one panel per section. -->
+            <ItemsControl x:Name="CheckPanels" ItemsSource="{x:Bind ViewModel.Sections}" IsTabStop="False">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                  <StackPanel Spacing="14" />
+                </ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="firstrun:CheckSectionViewModel">
+                  <Border Style="{StaticResource CorvidPanel}">
+                    <StackPanel>
+                      <Border Style="{StaticResource PanelHead}">
+                        <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                          <TextBlock Text="{x:Bind Title}" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                          <TextBlock Text="{x:Bind Summary}" Style="{StaticResource PanelNote}" />
+                        </controls:WrapRowPanel>
+                      </Border>
+                      <ItemsControl ItemsSource="{x:Bind Rows}" IsTabStop="False" AutomationProperties.Name="{x:Bind Title}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="firstrun:CheckRowViewModel">
+                            <Border BorderBrush="{ThemeResource CorvidLine}" BorderThickness="{x:Bind local:FirstRunPage.Divider(IsLast)}"
+                                    AutomationProperties.Name="{x:Bind AutomationName}">
+                              <Grid>
+                                <Grid.ColumnDefinitions>
+                                  <ColumnDefinition Width="110" />
+                                  <ColumnDefinition Width="116" />
+                                  <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <controls:TagChip Margin="10,7" VerticalAlignment="Top" HorizontalAlignment="Left" Text="{x:Bind StatusText}"
+                                                  Tone="{x:Bind StatusTone}" />
+                                <TextBlock Grid.Column="1" Margin="10,5.5,10,8.5" Text="{x:Bind Name}" Style="{StaticResource Cell}" />
+                                <StackPanel Grid.Column="2" Margin="10,5.5,10,8.5">
+                                  <TextBlock local:SpanText.Runs="{x:Bind Detail}" Style="{StaticResource CellMuted}" />
+                                  <TextBlock Margin="0,4,0,0" local:SpanText.Runs="{x:Bind Fix}" Style="{StaticResource Cell}" FontSize="12"
+                                             LineHeight="17.4" Visibility="{x:Bind ui:Ui.VisibleIf(HasFix)}" />
+                                  <controls:CorvidButton Margin="0,6,0,0" HorizontalAlignment="Left" Style="{StaticResource CorvidSmallButton}"
+                                                         Content="Copy the command" Command="{x:Bind CopyCommand}"
+                                                         Visibility="{x:Bind ui:Ui.VisibleIf(HasFixCommand)}"
+                                                         ToolTipService.ToolTip="{x:Bind FixCommand}" />
+                                </StackPanel>
+                              </Grid>
+                            </Border>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <StackPanel x:Name="RightStack" Grid.Column="1" Spacing="14">
+              <!-- Models: the default set preselected, sizes totalled, nothing downloads until asked. -->
+              <Border x:Name="ModelsPanel" Style="{StaticResource CorvidPanel}">
+                <StackPanel>
+                  <Border Style="{StaticResource PanelHead}">
+                    <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                      <TextBlock Text="Models" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                      <TextBlock Text="nothing downloads until you say so" Style="{StaticResource PanelNote}" />
+                    </controls:WrapRowPanel>
+                  </Border>
+                  <StackPanel Padding="14,12" Spacing="8">
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.Downloads.Items}" IsTabStop="False" ItemTemplate="{StaticResource DownloadChoiceTemplate}"
+                                  AutomationProperties.Name="Models to download">
+                      <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                          <StackPanel Spacing="8" />
+                        </ItemsPanelTemplate>
+                      </ItemsControl.ItemsPanel>
+                    </ItemsControl>
+                    <controls:WrapRowPanel Margin="0,4,0,0" Spacing="8" LineSpacing="8">
+                      <TextBlock Text="selected" Style="{StaticResource KvKey}" />
+                      <TextBlock local:SpanText.Runs="{x:Bind ViewModel.Downloads.SelectedRuns, Mode=OneWay}" Style="{StaticResource Cell}" />
+                    </controls:WrapRowPanel>
+                    <controls:ToneRow Tone="Amber" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasDeciderWarning), Mode=OneWay}">
+                      <controls:WrapRowPanel Spacing="8" LineSpacing="0">
+                        <controls:Icon Kind="Warning" Foreground="{ThemeResource CorvidAmber}" />
+                        <TextBlock local:SpanText.Runs="{x:Bind ViewModel.DeciderWarning, Mode=OneWay}" TextWrapping="Wrap" FontSize="12.5"
+                                   LineHeight="18.125" LineStackingStrategy="BlockLineHeight" />
+                      </controls:WrapRowPanel>
+                    </controls:ToneRow>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Primary" Content="Download selected"
+                                             Command="{x:Bind ViewModel.Downloads.DownloadCommand}" />
+                      <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Skip for now"
+                                             Command="{x:Bind ViewModel.SkipModelsCommand}" />
+                    </StackPanel>
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+
+              <!-- Workspace. -->
+              <Border x:Name="WorkspacePanel" Style="{StaticResource CorvidPanel}">
+                <StackPanel>
+                  <Border Style="{StaticResource PanelHead}">
+                    <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                      <TextBlock Text="Workspace" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                      <TextBlock Text="where tools may read and write" Style="{StaticResource PanelNote}" />
+                    </controls:WrapRowPanel>
+                  </Border>
+                  <StackPanel Padding="14,12" Spacing="8">
+                    <Grid ColumnSpacing="8">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                      </Grid.ColumnDefinitions>
+                      <TextBox Style="{StaticResource FieldBox}" Text="{x:Bind ViewModel.Workspace, Mode=TwoWay}" VerticalAlignment="Center"
+                               AutomationProperties.Name="Workspace folder" />
+                      <controls:CorvidButton Grid.Column="1" Style="{StaticResource CorvidSmallButton}" Content="Choose…"
+                                             Command="{x:Bind ViewModel.ChooseWorkspaceCommand}" />
+                    </Grid>
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.WorkspaceChoices}" IsTabStop="False"
+                                  Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsChoosingWorkspace), Mode=OneWay}"
+                                  AutomationProperties.Name="Folders">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="mvvm:Choice">
+                          <Button Style="{StaticResource PickerRow}" Command="{x:Bind Choose}" AutomationProperties.Name="{x:Bind Label}">
+                            <Grid ColumnSpacing="8">
+                              <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                              </Grid.ColumnDefinitions>
+                              <TextBlock Text="{x:Bind Label}" Style="{StaticResource CellMono}" />
+                              <controls:Icon Grid.Column="1" Kind="Check" Foreground="{ThemeResource CorvidAccent}"
+                                             Visibility="{x:Bind ui:Ui.VisibleIf(IsSelected), Mode=OneWay}" />
+                            </Grid>
+                          </Button>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock local:SpanText.Runs="{x:Bind ViewModel.WorkspaceNote, Mode=OneWay}" Style="{StaticResource PanelSmall}" />
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+
+              <!-- Approval mode. -->
+              <Border x:Name="ApprovalsPanel" Style="{StaticResource CorvidPanel}">
+                <StackPanel>
+                  <Border Style="{StaticResource PanelHead}">
+                    <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                      <TextBlock Text="Approval mode" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                      <TextBlock Text="the hardline list applies in every mode" Style="{StaticResource PanelNote}" />
+                    </controls:WrapRowPanel>
+                  </Border>
+                  <ItemsControl Padding="14,12" ItemsSource="{x:Bind ViewModel.Modes}" IsTabStop="False" AutomationProperties.Name="Approval mode">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate>
+                        <StackPanel Spacing="4" />
+                      </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="firstrun:ModeOptionViewModel">
+                        <RadioButton Style="{StaticResource SetupRadio}" Margin="0,6" GroupName="ApprovalMode" IsChecked="{x:Bind IsSelected, Mode=OneWay}"
+                                     Command="{x:Bind Choose}" AutomationProperties.Name="{x:Bind AutomationName}">
+                          <TextBlock local:SpanText.Runs="{x:Bind Text}" Style="{StaticResource PanelText}" />
+                        </RadioButton>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </Border>
+
+              <!-- Cloud privacy. -->
+              <Border x:Name="PrivacyPanel" Style="{StaticResource CorvidPanel}">
+                <StackPanel>
+                  <Border Style="{StaticResource PanelHead}">
+                    <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                      <TextBlock Text="Cloud privacy" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                      <controls:TagChip Text="{x:Bind ViewModel.Posture, Mode=OneWay}" Tone="Blue" />
+                    </controls:WrapRowPanel>
+                  </Border>
+                  <StackPanel Padding="14,12" Spacing="4">
+                    <TextBlock local:SpanText.Runs="{x:Bind ViewModel.PrivacyText}" Style="{StaticResource PanelSmall}" />
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.Postures}" IsTabStop="False" Margin="0,4,0,0" AutomationProperties.Name="Cloud privacy">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="mvvm:Choice">
+                          <RadioButton Style="{StaticResource SetupRadio}" Margin="0,4" GroupName="Posture" IsChecked="{x:Bind IsSelected, Mode=OneWay}"
+                                       Command="{x:Bind Choose}" AutomationProperties.Name="{x:Bind Description}">
+                            <TextBlock Text="{x:Bind Description}" Style="{StaticResource PanelText}" FontSize="12.5" LineHeight="18.125" />
+                          </RadioButton>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+
+              <!-- Import from Hermes. -->
+              <Border x:Name="ImportPanel" Style="{StaticResource CorvidPanel}">
+                <StackPanel>
+                  <Border Style="{StaticResource PanelHead}">
+                    <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                      <TextBlock Text="Import from Hermes" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                      <TextBlock Text="optional" Style="{StaticResource PanelNote}" />
+                    </controls:WrapRowPanel>
+                  </Border>
+                  <StackPanel Padding="14,12" Spacing="8">
+                    <TextBlock local:SpanText.Runs="{x:Bind ViewModel.HermesText, Mode=OneWay}" Style="{StaticResource PanelSmall}" />
+                    <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" HorizontalAlignment="Left" Content="Preview the import in Memory"
+                                           Command="{x:Bind ViewModel.OpenImportCommand}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasHermes), Mode=OneWay}" />
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+            </StackPanel>
+          </Grid>
+        </StackPanel>
+      </ScrollViewer>
+    </Grid>
   </Grid>
 </Page>

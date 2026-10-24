@@ -88,10 +88,10 @@ public sealed class SlotRowViewModel : ObservableObject
     public bool IsBound { get => _isBound; private set => SetProperty(ref _isBound, value); }
 
     /// <summary>Under the model: "default", "pinned".</summary>
-    public string CurrentNote { get => _currentNote; private set => SetProperty(ref _currentNote, value); }
+    public string CurrentNote { get => _currentNote; private set { if (SetProperty(ref _currentNote, value)) OnPropertyChanged(nameof(HasCurrentNote)); } }
 
     /// <summary>The decider's tier beside its model: "calibrated" (green) or "degraded" (amber).</summary>
-    public string TagText { get => _tagText; private set => SetProperty(ref _tagText, value); }
+    public string TagText { get => _tagText; private set { if (SetProperty(ref _tagText, value)) OnPropertyChanged(nameof(HasTag)); } }
 
     public Tone TagTone { get => _tagTone; private set => SetProperty(ref _tagTone, value); }
 
@@ -100,13 +100,36 @@ public sealed class SlotRowViewModel : ObservableObject
     public bool HasLadder => Ladder.Count > 0;
 
     /// <summary>The fallback model ("e5"), shown as "fallback e5".</summary>
-    public string Fallback { get => _fallback; private set => SetProperty(ref _fallback, value); }
+    public string Fallback
+    {
+        get => _fallback;
+        private set
+        {
+            if (!SetProperty(ref _fallback, value))
+                return;
+            OnPropertyChanged(nameof(HasFallback));
+            OnPropertyChanged(nameof(FallbackText));
+        }
+    }
+
+    public bool HasFallback => _fallback.Length > 0;
+
+    /// <summary>"fallback" muted, then the model in the code font.</summary>
+    public IReadOnlyList<TextRun> FallbackText => _fallback.Length > 0 ? [new TextRun("fallback ", Muted: true), new TextRun(_fallback, Code: true)] : [];
+
+    public bool HasNote => _note.Length > 0;
+
+    public bool HasPlain => _plain.Length > 0;
+
+    public bool HasCurrentNote => _currentNote.Length > 0;
+
+    public bool HasTag => _tagText.Length > 0;
 
     /// <summary>The small note under the ladder or fallback ("a hard step escalates up this ladder").</summary>
-    public string Note { get => _note; private set => SetProperty(ref _note, value); }
+    public string Note { get => _note; private set { if (SetProperty(ref _note, value)) OnPropertyChanged(nameof(HasNote)); } }
 
     /// <summary>The cell's text when there is no ladder and no fallback ("none", "needed for images in prompts (K-8)").</summary>
-    public string Plain { get => _plain; private set => SetProperty(ref _plain, value); }
+    public string Plain { get => _plain; private set { if (SetProperty(ref _plain, value)) OnPropertyChanged(nameof(HasPlain)); } }
 
     /// <summary>"cuda:0 · q0 · 180 ms", or "—" for an unbound slot.</summary>
     public string Placement { get => _placement; private set => SetProperty(ref _placement, value); }
@@ -116,7 +139,7 @@ public sealed class SlotRowViewModel : ObservableObject
     /// <summary>The median latency against <see cref="GaugeFullMilliseconds"/>, for the gauge under it.</summary>
     public double Latency { get => _latency; private set => SetProperty(ref _latency, value); }
 
-    public bool CanSwitch { get => _canSwitch; private set { if (SetProperty(ref _canSwitch, value)) SwitchCommand.NotifyCanExecuteChanged(); } }
+    public bool CanSwitch { get => _canSwitch; private set { if (SetProperty(ref _canSwitch, value)) { SwitchCommand.NotifyCanExecuteChanged(); OnPropertyChanged(nameof(ShowActions)); } } }
 
     public bool CanPin { get => _canPin; private set { if (SetProperty(ref _canPin, value)) PinCommand.NotifyCanExecuteChanged(); } }
 
@@ -125,7 +148,10 @@ public sealed class SlotRowViewModel : ObservableObject
     public string PinLabel => _pinned ? "Unpin" : "Pin";
 
     /// <summary>The decider: shared by every session, so switching it is a command and a restart, not a button.</summary>
-    public bool IsShared { get => _shared; private set => SetProperty(ref _shared, value); }
+    public bool IsShared { get => _shared; private set { if (SetProperty(ref _shared, value)) OnPropertyChanged(nameof(ShowActions)); } }
+
+    /// <summary>Switch… (and Pin) show for a bound slot that is not shared.</summary>
+    public bool ShowActions => _canSwitch;
 
     public IReadOnlyList<TextRun> SharedText { get; } =
         Spans.Parse("shared by every session: `corvid model switch decider …`, then restart");

@@ -1,23 +1,541 @@
 <Page x:Class="Corvid.App.Pages.ModelsPage"
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:controls="using:Corvid.App.Controls"
+      xmlns:models="using:Corvid.App.Core.Models"
+      xmlns:coreshell="using:Corvid.App.Core.Shell"
+      xmlns:mvvm="using:Corvid.App.Core.Mvvm"
+      xmlns:local="using:Corvid.App.Pages"
+      xmlns:ui="using:Corvid.App.Infrastructure"
       Background="{ThemeResource CorvidBg}"
       Foreground="{ThemeResource CorvidText}"
       FontSize="13.5">
-  <!-- .page: the page head with the area's title, then the body. A placeholder until the area is built. -->
-  <Grid>
+  <!--
+    The Models area (Models.png, Models-narrow.png; docs/plan/ui.md §4.8, F14, F23): the page head with the config line and
+    two buttons, then two columns (1.4fr and 1fr, 18 apart): Slots and Catalogue and downloads on the left; Privacy and
+    egress, Decider and Placement on the right. Sizes and colours are corvid.css's .page-head, .panel, .table, .kv, .target
+    and .meter. The tables keep the mockup's column widths and scroll sideways when the column is narrower than them.
+    Pickers (Switch…, Download…, Add a local server…) open over the page; Esc closes them.
+  -->
+  <Page.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="ms-appx:///Pages/ModelsStyles.xaml" />
+      </ResourceDictionary.MergedDictionaries>
+
+      <!-- .kv: the key at least 64 wide, then the value beside it or, when it does not fit, on the next line (8 apart). -->
+      <DataTemplate x:Key="FactTemplate" x:DataType="models:ModelFact">
+        <controls:WrapRowPanel Spacing="8" LineSpacing="8" AutomationProperties.Name="{x:Bind AutomationName}">
+          <TextBlock Text="{x:Bind Key}" Style="{StaticResource KvKey}" LineHeight="18" />
+          <TextBlock local:SpanText.Runs="{x:Bind Value}" Style="{StaticResource Cell}" LineHeight="18" />
+        </controls:WrapRowPanel>
+      </DataTemplate>
+
+      <!-- A model to download: the check box, its line and tag, and while it downloads, its gauge and progress. -->
+      <DataTemplate x:Key="DownloadChoiceTemplate" x:DataType="models:DownloadChoiceViewModel">
+        <StackPanel>
+          <CheckBox Style="{StaticResource SetupCheckBox}" IsChecked="{x:Bind IsSelected, Mode=TwoWay}" IsEnabled="{x:Bind IsEnabled, Mode=OneWay}"
+                    AutomationProperties.Name="{x:Bind AutomationName, Mode=OneWay}">
+            <controls:WrapRowPanel Spacing="4" LineSpacing="2">
+              <TextBlock local:SpanText.Runs="{x:Bind Text, Mode=OneWay}" Style="{StaticResource PanelText}" />
+              <controls:TagChip Text="{x:Bind StateTag, Mode=OneWay}" Tone="Green" Visibility="{x:Bind ui:Ui.VisibleIf(HasStateTag), Mode=OneWay}" />
+            </controls:WrapRowPanel>
+          </CheckBox>
+          <StackPanel Margin="21,4,0,0" Spacing="4" Visibility="{x:Bind ui:Ui.VisibleIf(IsDownloading), Mode=OneWay}">
+            <controls:Meter Width="160" HorizontalAlignment="Left" Fraction="{x:Bind Fraction, Mode=OneWay}"
+                            AutomationProperties.Name="Download progress" />
+            <TextBlock Text="{x:Bind Progress, Mode=OneWay}" Style="{StaticResource CellSmall}" />
+          </StackPanel>
+        </StackPanel>
+      </DataTemplate>
+    </ResourceDictionary>
+  </Page.Resources>
+
+  <Grid x:Name="Root">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto" />
       <RowDefinition Height="*" />
     </Grid.RowDefinitions>
-    <Border Style="{StaticResource CorvidPageHead}">
-      <TextBlock Text="{x:Bind ViewModel.Title}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
-                 AutomationProperties.HeadingLevel="Level1" />
+
+    <!-- .page-head: the title and the config line wrap as one group; the buttons sit right, or below when it is narrow. -->
+    <Border x:Name="HeadHost" Style="{StaticResource CorvidPageHead}">
+      <Grid x:Name="Head" ColumnSpacing="12">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <controls:WrapRowPanel x:Name="HeadTitle" Spacing="12" LineSpacing="12" VerticalAlignment="Center">
+          <TextBlock Text="{x:Bind ViewModel.Title}" Style="{StaticResource CorvidPageTitle}" VerticalAlignment="Center"
+                     AutomationProperties.HeadingLevel="Level1" />
+          <TextBlock local:SpanText.Runs="{x:Bind ViewModel.Subtitle, Mode=OneWay}" Style="{StaticResource CorvidMutedText}"
+                     VerticalAlignment="Center" />
+        </controls:WrapRowPanel>
+        <StackPanel x:Name="HeadButtons" Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <controls:CorvidButton Content="Add a local server…" Command="{x:Bind ViewModel.AddServerPickerCommand}"
+                                 ToolTipService.ToolTip="An OpenAI-compatible endpoint (Ollama, llama.cpp, vLLM), checked before it is added" />
+          <controls:CorvidButton Content="Download…" Variant="Primary" Command="{x:Bind ViewModel.DownloadPickerCommand}"
+                                 ToolTipService.ToolTip="Pick models to download; nothing downloads implicitly" />
+        </StackPanel>
+      </Grid>
     </Border>
-    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-      <StackPanel Padding="24,18,24,18" Spacing="18" MaxWidth="960" HorizontalAlignment="Left">
-        <TextBlock Text="{x:Bind ViewModel.Summary}" Style="{StaticResource CorvidMutedText}" />
+
+    <ScrollViewer x:Name="BodyScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled"
+                  HorizontalScrollBarVisibility="Disabled">
+      <StackPanel x:Name="Body" Padding="24,18,24,18" Spacing="18">
+        <!-- What a change wrote, or why it was refused (.toast). -->
+        <controls:ToneRow Tone="{x:Bind ViewModel.NoticeTone, Mode=OneWay}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasNotice), Mode=OneWay}"
+                          AutomationProperties.LiveSetting="Polite">
+          <Grid ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock local:SpanText.Runs="{x:Bind ViewModel.Notice, Mode=OneWay}" TextWrapping="Wrap" VerticalAlignment="Center"
+                       LineHeight="18.125" LineStackingStrategy="BlockLineHeight" />
+            <controls:CorvidButton Grid.Column="1" Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Dismiss"
+                                   Foreground="{ThemeResource CorvidText2}" Command="{x:Bind ViewModel.DismissNoticeCommand}" />
+          </Grid>
+        </controls:ToneRow>
+
+        <!-- F23: models missing, with the download. -->
+        <controls:ToneRow Tone="Amber" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.HasMissing), Mode=OneWay}">
+          <Grid ColumnSpacing="10">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="Auto" />
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <controls:Icon Kind="Warning" VerticalAlignment="Center" Foreground="{ThemeResource CorvidAmber}" />
+            <TextBlock Grid.Column="1" local:SpanText.Runs="{x:Bind ViewModel.MissingText, Mode=OneWay}" TextWrapping="Wrap"
+                       VerticalAlignment="Center" LineHeight="18.125" LineStackingStrategy="BlockLineHeight" />
+            <controls:CorvidButton Grid.Column="2" Style="{StaticResource CorvidSmallButton}" Variant="Primary"
+                                   Content="{x:Bind ViewModel.MissingButtonText, Mode=OneWay}" Command="{x:Bind ViewModel.DownloadMissingCommand}" />
+          </Grid>
+        </controls:ToneRow>
+
+        <Grid x:Name="Columns" ColumnSpacing="18" RowSpacing="18">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition x:Name="LeftColumn" Width="1.4*" />
+            <ColumnDefinition x:Name="RightColumn" Width="1*" />
+          </Grid.ColumnDefinitions>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+          </Grid.RowDefinitions>
+
+          <StackPanel x:Name="LeftStack" Spacing="18">
+            <!-- Slots. -->
+            <Border Style="{StaticResource CorvidPanel}">
+              <StackPanel>
+                <Border Style="{StaticResource PanelHead}">
+                  <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                    <TextBlock Text="Slots" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                    <TextBlock Text="this session · switching mid-turn waits for issued tool calls" Style="{StaticResource PanelNote}" />
+                  </controls:WrapRowPanel>
+                </Border>
+                <ScrollViewer x:Name="SlotsScroll" HorizontalScrollMode="Auto" HorizontalScrollBarVisibility="Auto" VerticalScrollMode="Disabled"
+                              VerticalScrollBarVisibility="Disabled" SizeChanged="OnTableScrollSized">
+                  <StackPanel MinWidth="646" AutomationProperties.Name="Model slots">
+                    <Grid>
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="123" />
+                        <ColumnDefinition Width="133" />
+                        <ColumnDefinition Width="165" />
+                        <ColumnDefinition Width="118" />
+                        <ColumnDefinition Width="*" />
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Text="slot" Style="{StaticResource TableHead}" />
+                      <TextBlock Grid.Column="1" Text="current" Style="{StaticResource TableHead}" />
+                      <TextBlock Grid.Column="2" Text="escalation and fallbacks" Style="{StaticResource TableHead}" />
+                      <TextBlock Grid.Column="3" Text="placement · p50" Style="{StaticResource TableHead}" />
+                    </Grid>
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.Slots}" IsTabStop="False">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="models:SlotRowViewModel">
+                          <Border Style="{StaticResource TableRow}" AutomationProperties.Name="{x:Bind AutomationName, Mode=OneWay}">
+                            <Grid>
+                              <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="123" />
+                                <ColumnDefinition Width="133" />
+                                <ColumnDefinition Width="165" />
+                                <ColumnDefinition Width="118" />
+                                <ColumnDefinition Width="*" />
+                              </Grid.ColumnDefinitions>
+                              <TextBlock Margin="10,5.5,10,8.5" Text="{x:Bind Name}" Style="{StaticResource Cell}" FontWeight="SemiBold" />
+
+                              <StackPanel Grid.Column="1" Margin="10,5.5,10,8.5">
+                                <controls:WrapRowPanel Spacing="4">
+                                  <TextBlock Text="{x:Bind Model, Mode=OneWay}" Style="{StaticResource CellMono}"
+                                             Visibility="{x:Bind ui:Ui.VisibleIf(IsBound), Mode=OneWay}" />
+                                  <TextBlock Text="unbound" Style="{StaticResource CellMuted}"
+                                             Visibility="{x:Bind ui:Ui.CollapsedIf(IsBound), Mode=OneWay}" />
+                                  <controls:TagChip Text="{x:Bind TagText, Mode=OneWay}" Tone="{x:Bind TagTone, Mode=OneWay}"
+                                                    Visibility="{x:Bind ui:Ui.VisibleIf(HasTag), Mode=OneWay}" />
+                                </controls:WrapRowPanel>
+                                <TextBlock Text="{x:Bind CurrentNote, Mode=OneWay}" Style="{StaticResource CellSmall}"
+                                           Visibility="{x:Bind ui:Ui.VisibleIf(HasCurrentNote), Mode=OneWay}" />
+                              </StackPanel>
+
+                              <StackPanel Grid.Column="2" Margin="10,7">
+                                <ItemsControl ItemsSource="{x:Bind Ladder}" IsTabStop="False" Visibility="{x:Bind ui:Ui.VisibleIf(HasLadder), Mode=OneWay}"
+                                              AutomationProperties.Name="Escalation ladder">
+                                  <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                      <controls:WrapRowPanel Spacing="6" LineSpacing="6" />
+                                    </ItemsPanelTemplate>
+                                  </ItemsControl.ItemsPanel>
+                                  <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="models:LadderStepViewModel">
+                                      <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <Button Style="{StaticResource LadderChip}" Tag="{x:Bind}"
+                                                AutomationProperties.Name="{x:Bind AutomationName}"
+                                                ToolTipService.ToolTip="Drag to reorder, or Alt+Left and Alt+Right"
+                                                Loaded="OnStepLoaded" PointerMoved="OnStepMoved"
+                                                PointerCaptureLost="OnStepCaptureLost" KeyDown="OnStepKeyDown">
+                                          <StackPanel Orientation="Horizontal" Spacing="5">
+                                            <Path Data="M 0.15 2 a 0.85 0.85 0 1 0 1.7 0 a 0.85 0.85 0 1 0 -1.7 0 Z M 0.15 6 a 0.85 0.85 0 1 0 1.7 0 a 0.85 0.85 0 1 0 -1.7 0 Z M 0.15 10 a 0.85 0.85 0 1 0 1.7 0 a 0.85 0.85 0 1 0 -1.7 0 Z M 4.15 2 a 0.85 0.85 0 1 0 1.7 0 a 0.85 0.85 0 1 0 -1.7 0 Z M 4.15 6 a 0.85 0.85 0 1 0 1.7 0 a 0.85 0.85 0 1 0 -1.7 0 Z M 4.15 10 a 0.85 0.85 0 1 0 1.7 0 a 0.85 0.85 0 1 0 -1.7 0 Z" Fill="{ThemeResource CorvidText}" Width="7" Height="12" VerticalAlignment="Center" />
+                                            <TextBlock Text="{x:Bind Model}" FontFamily="{StaticResource CorvidMono}" FontSize="12.5"
+                                                       VerticalAlignment="Center" />
+                                          </StackPanel>
+                                        </Button>
+                                        <TextBlock Text="→" Foreground="{ThemeResource CorvidText2}" FontSize="13.5" VerticalAlignment="Center"
+                                                   Visibility="{x:Bind ui:Ui.VisibleIf(ShowArrow)}" AutomationProperties.AccessibilityView="Raw" />
+                                      </StackPanel>
+                                    </DataTemplate>
+                                  </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <TextBlock Margin="0,-1.5,0,0" local:SpanText.Runs="{x:Bind FallbackText, Mode=OneWay}" Style="{StaticResource Cell}"
+                                           Visibility="{x:Bind ui:Ui.VisibleIf(HasFallback), Mode=OneWay}" />
+                                <TextBlock Text="{x:Bind Note, Mode=OneWay}" Style="{StaticResource CellSmall}"
+                                           Visibility="{x:Bind ui:Ui.VisibleIf(HasNote), Mode=OneWay}" />
+                                <TextBlock Margin="0,-1.5,0,0" Text="{x:Bind Plain, Mode=OneWay}" Style="{StaticResource CellMuted}"
+                                           Visibility="{x:Bind ui:Ui.VisibleIf(HasPlain), Mode=OneWay}" />
+                              </StackPanel>
+
+                              <StackPanel Grid.Column="3" Margin="10,5.5,10,8.5">
+                                <TextBlock Text="{x:Bind Placement, Mode=OneWay}" Style="{StaticResource Cell}"
+                                           Visibility="{x:Bind ui:Ui.VisibleIf(HasPlacement), Mode=OneWay}" />
+                                <TextBlock Text="—" Style="{StaticResource CellMuted}" Visibility="{x:Bind ui:Ui.CollapsedIf(HasPlacement), Mode=OneWay}" />
+                                <controls:Meter Width="90" Margin="0,4,0,0" HorizontalAlignment="Left" Fraction="{x:Bind Latency, Mode=OneWay}"
+                                                Visibility="{x:Bind ui:Ui.VisibleIf(HasPlacement), Mode=OneWay}"
+                                                AutomationProperties.Name="Median latency against 600 ms" />
+                              </StackPanel>
+
+                              <Grid Grid.Column="4" Margin="10,7">
+                                <controls:WrapRowPanel Spacing="6" LineSpacing="6" Visibility="{x:Bind ui:Ui.VisibleIf(ShowActions), Mode=OneWay}">
+                                  <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Content="Switch…" Command="{x:Bind SwitchCommand}"
+                                                         AutomationProperties.Name="{x:Bind local:ModelsPage.SwitchName(Name)}" />
+                                  <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="{x:Bind PinLabel, Mode=OneWay}"
+                                                         Command="{x:Bind PinCommand}" Visibility="{x:Bind ui:Ui.VisibleIf(CanPin), Mode=OneWay}"
+                                                         ToolTipService.ToolTip="Pin for this session: escalation and switches elsewhere leave it alone" />
+                                </controls:WrapRowPanel>
+                                <TextBlock Margin="0,-1.5,0,0" local:SpanText.Runs="{x:Bind SharedText}" Style="{StaticResource CellSmall}"
+                                           Visibility="{x:Bind ui:Ui.VisibleIf(IsShared), Mode=OneWay}" />
+                              </Grid>
+                            </Grid>
+                          </Border>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </ScrollViewer>
+              </StackPanel>
+            </Border>
+
+            <!-- Catalogue and downloads. -->
+            <Border Style="{StaticResource CorvidPanel}">
+              <StackPanel>
+                <Border Style="{StaticResource PanelHead}">
+                  <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                    <TextBlock Text="Catalogue and downloads" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                    <TextBlock Text="nothing downloads implicitly · default set about 10 GB" Style="{StaticResource PanelNote}" />
+                  </controls:WrapRowPanel>
+                </Border>
+                <ScrollViewer x:Name="CatalogueScroll" HorizontalScrollMode="Auto" HorizontalScrollBarVisibility="Auto" VerticalScrollMode="Disabled"
+                              VerticalScrollBarVisibility="Disabled" SizeChanged="OnTableScrollSized">
+                  <StackPanel MinWidth="646" AutomationProperties.Name="Catalogue">
+                    <Grid>
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="132" />
+                        <ColumnDefinition Width="200" />
+                        <ColumnDefinition Width="90" />
+                        <ColumnDefinition Width="147" />
+                        <ColumnDefinition Width="*" />
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Text="model" Style="{StaticResource TableHead}" />
+                      <TextBlock Grid.Column="1" Text="where" Style="{StaticResource TableHead}" />
+                      <TextBlock Grid.Column="2" Text="size · fit" Style="{StaticResource TableHead}" />
+                      <TextBlock Grid.Column="3" Text="state" Style="{StaticResource TableHead}" />
+                    </Grid>
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.Catalogue}" IsTabStop="False">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="models:CatalogueRowViewModel">
+                          <Border Style="{StaticResource TableRow}" AutomationProperties.Name="{x:Bind AutomationName, Mode=OneWay}">
+                            <Grid>
+                              <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="132" />
+                                <ColumnDefinition Width="200" />
+                                <ColumnDefinition Width="90" />
+                                <ColumnDefinition Width="147" />
+                                <ColumnDefinition Width="*" />
+                              </Grid.ColumnDefinitions>
+                              <StackPanel Margin="10,5.5,10,8.5">
+                                <TextBlock Text="{x:Bind Name}" Style="{StaticResource CellMono}" />
+                                <TextBlock Text="{x:Bind Serves, Mode=OneWay}" Style="{StaticResource CellSmall}" />
+                              </StackPanel>
+                              <TextBlock Grid.Column="1" Margin="10,5.5,10,8.5" local:SpanText.Runs="{x:Bind Where, Mode=OneWay}" Style="{StaticResource Cell}" />
+                              <TextBlock Grid.Column="2" Margin="10,5.5,10,8.5" Text="{x:Bind Fit, Mode=OneWay}" Style="{StaticResource Cell}" />
+                              <StackPanel Grid.Column="3" Margin="10,5.5,10,8.5">
+                                <ItemsControl ItemsSource="{x:Bind Tags, Mode=OneWay}" IsTabStop="False"
+                                              Visibility="{x:Bind ui:Ui.CollapsedIf(IsDownloading), Mode=OneWay}">
+                                  <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                      <controls:WrapRowPanel Spacing="4" LineSpacing="4" />
+                                    </ItemsPanelTemplate>
+                                  </ItemsControl.ItemsPanel>
+                                  <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="coreshell:StatusTag">
+                                      <controls:TagChip Text="{x:Bind Text}" Tone="{x:Bind Tone}" ToolTipService.ToolTip="{x:Bind Detail}"
+                                                        AutomationProperties.Name="{x:Bind Text}" />
+                                    </DataTemplate>
+                                  </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <StackPanel Visibility="{x:Bind ui:Ui.VisibleIf(IsDownloading), Mode=OneWay}">
+                                  <controls:Meter Width="140" Margin="0,6,0,0" HorizontalAlignment="Left" Fraction="{x:Bind Fraction, Mode=OneWay}"
+                                                  AutomationProperties.Name="Download progress" />
+                                  <TextBlock Margin="0,4,0,0" Text="{x:Bind Progress, Mode=OneWay}" Style="{StaticResource CellSmall}" />
+                                </StackPanel>
+                              </StackPanel>
+                              <Grid Grid.Column="4" Margin="10,7,6,7" VerticalAlignment="Top" HorizontalAlignment="Left"
+                                    Visibility="{x:Bind ui:Ui.VisibleIf(HasAction), Mode=OneWay}">
+                                <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost"
+                                                       Content="{x:Bind ActionLabel, Mode=OneWay}" Command="{x:Bind ActionCommand}"
+                                                       AutomationProperties.Name="{x:Bind local:ModelsPage.ActionName(ActionLabel, Name), Mode=OneWay}"
+                                                       Visibility="{x:Bind ui:Ui.CollapsedIf(ActionIsDanger), Mode=OneWay}" />
+                                <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Foreground="{ThemeResource CorvidRed}"
+                                                       Content="{x:Bind ActionLabel, Mode=OneWay}" Command="{x:Bind ActionCommand}"
+                                                       AutomationProperties.Name="{x:Bind local:ModelsPage.ActionName(ActionLabel, Name), Mode=OneWay}"
+                                                       Visibility="{x:Bind ui:Ui.VisibleIf(ActionIsDanger), Mode=OneWay}" />
+                              </Grid>
+                            </Grid>
+                          </Border>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </ScrollViewer>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+
+          <StackPanel x:Name="RightStack" Grid.Column="1" Spacing="18">
+            <!-- Privacy and egress. -->
+            <Border Style="{StaticResource CorvidPanel}">
+              <StackPanel>
+                <Border Style="{StaticResource PanelHead}">
+                  <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                    <TextBlock Text="Privacy and egress" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                    <controls:TagChip Text="{x:Bind ViewModel.PrivacyTag, Mode=OneWay}" Tone="Blue" />
+                  </controls:WrapRowPanel>
+                </Border>
+                <StackPanel Padding="14,12" Spacing="8">
+                  <TextBlock local:SpanText.Runs="{x:Bind ViewModel.PrivacySummary, Mode=OneWay}" Style="{StaticResource PanelText}" />
+                  <ItemsControl ItemsSource="{x:Bind ViewModel.PrivacyFacts, Mode=OneWay}" IsTabStop="False" ItemTemplate="{StaticResource FactTemplate}">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate>
+                        <StackPanel Spacing="8" />
+                      </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                  </ItemsControl>
+                  <controls:LinkButton Text="Open the egress ledger" Command="{x:Bind ViewModel.OpenEgressCommand}" HorizontalAlignment="Left"
+                                       ToolTipService.ToolTip="Audit: every request that left the machine, as sent" />
+                </StackPanel>
+              </StackPanel>
+            </Border>
+
+            <!-- Decider. -->
+            <Border Style="{StaticResource CorvidPanel}">
+              <StackPanel>
+                <Border Style="{StaticResource PanelHead}">
+                  <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                    <TextBlock Text="Decider" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                    <controls:TagChip Text="{x:Bind ViewModel.DeciderTag, Mode=OneWay}" Tone="{x:Bind ViewModel.DeciderTone, Mode=OneWay}" />
+                  </controls:WrapRowPanel>
+                </Border>
+                <ItemsControl Padding="14,12" ItemsSource="{x:Bind ViewModel.DeciderFacts, Mode=OneWay}" IsTabStop="False" ItemTemplate="{StaticResource FactTemplate}">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                      <StackPanel Spacing="8" />
+                    </ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                </ItemsControl>
+              </StackPanel>
+            </Border>
+
+            <!-- Placement, and its editor (F14). -->
+            <Border Style="{StaticResource CorvidPanel}">
+              <StackPanel>
+                <Border Style="{StaticResource PanelHead}">
+                  <controls:WrapRowPanel Spacing="10" LineSpacing="2" PushLastRight="True">
+                    <TextBlock Text="Placement" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+                    <TextBlock Text="from the doctor's GPU section" Style="{StaticResource PanelNote}" />
+                  </controls:WrapRowPanel>
+                </Border>
+                <StackPanel Padding="14,12" Spacing="8" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsShowingPlacement), Mode=OneWay}">
+                  <ItemsControl ItemsSource="{x:Bind ViewModel.PlacementFacts, Mode=OneWay}" IsTabStop="False" ItemTemplate="{StaticResource FactTemplate}">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate>
+                        <StackPanel Spacing="8" />
+                      </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                  </ItemsControl>
+                  <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Content="Edit placement…" HorizontalAlignment="Left"
+                                         Command="{x:Bind ViewModel.EditPlacementCommand}" />
+                </StackPanel>
+                <StackPanel Padding="14,12" Spacing="12" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsEditingPlacement), Mode=OneWay}">
+                  <ItemsControl ItemsSource="{x:Bind ViewModel.PlacementRows}" IsTabStop="False">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate>
+                        <StackPanel Spacing="12" />
+                      </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="models:PlacementRowViewModel">
+                        <StackPanel Spacing="6">
+                          <controls:WrapRowPanel Spacing="10" LineSpacing="6">
+                            <TextBlock Text="{x:Bind Model}" Style="{StaticResource CellMono}" MinWidth="100" VerticalAlignment="Center" />
+                            <Border Height="22" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1" CornerRadius="6" VerticalAlignment="Center">
+                              <ItemsControl ItemsSource="{x:Bind Choices}" IsTabStop="False" AutomationProperties.Name="{x:Bind Model}">
+                                <ItemsControl.ItemsPanel>
+                                  <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" />
+                                  </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                  <DataTemplate x:DataType="mvvm:Choice">
+                                    <controls:SegmentButton Content="{x:Bind Label}" IsChecked="{x:Bind IsSelected, Mode=OneWay}" Command="{x:Bind Choose}"
+                                                            ToolTipService.ToolTip="{x:Bind Description}" AutomationProperties.HelpText="{x:Bind Description}" />
+                                  </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                              </ItemsControl>
+                            </Border>
+                            <TextBlock Text="{x:Bind Fallback}" Style="{StaticResource CellMuted}" VerticalAlignment="Center" />
+                          </controls:WrapRowPanel>
+                          <ItemsControl ItemsSource="{x:Bind Checks}" IsTabStop="False" Visibility="{x:Bind ui:Ui.VisibleIf(ShowChecks), Mode=OneWay}"
+                                        Margin="12,0,0,0" ItemTemplate="{StaticResource FactTemplate}"
+                                        AutomationProperties.Name="The doctor's checks for this GPU">
+                            <ItemsControl.ItemsPanel>
+                              <ItemsPanelTemplate>
+                                <StackPanel Spacing="4" />
+                              </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                          </ItemsControl>
+                        </StackPanel>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Primary" Content="Write placement"
+                                           Command="{x:Bind ViewModel.SavePlacementCommand}" />
+                    <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Cancel"
+                                           Command="{x:Bind ViewModel.CancelPlacementCommand}" />
+                  </StackPanel>
+                </StackPanel>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </Grid>
       </StackPanel>
     </ScrollViewer>
+
+    <!-- The pickers, over the page: a scrim that closes them, then the card. -->
+    <Grid x:Name="PickerLayer" Grid.RowSpan="2" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsPickerOpen), Mode=OneWay}">
+      <Border Background="#33000000" Tapped="OnScrimTapped" />
+      <Border x:Name="PickerCard" Style="{StaticResource PickerCard}" Width="460" Margin="16,64,16,16" VerticalAlignment="Top"
+              HorizontalAlignment="Center">
+        <Grid>
+          <!-- Switch… -->
+          <StackPanel Spacing="10" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsSwitchOpen), Mode=OneWay}">
+            <TextBlock Text="{x:Bind ViewModel.SwitchTitle, Mode=OneWay}" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+            <TextBlock Text="Applies to new sessions; this one switches at its next step, after its issued tool calls." Style="{StaticResource PanelSmall}" />
+            <ItemsControl ItemsSource="{x:Bind ViewModel.SwitchChoices}" IsTabStop="False">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                  <StackPanel Spacing="4" />
+                </ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="models:SwitchChoiceViewModel">
+                  <Button Style="{StaticResource PickerRow}" Command="{x:Bind Choose}" AutomationProperties.Name="{x:Bind AutomationName}">
+                    <Grid ColumnSpacing="10">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                      </Grid.ColumnDefinitions>
+                      <StackPanel>
+                        <TextBlock Text="{x:Bind Model}" Style="{StaticResource CellMono}" />
+                        <TextBlock Text="{x:Bind Detail}" Style="{StaticResource CellSmall}" />
+                      </StackPanel>
+                      <controls:TagChip Grid.Column="1" Text="current" Tone="Blue" Visibility="{x:Bind ui:Ui.VisibleIf(IsCurrent)}" />
+                      <TextBlock Grid.Column="1" Text="{x:Bind Reason}" Style="{StaticResource CellSmall}" VerticalAlignment="Center"
+                                 Visibility="{x:Bind ui:Ui.VisibleIf(HasReason)}" />
+                    </Grid>
+                  </Button>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+
+          <!-- Download… -->
+          <StackPanel Spacing="8" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsDownloadOpen), Mode=OneWay}">
+            <TextBlock Text="Download models" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+            <TextBlock Text="Nothing downloads until you start it. A cancelled download leaves no partial file." Style="{StaticResource PanelSmall}" />
+            <ItemsControl ItemsSource="{x:Bind ViewModel.Downloads.Items}" IsTabStop="False" ItemTemplate="{StaticResource DownloadChoiceTemplate}">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                  <StackPanel Spacing="8" />
+                </ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+            </ItemsControl>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Text="selected" Style="{StaticResource KvKey}" VerticalAlignment="Center" />
+              <TextBlock local:SpanText.Runs="{x:Bind ViewModel.Downloads.SelectedRuns, Mode=OneWay}" Style="{StaticResource Cell}"
+                         VerticalAlignment="Center" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Primary" Content="Download selected"
+                                     Command="{x:Bind ViewModel.Downloads.DownloadCommand}" />
+              <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Close"
+                                     Command="{x:Bind ViewModel.ClosePickerCommand}" />
+            </StackPanel>
+          </StackPanel>
+
+          <!-- Add a local server… -->
+          <StackPanel Spacing="8" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsAddServerOpen), Mode=OneWay}">
+            <TextBlock Text="Add a local server" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
+            <TextBlock Text="An OpenAI-compatible endpoint (Ollama, llama.cpp, vLLM). It is checked before it is written to corvid.json."
+                       Style="{StaticResource PanelSmall}" />
+            <TextBlock Text="name" Style="{StaticResource KvKey}" />
+            <TextBox x:Name="ServerNameBox" Style="{StaticResource FieldBox}" PlaceholderText="qwen-coder"
+                     Text="{x:Bind ViewModel.ServerName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                     AutomationProperties.Name="Server name" />
+            <TextBlock Text="address" Style="{StaticResource KvKey}" />
+            <TextBox Style="{StaticResource FieldBox}" PlaceholderText="http://127.0.0.1:11434/v1"
+                     Text="{x:Bind ViewModel.ServerUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                     AutomationProperties.Name="Server address" />
+            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+              <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Primary" Content="Check and add"
+                                     Command="{x:Bind ViewModel.AddServerCommand}" />
+              <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Cancel"
+                                     Command="{x:Bind ViewModel.ClosePickerCommand}" />
+            </StackPanel>
+          </StackPanel>
+        </Grid>
+      </Border>
+    </Grid>
   </Grid>
 </Page>

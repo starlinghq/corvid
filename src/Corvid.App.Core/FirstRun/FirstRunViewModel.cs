@@ -89,16 +89,29 @@ public sealed class CheckRowViewModel
     public RelayCommand CopyCommand { get; }
 
     public string AutomationName { get; }
+
+    /// <summary>The section's last row, which has no line below it (the panel's border is there).</summary>
+    public bool IsLast { get; internal set; }
 }
 
 /// <summary>A section of the doctor's checks (one panel): its title, its summary ("2 ok", "1 warning") and its rows.</summary>
-public sealed class CheckSectionViewModel(string title, string summary, IReadOnlyList<CheckRowViewModel> rows)
+public sealed class CheckSectionViewModel
 {
-    public string Title { get; } = title;
+    public CheckSectionViewModel(string title, string summary, IReadOnlyList<CheckRowViewModel> rows)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        Title = title;
+        Summary = summary;
+        Rows = rows;
+        if (rows.Count > 0)
+            rows[^1].IsLast = true;
+    }
 
-    public string Summary { get; } = summary;
+    public string Title { get; }
 
-    public IReadOnlyList<CheckRowViewModel> Rows { get; } = rows;
+    public string Summary { get; }
+
+    public IReadOnlyList<CheckRowViewModel> Rows { get; }
 
     /// <summary>
     /// "2 ok"; "1 warning" when anything needs attention; "1 info" when something is only informational; prefixed with
