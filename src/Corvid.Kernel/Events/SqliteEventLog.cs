@@ -179,6 +179,26 @@ public sealed class SqliteEventLog : IEventLog
         return result.AsReadOnly();
     }
 
+    /// <summary>
+    /// The <paramref name="limit"/> sessions most recently appended to, the latest first: for a surface that reads recent
+    /// activity without walking every session's log.
+    /// </summary>
+    public IReadOnlyList<string> ListRecentSessions(int limit, CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+        cancellationToken.ThrowIfCancellationRequested();
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        // Rows are appended in order, so a session's highest rowid is its latest append.
+        command.CommandText = "SELECT session_id FROM events GROUP BY session_id ORDER BY MAX(rowid) DESC LIMIT $limit;";
+        command.Parameters.AddWithValue("$limit", limit);
+        using var reader = command.ExecuteReader();
+        var result = new List<string>();
+        while (reader.Read())
+            result.Add(reader.GetString(0));
+        return result.AsReadOnly();
+    }
+
     private SqliteConnection Open()
     {
         var connection = new SqliteConnection(connectionString);

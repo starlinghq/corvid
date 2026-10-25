@@ -21,8 +21,8 @@ namespace Corvid.App.Engine.Safety;
 /// <summary>
 /// The Safety page over the runtime (docs/plan/ui.md §4.4): the approval pipeline's remembered rules, each session's and the
 /// rules file's, listed with their scope and source and removable (K-7); the built-in detection pack and its live enforce
-/// switch; the matches the log holds (<c>detection_matched</c> events); the hardline list; and the taint of the sessions open
-/// in this process.
+/// switch; the latest matches in the most recently active sessions (<c>detection_matched</c> events, capped and counted); the
+/// hardline list; and the taint of the sessions open in this process.
 /// <para>
 /// What the engine does not keep is shown as unknown rather than guessed: how often a rule was used (no event records a
 /// rule's allow), which approval and turn wrote it, a session's title, and the taint of a session this process has not
@@ -33,6 +33,12 @@ public sealed class EngineSafetyService : ISafetyService, IDisposable
 {
     /// <summary>The configuration key the enforce switch writes, for the next start.</summary>
     public const string EnforceKey = "Corvid:Detections:Enforce";
+
+    /// <summary>The most recently active sessions whose logs are searched for matches.</summary>
+    public const int MaxScannedSessions = 50;
+
+    /// <summary>The most matches a snapshot lists, and a session keeps: the latest; the rest are counted.</summary>
+    public const int MaxDetections = 200;
 
     private const int Page = 4096;
 
@@ -72,7 +78,8 @@ public sealed class EngineSafetyService : ISafetyService, IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             var pipeline = runtime.Approvals;
-            // A rule already gone changes nothing (ISafetyService.RemoveRuleAsync).
+            // A rule already gone changes nothing (ISafetyService.RemoveRuleAsync). The id is the rule's content, and a store
+            // keeps an equal rule once, so this removes the one rule the row shows.
             if (pipeline.AlwaysRules.FirstOrDefault(rule => AlwaysId(rule) == ruleId) is { } always)
                 return pipeline.RemoveAlwaysRule(always);
             foreach (var (sessionId, rules) in pipeline.AllSessionRules)
@@ -99,6 +106,11 @@ public sealed class EngineSafetyService : ISafetyService, IDisposable
         var written = await Task.Run(() => writer.Apply(new ConfigEdit(EnforceKey, JsonValue.Create(enforce))), cancellationToken).ConfigureAwait(false);
         if (!written.Written)
             throw new InvalidOperationException("corvid.json could not be written: " + written.FailureText);
+        // An environment variable or --set wins over the file, at the next start as in this run: say so, and leave the
+        // running switch as that value has it.
+        if (!written.ShadowedKeys.IsEmpty)
+            throw new InvalidOperationException(
+                $"Written to corvid.json, but {string.Join(", ", written.ShadowedKeys)} is set for this run by an environment variable or --set, which wins over the file.");
         detections.Enforce = enforce;
         RaiseChanged();
     }
@@ -127,19 +139,34 @@ public sealed class EngineSafetyService : ISafetyService, IDisposable
                 rules.Add(Rule(rule, SessionId(sessionId, rule), RuleScope.Session) with { SessionId = sessionId });
 
         var sessions = runtime.Log.ListSessions(cancellationToken);
-        var detections = ImmutableArray.CreateBuilder<SafetyDetection>();
         var taint = ImmutableArray.CreateBuilder<SessionTaint>();
+        // Taint is known only for the sessions this process holds open; a session it never opened is not listed.
         foreach (var id in sessions)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            detections.AddRange(Detections(runtime.Log, id, cancellationToken));
-            // Taint is known only for the sessions this process holds open; a session it never opened is not listed.
             if (runtime.TryGetSession(id, out var session))
                 taint.Add(new SessionTaint(id, id, session.Tainted));
-        }
 
-        return new SafetySnapshot(rules.ToImmutable(), [Pack(runtime)], [.. detections.OrderByDescending(match => match.At)],
-            Hardline(), [.. taint.OrderByDescending(item => item.Tainted).ThenBy(item => item.SessionId, StringComparer.Ordinal)]);
+        // Matches come from the most recently active sessions only, and each keeps its latest: a long history is never read
+        // or held whole. What is left out is counted, and the page says so (Audit reads any session's log).
+        var recent = runtime.Log.ListRecentSessions(MaxScannedSessions, cancellationToken);
+        foreach (var stale in _scanned.Keys.Except(recent, StringComparer.Ordinal).ToList())
+            _scanned.TryRemove(stale, out _);
+        var detections = new List<SafetyDetection>();
+        var found = 0;
+        foreach (var id in recent)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var (matches, total) = Detections(runtime.Log, id, cancellationToken);
+            detections.AddRange(matches);
+            found += total;
+        }
+        var latest = detections.OrderByDescending(match => match.At).Take(MaxDetections).ToImmutableArray();
+
+        return new SafetySnapshot(rules.ToImmutable(), [Pack(runtime)], latest,
+            Hardline(), [.. taint.OrderByDescending(item => item.Tainted).ThenBy(item => item.SessionId, StringComparer.Ordinal)])
+        {
+            MoreDetections = found - latest.Length,
+            SessionsNotScanned = Math.Max(0, sessions.Count - recent.Count),
+        };
     }
 
     /// <summary>The rule's words: its action in backticks, then the paths and names it covers.</summary>
@@ -191,8 +218,8 @@ public sealed class EngineSafetyService : ISafetyService, IDisposable
         }.Select(code => SafetyCatalog.Hardline.FirstOrDefault(known => known.Code == code) ?? new HardlineCode(code, code)),
     ];
 
-    /// <summary>The session's matches, reading only the events added since the last load.</summary>
-    private IReadOnlyList<SafetyDetection> Detections(IEventLog log, string sessionId, CancellationToken cancellationToken)
+    /// <summary>The session's latest matches and how many it holds in all, reading only the events added since the last load.</summary>
+    private (IReadOnlyList<SafetyDetection> Latest, int Total) Detections(IEventLog log, string sessionId, CancellationToken cancellationToken)
     {
         var scanned = _scanned.GetOrAdd(sessionId, _ => new Scanned());
         lock (scanned)
@@ -211,7 +238,10 @@ public sealed class EngineSafetyService : ISafetyService, IDisposable
                             scanned.Answers[resolved.ApprovalId] = resolved.Approved;
                             break;
                         case DetectionMatched matched:
-                            scanned.Matches.Add((stored, matched));
+                            scanned.Matches.Enqueue((stored, matched));
+                            scanned.Total++;
+                            if (scanned.Matches.Count > MaxDetections)
+                                scanned.Matches.Dequeue();
                             break;
                     }
                     scanned.Through = stored.Sequence;
@@ -220,7 +250,7 @@ public sealed class EngineSafetyService : ISafetyService, IDisposable
                     break;
             }
 
-            return [.. scanned.Matches.Select(match => Detection(sessionId, match.Stored, match.Matched, scanned))];
+            return ([.. scanned.Matches.Select(match => Detection(sessionId, match.Stored, match.Matched, scanned))], scanned.Total);
         }
     }
 
@@ -259,6 +289,9 @@ public sealed class EngineSafetyService : ISafetyService, IDisposable
 
         public Dictionary<string, bool> Answers { get; } = new(StringComparer.Ordinal);
 
-        public List<(StoredEvent Stored, DetectionMatched Matched)> Matches { get; } = [];
+        // The latest MaxDetections matches; Total counts every one seen.
+        public Queue<(StoredEvent Stored, DetectionMatched Matched)> Matches { get; } = [];
+
+        public int Total;
     }
 }
