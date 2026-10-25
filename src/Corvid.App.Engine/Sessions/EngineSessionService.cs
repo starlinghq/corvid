@@ -286,6 +286,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         return delivered ? null : taken?.Text;
     }
 
+    /// <summary>Tests only: awaited by an interrupt once it has marked the window cancelling, before it cancels the turn.</summary>
+    internal Func<Task>? InterruptCancelling { get; set; }
+
     /// <summary>
     /// Interrupts the window's running turn: the work so far stays, open prompts close as cancelled, and the queue goes next.
     /// A turn whose message the session has not begun yet (it is starting, or waits behind another surface's turn) is
@@ -305,6 +308,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             channel.Cancelling = true;
             begun = channel.TurnBegun;
         }
+        if (InterruptCancelling is { } hook)
+            await hook().ConfigureAwait(false);
         // The turn's token first, so the pipeline records each open prompt as cancelled rather than denied; then the cards close.
         if (begun && runtime.TryGetSession(sessionId, out var session))
             session.Cancel();

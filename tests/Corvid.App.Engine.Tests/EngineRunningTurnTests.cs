@@ -496,4 +496,54 @@ public sealed class EngineRunningTurnTests
         Assert.Equal(["tag the release", "use main"], waiter.Updates.OfType<UserMessage>().Select(message => message.Text));
         Assert.DoesNotContain(waiter.Updates.OfType<QuestionAnswered>(), answered => answered.Answer.Length > 0);
     }
+
+    [Fact]
+    public async Task An_interrupt_that_marks_the_window_before_the_asker_looks_still_withdraws_the_question()
+    {
+        // A5 fix round (D1): the interrupt sets the window cancelling, the asker is asked before the turn's token is cancelled,
+        // and only then the token goes. The asker waits for the token rather than answer null (which left the question open
+        // on every replay), refuses an answer meanwhile, and the question goes with the turn.
+        var generator = new FakeGenerator(
+            _ => Calls(("ask_user", """{"question":"Which branch?"}""")),
+            Reply.Say("Using main."));
+        await using var fixture = await StartAsync(generator, new AskUserTool());
+        var id = fixture.Runtime.OpenSession(surface: "app").Id;
+        using var service = fixture.Sessions();
+        var waiter = new SessionWaiter();
+        using var subscription = await service.OpenAsync(id, waiter.Add, Ct);
+        var cancelling = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task? interrupt = null;
+        service.InterruptCancelling = async () =>
+        {
+            cancelling.TrySetResult();
+            await release.Task;
+        };
+        service.AskEntering = async () =>
+        {
+            interrupt = service.InterruptAsync(id, Ct);
+            await cancelling.Task;
+        };
+        service.AskWaiting = () => waiting.TrySetResult();
+
+        await service.SendAsync(id, "tag the release", Ct);
+        var question = await waiter.WaitAsync<QuestionAsked>();
+        // Without the fix the asker answers null and the turn ends on the question before it ever waits.
+        var ended = waiter.WaitAsync<TurnEnded>();
+        var first = await Task.WhenAny(waiting.Task, ended);
+        Assert.Same(waiting.Task, first);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.AnswerQuestionAsync(id, question.QuestionId, "main", Ct));
+        release.SetResult();
+        await interrupt!;
+        await service.IdleAsync();
+
+        Assert.Equal(TurnOutcome.Cancelled, Assert.Single(waiter.Updates.OfType<TurnEnded>()).Outcome);
+        Assert.Null(service.QuestionWaiting(id));
+        Assert.Null(SessionFold.Replay(id, subscription.History.Concat(waiter.Updates)).Question);
+        using var fresh = fixture.Sessions();
+        using var reopened = await fresh.OpenAsync(id, _ => { }, Ct);
+        Assert.Null(SessionFold.Replay(id, reopened.History).Question);
+        Assert.Equal(0, (await service.ListAsync(Ct)).Single(item => item.Id == id).PendingQuestions);
+    }
 }

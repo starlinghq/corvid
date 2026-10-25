@@ -17,6 +17,12 @@ public sealed partial class EngineSessionService
     /// </summary>
     internal bool QuestionsInTurn { get; set; } = true;
 
+    /// <summary>Tests only: awaited as the asker is asked, before it looks at the window (an interrupt's race).</summary>
+    internal Func<Task>? AskEntering { get; set; }
+
+    /// <summary>Tests only: called once the asker has taken the question as waiting (it then waits for the answer).</summary>
+    internal Action? AskWaiting { get; set; }
+
     /// <summary>Tests only: the question this window's running turn waits on, or null.</summary>
     internal string? QuestionWaiting(string sessionId)
     {
@@ -49,6 +55,8 @@ public sealed partial class EngineSessionService
 
         public async ValueTask<string?> AskAsync(QuestionPrompt prompt, CancellationToken cancellationToken)
         {
+            if (service.AskEntering is { } entering)
+                await entering().ConfigureAwait(false);
             InTurnQuestion waiting;
             lock (channel.Gate)
             {
@@ -66,6 +74,7 @@ public sealed partial class EngineSessionService
                 // the question with the turn. AnswerQuestionAsync refuses an answer meanwhile.
                 channel.AskedInTurn = waiting;
             }
+            service.AskWaiting?.Invoke();
             try
             {
                 // The question is in the log: shown (and everything the turn reported before it) while the turn waits.
