@@ -44,6 +44,7 @@ public sealed class SessionUpdateReporter : ITurnObserver
     // The chain's own: the taint last reported, and what the step being run says brought it in.
     private bool? _taintReported;
     private string? _taintSource;
+    private bool _finishing;
 
     /// <param name="head">The log position the turn starts from: only later events are the turn's.</param>
     /// <param name="emit">Called with each update, one at a time and in order, on a pool thread.</param>
@@ -240,6 +241,8 @@ public sealed class SessionUpdateReporter : ITurnObserver
         Then(() =>
         {
             CatchUp();
+            // The last step: a taint still waiting for the call that brought it in is reported now, with what is known.
+            _finishing = true;
             if (answer is not null && !string.Equals(answer.Trim(), Streamed.Trim(), StringComparison.Ordinal))
                 Emit(new AnswerChunk(answer));
         });
@@ -315,6 +318,10 @@ public sealed class SessionUpdateReporter : ITurnObserver
     private void NoteTaint(bool? tainted)
     {
         if (tainted is not { } now || now == _taintReported)
+            return;
+        // A taint read before any finished call named its source (the feed's start of a call can reach the chain after the
+        // call's result tainted the session) waits for the step that names it, or for the turn's end.
+        if (now && _taintSource is null && !_finishing)
             return;
         // The source is the last call that finished, kept until a taint is reported: the session can turn tainted just after
         // that call's step was queued, so the taint is read with the next step (the answer's text), which names no call.

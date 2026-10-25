@@ -127,6 +127,33 @@ public sealed class SessionStreamTests
     }
 
     [Fact]
+    public async Task ATaintTheSessionAlreadyHasWhenTheCallsStartIsQueuedWaitsForTheCallThatNamesIt()
+    {
+        await using var host = TestHost.Create(new FakeModels(new FakeGenerator()));
+        var runtime = await host.StartAsync();
+        await using var _ = runtime;
+        var session = runtime.OpenSession(surface: "test");
+        var tainted = true;
+        var live = new List<SessionStreamUpdate>();
+        var reporter = new SessionUpdateReporter(runtime, session.Id, new ToolPresentation(runtime), 0, update =>
+        {
+            lock (live)
+                live.Add(update);
+        }, tainted: () => Volatile.Read(ref tainted));
+
+        // The feed's start of the call reaches the reporter only after the call's result tainted the session.
+        reporter.ToolStarted("c1", "web_fetch", approval: false);
+        reporter.ToolFinished("c1", "web_fetch", "completed", TimeSpan.FromMilliseconds(5));
+        reporter.Text("The page says hello.");
+        await reporter.FinishAsync("The page says hello.");
+
+        var noted = Assert.Single(live.OfType<TaintNoted>());
+        Assert.True(noted.Tainted);
+        Assert.StartsWith("web_fetch", noted.Source, StringComparison.Ordinal);
+        Assert.True(live.IndexOf(noted) > live.FindIndex(update => update is ToolCallStarted));
+    }
+
+    [Fact]
     public async Task ALiveTurnAndItsReplayCarryTheSamePromptCallDiffAndAnswer()
     {
         await using var host = TestHost.Create(FileWrite(), FileTools);
