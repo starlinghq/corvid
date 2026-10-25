@@ -263,13 +263,12 @@ public static class SessionReplay
         {
             if (run.Count == 0)
                 return;
-            IEnumerable<Checkpoint>? shared = null;
-            foreach (var (_, decision) in run)
-            {
-                var at = catalogue.TryResolve(decision.QuestionId, out var question) ? question.Checkpoints : [];
-                shared = shared is null ? at : shared.Intersect(at);
-            }
-            var checkpoints = (shared ?? []).ToList();
+            var checkpoints = Shared(run.Select(pair => pair.Decision.QuestionId), catalogue);
+            // A question the catalogue no longer has names no checkpoint: the first one its neighbours are asked at, or a step.
+            if (checkpoints.Count == 0)
+                checkpoints = [.. run.SelectMany(pair => catalogue.TryResolve(pair.Decision.QuestionId, out var known) ? known.Checkpoints : []).Take(1)];
+            if (checkpoints.Count == 0)
+                checkpoints = [Checkpoint.Step];
             var checkpoint = checkpoints.Count == 1 ? checkpoints[0]
                 : checkpoints.Contains(Checkpoint.Ingress) && firstInTurn ? Checkpoint.Ingress
                 : checkpoints.Contains(Checkpoint.Step) ? Checkpoint.Step
@@ -291,9 +290,11 @@ public static class SessionReplay
                 continue;
             if (item.Payload is Decision decision)
             {
+                // Two checkpoints back to back over one state (a step's, then egress's) part where no checkpoint asks both.
                 var continues = run.Count > 0 && item.Sequence == previous + 1
                     && SameState(run[0].Decision.State, decision.State)
-                    && run.All(pair => !string.Equals(pair.Decision.QuestionId, decision.QuestionId, StringComparison.Ordinal));
+                    && run.All(pair => !string.Equals(pair.Decision.QuestionId, decision.QuestionId, StringComparison.Ordinal))
+                    && Shared(run.Select(pair => pair.Decision.QuestionId).Append(decision.QuestionId), catalogue).Count > 0;
                 if (!continues)
                     Flush();
                 run.Add((item, decision));
@@ -308,6 +309,18 @@ public static class SessionReplay
         }
         Flush();
         return output;
+    }
+
+    /// <summary>The checkpoints every one of the questions is asked at; a question the catalogue lacks asks at none.</summary>
+    private static List<Checkpoint> Shared(IEnumerable<string> questions, QuestionCatalogue catalogue)
+    {
+        IEnumerable<Checkpoint>? shared = null;
+        foreach (var id in questions)
+        {
+            var at = catalogue.TryResolve(id, out var question) ? question.Checkpoints : [];
+            shared = shared is null ? at : shared.Intersect(at);
+        }
+        return [.. shared ?? []];
     }
 
     private static bool SameState(JsonElement? first, JsonElement? second) =>

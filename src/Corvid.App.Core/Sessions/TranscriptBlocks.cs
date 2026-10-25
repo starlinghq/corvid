@@ -240,7 +240,10 @@ public sealed class DecisionsBlock : TranscriptBlock
         IsSummary = decisions.Summary;
         Chips = [.. decisions.Group.Answers.Select(DecisionChip.From)];
         var checkpoint = SessionText.Checkpoint(decisions.Group.Checkpoint);
-        AutomationName = $"{char.ToUpperInvariant(checkpoint[0])}{checkpoint[1..]} checkpoint, {decisions.Group.Decider}";
+        // An unnamed checkpoint (a feed that lost the span's tag) is still a row, not a failure to draw the session.
+        AutomationName = checkpoint.Length == 0
+            ? $"Checkpoint, {decisions.Group.Decider}"
+            : $"{char.ToUpperInvariant(checkpoint[0])}{checkpoint[1..]} checkpoint, {decisions.Group.Decider}";
     }
 }
 

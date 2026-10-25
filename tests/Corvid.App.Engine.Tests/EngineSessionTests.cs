@@ -128,6 +128,41 @@ public sealed class EngineSessionTests
     }
 
     [Fact]
+    public async Task ACompactedSessionReplaysWithItsMarkerAsTheLiveOneShowedIt()
+    {
+        const string record = """{"goal":"ship it","constraints":["keep tests green"],"decisions":[],"files":["a.cs"],"open_questions":[],"next_step":"release"}""";
+        await using var fixture = await EngineFixture.StartAsync(new FakeModels(new FakeGenerator(
+            Reply.Say("First answer."), Reply.Say("Second answer."), Reply.Say(record), Reply.Say(record))));
+        var id = fixture.Runtime.OpenSession(surface: "app").Id;
+        using var service = fixture.Sessions();
+        var live = new Recorder();
+        using var subscription = await service.OpenAsync(id, live.Add, TestContext.Current.CancellationToken);
+        await service.SendAsync(id, "one", TestContext.Current.CancellationToken);
+        await service.IdleAsync();
+        await service.SendAsync(id, "two", TestContext.Current.CancellationToken);
+        await service.IdleAsync();
+        await service.RunCommandAsync(id, "/compact keep the plan", TestContext.Current.CancellationToken);
+        await service.IdleAsync();
+        var shown = SessionFold.Replay(id, [.. subscription.History, .. live.Updates]);
+        var marker = Assert.Single(shown.Transcript.OfType<CompactionEntry>());
+
+        using var fresh = fixture.Sessions();
+        using var reopened = await fresh.OpenAsync(id, _ => { }, TestContext.Current.CancellationToken);
+        var replayed = SessionFold.Replay(id, reopened.History);
+
+        var again = Assert.Single(replayed.Transcript.OfType<CompactionEntry>());
+        Assert.Equal((marker.Compaction.FromTurn, marker.Compaction.ThroughTurn, marker.Compaction.Goal, marker.Compaction.Focus),
+            (again.Compaction.FromTurn, again.Compaction.ThroughTurn, again.Compaction.Goal, again.Compaction.Focus));
+        // Every checkpoint named as live, none blank.
+        Assert.Equal(live.Updates.OfType<CheckpointDecided>().Select(decided => decided.Checkpoint),
+            reopened.History.OfType<CheckpointDecided>().Select(decided => decided.Checkpoint));
+        // And a view model opens it.
+        using var view = new SessionViewModel(id, fresh, new Corvid.App.Core.Mvvm.InlineDispatcher(), fixture.Time);
+        await view.OpenAsync(TestContext.Current.CancellationToken);
+        Assert.Contains(view.Blocks, block => block is CompactionBlock);
+    }
+
+    [Fact]
     public async Task ATurnTheLogHoldsNoAnswerForReplaysAsInterruptedAsTheLiveOneEnded()
     {
         await using var fixture = await EngineFixture.StartAsync(NotesTurn());
