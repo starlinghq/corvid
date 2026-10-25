@@ -782,7 +782,7 @@
           </ItemsControl>
           <TextBlock Text="Or type an answer in the composer." Style="{StaticResource CorvidSmallText}"
                      Visibility="{x:Bind local:SessionsPage.Both(IsOpen, AllowsFreeText), Mode=OneWay}" />
-          <TextBlock Text="{x:Bind local:SessionsPage.Prefixed('answered: ', AnswerText), Mode=OneWay}" Style="{StaticResource CorvidSmallText}"
+          <TextBlock Text="{x:Bind AnswerText, Mode=OneWay}" Style="{StaticResource CorvidSmallText}"
                      Visibility="{x:Bind ui:Ui.VisibleIfText(AnswerText), Mode=OneWay}" />
         </StackPanel>
       </Grid>

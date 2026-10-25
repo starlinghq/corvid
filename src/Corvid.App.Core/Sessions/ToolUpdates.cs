@@ -134,8 +134,9 @@ public sealed record ToolCallUpdate(string CallId) : SessionUpdate
     public string? Summary { get; init; }
 
     /// <summary>
-    /// The last lines of output while the call runs, replacing the previous tail. Needs K-2: a bounded tail of
-    /// <c>shell</c> and <c>web_fetch</c> output streamed while the call runs.
+    /// The last lines of output while the call runs, replacing the previous tail (K-2: the shell's output and web_fetch's
+    /// progress, bounded and credential-scrubbed by the kernel, reported at most a few times a second). Live only: the
+    /// log keeps the result, not the tail. Untrusted text.
     /// </summary>
     public string? Tail { get; init; }
 
