@@ -11,7 +11,8 @@ namespace Corvid.Host.Sessions;
 /// <param name="Checkpoints">The write ledger's checkpoints (<see cref="CheckpointLogged"/>).</param>
 /// <param name="Approvals">
 /// Each asked call's approval answer (<see cref="ToolCallChanged.Approval"/>), and a refused call's outcome as
-/// <c>denied</c>, as a live turn shows it.
+/// <c>denied</c>, as a live turn shows it; for a call that asked nobody, the pipeline's assessment
+/// (<see cref="ToolCallChanged.Assessment"/>, G-2) or the tool's read-only declaration; and the checkpoint taken before it.
 /// </param>
 /// <param name="UnfinishedCalls">
 /// A call the log holds no result for (its turn was interrupted, or the process stopped under it) replays as failed and
@@ -65,6 +66,16 @@ public static class SessionReplay
             .GroupBy(call => call.CallId, StringComparer.Ordinal).ToDictionary(group => group.Key, group => group.Last(), StringComparer.Ordinal);
         var checkpoints = snapshot.CheckpointEvents.Where(item => snapshot.IsVisible(item.Sequence)).ToList();
         var approvals = options.Approvals ? Approvals(stored.Values, snapshot.IsVisible) : [];
+        // G-2: why a call that asked nobody ran, or was refused.
+        var assessments = options.Approvals
+            ? stored.Values.Where(item => snapshot.IsVisible(item.Sequence)).OrderBy(item => item.Sequence).Select(item => item.Payload)
+                .OfType<ApprovalAssessed>().GroupBy(assessed => assessed.CallId, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.Last(), StringComparer.Ordinal)
+            : [];
+        var asked = options.Approvals
+            ? stored.Values.Select(item => item.Payload).OfType<ApprovalRequested>().Select(request => request.CallId).OfType<string>()
+                .ToHashSet(StringComparer.Ordinal)
+            : [];
 
         var items = new List<(long Sequence, SessionStreamUpdate Update)>();
         int? round = null;
@@ -121,8 +132,14 @@ public static class SessionReplay
                         && checkpoints.FirstOrDefault(c => c.Checkpoint is { Kind: CheckpointKinds.After } a && a.CallId == result.CallId) is { Checkpoint.Paths: { Length: > 0 } paths } after)
                         diffs = await tools.LedgerDiffsAsync(before.Checkpoint.Revision, after.Checkpoint.Revision, paths).ConfigureAwait(false);
                     var approval = approvals.GetValueOrDefault(result.CallId);
+                    var checkpoint = options.Approvals
+                        ? checkpoints.FirstOrDefault(c => c.Checkpoint is { Kind: CheckpointKinds.Before } b && b.CallId == result.CallId)?.Checkpoint.CheckpointId
+                        : null;
                     items.Add((entry.FromSequence, new ToolCallChanged(result.CallId)
                     {
+                        Assessment = assessments.GetValueOrDefault(result.CallId),
+                        ReadOnly = options.Approvals && !asked.Contains(result.CallId) ? calls.GetValueOrDefault(result.CallId)?.ReadOnly : null,
+                        CheckpointBefore = checkpoint,
                         At = at,
                         Tool = calls.GetValueOrDefault(result.CallId)?.ToolName,
                         Kind = calls.GetValueOrDefault(result.CallId) is { } issued ? tools.Kind(issued.ToolName) : null,

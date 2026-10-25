@@ -53,6 +53,38 @@ public sealed class AuditReviewTests
     }
 
     [Fact]
+    public void TheGatesPlaceholdersAreMarkedAndARepeatedValueCountsOnce()
+    {
+        Assert.Equal([new RedactedSegment("to ", false), new RedactedSegment("<PERSON_1>", true), new RedactedSegment(" at ", false),
+            new RedactedSegment("<EMAIL_1>", true)], AuditText.Redactions("to <PERSON_1> at <EMAIL_1>"));
+        // Not the gate's form: lower case, no number, or the neutralized ‹…› of quoted placeholder text.
+        Assert.Equal([new RedactedSegment("<person_1> <EMAIL> ‹EMAIL_1›", false)], AuditText.Redactions("<person_1> <EMAIL> ‹EMAIL_1›"));
+
+        // One person named three times and one address: two values, as the gate counts them.
+        var full = "[user] Write to <PERSON_1> at <EMAIL_1>.\n[assistant] Writing to <PERSON_1>.\n[user] Thank <PERSON_1>.";
+        Assert.Equal(2, AuditText.CountRedactions(full));
+        var egress = new EgressView(new EgressRequest(1, 10, "s", At, "model") { Excerpt = full, Full = full, Redacted = 2 }, TimeZoneInfo.Utc);
+        Assert.False(egress.HasRedactionMismatch);
+        Assert.Equal(4, egress.Lines.SelectMany(line => line.Segments).Count(segment => segment.IsRedaction));
+
+        // A request sent as it was whose text holds a placeholder-shaped string: the gate redacted nothing, and it is flagged.
+        var sent = new EgressView(new EgressRequest(2, 11, "s", At, "model") { Full = "a page quoting <EMAIL_1>", Redacted = 0 }, TimeZoneInfo.Utc);
+        Assert.True(sent.HasRedactionMismatch);
+    }
+
+    [Fact]
+    public void ADirectRequestNamesItsHostAndUnknownTokensAreLeftOut()
+    {
+        var local = new EgressView(new EgressRequest(1, 10, "s", At, "m") { Host = "127.0.0.1:8080", Bytes = 812 }, TimeZoneInfo.Utc);
+        Assert.Equal("direct to 127.0.0.1:8080", AuditText.Plain(local.Route));
+        Assert.Equal("812 B", local.Sent);
+
+        var cloud = new EgressView(new EgressRequest(1, 10, "s", At, "m") { Secret = "k", Host = "h", Bytes = 38_200, Tokens = 9410, CachedPrefix = 6120 },
+            TimeZoneInfo.Utc);
+        Assert.Equal("38.2 KB · 9,410 tokens · cached prefix 6,120", cloud.Sent);
+    }
+
+    [Fact]
     public void TheRawEventShowsHiddenCharactersAndTheNamesAreCleaned()
     {
         var auditEvent = new AuditEvent(5, "s-1", At, "tool\u202E_result", AuditEventGroup.Tools)

@@ -31,6 +31,8 @@ public sealed class SessionUpdateReporter : ITurnObserver
     private readonly Dictionary<string, ToolResult> _results = new(StringComparer.Ordinal);
     private readonly Dictionary<string, CheckpointTaken> _before = new(StringComparer.Ordinal);
     private readonly Dictionary<string, CheckpointTaken> _after = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ApprovalAssessed> _assessed = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _asked = new(StringComparer.Ordinal);
     private readonly List<SessionStreamUpdate> _fromLog = [];
     // K-2: each running call's latest tail not yet reported, the calls with a report queued, and the calls that finished.
     private readonly Dictionary<string, (string Tool, string Tail)> _tails = new(StringComparer.Ordinal);
@@ -101,8 +103,8 @@ public sealed class SessionUpdateReporter : ITurnObserver
             _tails.Remove(callId);
         }
         Announce(callId, tool, approval: false);
-        var (call, result, before, after) = ReadNew(() => (_calls.GetValueOrDefault(callId), _results.GetValueOrDefault(callId),
-            _before.GetValueOrDefault(callId), _after.GetValueOrDefault(callId)));
+        var (call, result, before, after, assessed, asked) = ReadNew(() => (_calls.GetValueOrDefault(callId), _results.GetValueOrDefault(callId),
+            _before.GetValueOrDefault(callId), _after.GetValueOrDefault(callId), _assessed.GetValueOrDefault(callId), _asked.Contains(callId)));
         FlushLog();
         IReadOnlyList<FileDiff> diffs = [];
         if (before is not null && after is { Paths: { Length: > 0 } paths })
@@ -120,6 +122,10 @@ public sealed class SessionUpdateReporter : ITurnObserver
             Locations = _tools.Locations(call?.Arguments),
             Diffs = [.. diffs],
             Elapsed = elapsed,
+            Assessment = assessed,
+            // A read-only call that was asked (a network read in a tainted turn) is the prompter's to close.
+            ReadOnly = asked ? null : call?.ReadOnly,
+            CheckpointBefore = before?.CheckpointId,
         });
     });
 
@@ -304,6 +310,12 @@ public sealed class SessionUpdateReporter : ITurnObserver
                             break;
                         case ToolResult result:
                             _results[result.CallId] = result;
+                            break;
+                        case ApprovalAssessed assessed:
+                            _assessed[assessed.CallId] = assessed;
+                            break;
+                        case ApprovalRequested { CallId: { } askedFor }:
+                            _asked.Add(askedFor);
                             break;
                         case CheckpointTaken taken:
                             if (taken is { CallId: { } before, Kind: CheckpointKinds.Before })

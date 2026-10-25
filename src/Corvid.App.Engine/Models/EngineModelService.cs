@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Corvid.App.Core;
 using Corvid.App.Core.Models;
 using Corvid.App.Core.Mvvm;
+using Corvid.Host.Audit;
 using Corvid.Host.Composition;
 using Corvid.Host.Configuration;
 using Corvid.Host.Diagnostics;
@@ -633,14 +634,35 @@ public sealed class EngineModelService : IModelService, IDisposable
             validated,
             [.. ModelSlots.All.Select(slot => Slot(slot, slots.GetValueOrDefault(slot), runtime, session))],
             catalogue,
-            new CloudPrivacy(options.Privacy.Cloud.ToString().ToLowerInvariant(), ExtractorBound(runtime, slots, availability), vaultPresent, 0, 0, 0)
-            {
-                TodayUnknown = "not counted here yet: the egress ledger's counts come with Audit (G-9)",
-            },
+            Privacy(options, ExtractorBound(runtime, slots, availability), vaultPresent),
             Decider(options, slots, availability, runtime),
             Gpus(gpuChecks),
             Placements(options),
             $"{options.Devices.CpuThreads} {(options.Devices.CpuThreads == 1 ? "thread" : "threads")} for models on the CPU (Corvid:Devices:CpuThreads)");
+    }
+
+    /// <summary>
+    /// The privacy panel: the posture, and today's counts from the egress ledger (G-9), read from its file so they show while
+    /// the models load. "Today" is the clock's local day. A ledger that cannot be read says so in place of the counts.
+    /// </summary>
+    private CloudPrivacy Privacy(CorvidOptions options, bool extractorBound, bool vaultPresent)
+    {
+        var posture = options.Privacy.Cloud.ToString().ToLowerInvariant();
+        var now = _time.GetUtcNow();
+        var local = TimeZoneInfo.ConvertTime(now, _time.LocalTimeZone);
+        var midnight = new DateTimeOffset(local.Date, local.Offset);
+        try
+        {
+            var counts = new EgressLedger(CorvidPaths.EgressDatabase(options)).Count(midnight);
+            return new CloudPrivacy(posture, extractorBound, vaultPresent, counts.Requests, counts.RedactedValues, counts.Refused);
+        }
+        catch (Exception exception) when (exception is not (OutOfMemoryException or OperationCanceledException))
+        {
+            return new CloudPrivacy(posture, extractorBound, vaultPresent, 0, 0, 0)
+            {
+                TodayUnknown = "the egress ledger could not be read: " + exception.Message,
+            };
+        }
     }
 
     private ModelSlot Slot(string slot, SlotSettings? settings, CorvidRuntime? runtime, CorvidSession? session)

@@ -15,7 +15,8 @@ namespace Corvid.Kernel.Events;
 /// <remarks>
 /// Scrubbed: <see cref="ToolCallIssued.Arguments"/>, <see cref="ToolResult.Result"/>, <see cref="AssistantMessage.Text"/>,
 /// <see cref="ClarificationAsked"/>'s text and options, <see cref="ApprovalRequested.Action"/> and <see cref="ApprovalRequested.Reason"/>, <see cref="Decision.State"/> and
-/// <see cref="AskedQuestion.Instructions"/> (a pre_execute or memory_op question carries arguments and text), and
+/// <see cref="AskedQuestion.Instructions"/> (a pre_execute or memory_op question carries arguments and text), <see cref="ApprovalAssessed"/>'s reasons and rule,
+/// <see cref="SessionTitled.Title"/> and <see cref="SessionRecapped.Text"/>, and
 /// <see cref="DeliveryQueued.Text"/>. Not scrubbed: <see cref="UserMessage"/> and <see cref="UserSteered"/> (what the user said is a recorded decision; a
 /// key the user hands over goes through Vault), and ids, sequences, revisions and paths. Only the egress rules run, never the
 /// encoded-blob rules, so commit SHAs and digests in shell output survive.
@@ -42,8 +43,24 @@ public static class EventScrubber
             // title is shown in every list rather than kept as a recorded message.
             SessionTitled titled when Text(titled.Title) is { } text => titled with { Title = text },
             SessionRecapped recap when Text(recap.Text) is { } text => recap with { Text = text },
+            ApprovalAssessed assessed => Assessed(assessed),
             _ => payload,
         };
+    }
+
+    // A reason quotes the command line a rule matched (a remembered rule's source), and a rule names hosts and recipients.
+    private static ApprovalAssessed Assessed(ApprovalAssessed assessed)
+    {
+        var changed = false;
+        var reasons = assessed.Reasons.Select(reason =>
+        {
+            if (Text(reason.Detail) is not { } detail)
+                return reason;
+            changed = true;
+            return reason with { Detail = detail };
+        }).ToImmutableArray();
+        var rule = assessed.Rule is { } words ? Text(words) : null;
+        return !changed && rule is null ? assessed : assessed with { Reasons = reasons, Rule = rule ?? assessed.Rule };
     }
 
     private static ApprovalRequested Approval(ApprovalRequested approval)

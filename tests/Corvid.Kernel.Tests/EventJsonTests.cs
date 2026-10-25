@@ -40,7 +40,24 @@ public sealed class EventJsonTests
         [typeof(ClarificationAsked)] = "clarification_asked",
         [typeof(SessionTitled)] = "session_titled",
         [typeof(SessionRecapped)] = "session_recapped",
+        [typeof(ApprovalAssessed)] = "approval_assessed",
+        [typeof(EgressRecorded)] = "egress_recorded",
     };
+
+    [Fact]
+    public void The_g2_and_g9_events_have_their_documented_persisted_form()
+    {
+        var assessed = new ApprovalAssessed("call-1", ApprovalResolutions.Automatic, "smart", [new AssessmentReason("risk", "approval_mode: level 1")],
+            Risk: new AssessedRisk("d-1", "approval_mode", 1, "low", 0.93, true, "kev-0.8b"), Effects: ["write"], Contained: true);
+        Assert.Equal("""
+            {"type":"approval_assessed","call_id":"call-1","resolution":"automatic","mode":"smart","reasons":[{"code":"risk","detail":"approval_mode: level 1"}],"risk":{"decision_id":"d-1","action":"approval_mode","level":1,"option":"low","confidence":0.93,"calibrated":true,"decider":"kev-0.8b"},"effects":["write"],"contained":true}
+            """, EventJson.Serialize(assessed));
+        var egress = new EgressRecorded("r-1", "claude@anthropic", EgressOutcomes.Redacted, ImmutableDictionary<string, int>.Empty.Add("email", 1),
+            1, 812, "redacted email", Slot: "generator");
+        Assert.Equal("""
+            {"type":"egress_recorded","request_id":"r-1","model":"claude@anthropic","outcome":"redacted","labels":{"email":1},"placeholders":1,"bytes":812,"reason":"redacted email","tainted":false,"slot":"generator"}
+            """, EventJson.Serialize(egress));
+    }
 
     [Fact]
     public void Discriminators_are_the_pinned_wire_names()

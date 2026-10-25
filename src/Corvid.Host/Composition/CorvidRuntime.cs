@@ -186,6 +186,9 @@ public sealed class CorvidRuntime : IAsyncDisposable
     /// <summary>The privacy egress gate (plan §10.4) every gated binding and every session's switches share.</summary>
     public PrivacyEgress Egress => _composer.Egress;
 
+    /// <summary>The egress ledger (G-9): every request the gate decided on, with the request as sent kept beside the log.</summary>
+    public Audit.EgressLedger EgressLedger => _composer.Ledger;
+
     /// <summary>
     /// Whether this process runs due jobs, and if not, why. "run by another corvid process" can become "running in this
     /// process" when a session opens after that process exited (C-041, <see cref="OpenSession"/>).

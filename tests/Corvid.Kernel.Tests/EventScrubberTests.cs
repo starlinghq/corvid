@@ -53,6 +53,23 @@ public sealed class EventScrubberTests : IDisposable
     }
 
     [Fact]
+    public void An_assessment_is_scrubbed_in_its_reasons_and_its_rule_and_kept_whole_otherwise()
+    {
+        var assessed = new ApprovalAssessed("c1", ApprovalResolutions.RuleDenied, "smart",
+            [new AssessmentReason("rule_denied", $"a remembered denial matches: curl -H 'Authorization: Bearer {Token}'")],
+            Rule: $"`curl` for {Token}", RuleScope: "always");
+
+        var scrubbed = Assert.IsType<ApprovalAssessed>(EventScrubber.Scrub(assessed));
+
+        Assert.DoesNotContain(Token, Persisted(scrubbed), StringComparison.Ordinal);
+        Assert.Contains(Marker, scrubbed.Reasons[0].Detail, StringComparison.Ordinal);
+        Assert.Contains(Marker, scrubbed.Rule, StringComparison.Ordinal);
+        Assert.Equal(("c1", "always"), (scrubbed.CallId, scrubbed.RuleScope));
+        var clean = new ApprovalAssessed("c2", ApprovalResolutions.Automatic, "smart", [new AssessmentReason("read_only", "reads only")]);
+        Assert.Same(clean, EventScrubber.Scrub(clean));
+    }
+
+    [Fact]
     public void Assistant_text_approval_text_and_queued_deliveries_are_scrubbed()
     {
         var reply = Assert.IsType<AssistantMessage>(EventScrubber.Scrub(new AssistantMessage($"Your token is {Token}.")));

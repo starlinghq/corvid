@@ -176,8 +176,9 @@ public sealed record ApprovalOptions
 /// deny, then ask the user with a deadline and record <c>ApprovalRequested</c> and <c>ApprovalResolved</c>.
 /// </summary>
 /// <remarks>
-/// Only prompts are recorded as approval events; automatic runs and denials that asked nobody are the caller's to record
-/// with the tool result. The <c>risk</c> question is a <c>Decision</c> event appended by the fabric, and the user's answer
+/// A prompt is recorded as <c>ApprovalRequested</c> and <c>ApprovalResolved</c>; a tool call's automatic run or a denial
+/// that asked nobody as one <c>ApprovalAssessed</c> (G-2), with the rule, mode and <c>risk</c> answer that decided it. The
+/// call's result is the caller's to record. The <c>risk</c> question is a <c>Decision</c> event appended by the fabric, and the user's answer
 /// is recorded as its outcome, which is the calibration data the degraded tier exists to collect.
 /// </remarks>
 public sealed class ApprovalPipeline
@@ -339,14 +340,19 @@ public sealed class ApprovalPipeline
         switch (assessment.Outcome)
         {
             case ApprovalOutcome.Auto:
-                return new(true, assessment.Rule is null ? ApprovalResolution.Automatic : ApprovalResolution.RuleAllowed, assessment, null, null);
+                var allowed = assessment.Rule is null ? ApprovalResolution.Automatic : ApprovalResolution.RuleAllowed;
+                Assessed(context, assessment, allowed);
+                return new(true, allowed, assessment, null, null);
             case ApprovalOutcome.Deny:
-                return new(false, assessment.Hardline ? ApprovalResolution.Hardline : ApprovalResolution.RuleDenied, assessment, null, null);
+                var denied = assessment.Hardline ? ApprovalResolution.Hardline : ApprovalResolution.RuleDenied;
+                Assessed(context, assessment, denied);
+                return new(false, denied, assessment, null, null);
         }
 
         if (_prompter is null || !context.Interactive)
         {
             RecordOutcome(context, assessment, "no_approver");
+            Assessed(context, assessment, ApprovalResolution.NoApprover);
             return new(false, ApprovalResolution.NoApprover, assessment, null, null);
         }
 
@@ -500,6 +506,50 @@ public sealed class ApprovalPipeline
         return new ApprovalResult(approved, resolution, assessment, approvalId, null);
     }
 
+    /// <summary>
+    /// Records why a tool call ran, or was refused, without asking anyone (G-2): an <see cref="ApprovalAssessed"/> event with
+    /// the resolution, the mode, the reasons, the rule that decided and the <c>risk</c> answer, so a surface can say "ran
+    /// unasked in smart mode, risk 1 (0.93)" live and on replay. Only for a tool call (a job's pre-run script has none).
+    /// </summary>
+    private void Assessed(ApprovalContext context, ApprovalAssessment assessment, ApprovalResolution resolution)
+    {
+        if (context.CallId is not { } callId)
+            return;
+        var rule = assessment.Rule;
+        var scope = rule is null ? null : SessionRules(context.SessionId).Contains(rule) ? "session" : "always";
+        var analysis = assessment.Analysis;
+        Append(context.SessionId, new ApprovalAssessed(callId, resolution switch
+            {
+                ApprovalResolution.RuleAllowed => ApprovalResolutions.RuleAllowed,
+                ApprovalResolution.RuleDenied => ApprovalResolutions.RuleDenied,
+                ApprovalResolution.Hardline => ApprovalResolutions.Hardline,
+                ApprovalResolution.NoApprover => ApprovalResolutions.NoApprover,
+                _ => ApprovalResolutions.Automatic,
+            },
+            context.Mode.ToString().ToLowerInvariant(),
+            [.. assessment.Reasons.Select(reason => new AssessmentReason(reason.Code, reason.Detail))],
+            rule?.Describe(), scope, Risk(assessment.Risk), [.. WireNames.Effects(analysis.Effects)], Contained(analysis)),
+            CancellationToken.None);
+    }
+
+    /// <summary>The <c>risk</c> decision as an assessment records it; its level and confidence only when a decider answered.</summary>
+    private AssessedRisk? Risk(FabricVerdict? risk)
+    {
+        if (risk is null)
+            return null;
+        var options = _fabric.Policy.Catalogue["risk"].Options;
+        var index = -1;
+        for (var i = 0; i < options.Length && risk.Verdict.Option is { } option; i++)
+            if (options[i].Name == option)
+                index = i;
+        return new AssessedRisk(risk.DecisionId, risk.Verdict.Action,
+            Level: index >= 0 && !risk.Skipped ? index : null,
+            Option: risk.Skipped ? null : risk.Verdict.Option,
+            Confidence: risk.Skipped ? null : risk.Answer?.Confidence,
+            Calibrated: risk.Skipped ? null : risk.Answer?.Calibrated,
+            Decider: risk.Decider);
+    }
+
     private void RecordOutcome(ApprovalContext context, ApprovalAssessment assessment, string outcome)
     {
         if (assessment.Risk is { } risk)
@@ -636,14 +686,17 @@ public sealed class ApprovalPipeline
     private static bool SmartEligible(ActionAnalysis analysis, ProposedAction action)
     {
         var destructive = action is ToolAction { Tool.Risk.Destructive: true };
-        var contained = analysis.Targets.All(target => target.Kind != TargetKind.Path
-            || target.Location == PathLocation.Inside
-            || target.Location == PathLocation.WorkspaceRoot && target.Access is not TargetAccess.Delete);
+        var contained = Contained(analysis);
         var effects = analysis.Effects;
         return contained && !destructive
             && !effects.HasFlag(ActionEffects.Network) && !effects.HasFlag(ActionEffects.Elevated)
             && !effects.HasFlag(ActionEffects.System);
     }
+
+    /// <summary>Every path the action touches is in the workspace, and none is a delete at its root.</summary>
+    private static bool Contained(ActionAnalysis analysis) => analysis.Targets.All(target => target.Kind != TargetKind.Path
+        || target.Location == PathLocation.Inside
+        || target.Location == PathLocation.WorkspaceRoot && target.Access is not TargetAccess.Delete);
 
     /// <summary>Reasons that make an action ask whatever its score, mode or remembered rules (and offer only "once").</summary>
     private ImmutableArray<ApprovalReason> Forced(ActionAnalysis analysis, ProposedAction action, ApprovalContext context)

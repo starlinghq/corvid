@@ -207,6 +207,98 @@ public sealed class SessionStreamTests
         Assert.Equal((ToolCallState.Failed, null, null), (plain.Status, plain.Outcome, plain.Approval));
     }
 
+    private sealed class ApproveForTheSession : IApprovalPrompter
+    {
+        public int Asked;
+
+        public ValueTask<ApprovalAnswer> AskAsync(ApprovalPrompt prompt, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref Asked);
+            return ValueTask.FromResult(ApprovalAnswer.Approve(ApprovalScope.Session));
+        }
+    }
+
+    [Fact]
+    public async Task ACallASessionRuleLetRunUnaskedCarriesTheAssessmentLiveAndOnReplay()
+    {
+        var models = new FakeModels(new FakeGenerator(
+            Reply.Call("write_file", """{"path":"notes.txt","content":"hello\n"}"""), Reply.Say("Wrote it."),
+            Reply.Call("write_file", """{"path":"notes.txt","content":"hello again\n"}"""), Reply.Say("Wrote it again.")));
+        models.Provider.Add("file-embed", [ModelSlots.TextEmbedder], () => new KeywordEmbedder("write", "save"), context: 512, tools: ToolCallSupport.None);
+        await using var host = TestHost.Create(models, FileTools);
+        var runtime = await host.StartAsync();
+        await using var _ = runtime;
+        var session = runtime.OpenSession(surface: "test");
+        var tools = new ToolPresentation(runtime);
+        var live = new List<SessionStreamUpdate>();
+        var prompter = new ApproveForTheSession();
+        using (runtime.AttachPrompter(session.Id, prompter))
+        {
+            foreach (var text in new[] { Prompt, "write it again" })
+            {
+                var reporter = new SessionUpdateReporter(runtime, session.Id, tools, runtime.Log.GetHead(session.Id, TestContext.Current.CancellationToken), update =>
+                {
+                    lock (live)
+                        live.Add(update);
+                });
+                using (runtime.Feed.Subscribe(session.Id, reporter))
+                {
+                    var delivery = await session.SendAsync(text, TestContext.Current.CancellationToken);
+                    await reporter.FinishAsync(delivery.Result?.Text);
+                }
+            }
+        }
+
+        // The first write asked (and wrote a session rule); the second ran under it, unasked.
+        Assert.Equal(1, prompter.Asked);
+        var finished = live.OfType<ToolCallChanged>().ToList();
+        Assert.Equal(2, finished.Count);
+        Assert.Null(finished[0].Assessment);
+        var assessed = Assert.IsType<Abstractions.Events.ApprovalAssessed>(finished[1].Assessment);
+        Assert.Equal((finished[1].CallId, Abstractions.Events.ApprovalResolutions.RuleAllowed, "session"), (assessed.CallId, assessed.Resolution, assessed.RuleScope));
+        Assert.StartsWith("`write_file", assessed.Rule, StringComparison.Ordinal);
+        Assert.NotNull(finished[1].CheckpointBefore);
+        Assert.Equal(false, finished[1].ReadOnly);
+
+        var replay = await SessionReplay.ReadAsync(runtime, session.Id, tools, cancellationToken: TestContext.Current.CancellationToken);
+        var replayed = replay.Updates.OfType<ToolCallChanged>().ToList();
+        Assert.Equal(finished.Select(item => item.CheckpointBefore), replayed.Select(item => item.CheckpointBefore));
+        Assert.NotNull(replayed[0].Approval);
+        Assert.Null(replayed[0].Assessment);
+        Assert.Equal(Kernel.Events.EventPayload.Json(assessed), Kernel.Events.EventPayload.Json(replayed[1].Assessment!));
+        // The conversation alone has none of it.
+        var transcript = await SessionReplay.ReadAsync(runtime, session.Id, tools, ReplayOptions.Transcript,
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.All(transcript.Updates.OfType<ToolCallChanged>(), item => Assert.Equal((null, null, null), (item.Assessment, item.ReadOnly, item.CheckpointBefore)));
+    }
+
+    [Fact]
+    public async Task ACallToAReadOnlyToolSaysSoLiveAndOnReplay()
+    {
+        await using var host = TestHost.Create(new FakeModels(new FakeGenerator(Reply.Call("list_notes"), Reply.Say("No notes."))));
+        var runtime = await host.StartAsync();
+        await using var _ = runtime;
+        var session = runtime.OpenSession(surface: "test");
+        var tools = new ToolPresentation(runtime);
+        var live = new List<SessionStreamUpdate>();
+        var reporter = new SessionUpdateReporter(runtime, session.Id, tools, 0, update =>
+        {
+            lock (live)
+                live.Add(update);
+        });
+        using (runtime.Feed.Subscribe(session.Id, reporter))
+        {
+            var delivery = await session.SendAsync("list my notes", TestContext.Current.CancellationToken);
+            await reporter.FinishAsync(delivery.Result?.Text);
+        }
+
+        var finished = Assert.Single(live.OfType<ToolCallChanged>());
+        Assert.Equal((true, null), (finished.ReadOnly, finished.Assessment));
+        var replayed = Assert.Single((await SessionReplay.ReadAsync(runtime, session.Id, tools, cancellationToken: TestContext.Current.CancellationToken))
+            .Updates.OfType<ToolCallChanged>());
+        Assert.Equal((true, null), (replayed.ReadOnly, replayed.Assessment));
+    }
+
     [Fact]
     public void ATitleNamesTheTargetOnOneLineAndCutsALongOne()
     {

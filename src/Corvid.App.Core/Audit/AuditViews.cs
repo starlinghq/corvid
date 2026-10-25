@@ -100,8 +100,14 @@ public sealed class EgressView : ObservableObject
         When = string.Create(CultureInfo.InvariantCulture, $"{AuditText.Time(request.At, zone)} · turn {request.Turn}, step {request.Step}");
         Model = SafeText.Clean(request.Model);
         // Built span by span, never parsed: the secret's name and the host are data.
-        Route = [new AuditSpan("via Vault "), new AuditSpan(SafeText.Clean(request.Secret), AuditSpanStyle.Mono), new AuditSpan(", " + SafeText.Clean(request.Host))];
-        Sent = $"{AuditText.Size(request.Bytes)} · {AuditText.Count(request.Tokens)} tokens · cached prefix {AuditText.Count(request.CachedPrefix)}";
+        // A gated local server takes no Vault secret: the request goes to it directly.
+        Route = request.Secret.Length > 0
+            ? [new AuditSpan("via Vault "), new AuditSpan(SafeText.Clean(request.Secret), AuditSpanStyle.Mono), new AuditSpan(", " + SafeText.Clean(request.Host))]
+            : [new AuditSpan("direct to "), new AuditSpan(SafeText.Clean(request.Host.Length > 0 ? request.Host : "the model's endpoint"))];
+        // The gate knows the request's size, not the provider's token count or cache: those show only when known.
+        Sent = AuditText.Size(request.Bytes)
+            + (request.Tokens > 0 ? $" · {AuditText.Count(request.Tokens)} tokens" : "")
+            + (request.CachedPrefix > 0 ? $" · cached prefix {AuditText.Count(request.CachedPrefix)}" : "");
         RedactedTag = request.Redacted == 1 ? "1 value" : string.Create(CultureInfo.InvariantCulture, $"{request.Redacted} values");
         var markers = AuditText.CountRedactions(request.Full);
         RedactionMismatch = markers == request.Redacted ? ""

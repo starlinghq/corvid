@@ -278,7 +278,8 @@ public sealed class ToolCardBlock : TranscriptBlock
             ToolOutcome.Failed => "failed",
             ToolOutcome.InvalidArguments => "invalid arguments",
             ToolOutcome.Cancelled when tool.Verdict?.Kind is not VerdictKind.Cancelled => "cancelled",
-            ToolOutcome.Denied when tool.Verdict?.Kind is not (VerdictKind.Denied or VerdictKind.TimedOut or VerdictKind.RuleDenied or VerdictKind.Hardline) => "denied",
+            ToolOutcome.Denied when tool.Verdict?.Kind is not (VerdictKind.Denied or VerdictKind.TimedOut or VerdictKind.RuleDenied or VerdictKind.Hardline
+                or VerdictKind.NoApprover) => "denied",
             null when tool.Status == ToolCallStatus.Failed => "failed",
             _ => null,
         };
@@ -306,6 +307,7 @@ public sealed class ToolCardBlock : TranscriptBlock
         VerdictKind.Hardline => "refused: hardline",
         VerdictKind.TimedOut => "denied: deadline",
         VerdictKind.Cancelled => "denied: cancelled",
+        VerdictKind.NoApprover => "denied: nobody to ask",
         _ => null,
     };
 
@@ -334,6 +336,7 @@ public sealed class ToolCardBlock : TranscriptBlock
             VerdictKind.Denied => verdict.Detail is { Length: > 0 } reason ? $"denied by you: {reason}" : null,
             VerdictKind.RuleDenied => $"denied by a remembered rule{(verdict.Detail is { Length: > 0 } rd ? $": {rd}" : "")}",
             VerdictKind.Hardline => $"refused by the hardline list{(verdict.Detail is { Length: > 0 } hd ? $": {hd}" : "")}",
+            VerdictKind.NoApprover => $"needed an approval and nobody could answer{(verdict.Detail is { Length: > 0 } na ? $": {na}" : "")}",
             _ => null,
         };
         if (lead is null)
@@ -341,7 +344,7 @@ public sealed class ToolCardBlock : TranscriptBlock
         var parts = new List<string> { lead };
         if (verdict.Kind is VerdictKind.SessionRule or VerdictKind.AlwaysRule or VerdictKind.Mode && risk is not null)
             parts.Add(risk);
-        if (verdict.Kind is not (VerdictKind.Denied or VerdictKind.RuleDenied or VerdictKind.Hardline) && checkpoint is not null)
+        if (verdict.Kind is not (VerdictKind.Denied or VerdictKind.RuleDenied or VerdictKind.Hardline or VerdictKind.NoApprover) && checkpoint is not null)
             parts.Add(checkpoint);
         return string.Join(" · ", parts);
     }

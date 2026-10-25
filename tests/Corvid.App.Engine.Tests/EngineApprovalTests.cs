@@ -183,6 +183,40 @@ public sealed class EngineApprovalTests
     }
 
     [Fact]
+    public async Task ACallThatRanUnaskedSaysWhyLiveAndWhenReopened()
+    {
+        // Turn 1's call is approved for the session; turn 2's runs under that rule, unasked; turn 3 only reads.
+        var models = AddNote(Reply.Call("add_note", """{"text":"water plants"}"""), Reply.Say("Added again."), Reply.Call("list_notes"), Reply.Say("Two notes."));
+        await using var fixture = await EngineFixture.StartAsync(models);
+        var id = fixture.Runtime.OpenSession(surface: "app").Id;
+        using var service = fixture.Sessions();
+        var waiter = new SessionWaiter();
+        using var subscription = await service.OpenAsync(id, waiter.Add, Ct);
+
+        await service.SendAsync(id, "add a note: water plants", Ct);
+        var request = await waiter.WaitAsync<ApprovalRequested>();
+        await service.AnswerApprovalAsync(id, request.ApprovalId, new ApprovalAnswer(ApprovalChoice.Session), Ct);
+        await waiter.WaitAsync<TurnEnded>(ended => ended.Turn == 1);
+        await service.SendAsync(id, "add it again", Ct);
+        await waiter.WaitAsync<TurnEnded>(ended => ended.Turn == 2);
+        await service.SendAsync(id, "list my notes", Ct);
+        await waiter.WaitAsync<TurnEnded>(ended => ended.Turn == 3);
+        await service.IdleAsync();
+
+        Assert.Single(waiter.Updates.OfType<ApprovalRequested>());
+        static List<string> Verdicts(SessionView view) =>
+            [.. view.Transcript.OfType<ToolEntry>().Select(tool => $"{tool.Tool} {tool.Verdict?.Kind} {tool.Verdict?.Rule}")];
+        var shown = Verdicts(SessionFold.Replay(id, [.. subscription.History, .. waiter.Updates]));
+        Assert.Equal(["add_note ApprovedSession `add_note`", "add_note SessionRule `add_note`", "list_notes ReadOnly "], shown);
+
+        using var fresh = fixture.Sessions();
+        using var reopened = await fresh.OpenAsync(id, _ => { }, Ct);
+        var replayed = Verdicts(SessionFold.Replay(id, reopened.History));
+        // The log keeps the answer's scope, not the rule's words, for an asked call; the unasked ones replay as they ran.
+        Assert.Equal(["add_note ApprovedSession ", "add_note SessionRule `add_note`", "list_notes ReadOnly "], replayed);
+    }
+
+    [Fact]
     public async Task InterruptingAWaitingTurnCancelsItsPromptAndTheQueueGoesNext()
     {
         var models = AddNote(Reply.Say("The queued one."));

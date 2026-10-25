@@ -14,6 +14,10 @@ namespace Corvid.Models.Privacy;
 /// generator, a fallback hop, and the degraded decider's questions alike. A redacted request is not streamed: a placeholder
 /// can be split across deltas, and Vault's proxy returns whole bodies anyway, so the response is restored whole and then
 /// replayed as updates.
+/// <para>
+/// An <see cref="IEgressObserver"/> (the host's egress ledger, G-9) is told each decision before anything is sent, with the
+/// messages exactly as they go when something does.
+/// </para>
 /// </remarks>
 public sealed class PrivacyEgressChatClient : DelegatingChatClient
 {
@@ -21,14 +25,16 @@ public sealed class PrivacyEgressChatClient : DelegatingChatClient
 
     private readonly ModelProfile _profile;
     private readonly PrivacyEgress _egress;
+    private readonly IEgressObserver? _observer;
 
-    public PrivacyEgressChatClient(IChatClient inner, ModelProfile profile, PrivacyEgress egress)
+    public PrivacyEgressChatClient(IChatClient inner, ModelProfile profile, PrivacyEgress egress, IEgressObserver? observer = null)
         : base(inner)
     {
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(egress);
         _profile = profile;
         _egress = egress;
+        _observer = observer;
     }
 
     public override async Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null,
@@ -36,7 +42,7 @@ public sealed class PrivacyEgressChatClient : DelegatingChatClient
     {
         var (stripped, context) = Context(options);
         (messages, stripped) = Instructions(messages, stripped);
-        var prepared = await PrepareAsync(messages, context, cancellationToken).ConfigureAwait(false);
+        var prepared = await PrepareAsync(messages, stripped, context, cancellationToken).ConfigureAwait(false);
         using var scope = context.Enter();
         var response = await base.GetResponseAsync(prepared.Messages, stripped, cancellationToken).ConfigureAwait(false);
         return prepared.Map is { } map ? PrivacyEgress.Restore(response, map) : response;
@@ -47,7 +53,7 @@ public sealed class PrivacyEgressChatClient : DelegatingChatClient
     {
         var (stripped, context) = Context(options);
         (messages, stripped) = Instructions(messages, stripped);
-        var prepared = await PrepareAsync(messages, context, cancellationToken).ConfigureAwait(false);
+        var prepared = await PrepareAsync(messages, stripped, context, cancellationToken).ConfigureAwait(false);
         if (prepared.Map is { } map)
         {
             ChatResponse response;
@@ -78,6 +84,17 @@ public sealed class PrivacyEgressChatClient : DelegatingChatClient
         }
     }
 
+    /// <summary>The distinct placeholders of the session's map that the request as sent carries: one per value redacted in it.</summary>
+    internal static int Placeholders(IEnumerable<ChatMessage> sent, RedactionMap map)
+    {
+        var found = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var text in PrivacyEgress.OutgoingTexts(sent))
+            foreach (System.Text.RegularExpressions.Match match in RedactionMap.PlaceholderPattern().Matches(text))
+                if (map.TryResolve(match.Value, out _))
+                    found.Add(match.Value);
+        return found.Count;
+    }
+
     // Keys first, then the ambient context of an outer layer that already stripped them; ambient taint is a floor.
     private static (ChatOptions? Options, ModelRequestContext Context) Context(ChatOptions? options) =>
         ModelRequestContext.Resolve(options);
@@ -93,7 +110,8 @@ public sealed class PrivacyEgressChatClient : DelegatingChatClient
         return ([new ChatMessage(ChatRole.System, instructions), .. messages], clone);
     }
 
-    private async Task<PreparedRequest> PrepareAsync(IEnumerable<ChatMessage> messages, ModelRequestContext context, CancellationToken cancellationToken)
+    private async Task<PreparedRequest> PrepareAsync(IEnumerable<ChatMessage> messages, ChatOptions? options, ModelRequestContext context,
+        CancellationToken cancellationToken)
     {
         var list = messages as IReadOnlyList<ChatMessage> ?? messages.ToList();
         using var activity = Source.StartActivity("corvid.egress", ActivityKind.Internal, parentContext: default, tags:
@@ -106,6 +124,13 @@ public sealed class PrivacyEgressChatClient : DelegatingChatClient
         // Label counts only: a value never goes into a span.
         activity?.SetTag("corvid.egress.outcome", prepared.Decision.Outcome.ToString().ToLowerInvariant());
         activity?.SetTag("corvid.egress.labels", prepared.Decision.Labels.Select(pair => $"{pair.Key}={pair.Value}").ToArray());
+        if (_observer is not null && prepared.Decision.Outcome != EgressOutcome.NotGated)
+        {
+            var refused = prepared.Decision.Refused;
+            _observer.Observe(new EgressObservation(_profile, context, prepared.Decision, refused ? null : prepared.Messages,
+                refused || prepared.Map is not { } used ? 0 : Placeholders(prepared.Messages, used),
+                refused ? [] : [.. options?.Tools?.Select(tool => tool.Name) ?? []]));
+        }
         if (prepared.Decision.Refused)
         {
             activity?.SetStatus(ActivityStatusCode.Error, prepared.Decision.Reason);

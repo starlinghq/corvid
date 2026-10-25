@@ -55,6 +55,12 @@ public sealed record ApprovalRule(
             source, createdAt);
     }
 
+    /// <summary>The rule in words, as an approval card says it: "`rm -r` under /work/build", with code in backticks.</summary>
+    public string Describe() =>
+        $"`{(Subcommand is { Length: > 0 } sub ? $"{Verb} {sub}" : Verb)}`"
+        + (Paths.IsEmpty ? "" : " under " + string.Join(", ", Paths))
+        + (Names.IsEmpty ? "" : " for " + string.Join(", ", Names));
+
     public bool Allows(string kind, AnalyzedCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
