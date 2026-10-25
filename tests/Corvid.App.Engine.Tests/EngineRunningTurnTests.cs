@@ -233,7 +233,10 @@ public sealed class EngineRunningTurnTests
         await service.IdleAsync();
 
         var question = await waiter.WaitAsync<QuestionAsked>();
-        Assert.Equal((Asked, Asked), (question.Text, question.Title));
+        // A one-line question is its own title.
+        Assert.Equal((Asked, (string?)null), (question.Text, question.Title));
+        // ask_user's call is the question's: no tool card for it.
+        Assert.DoesNotContain(waiter.Updates, update => update is ToolCall { Tool: "ask_user" });
         Assert.Equal(["0.2.0", "0.2.0-rc1"], question.Options);
         Assert.Equal(TurnOutcome.Clarifying, waiter.Updates.OfType<TurnEnded>().Single().Outcome);
         // The question's block carries its words; the turn's answer does not repeat them.

@@ -16,6 +16,16 @@ public sealed class AskUserTool : ToolFunction
 {
     public const string ToolName = "ask_user";
 
+    /// <summary>
+    /// Requests it is shortlisted for (plan §5.4's multi-vector examples): ones that leave out what the action needs, in the
+    /// user's words, so a vague request ranks it beside the tools it might mean.
+    /// </summary>
+    public static ImmutableArray<string> Examples { get; } =
+    [
+        "tag the release", "deploy it", "which one should I use", "move it to the other one", "fix the thing from before",
+        "send it to them", "update the version", "do the usual",
+    ];
+
     /// <summary>Answers offered at most; more are dropped.</summary>
     public const int MaxOptions = 4;
 

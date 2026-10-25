@@ -390,6 +390,10 @@ public sealed class CorvidRuntime : IAsyncDisposable
         return actor;
     }
 
+    /// <summary>The built-in tools' examples and the kernel's <c>ask_user</c>'s (K-6), for the shortlist.</summary>
+    private static readonly IReadOnlyDictionary<string, ImmutableArray<string>> ToolExamples =
+        new Dictionary<string, ImmutableArray<string>>(BuiltinTools.Examples, StringComparer.Ordinal) { [AskUserTool.ToolName] = AskUserTool.Examples };
+
     /// <summary>One session's turn services over the shared ones. Scheduled runs are not interactive: nobody can be asked.</summary>
     private TurnServices Services(SessionModelSlots slots, bool interactive, ToolRegistry? tools = null, SessionSettings? session = null)
     {
@@ -433,7 +437,7 @@ public sealed class CorvidRuntime : IAsyncDisposable
                 ApprovalMode = Options.Approvals.Mode,
                 Interactive = interactive,
                 // C-005 has no examples file; C-012 wrote the built-in tools' examples by hand.
-                ToolExamples = BuiltinTools.Examples,
+                ToolExamples = ToolExamples,
             },
         };
     }

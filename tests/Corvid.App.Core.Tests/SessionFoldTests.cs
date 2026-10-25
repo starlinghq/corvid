@@ -424,6 +424,17 @@ public sealed class SessionFoldTests
     }
 
     [Fact]
+    public void ARunningCardShowsTheNewestLinesOfALongTail()
+    {
+        // K-2: the engine's tail can be a dozen lines; the card's pane holds five, so it shows the newest.
+        var tail = string.Join('\n', Enumerable.Range(1, 12).Select(i => $"checked {i} of 12"));
+
+        Assert.Equal("checked 8 of 12\nchecked 9 of 12\nchecked 10 of 12\nchecked 11 of 12\nchecked 12 of 12", ToolCardBlock.LastLines(tail, ToolCardBlock.TailLines));
+        Assert.Equal("one\ntwo", ToolCardBlock.LastLines("one\ntwo", 5));
+        Assert.Equal("", ToolCardBlock.LastLines("", 5));
+    }
+
+    [Fact]
     public void AnUnknownUpdateChangesNothingButTheClock()
     {
         var before = SessionFold.Replay("s", RecordedTurn());

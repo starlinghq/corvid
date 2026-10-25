@@ -129,7 +129,8 @@ public sealed class SessionUpdateTranslator(string workspace)
                 output.Add(new QuestionAsked(question.QuestionId, question.Text)
                 {
                     At = at,
-                    Title = QuestionTitle(question.Text),
+                    // A short title for the tray when the question is longer than one; a one-line question is its own.
+                    Title = QuestionTitle(question.Text) is var title && title != question.Text.Trim() ? title : null,
                     Options = question.Options.IsDefault ? [] : question.Options,
                 });
                 break;
@@ -151,6 +152,10 @@ public sealed class SessionUpdateTranslator(string workspace)
                     ContextTokens = usage.InputTokens is { } sent ? (int)Math.Min(int.MaxValue, sent) : null,
                     ContextWindow = ContextWindow,
                 });
+                break;
+            // K-6: ask_user's call is the question's: its block shows it, so no tool card does.
+            case ToolCallStarted { Tool: Corvid.Kernel.Turns.AskUserTool.ToolName }:
+            case ToolCallChanged { Tool: Corvid.Kernel.Turns.AskUserTool.ToolName }:
                 break;
             case ToolCallStarted started:
                 output.Add(new ToolCall(started.CallId, started.Tool ?? started.Title, Kind(started.Kind, started.Tool), Status(started.Status))
