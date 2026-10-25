@@ -30,6 +30,8 @@ namespace Corvid.Abstractions.Events;
 [JsonDerivedType(typeof(McpToolHeld), "mcp_tool_held")]
 [JsonDerivedType(typeof(McpToolAccepted), "mcp_tool_accepted")]
 [JsonDerivedType(typeof(McpPinsForgotten), "mcp_pins_forgotten")]
+[JsonDerivedType(typeof(ApprovalAssessed), "approval_assessed")]
+[JsonDerivedType(typeof(EgressRecorded), "egress_recorded")]
 public abstract record SessionEvent;
 
 // Text is the initial message surface. Provider-specific message objects are never stored here.
@@ -178,3 +180,65 @@ public sealed record DetectionMatched(string RuleId, int RuleVersion, string Sev
 // hash of the normalized origin remote, main checkout path or workspace path; Source says which ("remote", "checkout",
 // "path"). Appended before a turn's user message when the session has no project yet or a different one.
 public sealed record ProjectBound(string ProjectId, string Source) : SessionEvent;
+
+// G-2: the approval pipeline's verdict on a tool call that asked nobody (a prompt is ApprovalRequested and ApprovalResolved
+// instead), appended when the call is authorized, so a surface shows why a call ran unasked (or was refused unasked), live
+// and on replay. Resolution is an ApprovalResolutions name: "automatic" (read-only, or the mode and the risk answer allowed
+// it), "rule_allowed", "rule_denied", "hardline" or "no_approver" (an ask with nobody to answer: a scheduled run). Mode is
+// the approval mode in force ("manual", "smart", "permissive"). Reasons are the pipeline's, code and detail. Rule is the
+// remembered rule that decided, in words (`verb sub` under paths), and RuleScope "session" or "always". Risk is the logged
+// risk decision when one was asked. Effects (the pipeline's effect names, lower case) and Contained (every path target in
+// the workspace) say what the action does, for "in workspace, no network". Optional members are omitted when null.
+public sealed record ApprovalAssessed(string CallId, string Resolution, string Mode, ImmutableArray<AssessmentReason> Reasons,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Rule = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RuleScope = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AssessedRisk? Risk = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ImmutableArray<string>? Effects = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Contained = null) : SessionEvent;
+
+/// <summary>One of the pipeline's reasons: its code (<c>read_only</c>, <c>rule_allowed</c>, <c>risk</c>, a hardline rule…) and sentence.</summary>
+public sealed record AssessmentReason(string Code, string Detail);
+
+/// <summary>
+/// The <c>risk</c> decision an assessment used: its <c>Decision</c> event and action, the level (0 to 4, the chosen option's
+/// index) and option, the confidence, whether the answer was calibrated and which decider gave it.
+/// </summary>
+public sealed record AssessedRisk(string DecisionId, string Action,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Level = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Option = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Confidence = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Calibrated = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Decider = null);
+
+/// <summary>The wire names of <see cref="ApprovalAssessed.Resolution"/>.</summary>
+public static class ApprovalResolutions
+{
+    public const string Automatic = "automatic";
+    public const string RuleAllowed = "rule_allowed";
+    public const string RuleDenied = "rule_denied";
+    public const string Hardline = "hardline";
+    public const string NoApprover = "no_approver";
+}
+
+// G-9: a request to a gated model (every cloud model, by default) passed the privacy egress gate (plan §10.4). RequestId names
+// it in the egress store (egress.db beside the log), which keeps the request as sent, after redaction, so the log stays small;
+// Model is the target profile's id and Slot the binding's slot. Outcome is an EgressOutcomes name: "sent" (nothing to redact,
+// or the policy sends it), "redacted", or "refused" (nothing left the machine and nothing is kept). Labels counts the distinct
+// values of each label the scan found, Placeholders the gate's placeholders in the request as sent, Bytes its UTF-8 size as
+// rendered, Reason the gate's words (labels and counts, never a value) and Tainted whether the gate treated it as tainted.
+// Host is where it went and Secret the Vault secret it authenticated with (its name, never its value). Unkept says why the
+// request as sent could not be stored, when it could not. Optional members are omitted when null.
+public sealed record EgressRecorded(string RequestId, string Model, string Outcome, ImmutableDictionary<string, int> Labels,
+    int Placeholders, long Bytes, string Reason, bool Tainted = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Slot = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Host = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Secret = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Unkept = null) : SessionEvent;
+
+/// <summary>The wire names of <see cref="EgressRecorded.Outcome"/>.</summary>
+public static class EgressOutcomes
+{
+    public const string Sent = "sent";
+    public const string Redacted = "redacted";
+    public const string Refused = "refused";
+}

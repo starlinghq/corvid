@@ -88,6 +88,15 @@ internal static class Samples
         new McpToolAccepted("notes", "save", "ef56", Flagged: true),
         new McpToolHeld("notes", "send", "injection", "ab78", PinnedHash: "ab78", Detail: "d-9"),
         new McpPinsForgotten("notes", 3),
+        new ApprovalAssessed("call-1", ApprovalResolutions.RuleAllowed, "smart", [new AssessmentReason("rule_allowed", "a remembered approval matches")],
+            Rule: "`dotnet test` under /work", RuleScope: "session", Effects: ["execute", "write"], Contained: true),
+        new ApprovalAssessed("call-2", ApprovalResolutions.Automatic, "permissive", [],
+            Risk: new AssessedRisk("d-9", "auto_run", 0, "none", 0.97, true, "kev-0.8b")),
+        new EgressRecorded("r-1", "claude@anthropic", EgressOutcomes.Redacted,
+            ImmutableDictionary<string, int>.Empty.Add("email", 1).Add("person", 2), 3, 4096, "redacted email, person", Tainted: true,
+            Slot: "generator", Host: "api.anthropic.com", Secret: "anthropic.key"),
+        new EgressRecorded("r-2", "claude@anthropic", EgressOutcomes.Sent, ImmutableDictionary<string, int>.Empty, 0, 12, "no PII found",
+            Unkept: "the egress store could not be written"),
     ];
 
     public static EventData[] Data(params SessionEvent[] events) => events.Select(EventData.Create).ToArray();

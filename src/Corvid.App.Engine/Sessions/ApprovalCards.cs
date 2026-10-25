@@ -97,10 +97,7 @@ internal static class ApprovalCards
     }
 
     /// <summary>The rule a session or always answer wrote, as the resolved card says it ("`rm -r` under /work/build").</summary>
-    public static string Describe(ApprovalRule rule) =>
-        $"`{(rule.Subcommand is { Length: > 0 } sub ? $"{rule.Verb} {sub}" : rule.Verb)}`"
-        + (rule.Paths.IsEmpty ? "" : " under " + string.Join(", ", rule.Paths))
-        + (rule.Names.IsEmpty ? "" : " for " + string.Join(", ", rule.Names));
+    public static string Describe(ApprovalRule rule) => rule.Describe();
 
     private static ParsedCommand Command(AnalyzedCommand command) => new(command.Text, command.Verb)
     {

@@ -31,6 +31,12 @@ public static class CorvidPaths
 
     public static string MemoryDatabase(CorvidOptions options) => Path.Combine(DataDirectory(options), "memory.db");
 
+    /// <summary>
+    /// The egress ledger's store (G-9): each request to a gated model as it was sent, after redaction, kept beside the log so
+    /// the log's own events stay small. Owner-only; created at the first gated request.
+    /// </summary>
+    public static string EgressDatabase(CorvidOptions options) => Path.Combine(DataDirectory(options), "egress.db");
+
     /// <summary>The durable job store (C-012), its own SQLite file because jobs change.</summary>
     public static string JobStore(CorvidOptions options) => Path.Combine(DataDirectory(options), "jobs.db");
 
