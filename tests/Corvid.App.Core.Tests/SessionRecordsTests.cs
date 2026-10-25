@@ -85,10 +85,13 @@ public sealed class SessionRecordsTests
         public Task SteerAsync(string sessionId, string text, CancellationToken cancellationToken = default) => inner.SteerAsync(sessionId, text, cancellationToken);
         public Task InterruptAsync(string sessionId, CancellationToken cancellationToken = default) => inner.InterruptAsync(sessionId, cancellationToken);
         public Task AnswerApprovalAsync(string sessionId, string approvalId, ApprovalAnswer answer, CancellationToken cancellationToken = default) => inner.AnswerApprovalAsync(sessionId, approvalId, answer, cancellationToken);
+        /// <summary>When set, an answer is refused with this reason, as the engine refuses one to a question answered elsewhere.</summary>
+        public string? RefuseAnswer { get; set; }
+
         public Task AnswerQuestionAsync(string sessionId, string questionId, string answer, CancellationToken cancellationToken = default)
         {
             Answers.Add((questionId, answer));
-            return Task.CompletedTask;
+            return RefuseAnswer is { } reason ? Task.FromException(new InvalidOperationException(reason)) : Task.CompletedTask;
         }
         public Task RunCommandAsync(string sessionId, string line, CancellationToken cancellationToken = default) => inner.RunCommandAsync(sessionId, line, cancellationToken);
         public Task SetApprovalModeAsync(string sessionId, ApprovalMode mode, CancellationToken cancellationToken = default) => inner.SetApprovalModeAsync(sessionId, mode, cancellationToken);
@@ -127,6 +130,42 @@ public sealed class SessionRecordsTests
 
         // Only what a reader sees goes as the person's answer.
         Assert.Equal([("q-hidden", "Blue"), ("q-hidden", "Green")], service.Answers);
+    }
+
+    [Fact]
+    public async Task An_answer_the_service_refuses_goes_back_to_the_composer()
+    {
+        var (service, time, demo) = Start();
+        using var _ = demo;
+        service.AfterOpen = new QuestionAsked("q-open", "Which branch?");
+        service.RefuseAnswer = "That question is no longer open; nothing was sent.";
+        using var view = new SessionViewModel(DemoSessionService.VaultSessionId, service, new InlineDispatcher(), time);
+        await view.OpenAsync(Ct);
+        Assert.True(view.PendingQuestion!.AllowsFreeText);
+
+        view.Draft = "the release branch";
+        view.SubmitCommand.Execute(null);
+
+        // M1: answered from another view meanwhile (or a line the engine will not take as an answer): the words stay.
+        Assert.Equal([("q-open", "the release branch")], service.Answers);
+        Assert.Equal("the release branch", view.Draft);
+        Assert.Equal("That question is no longer open; nothing was sent.", view.Error);
+    }
+
+    [Fact]
+    public async Task A_slash_command_typed_while_a_question_is_open_runs_and_is_not_its_answer()
+    {
+        var (service, time, demo) = Start();
+        using var _ = demo;
+        service.AfterOpen = new QuestionAsked("q-open", "Which branch?");
+        using var view = new SessionViewModel(DemoSessionService.VaultSessionId, service, new InlineDispatcher(), time);
+        await view.OpenAsync(Ct);
+
+        view.Draft = "/help";
+        view.SubmitCommand.Execute(null);
+
+        Assert.Empty(service.Answers);
+        Assert.True(view.PendingQuestion!.IsOpen);
     }
 
     [Fact]

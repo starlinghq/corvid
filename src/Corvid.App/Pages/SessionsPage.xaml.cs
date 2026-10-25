@@ -49,6 +49,8 @@ public sealed partial class SessionsPage : Page, IDockProvider
     private int _newCount;
     private DateTimeOffset _lastEscape;
     private bool _swallowLineBreak;
+    // Whether Ctrl is down as the composer's own key events say (A4V2-1).
+    private bool _composerCtrl;
     private bool _spinning;
 
     public SessionsPage()
@@ -56,6 +58,9 @@ public sealed partial class SessionsPage : Page, IDockProvider
         InitializeComponent();
         _spinner = Spinner();
         Composer.AddHandler(PreviewKeyDownEvent, new KeyEventHandler(OnComposerKeyDown), true);
+        Composer.AddHandler(PreviewKeyUpEvent, new KeyEventHandler(OnComposerKeyUp), true);
+        // A Ctrl released elsewhere never reaches the composer's key up: losing focus forgets it.
+        Composer.LostFocus += (_, _) => _composerCtrl = false;
         Composer.BeforeTextChanging += OnComposerTextChanging;
         Root.KeyDown += OnRootKeyDown;
         for (var i = 0; i < 7; i++)
@@ -516,7 +521,14 @@ public sealed partial class SessionsPage : Page, IDockProvider
     {
         if (_session is not { } session)
             return;
-        var ctrl = IsDown(VirtualKey.Control);
+        if (e.Key is VirtualKey.Control or VirtualKey.LeftControl or VirtualKey.RightControl)
+        {
+            _composerCtrl = true;
+            return;
+        }
+        // A4V2-1: Ctrl as the composer's own key events saw it (the same stream as this Enter, so in order), with the
+        // thread's key state as a second source; Uno's KeyRoutedEventArgs has no public modifiers.
+        var ctrl = _composerCtrl || IsDown(VirtualKey.Control);
         var shift = IsDown(VirtualKey.Shift);
         switch (e.Key)
         {
@@ -549,6 +561,12 @@ public sealed partial class SessionsPage : Page, IDockProvider
                 session.StashDraftCommand.Execute(null);
                 return;
         }
+    }
+
+    private void OnComposerKeyUp(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key is VirtualKey.Control or VirtualKey.LeftControl or VirtualKey.RightControl)
+            _composerCtrl = false;
     }
 
     /// <summary>

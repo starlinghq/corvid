@@ -175,6 +175,96 @@ public sealed class EngineRunningTurnTests
         Assert.DoesNotContain(generator.Calls[^1], message => message.Text == "forget it");
     }
 
+    [Fact]
+    public async Task A_steer_sent_while_an_approval_card_waits_is_a_chip_until_the_checkpoint_after_the_call_takes_it()
+    {
+        var generator = new FakeGenerator(Reply.Call("add_note", """{"text":"water plants"}"""), Reply.Say("Added, and the ferns too."));
+        var models = new FakeModels(generator);
+        await using var fixture = await EngineFixture.StartAsync(models);
+        var id = fixture.Runtime.OpenSession(surface: "app").Id;
+        using var service = fixture.Sessions();
+        var waiter = new SessionWaiter();
+        using var subscription = await service.OpenAsync(id, waiter.Add, Ct);
+
+        await service.SendAsync(id, "add a note: water plants", Ct);
+        var request = await waiter.WaitAsync<ApprovalRequested>();
+        // A4V2-1: typed while the card is open (the CardPrompter's prompt waits): a steer chip, not lost, not sent yet.
+        await service.SteerAsync(id, "and the ferns", Ct);
+        var chip = await waiter.WaitAsync<QueueChanged>(change => change.Items.Any(item => item.Steer));
+        Assert.Equal("and the ferns", Assert.Single(chip.Items).Text);
+        Assert.Equal(1, service.PendingSteers(id));
+        Assert.Single(generator.Calls);
+
+        await service.AnswerApprovalAsync(id, request.ApprovalId, ApprovalAnswer.Once, Ct);
+        await service.IdleAsync();
+
+        Assert.Equal("and the ferns", (await waiter.WaitAsync<UserMessage>(message => message.Steered)).Text);
+        Assert.Empty(waiter.Updates.OfType<QueueChanged>().Last().Items);
+        Assert.Single(waiter.Updates.OfType<TurnStarted>());
+        Assert.Contains(generator.Calls[1], message => message.Role == Microsoft.Extensions.AI.ChatRole.User && message.Text == "and the ferns");
+        Assert.Equal(0, service.PendingSteers(id));
+    }
+
+    [Fact]
+    public async Task Ctrl_enter_during_a_shell_lines_turn_queues_the_message_as_enter_does()
+    {
+        var models = new FakeModels(new FakeGenerator(Reply.Say("Built.")));
+        await using var fixture = await EngineFixture.StartAsync(models, new Dictionary<string, string?> { ["Corvid:Tools:Builtin"] = "true" });
+        var id = fixture.Runtime.OpenSession(surface: "app").Id;
+        using var service = fixture.Sessions();
+        var waiter = new SessionWaiter();
+        using var subscription = await service.OpenAsync(id, waiter.Add, Ct);
+
+        await service.SendAsync(id, "!rm -rf build", Ct);
+        var request = await waiter.WaitAsync<ApprovalRequested>();
+        // M2: the ! line's turn has no step checkpoint, so no steer chip waits on it: an ordinary queued message.
+        await service.SteerAsync(id, "then build it again", Ct);
+        var queued = await waiter.WaitAsync<QueueChanged>(change => change.Items.Length > 0);
+        Assert.Equal([("then build it again", false)], queued.Items.Select(item => (item.Text, item.Steer)));
+        Assert.DoesNotContain(waiter.Updates.OfType<QueueChanged>(), change => change.Items.Any(item => item.Steer));
+        Assert.Equal(0, service.PendingSteers(id));
+
+        await service.AnswerApprovalAsync(id, request.ApprovalId, ApprovalAnswer.Deny, Ct);
+        await service.IdleAsync();
+
+        Assert.Equal(["!rm -rf build", "then build it again"], waiter.Updates.OfType<UserMessage>().Select(message => message.Text));
+        Assert.DoesNotContain(waiter.Updates, update => update is UserMessage { Steered: true });
+    }
+
+    [Fact]
+    public async Task A_steer_sent_as_the_turn_hands_off_is_queued_and_leaves_no_steer_waiting()
+    {
+        var weather = new Weather();
+        var generator = new FakeGenerator(Reply.Call("check_weather"), Reply.Say("Sunny."), Reply.Say("Windy tomorrow."));
+        await using var fixture = await StartAsync(generator, weather.Tool);
+        var id = fixture.Runtime.OpenSession(surface: "app").Id;
+        using var service = fixture.Sessions();
+        var settled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        service.Pause = async point =>
+        {
+            if (point != "settled")
+                return;
+            settled.TrySetResult();
+            await release.Task;
+        };
+        var waiter = new SessionWaiter();
+        using var subscription = await service.OpenAsync(id, waiter.Add, Ct);
+
+        await service.SendAsync(id, "what's the weather?", Ct);
+        weather.Release();
+        // Nit 7: the turn's steers are settled, and it has not handed the session on yet.
+        await settled.Task.WaitAsync(TimeSpan.FromSeconds(60), Ct);
+        await service.SteerAsync(id, "and tomorrow?", Ct);
+        Assert.Equal(0, service.PendingSteers(id));
+        release.TrySetResult();
+        await service.IdleAsync();
+
+        Assert.DoesNotContain(waiter.Updates.OfType<QueueChanged>(), change => change.Items.Any(item => item.Steer));
+        Assert.Equal(["what's the weather?", "and tomorrow?"], waiter.Updates.OfType<UserMessage>().Select(message => message.Text));
+        Assert.Equal(0, service.PendingSteers(id));
+    }
+
     // ---- K-2: running tails ----
 
     [Fact]

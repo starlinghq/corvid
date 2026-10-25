@@ -187,16 +187,14 @@ public sealed partial class SessionViewModel
         var text = _draft.Trim();
         if (text.Length == 0)
             return;
-        if (_pendingQuestion is { IsOpen: true, AllowsFreeText: true } question)
-        {
-            Draft = "";
-            AnswerQuestion(question.QuestionId, text);
-            return;
-        }
-
         Draft = "";
+        // A slash command runs as itself even with a question open: it is never the answer.
         if (IsCommandLine(text))
             Run(() => _service.RunCommandAsync(SessionId, text), () => Draft = text);
+        else if (_pendingQuestion is { IsOpen: true, AllowsFreeText: true } question)
+            // A refusal (answered from another view meanwhile, or a ! line the service will not take as an answer) gives the
+            // text back to the composer.
+            AnswerQuestion(question.QuestionId, text, () => Draft = text);
         else if (_state.Running)
             Run(() => _service.QueueAsync(SessionId, text), () => Draft = text);
         else

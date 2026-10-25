@@ -242,9 +242,10 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     {
         var channel = await LoadAsync(sessionId, cancellationToken).ConfigureAwait(false);
         // K-3: a steer chip is taken back from the turn too (or, already taken, it is in the transcript).
-        WithdrawSteer(channel, queuedId, out _);
+        var withdrawn = WithdrawSteerAsync(channel, queuedId);
         if (ChangeQueue(channel, queue => queue.FirstOrDefault(item => item.Id == queuedId) is { } item ? queue.Remove(item) : queue))
             PublishQueue(channel);
+        await withdrawn.ConfigureAwait(false);
     }
 
     public async Task MoveQueuedAsync(string sessionId, string queuedId, int index, CancellationToken cancellationToken = default)
@@ -263,8 +264,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     public async Task<string?> TakeBackQueuedAsync(string sessionId, string queuedId, CancellationToken cancellationToken = default)
     {
         var channel = await LoadAsync(sessionId, cancellationToken).ConfigureAwait(false);
-        // K-3: a steer the turn has already taken is not given back (it was sent); its chip just goes.
-        var delivered = WithdrawSteer(channel, queuedId, out var sent) && sent;
+        // K-3: a steer the turn has already taken is not given back (it was sent); its chip just goes. The chip leaves the
+        // queue before the turn's answer is awaited, so nothing else sends it meanwhile.
+        var withdrawn = WithdrawSteerAsync(channel, queuedId);
         QueuedMessage? taken = null;
         if (ChangeQueue(channel, queue =>
             {
@@ -272,6 +274,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 return taken is null ? queue : queue.Remove(taken);
             }))
             PublishQueue(channel);
+        var delivered = await withdrawn.ConfigureAwait(false);
         return delivered ? null : taken?.Text;
     }
 
@@ -554,6 +557,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
 
         // K-3: every steer has its answer once the delivery is in: taken ones leave the queue, the rest go to its head.
         await SettleSteersAsync(channel).ConfigureAwait(false);
+        await PauseAt("settled").ConfigureAwait(false);
         var elapsed = _time.GetElapsedTime(started);
         bool interrupted;
         lock (channel.Gate)
@@ -596,6 +600,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             channel.Cancelling = false;
             channel.TurnBegun = false;
             channel.OpenCalls.Clear();
+            DropStaleSteers(channel);
             // K-6: an open question holds the queue: only the person's answer goes next, never a message queued before it.
             if (next && !_disposed && !channel.Queue.IsEmpty && channel.View?.Question is null)
             {
