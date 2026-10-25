@@ -360,6 +360,13 @@ The PR review (four agents, one on security) found no high defect. Its fixes, be
   list is scanned only when the log changed; Rewind, Review and closing a view release the driver lock; lock I/O errors
   are reported as such.
 
+An independent check of those fixes found a guest's words losing their label once compacted; that and its lows are
+fixed: a guest stays quoted as theirs in compaction, skill learning, titles, recaps and the decider's recent events
+(never a title source), quoting turns every line break into a quoted line and shows format characters, an approval card
+ignores repeated keys and, for 750 ms after it takes focus, Enter and digits, Stop hosting cannot race a page load, a
+driver lock is not released while a message is being routed or the session is viewed, and every store creates the
+data directory 0700.
+
 Left from the review: lock files under the data directory's `drivers/` are not removed (deleting one another process
 just opened would split the lock); a guest's own allowlist replaces the adapter's rather than narrowing it (the page
 says so); a few App.Engine tests time out now and then when the machine's CPU is saturated.
