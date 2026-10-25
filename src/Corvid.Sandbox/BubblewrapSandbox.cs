@@ -94,8 +94,8 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
             var stdout = new BoundedCapture(_options.MaxOutputBytes);
             var stderr = new BoundedCapture(_options.MaxOutputBytes);
             Task pumps = Task.WhenAll(
-                stdout.PumpAsync(process.StandardOutput.BaseStream),
-                stderr.PumpAsync(process.StandardError.BaseStream));
+                stdout.PumpAsync(process.StandardOutput.BaseStream, command.Output),
+                stderr.PumpAsync(process.StandardError.BaseStream, command.Output));
 
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(_options.Timeout);
@@ -329,15 +329,33 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
 
         public string Text => Encoding.UTF8.GetString(_kept.GetBuffer(), 0, (int)_kept.Length);
 
-        public async Task PumpAsync(Stream stream)
+        /// <param name="output">K-2: told each piece as text as it is read, past the kept limit too (a tail shows the end).</param>
+        public async Task PumpAsync(Stream stream, Action<string>? output = null)
         {
             byte[] buffer = new byte[16 * 1024];
+            Decoder? decoder = output is null ? null : Encoding.UTF8.GetDecoder();
+            char[] chars = output is null ? [] : new char[Encoding.UTF8.GetMaxCharCount(buffer.Length)];
             int read;
             while ((read = await stream.ReadAsync(buffer).ConfigureAwait(false)) > 0)
             {
                 int keep = (int)Math.Clamp(limit - _total, 0, read);
                 _kept.Write(buffer, 0, keep);
                 _total += read;
+                if (decoder is not null && output is not null)
+                {
+                    int count = decoder.GetChars(buffer, 0, read, chars, 0, flush: false);
+                    if (count > 0)
+                    {
+                        try
+                        {
+                            output(new string(chars, 0, count));
+                        }
+                        catch (Exception e) when (e is not OutOfMemoryException)
+                        {
+                            // A watcher that fails must not stop the capture or block the command on a full pipe.
+                        }
+                    }
+                }
             }
         }
     }

@@ -417,6 +417,8 @@ public sealed class CorvidRuntime : IAsyncDisposable
             Project = Memory?.Lessons is null ? null : Project,
             LessonLearning = interactive ? Memory?.LessonLearner : null,
             SkillShortlist = _skillShortlist,
+            // Turn progress and K-2's running tails, to whichever surface watches the session.
+            Listener = Feed.Listener,
             Options = new TurnOptions
             {
                 SystemPrompt = prompt,
@@ -662,6 +664,12 @@ public sealed class CorvidSession
 
     /// <summary>Cancels the running turn (Ctrl-C, <c>/cancel</c>).</summary>
     public void Cancel() => Actor.CancelTurn();
+
+    /// <summary>
+    /// K-3, steer now: the person's message for the running turn, taken at its next step checkpoint. True once taken; false
+    /// when no turn was running or it ended first, and the caller sends the text as an ordinary message instead.
+    /// </summary>
+    public Task<bool> SteerAsync(string text) => Actor.SteerAsync(text);
 
     public SessionSnapshot Snapshot() => SessionProjection.Load(_runtime.Log, Id);
 

@@ -62,6 +62,7 @@ public static class SessionReplay
         var approvals = options.Approvals ? Approvals(stored.Values, snapshot.IsVisible) : [];
 
         var items = new List<(long Sequence, SessionStreamUpdate Update)>();
+        int? round = null;
         foreach (var entry in snapshot.Transcript)
         {
             var at = stored.TryGetValue(entry.FromSequence, out var item) ? item.RecordedAt : default;
@@ -69,11 +70,22 @@ public static class SessionReplay
             {
                 case UserMessage user:
                     items.Add((entry.FromSequence, new PromptSent(user.Text, entry.FromSequence) { At = at }));
+                    round = null;
+                    break;
+                // K-3: a steer is part of the turn that took it.
+                case UserSteered steer:
+                    items.Add((entry.FromSequence, new SteerSent(steer.Text, entry.FromSequence) { At = at }));
                     break;
                 case AssistantMessage assistant:
                     items.Add((entry.FromSequence, new AnswerChunk(assistant.Text) { At = at }));
                     break;
                 case ToolCallIssued call:
+                    // The step its round records, as the live turn reported it when the step began (with no budget: the log has none).
+                    if (call.Round is { } step and > 0 && step != round)
+                    {
+                        round = step;
+                        items.Add((entry.FromSequence, new TurnStepped(step, null) { At = at }));
+                    }
                     var finished = results.TryGetValue(call.CallId, out var outcome);
                     var unfinished = !finished && options.UnfinishedCalls;
                     var failed = (finished && outcome!.IsError) || unfinished;
@@ -121,6 +133,17 @@ public static class SessionReplay
             }
         }
 
+        // K-6: each clarifying question after the answer that carries it, as the live turn reported it.
+        var questions = false;
+        foreach (var item in stored.Values.Where(item => item.Payload is ClarificationAsked && snapshot.IsVisible(item.Sequence)))
+        {
+            questions = true;
+            var question = (ClarificationAsked)item.Payload;
+            items.Add((item.Sequence, new QuestionRaised(question.QuestionId, question.Text, question.Options.IsDefault ? [] : question.Options)
+            {
+                At = item.RecordedAt,
+            }));
+        }
         if (options.Plans)
             foreach (var item in stored.Values.Where(item => item.Payload is TodosSet && snapshot.IsVisible(item.Sequence)))
                 items.Add((item.Sequence, new PlanChanged(((TodosSet)item.Payload).Items) { At = item.RecordedAt }));
@@ -133,7 +156,7 @@ public static class SessionReplay
 
         // The transcript in its own order; plans and checkpoints placed among it by position (a stable sort, so the
         // transcript's order holds for entries at one position).
-        var ordered = options.Plans || options.Checkpoints ? items.OrderBy(item => item.Sequence).ToList() : items;
+        var ordered = options.Plans || options.Checkpoints || questions ? items.OrderBy(item => item.Sequence).ToList() : items;
         return new SessionHistory(sessionId, head, [.. ordered.Select(item => item.Update)]);
     }
 

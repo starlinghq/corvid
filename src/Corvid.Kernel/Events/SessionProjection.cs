@@ -213,7 +213,7 @@ public static class SessionProjection
                     transcript.Add(new(range.FromSequence, range.ThroughSequence, range));
                 continue;
             }
-            if (item.Payload is UserMessage or AssistantMessage or ToolCallIssued or ToolResult)
+            if (item.Payload is UserMessage or UserSteered or AssistantMessage or ToolCallIssued or ToolResult)
                 transcript.Add(new(item.Sequence, item.Sequence, item.Payload));
         }
 

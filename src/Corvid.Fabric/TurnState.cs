@@ -26,6 +26,10 @@ public sealed class CharsPerTokenCounter : ITokenCounter
 /// <param name="Recent">One-line summaries of recent log events, oldest first.</param>
 /// <param name="Entities">Extracted spans by label (from the extractor slot; not wired yet). Labels are written in ordinal order.</param>
 /// <param name="Generator">The generator slot as the decider should read it, for example <c>qwen3.5-0.8b local, 8k</c>.</param>
+/// <param name="Steering">
+/// What the user sent into the running turn (K-3, steer now), newest last, joined by newlines: rendered as <c>steering</c>
+/// after <c>user_message</c>, and only when there is some, so a state without it is unchanged.
+/// </param>
 public sealed record TurnStateInput(
     string UserMessage,
     string Surface,
@@ -34,7 +38,8 @@ public sealed record TurnStateInput(
     string? Goal = null,
     ImmutableSortedDictionary<string, ImmutableArray<string>>? Entities = null,
     int Step = 0,
-    string? LastToolResult = null);
+    string? LastToolResult = null,
+    string? Steering = null);
 
 /// <summary>Token budgets for the TurnState. Field budgets bound each field; <see cref="Total"/> bounds the whole state.</summary>
 /// <param name="Total">The target size of the rendered state (plan §5.1: 600).</param>
@@ -48,7 +53,8 @@ public sealed record TurnStateBudget(
     int Goal = 48,
     int Entities = 64,
     int LastToolResult = 80,
-    int Generator = 16)
+    int Generator = 16,
+    int Steering = 120)
 {
     public static TurnStateBudget Default { get; } = new();
 
@@ -56,7 +62,7 @@ public sealed record TurnStateBudget(
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(Total);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(Total, HardStop);
-        foreach (var field in new[] { UserMessage, Surface, Recent, Goal, Entities, LastToolResult, Generator })
+        foreach (var field in new[] { UserMessage, Surface, Recent, Goal, Entities, LastToolResult, Generator, Steering })
             ArgumentOutOfRangeException.ThrowIfNegative(field);
         return this;
     }
@@ -93,7 +99,7 @@ public sealed class TurnStateBuilder(ITokenCounter? counter = null, TurnStateBud
     private readonly TurnStateBudget _budget = (budget ?? TurnStateBudget.Default).Validate();
 
     // Cut first what the decider needs least.
-    private static readonly string[] TrimOrder = ["recent", "last_tool_result", "entities", "goal", "user_message"];
+    private static readonly string[] TrimOrder = ["recent", "last_tool_result", "entities", "goal", "steering", "user_message"];
 
     public ITokenCounter Counter => _counter;
 
@@ -116,6 +122,7 @@ public sealed class TurnStateBuilder(ITokenCounter? counter = null, TurnStateBud
             ["entities"] = _budget.Entities,
             ["last_tool_result"] = _budget.LastToolResult,
             ["generator"] = _budget.Generator,
+            ["steering"] = _budget.Steering,
         };
 
         var rendered = Render(input, budgets);
@@ -155,6 +162,7 @@ public sealed class TurnStateBuilder(ITokenCounter? counter = null, TurnStateBud
         }
 
         var userMessage = Text("user_message", input.UserMessage)!;
+        var steering = Text("steering", string.IsNullOrEmpty(input.Steering) ? null : input.Steering);
         var surface = Text("surface", input.Surface)!;
         var recent = Recent(input.Recent.IsDefault ? [] : input.Recent, budgets["recent"], out var recentTokens, out var recentCut);
         fieldTokens["recent"] = recentTokens;
@@ -175,6 +183,9 @@ public sealed class TurnStateBuilder(ITokenCounter? counter = null, TurnStateBud
             // Field order and names are part of the decider's prompt (plan §5.1).
             writer.WriteStartObject();
             writer.WriteString("user_message", userMessage);
+            // K-3: written only when the user steered the turn, so every other state keeps its bytes.
+            if (steering is not null)
+                writer.WriteString("steering", steering);
             writer.WriteString("surface", surface);
             writer.WriteStartArray("recent");
             foreach (var item in recent)
@@ -197,7 +208,7 @@ public sealed class TurnStateBuilder(ITokenCounter? counter = null, TurnStateBud
         }
 
         var json = Encoding.UTF8.GetString(buffer.WrittenSpan);
-        var order = new[] { "user_message", "surface", "recent", "goal", "entities", "last_tool_result", "generator" };
+        var order = new[] { "user_message", "steering", "surface", "recent", "goal", "entities", "last_tool_result", "generator" };
         return new Rendered(json, _counter.CountTokens(json), fieldTokens, order.Where(truncated.Contains).ToList());
     }
 

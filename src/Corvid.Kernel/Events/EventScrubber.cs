@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text.Json;
 using Corvid.Abstractions.Events;
 using Corvid.Secrets;
@@ -13,9 +14,9 @@ namespace Corvid.Kernel.Events;
 /// </summary>
 /// <remarks>
 /// Scrubbed: <see cref="ToolCallIssued.Arguments"/>, <see cref="ToolResult.Result"/>, <see cref="AssistantMessage.Text"/>,
-/// <see cref="ApprovalRequested.Action"/> and <see cref="ApprovalRequested.Reason"/>, <see cref="Decision.State"/> and
+/// <see cref="ClarificationAsked"/>'s text and options, <see cref="ApprovalRequested.Action"/> and <see cref="ApprovalRequested.Reason"/>, <see cref="Decision.State"/> and
 /// <see cref="AskedQuestion.Instructions"/> (a pre_execute or memory_op question carries arguments and text), and
-/// <see cref="DeliveryQueued.Text"/>. Not scrubbed: <see cref="UserMessage"/> (what the user said is a recorded decision; a
+/// <see cref="DeliveryQueued.Text"/>. Not scrubbed: <see cref="UserMessage"/> and <see cref="UserSteered"/> (what the user said is a recorded decision; a
 /// key the user hands over goes through Vault), and ids, sequences, revisions and paths. Only the egress rules run, never the
 /// encoded-blob rules, so commit SHAs and digests in shell output survive.
 /// </remarks>
@@ -32,6 +33,8 @@ public static class EventScrubber
             ToolCallIssued call when Json(call.Arguments) is { } arguments => call with { Arguments = arguments },
             ToolResult result when Json(result.Result) is { } value => result with { Result = value },
             AssistantMessage message when Text(message.Text) is { } text => message with { Text = text },
+            // The model's question (K-6), like its answer; the options are its words too.
+            ClarificationAsked question => Clarification(question),
             ApprovalRequested approval => Approval(approval),
             Decision decision => Decision(decision),
             DeliveryQueued delivery when Text(delivery.Text) is { } text => delivery with { Text = text },
@@ -44,6 +47,15 @@ public static class EventScrubber
         var action = Text(approval.Action);
         var reason = Text(approval.Reason);
         return action is null && reason is null ? approval : approval with { Action = action ?? approval.Action, Reason = reason ?? approval.Reason };
+    }
+
+    private static ClarificationAsked Clarification(ClarificationAsked question)
+    {
+        var text = Text(question.Text);
+        var options = question.Options.IsDefault ? [] : question.Options.Select(option => Text(option) ?? option).ToImmutableArray();
+        return text is null && options.SequenceEqual(question.Options.IsDefault ? [] : question.Options)
+            ? question
+            : question with { Text = text ?? question.Text, Options = options };
     }
 
     private static Decision Decision(Decision decision)

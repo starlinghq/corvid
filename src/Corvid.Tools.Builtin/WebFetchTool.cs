@@ -73,6 +73,8 @@ public sealed partial class WebFetchTool : IDisposable
         {
             for (var hop = 0; ; hop++)
             {
+                // K-2: the fetch's progress as lines for a watching surface (the page itself is only in the result).
+                Report(context, $"GET {current.AbsoluteUri}");
                 using var request = new HttpRequestMessage(HttpMethod.Get, current);
                 request.Headers.UserAgent.ParseAdd(_options.UserAgent);
                 request.Headers.Accept.ParseAdd("text/html,text/plain,application/json,application/xml;q=0.9,*/*;q=0.1");
@@ -91,7 +93,10 @@ public sealed partial class WebFetchTool : IDisposable
                     continue;
                 }
 
-                return await ReadAsync(url, current, response, timeout.Token).ConfigureAwait(false);
+                Report(context, $"{(int)response.StatusCode} {response.Content.Headers.ContentType?.MediaType ?? "no content type"}");
+                var read = await ReadAsync(url, current, response, timeout.Token).ConfigureAwait(false);
+                Report(context, read["truncated"] is JsonValue cut && cut.GetValue<bool>() ? "read, cut to the limit" : "read");
+                return read;
             }
         }
         catch (OperationCanceledException) when (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
@@ -101,6 +106,8 @@ public sealed partial class WebFetchTool : IDisposable
     }
 
     public void Dispose() => _client.Dispose();
+
+    private static void Report(ToolCallContext? context, string line) => context?.Output?.Invoke(line + "\n");
 
     private async Task<JsonNode> ReadAsync(string requested, Uri final, HttpResponseMessage response, CancellationToken cancellationToken)
     {
