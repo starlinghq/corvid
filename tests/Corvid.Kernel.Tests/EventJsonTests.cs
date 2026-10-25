@@ -36,6 +36,8 @@ public sealed class EventJsonTests
         [typeof(McpToolHeld)] = "mcp_tool_held",
         [typeof(McpToolAccepted)] = "mcp_tool_accepted",
         [typeof(McpPinsForgotten)] = "mcp_pins_forgotten",
+        [typeof(UserSteered)] = "user_steered",
+        [typeof(ClarificationAsked)] = "clarification_asked",
     };
 
     [Fact]

@@ -23,6 +23,30 @@ public sealed class TurnStateTests
     }
 
     [Fact]
+    public void A_steered_turn_shows_the_steering_after_the_message_and_cuts_it_before_the_message()
+    {
+        var plain = new TurnStateBuilder().Build(Fixtures.Input());
+        var steered = new TurnStateBuilder().Build(Fixtures.Input() with { Steering = "also check the retry count" });
+
+        // K-3: only a steered state has the field, right after the message; every other state keeps its bytes.
+        Assert.False(plain.Json.TryGetProperty("steering", out _));
+        Assert.Equal(["user_message", "steering", "surface", "recent", "goal", "entities", "step", "last_tool_result", "generator"],
+            steered.Json.EnumerateObject().Select(property => property.Name));
+        Assert.Equal("also check the retry count", steered.Json.GetProperty("steering").GetString());
+        Assert.Equal(plain.ToJsonString(), new TurnStateBuilder().Build(Fixtures.Input() with { Steering = "" }).ToJsonString());
+
+        // Over the total, the steering is cut after the rest and before the user's message, which stays whole here.
+        var tight = new TurnStateBuilder(budget: new TurnStateBudget(Total: 100, Steering: 80)).Build(Fixtures.Input("hi") with
+        {
+            Steering = new string('s', 300),
+        });
+        Assert.Contains("steering", tight.Truncated);
+        Assert.DoesNotContain("user_message", tight.Truncated);
+        Assert.Equal("hi", tight.Json.GetProperty("user_message").GetString());
+        Assert.InRange(tight.Tokens, 1, 100);
+    }
+
+    [Fact]
     public void Default_counter_is_chars_over_four_rounded_up()
     {
         Assert.Equal(0, CharsPerTokenCounter.Instance.CountTokens(""));

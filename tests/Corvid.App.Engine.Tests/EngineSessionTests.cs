@@ -47,8 +47,9 @@ public sealed class EngineSessionTests
         // The prompt opens turn 1 on the generator; the call is announced running, then finished with its input and output.
         var kinds = string.Join(" ", updates.Select(update => update.GetType().Name).Where((name, i) =>
             i == 0 || name != "AgentMessageChunk" || updates[i - 1] is not AgentMessageChunk));
-        // After the turn, the dock's change lists from the write ledger (empty: list_notes writes nothing).
-        Assert.Equal("UserMessage TurnStarted ToolCall ToolCall ToolCallUpdate AgentMessageChunk TurnEnded ChangesUpdate", kinds);
+        // After the turn, the dock's change lists from the write ledger (empty: list_notes writes nothing). The response with
+        // the call began step 1 of the turn's budget before the call started (turn progress).
+        Assert.Equal("UserMessage TurnStarted TurnProgress ToolCall ToolCall ToolCallUpdate AgentMessageChunk TurnEnded ChangesUpdate", kinds);
 
         var prompt = Assert.IsType<UserMessage>(updates[0]);
         Assert.Equal(Prompt, prompt.Text);
@@ -56,14 +57,17 @@ public sealed class EngineSessionTests
         var started = Assert.IsType<TurnStarted>(updates[1]);
         Assert.Equal(1, started.Turn);
         Assert.Equal("fake-gen", started.Model);
+        var step = Assert.IsType<TurnProgress>(updates[2]);
+        Assert.Equal((1, started.MaxSteps), (step.Step, step.MaxSteps));
+        Assert.NotNull(step.MaxSteps);
 
-        var announced = Assert.IsType<ToolCall>(updates[2]);
+        var announced = Assert.IsType<ToolCall>(updates[3]);
         Assert.Equal("list_notes", announced.Tool);
         Assert.Equal(ToolCallStatus.InProgress, announced.Status);
-        var described = Assert.IsType<ToolCall>(updates[3]);
+        var described = Assert.IsType<ToolCall>(updates[4]);
         Assert.Equal(announced.CallId, described.CallId);
         Assert.Equal("{}", described.Input);
-        var finished = Assert.IsType<ToolCallUpdate>(updates[4]);
+        var finished = Assert.IsType<ToolCallUpdate>(updates[5]);
         Assert.Equal(announced.CallId, finished.CallId);
         Assert.Equal(ToolCallStatus.Completed, finished.Status);
         Assert.Equal(ToolOutcome.Succeeded, finished.Outcome);
@@ -166,12 +170,10 @@ public sealed class EngineSessionTests
 
         await Assert.ThrowsAsync<KeyNotFoundException>(() => service.OpenAsync("cli-nowhere", _ => { }, TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<KeyNotFoundException>(() => service.QueueAsync("cli-nowhere", "later", TestContext.Current.CancellationToken));
-        var steer = await Assert.ThrowsAsync<ServiceUnavailableException>(() =>
-            service.SteerAsync("cli-nowhere", "now", TestContext.Current.CancellationToken));
-        Assert.StartsWith("Steering comes with K-3:", steer.Message, StringComparison.Ordinal);
-        var question = await Assert.ThrowsAsync<ServiceUnavailableException>(() =>
+        // Steering (K-3) and answers (K-6) are built: an unknown session is unknown to them too.
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => service.SteerAsync("cli-nowhere", "now", TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
             service.AnswerQuestionAsync("cli-nowhere", "q-1", "yes", TestContext.Current.CancellationToken));
-        Assert.StartsWith("Clarifying questions come with K-6:", question.Message, StringComparison.Ordinal);
         var rename = await Assert.ThrowsAsync<ServiceUnavailableException>(() =>
             service.RenameAsync("cli-nowhere", "a title", TestContext.Current.CancellationToken));
         Assert.StartsWith("Renaming comes with G-6:", rename.Message, StringComparison.Ordinal);

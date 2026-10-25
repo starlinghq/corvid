@@ -18,6 +18,44 @@ public sealed class ConfinementTests : IDisposable
 
     public void Dispose() => _layout.Dispose();
 
+    [Fact]
+    public async Task Output_reaches_the_watcher_while_the_command_runs_and_the_result_is_unchanged()
+    {
+        Host.RequireBubblewrap();
+        var pieces = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var first = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // K-2: the command waits for a file the test writes only once "first" has arrived, so it arrived while it ran.
+        string script = """
+            echo first
+            while [ ! -f go ]; do sleep 0.05; done
+            echo warning >&2
+            printf 'caf\303\251\n'
+            """;
+        var command = SandboxCommand.Shell(script) with
+        {
+            Output = piece =>
+            {
+                pieces.Enqueue(piece);
+                if (string.Concat(pieces).Contains("first\n", StringComparison.Ordinal))
+                    first.TrySetResult();
+            },
+        };
+
+        Task<SandboxResult> running = _layout.Sandbox().RunAsync(_layout.Policy, command, Ct);
+        await first.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        Assert.False(running.IsCompleted);
+        await File.WriteAllTextAsync(Path.Combine(_layout.Workspace, "go"), "", Ct);
+        SandboxResult result = await running;
+
+        string watched = string.Concat(pieces);
+        Assert.Contains("first\n", watched, StringComparison.Ordinal);
+        Assert.Contains("warning\n", watched, StringComparison.Ordinal);
+        // A character is decoded whole, however the pipe split it.
+        Assert.Contains("café\n", watched, StringComparison.Ordinal);
+        Assert.Equal("first\ncafé\n", result.StandardOutput);
+        Assert.Equal("warning\n", result.StandardError);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

@@ -133,9 +133,15 @@ internal sealed class ToolOutputTail : IDisposable
     {
         var text = CredentialScrub.Scrub(_buffer.ToString(), CredentialDetector.Egress).Text;
         if (text.Length > _maxChars)
+        {
             text = text[^_maxChars..];
-        if (text.Length > 0 && char.IsLowSurrogate(text[0]))
-            text = text[1..];
+            if (char.IsLowSurrogate(text[0]))
+                text = text[1..];
+            // The cut lands inside a line: that partial line goes when a whole one follows it.
+            var end = text.IndexOf('\n', StringComparison.Ordinal);
+            if (end >= 0 && end < text.Length - 1)
+                text = text[(end + 1)..];
+        }
         var lines = text.Split('\n');
         // A trailing newline ends the last line rather than starting an empty one.
         var count = lines.Length > 0 && lines[^1].Length == 0 ? lines.Length - 1 : lines.Length;
