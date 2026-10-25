@@ -40,12 +40,21 @@ public sealed class SessionUpdateReporter : ITurnObserver
     private readonly HashSet<string> _finished = new(StringComparer.Ordinal);
     private Task _chain = Task.CompletedTask;
     private long _read;
+    private readonly Func<bool>? _tainted;
+    // The chain's own: the taint last reported, and what the step being run says brought it in.
+    private bool? _taintReported;
+    private string? _taintSource;
 
     /// <param name="head">The log position the turn starts from: only later events are the turn's.</param>
     /// <param name="emit">Called with each update, one at a time and in order, on a pool thread.</param>
     /// <param name="log">Told why a report could not be built (a checkpoint the store cannot read); it never fails the turn.</param>
+    /// <param name="tainted">
+    /// The session's taint, for a surface that shows it: read as each report is queued, so in order with the turn rather than
+    /// when the chain gets to it, and reported as <see cref="TaintNoted"/> after the update it came with when it changed. A
+    /// call's result that brought outside content in names it as the source.
+    /// </param>
     public SessionUpdateReporter(CorvidRuntime runtime, string sessionId, ToolPresentation tools, long head, Action<SessionStreamUpdate> emit,
-        Action<string>? log = null, TimeProvider? time = null)
+        Action<string>? log = null, TimeProvider? time = null, Func<bool>? tainted = null)
     {
         ArgumentNullException.ThrowIfNull(runtime);
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
@@ -58,6 +67,7 @@ public sealed class SessionUpdateReporter : ITurnObserver
         _emit = emit;
         _log = log;
         _time = time ?? TimeProvider.System;
+        _tainted = tainted;
     }
 
     /// <summary>Text the generator streamed in its latest call; the delivered answer is compared with it, so nothing is sent twice.</summary>
@@ -127,6 +137,8 @@ public sealed class SessionUpdateReporter : ITurnObserver
             ReadOnly = asked ? null : call?.ReadOnly,
             CheckpointBefore = before?.CheckpointId,
         });
+        // The kernel taints the session as the call's result comes in, before the call ends: this call brought it in.
+        _taintSource = $"{tool} {ToolPresentation.Target(call?.Arguments)}".Trim();
     });
 
     /// <summary>
@@ -261,6 +273,10 @@ public sealed class SessionUpdateReporter : ITurnObserver
     private void Then(Func<Task> step)
     {
         lock (_gate)
+        {
+            // Read now, as the feed calls in: the chain may run this step after the turn has moved on (a busy machine), and the
+            // session's taint then would be a later call's, or the next message's.
+            var tainted = _tainted?.Invoke();
             _chain = _chain.ContinueWith(async _ =>
             {
                 try
@@ -272,7 +288,27 @@ public sealed class SessionUpdateReporter : ITurnObserver
                     // A report that cannot be built (a checkpoint the store cannot read) must not fail the turn.
                     _log?.Invoke(exception.Message);
                 }
+                try
+                {
+                    NoteTaint(tainted);
+                }
+                catch (Exception exception) when (exception is not OutOfMemoryException)
+                {
+                    _log?.Invoke(exception.Message);
+                }
             }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
+        }
+    }
+
+    /// <summary>After a step: the taint read when it was queued, reported when it changed, with the source the step named.</summary>
+    private void NoteTaint(bool? tainted)
+    {
+        var source = _taintSource;
+        _taintSource = null;
+        if (tainted is not { } now || now == _taintReported)
+            return;
+        _taintReported = now;
+        Emit(new TaintNoted(now, now ? source : null));
     }
 
     private T ReadNew<T>(Func<T> pick)

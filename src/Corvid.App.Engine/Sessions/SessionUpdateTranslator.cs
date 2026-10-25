@@ -100,7 +100,7 @@ public sealed class SessionUpdateTranslator(string workspace)
     /// </summary>
     public const string Interrupted = "interrupted";
 
-    /// <summary>The replay's taint so far (<see cref="TaintNoted"/>), for the window to reconcile with the session's own.</summary>
+    /// <summary>The taint so far (<see cref="TaintNoted"/>, replayed or live), for a replay to reconcile with the session's own.</summary>
     public bool Tainted { get; private set; }
 
     public IReadOnlyList<SessionUpdate> Translate(SessionStreamUpdate update)
