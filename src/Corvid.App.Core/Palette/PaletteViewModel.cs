@@ -706,8 +706,9 @@ public sealed class PaletteViewModel : ObservableObject
             var scored = _source
                 .Select((item, index) => (item, index, score: FuzzyMatch.Best(_query, item.Title, item.Detail, item.Group, item.Keywords)))
                 .Where(entry => entry.score is not null);
-            // The shortcuts keep their grouping; everything else ranks best first.
-            matched = (_mode == PaletteMode.Help ? scored : scored.OrderByDescending(entry => entry.score).ThenBy(entry => entry.index))
+            // The shortcuts keep their grouping, and so do the generator's two scopes (A5: a model is in both, and only its
+            // group says which choice a row makes); everything else ranks best first.
+            matched = (KeepsGroups ? scored : scored.OrderByDescending(entry => entry.score).ThenBy(entry => entry.index))
                 .Select(entry => entry.item);
         }
 
@@ -719,7 +720,7 @@ public sealed class PaletteViewModel : ObservableObject
         _selected = -1;
         foreach (var item in all)
             item.IsSelected = false;
-        var grouped = _mode == PaletteMode.Help || _query.Trim().Length == 0;
+        var grouped = KeepsGroups || _query.Trim().Length == 0;
         foreach (var item in all)
             item.Choose = ChooseCommand;
         for (var i = 0; i < all.Count; i++)
@@ -730,6 +731,8 @@ public sealed class PaletteViewModel : ObservableObject
         OnPropertyChanged(nameof(CountText));
         Select(_items.Count == 0 ? -1 : FirstEnabled());
     }
+
+    private bool KeepsGroups => _mode is PaletteMode.Help or PaletteMode.Generator;
 
     private IEnumerable<PaletteItem> FindInSession()
     {

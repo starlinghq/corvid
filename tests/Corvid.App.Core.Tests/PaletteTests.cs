@@ -306,6 +306,24 @@ public sealed class PaletteTests
         Assert.Equal(target.Title, models.Snapshot.Slot(ModelSlotNames.Generator)!.SessionModel);
     }
 
+    [Fact]
+    public async Task AltPFilteredKeepsItsTwoScopesApartUnderTheirHeaders()
+    {
+        using var composition = Compose();
+        var palette = composition.Palette;
+        await composition.ModelService.LoadAsync(TestContext.Current.CancellationToken);
+        palette.Execute(KeyCommands.SwitchGenerator);
+        var name = palette.Items.First(item => item.IsEnabled && item.Group == PaletteViewModel.ThisSessionGroup).Title;
+
+        palette.Query = name;
+
+        // A model is listed in both scopes; filtered, each row still sits under the header saying which choice it makes.
+        var rows = palette.Items.Where(item => item.Title == name).ToList();
+        Assert.Equal([PaletteViewModel.ThisSessionGroup, PaletteViewModel.NewSessionsGroup], rows.Select(item => item.Group));
+        Assert.Equal([PaletteViewModel.ThisSessionGroup, PaletteViewModel.NewSessionsGroup],
+            palette.Items.Select(item => item.GroupHeader).Where(header => header.Length > 0));
+    }
+
     [Theory]
     [InlineData(KeyCommands.NewSession, "New session", "come with the engine (A3)")]
     [InlineData(KeyCommands.NewWindow, "New window", "come with pop-out windows")]
