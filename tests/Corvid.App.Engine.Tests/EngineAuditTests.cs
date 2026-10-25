@@ -54,6 +54,23 @@ public sealed class EngineAuditTests
     }
 
     [Fact]
+    public async Task ASessionIsListedUnderItsTitleAsTheRailListsItAndItsLatestRenameWins()
+    {
+        await using var fixture = await EngineFixture.StartAsync();
+        Append(fixture, "cli-named", new UserMessage("please count slowly"), new AssistantMessage("1, 2, 3."),
+            new SessionTitled("Counting slowly", TitleSources.Generated));
+        Append(fixture, "cli-renamed", new UserMessage("tag the release"), new SessionTitled("Release", TitleSources.Generated),
+            new SessionTitled("Release 0.2", TitleSources.User));
+        Append(fixture, "cli-untitled", new UserMessage("what is in notes.md?"));
+
+        var titles = (await Audit(fixture).ListSessionsAsync(Ct)).ToDictionary(session => session.Id, session => session.Title);
+
+        Assert.Equal("Counting slowly", titles["cli-named"]);
+        Assert.Equal("Release 0.2", titles["cli-renamed"]);
+        Assert.Equal("what is in notes.md?", titles["cli-untitled"]);
+    }
+
+    [Fact]
     public async Task TheLogsSessionsAndEventsAreReadWithTheirTypesGroupsAndSummaries()
     {
         await using var fixture = await EngineFixture.StartAsync();

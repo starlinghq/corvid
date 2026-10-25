@@ -82,15 +82,18 @@ public sealed class EngineAuditService : IAuditService
         var sessions = new List<(AuditSession Session, DateTimeOffset Last)>();
         foreach (var id in log.ListSessions(cancellationToken))
         {
-            string? title = null;
+            string? title = null, named = null;
             var last = default(DateTimeOffset);
             foreach (var stored in SessionProjection.ReadRange(log, id, 0, log.GetHead(id, cancellationToken), cancellationToken))
             {
                 last = stored.RecordedAt;
-                if (title is null && stored.Payload is LoggedUserMessage user)
+                if (title is null && stored.Payload is LoggedUserMessage { LocalOnly: not true } user)
                     title = Line(user.Text, 80);
+                // G-6: the session's title (generated, or the person's rename) is what every list shows, the rail's included.
+                else if (stored.Payload is SessionTitled titled)
+                    named = SessionCatalogue.Line(titled.Title);
             }
-            sessions.Add((new AuditSession(id, title ?? StoreTitle(id)), last));
+            sessions.Add((new AuditSession(id, named ?? title ?? StoreTitle(id)), last));
         }
         return (IReadOnlyList<AuditSession>)[.. sessions.OrderByDescending(item => item.Last).Select(item => item.Session)];
     }, cancellationToken);
