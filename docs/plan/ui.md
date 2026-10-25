@@ -317,9 +317,12 @@ by side; for MCP tools the server's trust; the deadline as a countdown (five min
 ### 4.8 Models
 
 - **Slots** page: the seven slots (`generator`, `summarizer`, `decider`, `extractor`, `embedder.text`, `embedder.media`,
-  `vision`) with current, default, escalation ladder, fallbacks, placement and pin state; switching mid-turn; drag to
-  reorder the ladder, validated and written to `corvid.json` the way `corvid model switch` does it. The decider is
-  shared across sessions and the page says so.
+  `vision`) with current, default, escalation ladder, fallbacks, placement and pin state; switching at any time,
+  mid-turn too (the running turn takes it at its next step boundary); drag to reorder the ladder, validated and written
+  to `corvid.json` the way `corvid model switch` does it. A switch is either "this session" (it lasts for the session,
+  through turn ends, until the person changes or forgets it; escalation and fallback still move off it and
+  de-escalation returns to it) or "default for new sessions" (written to `corvid.json`); `Alt+P`, `/model` and
+  `/model --default` offer the same two. The decider is switchable per session too (A5).
 - **Catalogue**: local Starling models and the configured remote ones (Anthropic, OpenAI-compatible endpoints, Gemini),
   each with size, device fit from the doctor's GPU section, cached state and what it serves.
 - **Downloads**: explicit, with sizes and progress, cancel, and a note that nothing downloads implicitly. The default
@@ -391,8 +394,11 @@ plug in when they land. Audit appears as counts, through the read-only summary v
 
 The Board shows every session as a card: state (idle, running, waiting on you), the current step, elapsed time, model,
 taint and workspace. Peek opens a read-only live view; attach makes it the active session. New parallel sessions start
-here. When plan §14's `delegate_task` lands, a session's children appear as a tree with goal, toolset, budget, status
-and the validated output, and the Board groups them under their parent. Kanban boards come later, on the same substrate.
+here. A session's children (plan §14's `delegate_task`, built in A5, and `/delegate`) appear as a tree with goal,
+toolset, budget, model mix, status and the validated output: on the Board under their parent, and in the session
+header's children list. A child opens read-only, linked to its parent, and can be stopped from either list. Spawning one
+is a side effect under the session's approval mode, its card showing the goal, toolset, budget and models. Kanban boards
+come later, on the same substrate.
 
 ### 4.14 Remote and companion
 
@@ -509,8 +515,8 @@ host binding and the command to set it, and opens the Vault helper (U-6) or a te
 becomes available. The app never saw the value.
 
 **F18 The Board.** Three sessions run in two workspaces. The Board shows each with its step and state; one waits on an
-approval, which the tray also lists. Peek opens it read-only; attach switches to it. A child session, once subagents
-exist, shows under its parent with its budget.
+approval, which the tray also lists. Peek opens it read-only; attach switches to it. A child session shows under its
+parent with its budget and models (A5), opens read-only with its parent linked, and can be stopped there.
 
 **F19 Attachments and images.** A dropped screenshot becomes a chip and renders in the transcript (K-8); a dropped
 source file becomes an `@` reference; a dropped folder is offered as a workspace to open.
@@ -642,7 +648,8 @@ pages, the attention tray and notifications, the Board, search, export, themes, 
 K-3, K-5, K-7, K-9, G-3, G-5, G-6, G-8 to G-14.
 
 **A2, reach.** Attached mode and the daemon, the WebAssembly client with pairing, phone notifications through Vault,
-subagent views, worktrees per session, images, voice. G-1, G-4, G-15, K-8.
+subagent views, worktrees per session, images, voice. G-1, G-4, G-15, K-8. (Subagent views and G-15 were built in the
+A5 phase, before attached mode, worktrees, images and packaging, which A6 takes.)
 
 ## 11. Open decisions
 
