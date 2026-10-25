@@ -1,5 +1,3 @@
-using System.Threading.Channels;
-
 namespace Corvid.Cli.Chat;
 
 /// <summary>Where the chat reads lines: the terminal, or a script in tests.</summary>
@@ -14,52 +12,142 @@ public interface IChatInput
     /// so a message typed during a turn can never answer a prompt it did not see.
     /// </param>
     ValueTask<string?> ReadLineAsync(bool fresh = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// G-15: whether <see cref="ReadDuringTurnAsync"/> hears lines typed while a turn runs. An input that does not (a
+    /// script) keeps every such line for after the turn, as before.
+    /// </summary>
+    bool ReadsDuringTurn => false;
+
+    /// <summary>
+    /// G-15: the next line typed while a turn runs, for the few commands that run beside it (<c>/fork</c>). A line typed
+    /// while an approval prompt waits goes to the prompt, never here; lines typed before this call stay where they are. The
+    /// chat gives back (<see cref="PutBack"/>) a line that is not such a command, which the next ordinary read then returns,
+    /// so typing ahead works as before. Null at end of input.
+    /// </summary>
+    ValueTask<string?> ReadDuringTurnAsync(CancellationToken cancellationToken) => ValueTask.FromResult<string?>(null);
+
+    /// <summary>G-15: keeps a line read during a turn for the next ordinary read, after any typed before it.</summary>
+    void PutBack(string line)
+    {
+    }
 }
 
 /// <summary>
-/// Standard input, read by one background loop into a channel. Reads can then be cancelled (a deadline, Ctrl-C) without
-/// leaving a blocked <see cref="Console.ReadLine"/> that would swallow the next line.
+/// Standard input, read by one background loop. Each line goes to whoever waits for it, an approval prompt (a fresh read)
+/// first, then an ordinary read, then the running turn's reader (G-15); with nobody waiting it is kept, typed ahead, for
+/// the next ordinary read. Reads can be cancelled (a deadline, Ctrl-C) without leaving a blocked
+/// <see cref="Console.ReadLine"/> that would swallow the next line.
 /// </summary>
 internal sealed class ConsoleChatInput : IChatInput
 {
-    private readonly Channel<string?> _lines = Channel.CreateUnbounded<string?>(new UnboundedChannelOptions { SingleWriter = true });
-    private readonly Queue<string?> _typedAhead = new();
+    private readonly Queue<string> _typedAhead = new();
     private readonly Lock _gate = new();
     private Task? _reader;
+    private bool _ended;
+    private TaskCompletionSource<string?>? _fresh;
+    private TaskCompletionSource<string?>? _ordinary;
+    private TaskCompletionSource<string?>? _duringTurn;
 
     public bool Echoes => !Console.IsInputRedirected;
 
-    public async ValueTask<string?> ReadLineAsync(bool fresh = false, CancellationToken cancellationToken = default)
+    public bool ReadsDuringTurn => true;
+
+    public ValueTask<string?> ReadLineAsync(bool fresh = false, CancellationToken cancellationToken = default)
     {
         lock (_gate)
+        {
             _reader ??= Task.Factory.StartNew(Read, TaskCreationOptions.LongRunning);
-        if (fresh)
+            // A fresh read skips what was typed ahead; it stays for the next ordinary read.
+            if (!fresh && _typedAhead.TryDequeue(out var queued))
+                return ValueTask.FromResult<string?>(queued);
+            if (_ended)
+                return ValueTask.FromResult<string?>(null);
+            return new ValueTask<string?>(fresh ? Wait(ref _fresh, cancellationToken) : Wait(ref _ordinary, cancellationToken));
+        }
+    }
+
+    public ValueTask<string?> ReadDuringTurnAsync(CancellationToken cancellationToken)
+    {
+        lock (_gate)
         {
-            while (_lines.Reader.TryRead(out var early))
+            _reader ??= Task.Factory.StartNew(Read, TaskCreationOptions.LongRunning);
+            if (_ended)
+                return ValueTask.FromResult<string?>(null);
+            return new ValueTask<string?>(Wait(ref _duringTurn, cancellationToken));
+        }
+    }
+
+    public void PutBack(string line)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+        lock (_gate)
+            _typedAhead.Enqueue(line);
+    }
+
+    // Called with the lock held: registers the one waiter of its kind, which a cancel takes back if no line reached it.
+    private Task<string?> Wait(ref TaskCompletionSource<string?>? slot, CancellationToken cancellationToken)
+    {
+        if (slot is not null)
+            throw new InvalidOperationException("Another read of this kind is already waiting.");
+        var waiter = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        slot = waiter;
+        if (cancellationToken.CanBeCanceled)
+        {
+            var registration = cancellationToken.Register(() =>
+            {
                 lock (_gate)
-                    _typedAhead.Enqueue(early);
+                {
+                    if (ReferenceEquals(_fresh, waiter))
+                        _fresh = null;
+                    else if (ReferenceEquals(_ordinary, waiter))
+                        _ordinary = null;
+                    else if (ReferenceEquals(_duringTurn, waiter))
+                        _duringTurn = null;
+                    else
+                        return;
+                }
+                waiter.TrySetCanceled(cancellationToken);
+            });
+            _ = waiter.Task.ContinueWith(_ => registration.Dispose(), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
         }
-        else
-        {
-            lock (_gate)
-                if (_typedAhead.TryDequeue(out var queued))
-                    return queued;
-        }
-        try
-        {
-            return await _lines.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (ChannelClosedException)
-        {
-            return null;
-        }
+        return waiter.Task;
     }
 
     private void Read()
     {
         while (Console.ReadLine() is { } line)
-            _lines.Writer.TryWrite(line);
-        _lines.Writer.TryComplete();
+            Deliver(line);
+        TaskCompletionSource<string?>?[] waiting;
+        lock (_gate)
+        {
+            _ended = true;
+            waiting = [_fresh, _ordinary, _duringTurn];
+            _fresh = _ordinary = _duringTurn = null;
+        }
+        foreach (var waiter in waiting)
+            waiter?.TrySetResult(null);
+    }
+
+    private void Deliver(string line)
+    {
+        TaskCompletionSource<string?>? waiter;
+        lock (_gate)
+        {
+            if (_fresh is not null)
+                (waiter, _fresh) = (_fresh, null);
+            else if (_ordinary is not null)
+                (waiter, _ordinary) = (_ordinary, null);
+            else if (_duringTurn is not null)
+                (waiter, _duringTurn) = (_duringTurn, null);
+            else
+            {
+                _typedAhead.Enqueue(line);
+                return;
+            }
+        }
+        waiter.TrySetResult(line);
     }
 }
 

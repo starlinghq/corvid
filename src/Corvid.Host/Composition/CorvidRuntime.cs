@@ -436,22 +436,15 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
 
     /// <summary>
     /// Forks a session at a log position (plan §3.2): a new session holding a copy of the source's events through
-    /// <paramref name="throughSequence"/> (its head when null). When the source is open in this process the copy is taken
-    /// between its turns, so it never splits a turn.
+    /// <paramref name="throughSequence"/> (its head when null). While a turn of the source runs here the fork is taken at
+    /// that turn's last completed step without waiting for it (G-15, <see cref="ForkAsync"/>); between turns it is taken
+    /// between them, so it never splits a turn.
     /// </summary>
     /// <exception cref="SessionForkException">The source has no such position, or the position leaves a call or prompt open.</exception>
     public async Task<CorvidSession> ForkSessionAsync(string sourceId, long? throughSequence = null, string surface = "cli",
-        SessionSettings? settings = null, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(sourceId);
-        var id = NewSessionId(surface);
-        if (TryGetSession(sourceId, out var source))
-            await source.Actor.RunExclusiveAsync<long>(token => Task.FromResult(SessionFork.Fork(Log, sourceId, id, throughSequence, token)),
-                cancellationToken).ConfigureAwait(false);
-        else
-            SessionFork.Fork(Log, sourceId, id, throughSequence, cancellationToken);
-        return OpenSession(id, surface, settings);
-    }
+        SessionSettings? settings = null, CancellationToken cancellationToken = default) =>
+        (await ForkAsync(sourceId, new ForkOptions { Through = throughSequence, Surface = surface, Settings = settings }, cancellationToken)
+            .ConfigureAwait(false)).Session;
 
     public bool TryGetSession(string sessionId, out CorvidSession session) => _sessions.TryGetValue(sessionId, out session!);
 

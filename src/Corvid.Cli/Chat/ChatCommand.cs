@@ -109,6 +109,41 @@ internal static class ChatCommand
                     renderer.Echo(line);
                 return line;
             }
+            // G-15: while a turn runs, a command that runs beside it (/fork) runs when typed; any other line stays typed ahead
+            // for after the turn, as before. An approval prompt's answer never comes here: the input gives it to the prompt.
+            async Task<Delivery> BesideTurnAsync(Task<Delivery> turn)
+            {
+                if (!context.Input.ReadsDuringTurn)
+                    return await turn.ConfigureAwait(false);
+                while (!turn.IsCompleted)
+                {
+                    using var stop = CancellationTokenSource.CreateLinkedTokenSource(leave.Token);
+                    var read = context.Input.ReadDuringTurnAsync(stop.Token).AsTask();
+                    if (await Task.WhenAny(turn, read).ConfigureAwait(false) == turn)
+                    {
+                        await stop.CancelAsync().ConfigureAwait(false);
+                        // A line that reached the reader as the turn ended is the next ordinary read's.
+                        if (await SettledAsync(read).ConfigureAwait(false) is { } late)
+                            context.Input.PutBack(late);
+                        break;
+                    }
+                    if (await SettledAsync(read).ConfigureAwait(false) is not { } line)
+                        break;
+                    if (SlashCommandRegistry.IsCommand(line) && commands.TryGet(SlashCommandRegistry.Parse(line).Name, out var command)
+                        && command.DuringTurn)
+                    {
+                        if (!context.Input.Echoes)
+                            renderer.Echo(line);
+                        renderer.Output(await commands.ExecuteAsync(line, new SlashCommandContext(runtime, session, commands), leave.Token)
+                            .ConfigureAwait(false));
+                    }
+                    else
+                    {
+                        context.Input.PutBack(line);
+                    }
+                }
+                return await turn.ConfigureAwait(false);
+            }
             context.Interrupts.Interrupted += OnInterrupt;
             try
             {
@@ -194,7 +229,7 @@ internal static class ChatCommand
                     Delivery delivery;
                     try
                     {
-                        delivery = await turn.ConfigureAwait(false);
+                        delivery = await BesideTurnAsync(turn).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
@@ -263,6 +298,19 @@ internal static class ChatCommand
     }
 
     /// <summary>A <c>#</c> line through memory's gated write path, as command output.</summary>
+    /// <summary>A read's line, or null when it was cancelled or the input ended.</summary>
+    private static async Task<string?> SettledAsync(Task<string?> read)
+    {
+        try
+        {
+            return await read.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+    }
+
     private static async Task<CommandOutput> RememberAsync(CorvidSession session, string fact, CancellationToken cancellationToken)
     {
         try

@@ -165,6 +165,27 @@ public sealed class TurnRunner
     /// </summary>
     public bool Tainted { get; private set; }
 
+    /// <summary>
+    /// G-15: marks the session as holding outside content, as a fork of a tainted session does before its first turn. One
+    /// way: only a user's message at a turn's start clears taint (§10.3), so this can never weaken it.
+    /// </summary>
+    public void Taint() => Tainted = true;
+
+    // G-15: the log position through which the running turn's last completed step lies; 0 while no turn runs.
+    private long _stepBoundary;
+
+    /// <summary>
+    /// G-15: while a turn runs, the log position a fork may copy through without splitting a step: the turn's message
+    /// until its first round of tool calls has its results (the head before the message for a <c>!</c> line's turn), then
+    /// the head after each round's results. Every call issued by then has its result and no approval waits. Null between
+    /// turns. A snapshot, thread-safe: a surface reads it beside the running turn.
+    /// </summary>
+    public long? StepBoundary => Volatile.Read(ref _stepBoundary) is > 0 and var boundary ? boundary : null;
+
+    private void MarkStepBoundary(long sequence) => Volatile.Write(ref _stepBoundary, sequence);
+
+    private void MarkStepBoundary() => MarkStepBoundary(_services.Log.GetHead(SessionId));
+
     private int _approvalMode = -1;
 
     /// <summary>
@@ -283,6 +304,7 @@ public sealed class TurnRunner
         finally
         {
             // Steers the turn ended without taking go back to the surface, which sends them as messages.
+            Volatile.Write(ref _stepBoundary, 0);
             List<PendingSteer> left;
             lock (_steerGate)
                 (left, _steers) = (_steers ?? [], null);
@@ -468,6 +490,8 @@ public sealed class TurnRunner
             {
                 _turnStart = runner.Append(new UserMessage(envelope.Text, From: envelope.From)).Sequence;
             }
+            // G-15: until its first round has its results, a fork while the turn runs holds the turn's message.
+            runner.MarkStepBoundary(_turnStart);
 
             await ExtractEntitiesAsync(cancellationToken).ConfigureAwait(false);
             await BuildShortlistAsync(cancellationToken).ConfigureAwait(false);
@@ -526,6 +550,8 @@ public sealed class TurnRunner
             if (envelope.Origin != EnvelopeOrigin.User || envelope.Guest is not null)
                 return Result(TurnStatus.Failed, "Only the session's own user can run a shell line.");
             _localOnly = shell.LocalOnly;
+            // G-15: a fork while the line runs holds what came before it; its call has no step to wait for.
+            runner.MarkStepBoundary();
             _turnStart = runner.Append(new UserMessage(envelope.Text, shell.LocalOnly ? true : null)).Sequence;
             var function = _services.Tools.GetFunctions(_options.SecretNames).FirstOrDefault(candidate => candidate.Name == ShellTool);
             if (function?.GetService(typeof(ToolDescriptor)) is not ToolDescriptor descriptor)
@@ -601,6 +627,8 @@ public sealed class TurnRunner
                 _steps++;
                 Listen(listener => listener.StepStarted(runner.SessionId, _steps, _options.MaxSteps));
                 var (anyRan, failed) = await RunCallsAsync(calls, tools, cancellationToken).ConfigureAwait(false);
+                // G-15: the round is done, every call with its result: a step boundary a fork may copy through.
+                runner.MarkStepBoundary();
                 // K-6: the generator asked the user (ask_user); the round's other calls ran, and the question ends the turn.
                 if (_question is { } asked)
                     return await FinishAsync(TurnStatus.Clarifying, asked.Text, cancellationToken, asked).ConfigureAwait(false);
