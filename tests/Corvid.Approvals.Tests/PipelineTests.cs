@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text.Json;
 using Corvid.Abstractions.Events;
 using Corvid.Kernel.Events;
@@ -279,6 +280,79 @@ public sealed class PipelineTests
         Assert.True(store.Remove(a with { Paths = ["/w"] }));
         Assert.Equal([b], store.Rules);
         Assert.False(store.Remove(a));
+    }
+
+    [Fact]
+    public void Two_stores_on_one_file_see_each_others_changes_and_never_resurrect_a_removed_rule()
+    {
+        using var db = new TempLog();
+        var path = Path.Combine(db.Root, "config", "corvid", "approvals.json");
+        var at = new DateTimeOffset(2026, 10, 24, 12, 0, 0, TimeSpan.Zero);
+        var make = new ApprovalRule(RuleDecision.Allow, "shell", "make", null, ActionEffects.None, false, ["/w"], [], "make", at);
+        var ninja = make with { Verb = "ninja", Source = "ninja" };
+        var deny = make with { Decision = RuleDecision.Deny, Verb = "rm", Source = "rm -rf /w" };
+        // The app and the CLI: each reads the file once at start and outlives the other's changes.
+        var app = new JsonFileApprovalRuleStore(path);
+        var cli = new JsonFileApprovalRuleStore(path);
+
+        app.Add([make]);
+        Assert.Equal([make], cli.Rules);
+        Assert.True(cli.Remove(make));
+        Assert.Empty(app.Rules);
+        // The app's next write adds its rule to the file as it is now: the CLI's removal holds.
+        app.Add([ninja]);
+        Assert.Equal([ninja], cli.Rules);
+        // And the CLI's deny survives the app's next write.
+        cli.Add([deny]);
+        app.Add([ninja, make]);
+        Assert.Equal([ninja, deny, make], JsonFileApprovalRuleStore.Parse(File.ReadAllText(path)));
+        Assert.Equal([ninja, deny, make], cli.Rules);
+        Assert.False(app.Remove(make with { Verb = "cmake" }));
+        Assert.DoesNotContain(Directory.GetFiles(Path.GetDirectoryName(path)!), file => file.EndsWith(".tmp", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_store_waits_for_another_process_lock_and_gives_up_without_changing_the_file()
+    {
+        using var db = new TempLog();
+        var path = Path.Combine(db.Root, "config", "corvid", "approvals.json");
+        var at = new DateTimeOffset(2026, 10, 24, 12, 0, 0, TimeSpan.Zero);
+        var make = new ApprovalRule(RuleDecision.Allow, "shell", "make", null, ActionEffects.None, false, ["/w"], [], "make", at);
+        var store = new JsonFileApprovalRuleStore(path, TimeSpan.Zero);
+        store.Add([make]);
+        var before = File.ReadAllText(path);
+        // A stale approvals.json.tmp from an older Corvid is not this store's temporary file.
+        File.WriteAllText(path + ".tmp", "stale");
+
+        using (new FileStream(JsonFileApprovalRuleStore.LockPath(path), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.Throws<TimeoutException>(() => store.Add([make with { Verb = "ninja" }]));
+            Assert.Throws<TimeoutException>(() => store.Remove(make));
+        }
+
+        Assert.Equal(before, File.ReadAllText(path));
+        Assert.True(store.Remove(make));
+        Assert.Empty(new JsonFileApprovalRuleStore(path).Rules);
+    }
+
+    [Fact]
+    public async Task An_always_answer_whose_rule_cannot_be_stored_still_stands_for_this_action_as_once()
+    {
+        using var db = new TempLog();
+        var pipeline = Fixtures.Pipeline(db, prompter: ScriptedPrompter.Always(ApprovalAnswer.Approve(ApprovalScope.Always)),
+            always: new UnwritableRuleStore());
+        var result = await pipeline.AuthorizeAsync(Fixtures.Context(ApprovalMode.Manual), new ShellAction("git push origin main"), Ct);
+        Assert.True(result.Allowed);
+        Assert.Equal(ApprovalScope.Once, result.Scope);
+    }
+
+    private sealed class UnwritableRuleStore : IApprovalRuleStore
+    {
+        public ImmutableArray<ApprovalRule> Rules => [];
+
+        public void Add(IEnumerable<ApprovalRule> rules) => throw new TimeoutException("held");
+
+        public bool Remove(ApprovalRule rule) => false;
     }
 
     [Fact]

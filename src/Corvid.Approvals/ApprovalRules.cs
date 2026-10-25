@@ -134,11 +134,13 @@ public interface IApprovalRuleStore
 {
     ImmutableArray<ApprovalRule> Rules { get; }
 
+    /// <summary>Stores the rules; a rule equal to one stored already (the same content and time) is not stored again.</summary>
     void Add(IEnumerable<ApprovalRule> rules);
 
     /// <summary>
-    /// Removes a remembered rule (K-7): every stored rule equal to <paramref name="rule"/>. Calls it allowed ask again from
-    /// the next one. False when no such rule is stored (already removed), which changes nothing.
+    /// Removes a remembered rule (K-7): the stored rule equal to <paramref name="rule"/>. <see cref="Add"/> stores an equal rule
+    /// once, so this is one rule; a file written by hand with exact duplicates loses all of them, which read as one rule anyway.
+    /// Calls it allowed ask again from the next one. False when no such rule is stored (already removed), which changes nothing.
     /// </summary>
     bool Remove(ApprovalRule rule);
 }
@@ -152,7 +154,8 @@ public sealed class InMemoryApprovalRuleStore : IApprovalRuleStore
     public void Add(IEnumerable<ApprovalRule> rules)
     {
         ArgumentNullException.ThrowIfNull(rules);
-        ImmutableInterlocked.Update(ref _rules, (current, added) => current.AddRange(added), rules.ToArray());
+        ImmutableInterlocked.Update(ref _rules, (current, added) => added.Aggregate(current, (all, rule) => all.Contains(rule) ? all : all.Add(rule)),
+            rules.ToArray());
     }
 
     public bool Remove(ApprovalRule rule)
@@ -170,25 +173,53 @@ public sealed class InMemoryApprovalRuleStore : IApprovalRuleStore
 }
 
 /// <summary>
-/// "Always" rules in a JSON file (format <c>corvid-approval-rules</c>, version 1), written atomically. The default location,
+/// "Always" rules in a JSON file (format <c>corvid-approval-rules</c>, version 1), shared by every Corvid process on the
+/// machine: the CLI, the app and a gateway may each hold a store on the same file. The default location,
 /// <c>$XDG_CONFIG_HOME/corvid/approvals.json</c>, is inside Corvid's safety configuration, which the hardline list
 /// protects from every tool.
+/// <para>
+/// Each change takes a cross-process lock (<c>approvals.json.lock</c>, opened with no sharing), reads the file again under
+/// it, applies only its own delta (these rules added, this rule removed) and replaces the file through a temporary file of
+/// its own: two processes never undo or resurrect each other's rules, nor collide on the temporary file.
+/// <see cref="Rules"/> reads the file again whenever it changed on disk since this store last saw it, so a rule another
+/// process added or removed applies here from the next call.
+/// </para>
 /// </summary>
 public sealed class JsonFileApprovalRuleStore : IApprovalRuleStore
 {
     public const string Format = "corvid-approval-rules";
     public const int FormatVersion = 1;
 
+    /// <summary>How long a change waits for another process's change to finish before it gives up.</summary>
+    public static readonly TimeSpan DefaultLockTimeout = TimeSpan.FromSeconds(10);
+
     private readonly string _path;
+    private readonly string _lockPath;
+    private readonly TimeSpan _lockTimeout;
     private readonly Lock _gate = new();
     private ImmutableArray<ApprovalRule> _rules;
+    // The file as _rules was last read or written: its last write time and length, or null when it did not exist.
+    private (DateTime Written, long Length)? _seen;
 
     public JsonFileApprovalRuleStore(string path)
+        : this(path, DefaultLockTimeout)
+    {
+    }
+
+    internal JsonFileApprovalRuleStore(string path, TimeSpan lockTimeout)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         _path = Path.GetFullPath(path);
-        _rules = File.Exists(_path) ? Parse(File.ReadAllText(_path)) : [];
+        _lockPath = LockPath(_path);
+        _lockTimeout = lockTimeout;
+        lock (_gate)
+        {
+            _rules = ReadLocked();
+        }
     }
+
+    /// <summary>The lock file every store on <paramref name="path"/> takes for a change.</summary>
+    internal static string LockPath(string path) => Path.GetFullPath(path) + ".lock";
 
     public static string DefaultPath(ApprovalEnvironment environment)
     {
@@ -197,39 +228,136 @@ public sealed class JsonFileApprovalRuleStore : IApprovalRuleStore
         return Path.Combine(config, "corvid", "approvals.json");
     }
 
-    public ImmutableArray<ApprovalRule> Rules => _rules;
-
-    public void Add(IEnumerable<ApprovalRule> rules)
+    /// <summary>The stored rules, read again first when the file changed on disk since this store last read or wrote it.</summary>
+    public ImmutableArray<ApprovalRule> Rules
     {
-        ArgumentNullException.ThrowIfNull(rules);
-        lock (_gate)
+        get
         {
-            Write(_rules.AddRange(rules));
+            lock (_gate)
+            {
+                if (Stamp() != _seen)
+                    _rules = ReadLocked();
+                return _rules;
+            }
         }
     }
 
-    /// <summary>Removes the rule and rewrites the file atomically; a rule not in the file leaves it untouched.</summary>
+    /// <summary>Adds the rules not stored already (an equal rule is stored once) to the file as it is on disk now.</summary>
+    /// <exception cref="TimeoutException">Another process held the file's lock past the lock timeout; nothing changed.</exception>
+    public void Add(IEnumerable<ApprovalRule> rules)
+    {
+        ArgumentNullException.ThrowIfNull(rules);
+        var added = rules.ToArray();
+        lock (_gate)
+        {
+            using var held = AcquireFileLock();
+            var current = ReadLocked();
+            var updated = current;
+            foreach (var rule in added)
+                if (!updated.Contains(rule))
+                    updated = updated.Add(rule);
+            if (updated.Length != current.Length)
+                WriteLocked(updated);
+        }
+    }
+
+    /// <summary>
+    /// Removes the rule from the file as it is on disk now and replaces the file atomically. A rule not in the file (removed
+    /// already, here or by another process) leaves it untouched and returns false.
+    /// </summary>
+    /// <exception cref="TimeoutException">Another process held the file's lock past the lock timeout; nothing changed.</exception>
     public bool Remove(ApprovalRule rule)
     {
         ArgumentNullException.ThrowIfNull(rule);
         lock (_gate)
         {
-            var kept = _rules.RemoveAll(stored => stored.Equals(rule));
-            if (kept.Length == _rules.Length)
+            using var held = AcquireFileLock();
+            var current = ReadLocked();
+            var kept = current.RemoveAll(stored => stored.Equals(rule));
+            if (kept.Length == current.Length)
                 return false;
-            Write(kept);
+            WriteLocked(kept);
             return true;
         }
     }
 
-    // Under the gate: the file first, then the list, so a failed write leaves both as they were.
-    private void Write(ImmutableArray<ApprovalRule> updated)
+    /// <summary>
+    /// The cross-process lock: the lock file opened with no sharing, which .NET takes as an exclusive <c>flock</c> on Unix
+    /// (and a share-none open on Windows), so it excludes another store on the same file in this process too.
+    /// </summary>
+    private FileStream AcquireFileLock()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-        var temporary = _path + ".tmp";
-        File.WriteAllText(temporary, Serialize(updated));
-        File.Move(temporary, _path, overwrite: true);
+        var deadline = Environment.TickCount64 + (long)_lockTimeout.TotalMilliseconds;
+        var wait = 2;
+        while (true)
+        {
+            try
+            {
+                return new FileStream(_lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.None);
+            }
+            catch (IOException) when (Environment.TickCount64 < deadline)
+            {
+                Thread.Sleep(wait);
+                wait = Math.Min(wait * 2, 100);
+            }
+            catch (IOException exception)
+            {
+                throw new TimeoutException(
+                    $"Another Corvid process held {_lockPath} for over {_lockTimeout.TotalSeconds:0.#} seconds; the approval rules were not changed.",
+                    exception);
+            }
+        }
+    }
+
+    // Under the gate: the file's rules, noting the file as read. A file that does not exist holds none.
+    private ImmutableArray<ApprovalRule> ReadLocked()
+    {
+        var stamp = Stamp();
+        string text;
+        try
+        {
+            text = File.ReadAllText(_path);
+        }
+        catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
+        {
+            _seen = null;
+            return [];
+        }
+        var rules = Parse(text);
+        _seen = stamp;
+        return rules;
+    }
+
+    // Under the gate and the file lock: a temporary file of this call's own, renamed over the file, then the list, so a failed
+    // write leaves both as they were. The write time is moved past the replaced file's, so a store that read that file sees
+    // a change even when both writes fall inside one tick of the file system's clock.
+    private void WriteLocked(ImmutableArray<ApprovalRule> updated)
+    {
+        var previous = Stamp()?.Written;
+        var temporary = $"{_path}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllText(temporary, Serialize(updated));
+            File.Move(temporary, _path, overwrite: true);
+        }
+        catch
+        {
+            File.Delete(temporary);
+            throw;
+        }
+        var written = DateTime.UtcNow;
+        if (previous is { } before && written <= before)
+            written = before.AddTicks(TimeSpan.TicksPerMillisecond);
+        File.SetLastWriteTimeUtc(_path, written);
         _rules = updated;
+        _seen = Stamp();
+    }
+
+    private (DateTime Written, long Length)? Stamp()
+    {
+        var info = new FileInfo(_path);
+        return info.Exists ? (info.LastWriteTimeUtc, info.Length) : null;
     }
 
     public static string Serialize(IEnumerable<ApprovalRule> rules) => JsonSerializer.Serialize(
