@@ -142,7 +142,8 @@ public sealed class EgressLedgerTests : IDisposable
         Assert.Equal(0, Scalar("SELECT COUNT(*) FROM messages"));
 
         await Client().GetResponseAsync(First(), Session("s3"), Token);
-        Assert.Equal(new EgressCounts(2, 1, 1), _ledger.Count(DateTimeOffset.UtcNow.AddHours(-1)));
+        // Two requests, the three values of the one that left, the one refused.
+        Assert.Equal(new EgressCounts(2, 3, 1), _ledger.Count(DateTimeOffset.UtcNow.AddHours(-1)));
         Assert.Equal(new EgressCounts(0, 0, 0), _ledger.Count(DateTimeOffset.UtcNow.AddHours(1)));
         Assert.Equal(2, _ledger.List(cancellationToken: Token).Count);
     }

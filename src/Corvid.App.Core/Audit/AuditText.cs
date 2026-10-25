@@ -118,11 +118,12 @@ public static partial class AuditText
     public static string Plain(IEnumerable<AuditSpan> spans) => string.Concat(spans.Select(span => span.Text));
 
     /// <summary>
-    /// A line of a request as sent, cut where the gate put its markers (<c>[redacted:credential]</c>), so the view can mark
-    /// each redacted value. Only a marker of the gate's exact form (<c>[redacted:</c>, a lower-case kind, <c>]</c>) counts;
-    /// anything else that looks like one stays plain. The markers are still read back out of text, which a tool's output
-    /// or the model can imitate, so <see cref="CountRedactions"/> is checked against the gate's own count. The gate (G-9)
-    /// should hand its redactions over as structure instead.
+    /// A line of a request as sent, cut where the gate put its markers, so the view can mark each redacted value. Two forms
+    /// count: the privacy gate's placeholders as it sends them (<c>&lt;EMAIL_1&gt;</c>, an upper-case label, an underscore
+    /// and a number), and a marker of the form <c>[redacted:credential]</c> (a lower-case kind); anything else that looks
+    /// like one stays plain. In a redacted request the gate neutralizes placeholder-shaped text before it redacts, so every
+    /// placeholder there is its own; markers are still read back out of text, which a tool's output or the model can
+    /// imitate in a request sent as it was, so <see cref="CountRedactions"/> is checked against the gate's own count.
     /// </summary>
     public static ImmutableArray<RedactedSegment> Redactions(string line)
     {
@@ -142,14 +143,27 @@ public static partial class AuditText
         return segments.ToImmutable();
     }
 
-    /// <summary>How many of the gate's markers the text holds, by <see cref="Redactions"/>'s rule.</summary>
+    /// <summary>
+    /// How many redacted values the text holds, by <see cref="Redactions"/>'s rule: each <c>[redacted:kind]</c> marker, and
+    /// each distinct placeholder once (a placeholder names one value, however often the request repeats it), which is how
+    /// the gate counts what it redacted.
+    /// </summary>
     public static int CountRedactions(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
-        return RedactionMarker().Count(text);
+        var placeholders = new HashSet<string>(StringComparer.Ordinal);
+        var markers = 0;
+        foreach (Match marker in RedactionMarker().Matches(text))
+        {
+            if (marker.Value[0] == '<')
+                placeholders.Add(marker.Value);
+            else
+                markers++;
+        }
+        return markers + placeholders.Count;
     }
 
-    [GeneratedRegex(@"\[redacted:[a-z_]+\]", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\[redacted:[a-z_]+\]|<[A-Z][A-Z0-9_]*_[0-9]+>", RegexOptions.CultureInvariant)]
     private static partial Regex RedactionMarker();
 
     /// <summary>"38.2 KB", "812 B", "1.4 MB": decimal kilobytes, as the mockups write sizes.</summary>

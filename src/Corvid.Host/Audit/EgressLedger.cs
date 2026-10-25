@@ -24,8 +24,8 @@ public sealed record EgressEntry(long Number, string RequestId, string? SessionI
     public bool Left => Outcome != EgressOutcomes.Refused;
 }
 
-/// <summary>Requests to gated models since a moment: all, how many were redacted, how many were refused.</summary>
-public sealed record EgressCounts(int Requests, int Redacted, int Refused);
+/// <summary>Requests to gated models since a moment: all of them, the values redacted in them, and how many were refused.</summary>
+public sealed record EgressCounts(int Requests, int RedactedValues, int Refused);
 
 /// <summary>
 /// The egress ledger (G-9, docs/plan/ui.md §4.12, F8): every request the privacy egress gate decided on, for every gated
@@ -269,7 +269,7 @@ public sealed class EgressLedger
         return EgressRendering.Full(blocks, tools is null ? [] : JsonSerializer.Deserialize(tools, EgressJson.Default.StringArray) ?? []);
     }
 
-    /// <summary>How many requests the ledger holds since <paramref name="since"/>, redacted and refused among them.</summary>
+    /// <summary>How many requests the ledger holds since <paramref name="since"/>, the values redacted in them and how many were refused.</summary>
     public EgressCounts Count(DateTimeOffset since)
     {
         using var connection = Open(create: false);
@@ -277,7 +277,7 @@ public sealed class EgressLedger
             return new(0, 0, 0);
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT COUNT(*), COALESCE(SUM(outcome = 'redacted'), 0), COALESCE(SUM(outcome = 'refused'), 0)
+            SELECT COUNT(*), COALESCE(SUM(placeholders), 0), COALESCE(SUM(outcome = 'refused'), 0)
             FROM requests WHERE recorded_at >= $since;
             """;
         command.Parameters.AddWithValue("$since", since.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
