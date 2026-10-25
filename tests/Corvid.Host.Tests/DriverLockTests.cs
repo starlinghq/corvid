@@ -1,4 +1,5 @@
 using Corvid.Host.Composition;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Corvid.Host.Tests;
@@ -113,6 +114,58 @@ public sealed class DriverLockTests
         // The second process reads it as it stands, without opening it.
         Assert.Contains(second.Log.Read("cli-read", cancellationToken: Token), item => item.Payload is Abstractions.Events.AssistantMessage);
         Assert.Equal(LockState.HeldElsewhere, second.Driver("cli-read").State);
+    }
+
+    [Fact]
+    public async Task ARecapOrARenameOfASessionAnotherProcessDrivesIsRefusedAndWritesNothing()
+    {
+        var generator = new FakeGenerator(Reply.Say("Hello."), Reply.Say("You said hi."));
+        await using var host = TestHost.Create(new FakeModels(generator));
+        await using var first = await host.StartAsync();
+        var factory = host.Services.GetRequiredService<CorvidRuntimeFactory>();
+        await using var second = await factory.StartAsync(Token);
+        var session = first.OpenSession("cli-held");
+        await session.SendAsync("hi", Token);
+        var head = second.Log.GetHead("cli-held", Token);
+
+        // G-12: only the driver writes to the log, a title or a recap included, and the generator is not asked for one.
+        var renamed = Assert.Throws<SessionHeldException>(() => second.Rename("cli-held", "From the window"));
+        Assert.Contains("is driven by", renamed.Message, StringComparison.Ordinal);
+        await Assert.ThrowsAsync<SessionHeldException>(() => second.RecapAsync("cli-held", cancellationToken: Token));
+        Assert.Single(generator.Calls);
+        Assert.Equal(head, second.Log.GetHead("cli-held", Token));
+
+        // The driver itself may.
+        Assert.Equal("You said hi.", (await first.RecapAsync("cli-held", cancellationToken: Token))?.Text);
+        Assert.Equal("Mine now", first.Rename("cli-held", "Mine now").Title);
+    }
+
+    [Fact]
+    public async Task ASessionAnotherProcessTakesWhileTheRecapIsWrittenIsNotWrittenTo()
+    {
+        CorvidRuntime? taker = null;
+        var generator = new FakeGenerator(
+            Reply.Say("Hello."),
+            _ =>
+            {
+                // While the local generator writes the recap, the terminal takes the session.
+                taker!.OpenSession("cli-race");
+                return new ChatResponse(new ChatMessage(ChatRole.Assistant, "You said hi."));
+            });
+        await using var host = TestHost.Create(new FakeModels(generator));
+        var factory = host.Services.GetRequiredService<CorvidRuntimeFactory>();
+        await using (var earlier = await host.StartAsync())
+            await earlier.OpenSession("cli-race").SendAsync("hi", Token);
+        await using var window = await factory.StartAsync(Token);
+        await using var terminal = await factory.StartAsync(Token);
+        taker = terminal;
+        var head = window.Log.GetHead("cli-race", Token);
+        Assert.Equal(LockState.Free, window.Driver("cli-race").State);
+
+        await Assert.ThrowsAsync<SessionHeldException>(() => window.RecapAsync("cli-race", cancellationToken: Token));
+
+        Assert.Equal(2, generator.Calls.Count);
+        Assert.Equal(head, window.Log.GetHead("cli-race", Token));
     }
 
     [Theory]

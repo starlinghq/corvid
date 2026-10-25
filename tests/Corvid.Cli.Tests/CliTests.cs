@@ -670,6 +670,30 @@ public sealed class RendererTests
     }
 
     [Fact]
+    public void AChoiceWithHiddenCharactersShowsThemAndIsSentOnlyAsItsVisibleText()
+    {
+        var console = new TestConsole();
+        var renderer = new ChatRenderer(console, live: false);
+        // The model wrote the choices: tag characters after "Blue" spell "also", a bidirectional override sits in the second,
+        // a variation selector rides on the third, and the fourth is only a zero-width space.
+        var question = new ClarifyingQuestion("q-1", "Which colour?",
+            ["Blue\U000E0061\U000E006C\U000E0073\U000E006F", "Green‮ecaf", "Red\U000E0100", "​"]);
+        var result = new TurnResult(TurnStatus.Clarifying, "Which colour?", 0, 1, false, "reply", [], []) { Question = question };
+        renderer.BeginTurn();
+        renderer.EndTurn(new Delivery(new Corvid.Abstractions.Sessions.Envelope("cli-1", "cli", "pick", Corvid.Abstractions.Sessions.EnvelopeOrigin.User), result));
+
+        // Shown as codes, not dropped: the person sees the choice holds more than its words.
+        var shown = console.Output.Replace("\n", "", StringComparison.Ordinal);
+        Assert.Contains("1 Blue\\uE0061\\uE006C\\uE0073\\uE006F · 2 Green\\u202Eecaf · 3 Red\\uE0100 · 4 \\u200B", shown, StringComparison.Ordinal);
+        Assert.DoesNotContain("\U000E0061", console.Output, StringComparison.Ordinal);
+        // A number sends only what a reader sees; a choice with nothing visible is the line as typed.
+        Assert.Equal("Blue", ChatRenderer.Answer(question, "1"));
+        Assert.Equal("Greenecaf", ChatRenderer.Answer(question, "2"));
+        Assert.Equal("Red", ChatRenderer.Answer(question, "3"));
+        Assert.Equal("4", ChatRenderer.Answer(question, "4"));
+    }
+
+    [Fact]
     public void ApprovalChoicesFollowWhatIsOffered()
     {
         Assert.Equal("Allow? [green]y[/] once · [red]n[/] deny ›", ChatRenderer.Choices([Corvid.Approvals.ApprovalScope.Once]));

@@ -223,6 +223,35 @@ public sealed class EngineDriverTests
     }
 
     [Fact]
+    public async Task AReadOnlyViewWritesNoRecapOrTitleToTheSessionAnotherProcessDrives()
+    {
+        var generator = new FakeGenerator(Reply.Say("One."), Reply.Say("A recap nobody should write."));
+        await using var fixture = await EngineFixture.StartAsync(new FakeModels(generator),
+            new Dictionary<string, string?> { ["Corvid:Sessions:RecapAfterMinutes"] = "60" });
+        var other = await OtherProcessAsync(fixture.Host);
+        await other.OpenSession("cli-held").SendAsync("first", Ct);
+        using var sessions = fixture.Sessions();
+        using var subscription = await sessions.OpenAsync("cli-held", _ => { }, Ct);
+        Assert.True(Assert.IsType<DriverChanged>(subscription.History.First()).ReadOnly);
+        var head = fixture.Runtime.Log.GetHead("cli-held", Ct);
+
+        // Asked for from the menu: refused with the holder, before the generator is asked.
+        var recap = await Assert.ThrowsAsync<InvalidOperationException>(() => sessions.RecapAsync("cli-held", Ct));
+        Assert.Contains("read-only here: driven by", recap.Message, StringComparison.Ordinal);
+        // A rename the UI let through anyway: the runtime refuses it.
+        var rename = await Assert.ThrowsAsync<SessionHeldException>(() => sessions.RenameAsync("cli-held", "From the window", Ct));
+        Assert.Contains("is driven by", rename.Message, StringComparison.Ordinal);
+        // Coming back after an absence: no recap on return either.
+        fixture.Runtime.UiState.MarkSeen("cli-held", 0, fixture.Time.GetUtcNow().AddHours(-2));
+        await sessions.ViewedAsync("cli-held", viewing: true, Ct);
+        await sessions.IdleAsync();
+
+        Assert.Single(generator.Calls);
+        Assert.Equal(head, fixture.Runtime.Log.GetHead("cli-held", Ct));
+        await other.DisposeAsync();
+    }
+
+    [Fact]
     public async Task RewindAndReviewRefuseToRestoreASessionAnotherProcessDrives()
     {
         await using var fixture = await HistoryFixture.StartAsync();

@@ -48,8 +48,28 @@ public sealed class SessionRecordsTests
         public Task SetPinnedAsync(string sessionId, bool pinned, CancellationToken cancellationToken = default) =>
             inner.SetPinnedAsync(sessionId, pinned, cancellationToken);
 
-        public Task<ISessionSubscription> OpenAsync(string sessionId, Action<SessionUpdate> onUpdate, CancellationToken cancellationToken = default) =>
-            inner.OpenAsync(sessionId, onUpdate, cancellationToken);
+        /// <summary>Sent to the view right after it opens, as a live update (a question the model asked, say).</summary>
+        public SessionUpdate? AfterOpen { get; set; }
+
+        public List<(string QuestionId, string Answer)> Answers { get; } = [];
+
+        public List<string> Recaps { get; } = [];
+
+        public bool CanRecap => true;
+
+        public Task RecapAsync(string sessionId, CancellationToken cancellationToken = default)
+        {
+            Recaps.Add(sessionId);
+            return Task.CompletedTask;
+        }
+
+        public async Task<ISessionSubscription> OpenAsync(string sessionId, Action<SessionUpdate> onUpdate, CancellationToken cancellationToken = default)
+        {
+            var subscription = await inner.OpenAsync(sessionId, onUpdate, cancellationToken);
+            if (AfterOpen is { } update)
+                onUpdate(update);
+            return subscription;
+        }
 
         public Task<IReadOnlyList<SessionSummary>> ListAsync(CancellationToken cancellationToken = default) => inner.ListAsync(cancellationToken);
         /// <summary>When set, sending or queueing is refused with this reason, as the engine refuses a <c>#</c> line with no extractor.</summary>
@@ -65,7 +85,11 @@ public sealed class SessionRecordsTests
         public Task SteerAsync(string sessionId, string text, CancellationToken cancellationToken = default) => inner.SteerAsync(sessionId, text, cancellationToken);
         public Task InterruptAsync(string sessionId, CancellationToken cancellationToken = default) => inner.InterruptAsync(sessionId, cancellationToken);
         public Task AnswerApprovalAsync(string sessionId, string approvalId, ApprovalAnswer answer, CancellationToken cancellationToken = default) => inner.AnswerApprovalAsync(sessionId, approvalId, answer, cancellationToken);
-        public Task AnswerQuestionAsync(string sessionId, string questionId, string answer, CancellationToken cancellationToken = default) => inner.AnswerQuestionAsync(sessionId, questionId, answer, cancellationToken);
+        public Task AnswerQuestionAsync(string sessionId, string questionId, string answer, CancellationToken cancellationToken = default)
+        {
+            Answers.Add((questionId, answer));
+            return Task.CompletedTask;
+        }
         public Task RunCommandAsync(string sessionId, string line, CancellationToken cancellationToken = default) => inner.RunCommandAsync(sessionId, line, cancellationToken);
         public Task SetApprovalModeAsync(string sessionId, ApprovalMode mode, CancellationToken cancellationToken = default) => inner.SetApprovalModeAsync(sessionId, mode, cancellationToken);
         public Task SetGoalAsync(string sessionId, string? goal, CancellationToken cancellationToken = default) => inner.SetGoalAsync(sessionId, goal, cancellationToken);
@@ -79,6 +103,52 @@ public sealed class SessionRecordsTests
         var time = ManualTimeProvider.Demo();
         var demo = new DemoSessionService(new InlineDispatcher(), time, DemoScene.Main);
         return (new KeepingService(demo), time, demo);
+    }
+
+    [Fact]
+    public async Task An_option_with_hidden_characters_shows_them_and_sends_only_its_visible_text()
+    {
+        var (service, time, demo) = Start();
+        using var _ = demo;
+        // The model wrote the options: tag characters after "Blue" spell "also"; the second is only a zero-width space.
+        const string Blue = "Blue\U000E0061\U000E006C\U000E0073\U000E006F";
+        service.AfterOpen = new QuestionAsked("q-hidden", "Which colour?") { Options = [Blue, "​", "Green"] };
+        using var view = new SessionViewModel(DemoSessionService.VaultSessionId, service, new InlineDispatcher(), time);
+        await view.OpenAsync(Ct);
+
+        var question = Assert.IsType<QuestionBlock>(view.PendingQuestion);
+        // Revealed, not dropped: the person sees the option holds more than its word.
+        Assert.Equal(["Blue⟨U+E0061⟩⟨U+E006C⟩⟨U+E0073⟩⟨U+E006F⟩", "⟨U+200B⟩", "Green"], question.Options.Select(option => option.Label));
+        // Nothing visible: it cannot be chosen.
+        Assert.False(question.Options[1].Choose.CanExecute(null));
+
+        question.Options[0].Choose.Execute(null);
+        question.Options[2].Choose.Execute(null);
+
+        // Only what a reader sees goes as the person's answer.
+        Assert.Equal([("q-hidden", "Blue"), ("q-hidden", "Green")], service.Answers);
+    }
+
+    [Fact]
+    public async Task A_read_only_view_cannot_recap_or_rename_the_session_another_process_drives()
+    {
+        var (service, time, demo) = Start();
+        using var _ = demo;
+        using var view = new SessionViewModel(DemoSessionService.TerminalSessionId, service, new InlineDispatcher(), time);
+        await view.OpenAsync(Ct);
+
+        Assert.True(view.IsReadOnly);
+        // The service writes recaps, but not here: the session's log is the driving process's (G-12).
+        Assert.True(view.CanRecap);
+        Assert.False(view.RecapCommand.CanExecute(null));
+        Assert.False(view.RenameCommand.CanExecute("A new name"));
+
+        using var writable = new SessionViewModel(DemoSessionService.VaultSessionId, service, new InlineDispatcher(), time);
+        await writable.OpenAsync(Ct);
+        Assert.True(writable.RecapCommand.CanExecute(null));
+        Assert.True(writable.RenameCommand.CanExecute("A new name"));
+        writable.RecapCommand.Execute(null);
+        Assert.Equal([DemoSessionService.VaultSessionId], service.Recaps);
     }
 
     [Fact]
