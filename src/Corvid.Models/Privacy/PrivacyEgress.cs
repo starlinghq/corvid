@@ -322,6 +322,8 @@ public sealed partial class PrivacyEgress
         "priority", "progress", "step", "steps", "budget", "tokens", "usage", "model", "models", "session", "turn", "reason",
         "category", "categories", "action", "actions", "event", "events", "warning", "warnings", "info", "debug",
         "width", "height", "x", "y", "lat", "lon", "unit", "units", "amount", "currency", "price", "quantity",
+        "email", "emails", "phone", "address", "username", "login", "account", "first", "last", "full", "display", "city",
+        "country", "zip", "company", "org", "team", "members", "member",
     }.ToFrozenSet(StringComparer.Ordinal);
 
     private static readonly HashSet<string> RoleWords = new(StringComparer.OrdinalIgnoreCase)

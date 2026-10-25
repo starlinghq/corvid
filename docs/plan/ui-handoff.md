@@ -446,8 +446,7 @@ Left:
 - From §1.5: a steer's position in the report relative to the call that finished; the Board's Take over; the lock files
   under `drivers/`; a job's message read as the user's on replay; a gateway adapter needs Vault for its token.
 - Delegation: the calls a turn issues in the same round are authorized and run one after another (approved
-  `delegate_task` calls do not run together across calls, only the tasks of one call); the gateway's prompter has no
-  delegation card lines; a finished child's tail timer keeps ticking until its channel goes; `Children(parentId)` is
+  `delegate_task` calls do not run together across calls, only the tasks of one call); a finished child's tail timer keeps ticking until its channel goes; `Children(parentId)` is
   read again on each list; `--demo` has no children.
 - Switching: the live step's model is inferred until `ITurnListener.StepStarted` carries the generator (replay is exact).
 - A person's message clears taint for its turn (plan §10.3), so a child spawned in a tainted fork after the person writes
@@ -483,8 +482,28 @@ Found and left:
 - A fork's copied turns read "0 s".
 - The spawn card offers Allow once when every child would be refused; the refusal shows on the card and the call fails.
 - `corvid chat` without `corvid-sandbox` beside it refuses sandboxed tools (correctly); the message names
-  `SandboxOptions.LauncherPath` rather than `Corvid:Sandbox:LauncherPath`. With that key set to the app's launcher, the
-  shell runs and the launcher is visible and read-only inside its sandbox.
+  `Corvid:Sandbox:LauncherPath` now (it named only `SandboxOptions.LauncherPath`). With that key set to the app's
+  launcher, the shell runs and the launcher is visible and read-only inside its sandbox.
+
+The A5 verifier's fix round then fixed:
+
+- An interrupt that reached the app's question asker between setting its cancelling flag and cancelling the turn's token
+  got a null answer, so the turn ended cancelled with its question still open on every replay. The asker now waits for
+  the token, an answer meanwhile is refused, and the kernel withdraws the question (`ClarificationAnswered` with "")
+  whenever the token is cancelled as the asker returns.
+- The output schema's repair turn had a fresh step budget (up to twice what the card showed). `TurnRunner.StepLimit` gives
+  it what the first turn left, and with nothing left there is no repair.
+- A schema-checked `output` reached the parent uncapped; past `MaxChildTextChars` it goes as the start of its JSON text
+  in `answer`, and `detail` says so.
+- The gateway's `/approve` message shows the spawn's plan (`IGatewayAgent.CardLinesAsync`, the host's `DelegationCard`).
+- The spawn card's preview loaded the models a mix named while the approval waited; it now reads the catalogue's profiles
+  (the gate checks them the same way) and binds nothing, and the approved call loads.
+- A child opened but not run yet (another task of the call still planning) could not be stopped: its usage is made at
+  open, and a stop before it runs means it never starts ("stopped by the person").
+- Egress: a lowercase JSON key was taken as structure, and every key's words then suppressed the same word anywhere in
+  the request, so `{"jsmith": …}` went unredacted. A key is structure only when it is made of Corvid's fixed structure
+  words (`PrivacyEgress.StructureWords`: "status", "exit_code", "toolCallId"); any other key is scanned and rewritten as a
+  value, and only those words and the trusted prompts' own words make a lowercase span structure.
 
 ### What the running app shows today
 
