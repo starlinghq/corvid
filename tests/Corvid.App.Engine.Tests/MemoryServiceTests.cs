@@ -48,7 +48,7 @@ public sealed class MemoryServiceTests
 
         // A correction is written as corrected; a hidden character is refused until it is corrected.
         var second = snapshot.StagedFacts[1];
-        await Assert.ThrowsAsync<ArgumentException>(() => service.ApproveFactAsync(second.Id, MemoryOperation.Add, "The user prefers​ spaces", null, Ct));
+        await Assert.ThrowsAsync<ArgumentException>(() => service.ApproveFactAsync(second.Id, MemoryOperation.Add, "The user prefers\u200B spaces", null, Ct));
         var corrected = await service.ApproveFactAsync(second.Id, MemoryOperation.Add, "The user prefers spaces", null, Ct);
         Assert.Equal("The user prefers spaces", corrected.Written!.Text);
 
@@ -161,7 +161,7 @@ public sealed class MemoryServiceTests
         var snapshot = await service.LoadAsync(Ct);
         Assert.Equal(3, snapshot.PendingLessons.Count);
         // A rejection records why, and the candidate leaves the queue.
-        await Assert.ThrowsAsync<ArgumentException>(() => service.RejectLessonAsync(third.LessonId, "one-off​", Ct));
+        await Assert.ThrowsAsync<ArgumentException>(() => service.RejectLessonAsync(third.LessonId, "one-off\u200B", Ct));
         await service.RejectLessonAsync(third.LessonId, "one-off", Ct);
         Assert.Equal((LessonStates.Rejected, "one-off"), (store.Get(third.LessonId)!.State, store.Get(third.LessonId)!.ReviewReason));
         snapshot = await service.LoadAsync(Ct);

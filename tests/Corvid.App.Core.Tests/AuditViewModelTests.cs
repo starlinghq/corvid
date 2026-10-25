@@ -249,7 +249,7 @@ public sealed class AuditViewModelTests
     }
 
     /// <summary>The demo's sessions, with a way to deliver an update the scenario never sends.</summary>
-    private sealed class CapturingSessionService(DemoSessionService inner) : ISessionService
+    internal sealed class CapturingSessionService(DemoSessionService inner) : ISessionService
     {
         private Action<SessionUpdate>? _onUpdate;
 

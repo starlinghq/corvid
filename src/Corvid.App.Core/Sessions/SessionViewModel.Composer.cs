@@ -50,6 +50,9 @@ public sealed partial class SessionViewModel
     /// <summary>The composer's placeholder, as the mockup prints it.</summary>
     public const string ComposerPlaceholder = "Ask Corvid…   / commands   @ files   ! shell   # memory";
 
+    /// <summary>The placeholder where the service has no <c>!</c> or <c>#</c> mode (<see cref="ISessionService.HasComposerModes"/>).</summary>
+    public const string ComposerPlaceholderWithoutModes = "Ask Corvid…   / commands   @ files";
+
     private static readonly IReadOnlyList<HintPart> RunningHint =
     [
         new("Ctrl", true), new(" ", false), new("↵", true), new(" steers at the next checkpoint · ", false), new("Esc", true),
@@ -82,7 +85,7 @@ public sealed partial class SessionViewModel
         }
     }
 
-    public string Placeholder => ComposerPlaceholder;
+    public string Placeholder => _service.HasComposerModes ? ComposerPlaceholder : ComposerPlaceholderWithoutModes;
 
     /// <summary>
     /// The note beside the paperclip: "typed while the card opened: it never answers the card" while an approval card is

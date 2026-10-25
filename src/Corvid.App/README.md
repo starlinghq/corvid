@@ -56,8 +56,12 @@ gave). It does not show what the log does not keep: the generator and tokens of 
 ended beyond "answered" (an interrupted turn reads "the log holds no answer"), the session's taint, a call's elapsed
 time, the rule text a session or always answer wrote, a call refused without a prompt (the hardline list, a remembered
 denial, no approver) as "denied" rather than "failed", and the reason for denials logged before `approval_resolved`
-carried it (`note`). The composer's `!` shell and `#` memory lines are not built (docs/plan/tui.md §4.1): a message
-starting with either is refused with a notice and stays in the composer.
+carried it (`note`). The composer's `!` shell and `#` memory lines are not built (docs/plan/tui.md §4.1), so the
+placeholder leaves them out: a one-line message starting with either is refused with a notice and stays in the composer;
+text of more than one line (pasted notes under a Markdown heading) and a Markdown image are sent. A rollback from Rewind
+to before a call keeps that call's turn and its message, as the kernel does (it goes back to just before the call): the
+call and what came after it in the turn leave, and so do the later turns, and the open transcript then reads as a replay
+of the log would.
 
 The window's own keys come from the key map (`Corvid.App.Core/Keys/KeyMap.cs`, `ui.md` §6) and can be remapped at once
 in Settings › Keybindings: `Ctrl+K` and `Ctrl+P` the command palette, `Ctrl+Tab` the session switcher (again for the
@@ -67,8 +71,8 @@ sessions, `Alt+P` switch the generator, `F1` and `?` (outside a text field) the 
 `Ctrl+Shift+C` Review, `Esc` closes the palette or an overlay. A page's own key on the same gesture (Audit's, Memory's
 and Skills' `Ctrl+F`, Models' `Alt+P`) wins while that area shows; a new page key goes into `KeyMap`'s defaults and
 `KeyMap.ContextsOf` so the help and the conflict check know it. On the Sessions
-page: `Enter` sends (queued while a turn runs), `Shift+Enter` breaks the line, `Ctrl+Enter` steers, `Esc` interrupts,
-`Esc Esc` on an idle empty composer opens Rewind, `Up` takes the last queued message back, `Shift+Tab` cycles the
+page: `Enter` sends (queued while a turn runs), `Shift+Enter` breaks the line, `Ctrl+Enter` steers, `Esc` interrupts
+(in the composer also while an approval card waits, closing it as cancelled), `Esc Esc` on an idle empty composer opens Rewind, `Up` takes the last queued message back, `Shift+Tab` cycles the
 approval mode, `Ctrl+S` puts the draft aside; on an open approval card the first `Enter` focuses it, then `1` to `5`
 answer and the arrows move; `Ctrl+1` to `Ctrl+7` pick dock tabs; `Ctrl+O`, `Ctrl+T` and `Ctrl+Shift+D` expand the latest
 output, the thoughts and every checkpoint's chips. On Models: `Alt+P` opens the generator's Switch… picker, `Alt+Left`

@@ -100,7 +100,7 @@ public sealed class SecretsServiceTests
         Assert.IsType<KeyNotFoundException>(await Refused("gateway:nothing", "tg.other"));
         Assert.Equal("Vault has no secret named tg.missing.", (await Refused("gateway:telegram", "tg.missing")).Message);
         Assert.Equal("github.token is not bound to api.telegram.org; Vault would refuse to send it there.", (await Refused("gateway:telegram", "github.token")).Message);
-        Assert.Equal("That name holds hidden characters; it is not bound.", (await Refused("gateway:telegram", "tg.​other")).Message);
+        Assert.Equal("That name holds hidden characters; it is not bound.", (await Refused("gateway:telegram", "tg.\u200Bother")).Message);
         Assert.Equal(0, changes);
         Assert.Equal("", fixture.ConfigText);
 

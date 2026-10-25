@@ -101,7 +101,7 @@ public sealed class GatewayServiceTests
     {
         await using var fixture = await OpsFixture.StartAsync(Telegram);
         var pairing = Pairing(fixture);
-        var code = pairing.Request("telegram", "1002", "da​na", "1002").Request!.Code;
+        var code = pairing.Request("telegram", "1002", "da\u200Bna", "1002").Request!.Code;
         using var service = new EngineGatewayService(fixture.Engine, new InlineDispatcher(), fixture.Time);
 
         var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => service.PairAsync(code, PairingRole.Owner, Token));

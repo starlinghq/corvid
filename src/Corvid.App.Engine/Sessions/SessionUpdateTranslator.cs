@@ -61,7 +61,13 @@ public sealed class SessionUpdateTranslator(string workspace)
     {
         Turn = Math.Min(Turn, Math.Max(0, firstTurnGone - 1));
         TurnOpen = false;
+        // The prompts of the turns that left start no turn now.
+        if (_turnStarts.Count > Turn)
+            _turnStarts.RemoveRange(Turn, _turnStarts.Count - Turn);
     }
+
+    /// <summary>What a replayed turn without an answer ends with.</summary>
+    public const string NoAnswer = "The log holds no answer for this turn.";
 
     public IReadOnlyList<SessionUpdate> Translate(SessionStreamUpdate update)
     {
@@ -185,7 +191,7 @@ public sealed class SessionUpdateTranslator(string workspace)
             {
                 At = at,
                 Elapsed = elapsed ?? (at > _turnStarted ? at - _turnStarted : TimeSpan.Zero),
-                Error = error ?? (outcome is null && !_answered ? "The log holds no answer for this turn." : null),
+                Error = error ?? (outcome is null && !_answered ? NoAnswer : null),
                 // Live only (K-5): a replay knows no usage.
                 Tokens = _turnTokens > 0 ? (int)Math.Min(int.MaxValue, _turnTokens) : null,
             },

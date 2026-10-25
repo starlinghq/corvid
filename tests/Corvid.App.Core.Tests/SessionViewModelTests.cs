@@ -71,6 +71,22 @@ public sealed class SessionViewModelTests
     }
 
     [Fact]
+    public async Task TheTaintTagCleansItsSourceTheModelsArgumentsNamed()
+    {
+        var time = ManualTimeProvider.Demo();
+        using var demo = new DemoSessionService(new InlineDispatcher(), time, DemoScene.Main);
+        var service = new AuditViewModelTests.CapturingSessionService(demo);
+        var session = new SessionViewModel(Main, service, new InlineDispatcher(), time);
+        await session.OpenAsync(TestContext.Current.CancellationToken);
+
+        service.Deliver(new TaintChanged(true) { Source = "web_fetch https://example.com/\u202Eevil" });
+
+        var tag = Assert.Single(session.StatusTags, tag => tag.Text == "tainted");
+        Assert.Contains("web_fetch https://example.com/evil.", tag.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain('\u202E', tag.Detail);
+    }
+
+    [Fact]
     public async Task TheTurnStripComposerStatusAndPanelsAreMainPngs()
     {
         var (session, _, _) = await Open(Main);

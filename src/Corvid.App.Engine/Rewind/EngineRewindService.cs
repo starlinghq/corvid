@@ -141,6 +141,7 @@ public sealed class EngineRewindService : IRewindService, IDisposable
             Files = putBack.ToImmutable(),
             FromTurn = ledger.TurnAt(plan.Position) + 1,
             ToTurn = ledger.Turn,
+            PartTurn = ledger.TurnAt(entry.CallSequence) is var turn && turn == ledger.TurnAt(plan.Position) && turn > 0 ? turn : null,
             Command = string.Create(CultureInfo.InvariantCulture, $"/rollback {number}"),
         };
     }
@@ -184,6 +185,11 @@ public sealed class EngineRewindService : IRewindService, IDisposable
         var (ledger, entry, session) = await FindAsync(sessionId, checkpointId, cancellationToken).ConfigureAwait(false);
         var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
         var label = $"rollback to before {checkpointId}";
+        // The kernel rolls back to just before the call (its position minus one): the call's turn keeps its prompt, and only
+        // the turns after it leave whole, as the plan says.
+        var plan = session.PlanRollbackTo(checkpointId) ?? throw Missing(sessionId, checkpointId);
+        var firstGone = ledger.TurnAt(plan.Position) + 1;
+        var partial = ledger.TurnAt(entry.CallSequence) == firstGone - 1;
         var result = await session.RollbackToAsync(checkpointId, Scope(scope), null, cancellationToken).ConfigureAwait(false);
         var at = _time.GetUtcNow();
         RestoreOutcome outcome = result is null
@@ -202,11 +208,13 @@ public sealed class EngineRewindService : IRewindService, IDisposable
             _outcomes[(sessionId, restorePoint)] = outcome;
         else
             _unrecorded[sessionId] = (outcome, head);
-        // The open transcript follows, as the demo's does: the turns from the checkpoint's leave it (unless only files went
-        // back), and the files put back are marked.
+        // The open transcript follows as a replay of the log would show it (unless only files went back): the turns after the
+        // call's leave, the call's turn keeps its prompt and what came before the call, and the files put back are marked.
         if (result is not null)
-            _signals.Rewound(sessionId, new AppRewound(ledger.TurnAt(entry.CallSequence), scope, "rollback")
+            _signals.Rewound(sessionId, new AppRewound(firstGone, scope, "rollback")
             {
+                FromCallId = partial ? entry.CallId : null,
+                UnansweredError = partial ? SessionUpdateTranslator.NoAnswer : null,
                 Restored = outcome.Restored,
                 Merged = outcome.Merged,
                 Conflicts = outcome.Conflicts,

@@ -110,7 +110,7 @@ public sealed class JobsServiceTests
         Assert.False(bad.Valid);
         Assert.Contains("a delay ('in 30m', '2h')", bad.Error, StringComparison.Ordinal);
         Assert.False((await service.PreviewAsync("every 10s", Token)).Valid);
-        Assert.Equal("The schedule holds hidden characters; type it again.", (await service.PreviewAsync("daily at 9​am", Token)).Error);
+        Assert.Equal("The schedule holds hidden characters; type it again.", (await service.PreviewAsync("daily at 9\u200Bam", Token)).Error);
         Assert.StartsWith("Say when it runs:", (await service.PreviewAsync("  ", Token)).Error, StringComparison.Ordinal);
         Assert.Empty(fixture.Runtime.Builtin.Jobs.List(includeFinished: true));
     }
@@ -142,7 +142,7 @@ public sealed class JobsServiceTests
             await Refused(new JobDraft("Weekly-Deps", "daily at 9am", "Again.", null, false, "")));
         Assert.Contains("'whenever'", await Refused(new JobDraft("other", "whenever", "Do it.", null, false, "")), StringComparison.Ordinal);
         Assert.Equal("The job holds hidden characters; nothing was created.",
-            await Refused(new JobDraft("other", "daily at 9am", "Do​ it.", null, false, "")));
+            await Refused(new JobDraft("other", "daily at 9am", "Do\u200B it.", null, false, "")));
         Assert.Equal("A no-agent job runs only its script; give it one.", await Refused(new JobDraft("other", "daily at 9am", "", " ", true, "")));
         Assert.Equal("Say what the job asks Corvid to do.", await Refused(new JobDraft("other", "daily at 9am", " ", null, false, "")));
         Assert.StartsWith("A job made here keeps its result in the run's session",
@@ -187,7 +187,7 @@ public sealed class JobsServiceTests
         await using var fixture = await OpsFixture.StartAsync();
         var store = fixture.Runtime.Builtin.Jobs;
         // As cron_create makes it from a chat: unchecked.
-        var made = store.Add(new NewJob("sneaky", "Summarise​ the inbox.", "daily at 9am", OriginSession: "cli-77b0"));
+        var made = store.Add(new NewJob("sneaky", "Summarise\u200B the inbox.", "daily at 9am", OriginSession: "cli-77b0"));
         store.Pause(made.JobId);
         using var service = new EngineJobsService(fixture.Engine, new InlineDispatcher(), fixture.Time);
 

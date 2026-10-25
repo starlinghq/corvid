@@ -535,6 +535,8 @@ public static class SessionFold
         if (!rewound.Refused && rewound.Scope != RewindScope.FilesOnly)
         {
             var transcript = state.Transcript.RemoveAll(entry => entry.Turn >= rewound.Turn);
+            if (rewound.FromCallId is { } call)
+                transcript = KeepTurnBefore(transcript, rewound.Turn - 1, call, rewound.UnansweredError);
             var question = state.Question is { } open && IndexOf(transcript, QuestionId(open.QuestionId)) < 0 ? null : state.Question;
             var removedTurn = state.Turn >= rewound.Turn;
             state = state with
@@ -559,6 +561,29 @@ public static class SessionFold
         }
 
         return AddNew(state, "rewind", id => new RewindEntry(id, rewound) { Turn = 0 });
+    }
+
+    /// <summary>
+    /// A rollback to before a call inside <paramref name="turn"/>: the turn keeps its prompt and what came before the call,
+    /// and the call's card and everything after it in the turn leave, as a replay of the log shows it. When nothing of the
+    /// turn's answer is left, its header reads <paramref name="unanswered"/> (when given) as a failed turn, as the replay's does.
+    /// </summary>
+    private static ImmutableList<TranscriptEntry> KeepTurnBefore(ImmutableList<TranscriptEntry> transcript, int turn, string callId, string? unanswered)
+    {
+        var from = transcript.FindIndex(entry => entry.Turn == turn && entry is ToolEntry tool && tool.CallId == callId);
+        if (from < 0)
+            return transcript;
+        var builder = transcript.ToBuilder();
+        for (var i = builder.Count - 1; i >= from; i--)
+            if (builder[i].Turn == turn)
+                builder.RemoveAt(i);
+        var kept = builder.ToImmutable();
+        if (unanswered is null || kept.Any(entry => entry.Turn == turn && entry is AnswerEntry { Text.Length: > 0 }))
+            return kept;
+        var header = kept.FindIndex(entry => entry.Turn == turn && entry is TurnHeaderEntry { Running: false });
+        return header < 0
+            ? kept
+            : kept.SetItem(header, (TurnHeaderEntry)kept[header] with { Outcome = TurnOutcome.Failed, Error = unanswered });
     }
 
     /// <summary>

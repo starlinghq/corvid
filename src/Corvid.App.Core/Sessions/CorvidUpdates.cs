@@ -154,6 +154,19 @@ public sealed record SessionRewound(int Turn, RewindScope Scope, string Reason) 
     /// </summary>
     public string? RestorePoint { get; init; }
 
+    /// <summary>
+    /// The call the conversation went back to before, when it was inside the turn before <see cref="Turn"/> (the engine's
+    /// rollback keeps the turn's prompt in the log): that turn keeps its prompt and what came before the call, and the call's
+    /// card and everything after it leave. Null when only whole turns leave.
+    /// </summary>
+    public string? FromCallId { get; init; }
+
+    /// <summary>
+    /// With <see cref="FromCallId"/>: what the kept turn's header says when nothing of its answer is left, as a replay of the
+    /// log marks such a turn failed. Null leaves the header as it was.
+    /// </summary>
+    public string? UnansweredError { get; init; }
+
     /// <summary>Nothing changed: a conflict, or the plan could not be applied (<see cref="Detail"/> says why).</summary>
     public bool Refused { get; init; }
 

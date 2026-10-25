@@ -166,7 +166,7 @@ public sealed class TranslatorTests
         // The fold and the views clean what they draw (SafeText); the translator keeps the text as the engine gave it, so
         // an approval shown revealed later still has every character.
         var translator = new SessionUpdateTranslator(Workspace);
-        var text = "look​ here";
+        var text = "look\u200B here";
         var chunk = Assert.IsType<AgentMessageChunk>(Assert.Single(translator.Translate(new AnswerChunk(text))));
         Assert.Equal(text, chunk.Text);
         Assert.Equal(ImmutableArray<string>.Empty, Assert.IsType<ToolCall>(Assert.Single(translator.Translate(

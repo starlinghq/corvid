@@ -302,7 +302,7 @@ public sealed class EngineApprovalTests
     [Fact]
     public async Task ARuleWithAHiddenCharacterIsNeverWritten()
     {
-        await using var engine = await CustomEngine.StartAsync(FileWrite("notes​.txt"), FileTools);
+        await using var engine = await CustomEngine.StartAsync(FileWrite("notes\u200B.txt"), FileTools);
         var id = engine.Runtime.OpenSession(surface: "app").Id;
         using var service = engine.Sessions();
         var waiter = new SessionWaiter();
@@ -311,7 +311,7 @@ public sealed class EngineApprovalTests
         await service.SendAsync(id, "write hello to the file notes.txt", Ct);
         var request = await waiter.WaitAsync<ApprovalRequested>();
         // The card gets the text as it is, for the page to reveal; the engine never cleans it away.
-        Assert.Contains("​", request.Text, StringComparison.Ordinal);
+        Assert.Contains("\u200B", request.Text, StringComparison.Ordinal);
 
         var refused = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.AnswerApprovalAsync(id, request.ApprovalId, new ApprovalAnswer(ApprovalChoice.Always), Ct));

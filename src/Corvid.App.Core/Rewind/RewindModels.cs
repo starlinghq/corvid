@@ -86,6 +86,12 @@ public sealed record RestorePlan(string CheckpointId, DateTimeOffset At, int Tur
 
     public int ToTurn { get; init; }
 
+    /// <summary>
+    /// The turn the checkpoint is part-way through, when it keeps its message and loses only the call and what came after
+    /// it (the engine's rollback goes back to just before the call); null when only whole turns leave.
+    /// </summary>
+    public int? PartTurn { get; init; }
+
     /// <summary>"/rollback 4": the Nth latest call's before checkpoint; null for a restore point.</summary>
     public string? Command { get; init; }
 

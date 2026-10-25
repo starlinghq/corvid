@@ -1,6 +1,7 @@
 using Corvid.Abstractions.Events;
 using Corvid.App.Core.Composition;
 using Corvid.App.Core.Rewind;
+using Corvid.App.Core.Tests;
 using Corvid.App.Core.Mvvm;
 using Corvid.App.Engine.History;
 using Corvid.App.Engine.Rewind;
@@ -170,8 +171,10 @@ public sealed class EngineRewindTests
         Assert.Equal(2, after.Turn);
     }
 
-    [Fact]
-    public async Task ARestoreReachesTheOpenTranscriptAndTheNextPromptTakesTheTurnThatLeft()
+    [Theory]
+    [InlineData(AppScope.ConversationOnly)]
+    [InlineData(AppScope.FilesAndConversation)]
+    public async Task ARestoreReachesTheOpenTranscriptAsAReplayOfTheLogShowsIt(AppScope scope)
     {
         await using var fixture = await HistoryFixture.StartAsync(new FakeModels(new FakeGenerator(Reply.Say("Hello."))));
         var id = await ThreeTurnsAsync(fixture);
@@ -180,19 +183,50 @@ public sealed class EngineRewindTests
         using var subscription = await fixture.Sessions.OpenAsync(id, live.Add, Ct);
         var latest = (await rewind.GetTimelineAsync(id, Ct)).Entries[0];
         Assert.Equal(2, latest.Turn);
+        var plan = await rewind.PlanAsync(id, latest.CheckpointId, Ct);
+        Assert.Equal((3, 3, (int?)2), (plan.FromTurn, plan.ToTurn, plan.PartTurn));
 
-        var outcome = await rewind.RestoreAsync(id, latest.CheckpointId, AppScope.ConversationOnly, Ct);
+        var outcome = await rewind.RestoreAsync(id, latest.CheckpointId, scope, Ct);
 
+        // The kernel goes back to just before call-2: turn 2 keeps its message, and only turn 3 leaves, as the plan said.
         Assert.False(outcome.Refused);
         var rewound = Assert.Single(live.Updates.OfType<Corvid.App.Core.Sessions.SessionRewound>());
-        Assert.Equal((2, AppScope.ConversationOnly, latest.CheckpointId), (rewound.Turn, rewound.Scope, rewound.RestorePoint));
+        Assert.Equal((plan.FromTurn, scope, latest.CheckpointId, "call-2"), (rewound.Turn, rewound.Scope, rewound.RestorePoint, rewound.FromCallId));
+        Assert.Equal(3, rewound.Turn);
         var view = Corvid.App.Core.Sessions.SessionFold.Replay(id, [.. subscription.History, .. live.Updates]);
-        Assert.DoesNotContain(view.Transcript, entry => entry.Turn >= 2);
+        Assert.Contains(view.Transcript, entry => entry is Corvid.App.Core.Sessions.UserEntry { Text: "make notes", Turn: 2 });
+        Assert.DoesNotContain(view.Transcript, entry => entry is Corvid.App.Core.Sessions.ToolEntry { CallId: "call-2" });
+        Assert.DoesNotContain(view.Transcript, entry => entry.Turn >= 3);
+        Assert.Equal(await ReplayedAsync(fixture, id), Shown(view));
 
+        // The next prompt is numbered as the replay numbers it, and the two still agree after it.
         await fixture.Sessions.SendAsync(id, "hello", Ct);
         await fixture.Sessions.IdleAsync();
-        Assert.Equal(2, Assert.Single(live.Updates.OfType<Corvid.App.Core.Sessions.TurnStarted>()).Turn);
+        Assert.Equal(3, Assert.Single(live.Updates.OfType<Corvid.App.Core.Sessions.TurnStarted>()).Turn);
+        view = Corvid.App.Core.Sessions.SessionFold.Replay(id, [.. subscription.History, .. live.Updates]);
+        Assert.Equal(await ReplayedAsync(fixture, id), Shown(view));
     }
+
+    /// <summary>The session's transcript as a fresh service replays it from the log.</summary>
+    private static async Task<string[]> ReplayedAsync(HistoryFixture fixture, string id)
+    {
+        using var fresh = new EngineSessionService(fixture.Engine, new InlineDispatcher(), fixture.Time);
+        using var opened = await fresh.OpenAsync(id, _ => { }, Ct);
+        return Shown(Corvid.App.Core.Sessions.SessionFold.Replay(id, opened.History));
+    }
+
+    /// <summary>What the transcript shows of the conversation: messages, turn headers with their outcome, calls and answers.</summary>
+    private static string[] Shown(Corvid.App.Core.Sessions.SessionView view) =>
+    [
+        .. view.Transcript.Select(entry => entry switch
+        {
+            Corvid.App.Core.Sessions.UserEntry user => $"{user.Turn} user: {user.Text}",
+            Corvid.App.Core.Sessions.TurnHeaderEntry header => $"{header.Turn} turn {header.Number}: {header.Outcome} {header.Error}",
+            Corvid.App.Core.Sessions.ToolEntry tool => $"{tool.Turn} call {tool.CallId}",
+            Corvid.App.Core.Sessions.AnswerEntry answer => $"{answer.Turn} answer: {answer.Text}",
+            _ => null,
+        }).OfType<string>(),
+    ];
 
     [Fact]
     public async Task AFilesOnlyRestoreKeepsTheConversation()

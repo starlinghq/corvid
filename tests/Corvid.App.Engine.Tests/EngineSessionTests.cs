@@ -171,6 +171,23 @@ public sealed class EngineSessionTests
 
         // Nothing reached the log or the generator.
         Assert.Equal(head, fixture.Runtime.Log.GetHead(id, TestContext.Current.CancellationToken));
+        Assert.False(((ISessionService)service).HasComposerModes);
+    }
+
+    [Theory]
+    [InlineData("# Heading of my pasted notes\nthe first point")]
+    [InlineData("![the diagram](docs/diagram.png) what does it show?")]
+    public async Task PastedMarkdownIsNotAModeLine(string text)
+    {
+        await using var fixture = await EngineFixture.StartAsync(NotesTurn());
+        var id = fixture.Runtime.OpenSession(surface: "app").Id;
+        using var service = fixture.Sessions();
+        var head = fixture.Runtime.Log.GetHead(id, TestContext.Current.CancellationToken);
+
+        await service.SendAsync(id, text, TestContext.Current.CancellationToken);
+        await service.IdleAsync();
+
+        Assert.True(fixture.Runtime.Log.GetHead(id, TestContext.Current.CancellationToken) > head);
     }
 
     [Fact]

@@ -24,13 +24,13 @@ public sealed class PromptHistoryTests
         Say(log, "job:nightly:run-1", new UserMessage("Tidy the workspace."));
         Say(log, "gateway:telegram:42", new UserMessage("hello from a chat"));
         // A hidden character is kept as sent: the palette shows it cleaned and refuses to put it back.
-        Say(log, "cli-a", new UserMessage("also check the retry​ count"));
+        Say(log, "cli-a", new UserMessage("also check the retry\u200B count"));
         var history = new EnginePromptHistory(fixture.Engine);
 
         var entries = await history.LoadAsync(Token);
 
         Assert.Equal(
-            [("also check the retry​ count", "cli-a"), ("draft the release notes", "acp-b"), ("fix the flaky test", "cli-a")],
+            [("also check the retry\u200B count", "cli-a"), ("draft the release notes", "acp-b"), ("fix the flaky test", "cli-a")],
             entries.Select(entry => (entry.Text, entry.SessionId)));
         Assert.True(entries[0].At >= entries[1].At && entries[1].At >= entries[2].At);
         Assert.False(EnginePromptHistory.Typed(Corvid.App.Engine.Memory.EngineMemoryService.ImportSession));

@@ -86,7 +86,7 @@ public sealed class McpServiceTests
     [Fact]
     public async Task ADefinitionThatHidesACharacterIsNeverPinnedFromHere()
     {
-        var (fixture, server) = await StartAsync(pinned: true, listDescription: "List the​ notes.");
+        var (fixture, server) = await StartAsync(pinned: true, listDescription: "List the\u200B notes.");
         await using var owned = fixture;
         await using var listing = server;
         using var service = new EngineMcpService(fixture.Engine, new InlineDispatcher(), fixture.Time);
@@ -224,7 +224,7 @@ public sealed class McpServiceTests
         Assert.StartsWith("An HTTP server's address", await Refused(new McpServerDraft("web", McpTransport.Http, "ftp://x", CoreTrust.Untrusted)),
             StringComparison.Ordinal);
         Assert.Equal("The server holds hidden characters; nothing was added.",
-            await Refused(new McpServerDraft("web", McpTransport.Stdio, "web​-mcp", CoreTrust.Untrusted)));
+            await Refused(new McpServerDraft("web", McpTransport.Stdio, "web\u200B-mcp", CoreTrust.Untrusted)));
         Assert.Equal("The command has a quote that is never closed.", await Refused(new McpServerDraft("web", McpTransport.Stdio, "web \"x", CoreTrust.Untrusted)));
         // The validator's own refusal: a remote server sent a token over plain HTTP.
         var http = await service.AddServerAsync(new McpServerDraft("remote", McpTransport.Http, "https://mcp.example.com/x", CoreTrust.Untrusted), Token);

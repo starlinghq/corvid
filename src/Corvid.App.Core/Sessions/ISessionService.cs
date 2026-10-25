@@ -131,6 +131,12 @@ public interface ISessionService
     /// <summary>Every session, newest activity first, with its summary and live state.</summary>
     Task<IReadOnlyList<SessionSummary>> ListAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Whether the composer's <c>!</c> shell line and <c>#</c> memory line exist (docs/plan/tui.md §4.1): the placeholder
+    /// names them only when they do. The demo's do; a service without them refuses such a line rather than sending it.
+    /// </summary>
+    bool HasComposerModes => true;
+
     /// <summary>A session's summary changed, or a session appeared (a fork, a job run). Raised on the UI thread.</summary>
     event EventHandler<SessionSummary>? SessionChanged;
 

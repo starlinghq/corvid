@@ -653,7 +653,9 @@ public sealed class RewindBlock : TranscriptBlock
         };
         Text = rewind.Refused
             ? $"restore refused: {SafeText.Clean(rewind.Detail ?? "a conflict")}"
-            : string.Create(CultureInfo.InvariantCulture, $"rewound to before turn {rewind.Turn}: {scope} ({rewind.Reason})");
+            : rewind.FromCallId is not null
+                ? string.Create(CultureInfo.InvariantCulture, $"rewound to part-way through turn {rewind.Turn - 1}: {scope} ({rewind.Reason})")
+                : string.Create(CultureInfo.InvariantCulture, $"rewound to before turn {rewind.Turn}: {scope} ({rewind.Reason})");
         var detail = string.Create(CultureInfo.InvariantCulture,
             $"restored {rewind.Restored.Length} · merged {rewind.Merged.Length} · refused {rewind.Conflicts.Length}");
         if (rewind.CheckpointId is { } checkpoint)

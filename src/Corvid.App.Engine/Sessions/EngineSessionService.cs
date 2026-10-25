@@ -123,12 +123,16 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
 
     /// <summary>
     /// The composer's <c>!</c> shell line and <c>#</c> memory line (docs/plan/tui.md §4.1, ui.md §3) are modes of their own,
-    /// not built yet in the app or the CLI: a message starting with one is refused, not sent to the model as text, so the
-    /// mode the placeholder names never quietly does something else. The draft stays in the composer.
+    /// not built yet in the app or the CLI (the placeholder leaves them out, <see cref="HasComposerModes"/>): a one-line
+    /// message starting with one is refused, not sent to the model as text, so a habit from the terminal never quietly does
+    /// something else. Text of more than one line (pasted notes under a Markdown heading) and a Markdown image (<c>![</c>)
+    /// are not mode lines and are sent. The draft stays in the composer.
     /// </summary>
     private static void RefuseComposerMode(string text)
     {
-        var line = text.TrimStart();
+        var line = text.Trim();
+        if (line.Contains('\n', StringComparison.Ordinal) || line.StartsWith("![", StringComparison.Ordinal))
+            return;
         if (line.StartsWith('!'))
             throw new ServiceUnavailableException(
                 "The ! shell line comes with the composer's shell mode (docs/plan/tui.md §4.1): the command would run through the approvals, " +
@@ -138,6 +142,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 "The # memory line comes with the composer's memory mode (docs/plan/tui.md §4.1): the fact would be staged for review. " +
                 "Nothing was sent. Ask in words for it to be remembered, or start the message with another character.");
     }
+
+    /// <summary>The engine has no <c>!</c> shell line or <c>#</c> memory line yet: the composer's placeholder leaves them out.</summary>
+    public bool HasComposerModes => false;
 
     /// <summary>Queues a message behind the running turn; with none running it starts one at once.</summary>
     public async Task<QueuedMessage> QueueAsync(string sessionId, string text, CancellationToken cancellationToken = default)

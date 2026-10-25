@@ -104,16 +104,20 @@ public sealed class RewindViewModel : AreaViewModel
     public bool HasPlanNotes => PlanNotes.Count > 0;
 
     /// <summary>"turns 10 to 12".</summary>
-    public string ConversationRange => _plan is { TurnsLeaving: > 0 } plan ? ConversationRangeOf(plan) : "no turns";
+    public string ConversationRange => _plan is { TurnsLeaving: > 0 } plan ? ConversationRangeOf(plan)
+        : _plan?.PartTurn is { } part ? string.Create(CultureInfo.InvariantCulture, $"part of turn {part}") : "no turns";
 
     /// <summary>"Three turns leave the transcript. They stay in the log and in Audit, and the fork tree keeps a branch for them."</summary>
-    public string ConversationText => _plan switch
+    public string ConversationText => (_plan switch
     {
         null => "",
+        { TurnsLeaving: 0, PartTurn: not null } => "No whole turn leaves the transcript.",
         { TurnsLeaving: 0 } => "No turns leave the transcript.",
         { TurnsLeaving: 1 } => "One turn leaves the transcript. It stays in the log and in Audit, and the fork tree keeps a branch for it.",
         var plan => $"{Word(plan.TurnsLeaving)} turns leave the transcript. They stay in the log and in Audit, and the fork tree keeps a branch for them.",
-    };
+    }) + (_plan?.PartTurn is { } part
+        ? string.Create(CultureInfo.InvariantCulture, $" Turn {part} keeps your message; its call and what came after it leave.")
+        : "");
 
     public IReadOnlyList<RestoreOptionView> Options { get; }
 
