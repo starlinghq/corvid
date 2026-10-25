@@ -188,20 +188,25 @@ public sealed partial class MemoryPage : Page
         if (box.Tag is EditorHook || box.DataContext is not INotifyPropertyChanged source)
             return;
         var dispatcher = DispatcherQueue;
+        void Take() => dispatcher.TryEnqueue(() =>
+        {
+            if (!IsOpen(source) || !box.IsLoaded)
+                return;
+            box.Focus(FocusState.Programmatic);
+            box.SelectionStart = box.Text.Length;
+        });
         PropertyChangedEventHandler handler = (_, args) =>
         {
             if (args.PropertyName is null || !EditorModes.Contains(args.PropertyName))
                 return;
-            dispatcher.TryEnqueue(() =>
-            {
-                if (!IsOpen(source) || !box.IsLoaded)
-                    return;
-                box.Focus(FocusState.Programmatic);
-                box.SelectionStart = box.Text.Length;
-            });
+            Take();
         };
         source.PropertyChanged += handler;
         box.Tag = new EditorHook(source, handler);
+        // Uno loads an editor inside a collapsed panel only when the panel shows, which is after its card opened it (Reject
+        // with a reason…): the caret goes to it now, or what is typed next lands elsewhere (A3's end-to-end pass).
+        if (IsOpen(source))
+            Take();
     }
 
     private void OnEditorUnloaded(object sender, RoutedEventArgs e)

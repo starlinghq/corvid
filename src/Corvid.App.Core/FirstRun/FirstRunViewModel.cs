@@ -380,14 +380,28 @@ public sealed class FirstRunViewModel : AreaViewModel
     /// "Manual → Smart" when the mode chosen differs from the one configured now: finishing the setup writes it. Empty when
     /// the configured mode stays (it is then not written at all).
     /// </summary>
-    public string ModeChange => _current.Mode is { } configured && configured != _mode
+    public string ModeChange => Overridden(_current.ModeOverride, "the approval mode", _current.Mode is { } configured && configured != _mode
         ? $"Configured now: {configured}. Finishing the setup changes it: {configured} → {_mode}."
-        : "";
+        : "");
 
     /// <summary>"Local only → Redact" when the posture chosen differs from the one configured now; empty when it stays.</summary>
-    public string PostureChange => _current.Posture is { } configured && !string.Equals(configured, _posture, StringComparison.Ordinal)
-        ? $"Configured now: {PostureName(configured)}. Finishing the setup changes it: {PostureName(configured)} → {PostureName(_posture)}."
-        : "";
+    public string PostureChange => Overridden(_current.PostureOverride, "cloud privacy",
+        _current.Posture is { } configured && !string.Equals(configured, _posture, StringComparison.Ordinal)
+            ? $"Configured now: {PostureName(configured)}. Finishing the setup changes it: {PostureName(configured)} → {PostureName(_posture)}."
+            : "");
+
+    /// <summary>
+    /// The change line with what overrides the setting this run said after it: the setup writes corvid.json, and the
+    /// environment variable or <c>--set</c> goes on winning while it is there. The override's value is untrusted text.
+    /// </summary>
+    private static string Overridden(string? value, string setting, string change)
+    {
+        if (value is null)
+            return change;
+        var note = $"This run's environment or --set sets {setting} to {SafeText.Clean(value)}: finishing writes your choice to corvid.json, " +
+            "but Corvid goes on using the override while it is set.";
+        return change.Length == 0 ? note : $"{change} {note}";
+    }
 
     /// <summary>The cloud privacy posture: "redact" (the default), "local only", or "send" when the configuration sends unredacted.</summary>
     public string Posture
@@ -580,7 +594,10 @@ public sealed class FirstRunViewModel : AreaViewModel
     {
         var info = await _service.DescribeWorkspaceAsync(_workspace).ConfigureAwait(true);
         if (info.Path == _workspace)
-            WorkspaceNote = Spans.Parse(info.Description);
+            WorkspaceNote = Spans.Parse(_current.WorkspaceOverride is { } overridden
+                ? $"{info.Description} This run's environment or --set sets the workspace to `{Spans.Escape(SafeText.Clean(overridden))}`: " +
+                  "finishing writes your choice to corvid.json, but Corvid goes on using the override while it is set."
+                : info.Description);
         foreach (var choice in WorkspaceChoices)
             choice.IsSelected = choice.Label == SafeText.Reveal(_workspace);
     }

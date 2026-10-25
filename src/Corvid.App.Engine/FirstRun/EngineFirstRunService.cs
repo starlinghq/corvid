@@ -184,8 +184,17 @@ public sealed class EngineFirstRunService : IFirstRunService, IDisposable
             "Redact" => "redact",
             _ => null,
         };
-        return new CurrentSetup(mode, posture);
+        // What this run's environment or --set gives over corvid.json: the page says a choice the setup writes does not win.
+        return new CurrentSetup(mode, posture)
+        {
+            ModeOverride = Override("Approvals:Mode"),
+            PostureOverride = Override("Privacy:Cloud"),
+            WorkspaceOverride = Override("Workspace"),
+        };
     }, cancellationToken);
+
+    private string? Override(string key) =>
+        _writer.TryGetOverride($"{CorvidOptions.Section}:{key}", out var value) && value is not null ? value : null;
 
     public void Dispose()
     {
