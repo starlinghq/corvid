@@ -1346,6 +1346,13 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         /// <summary>A5: the question the running turn waits on inside the turn, or null.</summary>
         public InTurnQuestion? AskedInTurn { get; set; }
 
+        /// <summary>
+        /// A5: the in-turn question the kernel is about to log (<see cref="Corvid.Kernel.Turns.IQuestionAsker.Expect"/>), until its
+        /// <see cref="Corvid.Kernel.Turns.IQuestionAsker.AskAsync"/> makes it <see cref="AskedInTurn"/>. A field for <see cref="Volatile"/>: it is
+        /// written under the turn's lock, not the channel's.
+        /// </summary>
+        public InTurnQuestion? Expected;
+
         /// <summary>The running turn is being interrupted: its open prompts close as cancelled.</summary>
         public bool Cancelling { get; set; }
 

@@ -20,6 +20,15 @@ public interface IQuestionAsker
     /// with the turn (an interrupt, the window closing), which ends the turn as cancelled.
     /// </summary>
     ValueTask<string?> AskAsync(QuestionPrompt prompt, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Called just before the question is logged, and then always followed by <see cref="AskAsync"/> for the same prompt: a
+    /// surface that shows the question from the log can be waiting for its answer before it appears, so an answer given as
+    /// soon as it shows finds the turn waiting. It runs under the turn's lock: it must not block or call back into the turn.
+    /// </summary>
+    void Expect(QuestionPrompt prompt)
+    {
+    }
 }
 
 /// <summary>An <c>ask_user</c> question asked inside a turn. The text and options are the model's: untrusted.</summary>

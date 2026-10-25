@@ -28,6 +28,45 @@ public sealed class InTurnQuestionTests
         }
     }
 
+    /// <summary>Records, when the turn says it expects a question, whether the log holds it yet.</summary>
+    private sealed class ExpectingAsker(Corvid.Host.Composition.CorvidRuntime runtime) : IQuestionAsker
+    {
+        public List<(QuestionPrompt Prompt, bool Logged)> Expected { get; } = [];
+
+        public List<QuestionPrompt> Asked { get; } = [];
+
+        public bool CanAsk(string sessionId) => true;
+
+        public void Expect(QuestionPrompt prompt) =>
+            Expected.Add((prompt, runtime.Log.Read(prompt.SessionId, limit: 4096).Any(item => item.Payload is ClarificationAsked asked
+                && asked.QuestionId == prompt.QuestionId)));
+
+        public ValueTask<string?> AskAsync(QuestionPrompt prompt, CancellationToken cancellationToken)
+        {
+            Asked.Add(prompt);
+            return ValueTask.FromResult<string?>("release");
+        }
+    }
+
+    [Fact]
+    public async Task The_surface_is_told_to_expect_the_question_before_it_is_logged_and_then_asked_it()
+    {
+        // A5 integration: the app shows a question from the log, so it must be waiting for the answer before the question
+        // is there; else an answer given as soon as it shows is refused as if the turn were not waiting.
+        var models = Models();
+        await using var host = TestHost.Create(models, BuiltinOn);
+        await using var runtime = await host.StartAsync();
+        var session = runtime.OpenSession(surface: "test");
+        var asker = new ExpectingAsker(runtime);
+
+        using (runtime.AttachQuestioner(session.Id, asker))
+            await session.SendAsync("tag it", Ct);
+
+        var (expected, logged) = Assert.Single(asker.Expected);
+        Assert.False(logged);
+        Assert.Equal(expected, Assert.Single(asker.Asked));
+    }
+
     private static FakeModels Models() => new(new FakeGenerator(
         Reply.Call("ask_user", """{"question":"Which branch?","options":["main","release"]}"""), Reply.Say("Tagging release.")));
 

@@ -33,6 +33,13 @@ internal sealed class QuestionRouter : IQuestionAsker
             : ValueTask.FromResult<string?>(null);
     }
 
+    public void Expect(QuestionPrompt prompt)
+    {
+        ArgumentNullException.ThrowIfNull(prompt);
+        if (_surfaces.TryGetValue(prompt.SessionId, out var surface))
+            surface.Expect(prompt);
+    }
+
     private sealed class Detach(QuestionRouter router, string sessionId, IQuestionAsker surface) : IDisposable
     {
         public void Dispose() => router._surfaces.TryRemove(KeyValuePair.Create(sessionId, surface));

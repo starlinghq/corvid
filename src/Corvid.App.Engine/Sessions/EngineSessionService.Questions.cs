@@ -23,7 +23,7 @@ public sealed partial class EngineSessionService
         if (!_channels.TryGetValue(sessionId, out var channel))
             return null;
         lock (channel.Gate)
-            return channel.AskedInTurn?.QuestionId;
+            return (channel.AskedInTurn ?? Volatile.Read(ref channel.Expected))?.QuestionId;
     }
 
     /// <summary>
@@ -41,14 +41,26 @@ public sealed partial class EngineSessionService
                 return !channel.Closed && !channel.ReadOnly && !channel.Cancelling && ReferenceEquals(channel.Reporter, reporter);
         }
 
+        // Registered before the question is logged (the kernel calls this under its lock, just before), so an answer given as
+        // soon as the question shows finds the turn waiting for it. A plain reference write: no lock taken under the turn's.
+        public void Expect(QuestionPrompt prompt) =>
+            Volatile.Write(ref channel.Expected, new InTurnQuestion(prompt.QuestionId,
+                new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously)));
+
         public async ValueTask<string?> AskAsync(QuestionPrompt prompt, CancellationToken cancellationToken)
         {
-            // Registered before it shows, so an answer given as soon as it appears finds the turn waiting for it.
-            var waiting = new InTurnQuestion(prompt.QuestionId, new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously));
+            InTurnQuestion waiting;
             lock (channel.Gate)
             {
+                var expected = Interlocked.Exchange(ref channel.Expected, null);
+                waiting = expected is not null && expected.QuestionId == prompt.QuestionId ? expected
+                    : new InTurnQuestion(prompt.QuestionId, new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously));
                 if (channel.Cancelling || service._disposed)
+                {
+                    if (ReferenceEquals(channel.AskedInTurn, waiting))
+                        channel.AskedInTurn = null;
                     return null;
+                }
                 channel.AskedInTurn = waiting;
             }
             try

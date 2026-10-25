@@ -1445,10 +1445,13 @@ public sealed class TurnRunner
                 return false;
             var (text, options) = AskUserTool.Read(arguments);
             var question = new ClarifyingQuestion(NewQuestionId(), text, options);
+            var prompt = new QuestionPrompt(runner.SessionId, question.Id, callId, text, options);
             lock (_gate)
             {
                 if (text.Length == 0 || _question is not null)
                     return false;
+                // The surface waits for the answer before the question reaches the log (and so the window): AskAsync follows.
+                asker.Expect(prompt);
                 runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, true, Generator: _generatorId, Usage: TakeUsage()),
                     new ClarificationAsked(question.Id, question.Text, question.Options));
                 // Open until answered: a cancelled turn closes it with the rest.
@@ -1458,7 +1461,7 @@ public sealed class TurnRunner
             string? answer;
             try
             {
-                answer = await asker.AskAsync(new QuestionPrompt(runner.SessionId, question.Id, callId, text, options), cancellationToken).ConfigureAwait(false);
+                answer = await asker.AskAsync(prompt, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {

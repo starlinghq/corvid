@@ -417,6 +417,10 @@ Decisions taken while merging:
 - A fork's copied session choices come back through the restore when it opens (`ForkResult.Models` reports them
   `Unchanged`). So `/fork` lets go of a fork with local choices, and keeps one open only when it holds a cloud choice.
 - The session header gives the parent link and the children button their room before the models pill (`FitTitle`).
+- An in-turn question could reach the window (`QuestionAsked`) before `WindowQuestioner` had registered its wait, since
+  the kernel logged `ClarificationAsked` before calling the asker: an answer given then was refused, and
+  `EngineRunningTurnTests.A_question_the_windows_turn_asks…` failed in 2 of 3 full-suite runs after the merges.
+  `IQuestionAsker.Expect` (a default method) is now called under the turn's lock just before the question is logged.
 - The models pill measured itself to decide whether it fits. Once it had given way (`MaxWidth` 0) it measured 0 wide and
   came back, a layout cycle whenever the title's room was near the line: at 1440 with the dock open the composer stopped
   showing typed text. It now measures its text.
@@ -446,11 +450,6 @@ Left:
   delegation card lines; a finished child's tail timer keeps ticking until its channel goes; `Children(parentId)` is
   read again on each list; `--demo` has no children.
 - Switching: the live step's model is inferred until `ITurnListener.StepStarted` carries the generator (replay is exact).
-- An in-turn question can reach the window (`QuestionAsked`) before `WindowQuestioner` has registered its wait, since the
-  kernel logs `ClarificationAsked` before it calls the asker. An answer given in that moment is refused ("A turn is
-  running; answer the question once it ends") rather than lost. Under heavy CPU load this makes
-  `EngineRunningTurnTests.A_question_the_windows_turn_asks_waits_inside_the_turn…` fail now and then (1 run in 7 at a
-  load of 21 on 12 cores; it passed 6 of 6 reruns). A fix would let the asker register before the kernel logs the question.
 - A person's message clears taint for its turn (plan §10.3), so a child spawned in a tainted fork after the person writes
   is not tainted unless the turn reads outside content again. This is the intended model; it is noted because a fork's
   inherited taint lasts only until then.

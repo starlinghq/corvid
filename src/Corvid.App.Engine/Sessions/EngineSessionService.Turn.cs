@@ -178,7 +178,7 @@ public sealed partial class EngineSessionService
             if (channel.View?.Question is not { } open || open.QuestionId != questionId)
                 throw new InvalidOperationException("That question is no longer open; nothing was sent.");
             // A5: the running turn asked it and waits for the answer inside the turn.
-            if (channel.AskedInTurn is { } waiting && waiting.QuestionId == questionId)
+            if ((channel.AskedInTurn ?? Volatile.Read(ref channel.Expected)) is { } waiting && waiting.QuestionId == questionId)
                 inTurn = waiting.Answer;
             else if (channel.Running)
                 throw new InvalidOperationException("A turn is running; answer the question once it ends.");
