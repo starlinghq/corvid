@@ -98,6 +98,58 @@ public sealed class EngineRecordsTests
         Assert.True(((ISessionService)service).CanPin);
     }
 
+    /// <summary>A4 review M3: draft saves are written in the order they were made, whenever the pool runs them.</summary>
+    [Fact]
+    public async Task Draft_saves_of_a_session_are_written_in_order_even_when_the_first_is_slow()
+    {
+        await using var fixture = await EngineFixture.StartAsync();
+        var id = fixture.Runtime.OpenSession(surface: "app").Id;
+        using var service = fixture.Sessions();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var held = 0;
+        // The first save is held at the write; the second is made meanwhile (the clock stands still: equal stamps).
+        service.BeforeDraftWrite = () => Interlocked.Increment(ref held) == 1 ? gate.Task : Task.CompletedTask;
+
+        var first = service.SaveDraftAsync(id, new SessionDraft("and then", null), Ct);
+        var second = service.SaveDraftAsync(id, new SessionDraft("and then check the changelog", null), Ct);
+        gate.SetResult();
+        await Task.WhenAll(first, second);
+
+        Assert.Equal("and then check the changelog", fixture.Runtime.UiState.GetDraft(id)!.Text);
+        Assert.Equal(2, held);
+    }
+
+    /// <summary>A4 review L6: a card's risk level is its own call's decider answer, never an earlier call's.</summary>
+    [Fact]
+    public void A_cards_risk_level_is_its_own_calls_and_none_when_the_decider_gave_it_none()
+    {
+        using var instructions = System.Text.Json.JsonDocument.Parse("\"rate the risk\"");
+        var question = new Corvid.Abstractions.Events.AskedQuestion("score", instructions.RootElement.Clone(),
+            [new("none"), new("low"), new("medium"), new("high"), new("critical")]);
+        Corvid.Abstractions.Events.Decision Risk(string level) => new("d-" + level, "risk",
+            System.Collections.Immutable.ImmutableDictionary<string, double>.Empty.Add(level, 0.9), 0.9, 0.5, "ask", Question: question);
+        using var arguments = System.Text.Json.JsonDocument.Parse("{}");
+        Corvid.Abstractions.Events.StoredEvent At(long sequence, Corvid.Abstractions.Events.SessionEvent payload) =>
+            new("s", sequence, Guid.NewGuid(), DateTimeOffset.UnixEpoch, payload);
+        var events = new Corvid.Abstractions.Events.StoredEvent[]
+        {
+            At(1, new Corvid.Abstractions.Events.ToolCallIssued("c1", "shell", arguments.RootElement.Clone())),
+            At(2, Risk("high")),
+            At(3, new Corvid.Abstractions.Events.ApprovalRequested("a1", "{}", "risk", "c1")),
+            At(4, new Corvid.Abstractions.Events.ApprovalResolved("a1", true, "approved")),
+            // The second call is asked in manual mode: no risk answer of its own.
+            At(5, new Corvid.Abstractions.Events.ToolCallIssued("c2", "shell", arguments.RootElement.Clone())),
+            At(6, new Corvid.Abstractions.Events.ApprovalRequested("a2", "{}", "mode", "c2")),
+            At(7, new Corvid.Abstractions.Events.ToolCallIssued("c3", "shell", arguments.RootElement.Clone())),
+            At(8, Risk("medium")),
+            At(9, new Corvid.Abstractions.Events.ApprovalRequested("a3", "{}", "risk", "c3")),
+        };
+
+        Assert.Equal(3, Sessions.ApprovalCards.RiskLevel(events, "a1", "c1"));
+        Assert.Null(Sessions.ApprovalCards.RiskLevel(events, "a2", "c2"));
+        Assert.Equal(2, Sessions.ApprovalCards.RiskLevel(events, "a3", "c3"));
+    }
+
     [Fact]
     public async Task A_draft_is_kept_in_ui_db_after_the_composer_is_still_and_comes_back_in_the_next_window()
     {

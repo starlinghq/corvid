@@ -37,6 +37,20 @@ public sealed class ChatRecordsTests
         Assert.Empty(run.Models!.Generator.Calls);
     }
 
+    /// <summary>A4 review M1: a message that starts with a mark is a message, and \# or \! sends any line as one.</summary>
+    [Fact]
+    public async Task Lines_that_start_with_a_mark_but_are_no_mode_and_escaped_lines_are_sent_as_messages()
+    {
+        using var run = new CliRun(new FakeModels(new FakeGenerator(Reply.Say("a"), Reply.Say("b"), Reply.Say("c"), Reply.Say("d"))));
+
+        await run.RunAsync(["chat"], "#123 is failing again", "!important: keep the API stable", @"\# the release branch is main",
+            @"\!git status", "/exit");
+
+        var sent = run.Models!.Generator.Calls.Select(call => call.Last(message => message.Role == Microsoft.Extensions.AI.ChatRole.User).Text).ToList();
+        Assert.Equal(["#123 is failing again", "!important: keep the API stable", "# the release branch is main", "!git status"], sent);
+        Assert.DoesNotContain("Staged for review", run.Output, StringComparison.Ordinal);
+    }
+
     /// <summary>A4V2-8: an empty session is listed nowhere, so /pin refuses it rather than pinning what nobody can see.</summary>
     [Fact]
     public async Task Pin_refuses_a_session_with_no_messages_and_pins_one_with_them()

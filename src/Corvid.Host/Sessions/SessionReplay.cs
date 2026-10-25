@@ -93,8 +93,10 @@ public static class SessionReplay
                 .OfType<ApprovalAssessed>().GroupBy(assessed => assessed.CallId, StringComparer.Ordinal)
                 .ToDictionary(group => group.Key, group => group.Last(), StringComparer.Ordinal)
             : [];
+        // Visible requests only, as the assessments: a call id asked in an undone turn says nothing of the call shown now.
         var asked = options.Approvals
-            ? stored.Values.Select(item => item.Payload).OfType<ApprovalRequested>().Select(request => request.CallId).OfType<string>()
+            ? stored.Values.Where(item => snapshot.IsVisible(item.Sequence)).Select(item => item.Payload).OfType<ApprovalRequested>()
+                .Select(request => request.CallId).OfType<string>()
                 .ToHashSet(StringComparer.Ordinal)
             : [];
         var generators = options.Generators ? Generators(stored.Values, snapshot.IsVisible) : [];

@@ -41,6 +41,23 @@ public sealed class EventScrubberTests : IDisposable
         Assert.DoesNotContain(Token, Persisted(scrubbed), StringComparison.Ordinal);
     }
 
+    /// <summary>A4 review security L3: an egress record's reason and why its text was not kept can quote what was sent.</summary>
+    [Fact]
+    public void An_egress_record_is_scrubbed_in_its_reason_and_unkept_and_kept_whole_otherwise()
+    {
+        var recorded = new EgressRecorded("r-1", "claude", EgressOutcomes.Redacted, ImmutableDictionary<string, int>.Empty.Add("credential", 1), 1, 120,
+            $"redacted a credential: {Token}", Tainted: true, Slot: "generator", Unkept: $"disk full writing {Token}");
+
+        var scrubbed = Assert.IsType<EgressRecorded>(EventScrubber.Scrub(recorded));
+
+        Assert.StartsWith("redacted a credential: " + Marker, scrubbed.Reason, StringComparison.Ordinal);
+        Assert.StartsWith("disk full writing " + Marker, scrubbed.Unkept, StringComparison.Ordinal);
+        Assert.Equal(recorded with { Reason = scrubbed.Reason, Unkept = scrubbed.Unkept }, scrubbed);
+        Assert.DoesNotContain(Token, Persisted(scrubbed), StringComparison.Ordinal);
+        var clean = recorded with { Reason = "no PII", Unkept = null };
+        Assert.Same(clean, EventScrubber.Scrub(clean));
+    }
+
     [Fact]
     public void A_tool_result_is_scrubbed_in_a_string_and_in_an_object()
     {

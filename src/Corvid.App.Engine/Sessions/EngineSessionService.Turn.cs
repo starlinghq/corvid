@@ -45,7 +45,8 @@ public sealed partial class EngineSessionService
                 chip = new QueuedMessage($"q-{++channel.QueueCounter}", text.Trim()) { Steer = true };
                 var withdraw = new CancellationTokenSource();
                 // Under the channel's lock, so the turn's end (which settles steers under it) sees this one or none of it.
-                taken = session.SteerAsync(chip.Text, withdraw.Token);
+                // A \# or \! steer goes without its backslash; the chip keeps it, as it is queued again as typed if not taken.
+                taken = session.SteerAsync(ComposerLine.MessageText(chip.Text), withdraw.Token);
                 channel.Queue = channel.Queue.Add(chip);
                 channel.Steers[chip.Id] = new PendingSteer(taken, withdraw);
             }

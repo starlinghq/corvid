@@ -9,6 +9,15 @@ namespace Corvid.Host.Sessions;
 /// Only a message of one line is a mode line: text of more than one line (pasted notes under a Markdown heading) and a
 /// Markdown image (<c>![</c>) are messages. A slash command is read before this.
 /// </para>
+/// <para>
+/// tui.md §4.1 names the marks but not where a message ends and a mode line begins; the rule here keeps ordinary messages
+/// that happen to start with a mark as messages. <c>#</c> is a mode only when a space follows it (<c># the release branch
+/// is main</c>), so <c>#123 is failing again</c>, <c>#include &lt;stdio.h&gt; not found</c> and <c>#[derive(Debug)]</c> are
+/// messages. <c>!</c> and <c>!!</c> are a mode only when a space or a command word follows: letters, digits and
+/// <c>_ . ~ / + -</c> up to a space or the line's end (<c>!git status</c>, <c>! ls -la</c>, <c>!./build.sh</c>), so
+/// <c>!important: keep the API stable</c> and <c>!!!</c> are messages. A line starting with <c>\#</c> or <c>\!</c> is
+/// always a message, sent without the backslash (<see cref="MessageText"/>).
+/// </para>
 /// </summary>
 public abstract record ComposerLine
 {
@@ -25,13 +34,12 @@ public abstract record ComposerLine
     /// <summary>A mode line with nothing after its mark; <see cref="Message"/> says what to type.</summary>
     public sealed record Empty(string Message) : ComposerLine;
 
-    /// <summary>The line's mode, or null for an ordinary message.</summary>
+    /// <summary>The line's mode, or null for an ordinary message (sent as <see cref="MessageText"/> gives it).</summary>
     public static ComposerLine? Parse(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
-        var line = text.Trim();
-        // The app's text box breaks lines with \r, a paste may bring \n.
-        if (line.Length == 0 || line.AsSpan().IndexOfAny('\r', '\n') >= 0 || line.StartsWith("![", StringComparison.Ordinal))
+        var line = OneLine(text);
+        if (line is null || line.StartsWith("![", StringComparison.Ordinal))
             return null;
         if (line.StartsWith("!!", StringComparison.Ordinal))
             return ShellOf(line[2..], local: true);
@@ -39,10 +47,34 @@ public abstract record ComposerLine
             return ShellOf(line[1..], local: false);
         if (line.StartsWith('#'))
         {
-            var fact = line[1..].Trim();
-            return fact.Length > 0 ? new Memory(fact) : new Empty("Type the fact to remember after #, for example: # the release branch is main.");
+            var rest = line[1..];
+            // "#123", "#include" and "#[derive" are messages: the mode needs a space after the mark.
+            if (rest.Length > 0 && !char.IsWhiteSpace(rest[0]))
+                return null;
+            var fact = rest.Trim();
+            return fact.Length > 0 ? new Memory(fact)
+                : new Empty("Type the fact to remember after # and a space, for example: # the release branch is main.");
         }
         return null;
+    }
+
+    /// <summary>
+    /// The text to send for a message: a one-line <c>\#</c> or <c>\!</c> line without its backslash (the escape that sends a
+    /// line starting with a mark as a message), anything else unchanged. Read when the message is posted, never before it
+    /// is queued: a queued line is parsed again when its turn starts.
+    /// </summary>
+    public static string MessageText(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        return OneLine(text) is { Length: > 1 } line && line[0] == '\\' && line[1] is '#' or '!' ? line[1..] : text;
+    }
+
+    // The trimmed line; null when the text is blank or holds more than one line (the app's text box breaks lines with \r,
+    // a paste may bring \n).
+    private static string? OneLine(string text)
+    {
+        var line = text.Trim();
+        return line.Length == 0 || line.AsSpan().IndexOfAny('\r', '\n') >= 0 ? null : line;
     }
 
     /// <summary>What a <c>#</c> line did, in a sentence, and whether it went wrong (the CLI's output, the app's notice).</summary>
@@ -87,10 +119,23 @@ public abstract record ComposerLine
         return (output, exit, null);
     }
 
-    private static ComposerLine ShellOf(string rest, bool local)
+    // A mark alone asks what to type; a mark before a space or a command word is the mode; anything else ("!important:",
+    // "!!!") is a message.
+    private static ComposerLine? ShellOf(string rest, bool local)
     {
         var command = rest.Trim();
-        return command.Length > 0 ? new Shell(command, local)
-            : new Empty($"Type a command after {(local ? "!!" : "!")}, for example: {(local ? "!!" : "!")}git status.");
+        if (command.Length == 0)
+            return new Empty($"Type a command after {(local ? "!!" : "!")}, for example: {(local ? "!!" : "!")}git status.");
+        return char.IsWhiteSpace(rest[0]) || IsCommandWord(rest) ? new Shell(command, local) : null;
+    }
+
+    // The first word is a command's name or path: letters, digits and _ . ~ / + - up to a space or the end.
+    private static bool IsCommandWord(string rest)
+    {
+        var end = 0;
+        for (; end < rest.Length && !char.IsWhiteSpace(rest[end]); end++)
+            if (!(char.IsAsciiLetterOrDigit(rest[end]) || rest[end] is '_' or '.' or '~' or '/' or '+' or '-'))
+                return false;
+        return end > 0;
     }
 }

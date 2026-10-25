@@ -329,6 +329,40 @@ public sealed class SessionStreamTests
         Assert.Equal((true, null), (replayed.ReadOnly, replayed.Assessment));
     }
 
+    /// <summary>A4 review L11: a call id asked in an undone turn does not make the same id's later, unasked call read as asked.</summary>
+    [Fact]
+    public async Task AnApprovalAskedInAnUndoneTurnDoesNotHideALaterCallsReadOnly()
+    {
+        await using var host = TestHost.Create();
+        var runtime = await host.StartAsync();
+        await using var _ = runtime;
+        var session = runtime.OpenSession(surface: "test");
+        using var write = System.Text.Json.JsonDocument.Parse("""{"path":"notes.txt","content":"x"}""");
+        using var empty = System.Text.Json.JsonDocument.Parse("{}");
+        using var done = System.Text.Json.JsonDocument.Parse("\"ok\"");
+        var head = runtime.Log.GetHead(session.Id, TestContext.Current.CancellationToken);
+        runtime.Log.Append(session.Id, head,
+        [
+            Event(new Corvid.Abstractions.Events.UserMessage("write the notes")),
+            Event(new Corvid.Abstractions.Events.ToolCallIssued("c1", "write_file", write.RootElement.Clone(), 1, false)),
+            Event(new Corvid.Abstractions.Events.ApprovalRequested("a1", "{}", "writes a file", "c1")),
+            Event(new Corvid.Abstractions.Events.ApprovalResolved("a1", true, "approved")),
+            Event(new Corvid.Abstractions.Events.ToolResult("c1", done.RootElement.Clone())),
+            Event(new Corvid.Abstractions.Events.AssistantMessage("Wrote them.")),
+            Event(new Corvid.Abstractions.Events.SessionRewound(head, "undo", [])),
+            Event(new Corvid.Abstractions.Events.UserMessage("list my notes")),
+            Event(new Corvid.Abstractions.Events.ToolCallIssued("c1", "list_notes", empty.RootElement.Clone(), 1, true)),
+            Event(new Corvid.Abstractions.Events.ToolResult("c1", done.RootElement.Clone())),
+            Event(new Corvid.Abstractions.Events.AssistantMessage("No notes.")),
+        ], TestContext.Current.CancellationToken);
+        var tools = new ToolPresentation(runtime);
+
+        var replayed = Assert.Single((await SessionReplay.ReadAsync(runtime, session.Id, tools, cancellationToken: TestContext.Current.CancellationToken))
+            .Updates.OfType<ToolCallChanged>());
+
+        Assert.Equal((true, null), (replayed.ReadOnly, replayed.Approval));
+    }
+
     private static Corvid.Abstractions.Events.EventData Event(Corvid.Abstractions.Events.SessionEvent payload) =>
         Corvid.Abstractions.Events.EventData.Create(payload);
 

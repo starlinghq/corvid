@@ -53,7 +53,16 @@ internal sealed class FakeGenerator(params Func<IReadOnlyList<ChatMessage>, Chat
         var response = step < script.Length ? script[step](list) : Reply.Text("Done.");
         response.Usage = new UsageDetails { InputTokenCount = 42, OutputTokenCount = 7 };
         response.ModelId = "fake-gen";
-        return Task.FromResult(response);
+        return Hold?.Invoke(step, cancellationToken) is { } hold ? HeldAsync(hold, response) : Task.FromResult(response);
+    }
+
+    /// <summary>Called with each script step's index (from 0) and the call's token; a task it returns is awaited before the answer.</summary>
+    public Func<int, CancellationToken, Task?>? Hold { get; set; }
+
+    private static async Task<ChatResponse> HeldAsync(Task hold, ChatResponse response)
+    {
+        await hold;
+        return response;
     }
 
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> messages,

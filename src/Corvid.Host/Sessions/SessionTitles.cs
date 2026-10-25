@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
 using Corvid.Abstractions.Events;
 using Corvid.Kernel.Events;
@@ -28,6 +30,13 @@ public sealed record SessionDescription(string Id, long Head)
 
     public DateTimeOffset LastActivity { get; init; }
 
+    /// <summary>
+    /// The sequence of the session's latest event that is news to a person: anything but the records about the session
+    /// (titles, recaps) and the bookkeeping beside a turn (egress records, approval assessments). A recap through it is up
+    /// to date.
+    /// </summary>
+    public long LastNews { get; init; }
+
     /// <summary>The latest recap (G-6), or null.</summary>
     public SessionRecapped? Recap { get; init; }
 
@@ -53,25 +62,55 @@ public static class SessionCatalogue
     /// <summary>The longest title a list shows; longer ones end in an ellipsis.</summary>
     public const int TitleLength = 80;
 
-    /// <summary>The session's description, or null when the log holds nothing for it.</summary>
+    // Each log's descriptions by session, as of the head they were read through: a list (/sessions, ACP's session/list, the
+    // rail every few seconds) reads only what was appended since, never every log in full again.
+    private static readonly ConditionalWeakTable<IEventLog, ConcurrentDictionary<string, SessionDescription>> Described = new();
+
+    /// <summary>
+    /// The session's description, or null when the log holds nothing for it. Kept per log and session by head, so a session
+    /// is read in full once and then only for what was appended since.
+    /// </summary>
     public static SessionDescription? Describe(IEventLog log, string sessionId, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(log);
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         var head = log.GetHead(sessionId, cancellationToken);
+        var cache = Described.GetOrCreateValue(log);
         if (head == 0)
+        {
+            cache.TryRemove(sessionId, out _);
             return null;
-        SessionTitled? titled = null;
-        SessionRecapped? recap = null;
-        ClarificationAsked? question = null;
-        string? first = null, answer = null;
-        var turns = 0;
-        var last = default(DateTimeOffset);
-        foreach (var item in SessionProjection.ReadRange(log, sessionId, 0, head, cancellationToken))
+        }
+        // A log whose head went back (a file replaced under the same instance) is read again from the start.
+        var known = cache.TryGetValue(sessionId, out var cached) && cached.Head <= head ? cached : null;
+        if (known?.Head == head)
+            return known;
+        var described = Fold(known ?? new SessionDescription(sessionId, 0),
+            SessionProjection.ReadRange(log, sessionId, known?.Head ?? 0, head, cancellationToken), head);
+        cache[sessionId] = described;
+        return described;
+    }
+
+    /// <summary>Whether a person would call the event something that happened in the session (<see cref="SessionDescription.LastNews"/>).</summary>
+    public static bool IsNews(SessionEvent payload) => payload is not (SessionTitled or SessionRecapped or EgressRecorded or ApprovalAssessed);
+
+    // The description continued over the events after its head.
+    private static SessionDescription Fold(SessionDescription from, IEnumerable<StoredEvent> events, long head)
+    {
+        var titled = from.Titled;
+        var recap = from.Recap;
+        var question = from.OpenQuestion;
+        string? first = from.FirstMessage, answer = from.LastAnswer;
+        var turns = from.Turns;
+        var last = from.LastActivity;
+        var news = from.LastNews;
+        foreach (var item in events)
         {
             // A rename or a recap is about the session, not activity in it: the list's "time since activity" stays.
             if (item.Payload is not (SessionTitled or SessionRecapped) || last == default)
                 last = item.RecordedAt;
+            if (IsNews(item.Payload))
+                news = item.Sequence;
             switch (item.Payload)
             {
                 case UserMessage user:
@@ -95,13 +134,14 @@ public static class SessionCatalogue
                     break;
             }
         }
-        return new SessionDescription(sessionId, head)
+        return new SessionDescription(from.Id, head)
         {
             Titled = titled,
             FirstMessage = first,
             LastAnswer = answer,
             Turns = turns,
             LastActivity = last,
+            LastNews = news,
             Recap = recap,
             OpenQuestion = question,
         };
@@ -335,7 +375,8 @@ public sealed class SessionTitler
         ArgumentNullException.ThrowIfNull(session);
         if (_generator is null || Options.RecapAfter <= TimeSpan.Zero || session.LastAnswer is null)
             return false;
-        if (session.Recap is { } recap && recap.ThroughSequence >= session.Head)
+        // Nothing new since the last recap: the recap itself, a title, or a turn's egress records and assessments are not news.
+        if (session.Recap is { } recap && recap.ThroughSequence >= session.LastNews)
             return false;
         var since = lastSeen ?? session.LastActivity;
         return (now ?? _time.GetUtcNow()) - since >= Options.RecapAfter;

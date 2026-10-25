@@ -115,7 +115,12 @@ public sealed class CorvidRuntimeFactory(
         try
         {
             var registry = composer.Compose(unavailable.Select(item => item.Model.Name).ToHashSet(StringComparer.OrdinalIgnoreCase));
-            var log = StartupStep.Run(progress, "Opening the event log", () => new SqliteEventLog(CorvidPaths.EventLog(settings)));
+            var log = StartupStep.Run(progress, "Opening the event log", () =>
+            {
+                // Owner only when Corvid makes it (the log is usually the first file in it).
+                CorvidPaths.CreatePrivateDirectory(CorvidPaths.DataDirectory(settings));
+                return new SqliteEventLog(CorvidPaths.EventLog(settings));
+            });
             // G-9: each gated request is linked to its session in the log from here on.
             composer.Ledger.Log = log;
             // Kev when the decider slot is bound (C-004b), with Kev-4B as the second tier when configured; the degraded tier

@@ -48,7 +48,7 @@ is desktop-only until attached mode (G-1).
 | `--theme light\|dark\|system` | The theme to start in; `system` by default. Settings switches it at run time. |
 | `--page <area>` | The area to open: `sessions`, `board`, `review`, `rewind`, `memory`, `skills`, `jobs`, `models`, `safety`, `mcp`, `gateway`, `secrets`, `audit`, `settings`, `first-run` (any case; `=` works too: `--page=models`). |
 | `--session <id>` | The session to select and open, such as `cli-9f2e`; with `--page`, it is selected and the page shows. |
-| `--scene main\|approval` | The demo scenario's moment: `main` (turn 12 running, as Main.png; the default) or `approval` (turn 13 waiting on approval a-32, as Approval.png). |
+| `--scene main\|approval` | The demo scenario's moment: `main` (turn 12 running, as Main.png; the default) or `approval` (turn 13 waiting on approval a-32, as Approval.png). It implies `--demo` (a scene never opens the engine on this machine's home) and is refused with `--engine`. |
 | `--help` | The usage. A wrong argument prints the usage and exits with 2. |
 
 `CORVID_APP_RENDERER=software` draws with Skia on the CPU instead of OpenGL (see the harness check below).
@@ -63,13 +63,16 @@ does not keep: a past turn's tokens, a running call's output tail, a call's elap
 time, the rule text a session or always answer wrote, a call refused without a prompt (the hardline list, a remembered
 denial, no approver) as "denied" rather than "failed", and the reason for denials logged before `approval_resolved`
 carried it (`note`). The composer's mode lines (A4, docs/plan/tui.md §4.1) are read by the host's `ComposerLine`, as
-`corvid chat` reads them: `#fact` is staged at once through memory's gated write path (a "Staged for review" notice
+`corvid chat` reads them: `# fact` is staged at once through memory's gated write path (a "Staged for review" notice
 with a review link; it starts no turn and the model never sees it), `!command` is a turn of its own that runs the command
 as the person's `shell` call through the approval card, the sandbox and the checkpoints with no generator call (its output
 is in the conversation for the next message), and `!!command` does the same with the message, call and output kept out
 of every later prompt, compaction, the decider's recent events and the episodic index (the log keeps them). Only a
 one-line message is a mode line: text of more than one line (pasted notes under a Markdown heading) and a Markdown image
-are sent; a mark with nothing after it is refused with what to type, and the draft stays.
+are sent; a mark with nothing after it is refused with what to type, and the draft stays. A mark is a mode only before
+a space (`#`) or a space or a command word (`!`, `!!`: letters, digits and `_ . ~ / + -` up to a space), so `#123 is
+failing again`, `#include <stdio.h> not found` and `!important: keep the API stable` are sent as messages; `\#` or `\!`
+at the start sends any such line as a message, without the backslash.
 
 Titles, recaps, pins and drafts (A4, G-6 and G-7): a session's title is its rename, else the one the local generator
 wrote after its first exchange (never a cloud generator), else its first message; the header's ••• menu renames it, pins

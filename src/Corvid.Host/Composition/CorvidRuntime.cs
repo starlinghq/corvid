@@ -64,6 +64,8 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     private readonly ToolShortlist _skillShortlist = new(new ShortlistOptions(Size: 3));
     private readonly Lock _maintenanceGate = new();
     private readonly CancellationTokenSource _lifetime = new();
+    // Cancels the titles being written when a surface leaves before they are done (MaintenanceIdleAsync with a bound).
+    private readonly CancellationTokenSource _titling = new();
     private Task _maintenance = Task.CompletedTask;
     private ProcessLock? _schedulerLock;
     private Task? _scheduler;
@@ -86,6 +88,8 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         Options = options;
         Catalogue = catalogue;
         _composer = composer;
+        // L10: the ledger reports from inside a model call; never onto the terminal, which a turn is drawing.
+        composer.Ledger.Failed = Report;
         Devices = devices;
         Metrics = metrics;
         Feed = feed;
@@ -315,6 +319,41 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     /// <summary>A recap was written here (G-6). Raised on the thread that wrote it; handlers must be thread-safe.</summary>
     public event Action<string, SessionRecapped>? Recapped;
 
+    /// <summary>
+    /// Something in the background went wrong that a person should hear of without it stopping anything (the egress ledger
+    /// could not record a request, or prune its store). Raised from any thread, often inside a model call: a surface shows it
+    /// its own way (the CLI as a notice, the app in its log), never by writing to the terminal from the handler's thread
+    /// outside its renderer. With nobody listening it is a trace line. The latest few are kept in <see cref="Notices"/>.
+    /// </summary>
+    public event Action<string>? Notice;
+
+    /// <summary>The latest background notices (<see cref="Notice"/>), oldest first, at most 20.</summary>
+    public IReadOnlyList<string> Notices
+    {
+        get
+        {
+            lock (_notices)
+                return [.. _notices];
+        }
+    }
+
+    private readonly Queue<string> _notices = new();
+
+    private void Report(string reason)
+    {
+        var line = "egress ledger: " + reason;
+        lock (_notices)
+        {
+            _notices.Enqueue(line);
+            while (_notices.Count > 20)
+                _notices.Dequeue();
+        }
+        if (Notice is { } notice)
+            notice(line);
+        else
+            System.Diagnostics.Trace.WriteLine("corvid: " + line);
+    }
+
     /// <summary>Renames a session (G-6): a <c>SessionTitled</c> by the user in the log, then <see cref="TitleChanged"/>.</summary>
     /// <exception cref="ArgumentException">The title is blank.</exception>
     /// <exception cref="SessionHeldException">Another process drives the session (G-12); nothing was written.</exception>
@@ -447,6 +486,22 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
             return _maintenance;
     }
 
+    /// <summary>
+    /// Waits at most <paramref name="bound"/> for background work (a surface leaving: <c>corvid chat</c>'s exit). When it is
+    /// not done by then, the titles being written are cancelled, so leaving is never held by the generator; a session left
+    /// untitled is queued again after its next answered exchange. True when the work finished in time.
+    /// </summary>
+    public async Task<bool> MaintenanceIdleAsync(TimeSpan bound)
+    {
+        var idle = MaintenanceIdleAsync();
+        // A timeout, like the work's own failure, is not the caller's: suppressed.
+        await idle.WaitAsync(bound).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        if (idle.IsCompleted)
+            return true;
+        await _titling.CancelAsync().ConfigureAwait(false);
+        return false;
+    }
+
     public async ValueTask DisposeAsync()
     {
         await _lifetime.CancelAsync().ConfigureAwait(false);
@@ -476,6 +531,7 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         _composer.Dispose();
         Devices.Dispose();
         _lifetime.Dispose();
+        _titling.Dispose();
     }
 
     internal static string NewSessionId(string surface) =>
@@ -720,12 +776,14 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     // convenience: a failure leaves the session titled by its first message.
     private void QueueTitle(string sessionId)
     {
-        var lifetime = _lifetime.Token;
+        var (end, leaving) = (_lifetime.Token, _titling.Token);
         lock (_maintenanceGate)
             _maintenance = _maintenance.ContinueWith(async _ =>
             {
                 try
                 {
+                    using var titling = CancellationTokenSource.CreateLinkedTokenSource(end, leaving);
+                    var lifetime = titling.Token;
                     if (SessionProjection.Load(Log, sessionId, cancellationToken: lifetime).Title is not null)
                     {
                         _titled[sessionId] = 0;

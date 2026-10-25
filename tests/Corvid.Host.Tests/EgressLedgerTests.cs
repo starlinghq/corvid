@@ -26,12 +26,14 @@ public sealed class EgressLedgerTests : IDisposable
     private readonly SqliteEventLog _log;
     private readonly EgressLedger _ledger;
     private readonly List<string> _failures = [];
+    // Stands at the real time (some tests count from now) until a retention test moves it.
+    private readonly StoppedClock _clock = new(DateTimeOffset.UtcNow);
 
     public EgressLedgerTests()
     {
         Directory.CreateDirectory(_root);
         _log = new SqliteEventLog(Path.Combine(_root, "events.db"));
-        _ledger = new EgressLedger(Path.Combine(_root, "egress.db")) { Log = _log, Failed = _failures.Add };
+        _ledger = new EgressLedger(Path.Combine(_root, "egress.db"), _clock) { Log = _log, Failed = _failures.Add };
     }
 
     public void Dispose()
@@ -226,4 +228,59 @@ public sealed class EgressLedgerTests : IDisposable
     }
 
     private static bool Contains(byte[] bytes, string text) => bytes.AsSpan().IndexOf(Encoding.UTF8.GetBytes(text)) >= 0;
+
+    private static List<ChatMessage> Other() => [new(ChatRole.System, "You are Corvid."), new(ChatRole.User, "Summarise the changelog.")];
+
+    /// <summary>A4 review M2: requests past the retention go, then the bodies no request uses; at most daily while recording.</summary>
+    [Fact]
+    public async Task Requests_older_than_the_retention_are_pruned_with_the_messages_only_they_used()
+    {
+        _ledger.Retention = new EgressRetention(TimeSpan.FromDays(90), null);
+        var client = Client();
+        await client.GetResponseAsync(First(), Session("old"), Token);
+        await client.GetResponseAsync(Second(), Session("old"), Token);
+        await _ledger.Pruning;
+        Assert.Equal(4, Scalar("SELECT COUNT(*) FROM messages"));
+
+        _clock.Now = _clock.Now.AddDays(91);
+        await client.GetResponseAsync(Other(), Session("new"), Token);
+        // The day since the store's last prune has passed: recording pruned it, in the background.
+        await _ledger.Pruning;
+
+        Assert.Equal(["new"], _ledger.List(cancellationToken: Token).Select(entry => entry.SessionId));
+        // The system prompt the new request shares stays; the old conversation's three other messages went.
+        Assert.Equal(2, Scalar("SELECT COUNT(*) FROM messages"));
+        Assert.Contains("Summarise the changelog.", _ledger.Render(_ledger.List(cancellationToken: Token)[0].RequestId), StringComparison.Ordinal);
+        // Not again the same day.
+        Assert.False(_ledger.PruneIfDue());
+        _clock.Now = _clock.Now.AddDays(1);
+        Assert.True(_ledger.PruneIfDue());
+        Assert.Empty(_failures);
+    }
+
+    [Fact]
+    public async Task Over_the_size_cap_the_oldest_requests_go_first_and_prune_compacts_on_request()
+    {
+        _ledger.Retention = new EgressRetention(null, null);
+        var client = Client();
+        await client.GetResponseAsync(First(), Session("s1"), Token);
+        await client.GetResponseAsync(Other(), Session("s2"), Token);
+        await _ledger.Pruning;
+        var newest = Scalar("SELECT LENGTH(CAST(body AS BLOB)) FROM messages WHERE body LIKE '%changelog%'")
+            + Scalar("SELECT LENGTH(CAST(body AS BLOB)) FROM messages WHERE body LIKE '%You are Corvid.%'");
+
+        _ledger.Retention = new EgressRetention(null, newest);
+        var pruned = _ledger.Prune(vacuum: true);
+
+        Assert.Equal((1, 1), (pruned.Requests, pruned.Messages));
+        Assert.Equal(["s2"], _ledger.List(cancellationToken: Token).Select(entry => entry.SessionId));
+        Assert.Empty(_failures);
+    }
+
+    [Fact]
+    public void Prune_on_no_store_creates_none()
+    {
+        Assert.Equal(new EgressPruned(0, 0), _ledger.Prune());
+        Assert.False(File.Exists(_ledger.Path));
+    }
 }
