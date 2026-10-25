@@ -343,7 +343,8 @@ public static class SessionFold
                 Input = call.Input ?? existing.Input,
                 Locations = call.Locations.IsDefaultOrEmpty ? existing.Locations : call.Locations,
                 Verdict = call.Verdict ?? existing.Verdict,
-                Model = existing.Model ?? Cleaned(call.Model),
+                // A5: the latest word wins: the finished call brings the generator the log ties it to.
+                Model = Cleaned(call.Model) ?? existing.Model,
                 StartedAt = call.Status == ToolCallStatus.InProgress && existing.Status == ToolCallStatus.Pending ? call.At : existing.StartedAt,
             };
             state = state with { Transcript = state.Transcript.SetItem(index, updated) };

@@ -171,6 +171,9 @@ public sealed class SessionUpdateTranslator(string workspace)
                 break;
             // Turn progress: the step a response with tool calls began, with the turn's budget when known.
             case TurnStepped stepped when TurnOpen:
+                // A5: the step's generator, from its calls' log on replay; live, the latest one known (its calls then say).
+                if (stepped.Generator is { } stepGenerator)
+                    _stepModel = Bare(stepGenerator);
                 output.Add(new TurnProgress(stepped.Step) { At = at, MaxSteps = stepped.MaxSteps ?? MaxSteps, Model = StepModel });
                 break;
             case ThoughtChunk thought:
@@ -200,7 +203,7 @@ public sealed class SessionUpdateTranslator(string workspace)
                 output.Add(new ToolCall(started.CallId, started.Tool ?? started.Title, Kind(started.Kind, started.Tool), Status(started.Status))
                 {
                     At = at,
-                    Model = userShell ? null : StepModel,
+                    Model = userShell ? null : CallModel(started.Generator),
                     Target = ToolPresentation.Target(started.Input),
                     Input = started.Input?.GetRawText(),
                     Locations = Relative(started.Locations),
@@ -213,7 +216,7 @@ public sealed class SessionUpdateTranslator(string workspace)
                         Status(changed.Status ?? ToolCallState.InProgress))
                     {
                         At = at,
-                        Model = changed.CallId.StartsWith(Corvid.Kernel.Turns.TurnRunner.UserShellCall, StringComparison.Ordinal) ? null : StepModel,
+                        Model = changed.CallId.StartsWith(Corvid.Kernel.Turns.TurnRunner.UserShellCall, StringComparison.Ordinal) ? null : CallModel(changed.Generator),
                         Target = ToolPresentation.Target(input),
                         Input = input.GetRawText(),
                         Locations = Relative(changed.Locations),
@@ -307,6 +310,14 @@ public sealed class SessionUpdateTranslator(string workspace)
     /// <summary>The generator the running step is on, without its device; null when unknown.</summary>
     private string? StepModel => _stepModel.Length > 0 ? _stepModel : null;
 
+    /// <summary>A5: the generator a call names (the log's, exact) or else the step's; the step follows the call's.</summary>
+    private string? CallModel(string? generator)
+    {
+        if (generator is { Length: > 0 })
+            _stepModel = Bare(generator);
+        return StepModel;
+    }
+
     /// <summary>
     /// A5: the host's <see cref="ModelChanged"/> as the app's updates: a <see cref="SlotModelChanged"/> for any slot, and a
     /// transcript row (<see cref="ModelSwitched"/>) before it when a logged switch really changed the model: the generator's
@@ -335,7 +346,8 @@ public sealed class SessionUpdateTranslator(string workspace)
             return [slot];
         var generator = change.Slot == Corvid.Models.ModelSlots.Generator;
         var person = change.Reason is "session" or "user";
-        if (generator && TurnOpen)
+        // Between turns the next turn starts on it; within one, the calls the log ties to it say when it took over.
+        if (generator && !TurnOpen)
             _stepModel = Bare(change.To);
         if (!generator && !person)
             return [slot];

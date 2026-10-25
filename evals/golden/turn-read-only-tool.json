@@ -202,7 +202,8 @@
         "limit": 5
       },
       "round": 1,
-      "read_only": true
+      "read_only": true,
+      "generator": "gen-small"
     },
     {
       "type": "tool_result",
@@ -375,7 +376,8 @@
                 "limit": 5
               },
               "round": 1,
-              "read_only": true
+              "read_only": true,
+              "generator": "gen-small"
             }
           },
           {

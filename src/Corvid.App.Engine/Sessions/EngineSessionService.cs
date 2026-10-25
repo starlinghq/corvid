@@ -822,10 +822,11 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 updates.Add(new TaintChanged(tainted) { At = at });
             channel.Tainted = tainted;
             // The status bar's generator before a turn runs: what the next one starts on.
-            if (CurrentGenerator(runtime, open ? session : null) is { Length: > 0 } generator)
-                updates.Add(new EngineStatus { Model = generator, At = at });
-            // A5: and the session's decider (per session now), for the header beside the generator.
-            updates.Add(new EngineStatus { Decider = DeciderLabel(runtime, open ? session : null), At = at });
+            // A5: with the session's decider (per session now), for the header beside the generator.
+            var decider = DeciderLabel(runtime, open ? session : null);
+            updates.Add(CurrentGenerator(runtime, open ? session : null) is { Length: > 0 } generator
+                ? new EngineStatus { Model = generator, Decider = decider, At = at }
+                : new EngineStatus { Decider = decider, At = at });
             updates.Add(new AvailableCommandsUpdate(commands) { At = at });
             channel.ReadOnly = summary.ReadOnly;
             channel.Holder = summary.Holder;

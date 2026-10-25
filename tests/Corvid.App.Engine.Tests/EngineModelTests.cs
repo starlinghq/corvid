@@ -109,7 +109,8 @@ public sealed class EngineModelTests
         // The test host's decider is unbound: the degraded tier.
         Assert.Null(snapshot.Slot(ModelSlotNames.Decider)!.Model);
         Assert.Equal(DeciderTier.Degraded, snapshot.Decider.Tier);
-        Assert.True(snapshot.Slot(ModelSlotNames.Decider)!.Shared);
+        // A5: the decider is per session, so no slot is shared.
+        Assert.False(snapshot.Slot(ModelSlotNames.Decider)!.Shared);
 
         var gen = snapshot.Find("fake-gen")!;
         Assert.Equal(ModelKind.Local, gen.Kind);
@@ -150,24 +151,61 @@ public sealed class EngineModelTests
     }
 
     [Fact]
-    public async Task ASwitchIsWrittenAndAppliesToNewSessionsAndTheOpenOne()
+    public async Task ASwitchIsWrittenAndAppliesToNewSessionsWhileTheOpenOneKeepsItsOwn()
+    {
+        await using var setup = await StartAsync();
+        var runtime = setup.Fixture.Runtime;
+        var session = runtime.OpenSession(surface: "app");
+        setup.Session = session.Id;
+        var first = await setup.Service.SwitchAsync(ModelSlotNames.Summarizer, "fake-gen", Token);
+        Assert.True(first.Written, first.Message);
+        // The test host leaves the summarizer unbound: the open session takes the first default as its own.
+        var before = session.Slots.Current(ModelSlotNames.Summarizer).Profile.Id;
+        var answer = await setup.Service.SwitchAsync(ModelSlotNames.Summarizer, Spare, Token);
+
+        // A5: "default for new sessions" is its own choice: written, new sessions start on it, the open session stays.
+        Assert.True(answer.Written, answer.Message);
+        Assert.Contains("for new sessions", answer.Message, StringComparison.Ordinal);
+        Assert.Contains("New sessions start with it", answer.Message, StringComparison.Ordinal);
+        Assert.Equal(Spare, (string?)(await setup.FileAsync())["Corvid"]!["Models"]!["Slots"]!["summarizer"]!["Model"]);
+        Assert.Equal($"{Spare}@cpu", runtime.Registry.Get(ModelSlotNames.Summarizer).Default.Profile.Id);
+        Assert.Equal(before, session.Slots.Current(ModelSlotNames.Summarizer).Profile.Id);
+        Assert.Equal($"{Spare}@cpu", runtime.OpenSession(surface: "app").Slots.Current(ModelSlotNames.Summarizer).Profile.Id);
+        Assert.Equal(Spare, setup.Service.Snapshot.Slot(ModelSlotNames.Summarizer)!.Model);
+        Assert.Equal($"The summarizer is already {Spare}.", (await setup.Service.SwitchAsync(ModelSlotNames.Summarizer, Spare, Token)).Message);
+    }
+
+    [Fact]
+    public async Task ThisSessionSwitchesTheOpenSessionOnlyAndWritesNothing()
     {
         await using var setup = await StartAsync();
         var runtime = setup.Fixture.Runtime;
         var session = runtime.OpenSession(surface: "app");
         setup.Session = session.Id;
 
-        var first = await setup.Service.SwitchAsync(ModelSlotNames.Summarizer, "fake-gen", Token);
-        Assert.True(first.Written, first.Message);
-        var answer = await setup.Service.SwitchAsync(ModelSlotNames.Summarizer, Spare, Token);
+        Assert.False((await setup.Service.SwitchSessionAsync("nonsense", "fake-gen", Token)).Written);
+        Assert.False((await setup.Service.SwitchSessionAsync(ModelSlotNames.Generator, "nope", Token)).Written);
+        Assert.False((await setup.Service.SwitchSessionAsync(ModelSlotNames.Extractor, "fake-gen", Token)).Written);
 
+        var answer = await setup.Service.SwitchSessionAsync(ModelSlotNames.Generator, "fake-gen-large", Token);
         Assert.True(answer.Written, answer.Message);
-        Assert.Contains($"switches after its issued tool calls", answer.Message, StringComparison.Ordinal);
-        Assert.Equal(Spare, (string?)(await setup.FileAsync())["Corvid"]!["Models"]!["Slots"]!["summarizer"]!["Model"]);
-        Assert.Equal($"{Spare}@cpu", runtime.Registry.Get(ModelSlotNames.Summarizer).Default.Profile.Id);
-        Assert.Equal($"{Spare}@cpu", session.Slots.Current(ModelSlotNames.Summarizer).Profile.Id);
-        Assert.Equal(Spare, setup.Service.Snapshot.Slot(ModelSlotNames.Summarizer)!.Model);
-        Assert.Equal($"The summarizer is already {Spare}.", (await setup.Service.SwitchAsync(ModelSlotNames.Summarizer, Spare, Token)).Message);
+        Assert.Contains("This session's generator is fake-gen-large", answer.Message, StringComparison.Ordinal);
+        Assert.False(File.Exists(setup.ConfigFile));
+        Assert.Equal("fake-gen-large@cpu", session.Slots.Current(ModelSlotNames.Generator).Profile.Id);
+        Assert.True(session.Slots.HasSessionChoice(ModelSlotNames.Generator));
+        Assert.Equal("fake-gen@cpu", runtime.OpenSession(surface: "app").Slots.Current(ModelSlotNames.Generator).Profile.Id);
+        var slot = setup.Service.Snapshot.Slot(ModelSlotNames.Generator)!;
+        Assert.Equal(("fake-gen", "fake-gen-large", true), (slot.Model, slot.SessionModel, slot.SessionChoice));
+
+        // The decider, per session, on the degraded tier where nothing binds it by default.
+        Assert.True((await setup.Service.SwitchSessionAsync(ModelSlotNames.Decider, "fake-kev", Token)).Written);
+        Assert.Equal("fake-kev", runtime.Deciders.DeciderName(session.Slots)?.Split('@')[0]);
+        Assert.Null(runtime.Fabric.CalibratedDecider);
+
+        var forgot = await setup.Service.ClearSessionChoiceAsync(ModelSlotNames.Generator, Token);
+        Assert.True(forgot.Written, forgot.Message);
+        Assert.Equal("fake-gen@cpu", session.Slots.Current(ModelSlotNames.Generator).Profile.Id);
+        Assert.False(setup.Service.Snapshot.Slot(ModelSlotNames.Generator)!.SessionChoice);
     }
 
     [Fact]
@@ -181,10 +219,13 @@ public sealed class EngineModelTests
         Assert.Contains("overrides", generator.Message, StringComparison.Ordinal);
         Assert.Contains("New sessions in this window start with it.", generator.Message, StringComparison.Ordinal);
 
+        // A5: the decider's default for new sessions applies at once too (it is per session now); the shared fabric stays.
         var decider = await setup.Service.SwitchAsync(ModelSlotNames.Decider, "fake-kev", Token);
         Assert.True(decider.Written, decider.Message);
-        Assert.Contains("shared by every session", decider.Message, StringComparison.Ordinal);
+        Assert.Contains("New sessions in this window start with it.", decider.Message, StringComparison.Ordinal);
         Assert.Null(setup.Fixture.Runtime.Fabric.CalibratedDecider);
+        var next = setup.Fixture.Runtime.OpenSession(surface: "app");
+        Assert.Equal("fake-kev", setup.Fixture.Runtime.Deciders.DeciderName(next.Slots)?.Split('@')[0]);
     }
 
     [Fact]
