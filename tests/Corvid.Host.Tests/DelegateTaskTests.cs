@@ -377,6 +377,117 @@ public sealed class DelegateTaskTests
         Assert.Empty(Events(runtime, parent.Id).OfType<ChildSpawned>());
     }
 
+    private static ValueTask<Corvid.Host.Commands.CommandOutput> Command(CorvidRuntime runtime, CorvidSession session, string line)
+    {
+        var commands = Corvid.Host.Commands.CoreCommands.Register(new Corvid.Host.Commands.SlashCommandRegistry());
+        return commands.ExecuteAsync(line, new Corvid.Host.Commands.SlashCommandContext(runtime, session, commands), Ct);
+    }
+
+    [Fact]
+    public async Task Delegate_starts_a_child_with_the_persons_mix_and_agents_lists_shows_and_stops_it()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var generator = new FakeGenerator(Reply.Say("Found three."))
+        {
+            Hold = (step, token) =>
+            {
+                started.TrySetResult();
+                return gate.Task.WaitAsync(token);
+            },
+        };
+        var models = new FakeModels(generator);
+        await using var host = Host(models);
+        await using var runtime = await host.StartAsync();
+        var parent = runtime.OpenSession();
+        var ended = new TaskCompletionSource<ChildFinished>(TaskCreationOptions.RunContinuationsAsynchronously);
+        runtime.ChildChanged += (id, update) =>
+        {
+            if (id == parent.Id && update is Corvid.Host.Sessions.ChildEnded end)
+                ended.TrySetResult(end.Child);
+        };
+
+        var output = await Command(runtime, parent, "/delegate --model generator=fake-gen --tools list_notes --steps 3 look up the birthday of Ada");
+        await started.Task.WaitAsync(Ct);
+        var listed = await Command(runtime, parent, "/agents");
+        var shown = await Command(runtime, parent, "/agents show 1");
+        gate.SetResult();
+        var finished = await ended.Task.WaitAsync(Ct);
+        var after = await Command(runtime, parent, "/agents show 1");
+
+        Assert.Equal(Corvid.Host.Commands.OutputTone.Success, output.Tone);
+        Assert.Contains(output.Lines, line => line.Contains("generator fake-gen (local", StringComparison.Ordinal));
+        var spawned = Assert.Single(Events(runtime, parent.Id).OfType<ChildSpawned>());
+        Assert.Equal((ChildSessions.ByUser, "look up the birthday of Ada", 3), (spawned.By, spawned.Goal, spawned.Budget.MaxSteps));
+        Assert.Equal(["list_notes"], spawned.Tools);
+        Assert.Equal("running", listed.Table!.Rows[0][2]);
+        Assert.Contains(shown.Lines, line => line == "status: running");
+        Assert.Equal(ChildStatuses.Answered, finished.Status);
+        Assert.True(after.Lines.Contains("answer: Found three."), string.Join(" / ", after.Lines));
+        Assert.Contains((await Command(runtime, parent, "/agents stop 1")).Lines, line => line.Contains("not running", StringComparison.Ordinal));
+        Assert.Equal(Corvid.Host.Commands.OutputTone.Error, (await Command(runtime, parent, "/delegate --steps none go")).Tone);
+        Assert.Contains("no model named", (await Command(runtime, parent, "/delegate --model generator=nope go")).Lines[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_card_shows_hidden_characters_in_the_goal_and_model_names_revealed()
+    {
+        await using var host = Host(new FakeModels());
+        await using var runtime = await host.StartAsync();
+        var parent = runtime.OpenSession();
+        var arguments = JsonSerializer.SerializeToElement(new { goal = "summarise‮ the notes", tools = new[] { "list_notes", "nope​" } });
+        var prompt = new ApprovalPrompt("a-1", parent.Id, new ActionAnalysis("tool", "delegate_task", [], null), [], [ApprovalScope.Once],
+            DateTimeOffset.UtcNow.AddMinutes(5))
+        {
+            Action = new ToolAction(runtime.Tools.List().Single(tool => tool.Name == DelegateTaskTool.ToolName), arguments),
+        };
+
+        var lines = await DelegationCard.LinesAsync(runtime, prompt, Ct);
+
+        Assert.Equal("Child: summarise\\u202E the notes", lines[0]);
+        Assert.Contains("  tools: list_notes", lines);
+        Assert.Contains("  left out: nope\\u200B (the parent session has no such tool)", lines);
+        Assert.Contains(lines, line => line.StartsWith("  budget: 8 steps, 64,000 tokens, 600 s", StringComparison.Ordinal));
+        Assert.Contains(lines, line => line.StartsWith("  models: ", StringComparison.Ordinal) && line.Contains("generator fake-gen", StringComparison.Ordinal));
+        Assert.Contains("  approvals: manual", lines);
+    }
+
+    [Fact]
+    public async Task A_childs_approval_reaches_the_parents_prompter_and_its_card_names_the_child()
+    {
+        var models = new FakeModels(new FakeGenerator(
+            Reply.Call(DelegateTaskTool.ToolName, Args(new { goal = "add a note", tools = new[] { "add_note" } })),
+            Reply.Call("add_note", """{"text":"from the child"}"""),
+            Reply.Say("Added."),
+            Reply.Say("The helper added it.")));
+        await using var host = Host(models);
+        await using var runtime = await host.StartAsync();
+        var parent = runtime.OpenSession();
+        var prompts = new Recording();
+        var cards = new ConcurrentQueue<IReadOnlyList<string>>();
+        using var attached = runtime.AttachPrompter(parent.Id, new CardReader(runtime, prompts, cards));
+
+        await parent.SendAsync("ask a helper to do it", Ct);
+
+        // The spawn's prompt, then the child's own call's, both answered by the parent's prompter.
+        var childId = Events(runtime, parent.Id).OfType<ChildSpawned>().Single().ChildId;
+        Assert.True(2 == prompts.Prompts.Count, string.Join("\n", Events(runtime, childId).Select(e => e.ToString()![..Math.Min(300, e.ToString()!.Length)])));
+        var childPrompt = prompts.Prompts.Last();
+        Assert.StartsWith(ChildSessions.Surface + "-", childPrompt.SessionId, StringComparison.Ordinal);
+        Assert.Contains(cards.Last(), line => line.StartsWith($"Asked by child session {childPrompt.SessionId} of {parent.Id}", StringComparison.Ordinal));
+        Assert.Contains("from the child", models.Tools.Notes);
+    }
+
+    /// <summary>Reads each prompt's card lines while it is open (the child still runs), then answers through another prompter.</summary>
+    private sealed class CardReader(CorvidRuntime runtime, IApprovalPrompter inner, ConcurrentQueue<IReadOnlyList<string>> cards) : IApprovalPrompter
+    {
+        public async ValueTask<ApprovalAnswer> AskAsync(ApprovalPrompt prompt, CancellationToken cancellationToken)
+        {
+            cards.Enqueue(await DelegationCard.LinesAsync(runtime, prompt, cancellationToken));
+            return await inner.AskAsync(prompt, cancellationToken);
+        }
+    }
+
     [Fact]
     public async Task The_delegate_question_is_asked_when_a_calibrated_decider_and_a_native_generator_could_use_it()
     {

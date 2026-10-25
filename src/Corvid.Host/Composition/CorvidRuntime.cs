@@ -535,6 +535,8 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await _lifetime.CancelAsync().ConfigureAwait(false);
+        // A5: children a person started (/delegate, the app) end cancelled and log it before their sessions go.
+        await StartedChildrenIdleAsync().ConfigureAwait(false);
         Task? scheduler;
         lock (_schedulerGate)
             scheduler = _scheduler;

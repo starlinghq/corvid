@@ -6,7 +6,12 @@ namespace Corvid.Cli.Chat;
 /// Approvals inline in the chat (plan §12): the prompt is printed into the scrollback and answered on the next line. Only a
 /// line typed after the prompt appeared counts, and an unanswered prompt is denied at its deadline.
 /// </summary>
-internal sealed class CliApprovalPrompter(ChatRenderer renderer, IChatInput input) : IApprovalPrompter
+/// <param name="details">
+/// A5: lines the card adds (a <c>delegate_task</c> spawn's children, or which child asks), from the host's
+/// <c>DelegationCard</c>; null adds none.
+/// </param>
+internal sealed class CliApprovalPrompter(ChatRenderer renderer, IChatInput input,
+    Func<ApprovalPrompt, CancellationToken, Task<IReadOnlyList<string>>>? details = null) : IApprovalPrompter
 {
     public async ValueTask<ApprovalAnswer> AskAsync(ApprovalPrompt prompt, CancellationToken cancellationToken)
     {
@@ -15,7 +20,8 @@ internal sealed class CliApprovalPrompter(ChatRenderer renderer, IChatInput inpu
             return ApprovalAnswer.Deny();
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(wait);
-        renderer.ShowApproval(prompt);
+        var extra = details is null ? [] : await details(prompt, deadline.Token).ConfigureAwait(false);
+        renderer.ShowApproval(prompt, extra);
         while (true)
         {
             string? line;

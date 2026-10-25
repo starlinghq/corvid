@@ -42,6 +42,9 @@ public static class CoreCommands
             .Add(new SlashCommand("compact", "Compact the conversation before the latest turn now, keeping what you name in full.",
                 "[<what to keep>]", CompactAsync))
             .Add(new SlashCommand("cron", "Scheduled jobs: list, run history, pause, resume or remove one.", CronCommands.Usage, CronCommands.RunAsync))
+            .Add(new SlashCommand("agents", "This session's child sessions: list them, show one's answer, or stop one.", AgentCommands.AgentsUsage, AgentCommands.AgentsAsync))
+            .Add(new SlashCommand("delegate", "Start a child session on a goal, with the tools, model mix and budget you give.", AgentCommands.DelegateUsage,
+                AgentCommands.DelegateAsync))
             .Add(new SlashCommand("rollback", "List checkpoints, or go back to before the Nth latest one (files and conversation).",
                 "[N]", RollbackAsync))
             .Add(new SlashCommand("cancel", "Cancel the running turn.", "", Cancel))

@@ -185,6 +185,13 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
         }
         await runtime.MaintenanceIdleAsync().ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         await runtime.DisposeAsync().ConfigureAwait(false);
+        runtime.ChildChanged -= OnChild;
+    }
+
+    private void OnChild(string parentId, SessionStreamUpdate update)
+    {
+        if (_sessions.ContainsKey(parentId) && TurnReporter.Child(update) is { } notification)
+            _context.Update(parentId, notification);
     }
 
     private async Task<CorvidRuntime> StartAsync(Func<CancellationToken, Task<CorvidRuntime>> start, CancellationToken cancellationToken)
@@ -194,6 +201,8 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
             var runtime = await Task.Run(() => start(cancellationToken), cancellationToken).ConfigureAwait(false);
             _context.Runtime = runtime;
             _context.Tools = new ToolPresentation(runtime);
+            // A5: a child session of an open session is shown as a call of its own, started and finished.
+            runtime.ChildChanged += OnChild;
             foreach (var notice in runtime.DeciderNotices)
                 _context.Log("corvid acp: " + notice);
             return runtime;
@@ -385,6 +394,8 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
         _context.Update(sessionId, new AvailableCommandsUpdate([.. _commands.Commands
             // Leaving is the editor's business.
             .Where(command => command.Name is not ("exit" or "quit"))
+            // A5: /agents and /delegate run when typed; the editor's list keeps its recorded set (they are the chat's and the app's).
+            .Where(command => command.Name is not ("agents" or "delegate"))
             .Select(command => new AvailableCommand(command.Name, command.Summary)
             {
                 Input = command.Usage.Contains(' ', StringComparison.Ordinal) ? new AvailableCommandInput(command.Usage) : null,

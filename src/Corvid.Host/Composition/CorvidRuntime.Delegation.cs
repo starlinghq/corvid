@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Text.Json;
 using Corvid.Abstractions.Events;
@@ -205,6 +206,49 @@ public sealed partial class CorvidRuntime
         _stoppedChildren[childId] = 0;
         usage.Stop();
         return true;
+    }
+
+    private readonly ConcurrentDictionary<string, Task<ChildResult>> _startedChildren = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// A5: starts a child a person asked for (<c>/delegate</c>, the app) and lets it run in the background: the plan's child
+    /// opened now (its <c>ChildSpawned</c> logged), run until it ends, stops with <see cref="StopChild"/> or the runtime's
+    /// end, and reported through <see cref="ChildChanged"/>. The person asked for it, so nothing is approved first; its own
+    /// calls ask as the parent's would. Returns the child session, whose <see cref="Completion"/> is its result.
+    /// </summary>
+    /// <exception cref="ChildRefusedException">The parent already runs as many children as it may, or is not open here.</exception>
+    public CorvidSession StartChild(ChildPlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        var child = OpenChildSession(plan);
+        // Listed before it runs, so its end always finds (and removes) its entry.
+        var listed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _startedChildren[child.Id] = RunStartedAsync(child, listed.Task);
+        listed.SetResult();
+        return child;
+    }
+
+    /// <summary>A started child's result once it ends; null when <paramref name="childId"/> was not started by <see cref="StartChild"/> or has been forgotten.</summary>
+    public Task<ChildResult>? Completion(string childId) => _startedChildren.TryGetValue(childId, out var running) ? running : null;
+
+    private async Task<ChildResult> RunStartedAsync(CorvidSession child, Task listed)
+    {
+        try
+        {
+            // Off the caller's thread: the command that started it returns at once.
+            await listed.ConfigureAwait(false);
+            return await RunChildAsync(child, _lifetime.Token).ConfigureAwait(false);
+        }
+        finally
+        {
+            _startedChildren.TryRemove(child.Id, out _);
+        }
+    }
+
+    private async Task StartedChildrenIdleAsync()
+    {
+        foreach (var running in _startedChildren.Values.ToArray())
+            await ((Task)running).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
     }
 
     private static string RepairMessage(IReadOnlyList<string> errors) =>

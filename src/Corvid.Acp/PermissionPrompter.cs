@@ -39,6 +39,10 @@ internal sealed class PermissionPrompter(AcpConnectionContext context, AcpSessio
         var content = new List<ToolCallContent>();
         if (tools?.ProposedDiff(toolName, arguments) is { } diff)
             content.Add(TurnReporter.Diff(diff));
+        // A5: a spawn's children (goal, tools, budget, models) or the child that asks, as every surface shows them.
+        var children = await Corvid.Host.Composition.DelegationCard.LinesAsync(context.Runtime, prompt, cancellationToken).ConfigureAwait(false);
+        if (children.Count > 0)
+            content.Add(new ContentToolCallContent(new TextContent(string.Join("\n", children))));
         var reasons = string.Join("\n", prompt.Reasons.Select(reason => $"• {reason.Detail} ({reason.Code})"));
         content.Add(new ContentToolCallContent(new TextContent(
             (reasons.Length > 0 ? reasons + "\n" : "") + $"Denied automatically at {prompt.Deadline.ToLocalTime():HH:mm:ss} if unanswered.")));
