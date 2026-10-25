@@ -117,6 +117,28 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
 
     public bool HasFork => ForkText.Length > 0;
 
+    /// <summary>
+    /// A5: the session's generator and decider now, for the header ("qwen3.5-0.8b · decider kev-0.8b"): this session's own,
+    /// live as they switch (a person's choice, escalation, a fallback, the privacy gate). Empty until the engine says.
+    /// </summary>
+    public string ModelsText
+    {
+        get
+        {
+            var generator = _state.Model is { Length: > 0 } model ? SafeText.Clean(model) : null;
+            var decider = _state.Decider is { Length: > 0 } named ? SafeText.Clean(named) : null;
+            return (generator, decider) switch
+            {
+                (null, null) => "",
+                (_, null) => generator!,
+                (null, _) => $"decider {decider}",
+                _ => $"{generator} · decider {decider}",
+            };
+        }
+    }
+
+    public bool HasModels => ModelsText.Length > 0;
+
     /// <summary>The standing goal, raw.</summary>
     public string Goal => _state.Goal ?? "";
 
@@ -309,6 +331,12 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
         {
             OnPropertyChanged(nameof(ForkText));
             OnPropertyChanged(nameof(HasFork));
+        }
+
+        if (previous.Model != _state.Model || previous.Decider != _state.Decider)
+        {
+            OnPropertyChanged(nameof(ModelsText));
+            OnPropertyChanged(nameof(HasModels));
         }
 
         if (previous.Goal != _state.Goal)

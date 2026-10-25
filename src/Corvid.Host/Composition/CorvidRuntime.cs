@@ -619,6 +619,9 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         // A5: a child session runs on its plan: its own slots, toolset, budget and approval ceiling.
         var child = _childPlans.GetValueOrDefault(sessionId);
         var slots = NewSlots(sessionId, child?.Configurations);
+        // A5: a session opened again keeps the models the person chose for it (CorvidRuntime.Models.cs).
+        if (child is null)
+            RestoreModelChoices(sessionId, slots);
         var tools = child is not null ? ChildTools(child) : settings.Tools ? Tools : new ToolRegistry();
         var runner = new TurnRunner(sessionId, Services(slots, settings.Interactive, tools, settings, child));
         var actor = new SessionActor(runner, slots, new Sink(this), new SessionActorOptions { EmbedderSwap = _swap });

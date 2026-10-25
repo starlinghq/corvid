@@ -280,6 +280,9 @@
           </Grid>
           <TextBlock controls:RichText.Runs="{x:Bind Why, Mode=OneWay}" Visibility="{x:Bind ui:Ui.VisibleIf(HasWhy), Mode=OneWay}"
                      Style="{StaticResource CorvidSmallText}" Margin="38,0,12,8" />
+          <!-- A5: which generator asked for the call, once the turn has switched. -->
+          <TextBlock Text="{x:Bind GeneratedBy, Mode=OneWay}" Visibility="{x:Bind ui:Ui.VisibleIf(ShowGeneratedBy), Mode=OneWay}"
+                     Style="{StaticResource CorvidSmallText}" Margin="38,0,12,8" />
           <Border Margin="1,0,1,1" Padding="10,8" CornerRadius="0,0,7,7" Background="{ThemeResource CorvidCodeBg}" MaxHeight="120"
                   Visibility="{x:Bind ui:Ui.VisibleIf(HasTail), Mode=OneWay}">
             <ScrollViewer HorizontalScrollBarVisibility="Auto" HorizontalScrollMode="Auto" VerticalScrollBarVisibility="Auto">
@@ -850,6 +853,14 @@
           <Border x:Name="ForkPill" Style="{StaticResource Pill}" SizeChanged="OnHeaderSizeChanged" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.Session.HasFork), Mode=OneWay, FallbackValue=Collapsed}">
             <TextBlock Text="{x:Bind ViewModel.Session.ForkText, Mode=OneWay, FallbackValue=''}" FontSize="12" Foreground="{ThemeResource CorvidText2}"
                        VerticalAlignment="Center" TextWrapping="NoWrap" />
+          </Border>
+          <!-- A5: this session's generator and decider, live as they switch. -->
+          <Border x:Name="ModelsPill" Style="{StaticResource Pill}" SizeChanged="OnHeaderSizeChanged"
+                  Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.Session.HasModels), Mode=OneWay, FallbackValue=Collapsed}"
+                  ToolTipService.ToolTip="This session's generator and decider. Alt+P switches the generator; Models › Switch… › This session switches either."
+                  AutomationProperties.Name="{x:Bind ViewModel.Session.ModelsText, Mode=OneWay, FallbackValue=''}">
+            <TextBlock Text="{x:Bind ViewModel.Session.ModelsText, Mode=OneWay, FallbackValue=''}" FontSize="12" FontFamily="{StaticResource CorvidMono}"
+                       Foreground="{ThemeResource CorvidText2}" VerticalAlignment="Center" TextWrapping="NoWrap" />
           </Border>
         </StackPanel>
         <StackPanel x:Name="HeaderActions" Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" SizeChanged="OnHeaderSizeChanged">

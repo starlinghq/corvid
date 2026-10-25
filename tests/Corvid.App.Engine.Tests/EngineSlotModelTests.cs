@@ -29,8 +29,8 @@ public sealed class EngineSlotModelTests
         Assert.Equal(("fake-gen-large@cpu", "session", true), (generator.To, generator.Reason, generator.SessionDefault));
         var decider = await waiter.WaitAsync<SlotModelChanged>(change => change.Slot == ModelSlots.Decider);
         Assert.Equal(("none", "fake-kev@cpu"), (decider.From, decider.To));
-        // Only the generator has a transcript row.
-        Assert.Single(waiter.Updates.OfType<ModelSwitched>());
+        // A5 (switch): the person's decider choice has its row too, naming its slot.
+        Assert.Equal([ModelSlots.Generator, ModelSlots.Decider], waiter.Updates.OfType<ModelSwitched>().Select(row => row.Slot));
 
         var view = SessionFold.Replay(id, waiter.Updates);
         Assert.Equal("fake-gen-large", view.Model);

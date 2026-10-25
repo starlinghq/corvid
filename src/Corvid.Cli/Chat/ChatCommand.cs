@@ -77,6 +77,14 @@ internal static class ChatCommand
             // Background problems (the egress ledger) as notices through the renderer, never written mid-panel by their thread.
             void OnNotice(string line) => renderer.Notice($"[yellow]{Markup.Escape(line)}[/]");
             runtime.Notice += OnNotice;
+            // A5: a slot that moves on its own (escalation, a fallback, the privacy gate, the turn's end) says so; the person's
+            // own switch is said by /model's reply.
+            void OnModel(string id, ModelChanged change)
+            {
+                if (id == session.Id && ChatRenderer.ModelNotice(change) is { } notice)
+                    renderer.Notice(notice);
+            }
+            runtime.ModelChanged += OnModel;
 
             using var leave = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             Task<Delivery>? running = null;
@@ -108,6 +116,30 @@ internal static class ChatCommand
                 if (line is not null && !context.Input.Echoes)
                     renderer.Echo(line);
                 return line;
+            }
+            // A5: while a turn runs, the lines a turn can take now (/model) are read and run at once; anything else typed then
+            // waits for the turn's end as before, and an approval prompt open meanwhile gets every line first.
+            async Task WatchTurnAsync(CancellationToken turnEnded)
+            {
+                try
+                {
+                    while (await context.Input.ReadDuringTurnAsync(ChatRenderer.TakesMidTurn, turnEnded).ConfigureAwait(false) is { } command)
+                    {
+                        if (!context.Input.Echoes)
+                            renderer.Echo(command);
+                        // The switch itself is not cut short by the turn's end, only by leaving.
+                        var output = await commands.ExecuteAsync(command, new SlashCommandContext(runtime, session, commands), leave.Token)
+                            .ConfigureAwait(false);
+                        renderer.Output(output);
+                    }
+                }
+                catch (OperationCanceledException) when (turnEnded.IsCancellationRequested)
+                {
+                }
+                catch (Exception exception) when (exception is not OutOfMemoryException)
+                {
+                    renderer.Notice($"[red]{Markup.Escape(exception.Message)}[/]");
+                }
             }
             context.Interrupts.Interrupted += OnInterrupt;
             try
@@ -192,6 +224,9 @@ internal static class ChatCommand
                         : session.SendAsync(line, cancellationToken);
                     Volatile.Write(ref running, turn);
                     Delivery delivery;
+                    // A5: /model typed while the turn runs switches this session; the turn takes it at its next step.
+                    using var turnInput = CancellationTokenSource.CreateLinkedTokenSource(leave.Token);
+                    var watching = WatchTurnAsync(turnInput.Token);
                     try
                     {
                         delivery = await turn.ConfigureAwait(false);
@@ -199,6 +234,11 @@ internal static class ChatCommand
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
                         break;
+                    }
+                    finally
+                    {
+                        await turnInput.CancelAsync().ConfigureAwait(false);
+                        await watching.ConfigureAwait(false);
                     }
                     string? shellStatus = null;
                     // Only a turn that issued the call has a result to report (a refused line, say the shell tool is off, issued none).
@@ -216,6 +256,7 @@ internal static class ChatCommand
                 context.Interrupts.Interrupted -= OnInterrupt;
                 runtime.JobCompleted -= OnJob;
                 runtime.Notice -= OnNotice;
+                runtime.ModelChanged -= OnModel;
             }
             console.MarkupLine($"[grey]Session {Markup.Escape(session.Id)} is in the log; resume it with `corvid chat --session {Markup.Escape(session.Id)}`.[/]");
             // The title the local generator writes after the first exchange lands before the runtime goes, if it comes within

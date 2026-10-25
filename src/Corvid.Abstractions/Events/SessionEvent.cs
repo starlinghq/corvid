@@ -66,10 +66,13 @@ public sealed record ClarificationAsked(string QuestionId, string Text, Immutabl
 // read from a change, from the log alone. Both are omitted when null, so events written before them keep their persisted
 // form; ReadOnly is null when the call named no offered tool. LocalOnly (A4) is a call the user ran from the composer's `!!`
 // line, which the prompt and the episodic index leave out with its result; omitted when null too.
+// Generator (A5) is the profile id of the generator whose response asked for the call ("qwen3.5-0.8b@cuda0"), so a switch
+// mid-turn is placed exactly on replay; omitted when null (the user's own `!` call, and events written before it).
 public sealed record ToolCallIssued(string CallId, string ToolName, JsonElement Arguments,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Round = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? ReadOnly = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? LocalOnly = null) : SessionEvent;
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? LocalOnly = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Generator = null) : SessionEvent;
 // LocalOnly (A4) marks the result of a `!!` call, so a reader of one event (the episodic index) leaves it out without
 // finding its call; omitted when null.
 public sealed record ToolResult(string CallId, JsonElement Result, bool IsError = false,

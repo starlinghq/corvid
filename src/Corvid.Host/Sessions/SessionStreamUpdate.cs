@@ -51,7 +51,11 @@ public sealed record QuestionRaised(string QuestionId, string Text, ImmutableArr
 /// its calls record, with no budget.
 /// </summary>
 /// <param name="MaxSteps">The turn's step budget; null on replay.</param>
-public sealed record TurnStepped(int Step, int? MaxSteps) : SessionStreamUpdate;
+public sealed record TurnStepped(int Step, int? MaxSteps) : SessionStreamUpdate
+{
+    /// <summary>A5: the generator's profile id whose response began the step; on replay from its calls' log, live unknown (null).</summary>
+    public string? Generator { get; init; }
+}
 
 /// <summary>Answer text (ACP <c>agent_message_chunk</c>): a streamed delta live, the whole message on replay.</summary>
 public sealed record AnswerChunk(string Text) : SessionStreamUpdate;
@@ -93,11 +97,17 @@ public sealed record ToolCallStarted(string CallId, string Title, string Kind, T
 
     /// <summary>Files it names, as absolute paths the tools may open.</summary>
     public ImmutableArray<string> Locations { get; init; } = [];
+
+    /// <summary>A5: the profile id of the generator that asked for it, from the log (<c>ToolCallIssued.Generator</c>); null when unknown.</summary>
+    public string? Generator { get; init; }
 }
 
 /// <summary>A tool call changed (ACP <c>tool_call_update</c>): it finished, with what it did. Null or empty leaves a part as it was.</summary>
 public sealed record ToolCallChanged(string CallId) : SessionStreamUpdate
 {
+    /// <summary>A5: the profile id of the generator that asked for it, from the log, when the change brings the call's input.</summary>
+    public string? Generator { get; init; }
+
     public string? Title { get; init; }
 
     public string? Tool { get; init; }

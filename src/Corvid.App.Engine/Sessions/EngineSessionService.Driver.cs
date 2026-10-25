@@ -27,7 +27,7 @@ public sealed partial class EngineSessionService
 
     /// <summary>What a tail reads past <paramref name="after"/>: the open calls are the other process's, still running.</summary>
     private static ReplayOptions TailOptions(long after) =>
-        ReplayOptions.Full with { UnfinishedCalls = false, UnfinishedAsRunning = true, After = after };
+        ReplayOptions.Full with { UnfinishedCalls = false, UnfinishedAsRunning = true, After = after, Models = true };
 
     /// <summary>The read-only note for a session another process drives.</summary>
     internal static string DriverHolder(LockHolder? holder) =>

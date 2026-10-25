@@ -437,6 +437,8 @@ public sealed class TurnRunner
         private bool _heldLocalOnly;
         private string? _lastToolResult;
         private int _steps;
+        // A5: the generator the latest response came from, logged on the calls it asked for (ToolCallIssued.Generator).
+        private string? _generatorId;
         private int _toolCalls;
         private bool _prefillChecked;
         private string? _memoryWrite;
@@ -645,6 +647,7 @@ public sealed class TurnRunner
         {
             var generator = _services.Slots.GetChatClient(ModelSlots.Generator);
             var profile = _services.Slots.Current(ModelSlots.Generator).Profile;
+            _generatorId = profile.Id;
             var counter = Counter(generator);
             var budget = profile.AcceptedContext - _options.MaxOutputTokens - _options.ContextReserve;
             var toolTokens = tools.Sum(tool => counter.CountTokens(tool.Function.Name) + counter.CountTokens(tool.Function.Description)
@@ -1312,7 +1315,7 @@ public sealed class TurnRunner
                 lock (_gate)
                 {
                     runner.Append(new ToolCallIssued(call.CallId, call.Tool.Function.Name, call.Arguments, _steps, call.Tool.Descriptor.Risk.ReadOnly,
-                        _localOnly ? true : null));
+                        _localOnly ? true : null, _generatorId));
                     _open.Add(call.CallId);
                 }
             }
@@ -1340,7 +1343,7 @@ public sealed class TurnRunner
                         ? "The question goes to the user and the turn ends here; their answer comes as their next message."
                         : text.Length == 0 ? "The question was empty, so nothing was asked." : "One question per turn: the first one was asked.",
                 });
-                runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, true), new ToolResult(callId, result, IsError: !first));
+                runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, true, Generator: _generatorId), new ToolResult(callId, result, IsError: !first));
                 if (first)
                     _question = new ClarifyingQuestion(NewQuestionId(), text, options);
                 _pickDecisions.Remove(tool, out decisionId);
@@ -1361,7 +1364,7 @@ public sealed class TurnRunner
             activity?.SetTag(KernelTelemetry.ToolOutcome, "invalid_arguments");
             activity?.SetStatus(ActivityStatusCode.Error);
             lock (_gate)
-                runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, readOnly), new ToolResult(callId, error, IsError: true));
+                runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, readOnly, Generator: _generatorId), new ToolResult(callId, error, IsError: true));
         }
 
         // Read-only calls finish concurrently, so the shared turn state they touch is updated under the lock.

@@ -159,7 +159,7 @@ public static class SessionReplay
                     if (options.Steps && call.Round is { } step and > 0 && step != round)
                     {
                         round = step;
-                        items.Add((entry.FromSequence, new TurnStepped(step, null) { At = at }));
+                        items.Add((entry.FromSequence, new TurnStepped(step, null) { At = at, Generator = call.Generator }));
                     }
                     var finished = results.TryGetValue(call.CallId, out var outcome);
                     var unfinished = !finished && options.UnfinishedCalls;
@@ -172,6 +172,7 @@ public static class SessionReplay
                         Tool = call.ToolName,
                         Input = call.Arguments,
                         Locations = tools.Locations(call.Arguments),
+                        Generator = call.Generator,
                     }));
                     // No result in the log: the call never finished. A live turn closes it as cancelled when its turn is
                     // interrupted, and so does the replay.

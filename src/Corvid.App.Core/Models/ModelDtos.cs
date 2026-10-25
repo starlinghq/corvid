@@ -101,7 +101,9 @@ public sealed record SlotPlacement(string Device, int? Queue, int P50Millisecond
 /// <summary>
 /// One slot (docs/plan/ui.md §4.8): the model bound to it, whether that is the default, the escalation ladder (a hard
 /// step goes up it in order), the fallback, a note on what the slot does, placement and latency, and whether it is
-/// shared by every session (the decider) or pinned for this one.
+/// shared by every session or pinned for this one. A5: <see cref="Model"/> is the default for new sessions;
+/// <see cref="SessionModel"/> what the window's open session uses now, and <see cref="SessionChoice"/> whether the person chose
+/// it for that session (it lasts until changed). The decider is per session too, so no slot is shared now.
 /// </summary>
 public sealed record ModelSlot(
     string Name,
@@ -113,9 +115,14 @@ public sealed record ModelSlot(
     SlotPlacement? Placement = null,
     bool Shared = false,
     bool Pinned = false,
-    bool Pinnable = false)
+    bool Pinnable = false,
+    string? SessionModel = null,
+    bool SessionChoice = false)
 {
     public IReadOnlyList<string> Escalation => Ladder ?? [];
+
+    /// <summary>A5: the model the open session uses (its own, else the default); null when neither binds the slot.</summary>
+    public string? InSession => SessionModel ?? Model;
 
     public bool IsBound => Model is not null;
 }

@@ -777,8 +777,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         var driven = IsJobRun(id) ? Corvid.Host.Composition.LockState.Free : runtime.Driver(id).State;
         var elsewhere = driven == Corvid.Host.Composition.LockState.HeldElsewhere;
         var runningHere = runtime.IsTurnRunning(id);
+        // A5: the log's model switches too, for their rows, the per-step model and the slots' state.
         var options = elsewhere ? TailOptions(0)
-            : runningHere ? ReplayOptions.Full with { UnfinishedCalls = false } : ReplayOptions.Full;
+            : runningHere ? ReplayOptions.Full with { UnfinishedCalls = false, Models = true } : ReplayOptions.Full with { Models = true };
         var history = await SessionReplay.ReadAsync(runtime, id, tools, options).ConfigureAwait(false);
         var goal = Corvid.Kernel.Events.SessionProjection.Load(runtime.Log, id).Goal;
         var summary = Summarize(runtime, id) ?? Empty(runtime, id, _time.GetUtcNow());
@@ -821,8 +822,13 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 updates.Add(new TaintChanged(tainted) { At = at });
             channel.Tainted = tainted;
             // The status bar's generator before a turn runs: what the next one starts on.
-            if (CurrentGenerator(runtime, open ? session : null) is { Length: > 0 } generator)
-                updates.Add(new EngineStatus { Model = generator, At = at });
+            // A5: with the session's decider (per session now), for the header beside the generator; for a session not open
+            // here, the choices its log holds, which it starts on when it opens.
+            var choices = open ? null : runtime.ModelChoices(id);
+            var decider = choices?.GetValueOrDefault(Corvid.Models.ModelSlots.Decider)?.Split('@')[0] ?? DeciderLabel(runtime, open ? session : null);
+            updates.Add((choices?.GetValueOrDefault(Corvid.Models.ModelSlots.Generator)?.Split('@')[0] ?? CurrentGenerator(runtime, open ? session : null)) is { Length: > 0 } generator
+                ? new EngineStatus { Model = generator, Decider = decider, At = at }
+                : new EngineStatus { Decider = decider, At = at });
             updates.Add(new AvailableCommandsUpdate(commands) { At = at });
             channel.ReadOnly = summary.ReadOnly;
             channel.Holder = summary.Holder;

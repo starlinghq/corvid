@@ -70,7 +70,8 @@ public sealed class CorvidRuntimeFactory(
     CorvidConfigFile? configFile = null,
     IMcpTransports? mcpTransports = null,
     WebFetchTransport? webTransport = null,
-    UiStateStore? uiState = null)
+    UiStateStore? uiState = null,
+    CorvidConfigWriter? configWriter = null)
 {
     /// <summary>
     /// Configured models that stop the runtime from starting, checked offline (by size for Starling's): every missing or
@@ -257,6 +258,8 @@ public sealed class CorvidRuntimeFactory(
                 Project = project,
                 Titles = titles,
                 UiState = uiState ?? new UiStateStore(UiStateStore.PathFor(settings)),
+                // A5: the "default for new sessions" choice on surfaces that have only the runtime (/model --default).
+                ConfigWriter = configWriter,
             };
         }
         catch

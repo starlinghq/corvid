@@ -50,8 +50,9 @@ public sealed class ModelsTests
         Assert.Equal("calibrated", decider.TagText);
         Assert.Equal(Tone.Green, decider.TagTone);
         Assert.Equal("second tier for gates below their floor · downloading", decider.Note);
-        Assert.True(decider.IsShared);
-        Assert.False(decider.CanSwitch);
+        // A5: the decider is switchable per session.
+        Assert.False(decider.IsShared);
+        Assert.True(decider.CanSwitch);
 
         Assert.Equal("none", models.Slots[1].Plain);
         Assert.Equal("cpu · 38 ms", models.Slots[3].Placement);
@@ -159,13 +160,35 @@ public sealed class ModelsTests
         Assert.False(models.SwitchChoices[3].Choose.CanExecute(null));
         Assert.Equal("set gemini.key in Vault", models.SwitchChoices[3].Reason);
 
+        // A5: "This session" first: the open session switches, the default for new sessions stays.
+        Assert.True(models.SwitchForSession);
+        Assert.Equal(["This session", "Default for new sessions"], models.SwitchScopes.Select(scope => scope.Label));
+        Assert.True(models.SwitchScopes[0].IsSelected);
+        Assert.False(models.CanForgetChoice);
         models.SwitchChoices[1].Choose.Execute(null);
 
         Assert.False(models.IsPickerOpen);
+        Assert.Equal("qwen3.5-0.8b", models.Slots[0].Model);
+        Assert.Equal("default · this session: qwen-27b", models.Slots[0].CurrentNote);
+        Assert.Equal(Tone.Green, models.NoticeTone);
+
+        // Reopened, the session's model is the current one, and its choice can be forgotten.
+        models.SwitchGeneratorCommand.Execute(null);
+        Assert.True(models.SwitchChoices[1].IsCurrent);
+        Assert.True(models.CanForgetChoice);
+        models.ForgetChoiceCommand.Execute(null);
+        Assert.Equal("default", models.Slots[0].CurrentNote);
+
+        // "Default for new sessions": written, and the ladder loses the model that is now the default.
+        models.SwitchGeneratorCommand.Execute(null);
+        models.SwitchScopes[1].Choose.Execute(null);
+        Assert.False(models.SwitchForSession);
+        Assert.True(models.SwitchScopes[1].IsSelected);
+        Assert.True(models.SwitchChoices[0].IsCurrent);
+        models.SwitchChoices[1].Choose.Execute(null);
         Assert.Equal("qwen-27b", models.Slots[0].Model);
         Assert.Equal(["claude"], models.Slots[0].Ladder.Select(step => step.Model));
         Assert.Equal("", models.Slots[0].CurrentNote);
-        Assert.Equal(Tone.Green, models.NoticeTone);
     }
 
     [Fact]

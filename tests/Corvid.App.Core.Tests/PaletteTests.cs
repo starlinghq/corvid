@@ -287,13 +287,23 @@ public sealed class PaletteTests
 
         Assert.Equal(PaletteMode.Generator, palette.Mode);
         Assert.Contains(palette.Items, item => item.Title == before && item.Detail.EndsWith("in use", StringComparison.Ordinal) && !item.IsEnabled);
-        var target = palette.Items.First(item => item.IsEnabled);
+        // A5: two groups, "This session" first, then "Default for new sessions": separate choices.
+        Assert.Equal([PaletteViewModel.ThisSessionGroup, PaletteViewModel.NewSessionsGroup], palette.Items.Select(item => item.Group).Distinct());
+        var target = palette.Items.First(item => item.IsEnabled && item.Group == PaletteViewModel.ThisSessionGroup);
         palette.Choose(target);
 
         Assert.True(palette.IsOpen);
         Assert.Equal(Tone.Green, palette.NoteTone);
-        Assert.Equal(target.Title, models.Snapshot.Slot(ModelSlotNames.Generator)!.Model);
-        Assert.Contains(palette.Items, item => item.Title == target.Title && item.Detail.EndsWith("in use", StringComparison.Ordinal));
+        Assert.Contains("This session's generator is", palette.Note, StringComparison.Ordinal);
+        Assert.Equal(target.Title, models.Snapshot.Slot(ModelSlotNames.Generator)!.SessionModel);
+        Assert.Equal(before, models.Snapshot.Slot(ModelSlotNames.Generator)!.Model);
+        Assert.Contains(palette.Items, item => item.Group == PaletteViewModel.ThisSessionGroup && item.Title == target.Title && item.Detail.EndsWith("in use", StringComparison.Ordinal));
+
+        var other = palette.Items.First(item => item.IsEnabled && item.Group == PaletteViewModel.NewSessionsGroup);
+        palette.Choose(other);
+        Assert.Contains("New sessions start on", palette.Note, StringComparison.Ordinal);
+        Assert.Equal(other.Title, models.Snapshot.Slot(ModelSlotNames.Generator)!.Model);
+        Assert.Equal(target.Title, models.Snapshot.Slot(ModelSlotNames.Generator)!.SessionModel);
     }
 
     [Theory]

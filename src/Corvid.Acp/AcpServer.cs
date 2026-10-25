@@ -126,7 +126,7 @@ internal sealed class AcpSessionState(CorvidSession session)
     }
 }
 
-internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
+internal sealed partial class AcpAgent : IJsonRpcHandler, IAsyncDisposable
 {
     private const string Surface = "acp";
     private const int ListPage = 50;
@@ -155,6 +155,8 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
             AcpMethods.SessionList => Result(await ListAsync(Read(parameters, AcpJson.Default.ListSessionsRequest)).ConfigureAwait(false),
                 AcpJson.Default.ListSessionsResponse),
             AcpMethods.SessionClose => Result(Close(Read(parameters, AcpJson.Default.SessionIdRequest)), AcpJson.Default.EmptyResponse),
+            // A5: the generator and the decider for this session (AcpServer.Models.cs).
+            AcpConfig.SetConfigOption => await SetConfigOptionAsync(Read(parameters, AcpJson.Default.SetConfigOptionRequest), cancellationToken).ConfigureAwait(false),
             AcpMethods.SessionPrompt => Result(await PromptAsync(Read(parameters, AcpJson.Default.PromptRequest), cancellationToken).ConfigureAwait(false),
                 AcpJson.Default.PromptResponse),
             _ => throw new AcpException(AcpErrors.MethodNotFound, $"Corvid does not implement '{method}'."),
@@ -169,6 +171,7 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        Unwatch();
         foreach (var state in _sessions.Values)
         {
             state.Cancel();
@@ -241,7 +244,8 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
         CheckWorkspace(runtime, request);
         NoteMcpServers(request);
         var state = Open(runtime, runtime.OpenSession(surface: Surface));
-        return Result(new NewSessionResponse(state.Session.Id), AcpJson.Default.NewSessionResponse, () => SendCommands(state.Session.Id));
+        return Result(new NewSessionResponse(state.Session.Id) { ConfigOptions = ConfigOptions(runtime, state.Session) }, AcpJson.Default.NewSessionResponse,
+            () => SendCommands(state.Session.Id));
     }
 
     private async Task<JsonRpcResult> LoadAsync(SessionRequest request, bool replay)
@@ -264,7 +268,8 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
         // session/load replays the whole conversation before answering; session/resume must not.
         if (replay)
             await ReplayAsync(runtime, id).ConfigureAwait(false);
-        return Result(new EmptyResponse(), AcpJson.Default.EmptyResponse, () => SendCommands(state.Session.Id));
+        return Result(new ConfigOptionsResponse { ConfigOptions = ConfigOptions(runtime, state.Session) }, AcpJson.Default.ConfigOptionsResponse,
+            () => SendCommands(state.Session.Id));
     }
 
     private async Task<JsonRpcResult> ForkAsync(SessionRequest request, CancellationToken cancellationToken)
@@ -287,7 +292,8 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
             throw new AcpException(AcpErrors.InvalidParams, exception.Message);
         }
         var state = Open(runtime, fork);
-        return Result(new NewSessionResponse(fork.Id), AcpJson.Default.NewSessionResponse, () => SendCommands(state.Session.Id));
+        return Result(new NewSessionResponse(fork.Id) { ConfigOptions = ConfigOptions(runtime, fork) }, AcpJson.Default.NewSessionResponse,
+            () => SendCommands(state.Session.Id));
     }
 
     private async Task<ListSessionsResponse> ListAsync(ListSessionsRequest request)

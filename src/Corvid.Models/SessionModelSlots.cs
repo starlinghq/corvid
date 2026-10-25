@@ -136,6 +136,22 @@ public sealed class SessionModelSlots
         return Configuration(slot).Default;
     }
 
+    /// <summary>
+    /// A5: puts back a choice the person made for the session before it was opened again (a resumed session, a fork): the
+    /// slot uses <paramref name="binding"/> and returns to it when a turn ends, as after <see cref="SetSessionDefaultAsync"/>.
+    /// Nothing is logged (the log already holds the choice's <c>ModelSwitched</c>) and no one is told. Only before the
+    /// session's first switch: a slot that has moved since the session opened keeps where it is.
+    /// </summary>
+    public void RestoreSessionDefault(string slot, ModelBinding binding)
+    {
+        ModelSlots.Check(slot, binding);
+        lock (_state)
+        {
+            _chosen[slot] = binding;
+            _current[slot] = binding;
+        }
+    }
+
     /// <summary>Whether the person chose the slot's model for this session (<see cref="SetSessionDefaultAsync"/>).</summary>
     public bool HasSessionChoice(string slot)
     {
