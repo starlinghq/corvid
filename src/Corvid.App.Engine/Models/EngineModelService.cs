@@ -383,8 +383,10 @@ public sealed class EngineModelService : IModelService, IDisposable
             if (_disposed != 0)
                 return;
             _disposed = 1;
-            background = [.. _background];
         }
+        // Under the list's own lock, which Track adds and removes under: a copy taken while a task finishes would hold a null.
+        lock (_background)
+            background = [.. _background];
 
         _engine.Started -= OnEngineStarted;
         _lifetime.Cancel();

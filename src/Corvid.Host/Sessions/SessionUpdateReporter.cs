@@ -303,10 +303,12 @@ public sealed class SessionUpdateReporter : ITurnObserver
     /// <summary>After a step: the taint read when it was queued, reported when it changed, with the source the step named.</summary>
     private void NoteTaint(bool? tainted)
     {
-        var source = _taintSource;
-        _taintSource = null;
         if (tainted is not { } now || now == _taintReported)
             return;
+        // The source is the last call that finished, kept until a taint is reported: the session can turn tainted just after
+        // that call's step was queued, so the taint is read with the next step (the answer's text), which names no call.
+        var source = _taintSource;
+        _taintSource = null;
         _taintReported = now;
         Emit(new TaintNoted(now, now ? source : null));
     }
