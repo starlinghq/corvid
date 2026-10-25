@@ -304,7 +304,15 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
 
     private void Rebuild()
     {
-        var wanted = new List<BoardTile>(Ordered().Where(Passes));
+        // A5 (§4.13, F18): a child shows under its parent's card, not as a card of its own, while its parent is listed.
+        var children = _cards.Values.Where(card => card.Summary is { Child: not null, ParentId: { } parent } && _cards.ContainsKey(parent))
+            .GroupBy(card => card.Summary.ParentId!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.OrderBy(card => card.Summary.LastActivity).Select(card => card.Summary.Child!).ToList(),
+                StringComparer.Ordinal);
+        foreach (var card in _cards.Values)
+            card.SetChildren(children.TryGetValue(card.Id, out var rows) ? rows : [], Open,
+                id => _hub.Service.StopChildAsync(id));
+        var wanted = new List<BoardTile>(Ordered().Where(card => !(card.Summary.ParentId is { } parent && _cards.ContainsKey(parent))).Where(Passes));
         if (_filter == BoardFilter.All)
             wanted.Add(NewSession);
         Sync(Tiles, wanted);

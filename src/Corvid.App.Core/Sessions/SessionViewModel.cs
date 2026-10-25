@@ -303,6 +303,8 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
 
     private void RaiseHeader(SessionView previous)
     {
+        // A5: the header's children, or the parent this child links.
+        RaiseChildren(previous);
         if (previous.Title != _state.Title)
             OnPropertyChanged(nameof(Title));
         if (previous.ForkOf != _state.ForkOf || previous.ForkTurn != _state.ForkTurn)

@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using Corvid.App.Core.Markdown;
 using Corvid.App.Core.Mvvm;
 using Corvid.App.Core.Sessions;
@@ -113,6 +114,53 @@ public sealed class SessionCardViewModel : BoardTile
     public RelayCommand OpenRunCommand { get; }
 
     public RelayCommand OpenJobsCommand { get; }
+
+    /// <summary>A5: this session's children, as a tree under the card (docs/plan/ui.md §4.13): oldest first.</summary>
+    public ObservableCollection<ChildRowViewModel> Children { get; } = [];
+
+    public bool HasChildren => Children.Count > 0;
+
+    /// <summary>"2 child sessions · 1 running".</summary>
+    public string ChildrenHeader
+    {
+        get
+        {
+            var running = Children.Count(row => row.IsRunning);
+            return $"{Children.Count} child session{(Children.Count == 1 ? "" : "s")}" + (running > 0 ? $" · {running} running" : "");
+        }
+    }
+
+    /// <summary>
+    /// A5: the children the Board found for this card, in order: a row each, kept in place when it only changed, so focus
+    /// stays on it.
+    /// </summary>
+    public void SetChildren(IReadOnlyList<ChildSessionChanged> children, Action<string> open, Func<string, Task>? stop)
+    {
+        ArgumentNullException.ThrowIfNull(children);
+        for (var i = 0; i < children.Count; i++)
+        {
+            var at = -1;
+            for (var j = i; j < Children.Count; j++)
+                if (Children[j].Id == children[i].ChildId)
+                {
+                    at = j;
+                    break;
+                }
+            if (at < 0)
+                Children.Insert(i, new ChildRowViewModel(children[i], open, stop));
+            else
+            {
+                if (at != i)
+                    Children.Move(at, i);
+                if (Children[i].Child != children[i])
+                    Children[i].Update(children[i]);
+            }
+        }
+        while (Children.Count > children.Count)
+            Children.RemoveAt(Children.Count - 1);
+        OnPropertyChanged(nameof(HasChildren));
+        OnPropertyChanged(nameof(ChildrenHeader));
+    }
 
     public void Update(SessionSummary summary)
     {
