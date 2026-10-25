@@ -73,6 +73,10 @@ public sealed partial class SessionsPage : Page, IDockProvider
                 ViewModel.StartingDraft = Composer.Text;
         };
         Root.KeyDown += OnRootKeyDown;
+        // A collapsed pill raises no SizeChanged, so the title would keep the narrow room it had beside it (seen going from a
+        // fork, its pill and children shown, back to its source: the title stayed cut to a word). Fit again once laid out.
+        foreach (var beside in new FrameworkElement[] { ForkPill, ModelsPill, ParentLink, ChildrenButton })
+            beside.RegisterPropertyChangedCallback(VisibilityProperty, (_, _) => DispatcherQueue.TryEnqueue(FitTitle));
         for (var i = 0; i < 7; i++)
         {
             var index = i;
@@ -951,6 +955,9 @@ public sealed partial class SessionsPage : Page, IDockProvider
 
     private void FitTitle()
     {
+        // Not laid out (the page away): nothing to fit to, and its next SizeChanged fits it.
+        if (HeaderGrid.ActualWidth <= 0)
+            return;
         // The room left of the actions, less the pill at its natural width.
         var room = HeaderGrid.ActualWidth - HeaderActions.ActualWidth - HeaderGrid.ColumnSpacing;
         var pill = ForkPill.Visibility == Visibility.Visible ? ForkPill.ActualWidth + TitleRow.Spacing : 0;
