@@ -376,6 +376,8 @@ public sealed class EngineRewindTests
         var during = await rewind.PlanAsync(id, first.CheckpointId, Ct);
         release.Set();
         await delivery.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        // The delivery completes inside the turn; the actor ends the turn just after it.
+        await session.Actor.IdleAsync(Ct);
         var after = await rewind.PlanAsync(id, first.CheckpointId, Ct);
 
         Assert.True(during.MidTurn);
