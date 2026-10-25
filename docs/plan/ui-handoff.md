@@ -264,7 +264,8 @@ test project after each merge:
 - **The running turn (`a4/turn`).** K-3: Ctrl+Enter steers the running turn; the kernel takes a steer at its next step
   checkpoint (`UserSteered`, a user message that starts no turn), and one the turn ends without taking goes to the head of
   the queue. K-6: `ask_user` ends a turn Clarifying with a question (`ClarificationAsked`); the queue holds until the
-  person answers, the rail shows it waiting, and an answer is sent as their words (never read as a `!` or `#` line).
+  person answers, the rail shows it waiting, and an answer is sent as their words (a `#` line typed then stages its fact and the question stays open; a `!` line is
+  refused until the question is answered, in the app, the engine and `corvid chat`).
   K-2: a running call's output tail (shell, web_fetch), bounded, scrubbed and throttled. Turn progress: the step on the
   turn and the rail. `corvid chat` shows the step and a running call's last line, and numbers a question's choices; it
   has no steer (it reads no input while a turn runs).
@@ -339,14 +340,29 @@ sampling without a seed). Still open from that pass:
 
 The independent verifier ran three rounds: round 1 found a blocker (hidden characters in `ask_user`'s options reaching
 the answer sent) and a major defect, round 2 one major and seven minor, all fixed but one; round 3 passed with four
-minor ones. Still open from verification:
+minor ones.
 
-- A steer typed while an approval card waits was lost twice under the harness (the composer emptied, no chip, nothing
-  logged); it could not be reproduced on demand, and may be a focus race between the card and the composer.
-- The kernel does not reserve the call id of the person's own `!` call, so a model could choose the same id; the CLI's
-  `!` line reports the last shell result even when the turn issued no call; a `#` line typed just after answering a
-  question was once lost. (A Board card's relative time standing still after its session's holder exits was fixed in the
-  A4 review: idle cards tick every 15 s.)
+The PR review (four agents, one on security) found no high defect. Its fixes, beside the hosting decision above:
+
+- The lost steer was the approval card taking focus: letters typed after Enter went to the card and a space pressed its
+  focused "Allow once", approving a call by accident. Space no longer answers a card, a letter returns focus to the
+  composer with the typed text, and Ctrl+Enter on a card returns to the composer; Enter and 1–5 still answer.
+- A refused answer goes back to the composer; a `!` turn takes no steer; a steer taken as the decider says done gets
+  one more step; the kernel renames a model call id that starts with `user-shell`, and the CLI reports only its own
+  `!` line's result; the output tail is published outside its lock and scrubbed before it is cut.
+- The composer's `#` is a mode only before a space, and `!` only before a space or a command word, so `#123`,
+  `#include` and `!important:` are messages; `\#` and `\!` send the line as text (the placeholder says so, which
+  departs from `Main.png`'s wording). The egress ledger keeps 90 days and 256 MB by default (`Corvid:Privacy:Ledger`,
+  `corvid egress prune`); drafts are saved in order; `corvid chat` waits at most 3 s for a title at exit; `--scene`
+  implies `--demo`; `ui.db` is 0600 and the data directory 0700 when Corvid creates them.
+- A guest's message is logged with its sender (`UserMessage.From`), quoted as outside content in the prompt, and only
+  the owner's message closes an open question in a gateway chat; `/sessions` answers only in direct chats. The session
+  list is scanned only when the log changed; Rewind, Review and closing a view release the driver lock; lock I/O errors
+  are reported as such.
+
+Left from the review: lock files under the data directory's `drivers/` are not removed (deleting one another process
+just opened would split the lock); a guest's own allowlist replaces the adapter's rather than narrowing it (the page
+says so); a few App.Engine tests time out now and then when the machine's CPU is saturated.
 
 ### What the running app shows today
 
