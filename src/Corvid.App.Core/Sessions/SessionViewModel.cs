@@ -471,8 +471,8 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
 
     internal void Interrupt() => Run(() => _service.InterruptAsync(SessionId));
 
-    internal void AnswerQuestion(string questionId, string answer) =>
-        Run(() => _service.AnswerQuestionAsync(SessionId, questionId, answer));
+    internal void AnswerQuestion(string questionId, string answer, Action? failed = null) =>
+        Run(() => _service.AnswerQuestionAsync(SessionId, questionId, answer), failed);
 
     internal void AnswerApproval(ApprovalCardBlock card, ApprovalAnswer answer) =>
         Run(() => _service.AnswerApprovalAsync(SessionId, card.ApprovalId, answer), card.AnswerFailed);

@@ -26,7 +26,7 @@ public sealed class EngineIntegrationTests
             services => services.AddSingleton<IToolProvider>(new ExtraTools(tools)));
 
     [Fact]
-    public async Task An_answer_that_reads_as_a_shell_line_is_sent_as_the_persons_words_and_runs_nothing()
+    public async Task An_answer_that_reads_as_a_shell_line_is_refused_and_runs_nothing_and_a_memory_line_is_staged_with_the_question_left_open()
     {
         var generator = new FakeGenerator(
             Reply.Call("ask_user", """{"question":"What should I run before tagging?"}"""),
@@ -41,13 +41,27 @@ public sealed class EngineIntegrationTests
         await service.SendAsync(id, "tag the release", Ct);
         var question = await waiter.WaitAsync<QuestionAsked>();
         await service.IdleAsync();
-        await service.AnswerQuestionAsync(id, question.QuestionId, "!rm -rf build", Ct);
-        await service.IdleAsync();
 
-        // The answer is a message the model reads, not the person's own shell call.
+        // M1: a ! line typed in the composer is not sent as the answer (its command would read as the person's words, or
+        // run): refused, and the view keeps the text.
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => service.AnswerQuestionAsync(id, question.QuestionId, "!rm -rf build", Ct));
+        Assert.Contains("answer it first", refused.Message, StringComparison.Ordinal);
+        // The same line sent as a message rather than as the answer is refused the same way.
+        var sent = await Assert.ThrowsAsync<InvalidOperationException>(() => service.SendAsync(id, "!rm -rf build", Ct));
+        Assert.Contains("answer it first", sent.Message, StringComparison.Ordinal);
+        // A # line is its mode: the fact is staged at once and the question still waits.
+        await service.AnswerQuestionAsync(id, question.QuestionId, "# the release branch is main", Ct);
+        var notice = await waiter.WaitAsync<Notice>(item => item.Kind == NoticeKind.MemoryStaged);
+        Assert.StartsWith("Staged for review: \"the release branch is main\"", notice.Text, StringComparison.Ordinal);
+        await service.IdleAsync();
+        Assert.Single(generator.Calls);
+        Assert.Equal(question.QuestionId, SessionFold.Replay(id, [.. subscription.History, .. waiter.Updates]).Question?.QuestionId);
+
+        await service.AnswerQuestionAsync(id, question.QuestionId, "the cleanup script", Ct);
+        await service.IdleAsync();
         Assert.Equal(2, generator.Calls.Count);
         var log = fixture.Runtime.Log.Read(id, cancellationToken: Ct).Select(item => item.Payload).ToList();
-        Assert.Contains(log, payload => payload is LoggedUserMessage { Text: "!rm -rf build" });
+        Assert.Equal(["tag the release", "the cleanup script"], log.OfType<LoggedUserMessage>().Select(message => message.Text));
         Assert.DoesNotContain(log, payload => payload is LoggedCall { CallId: TurnRunner.UserShellCall });
         Assert.DoesNotContain(waiter.Updates, update => update is ApprovalRequested);
     }

@@ -347,6 +347,22 @@ public sealed class EngineSessionRaceTests
     }
 
     [Fact]
+    public void AnAnsweredTurnTheActorStillCountsRunningIsReplayedEnded()
+    {
+        // The flake in AChannelNobodyWatchesIsLetGoAndTheNextOpenReplaysTheLog: the actor delivers a turn before it marks it
+        // finished, so a window opening in between found the session's turn running and left the answered turn open.
+        Corvid.Host.Sessions.SessionStreamUpdate[] answered = [new Corvid.Host.Sessions.PromptSent("hello", 1), new Corvid.Host.Sessions.AnswerChunk("Hello.")];
+        Corvid.Host.Sessions.SessionStreamUpdate[] working = [new Corvid.Host.Sessions.PromptSent("hello", 1)];
+
+        Assert.False(Corvid.App.Engine.Sessions.EngineSessionService.ReplayEndsRunning(false, runningHere: true, elsewhere: false, answered));
+        Assert.True(Corvid.App.Engine.Sessions.EngineSessionService.ReplayEndsRunning(false, runningHere: true, elsewhere: false, working));
+        Assert.True(Corvid.App.Engine.Sessions.EngineSessionService.ReplayEndsRunning(true, runningHere: true, elsewhere: false, answered));
+        Assert.True(Corvid.App.Engine.Sessions.EngineSessionService.ReplayEndsRunning(false, runningHere: false, elsewhere: true, working));
+        Assert.False(Corvid.App.Engine.Sessions.EngineSessionService.ReplayEndsRunning(false, runningHere: false, elsewhere: true, answered));
+        Assert.False(Corvid.App.Engine.Sessions.EngineSessionService.ReplayEndsRunning(false, runningHere: false, elsewhere: false, working));
+    }
+
+    [Fact]
     public async Task AJobsRunIsReadOnlyAndTheWindowSendsNothingIntoIt()
     {
         await using var fixture = await EngineFixture.StartAsync(new FakeModels(new FakeGenerator(Reply.Say("Tidied."))));

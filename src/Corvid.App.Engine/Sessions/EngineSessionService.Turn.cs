@@ -47,8 +47,18 @@ public sealed partial class EngineSessionService
                 // Under the channel's lock, so the turn's end (which settles steers under it) sees this one or none of it.
                 // A \# or \! steer goes without its backslash; the chip keeps it, as it is queued again as typed if not taken.
                 taken = session.SteerAsync(ComposerLine.MessageText(chip.Text), withdraw.Token);
-                channel.Queue = channel.Queue.Add(chip);
-                channel.Steers[chip.Id] = new PendingSteer(taken, withdraw);
+                if (taken is { IsCompletedSuccessfully: true, Result: false })
+                {
+                    // The turn takes no steers (a ! line's runs its command with no step checkpoint) or has just ended:
+                    // the message goes as Enter sends it, never as a steer chip waiting on nothing.
+                    withdraw.Dispose();
+                    (chip, taken) = (null, null);
+                }
+                else
+                {
+                    channel.Queue = channel.Queue.Add(chip);
+                    channel.Steers[chip.Id] = new PendingSteer(taken, withdraw);
+                }
             }
         }
         if (chip is null || taken is null)
@@ -107,23 +117,43 @@ public sealed partial class EngineSessionService
     }
 
     /// <summary>
-    /// Takes a steer chip back from the turn (remove or take back): withdrawn while it still waited, or already taken (true
-    /// in <paramref name="delivered"/>, and its message is in the transcript). False when the id is no steer.
+    /// Takes a steer chip back from the turn (remove or take back): withdrawn while it still waited, or already taken (true,
+    /// and its message is in the transcript). Cancelling completes a waiting steer as not taken at once; one a checkpoint has
+    /// begun taking is waited for, since its logging can still fail (the kernel then answers it not taken, at the turn's end
+    /// at the latest), so a steer is counted delivered only once the turn says it took it. False when the id is no steer.
     /// </summary>
-    private static bool WithdrawSteer(Channel channel, string queuedId, out bool delivered)
+    private static async Task<bool> WithdrawSteerAsync(Channel channel, string queuedId)
     {
         PendingSteer? pending;
         lock (channel.Gate)
             if (!channel.Steers.Remove(queuedId, out pending))
-            {
-                delivered = false;
                 return false;
-            }
         pending.Withdraw.Cancel();
-        // Cancelling completes a waiting steer as not taken at once; one a checkpoint has begun taking is delivered.
-        delivered = !pending.Taken.IsCompleted || pending.Taken is { IsCompletedSuccessfully: true, Result: true };
+        await ((Task)pending.Taken).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         pending.Withdraw.Dispose();
-        return true;
+        return pending.Taken is { IsCompletedSuccessfully: true, Result: true };
+    }
+
+    /// <summary>Nit 7: steer entries whose chip has left the queue some other way; under the channel's lock.</summary>
+    private static void DropStaleSteers(Channel channel)
+    {
+        foreach (var id in channel.Steers.Keys.ToList())
+        {
+            if (channel.Queue.Any(item => item.Id == id))
+                continue;
+            channel.Steers.Remove(id, out var stale);
+            stale!.Withdraw.Cancel();
+            stale.Withdraw.Dispose();
+        }
+    }
+
+    /// <summary>Tests only: the steers this window still waits on for the session.</summary>
+    internal int PendingSteers(string sessionId)
+    {
+        if (!_channels.TryGetValue(sessionId, out var channel))
+            return 0;
+        lock (channel.Gate)
+            return channel.Steers.Count;
     }
 
     /// <summary>
@@ -140,6 +170,7 @@ public sealed partial class EngineSessionService
         ObjectDisposedException.ThrowIf(_disposed, this);
         var channel = await LoadAsync(sessionId, cancellationToken).ConfigureAwait(false);
         Writable(channel);
+        var offered = false;
         lock (channel.Gate)
         {
             if (channel.View?.Question is not { } open || open.QuestionId != questionId)
@@ -149,11 +180,28 @@ public sealed partial class EngineSessionService
             // The model wrote the options: one passed as it was offered, hidden characters and all, is sent only as the text
             // a reader sees, so nothing the person did not see goes to the generator as their words (or clears the
             // session's taint). The view models already send the visible text; this holds for any caller.
-            if (SafeText.HasHidden(answer) && open.Options.Contains(answer, StringComparer.Ordinal))
+            offered = open.Options.Contains(answer, StringComparer.Ordinal);
+            if (SafeText.HasHidden(answer) && offered)
             {
                 answer = SafeText.Clean(answer).Trim();
                 if (answer.Length == 0)
                     throw new InvalidOperationException("That option is only hidden characters; answer in your own words. Nothing was sent.");
+            }
+        }
+        // M1: the person's own words that read as a composer mode line are that line, not an answer: a # line stages its fact
+        // at once and the question stays open; a ! line is refused (its command would run as the answer), and the caller keeps
+        // the text for after the answer.
+        if (!offered)
+        {
+            switch (ComposerLine.Parse(answer))
+            {
+                case ComposerLine.Memory memory:
+                    await RememberAsync(sessionId, memory.Text, cancellationToken).ConfigureAwait(false);
+                    return;
+                case ComposerLine.Shell:
+                    throw new InvalidOperationException("A question is open: answer it first, then send the ! line. Nothing was sent.");
+                case ComposerLine.Empty empty:
+                    throw new InvalidOperationException(empty.Message);
             }
         }
         // An option is the model's word, sent as it was offered: never read as a ! or # composer line.

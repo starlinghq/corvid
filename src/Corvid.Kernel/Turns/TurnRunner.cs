@@ -249,13 +249,33 @@ public sealed class TurnRunner
         }
     }
 
+    /// <summary>
+    /// Steers a checkpoint took but could not log: back at the head of the waiting list (the turn's end answers them not
+    /// taken), or answered not taken at once when no turn takes steers any more.
+    /// </summary>
+    private void ReturnSteers(List<PendingSteer> steers)
+    {
+        lock (_steerGate)
+        {
+            if (_steers is not null)
+            {
+                _steers.InsertRange(0, steers);
+                return;
+            }
+        }
+        foreach (var steer in steers)
+            steer.Taken.TrySetResult(false);
+    }
+
     public async Task<TurnResult> RunAsync(Envelope envelope, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(envelope);
         if (envelope.SessionId != SessionId)
             throw new ArgumentException("The envelope is for another session.", nameof(envelope));
+        // A ! line's turn has no step checkpoint (it runs the user's command, no generator), so it takes no steers: a surface
+        // is told at once and sends one as an ordinary message, rather than after the command.
         lock (_steerGate)
-            _steers = [];
+            _steers = envelope.Shell is null ? [] : null;
         try
         {
             return await RunTurnAsync(envelope, cancellationToken).ConfigureAwait(false);
@@ -597,9 +617,11 @@ public sealed class TurnRunner
                     continue;
 
                 // K-3: the step checkpoint takes what the user steered in, before the decider and the generator read on.
-                TakeSteers();
+                var steered = TakeSteers();
                 var step = await StepAsync(cancellationToken).ConfigureAwait(false);
-                if (Acted(step, "stuck", out _))
+                // A steer just taken may ask for more: the next step keeps its tools even when the decider would finish (or
+                // call the turn stuck), so the generator can act on it. The step budget still bounds the turn.
+                if (!steered && Acted(step, "stuck", out _))
                 {
                     if (!_options.EscalationAllowed || !await EscalateAsync("stuck", cancellationToken).ConfigureAwait(false))
                     {
@@ -607,7 +629,7 @@ public sealed class TurnRunner
                         status = TurnStatus.Stuck;
                     }
                 }
-                if (Acted(step, "done", out _))
+                if (!steered && Acted(step, "done", out _))
                     finishing = true;
                 offered = OfferFrom(step, "tool") ?? _shortlist;
             }
@@ -794,13 +816,15 @@ public sealed class TurnRunner
 
         /// <summary>
         /// K-3: logs the steers waiting for this checkpoint as <c>UserSteered</c> events (one batch, in order) and tells each
-        /// surface it was taken. When the events cannot be appended each steer is told it was not, and the failure goes on.
+        /// surface it was taken; true when it took any. When the events cannot be appended the steers go back to the runner,
+        /// ahead of any sent since, and the failure goes on: the turn's end tells each surface it was not taken, which sends
+        /// it as a message, so the text is never lost.
         /// </summary>
-        private void TakeSteers()
+        private bool TakeSteers()
         {
             var steers = runner.TakeSteers();
             if (steers.Count == 0)
-                return;
+                return false;
             try
             {
                 lock (_gate)
@@ -808,8 +832,7 @@ public sealed class TurnRunner
             }
             catch
             {
-                foreach (var steer in steers)
-                    steer.Taken.TrySetResult(false);
+                runner.ReturnSteers(steers);
                 throw;
             }
             foreach (var steer in steers)
@@ -817,6 +840,7 @@ public sealed class TurnRunner
                 _steered.Add(steer.Text);
                 steer.Taken.TrySetResult(true);
             }
+            return true;
         }
 
         // ---- tool calls ----
@@ -832,10 +856,15 @@ public sealed class TurnRunner
             foreach (var call in calls)
             {
                 _toolCalls++;
-                // Small models reuse ids ("call_0") across turns; the log needs them unique within the session.
-                var callId = string.IsNullOrWhiteSpace(call.CallId) ? "call" : call.CallId;
+                // Small models reuse ids ("call_0") across turns; the log needs them unique within the session. The id of the
+                // user's own ! line is reserved: surfaces read a call whose id starts with it as the person's, so a model's
+                // call never keeps such an id.
+                var baseId = string.IsNullOrWhiteSpace(call.CallId) ? "call"
+                    : call.CallId.StartsWith(UserShellCall, StringComparison.OrdinalIgnoreCase) ? "call-" + call.CallId
+                    : call.CallId;
+                var callId = baseId;
                 for (var n = 2; issued.Contains(callId); n++)
-                    callId = $"{(string.IsNullOrWhiteSpace(call.CallId) ? "call" : call.CallId)}-{n}";
+                    callId = $"{baseId}-{n}";
                 issued.Add(callId);
                 _lastRound.Add(callId);
                 var arguments = JsonValues.Object(call.Arguments);

@@ -179,6 +179,30 @@ public sealed class SessionViewModelTests
     }
 
     [Fact]
+    public async Task CtrlEnterWhileACardIsOpenKeepsTheDraftAndSteersNothing()
+    {
+        var time = ManualTimeProvider.Demo();
+        using var demo = new DemoSessionService(new InlineDispatcher(), time, DemoScene.Approval);
+        var service = new AuditViewModelTests.CapturingSessionService(demo);
+        var session = new SessionViewModel(Main, service, new InlineDispatcher(), time);
+        await session.OpenAsync(TestContext.Current.CancellationToken);
+        var focus = new List<SessionFocusTarget>();
+        session.FocusRequested += (_, target) => focus.Add(target);
+        Assert.True(session.IsRunning);
+        var card = session.CurrentApproval!;
+
+        session.Draft = "keep the launcher untouched";
+        session.SteerCommand.Execute(null);
+
+        // A4V2-1: the card waits, so Ctrl+Enter only points at it; the words stay in the composer, nothing is steered or queued.
+        Assert.Equal("keep the launcher untouched", session.Draft);
+        Assert.Empty(service.Steered);
+        Assert.Empty(session.Queue);
+        Assert.True(card.IsFocused);
+        Assert.Equal([SessionFocusTarget.Approval], focus);
+    }
+
+    [Fact]
     public async Task EnterFocusesAnOpenCardFirstAndTheSecondEnterOnTheCardAnswersIt()
     {
         var (session, service, time) = await Open(Main, DemoScene.Approval);

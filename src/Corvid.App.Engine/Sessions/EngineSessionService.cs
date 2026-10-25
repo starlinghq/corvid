@@ -187,6 +187,10 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         {
             var channel = await LoadAsync(sessionId, cancellationToken).ConfigureAwait(false);
             Writable(channel);
+            // With a question open the next message is its answer: a ! line would run its command as that answer, so it is
+            // refused here as AnswerQuestionAsync refuses it.
+            if (modeLines && channel.View?.Question is not null && ComposerLine.Parse(text) is ComposerLine.Shell)
+                throw new InvalidOperationException("A question is open: answer it first, then send the ! line. Nothing was sent.");
             QueuedMessage message;
             QueuedMessage? head = null;
             bool start;
@@ -242,9 +246,10 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     {
         var channel = await LoadAsync(sessionId, cancellationToken).ConfigureAwait(false);
         // K-3: a steer chip is taken back from the turn too (or, already taken, it is in the transcript).
-        WithdrawSteer(channel, queuedId, out _);
+        var withdrawn = WithdrawSteerAsync(channel, queuedId);
         if (ChangeQueue(channel, queue => queue.FirstOrDefault(item => item.Id == queuedId) is { } item ? queue.Remove(item) : queue))
             PublishQueue(channel);
+        await withdrawn.ConfigureAwait(false);
     }
 
     public async Task MoveQueuedAsync(string sessionId, string queuedId, int index, CancellationToken cancellationToken = default)
@@ -263,8 +268,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     public async Task<string?> TakeBackQueuedAsync(string sessionId, string queuedId, CancellationToken cancellationToken = default)
     {
         var channel = await LoadAsync(sessionId, cancellationToken).ConfigureAwait(false);
-        // K-3: a steer the turn has already taken is not given back (it was sent); its chip just goes.
-        var delivered = WithdrawSteer(channel, queuedId, out var sent) && sent;
+        // K-3: a steer the turn has already taken is not given back (it was sent); its chip just goes. The chip leaves the
+        // queue before the turn's answer is awaited, so nothing else sends it meanwhile.
+        var withdrawn = WithdrawSteerAsync(channel, queuedId);
         QueuedMessage? taken = null;
         if (ChangeQueue(channel, queue =>
             {
@@ -272,6 +278,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 return taken is null ? queue : queue.Remove(taken);
             }))
             PublishQueue(channel);
+        var delivered = await withdrawn.ConfigureAwait(false);
         return delivered ? null : taken?.Text;
     }
 
@@ -554,6 +561,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
 
         // K-3: every steer has its answer once the delivery is in: taken ones leave the queue, the rest go to its head.
         await SettleSteersAsync(channel).ConfigureAwait(false);
+        await PauseAt("settled").ConfigureAwait(false);
         var elapsed = _time.GetElapsedTime(started);
         bool interrupted;
         lock (channel.Gate)
@@ -596,6 +604,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             channel.Cancelling = false;
             channel.TurnBegun = false;
             channel.OpenCalls.Clear();
+            DropStaleSteers(channel);
             // K-6: an open question holds the queue: only the person's answer goes next, never a message queued before it.
             if (next && !_disposed && !channel.Queue.IsEmpty && channel.View?.Question is null)
             {
@@ -737,6 +746,18 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         }
     }
 
+    /// <summary>
+    /// Whether a replay leaves its last turn open: the window's own turn runs, or a turn of the session runs here or in the
+    /// process that drives it and the log does not end on its answer yet. A turn the log shows answered is over even while
+    /// the actor still counts it running: the actor hands a turn's delivery to its sink before it marks the turn finished,
+    /// so a window opened in between used to leave the answered turn open (no <see cref="TurnEnded"/>).
+    /// </summary>
+    internal static bool ReplayEndsRunning(bool windowRunning, bool runningHere, bool elsewhere, IReadOnlyList<SessionStreamUpdate> history)
+    {
+        var answered = history.Count > 0 && Answered(history);
+        return windowRunning || (runningHere || elsewhere && history.Count > 0) && !answered;
+    }
+
     private async Task ReplayAsync(CorvidRuntime runtime, ToolPresentation tools, Channel channel)
     {
         var id = channel.SessionId;
@@ -771,8 +792,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             // A turn running in this runtime that the window did not start (a job's run, another surface's) is still running,
             // not interrupted: its header stays open until the session is opened again. So is one another process drives
             // whose log does not end on an answer yet (G-12).
-            updates.AddRange(channel.Translator.EndReplay(running: channel.Running || runningHere
-                || (elsewhere && !history.Updates.IsEmpty && !Answered(history.Updates))));
+            updates.AddRange(channel.Translator.EndReplay(ReplayEndsRunning(channel.Running, runningHere, elsewhere, history.Updates)));
             updates.Add(changes);
             // The rail's title (a rename, the generated title, else the first message) heads the session too.
             if (summary.Title != id && (summary.Turns > 0 || described?.Titled is not null))

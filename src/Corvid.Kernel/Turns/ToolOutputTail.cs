@@ -8,10 +8,16 @@ namespace Corvid.Kernel.Turns;
 /// pieces) is kept to the last few thousand characters; at most once per interval the last lines, credentials scrubbed with
 /// the log's egress rules, are published as the tail. Output that arrives between reports is published when the interval
 /// ends, so a command that prints a line and then waits still shows it. Nothing is published after <see cref="Dispose"/>.
+/// <para>
+/// The tail is taken under the buffer's lock and published outside it, so a slow surface never holds up the tool's output
+/// (or the timer, or <see cref="Dispose"/>) on that lock; publishes are serialised, and one older than the last published is
+/// dropped.
+/// </para>
 /// </summary>
 internal sealed class ToolOutputTail : IDisposable
 {
     private readonly Lock _gate = new();
+    private readonly Lock _publishGate = new();
     private readonly TimeProvider _time;
     private readonly TimeSpan _interval;
     private readonly int _maxChars;
@@ -22,8 +28,11 @@ internal sealed class ToolOutputTail : IDisposable
     private long _lastPublished;
     private bool _published;
     private bool _dirty;
-    private bool _closed;
+    private volatile bool _closed;
     private bool _pendingReturn;
+    // The number of the latest tail taken (under _gate), and of the latest published (under _publishGate).
+    private long _taken;
+    private long _sent;
 
     public ToolOutputTail(TimeProvider time, TimeSpan interval, int maxChars, int maxLines, Action<string> publish)
     {
@@ -43,6 +52,7 @@ internal sealed class ToolOutputTail : IDisposable
     {
         if (string.IsNullOrEmpty(text))
             return;
+        (string Tail, long Number)? due = null;
         lock (_gate)
         {
             if (_closed)
@@ -51,13 +61,13 @@ internal sealed class ToolOutputTail : IDisposable
             _dirty = true;
             var elapsed = _published ? _time.GetElapsedTime(_lastPublished) : _interval;
             if (elapsed >= _interval)
-            {
-                PublishLocked();
-                return;
-            }
-            // A report is due when the interval ends; output until then joins it.
-            _timer ??= _time.CreateTimer(_ => Flush(), null, _interval - elapsed, Timeout.InfiniteTimeSpan);
+                due = TakeLocked();
+            else
+                // A report is due when the interval ends; output until then joins it.
+                _timer ??= _time.CreateTimer(_ => Flush(), null, _interval - elapsed, Timeout.InfiniteTimeSpan);
         }
+        if (due is { } tail)
+            Publish(tail.Tail, tail.Number);
     }
 
     /// <summary>The tail as it would be published now: the last lines, scrubbed.</summary>
@@ -75,32 +85,50 @@ internal sealed class ToolOutputTail : IDisposable
             _timer?.Dispose();
             _timer = null;
         }
+        // A publish already under way finishes before this returns; none starts after.
+        lock (_publishGate)
+        {
+        }
     }
 
     private void Flush()
     {
+        (string Tail, long Number)? due = null;
         lock (_gate)
         {
             _timer?.Dispose();
             _timer = null;
             if (!_closed && _dirty)
-                PublishLocked();
+                due = TakeLocked();
         }
+        if (due is { } tail)
+            Publish(tail.Tail, tail.Number);
     }
 
-    private void PublishLocked()
+    private (string Tail, long Number) TakeLocked()
     {
         _dirty = false;
         _published = true;
         _lastPublished = _time.GetTimestamp();
-        var tail = Render();
-        try
+        return (Render(), ++_taken);
+    }
+
+    private void Publish(string tail, long number)
+    {
+        lock (_publishGate)
         {
-            _publish(tail);
-        }
-        catch (Exception exception) when (exception is not OutOfMemoryException)
-        {
-            // A surface that fails to show the tail must not fail the tool.
+            // Closed meanwhile, or a newer tail went first: this one is stale.
+            if (_closed || number <= _sent)
+                return;
+            _sent = number;
+            try
+            {
+                _publish(tail);
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                // A surface that fails to show the tail must not fail the tool.
+            }
         }
     }
 
@@ -123,10 +151,33 @@ internal sealed class ToolOutputTail : IDisposable
             }
             _buffer.Append(c);
         }
-        // Twice the shown size is kept, so the scrub sees a credential whole even when the tail starts inside it.
+        Trim();
+    }
+
+    /// <summary>
+    /// Keeps twice the shown size, so the scrub sees a credential whole even when the tail starts inside it. The cut is at a
+    /// line's start, so no line is kept in part (a credential in the dropped line goes with all of it). A single line longer
+    /// than what is kept is scrubbed before it is cut and kept scrubbed, so a credential across the cut is replaced whole
+    /// rather than leaving its unrecognisable end in the buffer.
+    /// </summary>
+    private void Trim()
+    {
         var keep = _maxChars * 2;
-        if (_buffer.Length > keep)
-            _buffer.Remove(0, _buffer.Length - keep);
+        if (_buffer.Length <= keep)
+            return;
+        var text = _buffer.ToString();
+        var from = text.Length - keep;
+        var start = text.IndexOf('\n', from);
+        if (start >= 0 && start < text.Length - 1)
+        {
+            _buffer.Remove(0, start + 1);
+            return;
+        }
+        var scrubbed = CredentialScrub.Scrub(text, CredentialDetector.Egress).Text;
+        from = Math.Max(0, scrubbed.Length - keep);
+        if (from > 0 && char.IsLowSurrogate(scrubbed[from]))
+            from++;
+        _buffer.Clear().Append(scrubbed, from, scrubbed.Length - from);
     }
 
     private string Render()

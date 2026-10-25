@@ -172,6 +172,12 @@ internal static class ChatCommand
                         renderer.Output(await RememberAsync(session, memory.Text, leave.Token).ConfigureAwait(false));
                         continue;
                     }
+                    // With a question open the next line is its answer: a ! line would run its command as that answer.
+                    if (mode is ComposerLine.Shell && question is not null)
+                    {
+                        renderer.Notice("[yellow]A question is open: answer it first, then send the ! line. Nothing was sent.[/]");
+                        continue;
+                    }
                     // A \# or \! line is a message, sent without its backslash.
                     if (mode is null)
                         line = ComposerLine.MessageText(line);
@@ -179,6 +185,8 @@ internal static class ChatCommand
                     question = null;
 
                     renderer.BeginTurn();
+                    // A ! line reports its own turn's result only (security L1): the log's head before the line is posted.
+                    var before = mode is ComposerLine.Shell ? session.Snapshot().Head : 0;
                     var turn = mode is ComposerLine.Shell shell
                         ? await session.PostShellAsync(line.Trim(), new ShellLine(shell.Command, shell.LocalOnly), cancellationToken).ConfigureAwait(false)
                         : session.SendAsync(line, cancellationToken);
@@ -193,9 +201,10 @@ internal static class ChatCommand
                         break;
                     }
                     string? shellStatus = null;
-                    if (mode is ComposerLine.Shell ran && delivery.Error is null)
+                    // Only a turn that issued the call has a result to report (a refused line, say the shell tool is off, issued none).
+                    if (mode is ComposerLine.Shell ran && delivery is { Error: null, Result.ToolCalls: > 0 })
                     {
-                        var (output, exit, error) = ComposerLine.LastShellResult(session.Snapshot());
+                        var (output, exit, error) = ComposerLine.LastShellResult(session.Snapshot(), before);
                         shellStatus = renderer.ShellResult(output, exit, ran.LocalOnly, error);
                     }
                     renderer.EndTurn(delivery, shellStatus);

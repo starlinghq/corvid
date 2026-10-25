@@ -99,11 +99,21 @@ public abstract record ComposerLine
     /// (<see cref="Corvid.Kernel.Turns.ToolErrorKinds"/>: <c>not run</c> when it never ran, <c>tool failed</c> when the sandbox
     /// could not run it), null when the command ran (whatever its exit code).
     /// </summary>
-    public static (string? Output, int? ExitCode, string? Error) LastShellResult(Corvid.Kernel.Events.SessionSnapshot snapshot)
+    /// <param name="snapshot">The session after the line's turn.</param>
+    /// <param name="after">The log's head before the line was posted: only the turn that follows it counts (its user
+    /// message, then the call that turn issued and its result), so an earlier line's result is never reported as this one's.</param>
+    public static (string? Output, int? ExitCode, string? Error) LastShellResult(Corvid.Kernel.Events.SessionSnapshot snapshot, long after = 0)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        var result = snapshot.Transcript.Select(entry => entry.Content).OfType<Corvid.Abstractions.Events.ToolResult>()
-            .LastOrDefault(item => item.CallId.StartsWith(Corvid.Kernel.Turns.TurnRunner.UserShellCall, StringComparison.Ordinal));
+        var entries = snapshot.Transcript.SkipWhile(entry => entry.FromSequence <= after || entry.Content is not Corvid.Abstractions.Events.UserMessage)
+            .ToList();
+        // This turn: from its user message to the next one.
+        var turn = entries.Take(1).Concat(entries.Skip(1).TakeWhile(entry => entry.Content is not Corvid.Abstractions.Events.UserMessage))
+            .Select(entry => entry.Content).ToList();
+        var issued = turn.OfType<Corvid.Abstractions.Events.ToolCallIssued>()
+            .Where(call => call.CallId.StartsWith(Corvid.Kernel.Turns.TurnRunner.UserShellCall, StringComparison.Ordinal))
+            .Select(call => call.CallId).ToHashSet(StringComparer.Ordinal);
+        var result = turn.OfType<Corvid.Abstractions.Events.ToolResult>().LastOrDefault(item => issued.Contains(item.CallId));
         if (result is null)
             return (null, null, null);
         var value = result.Result;
