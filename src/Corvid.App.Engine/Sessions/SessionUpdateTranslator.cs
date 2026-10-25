@@ -34,8 +34,10 @@ public sealed class SessionUpdateTranslator(string workspace)
     // The log position of each turn's prompt, in turn order, for a compaction's range in turns.
     private readonly List<long> _turnStarts = [];
     private long _turnTokens;
-    // K-6: the question the latest clarifying turn ended on, until the next message answers it.
+    // K-6: the question the latest clarifying turn ended on, until the next message answers it; and its text while its turn
+    // is the latest, so the answer that repeats it is not shown twice.
     private string? _openQuestion;
+    private string? _questionText;
 
     /// <summary>The generator a turn opened from here on starts on ("fake-gen"); empty when unknown (a replay).</summary>
     public string Model { get; set; } = "";
@@ -97,6 +99,7 @@ public sealed class SessionUpdateTranslator(string workspace)
                 _turnStarted = at;
                 _turnTokens = 0;
                 _turnStarts.Add(prompt.Sequence);
+                _questionText = null;
                 // K-6: the person's next message is their answer to the open question; nothing else answers it.
                 if (_openQuestion is { } open)
                 {
@@ -110,6 +113,9 @@ public sealed class SessionUpdateTranslator(string workspace)
                 break;
             case AnswerChunk chunk:
                 _answered |= chunk.Text.Length > 0;
+                // K-6: a clarifying turn's answer is its question, which the question's block shows: not twice.
+                if (_questionText is { } asked && string.Equals(chunk.Text.Trim(), asked, StringComparison.Ordinal))
+                    break;
                 output.Add(new AgentMessageChunk(chunk.Text) { At = at });
                 break;
             // K-3: a steer the running turn took, in that turn.
@@ -119,6 +125,7 @@ public sealed class SessionUpdateTranslator(string workspace)
             // K-6: the question the turn ended on; it stays open past the turn's end, until the next message.
             case QuestionRaised question:
                 _openQuestion = question.QuestionId;
+                _questionText = question.Text.Trim();
                 output.Add(new QuestionAsked(question.QuestionId, question.Text)
                 {
                     At = at,
