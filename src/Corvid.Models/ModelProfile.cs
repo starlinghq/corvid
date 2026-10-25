@@ -35,6 +35,16 @@ public sealed record ModelProfile(
         return this;
     }
 
+    /// <summary>The id of <see cref="Unbound"/>.</summary>
+    public const string UnboundId = "none";
+
+    /// <summary>
+    /// No model: the profile a <c>ModelSwitched</c> records on the side of a slot nothing bound (A5: a decider chosen for a
+    /// session that ran on the degraded tier, or let go of again). Its id is <see cref="UnboundId"/>; nothing plans against it.
+    /// </summary>
+    public static ModelProfile Unbound { get; } = new(UnboundId, 1, 1, ToolCallSupport.None, StructuredOutputSupport.None,
+        PromptCachingStyle.None, ModelCost.Free, PrivacyClass.Local, UnboundId);
+
     /// <summary>The immutable form recorded in <c>ModelSwitched</c>; later registry changes cannot rewrite history.</summary>
     public JsonElement ToSnapshot() => JsonSerializer.SerializeToElement(this, ModelProfileJsonContext.Default.ModelProfile);
 

@@ -474,7 +474,10 @@ public sealed class TurnRunner
             await BuildSkillShortlistAsync(cancellationToken).ConfigureAwait(false);
 
             // Ingress: one request for every question this turn needs before the first generator call.
-            var ingress = new List<KeyValuePair<string, DecisionQuestion>> { Ask("intent"), Ask("difficulty"), Ask("clarify") };
+            var ingress = new List<KeyValuePair<string, DecisionQuestion>> { Ask("intent"), Ask("difficulty") };
+            // A5: a turn that may not ask the person anything (a child session's) is never diverted into a question.
+            if (_options.AsksQuestions)
+                ingress.Add(Ask("clarify"));
             // A guest's turn (C-020) recalls none of the user's memory: what it retrieved would be read out to the guest.
             if (_services.Retriever is not null && envelope.Guest is null)
                 ingress.Add(Ask("needs_recall"));
@@ -493,9 +496,9 @@ public sealed class TurnRunner
 
             // An embedding pick of ask_clarifying_question is no confidence either: like clarify itself (BlocksTurn), only a
             // calibrated answer diverts the turn unless the floors allow the degraded tier to.
-            var clarify = Acted(verdicts, "clarify", out _)
+            var clarify = _options.AsksQuestions && (Acted(verdicts, "clarify", out _)
                 || Acted(verdicts, "intent", out var intent) && intent == "ask_clarifying_question"
-                    && (verdicts["intent"].Answer?.Calibrated == true || _services.Fabric.Policy.Floors.DegradedTurnBlocking);
+                    && (verdicts["intent"].Answer?.Calibrated == true || _services.CurrentFabric().Policy.Floors.DegradedTurnBlocking));
             if (clarify)
             {
                 var question = Text(await GenerateAsync([], NudgeClarify, required: null, cancellationToken).ConfigureAwait(false));
@@ -1102,7 +1105,7 @@ public sealed class TurnRunner
                 _pickDecisions.Remove(descriptor.Name, out decisionId);
             }
             if (decisionId is not null)
-                _services.Fabric.RecordOutcome(runner.SessionId, decisionId,
+                _services.CurrentFabric().RecordOutcome(runner.SessionId, decisionId,
                     outcome == CallOutcome.Succeeded ? "tool_succeeded" : "tool_failed", CancellationToken.None);
             return outcome;
         }
@@ -1123,6 +1126,8 @@ public sealed class TurnRunner
                 CallId = call.CallId,
                 Interactive = _options.Interactive,
                 Reversible = await ReversibleAsync(approvals, action).ConfigureAwait(false),
+                // A5: the session's own decider answers its risk question too.
+                Fabric = _services.Deciders is null ? null : _services.CurrentFabric(),
             };
             ApprovalResult result;
             try
@@ -1344,7 +1349,7 @@ public sealed class TurnRunner
             if (!first)
                 activity?.SetStatus(ActivityStatusCode.Error);
             if (decisionId is not null)
-                _services.Fabric.RecordOutcome(runner.SessionId, decisionId, first ? "tool_succeeded" : "tool_failed", CancellationToken.None);
+                _services.CurrentFabric().RecordOutcome(runner.SessionId, decisionId, first ? "tool_succeeded" : "tool_failed", CancellationToken.None);
         }
 
         private static string NewQuestionId() => "q-" + Guid.NewGuid().ToString("N")[..12];
@@ -1471,7 +1476,7 @@ public sealed class TurnRunner
                 conditions.Add(FabricConditions.EscalationAllowed);
             CheckpointResult result;
             using (RequestScope())
-                result = await _services.Fabric.DecideAsync(runner.SessionId, checkpoint, State(BudgetFor(checkpoint, questions)), questions,
+                result = await _services.CurrentFabric().DecideAsync(runner.SessionId, checkpoint, State(BudgetFor(checkpoint, questions)), questions,
                     conditions, skip, cancellationToken).ConfigureAwait(false);
             if (result.Verdicts.TryGetValue("tool", out var tool) && tool.Verdict.Acted && tool.Verdict.Option is { } pick && pick != None)
                 lock (_gate)
@@ -1479,7 +1484,7 @@ public sealed class TurnRunner
             return result;
         }
 
-        private QuestionCatalogue Catalogue => _services.Fabric.Policy.Catalogue;
+        private QuestionCatalogue Catalogue => _services.CurrentFabric().Policy.Catalogue;
 
         private KeyValuePair<string, DecisionQuestion> Ask(string id) =>
             KeyValuePair.Create(id, Catalogue[id].ToQuestion());
@@ -1674,7 +1679,7 @@ public sealed class TurnRunner
             foreach (var function in _services.Tools.GetFunctions(_options.SecretNames))
                 if (function.GetService(typeof(ToolDescriptor)) is ToolDescriptor descriptor
                     // K-6: a turn nobody watches (a scheduled run) has nobody to ask.
-                    && (_options.Interactive || function is not AskUserTool)
+                    && (_options.Interactive && _options.AsksQuestions || function is not AskUserTool)
                     && (envelope.Guest is null || envelope.Guest.Allows(function.Name) && !descriptor.Risk.SideEffects.HasFlag(SideEffects.Memory)))
                     _catalogue[function.Name] = new Offered(function, descriptor);
             if (_catalogue.Count == 0 || !_services.Slots.TryCurrent(ModelSlots.TextEmbedder, out var binding)
@@ -1765,7 +1770,7 @@ public sealed class TurnRunner
             var key = "injection/skill:" + body.Name;
             // C-030: the verdict is never read (the body has tainted the turn already), so with reduced checkpoints the whole
             // request is saved; the question is still logged, as skipped.
-            IReadOnlyDictionary<string, string>? skip = _services.Fabric.Reduction is { } reduction
+            IReadOnlyDictionary<string, string>? skip = _services.CurrentFabric().Reduction is { } reduction
                 ? new Dictionary<string, string>(StringComparer.Ordinal) { [key] = "verdict unused, the skill body taints the turn; " + reduction.Reason }
                 : null;
             await DecideAsync(Checkpoint.Ingress, [KeyValuePair.Create(key, question.ToQuestion(instructions: instructions))], skip,
@@ -1863,7 +1868,7 @@ public sealed class TurnRunner
                 // An embedding pick is no confidence: only a calibrated answer sends the reply anywhere but back (C-020), so
                 // the degraded tier never silences an answer or moves it to another channel.
                 if (Acted(verdicts, "deliver", out var target) && target is not null
-                    && (verdicts["deliver"].Answer?.Calibrated == true || _services.Fabric.Policy.Floors.DegradedTurnBlocking))
+                    && (verdicts["deliver"].Answer?.Calibrated == true || _services.CurrentFabric().Policy.Floors.DegradedTurnBlocking))
                     deliver = target;
                 if (Acted(verdicts, "remember", out _))
                     await RememberAsync(cancellationToken).ConfigureAwait(false);

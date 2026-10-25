@@ -40,6 +40,12 @@ public sealed record ApprovalContext(string SessionId, ApprovalMode Mode, TurnSt
 
     /// <summary>The tool call the action belongs to, recorded on <c>ApprovalRequested</c> so the log links the two.</summary>
     public string? CallId { get; init; }
+
+    /// <summary>
+    /// A5: the fabric the session's decisions run on (its own decider), for the <c>risk</c> question and its outcome; null
+    /// uses the pipeline's own. It shares the pipeline's policy and log, so floors and calibration are unchanged.
+    /// </summary>
+    public DecisionFabric? Fabric { get; init; }
 }
 
 public enum ApprovalOutcome
@@ -188,6 +194,10 @@ public sealed class ApprovalPipeline
     private static readonly ImmutableArray<ApprovalScope> OnceOnly = [ApprovalScope.Once];
 
     private readonly DecisionFabric _fabric;
+
+    // A5: the session's own fabric when the turn passed one (its decider), else the shared one.
+    private DecisionFabric FabricFor(ApprovalContext context) => context.Fabric ?? _fabric;
+
     private readonly IEventLog _log;
     private readonly IApprovalRuleStore _always;
     private readonly IApprovalPrompter? _prompter;
@@ -335,12 +345,12 @@ public sealed class ApprovalPipeline
             // C-030: with reduced checkpoints (Kev on the CPU), risk is not asked where no answer could change the outcome:
             // a forced reason asks anyway, and Smart mode asks for an action it would never auto-run. It is still logged, as
             // a skipped Decision with the action ask, so the user's answer is recorded against it.
-            var elide = _fabric.Reduction is not null
+            var elide = FabricFor(context).Reduction is not null
                 && (!forced.IsEmpty || context.Mode == ApprovalMode.Smart && !SmartEligible(analysis, action));
             risk = await RiskAsync(context, analysis, elide, cancellationToken);
             var mapped = Map(context.Mode, risk.Verdict, analysis, action);
             reasons.Add(new("risk", risk.Skipped
-                ? $"{risk.Verdict.Action}: risk not asked, the outcome is ask whatever it says ({_fabric.Reduction!.Reason})"
+                ? $"{risk.Verdict.Action}: risk not asked, the outcome is ask whatever it says ({FabricFor(context).Reduction!.Reason})"
                 : $"{risk.Verdict.Action}: {risk.Verdict.Reason}"));
             if (forced.IsEmpty)
                 outcome = mapped;
@@ -573,7 +583,7 @@ public sealed class ApprovalPipeline
     private void RecordOutcome(ApprovalContext context, ApprovalAssessment assessment, string outcome)
     {
         if (assessment.Risk is { } risk)
-            _fabric.RecordOutcome(context.SessionId, risk.DecisionId, outcome, CancellationToken.None);
+            FabricFor(context).RecordOutcome(context.SessionId, risk.DecisionId, outcome, CancellationToken.None);
     }
 
     /// <summary>Stores the answer's rules, narrowed as it says; false (and nothing stored) when the narrowing is not narrower.</summary>
@@ -672,10 +682,10 @@ public sealed class ApprovalPipeline
         IReadOnlyDictionary<string, string>? skipped = skip
             ? new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                [entry.Id] = "the outcome is ask whatever risk says; " + _fabric.Reduction!.Reason,
+                [entry.Id] = "the outcome is ask whatever risk says; " + FabricFor(context).Reduction!.Reason,
             }
             : null;
-        var result = await _fabric.DecideAsync(context.SessionId, Checkpoint.PreExecute, context.TurnState,
+        var result = await FabricFor(context).DecideAsync(context.SessionId, Checkpoint.PreExecute, context.TurnState,
             [KeyValuePair.Create(entry.Id, entry.ToQuestion(instructions: instructions))], conditions, skipped, cancellationToken);
         return result[entry.Id];
     }

@@ -137,12 +137,18 @@ public sealed class SessionActor : IAsyncDisposable
     internal Action? CancelSignalled { get; set; }
 
     /// <summary>
-    /// A <c>/model</c> switch (plan §4.2). It runs beside a turn: it waits for running tool calls, not for calls parked at an
-    /// approval prompt. A switch of <c>embedder.text</c> starts memory's re-embed job.
+    /// A <c>/model</c> switch (plan §4.2): the person's choice for the session (A5, <see cref="SwitchScope.Session"/>, or
+    /// <see cref="SwitchScope.Pin"/> with <paramref name="pin"/>), so it lasts past the turn. It runs beside a turn: it waits
+    /// for running tool calls, not for calls parked at an approval prompt, and the turn takes it at its next step. A switch
+    /// of <c>embedder.text</c> starts memory's re-embed job.
     /// </summary>
-    public Task<SwitchResult> SwitchModelAsync(string slot, ModelBinding target, bool pin = false, CancellationToken cancellationToken = default)
+    public Task<SwitchResult> SwitchModelAsync(string slot, ModelBinding target, bool pin = false, CancellationToken cancellationToken = default) =>
+        SwitchModelAsync(slot, target, pin ? SwitchScope.Pin : SwitchScope.Session, cancellationToken);
+
+    /// <summary>A person's switch with how long it lasts (A5): the session, the session pinned, or this turn only.</summary>
+    public Task<SwitchResult> SwitchModelAsync(string slot, ModelBinding target, SwitchScope scope, CancellationToken cancellationToken = default)
     {
-        var command = new SwitchModel(slot, target, pin, cancellationToken);
+        var command = new SwitchModel(slot, target, scope, cancellationToken);
         if (!_commands.Writer.TryWrite(command))
             throw new ObjectDisposedException(nameof(SessionActor));
         return command.Completion.Task;
@@ -321,8 +327,7 @@ public sealed class SessionActor : IAsyncDisposable
     {
         try
         {
-            var result = await _slots.SwitchAsync(command.Slot, command.Target, SwitchReason.User, command.Pin, command.Cancellation)
-                .ConfigureAwait(false);
+            var result = await _slots.SwitchAsync(command.Slot, command.Target, command.Scope, command.Cancellation).ConfigureAwait(false);
             // A larger generator window expands compacted ranges before the next call (plan §4.2 step 4).
             _runner.NoteBudgetChange(result);
             if (result.Status == SwitchStatus.Switched && command.Slot == ModelSlots.TextEmbedder && _options.EmbedderSwap is { } job)
@@ -346,7 +351,7 @@ public sealed class SessionActor : IAsyncDisposable
     /// <param name="Target">The running turn's source when <see cref="CancelTurn"/> was called; null when none was running.</param>
     private sealed record CancelRunning(CancellationTokenSource? Target) : SessionCommand;
 
-    private sealed record SwitchModel(string Slot, ModelBinding Target, bool Pin, CancellationToken Cancellation) : SessionCommand
+    private sealed record SwitchModel(string Slot, ModelBinding Target, SwitchScope Scope, CancellationToken Cancellation) : SessionCommand
     {
         public TaskCompletionSource<SwitchResult> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }

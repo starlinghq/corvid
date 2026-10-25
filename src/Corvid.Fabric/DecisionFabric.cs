@@ -202,6 +202,19 @@ public sealed class DecisionFabric
         return checkpointResult;
     }
 
+    /// <summary>
+    /// A fabric with the same policy, degraded tier, log and checkpoint profile, but other calibrated deciders (A5: a
+    /// session's own decider, from its mix or a person's switch). Decisions it records go to the same log, named by their
+    /// decider as ever, so calibration reads them alike. The checkpoint profile (C-030's reduction) is this fabric's: it was
+    /// chosen for the configured decider's placement and is not worked out again.
+    /// </summary>
+    /// <param name="calibrated">The first tier, or null for the degraded tier alone.</param>
+    /// <param name="escalation">The second tier for gates below their floor; needs <paramref name="calibrated"/>.</param>
+    public DecisionFabric WithDeciders(IDecider? calibrated, IDecider? escalation = null) =>
+        ReferenceEquals(calibrated, _calibrated) && ReferenceEquals(escalation, _escalation)
+            ? this
+            : new DecisionFabric(Policy, _degraded, _log, calibrated, calibrated is null ? null : escalation, Reduction);
+
     /// <summary>Appends a later outcome for a decision (plan §5.2): the tool succeeded, the user approved, corrected or retried.</summary>
     public StoredEvent RecordOutcome(string sessionId, string decisionId, string outcome, CancellationToken cancellationToken = default)
     {
