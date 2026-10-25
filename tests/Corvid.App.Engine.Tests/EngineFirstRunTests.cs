@@ -181,18 +181,26 @@ public sealed class EngineFirstRunTests : IDisposable
         await WaitForAsync(page, () => page.Sections.Count > 0 && page.Workspace.Length > 0);
 
         var models = composition.ModelService;
+        // The models step lists the catalogue's local models from the engine, the missing generator picked: once the page
+        // has drawn the loaded snapshot, which comes after the snapshot is set (waiting on the snapshot alone raced it).
+        bool Listed() => models.Snapshot.IsLoaded && page.Downloads.Items.Any(item => item is { Name: "fake-gen", IsEnabled: true, IsSelected: true });
         var loaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        models.Changed += (_, _) =>
+        void Check()
         {
-            if (models.Snapshot.IsLoaded)
-                loaded.TrySetResult();
-        };
-        if (models.Snapshot.IsLoaded)
-            loaded.TrySetResult();
+            try
+            {
+                if (Listed())
+                    loaded.TrySetResult();
+            }
+            catch (InvalidOperationException)
+            {
+                // The list changed under the check (the page draws it on the engine's thread here); its next change checks again.
+            }
+        }
+        models.Changed += (_, _) => Check();
+        page.Downloads.PropertyChanged += (_, _) => Check();
+        Check();
         await loaded.Task.WaitAsync(TimeSpan.FromSeconds(30), Token);
-
-        // The models step lists the catalogue's local models from the engine, the missing generator picked.
-        Assert.Contains(page.Downloads.Items, item => item is { Name: "fake-gen", IsEnabled: true, IsSelected: true });
         Assert.Equal(Path.Combine(host.Root, "work"), page.Workspace);
         Assert.Equal("not started · 1 model missing", composition.StatusBar.Engine);
         Assert.False(page.HasNotice, string.Concat(page.Notice.Select(run => run.Text)));

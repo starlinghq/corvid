@@ -34,7 +34,10 @@ public sealed class EngineNewSessionTests
     public async Task TheHubListsTheNewSessionAtOnceAndOpensIt()
     {
         await using var fixture = await EngineFixture.StartAsync(new FakeModels(new FakeGenerator(Reply.Say("Hello."))));
-        using var service = fixture.Sessions();
+        // The service reports to a UI thread that is elsewhere, as in the window: its posts wait until the test runs
+        // them, so they never race the hub, which (like every view model) is used from one thread.
+        var ui = new UiQueue();
+        using var service = fixture.Sessions(ui);
         var bar = new StatusBarViewModel();
         var shell = new ShellViewModel(bar);
         using var hub = new SessionHub(service, new InlineDispatcher(), fixture.Time, shell, bar);
@@ -47,6 +50,29 @@ public sealed class EngineNewSessionTests
         Assert.Equal(Corvid.App.Core.Area.Sessions, shell.CurrentArea);
         Assert.Equal(id, hub.Current?.SessionId);
         await service.IdleAsync();
+        // The service's own summary of it, when it reaches the UI thread, keeps it listed and open.
+        ui.RunAll();
+        Assert.Equal((id, "New session"), (shell.CurrentSession?.Id, shell.CurrentSession?.Title));
+    }
+
+    /// <summary>A UI thread that is elsewhere: posts from any thread queue until the test runs them.</summary>
+    private sealed class UiQueue : IDispatcher
+    {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<Action> _queue = new();
+
+        public bool HasThreadAccess => false;
+
+        public bool Post(Action action)
+        {
+            _queue.Enqueue(action);
+            return true;
+        }
+
+        public void RunAll()
+        {
+            while (_queue.TryDequeue(out var action))
+                action();
+        }
     }
 }
 
