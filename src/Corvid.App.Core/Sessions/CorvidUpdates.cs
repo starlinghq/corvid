@@ -37,6 +37,30 @@ public enum ModelSwitchKind
     FellBack,
     /// <summary>The user switched it (<c>/model</c>, Alt+P).</summary>
     Switched,
+    /// <summary>A5: the turn ended and it went back to the session's default (de-escalation, or a one-turn switch undone).</summary>
+    Returned,
+}
+
+/// <summary>
+/// A5: one slot's model for this session changed, or the person's choice of it did (<c>_corvid/slot_model</c>, from the
+/// host's <c>ModelChanged</c>): any slot (generator, decider, extractor…), for the session's model strip and the Models
+/// page's per-session column. The generator's change also comes as <see cref="ModelSwitched"/>, which is the transcript's
+/// row; this one adds no row. Model ids come from configuration: shown through <see cref="SafeText"/>.
+/// </summary>
+/// <param name="Slot">The slot's name (<c>generator</c>, <c>decider</c>…).</param>
+/// <param name="From">The profile id it left (<c>none</c> for a slot nothing bound: a decider chosen on the degraded tier).</param>
+/// <param name="To">The profile id it uses now (<c>none</c> when let go of).</param>
+/// <param name="Reason">The wire reason: <c>session</c>, <c>user</c>, <c>escalation</c>, <c>fallback</c>, <c>de_escalation</c> or <c>privacy</c>.</param>
+public sealed record SlotModelChanged(string Slot, string From, string To, string Reason) : SessionUpdate
+{
+    /// <summary>The change made <see cref="To"/> the slot's default for this session (the person's "this session" choice).</summary>
+    public bool SessionDefault { get; init; }
+
+    /// <summary>The slot is pinned: a turn's end leaves it where it is.</summary>
+    public bool Pinned { get; init; }
+
+    /// <summary>The model is a cloud one: its requests leave the machine through the egress gate.</summary>
+    public bool Cloud { get; init; }
 }
 
 /// <summary>

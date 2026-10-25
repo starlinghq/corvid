@@ -301,6 +301,7 @@ public sealed class SwitchBlock : TranscriptBlock
             ModelSwitchKind.Escalated => ("escalated to", change.To),
             ModelSwitchKind.KeptLocal => ("kept local", ""),
             ModelSwitchKind.FellBack => ("fell back to", change.To),
+            ModelSwitchKind.Returned => ("back to", change.To),
             _ => ("switched to", change.To),
         };
         Reason = SafeText.Clean(change.Reason);

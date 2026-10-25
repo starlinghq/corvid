@@ -327,14 +327,23 @@ public sealed partial class EngineSessionService
         // L10: background problems (the egress ledger) go to the app's log, not the model call's thread's stderr.
         static void OnNotice(string line) => Log("corvid app: " + line);
 
+        // A5: every slot switch made in this process (in a turn or between turns, any slot) reaches the session's view.
+        void OnModel(string id, ModelChanged change)
+        {
+            if (!_disposed && _channels.TryGetValue(id, out var channel))
+                Publish(channel, _ => SessionUpdateTranslator.Models(change, _time.GetUtcNow()));
+        }
+
         runtime.TitleChanged += OnTitle;
         runtime.Recapped += OnRecap;
         runtime.Notice += OnNotice;
+        runtime.ModelChanged += OnModel;
         _unwatchRecords = () =>
         {
             runtime.TitleChanged -= OnTitle;
             runtime.Recapped -= OnRecap;
             runtime.Notice -= OnNotice;
+            runtime.ModelChanged -= OnModel;
         };
         if (_disposed)
             UnwatchRecords();

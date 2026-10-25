@@ -483,7 +483,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 reason => Log("corvid app: could not report a session update: " + reason), _time, () => session.Tainted);
             lock (channel.Gate)
             {
-                channel.Translator.Model = Generator(runtime);
+                // A5: the session's own generator (its choice for the session lasts past the turn), not only the runtime's default.
+                channel.Translator.Model = CurrentGenerator(runtime, session);
                 // A4V2-5: a ! line's turn runs its command, no generator.
                 channel.Translator.ShellLine = !verbatim && ComposerLine.Parse(text) is ComposerLine.Shell;
                 channel.Translator.MaxSteps = runtime.Options.Turn.MaxSteps;

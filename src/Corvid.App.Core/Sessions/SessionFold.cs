@@ -61,6 +61,16 @@ public static class SessionFold
             DetectionMatched detection => AddNew(state, "detection", id => new DetectionEntry(id, detection.Detection, detection.At)),
             CheckpointDecided decided => OnDecided(state, decided),
             ModelSwitched switched => OnModelSwitched(state, switched),
+            SlotModelChanged slot => state with
+            {
+                SlotModels = state.SlotModels.SetItem(slot.Slot, slot with
+                {
+                    Slot = SafeText.Clean(slot.Slot),
+                    From = SafeText.Clean(slot.From),
+                    To = SafeText.Clean(slot.To),
+                    Reason = SafeText.Clean(slot.Reason),
+                }),
+            },
             TaintChanged taint => OnTaint(state, taint),
             ChangesUpdate changes => state with
             {
@@ -78,7 +88,7 @@ public static class SessionFold
             _ => state,
         };
 
-        return update is AgentMessageChunk or AgentThoughtChunk or UsageUpdate or EngineStatus or QueueChanged or PlanUpdate
+        return update is AgentMessageChunk or AgentThoughtChunk or UsageUpdate or EngineStatus or QueueChanged or PlanUpdate or SlotModelChanged
             ? next
             : Arrange(next);
     }

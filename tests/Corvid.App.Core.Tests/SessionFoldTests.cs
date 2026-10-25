@@ -445,5 +445,32 @@ public sealed class SessionFoldTests
         Assert.Equal(Start.AddMinutes(1), after.LastActivity);
     }
 
+    [Fact]
+    public void A5_slot_changes_are_kept_per_slot_cleaned_and_add_no_row()
+    {
+        var view = SessionFold.Replay("s",
+        [
+            At(new SlotModelChanged("decider", "none", "kev‮-4b@cpu", "session") { SessionDefault = true }, 0),
+            At(new SlotModelChanged("decider", "kev-4b@cpu", "kev-0.8b@cpu", "session") { SessionDefault = true }, 1),
+            At(new SlotModelChanged("extractor", "gliner2@cpu", "gliner2-large@cpu", "user"), 2),
+        ]);
+
+        Assert.Empty(view.Transcript);
+        Assert.Equal(["decider", "extractor"], view.SlotModels.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(("kev-0.8b@cpu", true), (view.SlotModels["decider"].To, view.SlotModels["decider"].SessionDefault));
+        var first = SessionFold.Replay("s", [At(new SlotModelChanged("decider", "none", "kev‮-4b@cpu", "session"), 0)]);
+        Assert.DoesNotContain('‮', first.SlotModels["decider"].To);
+    }
+
+    [Fact]
+    public void A5_a_generator_returning_to_the_session_default_reads_back_to()
+    {
+        var view = SessionFold.Replay("s", [At(new ModelSwitched("generator", "qwen3.5-9b", "qwen3.5-0.8b", ModelSwitchKind.Returned, "the turn ended"), 0)]);
+
+        var entry = Assert.IsType<SwitchEntry>(Assert.Single(view.Transcript));
+        Assert.Equal(ModelSwitchKind.Returned, entry.Switch.Kind);
+        Assert.Equal("qwen3.5-0.8b", view.Model);
+    }
+
     private sealed record FutureUpdate : SessionUpdate;
 }

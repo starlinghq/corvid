@@ -292,6 +292,39 @@ public sealed class SessionUpdateTranslator(string workspace)
         && (!TurnOpen || (_answerLast && !_turnRemembers));
 
     /// <summary>The question in a few words for the attention tray: its first line, cut to a short title.</summary>
+    /// <summary>
+    /// A5: the host's <see cref="ModelChanged"/> as the app's updates: a <see cref="SlotModelChanged"/> for any slot, and for
+    /// the generator, when its model really changed, the transcript's <see cref="ModelSwitched"/> row before it. The
+    /// generator's names drop the device (<c>qwen3.5-0.8b@cuda0</c> reads <c>qwen3.5-0.8b</c>), as the session's model does.
+    /// </summary>
+    internal static IReadOnlyList<SessionUpdate> Models(ModelChanged change, DateTimeOffset at)
+    {
+        ArgumentNullException.ThrowIfNull(change);
+        var slot = new SlotModelChanged(change.Slot, change.From, change.To, change.Reason)
+        {
+            At = at,
+            SessionDefault = change.SessionDefault,
+            Pinned = change.Pinned,
+            Cloud = change.Cloud,
+        };
+        if (change.Slot != Corvid.Models.ModelSlots.Generator || change.Sequence is null || change.From == change.To)
+            return [slot];
+        var (kind, reason) = change.Reason switch
+        {
+            "escalation" => (ModelSwitchKind.Escalated, "escalated"),
+            "fallback" => (ModelSwitchKind.FellBack, "the model failed"),
+            "privacy" => (ModelSwitchKind.KeptLocal, "the privacy gate kept it local"),
+            "de_escalation" => (ModelSwitchKind.Returned, "the turn ended"),
+            "user" => (ModelSwitchKind.Switched, "for this turn"),
+            _ => (ModelSwitchKind.Switched, "for this session"),
+        };
+        return
+        [
+            new ModelSwitched(change.Slot, change.From.Split('@')[0], change.To.Split('@')[0], kind, reason) { At = at, Cloud = change.Cloud },
+            slot,
+        ];
+    }
+
     internal static string QuestionTitle(string text)
     {
         var line = text.ReplaceLineEndings("\n").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)

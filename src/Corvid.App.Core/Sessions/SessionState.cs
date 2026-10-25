@@ -209,6 +209,9 @@ public sealed record SessionView
     /// <summary>The generator now.</summary>
     public string? Model { get; init; }
 
+    /// <summary>A5: each slot's latest change in this session (any slot), by slot name; empty until one changes.</summary>
+    public ImmutableDictionary<string, SlotModelChanged> SlotModels { get; init; } = ImmutableDictionary<string, SlotModelChanged>.Empty;
+
     /// <summary>The open approval prompts, in the order they will be asked.</summary>
     public ImmutableList<ApprovalRequested> Approvals { get; init; } = [];
 
