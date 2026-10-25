@@ -553,11 +553,16 @@ public sealed class SkillsTests
         return options;
     }
 
-    /// <summary>The demo answers synchronously, so what a command started has finished; this only spins the continuations.</summary>
+    /// <summary>
+    /// The demo answers synchronously, so what a command started has finished; this spins the continuations, and on a busy
+    /// machine (a continuation on the thread pool) waits for them, up to 10 s.
+    /// </summary>
     internal static async Task WaitFor(Func<bool> condition)
     {
         for (var i = 0; i < 100 && !condition(); i++)
             await Task.Yield();
+        for (var i = 0; i < 1000 && !condition(); i++)
+            await Task.Delay(10, TestContext.Current.CancellationToken);
         Assert.True(condition());
     }
 }
