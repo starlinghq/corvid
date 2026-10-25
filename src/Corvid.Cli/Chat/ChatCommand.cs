@@ -69,7 +69,7 @@ internal static class ChatCommand
             var renderer = new ChatRenderer(console, verbose: arguments.Flag("--verbose"));
             using var feed = runtime.Feed.Subscribe(session.Id, renderer);
             using var prompter = runtime.AttachPrompter(session.Id, new CliApprovalPrompter(renderer, context.Input,
-                (prompt, token) => DelegationCard.LinesAsync(runtime, prompt, token)));
+                (prompt, whole, token) => DelegationCard.LinesAsync(runtime, prompt, token, whole)));
             // A5: this session's children, the agent's and /delegate's, as they start and end.
             void OnChild(string parentId, SessionStreamUpdate update)
             {

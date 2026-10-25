@@ -193,7 +193,9 @@ internal sealed partial class AcpAgent : IJsonRpcHandler, IAsyncDisposable
 
     private void OnChild(string parentId, SessionStreamUpdate update)
     {
-        if (_sessions.ContainsKey(parentId) && TurnReporter.Child(update) is { } notification)
+        // L5 (A5 review): a child is a tool call of the prompt turn that runs it; a session/update about a call outside any
+        // prompt turn (a child a /delegate command started, which runs on after the command's answer) is not sent.
+        if (_sessions.TryGetValue(parentId, out var state) && state.Reporter is not null && TurnReporter.Child(update) is { } notification)
             _context.Update(parentId, notification);
     }
 
