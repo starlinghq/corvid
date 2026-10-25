@@ -103,6 +103,7 @@ public sealed class SettingFieldViewModel : ObservableObject
     {
         SettingApplies.Restart => "needs a restart",
         SettingApplies.NextTurn => "next turn",
+        SettingApplies.NewSessions => "new sessions",
         _ => "",
     };
 
@@ -116,6 +117,7 @@ public sealed class SettingFieldViewModel : ObservableObject
         {
             SettingApplies.Restart => "Read when the host starts: a change applies after a restart.",
             SettingApplies.NextTurn => "A turn already running keeps what it started with; the next one reads the change.",
+            SettingApplies.NewSessions => "Sessions opened from now on use it; a session already open keeps what it was opened with.",
             _ => "",
         };
 

@@ -125,6 +125,55 @@ public sealed class CorvidRuntime : IAsyncDisposable
 
     public CorvidOptions Options { get; }
 
+    /// <summary>
+    /// The settings a running runtime takes without a restart (A4), by configuration key, with when each applies: the
+    /// default approval mode for sessions opened from now on, the approval deadline from the next prompt, the step budget
+    /// and output tokens per step for sessions opened from now on. Everything else in corvid.json is read once, at start.
+    /// </summary>
+    public static IReadOnlyDictionary<string, LiveSetting> LiveSettings { get; } = new Dictionary<string, LiveSetting>(StringComparer.OrdinalIgnoreCase)
+    {
+        [$"{CorvidOptions.Section}:Approvals:Mode"] = LiveSetting.NewSessions,
+        [$"{CorvidOptions.Section}:Approvals:TimeoutSeconds"] = LiveSetting.Now,
+        [$"{CorvidOptions.Section}:Turn:MaxSteps"] = LiveSetting.NewSessions,
+        [$"{CorvidOptions.Section}:Turn:MaxOutputTokens"] = LiveSetting.NewSessions,
+    };
+
+    /// <summary>
+    /// Takes the <see cref="LiveSettings"/> from <paramref name="next"/> (the configuration as the next start would read it,
+    /// after a surface wrote corvid.json) and returns the keys whose value changed here. A session already open keeps the
+    /// approval mode and step budget it was opened with; the approval deadline applies to the next prompt of every session.
+    /// </summary>
+    public ImmutableArray<string> ApplyLiveSettings(CorvidOptions next)
+    {
+        ArgumentNullException.ThrowIfNull(next);
+        var applied = ImmutableArray.CreateBuilder<string>();
+        lock (Options)
+        {
+            if (next.Approvals.Mode != Options.Approvals.Mode)
+            {
+                Options.Approvals.Mode = next.Approvals.Mode;
+                applied.Add($"{CorvidOptions.Section}:Approvals:Mode");
+            }
+            if (next.Approvals.TimeoutSeconds != Options.Approvals.TimeoutSeconds && next.Approvals.TimeoutSeconds > 0)
+            {
+                Options.Approvals.TimeoutSeconds = next.Approvals.TimeoutSeconds;
+                Approvals.SetTimeout(TimeSpan.FromSeconds(next.Approvals.TimeoutSeconds));
+                applied.Add($"{CorvidOptions.Section}:Approvals:TimeoutSeconds");
+            }
+            if (next.Turn.MaxSteps != Options.Turn.MaxSteps)
+            {
+                Options.Turn.MaxSteps = next.Turn.MaxSteps;
+                applied.Add($"{CorvidOptions.Section}:Turn:MaxSteps");
+            }
+            if (next.Turn.MaxOutputTokens != Options.Turn.MaxOutputTokens)
+            {
+                Options.Turn.MaxOutputTokens = next.Turn.MaxOutputTokens;
+                applied.Add($"{CorvidOptions.Section}:Turn:MaxOutputTokens");
+            }
+        }
+        return applied.ToImmutable();
+    }
+
     public ModelCatalogue Catalogue { get; }
 
     public DeviceSchedulers Devices { get; }
