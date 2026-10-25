@@ -473,7 +473,9 @@ Found and left:
 - Pin semantics differ between layers. `SessionModelSlots` (and its test) lets escalation move a pinned slot and keeps it
   there after the turn; `/model`'s help ("--pin to keep it past escalation"), `/model unpin` ("escalation moves off it
   again") and `IModelService.SetPinnedAsync` ("escalation leaves it alone") say a pin is not escalated off. Seen in
-  `corvid chat`: pinned on fake, two failed repairs escalated to fakebig, and the next turn stayed on fakebig.
+  `corvid chat`: pinned on fake, two failed repairs escalated to fakebig, and the next turn stayed on fakebig. Plan §6
+  ("returns to the session's default unless the user pinned the model") and C-006 back the model layer, so the fix is
+  the surfaces' words, unless the person wants a pin to stop escalation.
 - After "default for new sessions", the degraded decider tier (`/status`) and the session titler still use the default
   the runtime started with.
 - The egress gate redacts some non-PII: "hello two" sent as "hello `<PERSON_1>`", and a tool's own schema default (`200`) in
