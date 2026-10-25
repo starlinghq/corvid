@@ -473,6 +473,8 @@ public sealed class TurnRunner
         private ClarifyingQuestion? _question;
         // A4: a `!!` line's turn, whose call and result are logged local-only.
         private bool _localOnly;
+        // A5: the generator calls' tokens not yet on an event: the next answer or first issued call carries them.
+        private TokenUsage? _usage;
 
         public async Task<TurnResult> RunAsync(CancellationToken cancellationToken)
         {
@@ -739,6 +741,7 @@ public sealed class TurnRunner
                     try
                     {
                         var answer = await generator.GetResponseAsync(messages, forced, cancellationToken).ConfigureAwait(false);
+                        NoteUsage(answer.Usage);
                         NotePrivacyRetreat(head, cancellationToken);
                         return answer;
                     }
@@ -749,8 +752,38 @@ public sealed class TurnRunner
                 messages.Add(new ChatMessage(ChatRole.User, string.Format(CultureInfo.InvariantCulture, NudgeRequired, required)));
             }
             var response = await generator.GetResponseAsync(messages, options, cancellationToken).ConfigureAwait(false);
+            NoteUsage(response.Usage);
             NotePrivacyRetreat(head, cancellationToken);
             return response;
+        }
+
+        /// <summary>
+        /// A5 (K-5 in the log): a generator call's tokens, as its provider reported them, held until the next event this turn
+        /// appends for a response (its answer, or its first call), so a replay shows the turn's tokens and the context gauge.
+        /// </summary>
+        private void NoteUsage(UsageDetails? usage)
+        {
+            if (usage is null || usage.InputTokenCount is null && usage.OutputTokenCount is null)
+                return;
+            lock (_gate)
+            {
+                var held = _usage;
+                _usage = new TokenUsage(Sum(held?.InputTokens, usage.InputTokenCount), Sum(held?.OutputTokens, usage.OutputTokenCount),
+                    (held?.Calls ?? 0) + 1, usage.InputTokenCount ?? held?.PromptTokens);
+            }
+
+            static long? Sum(long? a, long? b) => a is null && b is null ? null : (a ?? 0) + (b ?? 0);
+        }
+
+        /// <summary>The held usage, once: the event that takes it carries it.</summary>
+        private TokenUsage? TakeUsage()
+        {
+            lock (_gate)
+            {
+                var usage = _usage;
+                _usage = null;
+                return usage;
+            }
         }
 
         // The egress gate refused the cloud model and the slot moved to a local one (plan §10.4); the user is told, as
@@ -944,7 +977,9 @@ public sealed class TurnRunner
                 // ends with its question after the round. A second one in the round is told the first was asked.
                 if (tool!.Function is AskUserTool && _options.Interactive)
                 {
-                    AskUser(callId, call.Name, arguments);
+                    // A5: asked inside the turn when a surface can answer now; otherwise (or put aside) K-6's path.
+                    if (!await AskInTurnAsync(callId, call.Name, arguments, cancellationToken).ConfigureAwait(false))
+                        AskUser(callId, call.Name, arguments);
                     continue;
                 }
                 var risk = tool.Descriptor.Risk;
@@ -1355,7 +1390,7 @@ public sealed class TurnRunner
                 lock (_gate)
                 {
                     runner.Append(new ToolCallIssued(call.CallId, call.Tool.Function.Name, call.Arguments, _steps, call.Tool.Descriptor.Risk.ReadOnly,
-                        _localOnly ? true : null, _generatorId));
+                        _localOnly ? true : null, _generatorId, TakeUsage()));
                     _open.Add(call.CallId);
                 }
             }
@@ -1383,7 +1418,7 @@ public sealed class TurnRunner
                         ? "The question goes to the user and the turn ends here; their answer comes as their next message."
                         : text.Length == 0 ? "The question was empty, so nothing was asked." : "One question per turn: the first one was asked.",
                 });
-                runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, true, Generator: _generatorId), new ToolResult(callId, result, IsError: !first));
+                runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, true, Generator: _generatorId, Usage: TakeUsage()), new ToolResult(callId, result, IsError: !first));
                 if (first)
                     _question = new ClarifyingQuestion(NewQuestionId(), text, options);
                 _pickDecisions.Remove(tool, out decisionId);
@@ -1397,6 +1432,76 @@ public sealed class TurnRunner
 
         private static string NewQuestionId() => "q-" + Guid.NewGuid().ToString("N")[..12];
 
+        /// <summary>
+        /// A5: an <c>ask_user</c> call asked inside the turn (<see cref="IQuestionAsker"/>). The call and its
+        /// <c>ClarificationAsked</c> are logged first (so every surface shows the question), the turn waits for the person, and
+        /// their answer is logged as the call's result with <c>ClarificationAnswered</c>, which closes the question; the turn
+        /// then goes on. False when nobody can answer inside the turn (or the question is empty, or one already ends this
+        /// round): the caller takes K-6's path. An answer put aside ends the round on the question as K-6 does.
+        /// </summary>
+        private async Task<bool> AskInTurnAsync(string callId, string tool, JsonElement arguments, CancellationToken cancellationToken)
+        {
+            if (_services.Questions is not { } asker || !_options.AsksQuestions || !asker.CanAsk(runner.SessionId))
+                return false;
+            var (text, options) = AskUserTool.Read(arguments);
+            var question = new ClarifyingQuestion(NewQuestionId(), text, options);
+            lock (_gate)
+            {
+                if (text.Length == 0 || _question is not null)
+                    return false;
+                runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, true, Generator: _generatorId, Usage: TakeUsage()),
+                    new ClarificationAsked(question.Id, question.Text, question.Options));
+                // Open until answered: a cancelled turn closes it with the rest.
+                _open.Add(callId);
+            }
+            using var activity = StartToolActivity(callId, tool, approval: false);
+            string? answer;
+            try
+            {
+                answer = await asker.AskAsync(new QuestionPrompt(runner.SessionId, question.Id, callId, text, options), cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Interrupted while it waited: the question goes with the turn (an empty answer withdraws it), as every surface
+                // closes an interrupted turn's question; the call is closed as cancelled with the turn's other open calls.
+                lock (_gate)
+                    runner.Append(new ClarificationAnswered(question.Id, ""));
+                activity?.SetTag(KernelTelemetry.ToolOutcome, "cancelled");
+                throw;
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                // A surface that fails to ask leaves the question for the person's next message, as nobody attached would.
+                answer = null;
+            }
+            answer = answer?.Trim();
+            string? pick;
+            var answered = answer is { Length: > 0 };
+            var result = JsonValues.ToElement(new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["asked"] = true,
+                [answered ? "answer" : "note"] = answered
+                    ? answer
+                    : "The question goes to the user and the turn ends here; their answer comes as their next message.",
+            });
+            lock (_gate)
+            {
+                if (answered)
+                    runner.Append(new ToolResult(callId, result), new ClarificationAnswered(question.Id, answer!));
+                else
+                {
+                    runner.Append(new ToolResult(callId, result));
+                    _question = question;
+                }
+                _open.Remove(callId);
+                _pickDecisions.Remove(tool, out pick);
+            }
+            activity?.SetTag(KernelTelemetry.ToolOutcome, "succeeded");
+            if (pick is not null)
+                _services.CurrentFabric().RecordOutcome(runner.SessionId, pick, "tool_succeeded", CancellationToken.None);
+            return true;
+        }
+
         private void IssueRejected(string callId, string tool, JsonElement arguments, bool? readOnly, JsonElement error)
         {
             // A call that never ran still gets its span, so a trace shows the repair the next response is asked for.
@@ -1404,7 +1509,7 @@ public sealed class TurnRunner
             activity?.SetTag(KernelTelemetry.ToolOutcome, "invalid_arguments");
             activity?.SetStatus(ActivityStatusCode.Error);
             lock (_gate)
-                runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, readOnly, Generator: _generatorId), new ToolResult(callId, error, IsError: true));
+                runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, readOnly, Generator: _generatorId, Usage: TakeUsage()), new ToolResult(callId, error, IsError: true));
         }
 
         // Read-only calls finish concurrently, so the shared turn state they touch is updated under the lock.
@@ -1874,9 +1979,10 @@ public sealed class TurnRunner
             // K-6: a clarifying turn's question is logged with its answer, structured, so every surface shows it as a question.
             if (status == TurnStatus.Clarifying)
                 question ??= new ClarifyingQuestion(NewQuestionId(), text, []);
+            var usage = TakeUsage();
             var answer = question is null
-                ? runner.Append(new AssistantMessage(text)).Sequence
-                : runner.Append(new AssistantMessage(text), new ClarificationAsked(question.Id, question.Text, question.Options))[0].Sequence;
+                ? runner.Append(new AssistantMessage(text, usage)).Sequence
+                : runner.Append(new AssistantMessage(text, usage), new ClarificationAsked(question.Id, question.Text, question.Options))[0].Sequence;
             _question = question;
             var deliver = "reply";
             var egress = new List<KeyValuePair<string, DecisionQuestion>>();

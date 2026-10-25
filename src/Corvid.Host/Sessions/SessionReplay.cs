@@ -42,6 +42,12 @@ public sealed record ReplayOptions(bool LedgerDiffs = true, bool Plans = true, b
     /// <summary>A5: each <c>ChildSpawned</c> and <c>ChildFinished</c> as <see cref="ChildStarted"/> and <see cref="ChildEnded"/>. Off unless asked for.</summary>
     public bool Children { get; init; }
 
+    /// <summary>
+    /// A5: the generator's tokens the log records on an answer or a response's first call, as <see cref="UsageReported"/>
+    /// just before it (where the live turn reported them). On in <see cref="Full"/>, off in <see cref="Transcript"/>.
+    /// </summary>
+    public bool Usage { get; init; } = true;
+
     /// <summary>Everything a live turn reports that the log holds.</summary>
     public static ReplayOptions Full { get; } = new();
 
@@ -50,7 +56,7 @@ public sealed record ReplayOptions(bool LedgerDiffs = true, bool Plans = true, b
     /// exchanges keep a call without a result as completed).
     /// </summary>
     public static ReplayOptions Transcript { get; } = new(LedgerDiffs: false, Plans: false, Checkpoints: false, Approvals: false, UnfinishedCalls: false,
-        Steps: false, Questions: false, Decisions: false, Generators: false, Taint: false, Compactions: false);
+        Steps: false, Questions: false, Decisions: false, Generators: false, Taint: false, Compactions: false) { Usage = false };
 }
 
 /// <summary>A session read back from the log: its updates in order, and the log head they run to.</summary>
@@ -64,9 +70,9 @@ public sealed record SessionHistory(string SessionId, long Head, ImmutableArray<
 /// it: each checkpoint's decisions (grouped from the <c>Decision</c> events), each turn's generator (from its first
 /// decision's TurnState), an asked call's approval answer and assessment, where a network read tainted the session, each
 /// compaction's marker, the steers (K-3) in the turn that took them, a clarifying question (K-6) after the answer that
-/// carries it, and each step from its calls' round. The log has no record of how a turn ended: a turn with no answer was
-/// interrupted, cut by a rollback or stopped with its process, and a surface shows it as interrupted. Thoughts, token usage
-/// and running tails (K-2) are live only.
+/// carries it, and each step from its calls' round, and (A5) the generator's token usage where the log records it. The log has
+/// no record of how a turn ended: a turn with no answer was interrupted, cut by a rollback or stopped with its process, and a
+/// surface shows it as interrupted. Thoughts and running tails (K-2) are live only.
 /// </summary>
 public static class SessionReplay
 {
@@ -152,9 +158,13 @@ public static class SessionReplay
                     items.Add((entry.FromSequence, new SteerSent(steer.Text, entry.FromSequence) { At = at }));
                     break;
                 case AssistantMessage assistant:
+                    if (options.Usage && assistant.Usage is { } answered)
+                        items.Add((entry.FromSequence, Used(answered, at)));
                     items.Add((entry.FromSequence, new AnswerChunk(assistant.Text) { At = at }));
                     break;
                 case ToolCallIssued call:
+                    if (options.Usage && call.Usage is { } issuedUsage)
+                        items.Add((entry.FromSequence, Used(issuedUsage, at)));
                     // The step its round records, as the live turn reported it when the step began (with no budget: the log has none).
                     if (options.Steps && call.Round is { } step and > 0 && step != round)
                     {
@@ -223,8 +233,16 @@ public static class SessionReplay
             }
         }
 
-        // K-6: each clarifying question after the answer that carries it, as the live turn reported it.
+        // K-6: each clarifying question after the answer that carries it, as the live turn reported it; A5: a question
+        // answered inside its turn, closed where the answer was logged.
         var questions = false;
+        foreach (var item in stored.Values.Where(item => options.Questions && item.Payload is ClarificationAnswered && item.Sequence > options.After
+            && snapshot.IsVisible(item.Sequence)))
+        {
+            questions = true;
+            var answered = (ClarificationAnswered)item.Payload;
+            items.Add((item.Sequence, new QuestionClosed(answered.QuestionId, answered.Answer) { At = item.RecordedAt }));
+        }
         foreach (var item in stored.Values.Where(item => options.Questions && item.Payload is ClarificationAsked && item.Sequence > options.After
             && snapshot.IsVisible(item.Sequence)))
         {
@@ -274,6 +292,9 @@ public static class SessionReplay
             : items;
         return new SessionHistory(sessionId, head, [.. ordered.Select(item => item.Update)]);
     }
+
+    private static UsageReported Used(TokenUsage usage, DateTimeOffset at) =>
+        new(usage.InputTokens, usage.OutputTokens) { At = at, PromptTokens = usage.PromptTokens, Calls = usage.Calls };
 
     /// <summary>
     /// Each call's latest closed approval, by call id: a visible <c>ApprovalRequested</c> naming the call, and the

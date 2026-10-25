@@ -34,7 +34,7 @@ public sealed record EgressPolicy
     public ImmutableArray<string> ExtraLabels { get; init; } = [];
 
     /// <summary>Minimum span confidence. Lower is stricter: more spans count as PII.</summary>
-    public float Threshold { get; init; } = 0.4f;
+    public float Threshold { get; init; } = 0.6f;
 
     /// <summary>
     /// The least the gate does when the request carries content from outside the user (plan §10.3): other people's text is

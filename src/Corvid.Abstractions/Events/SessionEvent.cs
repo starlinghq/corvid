@@ -32,6 +32,7 @@ namespace Corvid.Abstractions.Events;
 [JsonDerivedType(typeof(McpPinsForgotten), "mcp_pins_forgotten")]
 [JsonDerivedType(typeof(UserSteered), "user_steered")]
 [JsonDerivedType(typeof(ClarificationAsked), "clarification_asked")]
+[JsonDerivedType(typeof(ClarificationAnswered), "clarification_answered")]
 [JsonDerivedType(typeof(SessionTitled), "session_titled")]
 [JsonDerivedType(typeof(SessionRecapped), "session_recapped")]
 [JsonDerivedType(typeof(ApprovalAssessed), "approval_assessed")]
@@ -51,7 +52,16 @@ public abstract record SessionEvent;
 public sealed record UserMessage(string Text,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? LocalOnly = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? From = null) : SessionEvent;
-public sealed record AssistantMessage(string Text) : SessionEvent;
+// Usage (A5) is the generator calls' tokens since the previous call's record, on the answer that ended them; omitted when
+// null (no call reported any, or a message from elsewhere), so events written before it keep their persisted form.
+public sealed record AssistantMessage(string Text,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] TokenUsage? Usage = null) : SessionEvent;
+// A5: what one or more generator calls used, as their provider reported it (K-5 in the log). InputTokens and OutputTokens are
+// summed over the Calls it covers; PromptTokens is the latest call's prompt, which is what a context gauge shows. Each is
+// null when no call reported it.
+public sealed record TokenUsage(long? InputTokens, long? OutputTokens,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] int Calls = 1,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? PromptTokens = null);
 // K-3: a message the user sent into a running turn (steer now, Ctrl+Enter), taken at the turn's next step checkpoint. It is
 // part of the conversation like a UserMessage (the generator reads it as the user's words, after the results before it),
 // but it starts no turn: turn counting, undo and compaction, which look for UserMessage, never see it. It does not clear
@@ -61,18 +71,25 @@ public sealed record UserSteered(string Text) : SessionEvent;
 // question too, so a reader that knows only messages loses nothing). Options are answers the person can pick; empty when
 // the question is free text only. QuestionId is unique in the session. The person's answer is their next message.
 public sealed record ClarificationAsked(string QuestionId, string Text, ImmutableArray<string> Options) : SessionEvent;
+// A5: the person answered a question inside the running turn (an ask_user call a surface could answer then), so the turn
+// went on with the answer as the call's result. Logged with that result; it closes the question as their next message would.
+// The answer is the person's words (or an option's visible text), not a message: it starts no turn and clears no taint. An empty
+// answer withdraws the question: the turn was interrupted while it waited.
+public sealed record ClarificationAnswered(string QuestionId, string Answer) : SessionEvent;
 // Round (the turn's generator response that made the call, from 1) and ReadOnly (the tool's risk descriptor said read-only)
 // were added by C-026, so the recovery scan can tell a later round from a call run one at a time after approval, and a
 // read from a change, from the log alone. Both are omitted when null, so events written before them keep their persisted
 // form; ReadOnly is null when the call named no offered tool. LocalOnly (A4) is a call the user ran from the composer's `!!`
 // line, which the prompt and the episodic index leave out with its result; omitted when null too.
 // Generator (A5) is the profile id of the generator whose response asked for the call ("qwen3.5-0.8b@cuda0"), so a switch
-// mid-turn is placed exactly on replay; omitted when null (the user's own `!` call, and events written before it).
+// mid-turn is placed exactly on replay; omitted when null (the user's own `!` call, and events written before it). Usage (A5)
+// is on the first call a generator response issued: the tokens of the calls since the previous record, as on AssistantMessage.
 public sealed record ToolCallIssued(string CallId, string ToolName, JsonElement Arguments,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Round = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? ReadOnly = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? LocalOnly = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Generator = null) : SessionEvent;
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Generator = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] TokenUsage? Usage = null) : SessionEvent;
 // LocalOnly (A4) marks the result of a `!!` call, so a reader of one event (the episodic index) leaves it out without
 // finding its call; omitted when null.
 public sealed record ToolResult(string CallId, JsonElement Result, bool IsError = false,

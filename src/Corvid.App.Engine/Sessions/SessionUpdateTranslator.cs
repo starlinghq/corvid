@@ -157,6 +157,13 @@ public sealed partial class SessionUpdateTranslator(string workspace)
             case SteerSent steer:
                 output.Add(new UserMessage(steer.Text) { Position = steer.Sequence, Steered = true, At = at });
                 break;
+            // A5: the person answered it inside the turn, which went on with the answer.
+            case QuestionClosed closed:
+                if (_openQuestion == closed.QuestionId)
+                    _openQuestion = null;
+                _questionText = null;
+                output.Add(new QuestionAnswered(closed.QuestionId, closed.Answer) { At = at });
+                break;
             // K-6: the question the turn ended on; it stays open past the turn's end, until the next message.
             case QuestionRaised question:
                 _openQuestion = question.QuestionId;
@@ -187,7 +194,8 @@ public sealed partial class SessionUpdateTranslator(string workspace)
                 {
                     At = at,
                     TurnTokens = (int)Math.Min(int.MaxValue, _turnTokens),
-                    ContextTokens = usage.InputTokens is { } sent ? (int)Math.Min(int.MaxValue, sent) : null,
+                    // A5: a replayed record that sums several calls names the latest one's prompt.
+                    ContextTokens = (usage.PromptTokens ?? usage.InputTokens) is { } sent ? (int)Math.Min(int.MaxValue, sent) : null,
                     ContextWindow = ContextWindow,
                 });
                 break;

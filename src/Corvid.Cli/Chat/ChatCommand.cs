@@ -81,6 +81,8 @@ internal static class ChatCommand
                     renderer.Notice($"[grey]↳ {Markup.Escape(AgentCommands.Ended(ended.Child))}[/]");
             }
             runtime.ChildChanged += OnChild;
+            // A5: ask_user questions are asked and answered inline while the turn waits, like approvals.
+            using var questioner = runtime.AttachQuestioner(session.Id, new CliQuestionAsker(renderer, context.Input));
             // Scheduled runs happen in their own sessions; until the gateway delivers them (C-020), the chat says that they ran.
             void OnJob(ScheduledJob job, JobRun run) =>
                 renderer.Notice($"[grey]⏰ job {Markup.Escape(job.Name)}: {Markup.Escape(run.Status)} (session {Markup.Escape(run.SessionId)})[/]");

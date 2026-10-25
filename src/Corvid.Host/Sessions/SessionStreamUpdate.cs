@@ -41,10 +41,17 @@ public sealed record SteerSent(string Text, long Sequence) : SessionStreamUpdate
 
 /// <summary>
 /// The clarifying question a turn ended on (K-6), from its <c>ClarificationAsked</c> event (after the answer that carries
-/// the same text). Model text: untrusted. The person's next message answers it.
+/// the same text). Model text: untrusted. The person's next message answers it; A5: or, asked inside the turn where a
+/// surface could answer, <see cref="QuestionClosed"/> follows with their answer.
 /// </summary>
 /// <param name="Options">Answers to pick from; empty for free text.</param>
 public sealed record QuestionRaised(string QuestionId, string Text, ImmutableArray<string> Options) : SessionStreamUpdate;
+
+/// <summary>
+/// A5: the person answered a question inside the running turn (the log's <c>ClarificationAnswered</c>), so it is closed and
+/// the turn went on with the answer; live and on replay (<see cref="ReplayOptions.Questions"/>). The answer is the person's.
+/// </summary>
+public sealed record QuestionClosed(string QuestionId, string Answer) : SessionStreamUpdate;
 
 /// <summary>
 /// The running turn began a step (a generator response with tool calls), live from the turn loop; on replay from the step
@@ -67,10 +74,18 @@ public sealed record AnswerChunk(string Text) : SessionStreamUpdate;
 public sealed record ThoughtChunk(string Text) : SessionStreamUpdate;
 
 /// <summary>
-/// One generator call's tokens as its provider reported them (K-5, live only: the log does not keep usage yet). The
-/// prompt's count is the rendered prompt the call sent, which is what a context gauge shows.
+/// A generator call's tokens as its provider reported them (K-5): live, one call's; on replay (A5,
+/// <see cref="ReplayOptions.Usage"/>) what the log records on the answer or call that followed, which can sum several calls.
+/// The prompt's count is the rendered prompt the call sent, which is what a context gauge shows.
 /// </summary>
-public sealed record UsageReported(long? InputTokens, long? OutputTokens) : SessionStreamUpdate;
+public sealed record UsageReported(long? InputTokens, long? OutputTokens) : SessionStreamUpdate
+{
+    /// <summary>A5, replay: the latest call's prompt when this sums several calls (<see cref="Calls"/>); null live.</summary>
+    public long? PromptTokens { get; init; }
+
+    /// <summary>A5, replay: how many generator calls this covers.</summary>
+    public int Calls { get; init; } = 1;
+}
 
 /// <summary>A tool call's state, as ACP names it.</summary>
 public enum ToolCallState

@@ -10,7 +10,9 @@ namespace Corvid.Kernel.Turns;
 /// from. The turn loop recognises the call rather than running it: the call and its result are logged, the round's other
 /// calls run, and the turn ends <see cref="TurnStatus.Clarifying"/> with the question as its answer and as a
 /// <c>ClarificationAsked</c> event. The person's answer is their next message, which only they can send: nothing answers the
-/// question on their behalf. Offered only in interactive turns: a scheduled run has nobody to ask.
+/// question on their behalf. Offered only in interactive turns: a scheduled run has nobody to ask. A5: where a surface that
+/// can answer now is attached (<see cref="IQuestionAsker"/>: the app's window, <c>corvid chat</c>) the turn instead waits for
+/// the answer, which becomes the call's result (<c>ClarificationAnswered</c>), and goes on.
 /// </summary>
 public sealed class AskUserTool : ToolFunction
 {

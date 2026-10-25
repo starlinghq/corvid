@@ -372,6 +372,11 @@ internal sealed partial class AcpAgent : IJsonRpcHandler, IAsyncDisposable
             // Streamed text is already in the editor; anything else (a fixed message, an answer not streamed) is sent now.
             if (result.Text is { } answer && !string.Equals(answer.Trim(), reporter.Streamed.Trim(), StringComparison.Ordinal))
                 _context.Update(state.Session.Id, new AgentMessageChunk(new TextContent(answer)));
+            // A5: the question the turn ended on (K-6), structured, after its text; the person's next prompt answers it.
+            if (result.Status == TurnStatus.Clarifying && result.Question is { } question)
+                _context.Connection.Notify(AcpMethods.CorvidQuestion,
+                    new CorvidQuestionNotification(state.Session.Id, question.Id, question.Text, [.. question.Options.IsDefault ? [] : question.Options]),
+                    AcpJson.Default.CorvidQuestionNotification);
             // ACP: once the client has sent session/cancel, the prompt MUST answer "cancelled", even when the turn reached
             // its end before the kernel saw the cancel.
             if (cancelled.IsCancellationRequested)

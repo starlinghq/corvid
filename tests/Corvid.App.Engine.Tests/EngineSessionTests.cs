@@ -108,6 +108,29 @@ public sealed class EngineSessionTests
         Assert.Contains($"AnswerEntry {Answer}", replayed);
     }
 
+    // A5 (A4 leftover): token use is in the log, so a reopened session's turn header has its tokens and the context gauge
+    // is full before the next turn runs, as the live turn showed them.
+    [Fact]
+    public async Task AReplayedTurnShowsTheLiveTurnsTokensAndTheContextGauge()
+    {
+        await using var fixture = await EngineFixture.StartAsync(NotesTurn());
+        var (id, live) = await RunTurnAsync(fixture);
+        var shown = SessionFold.Replay(id, live);
+
+        using var fresh = fixture.Sessions();
+        using var reopened = await fresh.OpenAsync(id, _ => { }, TestContext.Current.CancellationToken);
+        var replayed = SessionFold.Replay(id, reopened.History);
+
+        var liveHeader = Assert.Single(shown.Transcript.OfType<TurnHeaderEntry>());
+        var header = Assert.Single(replayed.Transcript.OfType<TurnHeaderEntry>());
+        // Two generator calls of 42 in and 7 out each, as the fake provider reports them.
+        Assert.Equal(98, liveHeader.Tokens);
+        Assert.Equal(liveHeader.Tokens, header.Tokens);
+        Assert.Equal(42, replayed.ContextTokens);
+        Assert.Equal(shown.ContextWindow, replayed.ContextWindow);
+        Assert.NotNull(replayed.ContextWindow);
+    }
+
     [Fact]
     public async Task AReplayedTurnCarriesTheLiveTurnsGeneratorAndDecisions()
     {

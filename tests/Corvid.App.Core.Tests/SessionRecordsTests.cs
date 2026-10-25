@@ -105,6 +105,56 @@ public sealed class SessionRecordsTests
         public Task CompactAsync(string sessionId, string? focus, CancellationToken cancellationToken = default) => inner.CompactAsync(sessionId, focus, cancellationToken);
         public Task<string> ForkAsync(string sessionId, long? throughPosition, CancellationToken cancellationToken = default) => inner.ForkAsync(sessionId, throughPosition, cancellationToken);
         public Task RenameAsync(string sessionId, string title, CancellationToken cancellationToken = default) => inner.RenameAsync(sessionId, title, cancellationToken);
+
+        /// <summary>A5: when set, sessions can be created, and creating one waits for this (the runtime still starting).</summary>
+        public TaskCompletionSource<string>? Creating { get; set; }
+
+        public bool CanCreate => Creating is not null;
+
+        public Task<string> CreateAsync(CancellationToken cancellationToken = default) => Creating!.Task.WaitAsync(cancellationToken);
+    }
+
+    // A5 (A4 leftover): text typed while a new session starts (Ctrl+N as the runtime loads) is the new session's draft, whether
+    // it went into the composer with no session open or onto the draft of the one that was showing.
+    [Fact]
+    public async Task Text_typed_while_a_new_session_starts_becomes_its_draft()
+    {
+        var (service, time, demo) = Start();
+        using var _ = demo;
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar);
+        using var hub = new SessionHub(service, new InlineDispatcher(), time, shell, bar);
+        var sessions = new SessionsViewModel(shell, hub);
+        await hub.StartAsync(DemoSessionService.VaultSessionId, null, Ct);
+        var shown = hub.Current!;
+        shown.Draft = "half a thought";
+
+        service.Creating = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var creating = hub.CreateAsync(Ct);
+        Assert.True(sessions.IsStartingSession);
+        Assert.Contains("What you type now goes to it", sessions.EmptyText, StringComparison.Ordinal);
+        // Typed after Ctrl+N, into the composer still showing the old session.
+        shown.Draft = "half a thought and the start of the next";
+        service.Creating.SetResult(DemoSessionService.ReleaseNotesSessionId);
+        await creating;
+
+        Assert.False(sessions.IsStartingSession);
+        Assert.Equal("half a thought", shown.Draft);
+        var opened = hub.Current!;
+        Assert.Equal(DemoSessionService.ReleaseNotesSessionId, opened.SessionId);
+        Assert.Equal(" and the start of the next", opened.Draft);
+
+        // With no session open: the composer's text while it starts.
+        shell.SelectSession(null);
+        service.Creating = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        creating = hub.CreateAsync(Ct);
+        sessions.StartingDraft = "typed before it opened";
+        service.Creating.SetResult(DemoSessionService.MainSessionId);
+        await creating;
+        Assert.Equal("typed before it opened", hub.Current!.Draft);
+        // Once nothing is starting the composer's text goes nowhere (it empties as it binds a session).
+        sessions.StartingDraft = "";
+        Assert.Equal("", hub.StartingDraft);
     }
 
     private static (KeepingService Service, ManualTimeProvider Time, DemoSessionService Demo) Start()

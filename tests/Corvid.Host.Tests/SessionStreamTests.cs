@@ -1,3 +1,4 @@
+using Corvid.Abstractions.Events;
 using Corvid.Approvals;
 using Corvid.Host.Models;
 using Corvid.Host.Sessions;
@@ -61,9 +62,41 @@ public sealed class SessionStreamTests
         Assert.Equal("Hello there.", string.Concat(live.OfType<AnswerChunk>().Select(chunk => chunk.Text)));
         var usage = Assert.Single(live.OfType<UsageReported>());
         Assert.Equal((42L, 7L), (usage.InputTokens, usage.OutputTokens));
-        // Neither is in the log, so a replay has none.
+        // The reasoning is not in the log, so a replay has none; the tokens are (A5), on the answer.
         var replay = await SessionReplay.ReadAsync(runtime, session.Id, new ToolPresentation(runtime), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.DoesNotContain(replay.Updates, update => update is ThoughtChunk or UsageReported);
+        Assert.DoesNotContain(replay.Updates, update => update is ThoughtChunk);
+        var replayed = Assert.Single(replay.Updates.OfType<UsageReported>());
+        Assert.Equal((42L, 7L, 42L), (replayed.InputTokens, replayed.OutputTokens, replayed.PromptTokens));
+    }
+
+    // A5 (A4 leftover): token use is in the log, on the event each generator response produced (the answer, or a round's
+    // first call), so a replayed turn shows its tokens and the context gauge, as the live turn did; ACP's transcript is unchanged.
+    [Fact]
+    public async Task EachGeneratorResponsesTokensAreLoggedAndReplayedWhereTheLiveTurnReportedThem()
+    {
+        await using var host = TestHost.Create(new FakeModels(new FakeGenerator(Reply.Call("list_notes", "{}"), Reply.Say("Two notes."))));
+        var runtime = await host.StartAsync();
+        await using var _ = runtime;
+        var session = runtime.OpenSession(surface: "test");
+
+        var delivery = await session.SendAsync("list my notes", TestContext.Current.CancellationToken);
+        Assert.Equal(Corvid.Kernel.Turns.TurnStatus.Answered, delivery.Result!.Status);
+
+        var transcript = session.Snapshot().Transcript.Select(entry => entry.Content).ToList();
+        var call = Assert.Single(transcript.OfType<ToolCallIssued>());
+        Assert.Equal(new TokenUsage(42, 7, 1, 42), call.Usage);
+        Assert.Equal(new TokenUsage(42, 7, 1, 42), Assert.Single(transcript.OfType<AssistantMessage>()).Usage);
+
+        var replay = await SessionReplay.ReadAsync(runtime, session.Id, new ToolPresentation(runtime), cancellationToken: TestContext.Current.CancellationToken);
+        var updates = replay.Updates.ToList();
+        var usages = updates.Select((update, index) => (update, index)).Where(item => item.update is UsageReported).Select(item => item.index).ToList();
+        Assert.Equal(2, usages.Count);
+        // Each just before what its response produced: the call's start, then the answer.
+        Assert.IsType<ToolCallStarted>(updates.Skip(usages[0] + 1).First(update => update is not TurnStepped));
+        Assert.IsType<AnswerChunk>(updates[usages[1] + 1]);
+
+        var acp = await SessionReplay.ReadAsync(runtime, session.Id, new ToolPresentation(runtime), ReplayOptions.Transcript, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.DoesNotContain(acp.Updates, update => update is UsageReported);
     }
 
     [Fact]

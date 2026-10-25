@@ -70,8 +70,16 @@ public sealed partial class RedactionMap
         // (a first name inside a full name) never splits it.
         var matches = new List<(int Start, int Length, string Placeholder)>();
         foreach (var (value, placeholder) in values)
+        {
+            // A5: a PII value that is one word of letters is replaced where it stands as a word, not inside a longer one
+            // ("Mark" in "Marketing", "Ann" in "Annual"); the extractor reads words, so it never found it there. Anything else
+            // is replaced wherever it appears: a credential glued to other text is still the credential, and so is a number
+            // (an account, a phone) or a full name.
+            var whole = !IsCredential(placeholder) && value.All(char.IsLetter);
             for (var at = text.IndexOf(value, StringComparison.Ordinal); at >= 0; at = text.IndexOf(value, at + 1, StringComparison.Ordinal))
-                matches.Add((at, value.Length, placeholder));
+                if (!whole || (at == 0 || !char.IsLetterOrDigit(text[at - 1])) && (at + value.Length == text.Length || !char.IsLetterOrDigit(text[at + value.Length])))
+                    matches.Add((at, value.Length, placeholder));
+        }
         if (matches.Count == 0)
             return text;
         matches.Sort((a, b) => a.Start != b.Start ? a.Start.CompareTo(b.Start) : b.Length.CompareTo(a.Length));

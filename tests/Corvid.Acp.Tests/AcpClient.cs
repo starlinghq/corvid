@@ -122,7 +122,7 @@ internal sealed class AcpClient : IAsyncDisposable
     public List<JsonObject> UpdatesFor(string sessionId)
     {
         lock (Updates)
-            return [.. Updates.Where(update => update["params"]?["sessionId"]?.GetValue<string>() == sessionId)
+            return [.. Updates.Where(update => update["method"]?.GetValue<string>() == "session/update" && update["params"]?["sessionId"]?.GetValue<string>() == sessionId)
                 .Select(update => update["params"]!["update"]!.AsObject())];
     }
 

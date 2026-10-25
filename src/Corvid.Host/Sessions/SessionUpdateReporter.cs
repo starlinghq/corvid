@@ -225,6 +225,16 @@ public sealed class SessionUpdateReporter : ITurnObserver
     /// reported nothing, a last task list), then the delivered answer when it was not streamed as it reads (a fixed
     /// message, an answer the generator did not stream). Returns when all of it is emitted.
     /// </summary>
+    /// <summary>
+    /// A5: reads the log now and emits what it holds, so a question the turn just asked (its <c>ClarificationAsked</c>) is
+    /// shown before the surface waits for the answer. Returns once it is emitted.
+    /// </summary>
+    public Task CatchUpAsync()
+    {
+        Then(CatchUp);
+        return DrainAsync();
+    }
+
     public Task FinishAsync(string? answer)
     {
         Then(() =>
@@ -340,6 +350,10 @@ public sealed class SessionUpdateReporter : ITurnObserver
                             {
                                 At = item.RecordedAt,
                             });
+                            break;
+                        // A5: a question the person answered inside the turn.
+                        case ClarificationAnswered answered:
+                            _fromLog.Add(new QuestionClosed(answered.QuestionId, answered.Answer) { At = item.RecordedAt });
                             break;
                         case TodosSet todos:
                             _fromLog.Add(new PlanChanged(todos.Items) { At = item.RecordedAt });

@@ -488,13 +488,15 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 // A4V2-5: a ! line's turn runs its command, no generator.
                 channel.Translator.ShellLine = !verbatim && ComposerLine.Parse(text) is ComposerLine.Shell;
                 channel.Translator.MaxSteps = runtime.Options.Turn.MaxSteps;
-                channel.Translator.ContextWindow = session.Slots.TryCurrent(ModelSlots.Generator, out var generator) ? generator.Profile.AcceptedContext : null;
+                channel.Translator.ContextWindow = ContextWindow(runtime, session);
                 channel.TurnBegun = false;
                 channel.Sent = text;
                 channel.Reporter = reporter;
             }
             feed = runtime.Feed.Subscribe(sessionId, reporter);
-            prompter = runtime.AttachPrompter(sessionId, new CardPrompter(this, channel, runtime, tools, reporter));
+            // A5: and the turn's ask_user questions, answered inside the turn while this window runs it.
+            prompter = new Attached(runtime.AttachPrompter(sessionId, new CardPrompter(this, channel, runtime, tools, reporter)),
+                runtime.AttachQuestioner(sessionId, new WindowQuestioner(this, channel, reporter)));
             // Kept on the channel too, so closing the window lets go of them even while the turn runs on.
             lock (channel.Gate)
                 (channel.Feed, channel.Prompter) = (feed, prompter);
@@ -796,6 +798,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             // A job's run is the scheduler's: the window shows it as it ran and sends nothing into it.
             if (summary.ReadOnly)
                 updates.Add(new DriverChanged(true) { Holder = summary.Holder, At = at });
+            // A5: the replayed usage fills the context gauge against the window of the generator the next turn starts on.
+            channel.Translator.ContextWindow ??= ContextWindow(runtime, open ? session : null);
             foreach (var update in history.Updates)
                 updates.AddRange(channel.Translator.Translate(update));
             // A turn running in this runtime that the window did not start (a job's run, another surface's) is still running,
@@ -1253,6 +1257,14 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     private static string CurrentGenerator(CorvidRuntime runtime, CorvidSession? session) =>
         session is not null && session.Slots.TryCurrent(ModelSlots.Generator, out var current) ? current.Profile.Id.Split('@')[0] : Generator(runtime);
 
+    /// <summary>A5: the accepted context of the session's generator, or the registry default's for a session not open here.</summary>
+    private static int? ContextWindow(CorvidRuntime runtime, CorvidSession? session)
+    {
+        if (session is not null && session.Slots.TryCurrent(ModelSlots.Generator, out var current))
+            return current.Profile.AcceptedContext;
+        return runtime.Registry.TryGet(ModelSlots.Generator, out var slot) ? slot.Default.Profile.AcceptedContext : null;
+    }
+
     private static AppMode Mode(PipelineMode mode) => mode switch
     {
         PipelineMode.Manual => AppMode.Manual,
@@ -1330,6 +1342,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         public IDisposable? Feed { get; set; }
 
         public IDisposable? Prompter { get; set; }
+
+        /// <summary>A5: the question the running turn waits on inside the turn, or null.</summary>
+        public InTurnQuestion? AskedInTurn { get; set; }
 
         /// <summary>The running turn is being interrupted: its open prompts close as cancelled.</summary>
         public bool Cancelling { get; set; }

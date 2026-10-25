@@ -210,6 +210,12 @@ public sealed class TurnServices
     /// (turn progress) and the bounded tail of a running call's output (K-2). Null tells nobody, and tools get no output sink.
     /// </summary>
     public ITurnListener? Listener { get; init; }
+
+    /// <summary>
+    /// A5: where an <c>ask_user</c> question is asked inside the turn when a surface can answer it now; null (or nobody
+    /// attached) ends the turn on the question, as K-6 does.
+    /// </summary>
+    public IQuestionAsker? Questions { get; init; }
 }
 
 /// <summary>

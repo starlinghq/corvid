@@ -54,7 +54,8 @@ public sealed record SkillLearnerOptions
 /// </summary>
 public sealed class SkillLearner : ISkillLearning
 {
-    private const string SystemPrompt =
+    /// <summary>Its fixed system prompt, Corvid's own text (A5: the egress gate neither scans nor rewrites it).</summary>
+    public const string SystemPrompt =
         "You write reusable skills for an AI assistant in the agentskills.io SKILL.md format. Reply with the SKILL.md only.";
 
     private static readonly JsonWriterOptions WriterOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };

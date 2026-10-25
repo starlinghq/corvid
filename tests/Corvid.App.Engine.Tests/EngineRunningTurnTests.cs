@@ -322,6 +322,8 @@ public sealed class EngineRunningTurnTests
         await using var fixture = await StartAsync(generator, weather.Tool, new AskUserTool());
         var id = fixture.Runtime.OpenSession(surface: "app").Id;
         using var service = fixture.Sessions();
+        // K-6: the end-the-turn path, which a turn the window did not start and the decider clarify still take (A5).
+        service.QuestionsInTurn = false;
         var waiter = new SessionWaiter();
         using var subscription = await service.OpenAsync(id, waiter.Add, Ct);
 
@@ -382,6 +384,8 @@ public sealed class EngineRunningTurnTests
         await using var fixture = await StartAsync(generator, new AskUserTool());
         var id = fixture.Runtime.OpenSession(surface: "app").Id;
         using var service = fixture.Sessions();
+        // K-6: the end-the-turn path, which a turn the window did not start and the decider clarify still take (A5).
+        service.QuestionsInTurn = false;
         var waiter = new SessionWaiter();
         using var subscription = await service.OpenAsync(id, waiter.Add, Ct);
 
@@ -403,5 +407,93 @@ public sealed class EngineRunningTurnTests
         Assert.Equal("Blue", sent);
         Assert.DoesNotContain(generator.Calls[^1], message => message.Role == Microsoft.Extensions.AI.ChatRole.User
             && message.Text.Contains("\U000E0061", StringComparison.Ordinal));
+    }
+
+    // ---- A5: a question asked inside the turn ----
+
+    [Fact]
+    public async Task A_question_the_windows_turn_asks_waits_inside_the_turn_and_its_answer_is_the_calls_result()
+    {
+        const string Asked = "Which version?";
+        const string Rc = "0.2.0-rc1\U000E0061\U000E006C";
+        var generator = new FakeGenerator(
+            _ => Calls(("ask_user", System.Text.Json.JsonSerializer.Serialize(new { question = Asked, options = new[] { "0.2.0", Rc } }))),
+            Reply.Say("Tagged 0.2.0-rc1."),
+            Reply.Say("Changelog updated."));
+        await using var fixture = await StartAsync(generator, new AskUserTool());
+        var id = fixture.Runtime.OpenSession(surface: "app").Id;
+        using var service = fixture.Sessions();
+        var waiter = new SessionWaiter();
+        using var subscription = await service.OpenAsync(id, waiter.Add, Ct);
+
+        await service.SendAsync(id, "tag the release", Ct);
+        var question = await waiter.WaitAsync<QuestionAsked>();
+        Assert.Equal(question.QuestionId, service.QuestionWaiting(id));
+        // The turn waits on the person: still running, and nothing ended it.
+        Assert.DoesNotContain(waiter.Updates, update => update is TurnEnded);
+        Assert.Equal(question.QuestionId, SessionFold.Replay(id, subscription.History.Concat(waiter.Updates)).Question?.QuestionId);
+        Assert.Equal(1, (await service.ListAsync(Ct)).Single(item => item.Id == id).PendingQuestions);
+        // Typed while it waits: queued behind the turn, never the answer.
+        await service.QueueAsync(id, "then update the changelog", Ct);
+        // A ! line is still not an answer.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.AnswerQuestionAsync(id, question.QuestionId, "!rm -rf build", Ct));
+        Assert.Single(generator.Calls);
+
+        // The option as offered: only its visible text is the answer.
+        await service.AnswerQuestionAsync(id, question.QuestionId, Rc, Ct);
+        await service.IdleAsync();
+
+        var answered = Assert.Single(waiter.Updates.OfType<QuestionAnswered>());
+        Assert.Equal((question.QuestionId, "0.2.0-rc1"), (answered.QuestionId, answered.Answer));
+        Assert.Equal(TurnOutcome.Answered, waiter.Updates.OfType<TurnEnded>().First().Outcome);
+        // One turn took the answer (it is no message); the queued message ran after it.
+        Assert.Equal(["tag the release", "then update the changelog"], waiter.Updates.OfType<UserMessage>().Select(message => message.Text));
+        Assert.Equal(3, generator.Calls.Count);
+        var result = generator.Calls[1].SelectMany(message => message.Contents).OfType<Microsoft.Extensions.AI.FunctionResultContent>().Single();
+        Assert.Contains("0.2.0-rc1", result.Result?.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("\U000E0061", result.Result?.ToString(), StringComparison.Ordinal);
+        Assert.Null(service.QuestionWaiting(id));
+        Assert.Equal(0, (await service.ListAsync(Ct)).Single(item => item.Id == id).PendingQuestions);
+
+        // Replayed from the log in a fresh window: the question shows answered and none is open.
+        using var fresh = fixture.Sessions();
+        using var reopened = await fresh.OpenAsync(id, _ => { }, Ct);
+        var view = SessionFold.Replay(id, reopened.History);
+        Assert.Null(view.Question);
+        Assert.Equal("0.2.0-rc1", view.Transcript.OfType<QuestionEntry>().Single().Answer);
+        Assert.Equal(0, (await fresh.ListAsync(Ct)).Single(item => item.Id == id).PendingQuestions);
+    }
+
+    [Fact]
+    public async Task An_interrupt_while_a_question_waits_ends_the_turn_and_withdraws_the_question()
+    {
+        var generator = new FakeGenerator(
+            _ => Calls(("ask_user", """{"question":"Which branch?"}""")),
+            Reply.Say("Using main."));
+        await using var fixture = await StartAsync(generator, new AskUserTool());
+        var id = fixture.Runtime.OpenSession(surface: "app").Id;
+        using var service = fixture.Sessions();
+        var waiter = new SessionWaiter();
+        using var subscription = await service.OpenAsync(id, waiter.Add, Ct);
+
+        await service.SendAsync(id, "tag the release", Ct);
+        var question = await waiter.WaitAsync<QuestionAsked>();
+        await service.InterruptAsync(id, Ct);
+        await service.IdleAsync();
+
+        Assert.Equal(TurnOutcome.Cancelled, Assert.Single(waiter.Updates.OfType<TurnEnded>()).Outcome);
+        Assert.Null(service.QuestionWaiting(id));
+        // It went with the turn, as an interrupted turn's question does on every surface: here, in the list and from the log.
+        Assert.Null(SessionFold.Replay(id, subscription.History.Concat(waiter.Updates)).Question);
+        Assert.Equal(0, (await service.ListAsync(Ct)).Single(item => item.Id == id).PendingQuestions);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.AnswerQuestionAsync(id, question.QuestionId, "main", Ct));
+        using var fresh = fixture.Sessions();
+        using var reopened = await fresh.OpenAsync(id, _ => { }, Ct);
+        Assert.Null(SessionFold.Replay(id, reopened.History).Question);
+        // The next message is a message.
+        await service.SendAsync(id, "use main", Ct);
+        await service.IdleAsync();
+        Assert.Equal(["tag the release", "use main"], waiter.Updates.OfType<UserMessage>().Select(message => message.Text));
+        Assert.DoesNotContain(waiter.Updates.OfType<QuestionAnswered>(), answered => answered.Answer.Length > 0);
     }
 }
