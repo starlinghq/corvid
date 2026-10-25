@@ -464,6 +464,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 channel.Translator.MaxSteps = runtime.Options.Turn.MaxSteps;
                 channel.Translator.ContextWindow = session.Slots.TryCurrent(ModelSlots.Generator, out var generator) ? generator.Profile.AcceptedContext : null;
                 channel.TurnBegun = false;
+                channel.Sent = text;
                 channel.Reporter = reporter;
             }
             feed = runtime.Feed.Subscribe(sessionId, reporter);
@@ -475,6 +476,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             // A session's first message is its title until K-9 titles and G-6 renames are events, as the rail shows it.
             if (Line(text) is { Length: > 0 } title)
                 Publish(channel, _ => channel.View is { Title.Length: > 0 } ? [] : [new TitleChanged(title) { At = _time.GetUtcNow() }]);
+            await PauseAt("post").ConfigureAwait(false);
             // Returns once the session's actor has the message; the turn runs on, and its end is tracked below.
             var delivery = await session.PostAsync(text, EnvelopeOrigin.User, cancellationToken).ConfigureAwait(false);
             Track(FinishTurnAsync(channel, reporter, delivery, feed, prompter, started));
@@ -626,11 +628,14 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     private void Report(Channel channel, CorvidSession session, SessionUpdateReporter reporter, SessionStreamUpdate update)
     {
         var cancel = false;
-        if (update is PromptSent)
+        // Only the window's own message begins its turn: another surface may post between the head the reporter reads from
+        // and the window's post, and its turn runs first; an interrupt asked for meanwhile must not reach it. The log keeps a
+        // user's message as it was sent (it is not scrubbed), so its text tells the two apart.
+        if (update is PromptSent prompt)
         {
             lock (channel.Gate)
             {
-                if (ReferenceEquals(channel.Reporter, reporter) && !channel.TurnBegun)
+                if (ReferenceEquals(channel.Reporter, reporter) && !channel.TurnBegun && string.Equals(prompt.Text, channel.Sent, StringComparison.Ordinal))
                 {
                     channel.TurnBegun = true;
                     cancel = channel.Cancelling;
@@ -1172,6 +1177,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
 
         /// <summary>The session has begun the window's message (its prompt is in the log): an interrupt cancels it at once.</summary>
         public bool TurnBegun { get; set; }
+
+        /// <summary>The text of the message the running turn posted, which tells its prompt from another surface's.</summary>
+        public string? Sent { get; set; }
 
         public SessionView? View { get; set; }
 
