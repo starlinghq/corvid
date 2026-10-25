@@ -150,6 +150,8 @@ public sealed partial class EngineSessionService
             await reporter.AnnounceAsync(callId, prompt.Analysis.Text, tools.Kind(tool)).ConfigureAwait(false);
 
             var facts = ApprovalCards.Read(runtime.Log, channel.SessionId, prompt);
+            // A5: a spawn's children (goal, tools, budget, model mix) or the child that asks, as every surface's card has them.
+            var delegation = await DelegationCard.LinesAsync(runtime, prompt, cancellationToken).ConfigureAwait(false);
             var now = service._time.GetUtcNow();
             var pending = new PendingApproval(prompt, ApprovalPipeline.RulesFor(prompt.Analysis, RuleDecision.Allow, now));
             await service.PauseAt("card").ConfigureAwait(false);
@@ -162,7 +164,10 @@ public sealed partial class EngineSessionService
                     return [];
                 channel.Pending[prompt.ApprovalId] = pending;
                 registered = true;
-                AppRequested request = ApprovalCards.Request(prompt, callId, tool, arguments, tools, translator, facts, channel.TaintSource, now);
+                AppRequested request = ApprovalCards.Request(prompt, callId, tool, arguments, tools, translator, facts, channel.TaintSource, now) with
+                {
+                    Delegation = [.. delegation],
+                };
                 return
                 [
                     // An enforced detection's red row comes first, then the card it forced.

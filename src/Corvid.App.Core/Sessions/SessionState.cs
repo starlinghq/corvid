@@ -209,6 +209,15 @@ public sealed record SessionView
     /// <summary>The generator now.</summary>
     public string? Model { get; init; }
 
+    /// <summary>A5: this session's child sessions, oldest first, each as last reported (docs/plan/ui.md §4.13).</summary>
+    public ImmutableList<ChildSessionChanged> Children { get; init; } = [];
+
+    /// <summary>A5: the session this one is a child of; a child is read-only.</summary>
+    public string? ParentId { get; init; }
+
+    /// <summary>A5: what this child was asked, when it is one.</summary>
+    public string? ChildGoal { get; init; }
+
     /// <summary>A5: each slot's latest change in this session (any slot), by slot name; empty until one changes.</summary>
     public ImmutableDictionary<string, SlotModelChanged> SlotModels { get; init; } = ImmutableDictionary<string, SlotModelChanged>.Empty;
 

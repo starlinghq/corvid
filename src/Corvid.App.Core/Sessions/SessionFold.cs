@@ -71,6 +71,8 @@ public static class SessionFold
                     Reason = SafeText.Clean(slot.Reason),
                 }),
             },
+            ChildSessionChanged child => OnChild(state, child),
+            ChildOfSession parent => state with { ParentId = SafeText.Clean(parent.ParentId), ChildGoal = SafeText.Clean(parent.Goal) },
             TaintChanged taint => OnTaint(state, taint),
             ChangesUpdate changes => state with
             {
@@ -89,6 +91,7 @@ public static class SessionFold
         };
 
         return update is AgentMessageChunk or AgentThoughtChunk or UsageUpdate or EngineStatus or QueueChanged or PlanUpdate or SlotModelChanged
+                or ChildSessionChanged or ChildOfSession
             ? next
             : Arrange(next);
     }
@@ -489,6 +492,23 @@ public static class SessionFold
         }
 
         return state with { Model = switched.To };
+    }
+
+    /// <summary>A5: a child's start or end replaces what was known of it; its text is cleaned once, here.</summary>
+    private static SessionView OnChild(SessionView state, ChildSessionChanged child)
+    {
+        var clean = child with
+        {
+            ChildId = SafeText.Clean(child.ChildId),
+            Goal = SafeText.Clean(child.Goal),
+            Status = SafeText.Clean(child.Status),
+            Tools = [.. child.Tools.Select(SafeText.Clean)],
+            Mix = child.Mix is { } mix ? SafeText.Clean(mix) : null,
+            Answer = child.Answer is { } answer ? SafeText.Clean(answer) : null,
+            Detail = child.Detail is { } detail ? SafeText.Clean(detail) : null,
+        };
+        var at = state.Children.FindIndex(known => known.ChildId == clean.ChildId);
+        return state with { Children = at < 0 ? state.Children.Add(clean) : state.Children.SetItem(at, clean) };
     }
 
     private static SessionView OnTaint(SessionView state, TaintChanged taint)

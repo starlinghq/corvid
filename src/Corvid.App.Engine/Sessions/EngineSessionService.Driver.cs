@@ -27,7 +27,7 @@ public sealed partial class EngineSessionService
 
     /// <summary>What a tail reads past <paramref name="after"/>: the open calls are the other process's, still running.</summary>
     private static ReplayOptions TailOptions(long after) =>
-        ReplayOptions.Full with { UnfinishedCalls = false, UnfinishedAsRunning = true, After = after };
+        ReplayOptions.Full with { UnfinishedCalls = false, UnfinishedAsRunning = true, After = after, Children = true };
 
     /// <summary>The read-only note for a session another process drives.</summary>
     internal static string DriverHolder(LockHolder? holder) =>
@@ -100,7 +100,8 @@ public sealed partial class EngineSessionService
             }
         }
         var driver = runtime.Driver(id);
-        if (driver.State == LockState.HeldHere)
+        // A5: a child this process runs is followed through its log all the same: the window never drives it.
+        if (driver.State == LockState.HeldHere && !IsChild(id))
         {
             // This process took it (the window's own message): its turns report live from here on.
             StopTail(channel);
@@ -132,7 +133,7 @@ public sealed partial class EngineSessionService
         var flipped = false;
         Publish(channel, translator =>
         {
-            if (channel.Running || IsJobRun(id) || (channel.ReadOnly == elsewhere && channel.Holder == holder))
+            if (channel.Running || IsJobRun(id) || IsChild(id) || (channel.ReadOnly == elsewhere && channel.Holder == holder))
                 return [];
             flipped = true;
             channel.ReadOnly = elsewhere;

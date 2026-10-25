@@ -58,6 +58,15 @@ public sealed record SessionSummary(string Id, string Title)
 
     public int? ForkTurn { get; init; }
 
+    /// <summary>
+    /// A5: this session is a child of <see cref="ChildSessionChanged.ChildId"/>'s parent (<see cref="ParentId"/>): what it was
+    /// started with and how it ended. The Board shows it under its parent; it is read-only.
+    /// </summary>
+    public ChildSessionChanged? Child { get; init; }
+
+    /// <summary>A5: the session this one is a child of.</summary>
+    public string? ParentId { get; init; }
+
     public int PendingApprovals { get; init; }
 
     /// <summary>The first open approval in a line ("rm -rf build/ &amp;&amp; dotnet test").</summary>
@@ -214,6 +223,12 @@ public interface ISessionService
     /// resend", "branch from here", an aside.
     /// </summary>
     Task<string> ForkAsync(string sessionId, long? throughPosition, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// A5: stops a running child session (plan §14): its turn is cancelled and its parent hears it ended cancelled. False when
+    /// no such child runs where this service can reach it (the demo has none).
+    /// </summary>
+    Task<bool> StopChildAsync(string childId, CancellationToken cancellationToken = default) => Task.FromResult(false);
 
     /// <summary>Renames the session (G-6).</summary>
     Task RenameAsync(string sessionId, string title, CancellationToken cancellationToken = default);
