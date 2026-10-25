@@ -103,7 +103,16 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         Counter = counter;
         Builtin = builtin;
         _swap = memory is null ? null : new EmbedderSwapJob(memory.Vectors);
-        Sessions = new SessionHost(CreateActor);
+        Sessions = new SessionHost(CreateActor, new SessionHostOptions
+        {
+            // A message whose session cannot be routed (its driver lock went to another process after a release, M2) fails
+            // its send with why, rather than leaving the sender waiting.
+            RoutingFailed = (envelope, exception) =>
+            {
+                if (envelope.MessageId is { } id && _waiting.TryRemove(id, out var waiter))
+                    waiter.TrySetException(exception);
+            },
+        });
         if (memory is not null && registry.TryGet(ModelSlots.TextEmbedder, out var embedder)
             && memory.Vectors.State.Active != embedder.Default.Profile.Id)
             // The configured embedder changed since the store was written (or the store is new): §4.3's swap, in the background.
@@ -541,6 +550,9 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
 
     private SessionActor CreateActor(string sessionId)
     {
+        // G-12: every actor runs under the session's driver lock, also one made again for a message posted while the session
+        // was being let go of (ReleaseDriverAsync): idempotent when OpenSession already took it.
+        TakeDriver(sessionId);
         var slots = NewSlots(sessionId);
         var settings = _settings.TryGetValue(sessionId, out var chosen) ? chosen : SessionSettings.Default;
         var runner = new TurnRunner(sessionId, Services(slots, settings.Interactive, settings.Tools ? Tools : new ToolRegistry(), settings));

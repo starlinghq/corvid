@@ -144,7 +144,8 @@ public sealed partial class CorvidRuntime
         SessionActor? actor;
         lock (_driverGate)
         {
-            if (_driversReleased || !_drivers.TryGetValue(sessionId, out var held))
+            // Not while the runtime stops: its own disposal disposes the actors.
+            if (_driversReleased || _lifetime.IsCancellationRequested || !_drivers.TryGetValue(sessionId, out var held))
                 return false;
             if (_sessions.TryGetValue(sessionId, out var session) && !session.Actor.IsIdle)
                 return false;

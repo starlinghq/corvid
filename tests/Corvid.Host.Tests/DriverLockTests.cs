@@ -338,6 +338,25 @@ public sealed class DriverLockTests
     }
 
     [Fact]
+    public async Task AMessagePostedToASessionLetGoOfRetakesItsLockOrFailsWithWhoHoldsIt()
+    {
+        // M2: a handle kept across a release posts through the router, which never runs a turn without the driver lock.
+        await using var host = TestHost.Create(new FakeModels(new FakeGenerator(Reply.Say("Back."))));
+        await using var app = await host.StartAsync();
+        var factory = host.Services.GetRequiredService<CorvidRuntimeFactory>();
+        await using var terminal = await factory.StartAsync(Token);
+        var kept = app.OpenSession("cli-kept");
+        Assert.True(await app.ReleaseDriverAsync("cli-kept"));
+        terminal.OpenSession("cli-kept");
+
+        var delivery = await kept.PostAsync("still there?", Abstractions.Sessions.EnvelopeOrigin.User, Token);
+
+        var refused = await Assert.ThrowsAsync<SessionHeldException>(() => delivery.WaitAsync(Token));
+        Assert.Equal("cli-kept", refused.SessionId);
+        Assert.False(app.TryGetSession("cli-kept", out _));
+    }
+
+    [Fact]
     public async Task NobodyHoldsTheSchedulerWhenItIsOff()
     {
         await using var host = TestHost.Create();

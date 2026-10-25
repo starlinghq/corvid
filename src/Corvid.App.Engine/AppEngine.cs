@@ -414,7 +414,8 @@ public sealed class AppEngine : IAsyncDisposable
             return;
         try
         {
-            if (HostsGateway && await GatewayAsync().ConfigureAwait(false) is { Status.Hosting: not GatewayHosting.Here } gateway
+            // Only a gateway another process held: one off for its own reason (no adapter enabled) waits for Start or Settings.
+            if (HostsGateway && await GatewayAsync().ConfigureAwait(false) is { Status.Hosting: GatewayHosting.Elsewhere } gateway
                 && ProcessLock.Probe(GatewayStatus.LockPath(runtime.Options), withoutNote: true).State == LockState.Free)
                 await StartGatewayAsync(gateway).ConfigureAwait(false);
             // The runtime retries only a lock it lost to another process (C-041).
