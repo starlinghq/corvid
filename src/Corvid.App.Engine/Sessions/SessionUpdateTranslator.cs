@@ -47,6 +47,11 @@ public sealed class SessionUpdateTranslator(string workspace)
     // whether the turn's latest output is answer text (a call after it, such as memory_add, asks the gate in the turn).
     private bool _turnRemembers;
     private bool _answerLast;
+    // A5: the generator the running step is on (the turn's start, then each ModelSwitched of the generator), for the step
+    // update and tool cards; and the latest switch's log position, so a switch the replay and the live event both bring is
+    // shown once.
+    private string _stepModel = "";
+    private long _modelSequence;
 
     /// <summary>The generator a turn opened from here on starts on ("fake-gen"); empty when unknown (a replay).</summary>
     public string Model { get; set; } = "";
@@ -126,6 +131,7 @@ public sealed class SessionUpdateTranslator(string workspace)
                 _turnRemembers = false;
                 var generator = prompt.Generator ?? (ShellLine ? "" : Model);
                 ShellLine = false;
+                _stepModel = generator;
                 // K-6: the person's next message is their answer to the open question; nothing else answers it, a guest's
                 // message in a gateway chat included (security M2: shown as the guest's, the question stays open).
                 if (_openQuestion is { } open && prompt.From is null)
@@ -165,7 +171,7 @@ public sealed class SessionUpdateTranslator(string workspace)
                 break;
             // Turn progress: the step a response with tool calls began, with the turn's budget when known.
             case TurnStepped stepped when TurnOpen:
-                output.Add(new TurnProgress(stepped.Step) { At = at, MaxSteps = stepped.MaxSteps ?? MaxSteps });
+                output.Add(new TurnProgress(stepped.Step) { At = at, MaxSteps = stepped.MaxSteps ?? MaxSteps, Model = StepModel });
                 break;
             case ThoughtChunk thought:
                 output.Add(new AgentThoughtChunk(thought.Text) { At = at });
@@ -194,6 +200,7 @@ public sealed class SessionUpdateTranslator(string workspace)
                 output.Add(new ToolCall(started.CallId, started.Tool ?? started.Title, Kind(started.Kind, started.Tool), Status(started.Status))
                 {
                     At = at,
+                    Model = userShell ? null : StepModel,
                     Target = ToolPresentation.Target(started.Input),
                     Input = started.Input?.GetRawText(),
                     Locations = Relative(started.Locations),
@@ -206,6 +213,7 @@ public sealed class SessionUpdateTranslator(string workspace)
                         Status(changed.Status ?? ToolCallState.InProgress))
                     {
                         At = at,
+                        Model = changed.CallId.StartsWith(Corvid.Kernel.Turns.TurnRunner.UserShellCall, StringComparison.Ordinal) ? null : StepModel,
                         Target = ToolPresentation.Target(input),
                         Input = input.GetRawText(),
                         Locations = Relative(changed.Locations),
@@ -269,6 +277,10 @@ public sealed class SessionUpdateTranslator(string workspace)
                     Expanded = logged.Expanded,
                 });
                 break;
+            // A5: a slot's model changed (live from this process, replayed from the log's ModelSwitched): its row and slot change.
+            case ModelChanged change:
+                output.AddRange(Models(change, at));
+                break;
             // CheckpointLogged: Rewind's timeline reads the ledger itself (A3 history); the transcript shows no row for it.
         }
         // A compaction comes between turns, and so does a # line's memory gate: their time is not the replayed turn's end.
@@ -292,14 +304,26 @@ public sealed class SessionUpdateTranslator(string workspace)
         && (!TurnOpen || (_answerLast && !_turnRemembers));
 
     /// <summary>The question in a few words for the attention tray: its first line, cut to a short title.</summary>
+    /// <summary>The generator the running step is on, without its device; null when unknown.</summary>
+    private string? StepModel => _stepModel.Length > 0 ? _stepModel : null;
+
     /// <summary>
-    /// A5: the host's <see cref="ModelChanged"/> as the app's updates: a <see cref="SlotModelChanged"/> for any slot, and for
-    /// the generator, when its model really changed, the transcript's <see cref="ModelSwitched"/> row before it. The
-    /// generator's names drop the device (<c>qwen3.5-0.8b@cuda0</c> reads <c>qwen3.5-0.8b</c>), as the session's model does.
+    /// A5: the host's <see cref="ModelChanged"/> as the app's updates: a <see cref="SlotModelChanged"/> for any slot, and a
+    /// transcript row (<see cref="ModelSwitched"/>) before it when a logged switch really changed the model: the generator's
+    /// for every reason (escalation, a fallback, the privacy gate's retreat, de-escalation, the person's switch), the other
+    /// slots' (the decider's) for the person's own. Names drop the device (<c>qwen3.5-0.8b@cuda0</c> reads
+    /// <c>qwen3.5-0.8b</c>), as the session's model does. A person's switch while a turn runs says the turn takes it at its
+    /// next step. A switch already shown (by its log position) is not shown again.
     /// </summary>
-    internal static IReadOnlyList<SessionUpdate> Models(ModelChanged change, DateTimeOffset at)
+    internal IReadOnlyList<SessionUpdate> Models(ModelChanged change, DateTimeOffset at)
     {
         ArgumentNullException.ThrowIfNull(change);
+        if (change.Sequence is { } sequence)
+        {
+            if (sequence <= _modelSequence)
+                return [];
+            _modelSequence = sequence;
+        }
         var slot = new SlotModelChanged(change.Slot, change.From, change.To, change.Reason)
         {
             At = at,
@@ -307,23 +331,32 @@ public sealed class SessionUpdateTranslator(string workspace)
             Pinned = change.Pinned,
             Cloud = change.Cloud,
         };
-        if (change.Slot != Corvid.Models.ModelSlots.Generator || change.Sequence is null || change.From == change.To)
+        if (change.Sequence is null || change.From == change.To)
             return [slot];
+        var generator = change.Slot == Corvid.Models.ModelSlots.Generator;
+        var person = change.Reason is "session" or "user";
+        if (generator && TurnOpen)
+            _stepModel = Bare(change.To);
+        if (!generator && !person)
+            return [slot];
+        var next = TurnOpen && person ? "; the running turn takes it at its next step" : "";
         var (kind, reason) = change.Reason switch
         {
             "escalation" => (ModelSwitchKind.Escalated, "escalated"),
             "fallback" => (ModelSwitchKind.FellBack, "the model failed"),
             "privacy" => (ModelSwitchKind.KeptLocal, "the privacy gate kept it local"),
             "de_escalation" => (ModelSwitchKind.Returned, "the turn ended"),
-            "user" => (ModelSwitchKind.Switched, "for this turn"),
-            _ => (ModelSwitchKind.Switched, "for this session"),
+            "user" => (ModelSwitchKind.Switched, "for this turn" + next),
+            _ => (ModelSwitchKind.Switched, "for this session" + next),
         };
         return
         [
-            new ModelSwitched(change.Slot, change.From.Split('@')[0], change.To.Split('@')[0], kind, reason) { At = at, Cloud = change.Cloud },
+            new ModelSwitched(change.Slot, Bare(change.From), Bare(change.To), kind, reason) { At = at, Cloud = change.Cloud },
             slot,
         ];
     }
+
+    private static string Bare(string profileId) => profileId.Split('@')[0];
 
     internal static string QuestionTitle(string text)
     {

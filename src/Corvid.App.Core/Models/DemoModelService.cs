@@ -92,8 +92,6 @@ public sealed class DemoModelService : IModelService, IDisposable
     {
         if (_snapshot.Slot(slot) is not { } current)
             return Refused($"There is no slot named {E(slot)}.");
-        if (current.Shared)
-            return Refused($"The {current.Name} is shared by every session: run `corvid model switch {current.Name} …`, then restart.");
         if (_snapshot.Find(model) is not { } chosen || !chosen.CanServe.Contains(current.Name))
             return Refused($"{E(model)} cannot serve as the {current.Name}.");
         if (!chosen.IsAvailable)
@@ -120,7 +118,29 @@ public sealed class DemoModelService : IModelService, IDisposable
             Ladder = current.Ladder?.Where(step => step != model).ToList(),
             Placement = placement,
         });
-        return Written($"Written to `{ConfigPath}`: the {current.Name} is {E(model)}. Applies to new sessions; this one switches after its issued tool calls.");
+        return Written($"Written to `{ConfigPath}`: the {current.Name} is {E(model)} for new sessions. This session keeps its own model; Switch… › This session moves it.");
+    }
+
+    public Task<ConfigWrite> SwitchSessionAsync(string slot, string model, CancellationToken cancellationToken = default)
+    {
+        if (_snapshot.Slot(slot) is not { } current)
+            return Refused($"There is no slot named {E(slot)}.");
+        if (_snapshot.Find(model) is not { } chosen || !chosen.CanServe.Contains(current.Name))
+            return Refused($"{E(model)} cannot serve as the {current.Name}.");
+        if (!chosen.IsAvailable)
+            return Refused(chosen.Kind == ModelKind.Local ? $"{E(model)} is not downloaded yet." : $"{E(model)} is unavailable: {Unavailable(chosen)}.");
+        if (string.Equals(current.InSession, model, StringComparison.Ordinal) && current.SessionChoice)
+            return Written($"This session's {current.Name} is already {E(model)}.");
+        Replace(current with { SessionModel = model, SessionChoice = true });
+        return Written($"This session's {current.Name} is {E(model)} until you change it; a running turn takes it at its next step. Nothing was written.");
+    }
+
+    public Task<ConfigWrite> ClearSessionChoiceAsync(string slot, CancellationToken cancellationToken = default)
+    {
+        if (_snapshot.Slot(slot) is not { } current)
+            return Refused($"There is no slot named {E(slot)}.");
+        Replace(current with { SessionModel = null, SessionChoice = false });
+        return Written($"This session's {current.Name} follows the default again: {E(current.Model ?? "unbound")}.");
     }
 
     public Task<ConfigWrite> SetPinnedAsync(string slot, bool pinned, CancellationToken cancellationToken = default)
@@ -340,7 +360,7 @@ public sealed class DemoModelService : IModelService, IDisposable
             Placement: new("cuda:0", 0, 180), Pinnable: true),
         new(ModelSlotNames.Summarizer, "qwen3.5-0.8b", Placement: new("cuda:0", 0, 210)),
         new(ModelSlotNames.Decider, "kev-0.8b", Ladder: ["kev-4b"], Note: "second tier for gates below their floor",
-            Placement: new("cuda:0", 0, 240), Shared: true),
+            Placement: new("cuda:0", 0, 240)),
         new(ModelSlotNames.Extractor, "gliner2-base-v1", Placement: new("cpu", null, 38)),
         new(ModelSlotNames.EmbedderText, "embeddinggemma-2", Fallback: "e5", Note: "memory embeds only with models configured at start",
             Placement: new("cpu", null, 12)),

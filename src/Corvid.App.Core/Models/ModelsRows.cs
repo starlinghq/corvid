@@ -150,7 +150,13 @@ public sealed class SlotRowViewModel : ObservableObject
 
     public string PinLabel => _pinned ? "Unpin" : "Pin";
 
-    /// <summary>The decider: shared by every session, so switching it is a command and a restart, not a button.</summary>
+    /// <summary>A5: the model the open session uses when it is not the default (configured text: compare, never show raw); null otherwise.</summary>
+    public string? SessionModel { get; private set; }
+
+    /// <summary>A5: the person chose this slot's model for the open session.</summary>
+    public bool HasSessionChoice { get; private set; }
+
+    /// <summary>A slot shared by every session, so switching it is a command and a restart, not a button (none since A5's per-session decider).</summary>
     public bool IsShared { get => _shared; private set { if (SetProperty(ref _shared, value)) OnPropertyChanged(nameof(ShowActions)); } }
 
     /// <summary>Switch… (and Pin) show for a bound slot that is not shared.</summary>
@@ -188,13 +194,19 @@ public sealed class SlotRowViewModel : ObservableObject
         BoundModel = slot.Model;
         IsPinned = slot.Pinned;
         IsShared = slot.Shared;
-        CurrentNote = (slot.IsDefault, slot.Pinned) switch
-        {
-            (true, true) => "default · pinned",
-            (true, false) => "default",
-            (false, true) => "pinned",
-            _ => "",
-        };
+        SessionModel = slot.SessionModel;
+        HasSessionChoice = slot.SessionChoice;
+        // A5: what the open session uses when it is not the default for new sessions, and whether the person chose it.
+        var notes = new List<string>();
+        if (slot.IsDefault)
+            notes.Add("default");
+        if (slot.Pinned)
+            notes.Add("pinned");
+        if (slot.SessionModel is { } inSession && !string.Equals(inSession, slot.Model, StringComparison.Ordinal))
+            notes.Add($"this session: {SafeText.Clean(inSession)}");
+        else if (slot.SessionChoice)
+            notes.Add("this session's choice");
+        CurrentNote = string.Join(" · ", notes);
         if (slot.Name == ModelSlotNames.Decider && slot.IsBound)
         {
             var calibrated = snapshot.Decider.Tier == DeciderTier.Calibrated;
@@ -233,7 +245,8 @@ public sealed class SlotRowViewModel : ObservableObject
         Placement = slot.Placement is { } at ? SafeText.Clean(ModelText.Placement(at)) : "—";
         Latency = slot.Placement is { } p ? Math.Clamp(p.P50Milliseconds / GaugeFullMilliseconds, 0, 1) : 0;
         OnPropertyChanged(nameof(HasPlacement));
-        CanSwitch = slot.IsBound && !slot.Shared;
+        // A5: the decider can be given a model per session even on the degraded tier, where nothing binds it by default.
+        CanSwitch = !slot.Shared && (slot.IsBound || slot.Name == ModelSlotNames.Decider);
         CanPin = slot.Pinnable;
         OnPropertyChanged(nameof(AutomationName));
     }

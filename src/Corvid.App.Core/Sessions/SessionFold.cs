@@ -174,7 +174,12 @@ public static class SessionFold
     private static SessionView OnTurnProgress(SessionView state, TurnProgress progress)
     {
         var maxSteps = progress.MaxSteps ?? state.MaxSteps;
-        state = UpdateHeader(state, header => header with { Step = progress.Step, MaxSteps = maxSteps });
+        state = UpdateHeader(state, header => header with
+        {
+            Step = progress.Step,
+            MaxSteps = maxSteps,
+            StepModel = progress.Model is { Length: > 0 } model ? SafeText.Clean(model) : header.StepModel,
+        });
         return state with { Step = progress.Step, MaxSteps = maxSteps, ActivitySince = progress.At };
     }
 
@@ -338,6 +343,7 @@ public static class SessionFold
                 Input = call.Input ?? existing.Input,
                 Locations = call.Locations.IsDefaultOrEmpty ? existing.Locations : call.Locations,
                 Verdict = call.Verdict ?? existing.Verdict,
+                Model = existing.Model ?? Cleaned(call.Model),
                 StartedAt = call.Status == ToolCallStatus.InProgress && existing.Status == ToolCallStatus.Pending ? call.At : existing.StartedAt,
             };
             state = state with { Transcript = state.Transcript.SetItem(index, updated) };
@@ -353,6 +359,8 @@ public static class SessionFold
                 Locations = call.Locations.IsDefault ? [] : call.Locations,
                 Verdict = call.Verdict,
                 ApprovalId = state.Approvals.FirstOrDefault(request => request.CallId == call.CallId)?.ApprovalId,
+                Model = Cleaned(call.Model),
+                TurnModel = TurnFirstModel(state),
             };
             state = Add(state, entry);
         }
@@ -479,7 +487,11 @@ public static class SessionFold
     private static SessionView OnModelSwitched(SessionView state, ModelSwitched switched)
     {
         state = AddNew(state, "switch", id => new SwitchEntry(id, switched));
-        if (switched.Kind == ModelSwitchKind.KeptLocal)
+        // A5: another slot's row (the decider's) changes neither the generator nor the turn's models.
+        if (switched.Slot is { Length: > 0 } slot && slot != "generator")
+            return state;
+        // A privacy retreat (A5) moved the generator to a local model; a refused escalation stayed where it was.
+        if (switched.Kind == ModelSwitchKind.KeptLocal && (switched.To.Length == 0 || switched.To == switched.From))
             return state;
         if (state.Running)
         {
@@ -812,6 +824,12 @@ public static class SessionFold
     private static int CurrentTurn(SessionView state) => state.Running ? state.Turn : 0;
 
     private static string ThoughtId(SessionView state) => (state.Running ? state.TurnHeaderId : null) is { } header ? header + "-thought" : "thought-0";
+
+    /// <summary>A5: the generator the running turn started on, from its header; null outside a turn.</summary>
+    private static string? TurnFirstModel(SessionView state) =>
+        state.TurnHeaderId is { } id && IndexOf(state.Transcript, id) is >= 0 and var index && state.Transcript[index] is TurnHeaderEntry { Models: { IsDefaultOrEmpty: false } models }
+            ? models[0]
+            : null;
 
     private static SessionView UpdateHeader(SessionView state, Func<TurnHeaderEntry, TurnHeaderEntry> change)
     {

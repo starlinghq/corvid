@@ -886,7 +886,8 @@ public sealed partial class SessionsPage : Page, IDockProvider
     {
         // The room left of the actions, less the pill at its natural width.
         var room = HeaderGrid.ActualWidth - HeaderActions.ActualWidth - HeaderGrid.ColumnSpacing;
-        var pill = ForkPill.Visibility == Visibility.Visible ? ForkPill.ActualWidth + TitleRow.Spacing : 0;
+        var pill = (ForkPill.Visibility == Visibility.Visible ? ForkPill.ActualWidth + TitleRow.Spacing : 0)
+            + (ModelsPill.Visibility == Visibility.Visible ? ModelsPill.ActualWidth + TitleRow.Spacing : 0);
         var width = Math.Max(40, room - pill);
         if (Math.Abs(TitleText.MaxWidth - width) > 0.5)
             TitleText.MaxWidth = width;

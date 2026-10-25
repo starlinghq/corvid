@@ -66,6 +66,12 @@ public sealed record TurnStarted(int Turn, string Model) : SessionUpdate
 public sealed record TurnProgress(int Step) : SessionUpdate
 {
     public int? MaxSteps { get; init; }
+
+    /// <summary>
+    /// A5: the generator this step runs on ("qwen3.5-0.8b"), live from the session's slot and on replay from the log's
+    /// <c>ModelSwitched</c> events before it; null when unknown. Configuration text: shown through <see cref="SafeText"/>.
+    /// </summary>
+    public string? Model { get; init; }
 }
 
 /// <summary>How a turn ended: Corvid's <c>TurnStatus</c>, which refines ACP's stop reasons.</summary>

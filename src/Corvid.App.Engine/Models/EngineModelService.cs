@@ -23,8 +23,9 @@ namespace Corvid.App.Engine.Models;
 /// them, with where each runs and how fast once the runtime is up; the catalogue (<see cref="ModelCatalogue"/>) with each
 /// model's state in the cache, on its server or in Vault; the decider's tier; the doctor's GPU section and Vault check;
 /// placement. Every change is written to <c>corvid.json</c> through the host's <see cref="CorvidConfigWriter"/> (validated
-/// as the next start would read it), as <c>corvid model switch</c> does. A switch also applies at once: new sessions in
-/// this window start on the new model, and the window's open session switches after its issued tool calls. Ladders,
+/// as the next start would read it), as <c>corvid model switch</c> does. A5: that switch is the default for new sessions:
+/// sessions opened from now on start on it, and the window's open session keeps its own model. "This session" is a separate
+/// choice (<see cref="SwitchSessionAsync"/>): the open session only, any slot (the decider too), until changed. Ladders,
 /// placement and added servers apply from the next start, and the answer says so. Downloads run one at a time on the pool,
 /// only when asked, with progress through <see cref="Changed"/>; a cancelled one leaves no partial file.
 /// </summary>
@@ -146,12 +147,8 @@ public sealed class EngineModelService : IModelService, IDisposable
             if (!result.Written)
                 return Refused($"Not written: {E(result.FailureText)}");
 
-            var message = $"Written to `{E(result.Path)}`: the {slot} is {E(descriptor.Name)}.";
-            if (slot == ModelSlots.Decider)
-            {
-                message += " The decider is shared by every session, so it changes when Corvid next starts.";
-            }
-            else if (runtime is null)
+            var message = $"Written to `{E(result.Path)}`: the {slot} is {E(descriptor.Name)} for new sessions.";
+            if (runtime is null)
             {
                 message += " It applies when Corvid starts.";
             }
@@ -160,7 +157,7 @@ public sealed class EngineModelService : IModelService, IDisposable
                 // The file is written by now: a live switch that fails says so as what it is, not as a refused switch.
                 try
                 {
-                    message += " " + await SwitchLiveAsync(runtime, slot, descriptor.Name, sessionId, cancellationToken).ConfigureAwait(false);
+                    message += " " + SwitchLive(runtime, slot, descriptor.Name, sessionId);
                 }
                 catch (Exception exception) when (exception is not OutOfMemoryException)
                 {
@@ -179,6 +176,62 @@ public sealed class EngineModelService : IModelService, IDisposable
                 message += $" Written; the page could not read the models again: {E(exception.Message)}";
             }
             return Written(message);
+        }, cancellationToken);
+    }
+
+    public Task<ConfigWrite> SwitchSessionAsync(string slot, string model, CancellationToken cancellationToken = default)
+    {
+        var sessionId = _sessionId = _currentSession();
+        return Task.Run(async () =>
+        {
+            if (!ModelSlots.All.Contains(slot, StringComparer.Ordinal))
+                return Refused($"There is no slot named {E(slot)}.");
+            if (Started() is not { } runtime)
+                return Refused("Corvid has not started, so there is no session to switch.");
+            if (sessionId is null)
+                return Refused("Open a session first: \"This session\" switches the open one. \"Default for new sessions\" needs none.");
+            if (!runtime.TryGetSession(sessionId, out var session))
+                return Refused($"Session {E(sessionId)} is not open in this window yet: open it, then switch.");
+            if (!_catalogue.TryFind(model, out var descriptor))
+                return Refused($"There is no model named {E(model)} in the catalogue.");
+            var running = runtime.IsTurnRunning(sessionId);
+            SwitchResult result;
+            try
+            {
+                result = await session.SetModelAsync(slot, descriptor.Name, SwitchScope.Session, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or ModelUnavailableException)
+            {
+                return Refused(E(exception.Message));
+            }
+            await RefreshAsync(cancellationToken).ConfigureAwait(false);
+            var name = E(descriptor.Name);
+            var when = running ? " The running turn takes it at its next step, after its issued tool calls." : "";
+            return result.Status switch
+            {
+                SwitchStatus.Switched => Written($"This session's {slot} is {name} until you change it; nothing was written.{when}"),
+                SwitchStatus.Unchanged when result.SessionDefaultChanged => Written($"This session's {slot} already uses {name}; it is this session's choice now."),
+                SwitchStatus.Unchanged => Written($"This session's {slot} is already {name}."),
+                SwitchStatus.Refused => Refused($"The privacy gate refused {name} for this session: {E(result.Detail)}"),
+                _ => Refused($"This session's {slot} stays where it was ({E(result.Detail)})."),
+            };
+        }, cancellationToken);
+    }
+
+    public Task<ConfigWrite> ClearSessionChoiceAsync(string slot, CancellationToken cancellationToken = default)
+    {
+        var sessionId = _sessionId = _currentSession();
+        return Task.Run(async () =>
+        {
+            if (!ModelSlots.All.Contains(slot, StringComparer.Ordinal))
+                return Refused($"There is no slot named {E(slot)}.");
+            if (Started() is not { } runtime || sessionId is null || !runtime.TryGetSession(sessionId, out var session))
+                return Refused("Open a session first: its choice is what this forgets.");
+            var result = await session.ClearModelChoiceAsync(slot, cancellationToken).ConfigureAwait(false);
+            await RefreshAsync(cancellationToken).ConfigureAwait(false);
+            return result is null
+                ? Written($"This session made no choice for the {slot}; it follows the default.")
+                : Written($"This session's {slot} follows the default again: {E(result.To?.Id.Split('@')[0] ?? "none")}.");
         }, cancellationToken);
     }
 
@@ -716,8 +769,11 @@ public sealed class EngineModelService : IModelService, IDisposable
             ModelSlots.Vision => "needed for images in prompts (K-8)",
             _ => null,
         };
+        // A5: what the window's open session uses for the slot, and whether the person chose it for that session.
+        var inSession = session is not null && session.Slots.TryCurrent(slot, out var sessionBinding) ? sessionBinding.Profile.Id.Split('@')[0] : null;
+        var chosen = session?.Slots.HasSessionChoice(slot) ?? false;
         if (settings?.Model is not { Length: > 0 } model)
-            return new ModelSlot(slot, null, Note: note, Shared: slot == ModelSlots.Decider);
+            return new ModelSlot(slot, null, Note: note, SessionModel: inSession, SessionChoice: chosen);
 
         SlotPlacement? placement = null;
         if (runtime is not null && runtime.Registry.TryGet(slot, out var configured))
@@ -737,9 +793,10 @@ public sealed class EngineModelService : IModelService, IDisposable
             Fallback: settings.Fallbacks.Count == 0 ? null : string.Join(", ", settings.Fallbacks),
             Note: note,
             Placement: placement,
-            Shared: slot == ModelSlots.Decider,
             Pinned: session?.Slots.IsPinned(slot) ?? false,
-            Pinnable: slot is ModelSlots.Generator or ModelSlots.Summarizer);
+            Pinnable: slot is ModelSlots.Generator or ModelSlots.Summarizer,
+            SessionModel: inSession,
+            SessionChoice: chosen);
     }
 
     private static string? CorvidModelDefaults(string slot) => ModelOptions.DefaultSlots.GetValueOrDefault(slot);
@@ -919,40 +976,26 @@ public sealed class EngineModelService : IModelService, IDisposable
 
     // ---- Helpers ----
 
-    /// <summary>Switches the running runtime: new sessions start on the model, and the window's open session moves to it.</summary>
-    private static async Task<string> SwitchLiveAsync(CorvidRuntime runtime, string slot, string model, string? sessionId, CancellationToken cancellationToken)
+    /// <summary>
+    /// A5: the running runtime's default from now on (<see cref="CorvidRuntime.SetDefaultModel"/>): new sessions start on it.
+    /// The window's open session keeps its own model ("This session" is a separate choice).
+    /// </summary>
+    private static string SwitchLive(CorvidRuntime runtime, string slot, string model, string? sessionId)
     {
-        ModelBinding binding;
         try
         {
-            binding = runtime.Bind(slot, model);
+            runtime.SetDefaultModel(slot, model);
         }
         catch (Exception exception) when (exception is ModelUnavailableException or ArgumentException or InvalidOperationException)
         {
             return $"It could not load now ({E(exception.Message)}), so it applies when Corvid next starts.";
         }
 
-        if (runtime.Registry.TryGet(slot, out var configured))
-        {
-            runtime.Registry.Bind(slot, binding,
-                configured.Escalation.Where(step => !string.Equals(step.Profile.Id, binding.Profile.Id, StringComparison.Ordinal)),
-                configured.Fallbacks.Where(step => !string.Equals(step.Profile.Id, binding.Profile.Id, StringComparison.Ordinal)));
-        }
-        else
-        {
-            runtime.Registry.Bind(slot, binding);
-        }
-
         if (sessionId is null || !runtime.TryGetSession(sessionId, out var session))
             return "New sessions in this window start with it.";
-        var switched = await session.Actor.SwitchModelAsync(slot, binding, session.Slots.IsPinned(slot), cancellationToken).ConfigureAwait(false);
-        return switched.Status switch
-        {
-            SwitchStatus.Switched => $"New sessions start with it, and {E(sessionId)} switches after its issued tool calls.",
-            SwitchStatus.Unchanged => $"New sessions start with it; {E(sessionId)} already uses it.",
-            SwitchStatus.Refused => $"New sessions start with it; the privacy gate kept {E(sessionId)} where it was: {E(switched.Detail)}",
-            _ => $"New sessions start with it; {E(sessionId)} stays where it was ({E(switched.Detail)}).",
-        };
+        return session.Slots.HasSessionChoice(slot)
+            ? $"New sessions start with it; {E(sessionId)} keeps its own choice (Switch… › This session changes it)."
+            : $"New sessions start with it; {E(sessionId)} keeps its model until its turn ends, then follows it (Switch… › This session keeps one for it).";
     }
 
     /// <summary>
