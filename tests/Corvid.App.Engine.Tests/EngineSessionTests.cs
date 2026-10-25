@@ -176,6 +176,7 @@ public sealed class EngineSessionTests
 
     [Theory]
     [InlineData("# Heading of my pasted notes\nthe first point")]
+    [InlineData("# Heading typed in the composer\rthe first point")]
     [InlineData("![the diagram](docs/diagram.png) what does it show?")]
     public async Task PastedMarkdownIsNotAModeLine(string text)
     {

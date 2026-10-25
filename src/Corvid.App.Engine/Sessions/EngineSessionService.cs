@@ -131,7 +131,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     private static void RefuseComposerMode(string text)
     {
         var line = text.Trim();
-        if (line.Contains('\n', StringComparison.Ordinal) || line.StartsWith("![", StringComparison.Ordinal))
+        // The composer's text box breaks lines with \r, a paste may bring \n.
+        if (line.AsSpan().IndexOfAny('\r', '\n') >= 0 || line.StartsWith("![", StringComparison.Ordinal))
             return;
         if (line.StartsWith('!'))
             throw new ServiceUnavailableException(
