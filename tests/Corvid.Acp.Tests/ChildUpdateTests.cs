@@ -49,4 +49,28 @@ public sealed class ChildUpdateTests
         var load = await client.RequestAsync("session/load", new { sessionId = childId, cwd = client.Workspace, mcpServers = Array.Empty<object>() });
         Assert.Contains("child session: read-only", load["error"]!["message"]!.GetValue<string>(), StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task L5_a_child_a_command_started_outside_a_prompt_turn_sends_no_tool_call()
+    {
+        var models = new FakeModels(new FakeGenerator(Reply.Say("Two items."), Reply.Say("Hello.")));
+        await using var client = AcpClient.Start(TestHost.Create(models, new Dictionary<string, string?> { ["Corvid:Tools:Delegate"] = "true" }));
+        await client.RequestAsync("initialize", Initialize());
+        var session = await client.NewSessionAsync();
+        var runtime = await client.Runtime;
+        var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        runtime.ChildChanged += (id, update) =>
+        {
+            if (id == session && update is Corvid.Host.Sessions.ChildEnded)
+                ended.TrySetResult();
+        };
+
+        // The command's answer comes at once; the child runs on after it, outside any prompt turn.
+        await client.RequestAsync("session/prompt", Prompt(session, "/delegate --tools list_notes count the items"));
+        await ended.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        // A later prompt's answer comes after every notification sent before it.
+        await client.RequestAsync("session/prompt", Prompt(session, "hello"));
+
+        Assert.DoesNotContain(client.UpdatesFor(session), update => update["toolCallId"]?.GetValue<string>().StartsWith("child-", StringComparison.Ordinal) == true);
+    }
 }

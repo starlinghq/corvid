@@ -470,6 +470,9 @@ public sealed class TurnRunner
         private readonly Dictionary<string, Offered> _catalogue = new(StringComparer.Ordinal);
         // The calls of the latest generator response: budget clearing spares their results, and injection is asked about them.
         private readonly HashSet<string> _lastRound = new(StringComparer.Ordinal);
+        // A5 review (security M2): calls whose tool said its result is outside content (ToolCallContext.MarkResultTainted:
+        // a delegated child that read the web, a hub skill's file), asked injection as a network tool's are. Under _gate.
+        private readonly HashSet<string> _taintedResults = new(StringComparer.Ordinal);
         private ImmutableSortedDictionary<string, ImmutableArray<string>> _entities = ImmutableSortedDictionary<string, ImmutableArray<string>>.Empty;
         private ImmutableArray<Offered> _shortlist = [];
         private ImmutableArray<RetrievedItem> _recalled = [];
@@ -1203,6 +1206,8 @@ public sealed class TurnRunner
                 // content without the network (a hub skill's file) says so on its context.
                 if (descriptor.Risk.Network || callContext?.ResultTainted == true)
                     runner.Tainted = true;
+                if (callContext?.ResultTainted == true)
+                    _taintedResults.Add(call.CallId);
                 _pickDecisions.Remove(descriptor.Name, out decisionId);
             }
             if (decisionId is not null)
@@ -1219,7 +1224,8 @@ public sealed class TurnRunner
         {
             if (_services.Approvals is not { } approvals)
                 return ("no approval pipeline is configured, so side-effecting tools do not run", null);
-            var action = new ToolAction(call.Tool.Descriptor, call.Arguments);
+            // A5 review (security L5): the turn's offer travels with the action, so a spawn's card previews the toolset it grants.
+            var action = new ToolAction(call.Tool.Descriptor, call.Arguments) { OfferedTools = new HashSet<string>(_catalogue.Keys, StringComparer.Ordinal) };
             var context = new ApprovalContext(runner.SessionId, runner.ApprovalMode, State())
             {
                 Tainted = runner.Tainted,
@@ -1617,11 +1623,15 @@ public sealed class TurnRunner
             }
             // injection is asked about content that came from outside (a network tool); either answer leaves it tainted.
             var latest = _lastRound;
+            HashSet<string> outside;
+            lock (_gate)
+                outside = [.. _taintedResults];
             foreach (var entry in results.Where(entry => latest.Contains(((ToolResult)entry.Content).CallId)))
             {
                 var result = (ToolResult)entry.Content;
                 var tool = names.GetValueOrDefault(result.CallId, "");
-                if (_catalogue.TryGetValue(tool, out var offered) && offered.Descriptor.Risk.Network && !result.IsError)
+                // Security M2: and a tool that said its result is outside content, though it reads no network itself.
+                if (_catalogue.TryGetValue(tool, out var offered) && (offered.Descriptor.Risk.Network || outside.Contains(result.CallId)) && !result.IsError)
                     questions.Add(KeyValuePair.Create("injection/" + result.CallId,
                         Catalogue["injection"].ToQuestion(instructions: Instructions(Catalogue["injection"], tool, result, entry.FromSequence))));
             }

@@ -541,6 +541,8 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         await _lifetime.CancelAsync().ConfigureAwait(false);
         // A5: children a person started (/delegate, the app) end cancelled and log it before their sessions go.
         await StartedChildrenIdleAsync().ConfigureAwait(false);
+        // M2 (A5 review): a child whose turn outlived its run lets go of itself once idle; the cancelled lifetime ends the wait.
+        await ChildReleasesIdleAsync().ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         Task? scheduler;
         lock (_schedulerGate)
             scheduler = _scheduler;

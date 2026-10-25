@@ -60,8 +60,10 @@ public sealed partial class EngineSessionService
         PendingApproval[] open;
         lock (channel.Gate)
         {
-            open = [.. channel.Pending.Values];
-            channel.Pending.Clear();
+            // M3 (A5 review): a person-started child's prompts are not the turn's: they stay open past its end and its interrupt.
+            open = [.. channel.Pending.Values.Where(pending => !pending.Lifetime)];
+            foreach (var pending in open)
+                channel.Pending.Remove(pending.Prompt.ApprovalId);
         }
         if (open.Length == 0)
             return;
@@ -125,6 +127,9 @@ public sealed partial class EngineSessionService
 
         /// <summary>Null when the prompt closed without an answer: the deadline, the turn's cancellation, the window closing.</summary>
         public TaskCompletionSource<CardAnswer?> Answer { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>M3 (A5 review): a person-started child's prompt, open for the child's run rather than a turn's.</summary>
+        public bool Lifetime { get; init; }
     }
 
     /// <summary>
@@ -133,40 +138,52 @@ public sealed partial class EngineSessionService
     /// (<see cref="ApprovalRequested"/>), waits for <see cref="AnswerApprovalAsync"/>, and closes the card
     /// (<see cref="ApprovalResolved"/>). A prompt nobody answers is denied: by its deadline, which the pipeline keeps, by the
     /// turn's cancellation, or when the window closes. Nothing is approved on the person's behalf.
+    /// <para>
+    /// M3 (A5 review): with no <paramref name="reporter"/>, the prompter of a child the person started (<c>/delegate</c>), for
+    /// the child's run: its cards go on the parent's view whether or not a turn of the parent runs, and stay open past the
+    /// parent's turns while <paramref name="live"/> holds.
+    /// </para>
     /// </summary>
     private sealed class CardPrompter(EngineSessionService service, Channel channel, CorvidRuntime runtime, ToolPresentation tools,
-        SessionUpdateReporter reporter) : IApprovalPrompter
+        SessionUpdateReporter? reporter, Func<bool>? live = null) : IApprovalPrompter
     {
         public async ValueTask<PipelineAnswer> AskAsync(ApprovalPrompt prompt, CancellationToken cancellationToken)
         {
             if (service._disposed)
                 return PipelineAnswer.Deny();
-            var call = prompt.CallId is { } id ? reporter.Call(id) : null;
+            var call = prompt.CallId is { } id ? reporter?.Call(id) : null;
             var callId = prompt.CallId ?? "approval-" + prompt.ApprovalId;
             var tool = ApprovalCards.ToolOf(prompt, call);
             // What runs is the prompt's in-memory action; the logged call's arguments are credential-scrubbed (C-040).
             JsonElement? arguments = (prompt.Action as ToolAction)?.Arguments ?? call?.Arguments;
             // The call is announced before the card names it, and everything the turn queued before it goes first.
-            await reporter.AnnounceAsync(callId, prompt.Analysis.Text, tools.Kind(tool)).ConfigureAwait(false);
+            if (reporter is not null)
+                await reporter.AnnounceAsync(callId, prompt.Analysis.Text, tools.Kind(tool)).ConfigureAwait(false);
 
-            var facts = ApprovalCards.Read(runtime.Log, channel.SessionId, prompt);
+            // L4 (A5 review): the facts of the session that asks: a child's prompt is about the child's call, in the child's log.
+            var facts = ApprovalCards.Read(runtime.Log, prompt.SessionId, prompt);
             // A5: a spawn's children (goal, tools, budget, model mix) or the child that asks, as every surface's card has them.
             var delegation = await DelegationCard.LinesAsync(runtime, prompt, cancellationToken).ConfigureAwait(false);
+            // Security L5 (A5 review): a goal cut for the card can be read in full.
+            var whole = DelegationCard.IsCut(delegation)
+                ? await DelegationCard.LinesAsync(runtime, prompt, cancellationToken, whole: true).ConfigureAwait(false)
+                : [];
             var now = service._time.GetUtcNow();
-            var pending = new PendingApproval(prompt, ApprovalPipeline.RulesFor(prompt.Analysis, RuleDecision.Allow, now));
+            var pending = new PendingApproval(prompt, ApprovalPipeline.RulesFor(prompt.Analysis, RuleDecision.Allow, now)) { Lifetime = reporter is null };
             await service.PauseAt("card").ConfigureAwait(false);
             // The prompt is registered and its card put on the stream under one lock, so an interrupt or the turn's end
             // either comes first (no card, deny) or closes the card it sees: never a close before the card it closes.
             var registered = false;
             service.Publish(channel, translator =>
             {
-                if (channel.Cancelling || !ReferenceEquals(channel.Reporter, reporter) || service._disposed)
+                if (service._disposed || (reporter is null ? live?.Invoke() == false : channel.Cancelling || !ReferenceEquals(channel.Reporter, reporter)))
                     return [];
                 channel.Pending[prompt.ApprovalId] = pending;
                 registered = true;
                 AppRequested request = ApprovalCards.Request(prompt, callId, tool, arguments, tools, translator, facts, channel.TaintSource, now) with
                 {
                     Delegation = [.. delegation],
+                    DelegationWhole = [.. whole],
                 };
                 return
                 [
@@ -196,7 +213,7 @@ public sealed partial class EngineSessionService
             if (answer is null)
             {
                 // The pipeline cancels the prompt at its deadline; an interrupt or the window closing cancels it too.
-                var cancelled = interrupted || service._disposed;
+                var cancelled = (interrupted && reporter is not null) || service._disposed;
                 service.Publish(channel, _ =>
                 [
                     new AppResolved(prompt.ApprovalId, cancelled ? ApprovalOutcome.Cancelled : ApprovalOutcome.TimedOut)

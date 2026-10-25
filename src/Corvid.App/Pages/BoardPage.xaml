@@ -92,6 +92,9 @@
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
+              <!-- M5 (A5 review): the tree shows at most SessionCardViewModel.MaxChildRows children; the rest are counted here. -->
+              <TextBlock Text="{x:Bind MoreChildren, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" Margin="4,0,0,0"
+                         Visibility="{x:Bind ui:Ui.VisibleIfText(MoreChildren), Mode=OneWay}" />
             </StackPanel>
             <!-- .foot: tags then buttons, 8 apart, at the card's bottom. -->
             <controls:WrapRowPanel Grid.Row="5" Spacing="8" LineSpacing="8" VerticalAlignment="Bottom">

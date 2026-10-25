@@ -97,6 +97,9 @@ public sealed record ChildResult(string ChildId, string Status, string? Text, Js
     string? Detail)
 {
     public bool Answered => Status == ChildStatuses.Answered;
+
+    /// <summary>L3 (A5 review): <see cref="Tokens"/> holds the token counter's estimate for calls whose provider reported no usage.</summary>
+    public bool TokensEstimated { get; init; }
 }
 
 /// <summary>A child that cannot be started: too deep, delegation off, a model refused, an output schema not understood.</summary>

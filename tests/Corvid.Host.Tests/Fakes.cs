@@ -37,6 +37,9 @@ internal sealed class FakeGenerator(params Func<IReadOnlyList<ChatMessage>, Chat
 
     public ITokenCounter? Counter { get; init; }
 
+    /// <summary>False: answers carry no usage, as a provider that reports none (A5 review, L3).</summary>
+    public bool ReportsUsage { get; init; } = true;
+
     public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
@@ -51,7 +54,8 @@ internal sealed class FakeGenerator(params Func<IReadOnlyList<ChatMessage>, Chat
         }
         var step = Interlocked.Increment(ref _next) - 1;
         var response = step < script.Length ? script[step](list) : Reply.Text("Done.");
-        response.Usage = new UsageDetails { InputTokenCount = 42, OutputTokenCount = 7 };
+        if (ReportsUsage)
+            response.Usage = new UsageDetails { InputTokenCount = 42, OutputTokenCount = 7 };
         response.ModelId = "fake-gen";
         return Hold?.Invoke(step, cancellationToken) is { } hold ? HeldAsync(hold, response) : Task.FromResult(response);
     }
@@ -81,7 +85,9 @@ internal sealed class FakeGenerator(params Func<IReadOnlyList<ChatMessage>, Chat
                     yield return new ChatResponseUpdate(ChatRole.Assistant, [content]) { MessageId = "m1", ModelId = response.ModelId };
             }
         }
-        yield return new ChatResponseUpdate(ChatRole.Assistant, [new UsageContent(response.Usage!)]) { MessageId = "m1", FinishReason = ChatFinishReason.Stop };
+        yield return response.Usage is { } usage
+            ? new ChatResponseUpdate(ChatRole.Assistant, [new UsageContent(usage)]) { MessageId = "m1", FinishReason = ChatFinishReason.Stop }
+            : new ChatResponseUpdate(ChatRole.Assistant, []) { MessageId = "m1", FinishReason = ChatFinishReason.Stop };
     }
 
     private static IEnumerable<string> SplitWords(string text)

@@ -23,30 +23,44 @@ public static class DelegationCard
 
     /// <summary>
     /// The card's extra lines for a prompt: the spawn's children, or which child a child's prompt comes from; empty for any
-    /// other prompt. Never throws for a plan it cannot make: the refusal is a line.
+    /// other prompt. Never throws for a plan it cannot make: the refusal is a line. The spawn's children are planned with the
+    /// calling turn's offer (<see cref="ToolAction.OfferedTools"/>), as the approved call plans them.
     /// </summary>
-    public static async Task<IReadOnlyList<string>> LinesAsync(CorvidRuntime runtime, ApprovalPrompt prompt, CancellationToken cancellationToken = default)
+    /// <param name="whole">
+    /// Security L5 (A5 review): each goal in full rather than cut at <see cref="GoalChars"/> with how much is left out, for a
+    /// surface that lets the person read all of what they grant.
+    /// </param>
+    public static async Task<IReadOnlyList<string>> LinesAsync(CorvidRuntime runtime, ApprovalPrompt prompt, CancellationToken cancellationToken = default,
+        bool whole = false)
     {
         ArgumentNullException.ThrowIfNull(runtime);
         ArgumentNullException.ThrowIfNull(prompt);
         var lines = new List<string>();
         if (runtime.TryGetSession(prompt.SessionId, out var session) && session.Child is { } child)
-            lines.Add($"Asked by child session {prompt.SessionId} of {child.ParentId}, working on: {Goal(child.Goal)}");
+            lines.Add($"Asked by child session {prompt.SessionId} of {child.ParentId}, working on: {Goal(child.Goal, whole)}");
         if (IsSpawn(prompt))
         {
-            var previews = await runtime.PreviewDelegationAsync(prompt.SessionId, ((ToolAction)prompt.Action!).Arguments, cancellationToken)
+            var action = (ToolAction)prompt.Action!;
+            var previews = await runtime.PreviewDelegationAsync(prompt.SessionId, action.Arguments, cancellationToken, action.OfferedTools)
                 .ConfigureAwait(false);
             for (var i = 0; i < previews.Count; i++)
-                lines.AddRange(Lines(previews[i], previews.Count == 1 ? null : i + 1));
+                lines.AddRange(Lines(previews[i], previews.Count == 1 ? null : i + 1, whole));
         }
         return lines;
     }
 
+    /// <summary>Whether any goal on the card is longer than a card line shows (<see cref="GoalChars"/>).</summary>
+    public static bool IsCut(IReadOnlyList<string> lines) =>
+        lines?.Any(line => line.EndsWith(MoreSuffix, StringComparison.Ordinal)) == true;
+
+    private const string MoreSuffix = " more characters)";
+
     /// <summary>One child's lines: its goal, then its plan or why it would not start.</summary>
-    public static IReadOnlyList<string> Lines(DelegationPreview preview, int? number = null)
+    /// <param name="whole">The goal in full, not cut at <see cref="GoalChars"/>.</param>
+    public static IReadOnlyList<string> Lines(DelegationPreview preview, int? number = null, bool whole = false)
     {
         ArgumentNullException.ThrowIfNull(preview);
-        var lines = new List<string> { (number is { } n ? $"Child {n}: " : "Child: ") + Goal(preview.Goal) };
+        var lines = new List<string> { (number is { } n ? $"Child {n}: " : "Child: ") + Goal(preview.Goal, whole) };
         if (preview.Plan is not { } plan)
         {
             lines.Add("  would not start: " + TerminalText.Visible(preview.Refusal ?? "unknown"));
@@ -89,9 +103,11 @@ public static class DelegationCard
         return shown.Count == 0 ? "the parent's" : string.Join("; ", shown);
     }
 
-    private static string Goal(string goal)
+    // Security L5 (A5 review): a goal cut for the card says how much of it the line leaves out.
+    private static string Goal(string goal, bool whole)
     {
         var visible = TerminalText.Visible(goal.ReplaceLineEndings(" ").Trim());
-        return visible.Length > GoalChars ? visible[..GoalChars] + "…" : visible;
+        return whole || visible.Length <= GoalChars ? visible
+            : visible[..GoalChars] + string.Create(CultureInfo.InvariantCulture, $"… ({visible.Length - GoalChars:N0}") + MoreSuffix;
     }
 }

@@ -158,6 +158,12 @@ public sealed record ApprovalRequested(string ApprovalId, string Tool, string Te
     /// already shown as escapes.
     /// </summary>
     public ImmutableArray<string> Delegation { get; init; } = [];
+
+    /// <summary>
+    /// A5 review (security L5): <see cref="Delegation"/> with every goal in full, when a goal is longer than a card line
+    /// shows (the cut line says how many characters it leaves out); empty when nothing was cut.
+    /// </summary>
+    public ImmutableArray<string> DelegationWhole { get; init; } = [];
 }
 
 /// <summary>How a prompt closed.</summary>

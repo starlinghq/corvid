@@ -13,6 +13,9 @@ namespace Corvid.App.Engine.Sessions;
 /// </summary>
 public sealed partial class EngineSessionService
 {
+    // M3 (A5 review): the prompters of the children the person started from the window, by child id, until each ends.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, IDisposable> _childPrompters = new(StringComparer.Ordinal);
+
     /// <summary>What drives a child, for its read-only note.</summary>
     internal static string ChildHolder(string parentId) => $"a child session of {parentId}, run by it";
 
@@ -60,14 +63,28 @@ public sealed partial class EngineSessionService
     {
         if (_disposed)
             return;
-        if (_channels.TryGetValue(parentId, out var channel))
-            Publish(channel, translator => translator.Child(update));
         var childId = update switch
         {
             ChildStarted started => started.Child.ChildId,
             ChildEnded ended => ended.Child.ChildId,
             _ => null,
         };
+        if (_channels.TryGetValue(parentId, out var channel))
+        {
+            // M3 (A5 review): a child the person started from the window runs past the command and the parent's turns: its
+            // approvals get cards on the parent's view for its whole run, not only while a turn of the parent runs.
+            if (update is ChildStarted { Child.By: ChildSessions.ByUser } start && _engine.ToolsAsync() is { IsCompletedSuccessfully: true } tools)
+            {
+                var id = start.Child.ChildId;
+                var attached = runtime.AttachPrompter(id, new CardPrompter(this, channel, runtime, tools.Result, reporter: null,
+                    live: () => runtime.IsChildRunning(id)));
+                if (!_childPrompters.TryAdd(id, attached))
+                    attached.Dispose();
+            }
+            Publish(channel, translator => translator.Child(update));
+        }
+        if (update is ChildEnded && childId is not null && _childPrompters.TryRemove(childId, out var prompter))
+            prompter.Dispose();
         if (childId is not null)
             Refresh(runtime, childId);
         Refresh(runtime, parentId);
