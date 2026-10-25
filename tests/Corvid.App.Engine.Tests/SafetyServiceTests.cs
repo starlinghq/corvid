@@ -87,6 +87,21 @@ public sealed class SafetyServiceTests
     }
 
     [Fact]
+    public async Task AnEnforceSwitchThisRunsSettingsOverrideIsWrittenAndSaysTheOverrideWins()
+    {
+        // The test host's settings stand for --set: they win over corvid.json at every start.
+        await using var fixture = await EngineFixture.StartAsync(null, new Dictionary<string, string?> { [EngineSafetyService.EnforceKey] = "true" });
+        using var service = new EngineSafetyService(fixture.Engine, new InlineDispatcher(), fixture.Time);
+
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => service.SetEnforceAsync(SafetyCatalog.BuiltInPack, false, Ct));
+
+        Assert.Contains($"{EngineSafetyService.EnforceKey} is set for this run", refused.Message, StringComparison.Ordinal);
+        Assert.True(fixture.Runtime.Approvals.Options.Detections!.Enforce);
+        var file = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(fixture.Host.Root, "corvid.json"), Ct))!;
+        Assert.False(file["Corvid"]!["Detections"]!["Enforce"]!.GetValue<bool>());
+    }
+
+    [Fact]
     public async Task MatchesComeFromTheLogWithTheirOutcomeAndTaintFromTheOpenSessions()
     {
         await using var fixture = await EngineFixture.StartAsync();
@@ -115,6 +130,36 @@ public sealed class SafetyServiceTests
         // A later load reads only what is new, and finds the new match.
         Append(log, "cli-seen", new DetectionMatched("fork-bomb", 1, "high", "detect", "A fork bomb.", [5]));
         Assert.Equal(3, (await service.LoadAsync(Ct)).Detections.Length);
+    }
+
+    [Fact]
+    public async Task MatchesComeFromTheRecentSessionsOnlyAndAreCappedWithACount()
+    {
+        await using var fixture = await EngineFixture.StartAsync();
+        var log = fixture.Runtime.Log;
+        // An old session with a match, then more recent sessions than are searched, then one with more matches than are kept.
+        Append(log, "cli-old", new DetectionMatched("fork-bomb", 1, "high", "detect", "An old fork bomb.", [1]));
+        for (var i = 0; i < EngineSafetyService.MaxScannedSessions; i++)
+            Append(log, $"cli-{i:D3}", new UserMessage("hello"));
+        Append(log, "cli-busy", [.. Enumerable.Range(0, EngineSafetyService.MaxDetections + 5)
+            .Select(i => new DetectionMatched("credential-file-read", 1, "medium", "detect", $"Read {i}.", [i + 1]))]);
+        var all = log.ListSessions(Ct).Count;
+
+        using var service = new EngineSafetyService(fixture.Engine, new InlineDispatcher(), fixture.Time);
+        var snapshot = await service.LoadAsync(Ct);
+
+        Assert.Equal(EngineSafetyService.MaxDetections, snapshot.Detections.Length);
+        Assert.Equal(5, snapshot.MoreDetections);
+        Assert.Equal(all - EngineSafetyService.MaxScannedSessions, snapshot.SessionsNotScanned);
+        Assert.DoesNotContain(snapshot.Detections, match => match.SessionId == "cli-old");
+        // The latest are kept: the last append's match is listed, the first five are counted only.
+        Assert.Contains(snapshot.Detections, match => match.Summary == $"Read {EngineSafetyService.MaxDetections + 4}.");
+        Assert.DoesNotContain(snapshot.Detections, match => match.Summary == "Read 0.");
+
+        // A later load counts on from where the last one stopped.
+        Append(log, "cli-busy", new DetectionMatched("credential-file-read", 1, "medium", "detect", "Read again.", [1]));
+        var again = await service.LoadAsync(Ct);
+        Assert.Equal((EngineSafetyService.MaxDetections, 6), (again.Detections.Length, again.MoreDetections));
     }
 
     [Fact]

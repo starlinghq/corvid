@@ -335,6 +335,28 @@ public sealed class SafetyTests
     }
 
     [Fact]
+    public async Task MatchesTheEngineLeftOutAndSessionsItDidNotSearchAreCounted()
+    {
+        var at = ManualTimeProvider.DemoLocal().GetUtcNow();
+        var service = new FakeSafetyService
+        {
+            Detections = [.. Enumerable.Range(0, 3).Select(i => new SafetyDetection("fork-bomb", DetectionSeverity.High, "cli-1", at.AddSeconds(-i), i, [i])
+            {
+                Enforced = i == 0,
+            })],
+            MoreDetections = 40,
+            SessionsNotScanned = 12,
+        };
+        var bar = new StatusBarViewModel();
+        using var safety = new SafetyViewModel(service, new FakeSession(), new ShellViewModel(bar), bar, ManualTimeProvider.DemoLocal());
+        await safety.Loaded;
+
+        Assert.Equal(3, safety.Matches.Count);
+        Assert.Equal("and 40 older, not drawn; 12 older sessions not searched: Audit lists every match", safety.HiddenMatches);
+        Assert.Equal("43 matches · 1 of the latest 3 forced an ask", safety.MatchesNote);
+    }
+
+    [Fact]
     public async Task OutsideTextInTheDetectionAndHardlineRowsIsCleaned()
     {
         var service = new FakeSafetyService
@@ -506,6 +528,10 @@ public sealed class SafetyTests
 
         public List<SessionTaint> Taint { get; init; } = [];
 
+        public int MoreDetections { get; init; }
+
+        public int SessionsNotScanned { get; init; }
+
         public List<DetectionRule> Pack { get; init; } = [.. SafetyCatalog.BuiltInRules];
 
         public List<HardlineCode> Hardline { get; init; } = [.. SafetyCatalog.Hardline];
@@ -519,7 +545,11 @@ public sealed class SafetyTests
             FailLoad
                 ? Task.FromException<SafetySnapshot>(new InvalidOperationException("no answer"))
                 : Task.FromResult(new SafetySnapshot([.. Rules],
-                    [new DetectionPack(SafetyCatalog.BuiltInPack, true, [.. Pack])], [.. Detections], [.. Hardline], [.. Taint]));
+                    [new DetectionPack(SafetyCatalog.BuiltInPack, true, [.. Pack])], [.. Detections], [.. Hardline], [.. Taint])
+                {
+                    MoreDetections = MoreDetections,
+                    SessionsNotScanned = SessionsNotScanned,
+                });
 
         public Task RemoveRuleAsync(string ruleId, CancellationToken cancellationToken = default)
         {

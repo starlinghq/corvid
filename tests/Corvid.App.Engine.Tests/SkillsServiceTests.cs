@@ -79,6 +79,45 @@ public sealed class SkillsServiceTests
     }
 
     [Fact]
+    public async Task AnEditedDraftIsNeverAppliedOverASkillChangedSinceItWasStaged()
+    {
+        await using var fixture = await EngineFixture.StartAsync();
+        var store = Skills(fixture).Store!;
+        var service = Service(fixture);
+        await store.WriteAgentSkillAsync(SkillDocument.Parse(Document("notes", "1. Old.")), cancellationToken: Ct);
+        await store.WriteAgentSkillAsync(SkillDocument.Parse(Document("lists", "1. Old.")), cancellationToken: Ct);
+        PendingSkill StageAgainst(string name, string? revision) => Skills(fixture).Database!.Stage(name, Document(name, "1. Drafted."), "cli-source",
+            "decision-1", "no answer", new ReplayOutcome(true, ["list_notes"], ["list_notes"], "answered", "").Describe(), null, revision);
+        var overPerson = StageAgainst("notes", await store.RevisionOfAsync("notes", Ct));
+        var overAgent = StageAgainst("lists", await store.RevisionOfAsync("lists", Ct));
+        var asNew = StageAgainst("fresh", await store.RevisionOfAsync("fresh", Ct));
+        Assert.Equal("", asNew.BaseRevision);
+
+        // The person rewrites one skill, the agent another, and a third appears, all after staging.
+        await store.WriteUserSkillAsync(SkillDocument.Parse(Document("notes", "1. The person's.")), cancellationToken: Ct);
+        await store.WriteAgentSkillAsync(SkillDocument.Parse(Document("lists", "1. The agent's again.")), cancellationToken: Ct);
+        await store.WriteUserSkillAsync(SkillDocument.Parse(Document("fresh", "1. Mine.")), cancellationToken: Ct);
+
+        var person = await Assert.ThrowsAsync<SkillOwnershipException>(() => service.ApproveDraftAsync(overPerson.Id, Document("notes", "1. Edited."), Ct));
+        Assert.Contains("not agent-authored", person.Message, StringComparison.Ordinal);
+        var agent = await Assert.ThrowsAsync<SkillOwnershipException>(() => service.ApproveDraftAsync(overAgent.Id, Document("lists", "1. Edited."), Ct));
+        Assert.Contains("changed since this draft was staged", agent.Message, StringComparison.Ordinal);
+        var created = await Assert.ThrowsAsync<SkillOwnershipException>(() => service.ApproveDraftAsync(asNew.Id, Document("fresh", "1. Edited."), Ct));
+        Assert.Contains("created since this draft was staged", created.Message, StringComparison.Ordinal);
+
+        // Nothing was written and every draft still waits.
+        var snapshot = await service.LoadAsync(Ct);
+        Assert.Contains("The person's", snapshot.Skills.Single(skill => skill.Name == "notes").Content, StringComparison.Ordinal);
+        Assert.Contains("The agent's again", snapshot.Skills.Single(skill => skill.Name == "lists").Content, StringComparison.Ordinal);
+        Assert.Equal(3, snapshot.Drafts.Count);
+
+        // A draft over a skill unchanged since staging is applied as the person's.
+        var current = StageAgainst("lists", await store.RevisionOfAsync("lists", Ct));
+        var applied = await service.ApproveDraftAsync(current.Id, Document("lists", "1. Edited."), Ct);
+        Assert.Equal(("user", false), (applied.Author, applied.AgentOwned));
+    }
+
+    [Fact]
     public async Task HistoryShowsEachCommitsSkillsAndFilesAndARevertIsTheUsers()
     {
         await using var fixture = await EngineFixture.StartAsync();
@@ -120,7 +159,10 @@ public sealed class SkillsServiceTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.ArchiveAsync(["mine"], Ct));
 
         await service.SetPinnedAsync("review-notes", false, Ct);
-        Assert.Equal(["review-notes"], await service.ArchiveAsync(["review-notes", "not-a-skill"], Ct));
+        // A name the store does not hold stops the lot and is named.
+        var unknown = await Assert.ThrowsAsync<InvalidOperationException>(() => service.ArchiveAsync(["review-notes", "not-a-skill"], Ct));
+        Assert.Contains("not-a-skill", unknown.Message, StringComparison.Ordinal);
+        Assert.Equal(["review-notes"], await service.ArchiveAsync(["review-notes"], Ct));
         Assert.Equal(["mine"], (await service.LoadAsync(Ct)).Skills.Select(skill => skill.Name));
     }
 

@@ -513,7 +513,18 @@ public sealed class ApprovalPipeline
         if (!Narrow(RulesFor(analysis, decision, _time.GetUtcNow()), narrowed, out var rules, out _))
             return false;
         if (scope == ApprovalScope.Always)
-            _always.Add(rules);
+        {
+            // The person has answered: a rules file that cannot be written (another process holding its lock too long, a full
+            // disk) costs only the rule, and the answer stands for this action, recorded as once.
+            try
+            {
+                _always.Add(rules);
+            }
+            catch (Exception exception) when (exception is IOException or TimeoutException or UnauthorizedAccessException or InvalidDataException)
+            {
+                return false;
+            }
+        }
         else
             _session.AddOrUpdate(sessionId, _ => rules, (_, existing) => existing.AddRange(rules));
         return true;

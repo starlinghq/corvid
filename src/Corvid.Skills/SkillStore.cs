@@ -247,8 +247,30 @@ public sealed class SkillStore : ISkillSource
     /// <c>user</c>, which keeps the learning loop and the curator off it from then on. A new skill's folder must not exist.
     /// </summary>
     /// <returns>The new revision, or null when the content was unchanged.</returns>
-    public async Task<string?> WriteUserSkillAsync(SkillDocument document, string? sessionId = null, string? message = null,
+    public Task<string?> WriteUserSkillAsync(SkillDocument document, string? sessionId = null, string? message = null,
+        CancellationToken cancellationToken = default) =>
+        WriteAsUserAsync(document, sessionId, message, null, cancellationToken);
+
+    /// <summary>
+    /// Writes a reviewed draft the person edited, as theirs, only over what the draft was staged against: under the
+    /// repository's lock, an existing skill must still be wholly agent-authored and, when <paramref name="stagedAgainst"/> is
+    /// known, still at that revision (<c>""</c>: there was no such skill, so there must still be none). A skill the person or a
+    /// hub changed since staging is never overwritten (nor a hub's skill turned into the person's, which the loop trusts).
+    /// </summary>
+    /// <param name="stagedAgainst">The skill's revision when the draft was staged, <c>""</c> for a new skill, or null when not
+    /// known (then only authorship is checked).</param>
+    /// <exception cref="SkillOwnershipException">The skill changed since the draft was staged.</exception>
+    public async Task<string?> WriteReviewedSkillAsync(SkillDocument document, string? stagedAgainst, string? sessionId = null, string? message = null,
         CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        var existing = TryGet(document.Name, out var skill) ? skill : null;
+        return await WriteAsUserAsync(document, sessionId, message, token => EnsureStagedAgainstAsync(document.Name, existing, stagedAgainst, token),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<string?> WriteAsUserAsync(SkillDocument document, string? sessionId, string? message, Func<CancellationToken, Task>? check,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(document);
         var existing = TryGet(document.Name, out var skill) ? skill : null;
@@ -257,10 +279,46 @@ public sealed class SkillStore : ISkillSource
             throw new SkillOwnershipException($"{Relative(folder)} already exists and is not a skill Corvid loaded; nothing is written into it.");
         var revision = await Repository.CommitAsync(folder, SkillAuthor.User, message ?? $"{(existing is null ? "Add" : "Update")} skill {document.Name}",
             _ => File.WriteAllTextAsync(System.IO.Path.Combine(EnsureFolder(folder), SkillDocument.FileName), document.Text, cancellationToken),
-            check: existing is null ? token => EnsureNewFolderAsync(folder, token) : null, cancellationToken).ConfigureAwait(false);
+            check: async token =>
+            {
+                if (existing is null)
+                    await EnsureNewFolderAsync(folder, token).ConfigureAwait(false);
+                if (check is not null)
+                    await check(token).ConfigureAwait(false);
+            }, cancellationToken).ConfigureAwait(false);
         await AfterChangeAsync(document.Name, revision, SkillAuthor.User, sessionId, cancellationToken).ConfigureAwait(false);
         return revision;
     }
+
+    // Under the repository's lock, after outside edits are recorded: the skill is what the draft was staged against.
+    private async Task EnsureStagedAgainstAsync(string name, Skill? existing, string? stagedAgainst, CancellationToken cancellationToken)
+    {
+        if (existing is null)
+        {
+            if (!string.IsNullOrEmpty(stagedAgainst))
+                throw new SkillOwnershipException($"{name} was removed or archived since this draft was staged, so the draft was not applied; reject the draft.");
+            return;
+        }
+        if (stagedAgainst is { Length: 0 })
+            throw new SkillOwnershipException($"{name} was created since this draft was staged, so the draft was not applied over it; reject the draft.");
+        await EnsureAgentOwnedAsync(existing, cancellationToken).ConfigureAwait(false);
+        if (stagedAgainst is null)
+            return;
+        var head = (await Repository.LogAsync(existing.Folder, 1, cancellationToken).ConfigureAwait(false)).FirstOrDefault();
+        if (head is null || !string.Equals(head.Revision, stagedAgainst, StringComparison.Ordinal))
+            throw new SkillOwnershipException($"{name} changed since this draft was staged" +
+                (head is null ? "" : $" (now {head.Revision[..Math.Min(12, head.Revision.Length)]}, by {head.Author}, {head.Date:yyyy-MM-dd HH:mm})") +
+                ", so the draft was not applied over it; reject the draft, or edit the skill in the library.");
+    }
+
+    /// <summary>
+    /// What a draft is staged against: the last revision that touched the skill's folder, <c>""</c> when there is no such
+    /// skill, or null when the skill has no commit yet.
+    /// </summary>
+    public async Task<string?> RevisionOfAsync(string name, CancellationToken cancellationToken = default) =>
+        TryGet(name, out var skill)
+            ? (await Repository.LogAsync(skill.Folder, 1, cancellationToken).ConfigureAwait(false)).FirstOrDefault()?.Revision
+            : "";
 
     /// <summary>Moves an agent-authored skill to <c>.archive/</c> (the curator's stale rule). Pinned skills are never archived.</summary>
     public async Task<string?> ArchiveAsync(string name, string? sessionId = null, CancellationToken cancellationToken = default)

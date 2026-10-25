@@ -128,6 +128,45 @@ public sealed class MemoryServiceTests
     }
 
     [Fact]
+    public async Task AnUnchangedAppendingUpdateIsWrittenExactlyAsStaged()
+    {
+        await using var fixture = await EngineFixture.StartAsync();
+        var writer = Memory(fixture).Writer!;
+        var service = Service(fixture);
+        await writer.EditBlockAsync(Session, "user", "Works on corvid.\n\n", cancellationToken: Ct);
+        var rewrite = Assert.Single((await service.LoadAsync(Ct)).BlockUpdates);
+        await service.ApproveBlockUpdateAsync(rewrite.Id, rewrite.Added, false, Ct);
+        var before = Memory(fixture).Blocks.Get("user").Content;
+
+        // The block ends in a blank line; the update keeps it. Approved as the card shows it, nothing is rebuilt.
+        var staged = before + "Prefers short answers.\n";
+        await writer.EditBlockAsync(Session, "user", staged, cancellationToken: Ct);
+        var append = Assert.Single((await service.LoadAsync(Ct)).BlockUpdates);
+        Assert.Equal("Prefers short answers.", append.Added);
+        var block = await service.ApproveBlockUpdateAsync(append.Id, append.Added, false, Ct);
+        Assert.Equal(staged, Memory(fixture).Blocks.Get("user").Content);
+        Assert.Equal(staged, block.Text);
+    }
+
+    [Fact]
+    public async Task ALessonThatHidesACharacterIsNotApproved()
+    {
+        await using var fixture = await EngineFixture.StartAsync();
+        var project = fixture.Runtime.Project!;
+        var store = Memory(fixture).Lessons!.Store;
+        var hiddenRule = Lesson(project.Id, "Build the hooks​ binary first");
+        var hiddenWhen = Lesson(project.Id, "Run the cli tests after the build") with { Applicability = "when running‮ go test" };
+        store.File(hiddenRule);
+        store.File(hiddenWhen);
+        var service = Service(fixture);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => service.ApproveLessonAsync(hiddenRule.LessonId, null, Ct));
+        await Assert.ThrowsAsync<ArgumentException>(() => service.ApproveLessonAsync(hiddenWhen.LessonId, null, Ct));
+        Assert.Equal(2, (await service.LoadAsync(Ct)).PendingLessons.Count);
+        Assert.Empty((await service.LoadAsync(Ct)).Lessons);
+    }
+
+    [Fact]
     public async Task SearchFindsCurrentFactsAndAnEmptyQueryListsThemAll()
     {
         await using var fixture = await EngineFixture.StartAsync();

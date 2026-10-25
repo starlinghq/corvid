@@ -12,6 +12,7 @@ using Corvid.Gateway.Telegram;
 using Corvid.Host.Configuration;
 using Corvid.Models.Anthropic;
 using Corvid.Models.OpenAICompat;
+using Corvid.Models.Remote;
 using Corvid.Vault.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -116,6 +117,8 @@ public sealed class EngineSecretsService : ISecretsService, IDisposable
             Description = entry.Description,
             Hosts = [.. entry.Hosts],
             Toolsets = [.. entry.Toolsets],
+            // A secret for model providers' toolset serves a model slot only (SecretBinding.Refusal), as Vault's policy has it.
+            Role = entry.Toolsets.Contains(ModelHttp.Toolset, StringComparer.Ordinal) ? ModelHttp.Toolset : null,
             PolicyReported = false,
         }).OrderBy(secret => secret.Name, StringComparer.Ordinal).ToImmutableArray();
         var status = new VaultStatus(VaultState.Running) { Version = NotReportedVersion, Socket = socket, AuditSummary = summary };

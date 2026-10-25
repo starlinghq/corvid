@@ -40,6 +40,7 @@ public sealed class EngineGatewayService : IGatewayService, IDisposable
     private readonly AppEngine _engine;
     private readonly ChangeSignal _changed;
     private readonly Lock _gate = new();
+    private readonly LedgerCursor _ledger = new();
     private PairingStore? _pairing;
 
     public EngineGatewayService(AppEngine engine, IDispatcher dispatcher, TimeProvider time)
@@ -202,31 +203,52 @@ public sealed class EngineGatewayService : IGatewayService, IDisposable
 
     /// <summary>
     /// The ledger's open deliveries, oldest first, with when each was queued: read from the ledger's session as the gateway
-    /// reads it (a queued entry stays open until its resolution is appended).
+    /// reads it (a queued entry stays open until its resolution is appended). Each load reads only what was appended since
+    /// the last one, from the cursor this service keeps.
     /// </summary>
-    private static List<CorePending> Deliveries(IEventLog log)
+    internal List<CorePending> Deliveries(IEventLog log)
     {
-        var open = new SortedDictionary<long, (DeliveryQueued Queued, DateTimeOffset At)>();
-        var byId = new Dictionary<string, long>(StringComparer.Ordinal);
-        long after = 0;
-        while (true)
+        lock (_ledger)
         {
-            var page = log.Read(GatewaySessions.Ledger, after, limit: 512);
-            foreach (var stored in page)
+            while (true)
             {
-                if (stored.Payload is DeliveryQueued queued && byId.TryAdd(queued.DeliveryId, stored.Sequence))
-                    open[stored.Sequence] = (queued, stored.RecordedAt);
-                else if (stored.Payload is DeliveryResolved resolved && byId.Remove(resolved.DeliveryId, out var sequence))
-                    open.Remove(sequence);
-                after = stored.Sequence;
+                var page = log.Read(GatewaySessions.Ledger, _ledger.Through, limit: 512);
+                foreach (var stored in page)
+                {
+                    if (stored.Payload is DeliveryQueued queued && _ledger.ById.TryAdd(queued.DeliveryId, stored.Sequence))
+                        _ledger.Open[stored.Sequence] = (queued, stored.RecordedAt);
+                    else if (stored.Payload is DeliveryResolved resolved && _ledger.ById.Remove(resolved.DeliveryId, out var sequence))
+                        _ledger.Open.Remove(sequence);
+                    _ledger.Through = stored.Sequence;
+                }
+                if (page.Count < 512)
+                    break;
             }
-            if (page.Count < 512)
-                break;
+            return [.. _ledger.Open.Values.Take(MaxDeliveries).Select(item => new CorePending(item.Queued.DeliveryId,
+                item.Queued.Kind + (item.Queued.SourceSession is { } source ? " from " + source : ""),
+                $"{GatewayText.Channel(item.Queued.Adapter)} chat {item.Queued.ChatId}", item.At,
+                "waiting for a gateway to send it; none runs in this app (G-14)"))];
         }
-        return [.. open.Values.Take(MaxDeliveries).Select(item => new CorePending(item.Queued.DeliveryId,
-            item.Queued.Kind + (item.Queued.SourceSession is { } source ? " from " + source : ""),
-            $"{GatewayText.Channel(item.Queued.Adapter)} chat {item.Queued.ChatId}", item.At,
-            "waiting for a gateway to send it; none runs in this app (G-14)"))];
+    }
+
+    /// <summary>How far the ledger has been read.</summary>
+    internal long LedgerThrough
+    {
+        get
+        {
+            lock (_ledger)
+                return _ledger.Through;
+        }
+    }
+
+    // The ledger as read so far: the open deliveries by sequence, their ids, and the last sequence read.
+    private sealed class LedgerCursor
+    {
+        public long Through;
+
+        public SortedDictionary<long, (DeliveryQueued Queued, DateTimeOffset At)> Open { get; } = [];
+
+        public Dictionary<string, long> ById { get; } = new(StringComparer.Ordinal);
     }
 
     private static List<ChatOverride> Overrides(CorvidOptions options) =>

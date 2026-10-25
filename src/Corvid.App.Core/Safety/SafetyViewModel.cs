@@ -377,15 +377,28 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
             ? "no pack loaded"
             : string.Create(CultureInfo.InvariantCulture, $"{SafeText.Clean(pack.Name)} · {pack.Rules.Length} rules · {pack.Rules.Count(r => r.Enforces)} enforce");
         Matches = [.. snapshot.Detections.Take(MaxMatchRows).Select(match => new DetectionMatchRowView(match, _time, OpenInAudit))];
-        HiddenMatches = snapshot.Detections.Length > MaxMatchRows
-            ? string.Create(CultureInfo.InvariantCulture, $"and {snapshot.Detections.Length - MaxMatchRows} older, not drawn: Audit lists every match")
-            : "";
-        var forced = snapshot.Detections.Count(d => d.Enforced);
-        MatchesNote = snapshot.Detections.Length switch
+        // What is not drawn: rows past the page's cap, matches the engine left out of the snapshot, and sessions it did not search.
+        var hidden = snapshot.DetectionCount - Matches.Count;
+        var unscanned = snapshot.SessionsNotScanned switch
         {
-            0 => "No matches so far.",
-            1 => forced == 1 ? "1 match · it forced an ask" : "1 match · recorded only",
-            var n => string.Create(CultureInfo.InvariantCulture, $"{n} matches · {forced} forced an ask"),
+            <= 0 => "",
+            1 => "1 older session not searched",
+            var k => string.Create(CultureInfo.InvariantCulture, $"{k} older sessions not searched"),
+        };
+        HiddenMatches = (hidden > 0, unscanned.Length > 0) switch
+        {
+            (true, true) => string.Create(CultureInfo.InvariantCulture, $"and {hidden} older, not drawn; {unscanned}: Audit lists every match"),
+            (true, false) => string.Create(CultureInfo.InvariantCulture, $"and {hidden} older, not drawn: Audit lists every match"),
+            (false, true) => unscanned + ": Audit lists every match",
+            _ => "",
+        };
+        var forced = snapshot.Detections.Count(d => d.Enforced);
+        MatchesNote = (snapshot.DetectionCount, snapshot.MoreDetections) switch
+        {
+            (0, _) => "No matches so far.",
+            (1, _) => forced == 1 ? "1 match · it forced an ask" : "1 match · recorded only",
+            (var n, > 0) => string.Create(CultureInfo.InvariantCulture, $"{n} matches · {forced} of the latest {snapshot.Detections.Length} forced an ask"),
+            (var n, _) => string.Create(CultureInfo.InvariantCulture, $"{n} matches · {forced} forced an ask"),
         };
         Hardline = [.. snapshot.Hardline.Select(code => new HardlineRowView(code))];
         Taint = [.. snapshot.Taint.OrderByDescending(taint => taint.Tainted).Take(MaxTaintRows).Select(taint => new TaintRowView(taint, _time))];
@@ -579,7 +592,7 @@ public sealed class SafetyViewModel : AreaViewModel, IDisposable
         _lease.Mode = _session.Mode;
         _lease.Tags = [.. _session.Tags];
         _lease.SessionId = _session.SessionId ?? "";
-        var matches = _snapshot?.Detections.Length ?? 0;
+        var matches = _snapshot?.DetectionCount ?? 0;
         _lease.AreaFields =
         [
             new StatusField("detections", $"{(_enforce ? "enforcing" : "recording only")} · {matches} {(matches == 1 ? "match" : "matches")}"),

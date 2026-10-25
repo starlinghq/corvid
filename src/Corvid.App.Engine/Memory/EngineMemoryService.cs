@@ -104,10 +104,13 @@ public sealed class EngineMemoryService : IMemoryService
             var current = memory.Blocks.Get(proposal.Block!);
             // What the card's text stands for: the whole block (a consolidation, or an update that rewrites the block), or
             // the line an appending update adds. The content as staged is written exactly when nothing was changed.
-            var content = replacesBlock || Appended(current.Content, proposal.Content!) is null
-                ? text.Trim()
-                : Join(current.Content, text.Trim());
-            var corrected = string.Equals(content, proposal.Content, StringComparison.Ordinal) ? null : content;
+            var added = Appended(current.Content, proposal.Content!);
+            var edited = text.Trim();
+            var unchanged = replacesBlock || added is null
+                ? string.Equals(edited, proposal.Content!.Trim(), StringComparison.Ordinal)
+                : string.Equals(edited, added, StringComparison.Ordinal);
+            // Unchanged, the staged content is written exactly (not rebuilt around the line) and the decision is not corrected.
+            var corrected = unchanged ? null : replacesBlock || added is null ? edited : Join(current.Content, edited);
             var result = await writer.ApproveAsync(id, null, null, corrected, cancellationToken).ConfigureAwait(false);
             return Block(memory.Blocks, result.Block ?? memory.Blocks.Get(proposal.Block!));
         }, cancellationToken).ConfigureAwait(false);
@@ -139,6 +142,10 @@ public sealed class EngineMemoryService : IMemoryService
         var lessons = Lessons(runtime, memory);
         return await Task.Run(() =>
         {
+            // The rule and its "applies when" are approved as staged, with no correction: one that hides a character is rejected.
+            if (lessons.Store.Get(id) is { } candidate
+                && new[] { candidate.Title, candidate.Body, candidate.Applicability }.Any(text => SafeText.HasHidden(text)))
+                throw new ArgumentException("The lesson holds hidden characters, so it cannot be approved as it reads; reject it.", nameof(id));
             var approved = lessons.Approve(id, supersedesId, cancellationToken);
             return Lesson(lessons.Store, approved);
         }, cancellationToken).ConfigureAwait(false);
