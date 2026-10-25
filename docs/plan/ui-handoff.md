@@ -446,6 +446,11 @@ Left:
   delegation card lines; a finished child's tail timer keeps ticking until its channel goes; `Children(parentId)` is
   read again on each list; `--demo` has no children.
 - Switching: the live step's model is inferred until `ITurnListener.StepStarted` carries the generator (replay is exact).
+- An in-turn question can reach the window (`QuestionAsked`) before `WindowQuestioner` has registered its wait, since the
+  kernel logs `ClarificationAsked` before it calls the asker. An answer given in that moment is refused ("A turn is
+  running; answer the question once it ends") rather than lost. Under heavy CPU load this makes
+  `EngineRunningTurnTests.A_question_the_windows_turn_asks_waits_inside_the_turn…` fail now and then (1 run in 7 at a
+  load of 21 on 12 cores; it passed 6 of 6 reruns). A fix would let the asker register before the kernel logs the question.
 - A person's message clears taint for its turn (plan §10.3), so a child spawned in a tainted fork after the person writes
   is not tainted unless the turn reads outside content again. This is the intended model; it is noted because a fork's
   inherited taint lasts only until then.
