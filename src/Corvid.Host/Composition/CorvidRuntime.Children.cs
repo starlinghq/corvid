@@ -670,10 +670,12 @@ public sealed partial class CorvidRuntime
                 continue;
             var current = parent.Slots.SessionDefault(slot);
             var configuration = parent.Slots.TryConfiguration(slot, out var found) ? found : new SlotConfiguration(slot, current, [], []);
-            // Security L4 (A5 review): Corvid:Agents:Models narrows every model a child is given, the inherited ones too. The
-            // decider is the parent's own judge of the child (security M1), not a model the child works on, so it is not checked.
+            // Security L4 (A5 review): Corvid:Agents:Models narrows the models a child is given, the inherited ones too, in the
+            // slots a remote model can serve (generator, summarizer, vision): those are the ones that can send the child's work
+            // off the machine. The extractor and the embedders are in-process, and the decider is the parent's own judge of the
+            // child (security M1), so a list naming only generators does not refuse every child.
             ImmutableArray<ModelBinding> escalation = configuration.Escalation, fallbacks = configuration.Fallbacks;
-            if (slot != ModelSlots.Decider && Options.Agents.Models.Count > 0)
+            if (slot is ModelSlots.Generator or ModelSlots.Summarizer or ModelSlots.Vision && Options.Agents.Models.Count > 0)
             {
                 var inheritedName = _composer.NameOf(current) ?? current.Profile.Id;
                 if (!AllowedForChildren(inheritedName))

@@ -380,11 +380,14 @@ public sealed class DelegationReviewTests
         await using var narrowRuntime = await narrow.StartAsync();
         var parent = narrowRuntime.OpenSession();
 
-        var refused = await Assert.ThrowsAsync<ChildRefusedException>(() =>
-            narrowRuntime.PlanChildAsync(parent.Id, new ChildRequest("go") { Mix = ModelMix.Parse("""{"generator":"fake-gen-large"}""") }, Ct));
-
-        Assert.Contains("embedder.text", refused.Message, StringComparison.Ordinal);
+        // The parent's generator (fake-gen) is not listed: a child inheriting it is refused, naming the slot.
+        var refused = await Assert.ThrowsAsync<ChildRefusedException>(() => narrowRuntime.PlanChildAsync(parent.Id, new ChildRequest("go"), Ct));
+        Assert.Contains("generator", refused.Message, StringComparison.Ordinal);
         Assert.Contains("not in Corvid:Agents:Models", refused.Message, StringComparison.Ordinal);
+        // Naming a listed generator is enough: the in-process slots (embedder, extractor) send nothing off the machine, so a
+        // list of generators does not refuse every child.
+        var named = await narrowRuntime.PlanChildAsync(parent.Id, new ChildRequest("go") { Mix = ModelMix.Parse("""{"generator":"fake-gen-large"}""") }, Ct);
+        Assert.Equal("fake-gen-large", named.Slots.Single(slot => slot.Slot == ModelSlots.Generator).Model);
 
         await using var listed = Host(new FakeModels(), new()
         {
