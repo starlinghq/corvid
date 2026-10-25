@@ -47,15 +47,28 @@ public sealed record ConfigWriteResult(bool Written, string Path, ImmutableArray
 /// the file's JSON in memory, the result is validated with <see cref="CorvidOptionsValidator"/> as the next start would
 /// read it (the edited file in place of the current one, with this process's environment and <c>--set</c> values over it),
 /// and only then is the file replaced, through a temporary file in the same directory and a rename, so a reader never sees
-/// half a file and a refused edit leaves it byte for byte as it was. Writes from one process are serialized.
+/// half a file and a refused edit leaves it byte for byte as it was.
+/// <para>
+/// An edit changes only the text of the keys it names: the file's comments, layout and key order stay as they were
+/// (<see cref="JsoncText"/>). The replacement keeps the file's Unix permissions (a new file is the owner's alone, 0600), and
+/// a symbolic link is written through to its target, which stays a link. Writes are serialized within a process and,
+/// through an advisory lock file beside the file, between processes; a file changed by something else between the read
+/// and the replacement (an editor) is refused rather than overwritten.
+/// </para>
 /// </summary>
 public sealed class CorvidConfigWriter(CorvidConfigFile file, IConfiguration configuration, IValidateOptions<CorvidOptions> validator)
 {
     private static readonly SemaphoreSlim Gate = new(1, 1);
-    private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
+    private static readonly TimeSpan LockPoll = TimeSpan.FromMilliseconds(50);
 
     /// <summary>The file this writer edits.</summary>
     public string Path => file.Path;
+
+    /// <summary>How long a write waits for another process's write to finish before it is refused.</summary>
+    internal TimeSpan LockTimeout { get; set; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>Test seam: runs after the new text is validated, just before the file is checked for changes and replaced.</summary>
+    internal Action? BeforeReplace { get; set; }
 
     /// <summary>The file's JSON as it is now; an empty object when it does not exist.</summary>
     /// <exception cref="JsonException">The file is not a JSON object.</exception>
@@ -83,18 +96,22 @@ public sealed class CorvidConfigWriter(CorvidConfigFile file, IConfiguration con
         Gate.Wait();
         try
         {
+            string? busy = null;
+            using var held = write ? Lock(out busy) : null;
+            if (write && held is null)
+                return Refused(busy!);
             JsonObject document;
             try
             {
-                document = JsonNode.Parse(json, documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true })
-                    as JsonObject ?? throw new JsonException("The configuration must be one JSON object.");
+                document = ParseObject(json);
             }
             catch (JsonException exception)
             {
                 return Refused($"The text is not valid JSON: {exception.Message}");
             }
+            var original = ReadText();
             var before = Effective(ReadOrEmpty(out _));
-            return Finish(document, json, Changed(before, document), Effective(document).GetChildren().Select(child => child.Path), write);
+            return Finish(document, json, Changed(before, document), Effective(document).GetChildren().Select(child => child.Path), write, original);
         }
         finally
         {
@@ -162,22 +179,56 @@ public sealed class CorvidConfigWriter(CorvidConfigFile file, IConfiguration con
         Gate.Wait();
         try
         {
-            var document = ReadOrEmpty(out var problem);
+            string? busy = null;
+            using var held = write ? Lock(out busy) : null;
+            if (write && held is null)
+                return Refused(busy!);
+            var original = ReadText();
+            var current = ReadOrEmpty(out var problem);
             if (problem is not null)
                 return Refused(problem);
-            var before = Effective(document.DeepClone().AsObject());
-            foreach (var edit in edits)
-                Set(document, edit.Key.Split(':'), edit.Value?.DeepClone());
+            var before = Effective(current);
+            // The file's own text is edited, so its comments and layout stay; a missing file starts as an empty object.
+            var text = original ?? "{}";
+            JsonObject document;
+            try
+            {
+                foreach (var edit in edits)
+                    text = JsoncText.Set(text, edit.Key.Split(':'), edit.Value?.DeepClone());
+                document = ParseObject(text);
+            }
+            catch (Exception exception) when (exception is JsonException or InvalidOperationException)
+            {
+                return Refused(exception.Message);
+            }
             // Only the keys asked for count as changed: a key whose value is what it was needs nothing restarted.
+            var after = Effective(document);
             var changed = edits.Select(edit => edit.Key)
-                .Where(key => !SameSection(before, Effective(document), key))
+                .Where(key => !SameSection(before, after, key))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToImmutableArray();
-            return Finish(document, document.ToJsonString(Indented), changed, edits.Where(edit => edit.Value is not null).Select(edit => edit.Key), write);
+            return Finish(document, text, changed, edits.Where(edit => edit.Value is not null).Select(edit => edit.Key), write, original);
         }
         finally
         {
             Gate.Release();
+        }
+    }
+
+    private static JsonObject ParseObject(string text) =>
+        JsonNode.Parse(text, documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true })
+            as JsonObject ?? throw new JsonException("The configuration must be one JSON object.");
+
+    /// <summary>The file's text now; null when it does not exist.</summary>
+    private string? ReadText()
+    {
+        try
+        {
+            return File.Exists(file.Path) ? File.ReadAllText(file.Path) : null;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return null; // ReadOrEmpty says what is wrong with it
         }
     }
 
@@ -187,7 +238,9 @@ public sealed class CorvidConfigWriter(CorvidConfigFile file, IConfiguration con
     /// would see them. So neither an override that hides a bad value nor one that fixes it decides alone.
     /// </summary>
     /// <param name="written">The keys whose file values are validated on top: the edited ones, or the whole file.</param>
-    private ConfigWriteResult Finish(JsonObject document, string text, ImmutableArray<string> changed, IEnumerable<string> written, bool write)
+    /// <param name="original">The file's text when it was read for this edit (null when there was none): the file must still hold it.</param>
+    private ConfigWriteResult Finish(JsonObject document, string text, ImmutableArray<string> changed, IEnumerable<string> written, bool write,
+        string? original)
     {
         var fileOnly = Effective(document);
         var nextStart = Candidate(text);
@@ -217,7 +270,20 @@ public sealed class CorvidConfigWriter(CorvidConfigFile file, IConfiguration con
 
         var shadowed = changed.Where(key => !SameSection(fileOnly, nextStart, key)).ToImmutableArray();
         if (write)
-            WriteAtomically(text);
+        {
+            BeforeReplace?.Invoke();
+            // Something that does not take the lock (an editor) changed the file since it was read: its change would be lost.
+            if (!string.Equals(ReadText(), original, StringComparison.Ordinal))
+                return Refused($"{file.Path} changed while this edit was being made, so it was not replaced. Nothing was written; make the change again.");
+            try
+            {
+                WriteAtomically(text);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                return Refused($"{file.Path} could not be written: {exception.Message}");
+            }
+        }
         return new ConfigWriteResult(write, file.Path, [], changed, shadowed);
     }
 
@@ -323,86 +389,87 @@ public sealed class CorvidConfigWriter(CorvidConfigFile file, IConfiguration con
         return [.. keys.Where(key => !string.Equals(before[key], next[key], StringComparison.Ordinal)).Order(StringComparer.OrdinalIgnoreCase)];
     }
 
-    /// <summary>Sets (or with a null value removes) the node at a key's path, making the objects on the way.</summary>
-    private static void Set(JsonObject document, string[] path, JsonNode? value)
+    /// <summary>
+    /// Takes the advisory lock beside the file (<c>.corvid.json.lock</c>), which every writer of the file holds while it
+    /// reads, validates and replaces it: an exclusive open, which is <c>flock</c> on Unix and a share mode on Windows. Null,
+    /// with why, when another writer holds it past <see cref="LockTimeout"/>.
+    /// </summary>
+    private FileStream? Lock(out string? busy)
     {
-        JsonNode parent = document;
-        for (var i = 0; i < path.Length - 1; i++)
+        busy = null;
+        var target = Target();
+        var directory = System.IO.Path.GetDirectoryName(target)!;
+        var path = System.IO.Path.Combine(directory, $".{System.IO.Path.GetFileName(target)}.lock");
+        var options = new FileStreamOptions { Mode = FileMode.OpenOrCreate, Access = FileAccess.ReadWrite, Share = FileShare.None };
+        if (!OperatingSystem.IsWindows())
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        var waited = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
         {
-            var child = Child(parent, path[i]);
-            if (child is JsonObject or JsonArray)
+            try
             {
-                parent = child;
-                continue;
+                Directory.CreateDirectory(directory);
+                return new FileStream(path, options);
             }
-            if (value is null)
-                return; // nothing to remove below a key that is absent or a plain value
-            var created = new JsonObject();
-            Assign(parent, path[i], created);
-            parent = created;
-        }
-        if (value is null)
-            Remove(parent, path[^1]);
-        else
-            Assign(parent, path[^1], value);
-    }
-
-    private static JsonNode? Child(JsonNode parent, string key) => parent switch
-    {
-        // Configuration keys ignore case, so an existing "corvid" or "models" object is the one to extend.
-        JsonObject obj => obj.FirstOrDefault(pair => string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase)).Value,
-        JsonArray array when int.TryParse(key, out var index) && index >= 0 && index < array.Count => array[index],
-        _ => null,
-    };
-
-    private static void Assign(JsonNode parent, string key, JsonNode value)
-    {
-        switch (parent)
-        {
-            case JsonObject obj:
-                var existing = obj.FirstOrDefault(pair => string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase)).Key;
-                obj[existing ?? key] = value;
-                break;
-            case JsonArray array when int.TryParse(key, out var index) && index >= 0 && index <= array.Count:
-                if (index == array.Count)
-                    array.Add(value);
-                else
-                    array[index] = value;
-                break;
-            default:
-                throw new InvalidOperationException($"'{key}' cannot be set inside an array except by its index.");
+            catch (IOException) when (waited.Elapsed < LockTimeout)
+            {
+                Thread.Sleep(LockPoll);
+            }
+            catch (IOException exception)
+            {
+                busy = $"Another Corvid process is writing {file.Path} (it holds {path}), so nothing was written; try again in a moment. ({exception.Message})";
+                return null;
+            }
+            catch (UnauthorizedAccessException exception)
+            {
+                busy = $"{path} cannot be opened to lock {file.Path}, so nothing was written: {exception.Message}";
+                return null;
+            }
         }
     }
 
-    private static void Remove(JsonNode parent, string key)
+    /// <summary>The file a write replaces: the configuration file, or what its symbolic link (followed to the end) names.</summary>
+    private string Target()
     {
-        switch (parent)
+        var full = System.IO.Path.GetFullPath(file.Path);
+        try
         {
-            case JsonObject obj:
-                if (obj.FirstOrDefault(pair => string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase)).Key is { } existing)
-                    obj.Remove(existing);
-                break;
-            case JsonArray array when int.TryParse(key, out var index) && index >= 0 && index < array.Count:
-                array.RemoveAt(index);
-                break;
+            return new FileInfo(full).ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? full;
+        }
+        catch (IOException)
+        {
+            return full; // a link loop: the write fails on the link itself and says so
         }
     }
 
     private void WriteAtomically(string text)
     {
-        var directory = System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(file.Path))!;
+        // Through a symbolic link to its target, so the link stays a link.
+        var target = Target();
+        var directory = System.IO.Path.GetDirectoryName(target)!;
         Directory.CreateDirectory(directory);
         // Beside the file, so the rename stays on one filesystem and replaces it in one step.
-        var temporary = System.IO.Path.Combine(directory, $".{System.IO.Path.GetFileName(file.Path)}.{Guid.NewGuid():N}.tmp");
+        var temporary = System.IO.Path.Combine(directory, $".{System.IO.Path.GetFileName(target)}.{Guid.NewGuid():N}.tmp");
         try
         {
-            using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
+            UnixFileMode? mode = null;
+            if (!OperatingSystem.IsWindows())
+            {
+                // The file keeps its permissions; a new one is the owner's alone. The umask narrows a created file's mode, so
+                // it is set again once the file exists.
+                mode = File.Exists(target) ? File.GetUnixFileMode(target) : UnixFileMode.UserRead | UnixFileMode.UserWrite;
+                options.UnixCreateMode = mode.Value & (UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
+            using (var stream = new FileStream(temporary, options))
             {
                 var bytes = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(text);
                 stream.Write(bytes);
                 stream.Flush(flushToDisk: true);
             }
-            File.Move(temporary, file.Path, overwrite: true);
+            if (mode is { } kept && !OperatingSystem.IsWindows())
+                File.SetUnixFileMode(temporary, kept);
+            File.Move(temporary, target, overwrite: true);
         }
         finally
         {

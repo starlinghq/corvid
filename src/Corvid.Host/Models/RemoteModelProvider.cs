@@ -152,6 +152,17 @@ public sealed class RemoteModelProvider : IModelProvider
         return models.OrderBy(pair => pair.Key, StringComparer.Ordinal).SelectMany(pair => Validate(pair.Key, pair.Value)).ToList();
     }
 
+    /// <summary>
+    /// The models remote model settings describe, as a provider built from them would list them (the entries without
+    /// problems): for any other configuration than the one this provider was built from (the file a writer is about to save).
+    /// </summary>
+    public static IReadOnlyList<ModelDescriptor> DescriptorsOf(IReadOnlyDictionary<string, RemoteModelSettings> models)
+    {
+        ArgumentNullException.ThrowIfNull(models);
+        return [.. models.OrderBy(pair => pair.Key, StringComparer.Ordinal).Where(pair => !Validate(pair.Key, pair.Value).Any())
+            .Select(pair => Describe(pair.Key, pair.Value).Descriptor)];
+    }
+
     private static IEnumerable<string> Validate(string name, RemoteModelSettings? settings)
     {
         var key = $"Corvid:Models:Remote:{name}";
