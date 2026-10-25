@@ -83,6 +83,8 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
         CreateCommand = new AsyncRelayCommand(CreateAsync, CanCreate);
         DismissNoticeCommand = new RelayCommand(() => Say(true, ""));
         Hosting = new HostingToggleViewModel(hosting ?? new NoHostingService("This window does not host the scheduler."), HostedPart.Scheduler, Say);
+        // The page's host or scheduler line follows a start, a stop or a take-over at once.
+        Hosting.Changed += OnHostingChanged;
         foreach (var command in new[] { PauseCommand, ResumeCommand, RemoveCommand, CreateCommand })
             ReportFailures(command);
 
@@ -309,6 +311,7 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
         _disposed = true;
         _service.Changed -= OnServiceChanged;
         _shell.PropertyChanged -= OnShellChanged;
+        Hosting.Changed -= OnHostingChanged;
         Hosting.Dispose();
         _lease.Release();
     }
@@ -316,6 +319,8 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
     // ---- Loading ----
 
     private void OnServiceChanged(object? sender, EventArgs e) => _ = RefreshAsync();
+
+    private void OnHostingChanged(object? sender, EventArgs e) => _ = RefreshAsync();
 
     private async Task RefreshAsync()
     {

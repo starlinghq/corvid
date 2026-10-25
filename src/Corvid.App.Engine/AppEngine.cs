@@ -195,6 +195,8 @@ public sealed class AppEngine : IAsyncDisposable
                 // G-14, U-8: a gateway asked for starts with the runtime, not when its page is first opened.
                 _ = GatewayAsync();
                 WatchTakeOver();
+                // The scheduler may run here from the start (Corvid:App:HostScheduler): the status bar hears of it.
+                HostingChanged?.Invoke();
             }
             catch (Exception exception)
             {

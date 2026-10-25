@@ -160,8 +160,12 @@ public sealed class HostingToggleViewModel : ObservableObject, IDisposable
         OnChanged(this, EventArgs.Empty);
     }
 
+    /// <summary>What the app hosts changed (a start, a stop, a take-over): the page reads its state again.</summary>
+    public event EventHandler? Changed;
+
     private void OnChanged(object? sender, EventArgs e)
     {
+        Changed?.Invoke(this, EventArgs.Empty);
         if (IsOn)
             IsAsking = false;
         OnPropertyChanged(nameof(IsOn));

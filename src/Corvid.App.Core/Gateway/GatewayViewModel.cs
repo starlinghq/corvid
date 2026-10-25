@@ -56,6 +56,8 @@ public sealed class GatewayViewModel : AreaViewModel, IDisposable
         _lease = new StatusBarLease(statusBar);
         DismissNoticeCommand = new RelayCommand(() => Say(true, ""));
         Hosting = new HostingToggleViewModel(hosting ?? new NoHostingService("This window does not host the gateway."), HostedPart.Gateway, Say);
+        // The page's host or scheduler line follows a start, a stop or a take-over at once.
+        Hosting.Changed += OnHostingChanged;
 
         _service.Changed += OnServiceChanged;
         _shell.PropertyChanged += OnShellChanged;
@@ -142,6 +144,7 @@ public sealed class GatewayViewModel : AreaViewModel, IDisposable
         _disposed = true;
         _service.Changed -= OnServiceChanged;
         _shell.PropertyChanged -= OnShellChanged;
+        Hosting.Changed -= OnHostingChanged;
         Hosting.Dispose();
         _lease.Release();
     }
@@ -149,6 +152,8 @@ public sealed class GatewayViewModel : AreaViewModel, IDisposable
     // ---- Loading ----
 
     private void OnServiceChanged(object? sender, EventArgs e) => _ = RefreshAsync();
+
+    private void OnHostingChanged(object? sender, EventArgs e) => _ = RefreshAsync();
 
     private async Task RefreshAsync()
     {

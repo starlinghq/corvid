@@ -75,7 +75,12 @@ public sealed class HostingTests
         var adapter = new FakeAdapter();
         await using var host = EngineHosts.Create(settings: Settings(hostGateway: true, hostScheduler: true), services: Adapter(adapter));
         await using var engine = await AppEngine.StartAsync(host.Host, ownsHost: false, cancellationToken: Token);
+        // The window's status bar subscribes before the runtime is up, and hears when it starts hosting.
+        using var hosting = new EngineHostingService(engine, new InlineDispatcher());
+        var changes = 0;
+        hosting.Changed += (_, _) => Interlocked.Increment(ref changes);
         var runtime = await engine.RuntimeAsync();
+        await Wait.Until(() => Volatile.Read(ref changes) > 0, "the status bar to hear of the hosting");
 
         var gateway = await engine.GatewayAsync();
 
@@ -83,6 +88,22 @@ public sealed class HostingTests
         Assert.Equal(new HostingState(true, true, true, true), engine.HostingState);
         Assert.Equal("gateway · scheduler", engine.HostingState.Notice);
         Assert.Equal("running in this process", runtime.SchedulerState);
+    }
+
+    [Fact]
+    public async Task TheStatusBarHearsOfASchedulerHostedFromTheStart()
+    {
+        await using var host = EngineHosts.Create(settings: Settings(hostScheduler: true), services: Adapter(new FakeAdapter()));
+        await using var engine = await AppEngine.StartAsync(host.Host, ownsHost: false, cancellationToken: Token);
+        // The window's status bar subscribes before the runtime is up.
+        using var hosting = new EngineHostingService(engine, new InlineDispatcher());
+        var changes = 0;
+        hosting.Changed += (_, _) => Interlocked.Increment(ref changes);
+
+        await engine.RuntimeAsync();
+        await Wait.Until(() => Volatile.Read(ref changes) > 0, "the status bar to hear of the hosting");
+
+        Assert.Equal("scheduler", hosting.State.Notice);
     }
 
     [Fact]
