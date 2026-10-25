@@ -961,8 +961,11 @@ public sealed partial class SessionsPage : Page, IDockProvider
         // A5: the models pill gives way to the title: it shows only while the title keeps room for a few words beside it.
         if (ModelsPill.Visibility == Visibility.Visible)
         {
-            ModelsPill.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
-            var wanted = ModelsPill.DesiredSize.Width + TitleRow.Spacing;
+            // Its natural width from its text, not the pill's own measure: once given way (MaxWidth 0) the pill measures 0 wide,
+            // which would read as room and bring it back, a layout cycle whenever the title's room is near the line.
+            ModelsPillText.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+            var wanted = ModelsPillText.DesiredSize.Width + ModelsPill.Padding.Left + ModelsPill.Padding.Right
+                + ModelsPill.BorderThickness.Left + ModelsPill.BorderThickness.Right + TitleRow.Spacing;
             var fits = room - pill - wanted >= ModelsPillTitleRoom;
             var limit = fits ? double.PositiveInfinity : 0;
             if (ModelsPill.MaxWidth != limit)

@@ -866,7 +866,7 @@
                   Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.Session.HasModels), Mode=OneWay, FallbackValue=Collapsed}"
                   ToolTipService.ToolTip="This session's generator and decider. Alt+P switches the generator; Models › Switch… › This session switches either."
                   AutomationProperties.Name="{x:Bind ViewModel.Session.ModelsText, Mode=OneWay, FallbackValue=''}">
-            <TextBlock Text="{x:Bind ViewModel.Session.ModelsText, Mode=OneWay, FallbackValue=''}" FontSize="12" FontFamily="{StaticResource CorvidMono}"
+            <TextBlock x:Name="ModelsPillText" Text="{x:Bind ViewModel.Session.ModelsText, Mode=OneWay, FallbackValue=''}" FontSize="12" FontFamily="{StaticResource CorvidMono}"
                        Foreground="{ThemeResource CorvidText2}" VerticalAlignment="Center" TextWrapping="NoWrap" />
           </Border>
           <!-- A5: a child links its parent (it is read-only); a parent lists its children. -->
