@@ -199,6 +199,24 @@ public sealed class SessionTitlerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_shell_line_never_titles_a_session_and_a_rename_is_not_activity()
+    {
+        var log = Log(new UserMessage("!ls"),
+            new ToolCallIssued("user-shell", "shell", System.Text.Json.JsonDocument.Parse("""{"command":"ls"}""").RootElement.Clone(), 1, false),
+            new ToolResult("user-shell", System.Text.Json.JsonDocument.Parse("""{"exit_code":0}""").RootElement.Clone()),
+            new UserMessage("plan the move"), new AssistantMessage("Planned."));
+        var chat = new ScriptedChat(_ => "Plan the move");
+        var titler = new SessionTitler(log, chat);
+        var before = SessionCatalogue.Describe(log, "s", Ct)!.LastActivity;
+
+        await titler.TitleAsync("s", Ct);
+
+        var prompt = Assert.Single(chat.Prompts)[^1].Text;
+        Assert.StartsWith("User: plan the move", prompt, StringComparison.Ordinal);
+        Assert.Equal(before, SessionCatalogue.Describe(log, "s", Ct)!.LastActivity);
+    }
+
+    [Fact]
     public async Task A_rename_while_the_generator_writes_wins()
     {
         var log = Log(new UserMessage("hello"), new AssistantMessage("Hi."));

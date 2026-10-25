@@ -50,6 +50,18 @@ public sealed class TranslatorTests
     }
 
     [Fact]
+    public void AReplayedShellLineEndsAnsweredByItsCall()
+    {
+        // A4: a ! line's turn is the user's own shell call, with no answer by design.
+        var translator = new SessionUpdateTranslator(Workspace);
+        translator.Translate(new PromptSent("!ls", 1) { At = T0 });
+        translator.Translate(new ToolCallStarted("user-shell", "shell", ToolCallKinds.Execute, ToolCallState.Completed) { At = T0 });
+
+        var ended = Assert.IsType<TurnEnded>(Assert.Single(translator.EndReplay()));
+        Assert.Equal((TurnOutcome.Answered, (string?)null), (ended.Outcome, ended.Error));
+    }
+
+    [Fact]
     public void AReplayOfATurnStillRunningLeavesItOpenAndTheLiveEndClosesIt()
     {
         var translator = new SessionUpdateTranslator(Workspace) { Model = "fake-gen" };

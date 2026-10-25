@@ -205,7 +205,7 @@ public sealed partial class EngineSessionService
         var session = await SessionAsync(runtime, sessionId, cancellationToken).ConfigureAwait(false);
         // The extractor and the gate run on their devices; memory's store is SQLite: off the UI thread.
         var result = await Task.Run(() => session.RememberAsync(fact, cancellationToken), cancellationToken).ConfigureAwait(false);
-        var (line, problem) = ComposerLine.Describe(result, fact);
+        var (line, problem) = ComposerLine.Describe(result, fact, withId: false);
         var kind = problem ? NoticeKind.Warning : result.Status == MemoryWriteStatus.Staged ? NoticeKind.MemoryStaged : NoticeKind.Info;
         Publish(channel, _ => [new Notice(kind, line) { Target = result.Pending?.PendingId, At = _time.GetUtcNow() }]);
     }

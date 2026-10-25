@@ -62,7 +62,9 @@ public static class SessionCatalogue
         var last = default(DateTimeOffset);
         foreach (var item in SessionProjection.ReadRange(log, sessionId, 0, head, cancellationToken))
         {
-            last = item.RecordedAt;
+            // A rename or a recap is about the session, not activity in it: the list's "time since activity" stays.
+            if (item.Payload is not (SessionTitled or SessionRecapped) || last == default)
+                last = item.RecordedAt;
             switch (item.Payload)
             {
                 case UserMessage user:
@@ -228,11 +230,14 @@ public sealed class SessionTitler
         if (snapshot.Title is not null)
             return null;
         string? message = null, answer = null;
-        foreach (var entry in snapshot.Transcript)
+        var transcript = snapshot.Transcript;
+        for (var i = 0; i < transcript.Length; i++)
         {
-            if (entry.Content is UserMessage { LocalOnly: not true } user && message is null)
+            // A ! line's message (the user's own shell call follows it) names a command, not what the session is about.
+            if (transcript[i].Content is UserMessage { LocalOnly: not true } user && message is null
+                && !(i + 1 < transcript.Length && transcript[i + 1].Content is ToolCallIssued { CallId: var call } && call.StartsWith("user-shell", StringComparison.Ordinal)))
                 message = user.Text;
-            else if (entry.Content is AssistantMessage assistant && message is not null)
+            else if (transcript[i].Content is AssistantMessage assistant && message is not null)
             {
                 answer = assistant.Text;
                 break;

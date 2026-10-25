@@ -111,6 +111,8 @@ public sealed class SessionUpdateTranslator(string workspace)
                 });
                 break;
             case ToolCallStarted started:
+                // A4: a ! line's turn is its shell call (TurnRunner's user-shell ids); it has no answer, and needs none.
+                _answered |= started.CallId.StartsWith("user-shell", StringComparison.Ordinal);
                 output.Add(new ToolCall(started.CallId, started.Tool ?? started.Title, Kind(started.Kind, started.Tool), Status(started.Status))
                 {
                     At = at,

@@ -46,13 +46,14 @@ public abstract record ComposerLine
     }
 
     /// <summary>What a <c>#</c> line did, in a sentence, and whether it went wrong (the CLI's output, the app's notice).</summary>
-    public static (string Text, bool Problem) Describe(Corvid.Memory.MemoryWriteResult result, string fact)
+    /// <param name="withId">Name the staged write's id, which <c>/memory approve</c> takes (the CLI); the app's notice has a review button instead.</param>
+    public static (string Text, bool Problem) Describe(Corvid.Memory.MemoryWriteResult result, string fact, bool withId = true)
     {
         ArgumentNullException.ThrowIfNull(result);
         var quoted = "\"" + (SessionCatalogue.Line(fact) ?? fact) + "\"";
         return result.Status switch
         {
-            Corvid.Memory.MemoryWriteStatus.Staged => ($"Staged for review: {quoted}" + (result.Pending is { } pending ? $" ({pending.PendingId})" : "")
+            Corvid.Memory.MemoryWriteStatus.Staged => ($"Staged for review: {quoted}" + (withId && result.Pending is { } pending ? $" ({pending.PendingId})" : "")
                 + ". /memory pending lists it; the Memory page reviews it.", false),
             Corvid.Memory.MemoryWriteStatus.Applied => ($"Remembered: {quoted} ({result.Operation ?? "written"}, as the decider allowed).", false),
             Corvid.Memory.MemoryWriteStatus.Noop => ($"Already known: {quoted}. Nothing was written.", false),
