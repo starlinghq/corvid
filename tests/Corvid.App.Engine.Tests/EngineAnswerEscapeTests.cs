@@ -19,6 +19,8 @@ public sealed class EngineAnswerEscapeTests
             new Dictionary<string, string?> { ["Corvid:Tools:Builtin"] = "true" });
         var id = fixture.Runtime.OpenSession(surface: "app").Id;
         using var service = fixture.Sessions();
+        // K-6: the end-the-turn path, which a turn the window did not start and the decider clarify still take (A5).
+        service.QuestionsInTurn = false;
         var waiter = new SessionWaiter();
         using var subscription = await service.OpenAsync(id, waiter.Add, Ct);
         await service.SendAsync(id, "fix the failing issue", Ct);

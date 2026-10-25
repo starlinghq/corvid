@@ -47,6 +47,12 @@ public sealed record SteerSent(string Text, long Sequence) : SessionStreamUpdate
 public sealed record QuestionRaised(string QuestionId, string Text, ImmutableArray<string> Options) : SessionStreamUpdate;
 
 /// <summary>
+/// A5: the person answered a question inside the running turn (the log's <c>ClarificationAnswered</c>), so it is closed and
+/// the turn went on with the answer; live and on replay (<see cref="ReplayOptions.Questions"/>). The answer is the person's.
+/// </summary>
+public sealed record QuestionClosed(string QuestionId, string Answer) : SessionStreamUpdate;
+
+/// <summary>
 /// The running turn began a step (a generator response with tool calls), live from the turn loop; on replay from the step
 /// its calls record, with no budget.
 /// </summary>

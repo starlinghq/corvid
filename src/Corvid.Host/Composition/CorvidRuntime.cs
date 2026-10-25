@@ -62,6 +62,8 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     // A5: the decider per session, over the shared fabric.
     private readonly SessionDeciders _deciders;
     private readonly ApprovalRouter _prompters;
+    // A5: ask_user questions asked inside a turn, to the surface attached to the session.
+    private readonly QuestionRouter _questions = new();
     private readonly EmbedderSwapJob? _swap;
     private readonly ToolShortlist _shortlist = new();
     private readonly ToolShortlist _skillShortlist = new(new ShortlistOptions(Size: 3));
@@ -503,6 +505,12 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     /// <summary>Routes a session's approval prompts to its surface until the returned handle is disposed.</summary>
     public IDisposable AttachPrompter(string sessionId, IApprovalPrompter prompter) => _prompters.Attach(sessionId, prompter);
 
+    /// <summary>
+    /// A5: routes the session's <c>ask_user</c> questions to a surface that answers them inside the turn, until the handle is
+    /// disposed. Without one the turn ends on the question (K-6) and the person's next message answers it.
+    /// </summary>
+    public IDisposable AttachQuestioner(string sessionId, IQuestionAsker questioner) => _questions.Attach(sessionId, questioner);
+
     /// <summary>A model bound for a slot, loading it if needed (for <c>/model</c>).</summary>
     public ModelBinding Bind(string slot, string model) => _composer.Bind(slot, model);
 
@@ -671,6 +679,8 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
             SkillShortlist = _skillShortlist,
             // Turn progress and K-2's running tails, to whichever surface watches the session.
             Listener = Feed.Listener,
+            // A5: a question asked inside the turn, where a surface can answer it now.
+            Questions = _questions,
             Options = new TurnOptions
             {
                 SystemPrompt = prompt,

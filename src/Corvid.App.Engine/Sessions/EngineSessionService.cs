@@ -494,7 +494,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 channel.Reporter = reporter;
             }
             feed = runtime.Feed.Subscribe(sessionId, reporter);
-            prompter = runtime.AttachPrompter(sessionId, new CardPrompter(this, channel, runtime, tools, reporter));
+            // A5: and the turn's ask_user questions, answered inside the turn while this window runs it.
+            prompter = new Attached(runtime.AttachPrompter(sessionId, new CardPrompter(this, channel, runtime, tools, reporter)),
+                runtime.AttachQuestioner(sessionId, new WindowQuestioner(this, channel, reporter)));
             // Kept on the channel too, so closing the window lets go of them even while the turn runs on.
             lock (channel.Gate)
                 (channel.Feed, channel.Prompter) = (feed, prompter);
@@ -1325,6 +1327,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         public IDisposable? Feed { get; set; }
 
         public IDisposable? Prompter { get; set; }
+
+        /// <summary>A5: the question the running turn waits on inside the turn, or null.</summary>
+        public InTurnQuestion? AskedInTurn { get; set; }
 
         /// <summary>The running turn is being interrupted: its open prompts close as cancelled.</summary>
         public bool Cancelling { get; set; }

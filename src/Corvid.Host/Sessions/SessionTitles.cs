@@ -126,6 +126,10 @@ public static class SessionCatalogue
                 case ClarificationAsked asked:
                     question = asked;
                     break;
+                // A5: answered inside its turn.
+                case ClarificationAnswered answered when question?.QuestionId == answered.QuestionId:
+                    question = null;
+                    break;
                 case AssistantMessage assistant:
                     answer = assistant.Text;
                     break;

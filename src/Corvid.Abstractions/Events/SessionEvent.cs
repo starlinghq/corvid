@@ -32,6 +32,7 @@ namespace Corvid.Abstractions.Events;
 [JsonDerivedType(typeof(McpPinsForgotten), "mcp_pins_forgotten")]
 [JsonDerivedType(typeof(UserSteered), "user_steered")]
 [JsonDerivedType(typeof(ClarificationAsked), "clarification_asked")]
+[JsonDerivedType(typeof(ClarificationAnswered), "clarification_answered")]
 [JsonDerivedType(typeof(SessionTitled), "session_titled")]
 [JsonDerivedType(typeof(SessionRecapped), "session_recapped")]
 [JsonDerivedType(typeof(ApprovalAssessed), "approval_assessed")]
@@ -70,6 +71,11 @@ public sealed record UserSteered(string Text) : SessionEvent;
 // question too, so a reader that knows only messages loses nothing). Options are answers the person can pick; empty when
 // the question is free text only. QuestionId is unique in the session. The person's answer is their next message.
 public sealed record ClarificationAsked(string QuestionId, string Text, ImmutableArray<string> Options) : SessionEvent;
+// A5: the person answered a question inside the running turn (an ask_user call a surface could answer then), so the turn
+// went on with the answer as the call's result. Logged with that result; it closes the question as their next message would.
+// The answer is the person's words (or an option's visible text), not a message: it starts no turn and clears no taint. An empty
+// answer withdraws the question: the turn was interrupted while it waited.
+public sealed record ClarificationAnswered(string QuestionId, string Answer) : SessionEvent;
 // Round (the turn's generator response that made the call, from 1) and ReadOnly (the tool's risk descriptor said read-only)
 // were added by C-026, so the recovery scan can tell a later round from a call run one at a time after approval, and a
 // read from a change, from the log alone. Both are omitted when null, so events written before them keep their persisted

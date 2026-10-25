@@ -232,8 +232,16 @@ public static class SessionReplay
             }
         }
 
-        // K-6: each clarifying question after the answer that carries it, as the live turn reported it.
+        // K-6: each clarifying question after the answer that carries it, as the live turn reported it; A5: a question
+        // answered inside its turn, closed where the answer was logged.
         var questions = false;
+        foreach (var item in stored.Values.Where(item => options.Questions && item.Payload is ClarificationAnswered && item.Sequence > options.After
+            && snapshot.IsVisible(item.Sequence)))
+        {
+            questions = true;
+            var answered = (ClarificationAnswered)item.Payload;
+            items.Add((item.Sequence, new QuestionClosed(answered.QuestionId, answered.Answer) { At = item.RecordedAt }));
+        }
         foreach (var item in stored.Values.Where(item => options.Questions && item.Payload is ClarificationAsked && item.Sequence > options.After
             && snapshot.IsVisible(item.Sequence)))
         {

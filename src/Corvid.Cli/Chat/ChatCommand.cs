@@ -62,6 +62,8 @@ internal static class ChatCommand
             var renderer = new ChatRenderer(console, verbose: arguments.Flag("--verbose"));
             using var feed = runtime.Feed.Subscribe(session.Id, renderer);
             using var prompter = runtime.AttachPrompter(session.Id, new CliApprovalPrompter(renderer, context.Input));
+            // A5: ask_user questions are asked and answered inline while the turn waits, like approvals.
+            using var questioner = runtime.AttachQuestioner(session.Id, new CliQuestionAsker(renderer, context.Input));
             // Scheduled runs happen in their own sessions; until the gateway delivers them (C-020), the chat says that they ran.
             void OnJob(ScheduledJob job, JobRun run) =>
                 renderer.Notice($"[grey]⏰ job {Markup.Escape(job.Name)}: {Markup.Escape(run.Status)} (session {Markup.Escape(run.SessionId)})[/]");
