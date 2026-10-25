@@ -71,6 +71,46 @@ public sealed class GatewayTests
             throw new NotSupportedException();
     }
 
+    /// <summary>A store another process changes (<c>corvid gateway pair tools</c> in a terminal): no change is announced.</summary>
+    private sealed class QuietGateway : IGatewayService
+    {
+        public IReadOnlyList<string> Tools { get; set; } = [];
+
+        public event EventHandler? Changed { add { } remove { } }
+
+        public Task<GatewaySnapshot> LoadAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new GatewaySnapshot(new GatewayHost(true, "", null), [new GatewayAdapter("telegram", AdapterState.Down)], [],
+                [new PairedUser("telegram:424242", "telegram", "Alex", PairingRole.Guest, ManualTimeProvider.Demo().GetUtcNow()) { Allowlist = Tools }],
+                [], [], ["list_files", "read_file"]));
+
+        public Task<PairedUser> PairAsync(string requestId, PairingRole role, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task IgnoreAsync(string requestId, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task RevokeAsync(string userId, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<PairedUser> SetAllowlistAsync(string userId, IReadOnlyList<string> tools, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+    }
+
+    [Fact]
+    public void ComingBackToThePageReadsTheStoreAgainSoATerminalsChangeShows()
+    {
+        var time = ManualTimeProvider.Demo();
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar);
+        shell.Navigate(Area.Gateway);
+        var service = new QuietGateway();
+        using var gateway = new GatewayViewModel(service, shell, bar, time);
+        Assert.Equal("none: it can only talk", Assert.Single(gateway.Users).ToolsText);
+
+        shell.Navigate(Area.Board);
+        service.Tools = ["list_files", "read_file"];
+        shell.Navigate(Area.Gateway);
+
+        Assert.Equal("list_files, read_file", Assert.Single(gateway.Users).ToolsText);
+    }
+
     private static GatewayViewModel Showing(GatewayHost host)
     {
         var time = ManualTimeProvider.Demo();

@@ -324,7 +324,12 @@ public sealed class GatewayViewModel : AreaViewModel, IDisposable
             _lease.Engine = "";
             _lease.Trailing = "";
             if (_snapshot is not null)
+            {
                 _lease.Gateway = GatewayText.Summary(_snapshot.Adapters);
+                // Coming back: the store is read again, so what a terminal changed meanwhile (corvid gateway pair approve,
+                // revoke, tools), which raises nothing here, shows.
+                _ = RefreshAsync();
+            }
             return;
         }
 
