@@ -18,7 +18,7 @@ pull request starlinghq/corvid#71.
 | A0 verify loop | done: one independent verifier, one fix round (§1.1) | `60e90fd` |
 | A1 the seven other mocked screens: Review and Rewind, Board, Models and First run, Memory, Audit | done, verified on the running app by an independent verifier in two rounds (§1.2) | branch `a1/screens` |
 | A2 the pages without mockups (Skills, Jobs, MCP, Gateway, Safety, Secrets, Settings), the palette, the rest of the keys, the phone screens, an accessibility pass | done, verified on the running app in three rounds, PR review fixed (§1.3) | PR #76, branch `a2/screens` |
-| A3 `Corvid.App.Engine`: the real runtime behind the services | not started | |
+| A3 `Corvid.App.Engine`: the real runtime behind the services | done behind `--engine`, verified end to end in three rounds (§1.4) | branch `a3/engine` |
 
 The build ran as a workflow in a cloud container: one agent per step, each building, launching the app on a virtual
 display, screenshotting it and comparing it with the mockup renders, then an independent verifier. It was stopped during
@@ -194,6 +194,51 @@ Left:
   notice warns).
 - Not seen on screen, tests only: tainted plus read-only on the phone, a hidden model name under Alt+P, Check again
   after a failed Vault read, Review past MCP's 12-card cap.
+
+### 1.4 The engine behind the services (A3)
+
+Built by `.claude/workflows/corvid-app-a3-engine.js`: a foundation, five builders in parallel worktrees (sessions and
+approvals; Rewind, Review and Audit; Models, First run and Settings; Memory, Skills and Safety; Jobs, MCP, Gateway and
+Secrets), an integrator that added the Board and prompt history over the merged services, an end-to-end pass, and an
+independent verifier with fix rounds (round 1 found one major defect, round 2 one major and three minor; round 3
+passed with five minor ones).
+
+- **`--engine`** runs the app on the real runtime; `--demo` stays the default. `AppComposition` takes an `IAppServices`
+  (`DemoAppServices`, `EngineAppServices`, or `UnavailableAppServices`, which refuses each area by name). The demo's
+  Review and Rewind no longer cast the session service.
+- **K-10** is in `Corvid.Host/Sessions`: `SessionStreamUpdate`, `SessionUpdateReporter` (Acp's `TurnReporter` logic
+  moved to the host) and `SessionReplay`. Corvid.Acp now reports turns and replays sessions through it, with its
+  recorded exchanges unchanged. The engine's `SessionUpdateTranslator` maps the stream onto App.Core's updates.
+- **`CorvidConfigWriter`** (host): validated, atomic edits of corvid.json that report restart and shadowed keys;
+  `corvid model switch`, Models, First run, Settings, MCP and Secrets use it.
+- Host and kernel items done along the way: G-3 (restore scopes, rollback by checkpoint, one file from the ledger),
+  G-10 (per-session approval mode, in-process), G-11 (narrowed always rules), K-1 (thoughts, live only), K-5 (usage,
+  partly), K-7 (list and remove approval rules), G-13 (schedule preview), and `ISessionService.CreateAsync` so a fresh
+  home can start a session.
+- End to end in temporary homes: a scripted generator, a home with nothing downloaded, and real models (qwen3.5-0.8b,
+  kev-0.8b, gliner2 and embeddinggemma on the CPU, read from the Starling cache). F1, F2, F3, F4, F5, F6, F9, F11, F13,
+  F18, F21, F23 and F24 work on the engine; the WebAssembly head now builds.
+
+Refused on the engine, each with its message on the page: the egress ledger (G-9), hosting the gateway in the app
+(G-14) and the per-person guest allowlist, rename (G-6), steering (K-3), clarifying questions (K-6), the output tail
+(K-2), turn progress, app preferences beyond the window (G-7, ui.db), memory consolidation (plan §9.5), opening a
+terminal or the Vault helper (U-6), and the Vault policy and daily counts (V-n).
+
+Left:
+
+- The `#` (stage a memory) and `!` (shell) composer modes are advertised but built nowhere; the engine sends them as text.
+- Replay differs from live: no generator or decisions per replayed turn, an interrupted turn or one cut by a rollback
+  replays as "failed", the taint row is lost, compaction markers show only live.
+- Settings and Models changes apply at the next start (the runtime reads corvid.json once); First run does not restart
+  the runtime after its downloads.
+- Layout with engine-length text: Models' slots table at 1440, Rewind's checkpoint ids, Audit's raw JSON, Review's
+  "Checkpoint" label.
+- Memory's Reject loses its reason's focus; the Hermes import's staging session shows in the rail.
+- A job run's session opens writable, not read-only; Rewind and Review can write to a session another process drives
+  (G-12).
+- The round-3 minors: the turn strip offers steering the engine refuses; the raw settings editor validates on the UI
+  thread; a new session's rail entry stays "New session" while its first turn runs; Send looks enabled with no session.
+- Not walked on the engine: F8, F10, F12, F14's switch and download, F15, F16, F17 with a Vault.
 
 ### What the running app shows today
 
