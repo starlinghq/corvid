@@ -11,7 +11,7 @@ public sealed class ShellViewModelTests
     /// <summary>The demo's shell as the window gets it: the Main mockup's values, with the rail fed by the demo sessions.</summary>
     private static ShellViewModel DemoShellViewModel(out StatusBarViewModel bar)
     {
-        Assert.True(AppOptions.TryParse([], out var options, out var error), error);
+        Assert.True(AppOptions.TryParse(["--demo"], out var options, out var error), error);
         var composition = new AppComposition(options, new InlineDispatcher(), ManualTimeProvider.DemoLocal());
         bar = composition.StatusBar;
         return composition.Shell;

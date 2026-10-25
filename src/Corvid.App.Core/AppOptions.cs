@@ -12,10 +12,10 @@ public sealed record AppOptions
         Usage: Corvid.App [--demo | --engine] [--theme light|dark|system] [--page <area>] [--session <id>]
                           [--scene main|approval]
 
-          --demo              demo services and the scripted scenario, with the clock frozen at 2026-10-24 14:05
-                              local (the default)
           --engine            Corvid's engine in-process, over the configuration, models and event log the CLI
-                              uses (corvid.json; CORVID_CONFIG and the XDG directories move them)
+                              uses (corvid.json; CORVID_CONFIG and the XDG directories move them): the default
+          --demo              demo services and the scripted scenario, with the clock frozen at 2026-10-24 14:05
+                              local, instead of the engine
           --theme <theme>     light, dark or system (the default)
           --page <area>       the area to open: sessions, board, review, rewind, memory, skills, jobs, models,
                               safety, mcp, gateway, secrets, audit, settings or first-run
@@ -26,10 +26,10 @@ public sealed record AppOptions
         """;
 
     /// <summary>
-    /// Demo services and the scripted scenario, with the clock frozen: the default. False with <c>--engine</c>, which runs
-    /// the engine in-process (Corvid.App.Engine) on the system clock.
+    /// Demo services and the scripted scenario, with the clock frozen (<c>--demo</c>). False by default (and with
+    /// <c>--engine</c>, which says the default out loud): the engine runs in-process (Corvid.App.Engine) on the system clock.
     /// </summary>
-    public bool Demo { get; init; } = true;
+    public bool Demo { get; init; }
 
     public AppTheme Theme { get; init; } = AppTheme.System;
 

@@ -359,7 +359,7 @@ public sealed class GatewayTests
     [Fact]
     public void TheCompositionBuildsGatewayOnTheDemoAndDisposesIt()
     {
-        Assert.True(AppOptions.TryParse(["--page", "gateway"], out var options, out var error), error);
+        Assert.True(AppOptions.TryParse(["--demo", "--page", "gateway"], out var options, out var error), error);
         using var composition = new AppComposition(options, new InlineDispatcher(), ManualTimeProvider.DemoLocal());
 
         Assert.Single(composition.Gateway.Requests);
@@ -369,7 +369,7 @@ public sealed class GatewayTests
     [Fact]
     public async Task TheBellFollowsAPairingAnsweredHereBeforeTheBoardExists()
     {
-        Assert.True(AppOptions.TryParse(["--page", "gateway"], out var options, out var error), error);
+        Assert.True(AppOptions.TryParse(["--demo", "--page", "gateway"], out var options, out var error), error);
         using var composition = new AppComposition(options, new InlineDispatcher(), ManualTimeProvider.DemoLocal());
         var gateway = composition.Gateway;
         var areaItems = (await composition.BoardService.ListAttentionAsync(TestContext.Current.CancellationToken)).Count;

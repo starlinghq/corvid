@@ -18,11 +18,11 @@ public sealed class AppOptionsTests
     }
 
     [Fact]
-    public void NoArgumentsOpenTheDemoOnSessionsInTheSystemTheme()
+    public void NoArgumentsOpenTheEngineOnSessionsInTheSystemTheme()
     {
         var options = Parse();
 
-        Assert.True(options.Demo);
+        Assert.False(options.Demo);
         Assert.Equal(AppTheme.System, options.Theme);
         Assert.Null(options.Page);
         Assert.Null(options.Session);
@@ -31,8 +31,9 @@ public sealed class AppOptionsTests
     }
 
     [Fact]
-    public void EngineLeavesTheDemoAndDemoStaysTheDefault()
+    public void DemoOptsInAndEngineSaysTheDefault()
     {
+        Assert.False(Parse().Demo);
         Assert.False(Parse("--engine").Demo);
         Assert.False(Parse("--engine", "--page", "first-run").Demo);
         Assert.True(Parse("--demo").Demo);

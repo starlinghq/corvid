@@ -18,7 +18,7 @@ using Corvid.App.Core.Skills;
 namespace Corvid.App.Core.Composition;
 
 /// <summary>
-/// Demo mode's services (<c>--demo</c>, the default): the mockups' scenario on the composition's frozen clock, in memory.
+/// Demo mode's services (<c>--demo</c>; the browser head's only mode): the mockups' scenario on the composition's frozen clock, in memory.
 /// Review and Rewind work over the demo sessions themselves, so this keeps the <see cref="DemoSessionService"/> it made
 /// for them rather than the composition casting its session service.
 /// </summary>

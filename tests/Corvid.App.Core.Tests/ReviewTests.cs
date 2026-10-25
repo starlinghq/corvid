@@ -12,7 +12,7 @@ public sealed class ReviewTests
 
     private static AppComposition Compose(params string[] args)
     {
-        Assert.True(AppOptions.TryParse(args, out var options, out var error), error);
+        Assert.True(AppOptions.TryParse(["--demo", .. args], out var options, out var error), error);
         return new AppComposition(options, new InlineDispatcher());
     }
 
@@ -138,7 +138,7 @@ public sealed class ReviewTests
     [Fact]
     public async Task ACallRunningAtTheSendCountsAsSinceTheReviewOnceItEnds()
     {
-        Assert.True(AppOptions.TryParse(["--page", "review", "--scene", "approval"], out var options, out var error), error);
+        Assert.True(AppOptions.TryParse(["--demo", "--page", "review", "--scene", "approval"], out var options, out var error), error);
         var time = ManualTimeProvider.Demo();
         var composition = new AppComposition(options, new InlineDispatcher(), time);
         var review = composition.Review;

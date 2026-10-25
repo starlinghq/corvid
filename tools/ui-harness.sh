@@ -16,7 +16,10 @@
 #   ui-harness.sh stop   <n> [--xvfb]                 stop the app (and the display with --xvfb)
 #
 # For the Corvid app, launch with CORVID_APP_RENDERER=software: under Xvfb, Uno's OpenGL path can keep a stale frame
-# after a shrinking resize. Needs Xvfb, xdotool, xdpyinfo, xwininfo and ImageMagick (apt: xvfb xdotool x11-utils imagemagick).
+# after a shrinking resize. The app runs on the engine by default (the user's real Corvid home), so a mockup comparison
+# passes --demo explicitly:
+#   ui-harness.sh launch 7 1440x900 -- dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll --demo --page models
+# and an engine run points HOME, CORVID_CONFIG and the XDG directories at a temporary home first. Needs Xvfb, xdotool, xdpyinfo, xwininfo and ImageMagick (apt: xvfb xdotool x11-utils imagemagick).
 #
 # State lives in $UI_HARNESS_STATE (default $XDG_RUNTIME_DIR/ui-harness-$UID, private to the user): xvfb-<n>.pid,
 # app-<n>.pid, win-<n>.id, app-<n>.log. Processes are stopped by the PID recorded at launch, never by pattern, so a stop

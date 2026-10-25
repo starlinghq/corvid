@@ -549,7 +549,7 @@ public sealed class SkillsTests
 
     private static AppOptions Options(params string[] args)
     {
-        Assert.True(AppOptions.TryParse(args, out var options, out var error), error);
+        Assert.True(AppOptions.TryParse(["--demo", .. args], out var options, out var error), error);
         return options;
     }
 

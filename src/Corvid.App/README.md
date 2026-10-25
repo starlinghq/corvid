@@ -15,6 +15,10 @@ comes next: [`docs/plan/ui-handoff.md`](../../docs/plan/ui-handoff.md); the rule
 
 ```sh
 dotnet build src/Corvid.App/Corvid.App.csproj -c Release
+# The engine (the default) over this machine's Corvid home; set HOME, CORVID_CONFIG and the XDG directories to try a
+# temporary one:
+dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll
+# The demo, as the mockups draw it:
 dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll --demo
 # or, building as it goes:
 dotnet run --project src/Corvid.App -c Release -- --demo --page models --theme dark
@@ -39,8 +43,8 @@ is desktop-only until attached mode (G-1).
 
 | Option | Effect |
 | --- | --- |
-| `--demo` | Demo services and the scripted scenario, with the clock frozen at 2026-10-24 14:05 local so every relative time and screenshot is stable. The default. |
-| `--engine` | Corvid's engine in-process (`Corvid.App.Engine`, desktop head only), over the same `corvid.json`, models and event log as the CLI; `CORVID_CONFIG` and `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR` move them (a test home sets them all, and `Corvid:Models:Cache`, to temporary directories). The host starts and the model cache is checked before the window opens; the models load in the background. With models missing it opens First run. Every area runs on the engine; a member the engine cannot honour yet refuses with the work item that brings it ("comes with G-3: …", shown as a red notice or a disabled action). Not with `--demo`. |
+| `--engine` | The default (the option only says so): Corvid's engine in-process (`Corvid.App.Engine`, desktop head only), over the same `corvid.json`, models and event log as the CLI; `CORVID_CONFIG` and `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR` move them (a test home sets them all, and `Corvid:Models:Cache`, to temporary directories). The host starts and the model cache is checked before the window opens; the models load in the background. With models missing it opens First run. Every area runs on the engine; a member the engine cannot honour yet refuses with the work item that brings it ("comes with U-6: …", shown as a red notice or a disabled action). Not with `--demo`. |
+| `--demo` | Demo services and the scripted scenario instead of the engine, with the clock frozen at 2026-10-24 14:05 local so every relative time and screenshot is stable. Every mockup comparison and screenshot of a mocked screen passes it; the browser head runs only the demo. |
 | `--theme light\|dark\|system` | The theme to start in; `system` by default. Settings switches it at run time. |
 | `--page <area>` | The area to open: `sessions`, `board`, `review`, `rewind`, `memory`, `skills`, `jobs`, `models`, `safety`, `mcp`, `gateway`, `secrets`, `audit`, `settings`, `first-run` (any case; `=` works too: `--page=models`). |
 | `--session <id>` | The session to select and open, such as `cli-9f2e`; with `--page`, it is selected and the page shows. |
@@ -51,9 +55,11 @@ is desktop-only until attached mode (G-1).
 
 On the engine, a session opened from the log (`--session`, the rail after a restart) is replayed (K-10) and folds to
 what the live turn showed for what the log records: messages, calls with their results and diffs, plans, checkpoints,
-and each asked call's approval answer (approved once, for the session or always; denied, with the reason the person
-gave). It does not show what the log does not keep: the generator and tokens of a past turn, its decisions, how a turn
-ended beyond "answered" (an interrupted turn reads "the log holds no answer"), the session's taint, a call's elapsed
+each asked call's approval answer (approved once, for the session or always; denied, with the reason the person
+gave), and since A4 each turn's generator, the checkpoints' decisions, where outside content tainted the session and
+where the person's next message cleared it, compaction markers, steers, clarifying questions, each turn's steps and why a
+call that asked nobody ran (G-2). A turn the log holds no answer for replays as interrupted. It does not show what the log
+does not keep: a past turn's tokens, a running call's output tail, a call's elapsed
 time, the rule text a session or always answer wrote, a call refused without a prompt (the hardline list, a remembered
 denial, no approver) as "denied" rather than "failed", and the reason for denials logged before `approval_resolved`
 carried it (`note`). The composer's mode lines (A4, docs/plan/tui.md §4.1) are read by the host's `ComposerLine`, as

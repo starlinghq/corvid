@@ -36,7 +36,7 @@ public sealed class SeamTests
     public void DemoModeBuildsTheDemosServices()
     {
         var source = new Tracking(new DemoAppServices());
-        var composition = new AppComposition(new AppOptions(), new InlineDispatcher(), ManualTimeProvider.Demo(), source);
+        var composition = new AppComposition(new AppOptions { Demo = true }, new InlineDispatcher(), ManualTimeProvider.Demo(), source);
 
         Assert.IsType<DemoSessionService>(composition.SessionService);
         Assert.IsType<DemoReviewService>(composition.ReviewService);
@@ -54,7 +54,7 @@ public sealed class SeamTests
     [Fact]
     public void TheDefaultServicesAreTheDemosInDemoModeAndARefusalWithoutAnEngine()
     {
-        using var demo = new AppComposition(new AppOptions(), new InlineDispatcher(), ManualTimeProvider.Demo());
+        using var demo = new AppComposition(new AppOptions { Demo = true }, new InlineDispatcher(), ManualTimeProvider.Demo());
         Assert.IsType<DemoAppServices>(demo.Services);
 
         using var noEngine = new AppComposition(Engine, new InlineDispatcher(), ManualTimeProvider.Demo());

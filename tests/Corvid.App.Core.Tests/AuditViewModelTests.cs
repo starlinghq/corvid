@@ -19,7 +19,7 @@ public sealed class AuditViewModelTests
     [Fact]
     public async Task TheStatusBarIsAuditPngs()
     {
-        Assert.True(AppOptions.TryParse(["--page", "audit"], out var options, out var error), error);
+        Assert.True(AppOptions.TryParse(["--demo", "--page", "audit"], out var options, out var error), error);
         var composition = new AppComposition(options, new InlineDispatcher());
         await composition.Audit.Loaded;
         var bar = composition.StatusBar;
@@ -225,7 +225,7 @@ public sealed class AuditViewModelTests
     [Fact]
     public async Task ATranscriptDetectionOpensAuditFilteredToItsEvents()
     {
-        Assert.True(AppOptions.TryParse([], out var options, out var error), error);
+        Assert.True(AppOptions.TryParse(["--demo"], out var options, out var error), error);
         var composition = new AppComposition(options, new InlineDispatcher());
         var time = ManualTimeProvider.Demo();
         var service = new CapturingSessionService(new DemoSessionService(new InlineDispatcher(), time, DemoScene.Main));

@@ -11,7 +11,7 @@ public sealed class SafetyTests
 {
     private static AppComposition Compose(params string[] args)
     {
-        Assert.True(AppOptions.TryParse(args, out var options, out var error), error);
+        Assert.True(AppOptions.TryParse(["--demo", .. args], out var options, out var error), error);
         return new AppComposition(options, new InlineDispatcher(), ManualTimeProvider.DemoLocal());
     }
 
@@ -476,7 +476,7 @@ public sealed class SafetyTests
     public async Task DisposingTheCompositionStopsEveryWatchAndSubscription()
     {
         var time = ManualTimeProvider.DemoLocal();
-        Assert.True(AppOptions.TryParse(["--page", "safety"], out var options, out _));
+        Assert.True(AppOptions.TryParse(["--demo", "--page", "safety"], out var options, out _));
         var app = new AppComposition(options, new InlineDispatcher(), time);
         await app.Safety.Loaded;
         var service = (DemoSafetyService)app.SafetyService;

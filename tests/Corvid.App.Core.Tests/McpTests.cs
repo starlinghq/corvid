@@ -26,7 +26,7 @@ public sealed class McpTests
 
     private static AppComposition Compose(params string[] args)
     {
-        Assert.True(AppOptions.TryParse(args, out var options, out var error), error);
+        Assert.True(AppOptions.TryParse(["--demo", .. args], out var options, out var error), error);
         return new AppComposition(options, new InlineDispatcher(), ManualTimeProvider.DemoLocal());
     }
 

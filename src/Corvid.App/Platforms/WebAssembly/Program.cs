@@ -14,7 +14,7 @@ public static class Program
     {
         AppLogging.Initialize();
         var host = UnoPlatformHostBuilder.Create()
-            .App(() => new App(new AppOptions()))
+            .App(() => new App(new AppOptions { Demo = true }))
             .UseWebAssembly()
             .Build();
         await host.RunAsync();

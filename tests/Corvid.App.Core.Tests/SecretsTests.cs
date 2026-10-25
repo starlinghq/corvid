@@ -203,7 +203,7 @@ public sealed class SecretsTests
     [Fact]
     public async Task TheCompositionMakesSecretsOnceAndDisposesIt()
     {
-        Assert.True(AppOptions.TryParse(["--page", "secrets"], out var options, out var error), error);
+        Assert.True(AppOptions.TryParse(["--demo", "--page", "secrets"], out var options, out var error), error);
         var time = ManualTimeProvider.DemoLocal();
         var app = new AppComposition(options, new InlineDispatcher(), time);
         Assert.Same(app.Secrets, app.Secrets);

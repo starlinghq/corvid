@@ -335,7 +335,7 @@ public sealed class MemoryViewModelTests
     [Fact]
     public async Task TheCompositionCreatesTheMemoryPageOnTheDemo()
     {
-        Assert.True(AppOptions.TryParse(["--page", "memory"], out var options, out var error), error);
+        Assert.True(AppOptions.TryParse(["--demo", "--page", "memory"], out var options, out var error), error);
         var composition = new AppComposition(options, new InlineDispatcher());
         await composition.Memory.Loaded;
 

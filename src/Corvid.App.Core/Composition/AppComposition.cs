@@ -4,10 +4,10 @@ using Corvid.App.Core.Shell;
 namespace Corvid.App.Core.Composition;
 
 /// <summary>
-/// Builds the window's view models and the services behind them. Demo mode (the default) fills the shell with the Main
-/// mockup's values, backs each area with its demo service (<see cref="DemoAppServices"/>) and freezes the clock at
-/// 2026-10-24 14:05 local, so screenshots are stable. Engine mode (<c>--engine</c>) takes each area's service from the
-/// <see cref="IAppServices"/> the head gives it (Corvid.App.Engine's, in the desktop head), on the system clock.
+/// Builds the window's view models and the services behind them. Engine mode (the default) takes each area's service
+/// from the <see cref="IAppServices"/> the head gives it (Corvid.App.Engine's, in the desktop head), on the system clock.
+/// Demo mode (<c>--demo</c>) fills the shell with the Main mockup's values, backs each area with its demo service
+/// (<see cref="DemoAppServices"/>) and freezes the clock at 2026-10-24 14:05 local, so screenshots are stable.
 /// <para>
 /// The class is partial with one file per area (<c>AppComposition.&lt;Area&gt;.cs</c>), each holding a property named
 /// after the area that creates the area's service (through <see cref="Services"/>) and view model on first use. Agents
@@ -18,7 +18,7 @@ namespace Corvid.App.Core.Composition;
 public sealed partial class AppComposition : IDisposable
 {
     /// <summary>Engine mode's refusal when the head gave the composition no engine.</summary>
-    public const string NoEngine = "This window has no engine: --engine needs the desktop app, which runs Corvid in-process.";
+    public const string NoEngine = "This window has no engine: the engine needs the desktop app, which runs Corvid in-process. --demo shows the demo.";
 
     /// <param name="time">
     /// The clock; by default frozen at the demo's minute in demo mode and the system clock otherwise. Tests pass a manual
