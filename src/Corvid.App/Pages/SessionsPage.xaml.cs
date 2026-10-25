@@ -66,6 +66,12 @@ public sealed partial class SessionsPage : Page, IDockProvider
         Root.LostFocus += (_, _) => _ctrlHeld = false;
         Root.AddHandler(PreviewKeyDownEvent, new KeyEventHandler(OnCardPreviewKeyDown), true);
         Composer.BeforeTextChanging += OnComposerTextChanging;
+        // A5: with no session open while a new one starts, what is typed is kept for it.
+        Composer.TextChanged += (_, _) =>
+        {
+            if (_session is null && ViewModel?.IsStartingSession == true)
+                ViewModel.StartingDraft = Composer.Text;
+        };
         Root.KeyDown += OnRootKeyDown;
         for (var i = 0; i < 7; i++)
         {
@@ -96,6 +102,7 @@ public sealed partial class SessionsPage : Page, IDockProvider
         ApplyLayout();
         Bindings.Update();
         Attach(ViewModel.Session);
+        UpdateStarting();
         base.OnNavigatedTo(e);
     }
 
@@ -331,6 +338,21 @@ public sealed partial class SessionsPage : Page, IDockProvider
     {
         if (e.PropertyName == nameof(SessionsViewModel.Session))
             Attach(ViewModel.Session);
+        else if (e.PropertyName == nameof(SessionsViewModel.IsStartingSession))
+            UpdateStarting();
+    }
+
+    /// <summary>
+    /// A5 (A4 leftover): while a new session starts with none open (Ctrl+N as the runtime loads), the composer takes text for
+    /// it, focused, and the new session opens with it as its draft.
+    /// </summary>
+    private void UpdateStarting()
+    {
+        if (_session is not null)
+            return;
+        Composer.IsEnabled = ViewModel.IsStartingSession;
+        if (ViewModel.IsStartingSession)
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, FocusComposer);
     }
 
     private void Attach(SessionViewModel? session)
@@ -395,6 +417,9 @@ public sealed partial class SessionsPage : Page, IDockProvider
             UpdateTurnStrip();
         if (e.PropertyName is nameof(SessionViewModel.IsReadOnly) or null or "")
             UpdateReadOnly();
+        // A5 (A4 leftover): a session's first opening positions once its history has drawn, not on the empty view before it.
+        if (e.PropertyName is nameof(SessionViewModel.IsOpen) && !_positioned)
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, PositionAtLatest);
         UpdateAnnouncements(e.PropertyName);
     }
 
@@ -759,7 +784,9 @@ public sealed partial class SessionsPage : Page, IDockProvider
     /// <summary>Opens at the latest message: its top under the header, as the mockups show a running turn.</summary>
     private void PositionAtLatest()
     {
-        if (_session is not { } session || _positioned)
+        // A5 (A4 leftover): not before the history is in. Positioned on the empty view of a first opening (the engine still
+        // replaying the log), the transcript then filled in around an offset taken from no blocks, mid-way down.
+        if (_session is not { IsOpen: true } session || _positioned)
             return;
         _positioned = true;
         // A find (Ctrl+F) that opened the page lands on its block rather than on the latest message.
@@ -781,11 +808,21 @@ public sealed partial class SessionsPage : Page, IDockProvider
 
         ScrollToBlock(index);
         // The repeater estimates the heights of blocks it has not drawn; once the ones around the target are drawn the
-        // estimate can move it, so the position is taken again after that layout.
+        // estimate can move it, so the position is taken again after each layout until it holds (a few passes at most),
+        // unless the person scrolled meanwhile.
+        Settle(session, index, passes: 4);
+    }
+
+    private void Settle(SessionViewModel session, int index, int passes)
+    {
+        var offset = TranscriptScroll.VerticalOffset;
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
-            if (_session is not null && index < _session.Blocks.Count)
-                ScrollToBlock(index);
+            if (!ReferenceEquals(_session, session) || index >= session.Blocks.Count || Math.Abs(TranscriptScroll.VerticalOffset - offset) > 1)
+                return;
+            ScrollToBlock(index);
+            if (passes > 1 && Math.Abs(TranscriptScroll.VerticalOffset - offset) > 1)
+                Settle(session, index, passes - 1);
         });
     }
 

@@ -42,6 +42,11 @@ public sealed class SessionsViewModel : AreaViewModel
         if (_hub is not null)
         {
             _hub.CurrentChanged += (_, _) => Follow(_hub.Current);
+            _hub.StartingChanged += (_, _) =>
+            {
+                OnPropertyChanged(nameof(IsStartingSession));
+                OnPropertyChanged(nameof(EmptyText));
+            };
             Follow(_hub.Current);
         }
     }
@@ -78,9 +83,28 @@ public sealed class SessionsViewModel : AreaViewModel
     public RelayCommand SendCommand { get; }
 
     /// <summary>What the page says while no session is open.</summary>
-    public string EmptyText => CanCreateSession
-        ? "No session is open. Pick one in the rail, or start a new one (Ctrl+N)."
-        : "No session is open. Pick one in the rail.";
+    public string EmptyText => IsStartingSession
+        ? "Starting a new session. What you type now goes to it."
+        : CanCreateSession
+            ? "No session is open. Pick one in the rail, or start a new one (Ctrl+N)."
+            : "No session is open. Pick one in the rail.";
+
+    /// <summary>A5: a new session is starting; with none open, the composer takes text for it (<see cref="StartingDraft"/>).</summary>
+    public bool IsStartingSession => _hub?.Starting == true;
+
+    /// <summary>
+    /// A5: the composer's text while a new session starts and none is open; it becomes the new session's draft. Ignored
+    /// once nothing is starting, so the composer emptying as it binds a session clears nothing.
+    /// </summary>
+    public string StartingDraft
+    {
+        get => _hub?.StartingDraft ?? "";
+        set
+        {
+            if (_hub is { Starting: true } hub)
+                hub.StartingDraft = value ?? "";
+        }
+    }
 
     /// <summary>
     /// A transcript block find-in-session (Ctrl+F) asked to bring into view; the page takes it with

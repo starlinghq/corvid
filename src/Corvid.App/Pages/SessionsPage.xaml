@@ -936,7 +936,7 @@
             </ItemsRepeater.Layout>
           </ItemsRepeater>
           <StackPanel Spacing="10" Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.HasSession), Mode=OneWay}">
-            <TextBlock Text="{x:Bind ViewModel.EmptyText}" Style="{StaticResource CorvidMutedText}" TextWrapping="Wrap" />
+            <TextBlock Text="{x:Bind ViewModel.EmptyText, Mode=OneWay}" Style="{StaticResource CorvidMutedText}" TextWrapping="Wrap" />
             <!-- The engine starts one in the window's workspace (Ctrl+N); the demo always has a session open. -->
             <controls:CorvidButton Content="New session" Variant="Primary" Style="{StaticResource CorvidSmallButton}" HorizontalAlignment="Left"
                                    Command="{x:Bind ViewModel.NewSessionCommand}"
