@@ -13,8 +13,8 @@ namespace Corvid.Host.Sessions;
 /// tui.md §4.1 names the marks but not where a message ends and a mode line begins; the rule here keeps ordinary messages
 /// that happen to start with a mark as messages. <c>#</c> is a mode only when a space follows it (<c># the release branch
 /// is main</c>), so <c>#123 is failing again</c>, <c>#include &lt;stdio.h&gt; not found</c> and <c>#[derive(Debug)]</c> are
-/// messages. <c>!</c> and <c>!!</c> are a mode only when a space or a command word follows: letters, digits and
-/// <c>_ . ~ / + -</c> up to a space or the line's end (<c>!git status</c>, <c>! ls -la</c>, <c>!./build.sh</c>), so
+/// messages. <c>!</c> and <c>!!</c> are a mode only when a space or a command word follows: a word starting as a command does
+/// and holding no prose punctuation (<c>!git status</c>, <c>! ls -la</c>, <c>!./build.sh</c>, <c>!env|grep PATH</c>), so
 /// <c>!important: keep the API stable</c> and <c>!!!</c> are messages. A line starting with <c>\#</c> or <c>\!</c> is
 /// always a message, sent without the backslash (<see cref="MessageText"/>).
 /// </para>
@@ -139,13 +139,20 @@ public abstract record ComposerLine
         return char.IsWhiteSpace(rest[0]) || IsCommandWord(rest) ? new Shell(command, local) : null;
     }
 
-    // The first word is a command's name or path: letters, digits and _ . ~ / + - up to a space or the end.
+    // The first word is a command: it starts as a command's name, a path, a variable, a quoted word or a subshell does
+    // (letters, digits, _ . ~ / + - $ ' " ` \ ( ), and goes on up to a space or the end with those and the shell's other
+    // characters (| & ; < > = * [ ] { } @ % ^ ), so "!env|grep PATH", "!$EDITOR notes.md" and "!!'my script'" run (A4
+    // verification). Prose punctuation (: , ! ?) anywhere in it makes the line a message: "!important:", "!!!", "!wow,".
     private static bool IsCommandWord(string rest)
     {
-        var end = 0;
-        for (; end < rest.Length && !char.IsWhiteSpace(rest[end]); end++)
-            if (!(char.IsAsciiLetterOrDigit(rest[end]) || rest[end] is '_' or '.' or '~' or '/' or '+' or '-'))
+        if (rest.Length == 0 || !(IsNameCharacter(rest[0]) || rest[0] is '$' or '\'' or '"' or '`' or '\\' or '('))
+            return false;
+        for (var end = 0; end < rest.Length && !char.IsWhiteSpace(rest[end]); end++)
+            if (!(IsNameCharacter(rest[end]) || rest[end] is '$' or '\'' or '"' or '`' or '\\' or '(' or ')' or '|' or '&' or ';' or '<' or '>'
+                    or '=' or '*' or '[' or ']' or '{' or '}' or '@' or '%' or '^'))
                 return false;
-        return end > 0;
+        return true;
+
+        static bool IsNameCharacter(char c) => char.IsAsciiLetterOrDigit(c) || c is '_' or '.' or '~' or '/' or '+' or '-';
     }
 }

@@ -88,10 +88,16 @@ public sealed class SessionRecordsTests
         /// <summary>When set, an answer is refused with this reason, as the engine refuses one to a question answered elsewhere.</summary>
         public string? RefuseAnswer { get; set; }
 
-        public Task AnswerQuestionAsync(string sessionId, string questionId, string answer, CancellationToken cancellationToken = default)
+        /// <summary>When set, an answer waits for it before it is taken or refused.</summary>
+        public Task? AnswerGate { get; set; }
+
+        public async Task AnswerQuestionAsync(string sessionId, string questionId, string answer, CancellationToken cancellationToken = default)
         {
             Answers.Add((questionId, answer));
-            return RefuseAnswer is { } reason ? Task.FromException(new InvalidOperationException(reason)) : Task.CompletedTask;
+            if (AnswerGate is { } gate)
+                await gate;
+            if (RefuseAnswer is { } reason)
+                throw new InvalidOperationException(reason);
         }
         public Task RunCommandAsync(string sessionId, string line, CancellationToken cancellationToken = default) => inner.RunCommandAsync(sessionId, line, cancellationToken);
         public Task SetApprovalModeAsync(string sessionId, ApprovalMode mode, CancellationToken cancellationToken = default) => inner.SetApprovalModeAsync(sessionId, mode, cancellationToken);
@@ -150,6 +156,33 @@ public sealed class SessionRecordsTests
         Assert.Equal([("q-open", "the release branch")], service.Answers);
         Assert.Equal("the release branch", view.Draft);
         Assert.Equal("That question is no longer open; nothing was sent.", view.Error);
+    }
+
+    [Fact]
+    public async Task A_refused_answer_never_replaces_what_was_typed_while_it_was_asked()
+    {
+        // A4 verification: the refused words came back over the composer's new text.
+        var (service, time, demo) = Start();
+        using var _ = demo;
+        service.AfterOpen = new QuestionAsked("q-open", "Which branch?");
+        service.RefuseAnswer = "That question is no longer open; nothing was sent.";
+        var gate = new TaskCompletionSource();
+        service.AnswerGate = gate.Task;
+        using var view = new SessionViewModel(DemoSessionService.VaultSessionId, service, new InlineDispatcher(), time);
+        await view.OpenAsync(Ct);
+
+        view.Draft = "the release branch";
+        view.SubmitCommand.Execute(null);
+        Assert.Equal("", view.Draft);
+        view.Draft = "and tag it";
+        gate.SetResult();
+        // The refusal reaches the view on its continuation: wait for it (bounded), the order is the gate's.
+        for (var i = 0; i < 500 && view.Error.Length == 0; i++)
+            await Task.Delay(10, Ct);
+
+        Assert.Equal("That question is no longer open; nothing was sent.", view.Error);
+
+        Assert.Equal("the release branch\nand tag it", view.Draft);
     }
 
     [Fact]

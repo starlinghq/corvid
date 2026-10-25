@@ -1610,13 +1610,22 @@ public sealed class TurnRunner
         {
             var names = new Dictionary<string, string>(StringComparer.Ordinal);
             var lines = new List<string>();
+            var current = -1;
             foreach (var entry in snapshot.Transcript)
             {
                 switch (entry.Content)
                 {
                     // A4: a `!!` line is the user's alone, as in the prompt.
                     case UserMessage { LocalOnly: true } or ToolCallIssued { LocalOnly: true } or ToolResult { LocalOnly: true }: break;
-                    case UserMessage user: lines.Add((user.From is null ? "user: " : "guest (outside content): ") + Short(user.Text)); break;
+                    // A gateway guest's message is named as theirs, on one line with hidden characters shown (A4 verification).
+                    case UserMessage { From: { } guest } user:
+                        current = lines.Count;
+                        lines.Add("guest " + PromptRenderer.SenderName(guest) + " (outside content): " + Short(PromptRenderer.OneLine(user.Text)));
+                        break;
+                    case UserMessage user:
+                        current = lines.Count;
+                        lines.Add("user: " + Short(user.Text));
+                        break;
                     case UserSteered steer: lines.Add("user (during the turn): " + Short(steer.Text)); break;
                     case AssistantMessage assistant: lines.Add("assistant: " + Short(assistant.Text)); break;
                     case ToolCallIssued call:
@@ -1627,8 +1636,8 @@ public sealed class TurnRunner
                     case Compacted compacted: lines.Add($"summary of events {compacted.FromSequence}–{compacted.ThroughSequence}"); break;
                 }
             }
-            // The latest user line is this turn's message, which the state carries as user_message.
-            var current = lines.FindLastIndex(line => line.StartsWith("user: ", StringComparison.Ordinal));
+            // The latest message is this turn's, which the state carries as user_message (a guest's turn's too, so the
+            // owner's message before it stays in the recent events).
             if (current >= 0)
                 lines.RemoveAt(current);
             return [.. lines.TakeLast(_options.RecentEvents)];

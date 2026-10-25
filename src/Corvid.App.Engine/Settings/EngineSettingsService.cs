@@ -182,20 +182,23 @@ public sealed class EngineSettingsService : ISettingsService
     /// The live settings from the file as the next start reads it, applied to the running runtime: the keys that changed
     /// there. None while the runtime is not up (it reads the file when it starts).
     /// </summary>
-    private ImmutableArray<string> ApplyLive()
+    private ImmutableArray<string> ApplyLive(ImmutableArray<string> changed)
     {
         if (!_engine.Runtime.IsCompletedSuccessfully)
             return [];
         var next = _writer.NextStart().GetSection(CorvidOptions.Section).Get<CorvidOptions>() ?? new CorvidOptions();
         var applied = _engine.Runtime.Result.ApplyLiveSettings(next);
-        // U-8: the app's hosting follows its two settings at once (Start or Stop hosting, as on the Gateway and Jobs pages).
+        // U-8: the app's hosting follows its two settings at once (Start or Stop hosting, as on the Gateway and Jobs pages),
+        // only when this save changed one: saving another key must not stop hosting that an environment override or a Start
+        // on the Gateway or Jobs page turned on (A4 verification).
         foreach (var (part, on, key) in new[]
                  {
                      (HostedPart.Gateway, next.App.HostGateway, HostingKeys[0]),
                      (HostedPart.Scheduler, next.App.HostScheduler, HostingKeys[1]),
                  })
         {
-            if ((part == HostedPart.Gateway ? _engine.HostsGateway : _engine.HostsScheduler) == on)
+            if (!changed.Contains(key, StringComparer.OrdinalIgnoreCase)
+                || (part == HostedPart.Gateway ? _engine.HostsGateway : _engine.HostsScheduler) == on)
                 continue;
             // On the pool already (SaveAsync's work): stopping waits for the gateway's answers in flight, as Stop hosting does.
             _engine.SetHostingAsync(part, on).GetAwaiter().GetResult();
@@ -223,7 +226,7 @@ public sealed class EngineSettingsService : ISettingsService
         if (result is not null)
         {
             // What the running runtime takes at once; the rest applies after a restart.
-            var live = result.RestartKeys.IsEmpty ? [] : ApplyLive();
+            var live = result.RestartKeys.IsEmpty ? [] : ApplyLive(result.RestartKeys);
             var changed = Definitions.Where(definition => definition.Store == SettingStore.CorvidJson
                 && result.RestartKeys.Contains(definition.FullKey, StringComparer.OrdinalIgnoreCase)
                 && !live.Contains(definition.FullKey, StringComparer.OrdinalIgnoreCase)).ToList();

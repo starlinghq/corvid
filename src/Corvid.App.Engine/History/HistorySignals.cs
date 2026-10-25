@@ -41,6 +41,17 @@ internal sealed class HistorySignals : IDisposable
             engine.PublishRewound(sessionId, rewound);
     }
 
+    /// <summary>
+    /// M2: lets go of a session a Rewind restore or a Review revert opened, once it is done, so a terminal can drive it again;
+    /// not when the window views it now (A4 verification: it opened it while the restore ran, and its handle must stay the
+    /// live one; the window lets go of it when it stops viewing it).
+    /// </summary>
+    internal Task<bool> ReleaseAfterRestoreAsync(Corvid.Host.Composition.CorvidRuntime runtime, string sessionId)
+    {
+        ArgumentNullException.ThrowIfNull(runtime);
+        return runtime.ReleaseDriverAsync(sessionId, () => _sessions is Sessions.EngineSessionService engine && engine.IsViewed(sessionId));
+    }
+
     public void Dispose()
     {
         _disposed = true;

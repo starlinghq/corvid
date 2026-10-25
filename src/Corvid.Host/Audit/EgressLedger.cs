@@ -38,7 +38,11 @@ public sealed record EgressRetention(TimeSpan? MaxAge, long? MaxBytes)
 }
 
 /// <summary>What a prune removed: requests, and the message bodies no request still referenced.</summary>
-public sealed record EgressPruned(int Requests, int Messages);
+/// <param name="NotCompacted">
+/// Compacting was asked for and the file was in use (a process recording into it), so it was pruned but not compacted
+/// (A4 verification); <c>corvid egress prune</c> says so.
+/// </param>
+public sealed record EgressPruned(int Requests, int Messages, bool NotCompacted = false);
 
 /// <summary>
 /// The egress ledger (G-9, docs/plan/ui.md §4.12, F8): every request the privacy egress gate decided on, for every gated
@@ -296,25 +300,40 @@ public sealed class EgressLedger
         }
         if (retention.MaxBytes is { } max)
         {
-            // The oldest tenth at a time: a conversation's shared prefix is freed only once all its requests have gone.
+            // The oldest tenth at a time: a conversation's shared prefix is freed only once all its requests have gone. The
+            // newest request always stays (A4 verification): one conversation over the cap must not empty the ledger.
             while (Scalar(connection, "SELECT COALESCE(SUM(LENGTH(CAST(body AS BLOB))), 0) FROM messages;") > max)
             {
                 var count = Scalar(connection, "SELECT COUNT(*) FROM requests;");
-                if (count == 0)
+                if (count <= 1)
                     break;
                 requests += Execute(connection, "DELETE FROM requests WHERE number IN (SELECT number FROM requests ORDER BY number LIMIT $n);",
-                    ("$n", Math.Max(1, count / 10)));
+                    ("$n", Math.Min(count - 1, Math.Max(1, count / 10))));
                 messages += Unreferenced(connection);
             }
         }
         Execute(connection, "INSERT INTO meta (key, value) VALUES ('pruned_at', $at) ON CONFLICT(key) DO UPDATE SET value=excluded.value;",
             ("$at", now.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)));
         if (vacuum && requests + messages > 0)
-            Execute(connection, "VACUUM;");
+        {
+            try
+            {
+                BeforeVacuum?.Invoke();
+                Execute(connection, "VACUUM;");
+            }
+            // A4 verification: another process recording (or reading) holds the file; what was pruned stays pruned.
+            catch (SqliteException exception) when (exception.SqliteErrorCode is 5 or 6) // SQLITE_BUSY, SQLITE_LOCKED
+            {
+                return new EgressPruned(requests, messages, NotCompacted: true);
+            }
+        }
         return new EgressPruned(requests, messages);
     }
 
-    private const string MetaTable = "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);";
+    /// <summary>Runs just before a prune compacts the file (tests: another process starts writing then).</summary>
+    internal Action? BeforeVacuum { get; set; }
+
+    private const string MetaTable ="CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);";
 
     // Bodies no request's message list names any more.
     private static int Unreferenced(SqliteConnection connection) => Execute(connection, """

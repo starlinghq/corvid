@@ -138,7 +138,12 @@ public sealed partial class CorvidRuntime
     /// this process does not drive it or it is busy. The caller decides that no view, approval or question of its own is
     /// open (the window's session service).
     /// </summary>
-    public async Task<bool> ReleaseDriverAsync(string sessionId)
+    /// <param name="keep">
+    /// Asked under the driver gate, just before letting go: true keeps the session (a view of it opened meanwhile, which
+    /// holds or will take its handle; A4 verification: a Rewind or Review restore never lets go of a session the window
+    /// opened while it ran, whose handle would then name a disposed actor).
+    /// </param>
+    public async Task<bool> ReleaseDriverAsync(string sessionId, Func<bool>? keep = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         SessionActor? actor;
@@ -149,8 +154,13 @@ public sealed partial class CorvidRuntime
                 return false;
             if (_sessions.TryGetValue(sessionId, out var session) && !session.Actor.IsIdle)
                 return false;
+            if (keep?.Invoke() == true)
+                return false;
+            // A4 verification: not while a message posted to it is still in the ingress (the actor looks idle until the
+            // router hands it over), atomically with posting, so the router never submits to the actor disposed below.
+            if (!Sessions.TryRemoveIdle(sessionId, found => found.IsIdle, out actor))
+                return false;
             _sessions.TryRemove(sessionId, out _);
-            Sessions.TryRemove(sessionId, out actor);
             _drivers.TryRemove(sessionId, out _);
             held.Dispose();
         }

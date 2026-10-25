@@ -19,7 +19,7 @@ public sealed record SessionDescription(string Id, long Head)
     /// <summary>The latest <c>SessionTitled</c> (G-6): generated after the first exchange, or the user's rename; null when there is none.</summary>
     public SessionTitled? Titled { get; init; }
 
-    /// <summary>The first message the user sent, as typed (local-only <c>!!</c> lines left out).</summary>
+    /// <summary>The first message the user sent, as typed (local-only <c>!!</c> lines and a gateway guest's messages left out).</summary>
     public string? FirstMessage { get; init; }
 
     /// <summary>The latest answer.</summary>
@@ -115,7 +115,8 @@ public static class SessionCatalogue
             {
                 case UserMessage user:
                     turns++;
-                    if (user.LocalOnly != true)
+                    // A guest's words never name the owner's session (A4 verification).
+                    if (user.LocalOnly != true && user.From is null)
                         first ??= user.Text;
                     // K-6: a message answers the question before it; in a gateway chat only the owner's does (security M2:
                     // a guest's reply is theirs, and the question stays open for the owner).
@@ -293,8 +294,9 @@ public sealed class SessionTitler
         var transcript = snapshot.Transcript;
         for (var i = 0; i < transcript.Length; i++)
         {
-            // A ! line's message (the user's own shell call follows it) names a command, not what the session is about.
-            if (transcript[i].Content is UserMessage { LocalOnly: not true } user && message is null
+            // A ! line's message (the user's own shell call follows it) names a command, not what the session is about; a
+            // gateway guest's message is never the title's source (A4 verification).
+            if (transcript[i].Content is UserMessage { LocalOnly: not true, From: null } user && message is null
                 && !(i + 1 < transcript.Length && transcript[i + 1].Content is ToolCallIssued { CallId: var call } && call.StartsWith(Corvid.Kernel.Turns.TurnRunner.UserShellCall, StringComparison.Ordinal)))
                 message = user.Text;
             else if (transcript[i].Content is AssistantMessage assistant && message is not null)
@@ -415,6 +417,10 @@ public sealed class SessionTitler
             switch (entry.Content)
             {
                 case UserMessage { LocalOnly: true } or ToolCallIssued { LocalOnly: true } or ToolResult { LocalOnly: true }:
+                    break;
+                // A guest's message is outside content, quoted as theirs as the prompt quotes it (A4 verification).
+                case UserMessage { From: { } guest } user:
+                    lines.Add(Corvid.Kernel.Turns.PromptRenderer.Quoted(guest, Cut(user.Text, LineChars)));
                     break;
                 case UserMessage user:
                     lines.Add("user: " + Cut(user.Text, LineChars));

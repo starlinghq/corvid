@@ -51,6 +51,22 @@ public sealed class ChatRecordsTests
         Assert.DoesNotContain("Staged for review", run.Output, StringComparison.Ordinal);
     }
 
+    /// <summary>A4 verification: with a question open a ! line is refused (its command would run as the answer) and the question waits.</summary>
+    [Fact]
+    public async Task A_shell_line_while_a_question_is_open_is_refused_and_the_next_line_answers()
+    {
+        using var run = new CliRun(new FakeModels(new FakeGenerator(
+            Reply.Call("ask_user", """{"question":"What should I run before tagging?"}"""), Reply.Say("I will run the cleanup first."))));
+
+        await run.RunAsync(["chat", "--set", "Tools:Builtin=true"], "tag the release", "!rm -rf build", "the cleanup script", "/exit");
+
+        Assert.Contains("A question is open: answer it first, then send the ! line. Nothing was sent.", run.Output, StringComparison.Ordinal);
+        var calls = run.Models!.Generator.Calls;
+        Assert.Equal(2, calls.Count);
+        Assert.Contains("the cleanup script", calls[1].Last(message => message.Role == Microsoft.Extensions.AI.ChatRole.User).Text, StringComparison.Ordinal);
+        Assert.DoesNotContain(calls.SelectMany(call => call), message => message.Text.Contains("rm -rf", StringComparison.Ordinal));
+    }
+
     /// <summary>A4V2-8: an empty session is listed nowhere, so /pin refuses it rather than pinning what nobody can see.</summary>
     [Fact]
     public async Task Pin_refuses_a_session_with_no_messages_and_pins_one_with_them()

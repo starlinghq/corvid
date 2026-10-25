@@ -189,10 +189,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         {
             var channel = await LoadAsync(sessionId, cancellationToken).ConfigureAwait(false);
             Writable(channel);
-            // With a question open the next message is its answer: a ! line would run its command as that answer, so it is
-            // refused here as AnswerQuestionAsync refuses it.
-            if (modeLines && channel.View?.Question is not null && ComposerLine.Parse(text) is ComposerLine.Shell)
-                throw new InvalidOperationException("A question is open: answer it first, then send the ! line. Nothing was sent.");
+            var shellLine = modeLines && ComposerLine.Parse(text) is ComposerLine.Shell;
             QueuedMessage message;
             QueuedMessage? head = null;
             bool start;
@@ -201,6 +198,11 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 // Dropped while idle between the load and here: a fresh channel takes the message.
                 if (channel.Closed)
                     continue;
+                // With a question open the next message is its answer: a ! line would run its command as that answer, so it
+                // is refused here as AnswerQuestionAsync refuses it; read under the channel's lock, as the start below reads
+                // it (A4 verification).
+                if (shellLine && channel.View?.Question is not null)
+                    throw new InvalidOperationException("A question is open: answer it first, then send the ! line. Nothing was sent.");
                 message = new QueuedMessage($"q-{++channel.QueueCounter}", text.Trim());
                 start = !channel.Running;
                 // K-6: with a question open the session waits on this message, the person's answer: it starts now, and what
@@ -956,6 +958,12 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             }));
         }
     }
+
+    /// <summary>
+    /// Whether the window views the session now (it has its channel), so a restore that opened it does not let go of it:
+    /// the window's own requests use its handle, and it lets go itself once it stops viewing it (A4 verification).
+    /// </summary>
+    internal bool IsViewed(string sessionId) => _channels.TryGetValue(sessionId, out var channel) && !channel.Closed;
 
     /// <summary>The channels this window holds, for a test of their release.</summary>
     internal int ChannelCount => _channels.Count;

@@ -179,7 +179,7 @@ public sealed class EngineReviewService : IReviewService, IDisposable
         finally
         {
             if (opened)
-                await runtime.ReleaseDriverAsync(sessionId).ConfigureAwait(false);
+                await _signals.ReleaseAfterRestoreAsync(runtime, sessionId).ConfigureAwait(false);
         }
         if (result is null)
             return new FileRevertResult(path, checkpointId, false, true, $"{checkpointId} is no longer in the ledger");

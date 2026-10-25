@@ -401,6 +401,9 @@ public sealed class SkillLearner : ISkillLearning
         {
             switch (payload)
             {
+                // A gateway guest's message is outside content, quoted as theirs as the prompt quotes it (A4 verification).
+                case UserMessage { From: { } guest } user:
+                    return Corvid.Kernel.Turns.PromptRenderer.Quoted(guest, Cut(user.Text));
                 case UserMessage user:
                     return "User: " + Cut(user.Text);
                 case ToolCallIssued call:
