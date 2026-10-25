@@ -39,11 +39,11 @@ public sealed partial class EngineSessionService
             return;
 
         var (reply, written) = Decide(pending, answer);
-        pending.Written = written;
-        pending.Reason = answer.Choice == ApprovalChoice.Deny && !string.IsNullOrWhiteSpace(answer.Reason) ? answer.Reason.Trim() : null;
-        if (!pending.Answer.TrySetResult(reply))
+        var reason = answer.Choice == ApprovalChoice.Deny && !string.IsNullOrWhiteSpace(answer.Reason) ? answer.Reason.Trim() : null;
+        // The answer carries its rules and reason, so a second answer that loses the race changes nothing of the first's.
+        if (!pending.Answer.TrySetResult(new CardAnswer(reply, written, reason)))
             return;
-        if (pending.Reason is { } reason)
+        if (reason is not null)
         {
             lock (channel.Gate)
                 channel.Queue = channel.Queue.Insert(0, new QueuedMessage($"q-{++channel.QueueCounter}", reason));
@@ -113,6 +113,9 @@ public sealed partial class EngineSessionService
             throw new InvalidOperationException("The rule holds hidden characters, so it is not written. Allow once or deny.");
     }
 
+    /// <summary>The card's answer: the pipeline's reply, the rules it writes, and a denial's reason.</summary>
+    private sealed record CardAnswer(PipelineAnswer Reply, ImmutableArray<ApprovalRule> Written, string? Reason);
+
     /// <summary>An open prompt: what it asked, the rules a session or always answer writes, and the card's answer when it comes.</summary>
     private sealed class PendingApproval(ApprovalPrompt prompt, ImmutableArray<ApprovalRule> rules)
     {
@@ -121,11 +124,7 @@ public sealed partial class EngineSessionService
         public ImmutableArray<ApprovalRule> Rules { get; } = rules;
 
         /// <summary>Null when the prompt closed without an answer: the deadline, the turn's cancellation, the window closing.</summary>
-        public TaskCompletionSource<PipelineAnswer?> Answer { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public ImmutableArray<ApprovalRule> Written { get; set; } = [];
-
-        public string? Reason { get; set; }
+        public TaskCompletionSource<CardAnswer?> Answer { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     /// <summary>
@@ -153,23 +152,31 @@ public sealed partial class EngineSessionService
             var facts = ApprovalCards.Read(runtime.Log, channel.SessionId, prompt);
             var now = service._time.GetUtcNow();
             var pending = new PendingApproval(prompt, ApprovalPipeline.RulesFor(prompt.Analysis, RuleDecision.Allow, now));
-            string? taintSource;
-            lock (channel.Gate)
+            await service.PauseAt("card").ConfigureAwait(false);
+            // The prompt is registered and its card put on the stream under one lock, so an interrupt or the turn's end
+            // either comes first (no card, deny) or closes the card it sees: never a close before the card it closes.
+            var registered = false;
+            service.Publish(channel, translator =>
             {
-                taintSource = channel.TaintSource;
+                if (channel.Cancelling || !ReferenceEquals(channel.Reporter, reporter) || service._disposed)
+                    return [];
                 channel.Pending[prompt.ApprovalId] = pending;
-            }
-            AppRequested request = ApprovalCards.Request(prompt, callId, tool, arguments, tools, channel.Translator, facts, taintSource, now);
-            service.Publish(channel, _ =>
-            [
-                // An enforced detection's red row comes first, then the card it forced.
-                .. facts.Detections.Where(detection => detection.Enforced).Select(detection => new DetectionMatched(detection) { At = now }),
-                request,
-            ]);
+                registered = true;
+                AppRequested request = ApprovalCards.Request(prompt, callId, tool, arguments, tools, translator, facts, channel.TaintSource, now);
+                return
+                [
+                    // An enforced detection's red row comes first, then the card it forced.
+                    .. facts.Detections.Where(detection => detection.Enforced).Select(detection => new DetectionMatched(detection) { At = now }),
+                    request,
+                ];
+            });
+            if (!registered)
+                return PipelineAnswer.Deny();
 
-            PipelineAnswer? answer;
+            CardAnswer? answer;
             using (cancellationToken.Register(() => pending.Answer.TrySetResult(null)))
                 answer = await pending.Answer.Task.ConfigureAwait(false);
+            await service.PauseAt("answered").ConfigureAwait(false);
 
             bool interrupted, open;
             lock (channel.Gate)
@@ -195,17 +202,18 @@ public sealed partial class EngineSessionService
                 ]);
                 return PipelineAnswer.Deny();
             }
+            var reply = answer.Reply;
             service.Publish(channel, _ =>
             [
-                new AppResolved(prompt.ApprovalId, answer.Approved ? ApprovalOutcome.Approved : ApprovalOutcome.Denied)
+                new AppResolved(prompt.ApprovalId, reply.Approved ? ApprovalOutcome.Approved : ApprovalOutcome.Denied)
                 {
                     At = at,
-                    Scope = answer.Approved ? ApprovalCards.Scope(answer.Scope) : AppScope.Once,
-                    Rule = pending.Written.IsEmpty ? null : string.Join("; ", pending.Written.Select(ApprovalCards.Describe)),
-                    Reason = pending.Reason,
+                    Scope = reply.Approved ? ApprovalCards.Scope(reply.Scope) : AppScope.Once,
+                    Rule = answer.Written.IsDefaultOrEmpty ? null : string.Join("; ", answer.Written.Select(ApprovalCards.Describe)),
+                    Reason = answer.Reason,
                 },
             ]);
-            return answer;
+            return reply;
         }
     }
 }

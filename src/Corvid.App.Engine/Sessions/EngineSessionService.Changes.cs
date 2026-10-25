@@ -62,12 +62,23 @@ public sealed partial class EngineSessionService
         return changes.ToImmutable();
     }
 
-    /// <summary>Reads the change lists again and publishes them to the session's views; a failure is logged, not lost.</summary>
-    private void PublishChanges(CorvidRuntime runtime, Channel channel) => Track(Task.Run(async () =>
+    /// <summary>
+    /// Reads the change lists again and publishes them to the session's views; a failure is logged, not lost. Reads run in
+    /// parallel (a turn's end, a restore), so each is numbered and only the latest begun is published: an earlier read that
+    /// finishes later never puts back a list the ledger has moved past.
+    /// </summary>
+    private void PublishChanges(CorvidRuntime runtime, Channel channel)
     {
-        if (_disposed)
-            return;
-        var changes = await ChangesAsync(runtime, channel.SessionId, CancellationToken.None).ConfigureAwait(false);
-        Publish(channel, _ => [changes]);
-    }));
+        int read;
+        lock (channel.Gate)
+            read = ++channel.ChangesRead;
+        Track(Task.Run(async () =>
+        {
+            if (_disposed)
+                return;
+            var changes = await ChangesAsync(runtime, channel.SessionId, CancellationToken.None).ConfigureAwait(false);
+            await PauseAt("changes").ConfigureAwait(false);
+            Publish(channel, _ => read == channel.ChangesRead ? [changes] : []);
+        }));
+    }
 }

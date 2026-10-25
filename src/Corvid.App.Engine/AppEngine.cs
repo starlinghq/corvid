@@ -56,8 +56,9 @@ public sealed class AppEngine : IAsyncDisposable
 
     /// <summary>
     /// Starts the host (validating the configuration) and checks the model cache, then starts the runtime on the pool.
-    /// A configuration the validator refuses, or models the cache lacks, leave the runtime unstarted with the reason in
-    /// <see cref="StartFailure"/>, rather than failing here: the window still opens, on First run.
+    /// A configuration the validator refuses, a host that cannot start for another reason (a hosted service that throws, a
+    /// file it cannot read), or models the cache lacks, leave the runtime unstarted with the reason in
+    /// <see cref="StartFailure"/>, rather than failing here: the window still opens and says why.
     /// </summary>
     /// <param name="ownsHost">Whether disposing the engine stops and disposes the host (the head's); tests keep their own.</param>
     /// <param name="progress">Told each stage of the runtime's start as it begins and ends, from a pool thread (as <see cref="Progress"/>).</param>
@@ -75,9 +76,22 @@ public sealed class AppEngine : IAsyncDisposable
             var reason = "Corvid cannot start: the configuration is not valid. " + string.Join(" ", exception.Failures);
             return new AppEngine(host, ownsHost, Task.FromException<CorvidRuntime>(new ServiceUnavailableException(reason)), [], reason, lifetime);
         }
+        catch (Exception exception) when (exception is not OutOfMemoryException && !cancellationToken.IsCancellationRequested)
+        {
+            return Failed(host, ownsHost, lifetime, exception);
+        }
 
-        var factory = host.Services.GetRequiredService<CorvidRuntimeFactory>();
-        var missing = factory.CheckModels().ToImmutableArray();
+        CorvidRuntimeFactory factory;
+        ImmutableArray<ModelAvailability> missing;
+        try
+        {
+            factory = host.Services.GetRequiredService<CorvidRuntimeFactory>();
+            missing = factory.CheckModels().ToImmutableArray();
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return Failed(host, ownsHost, lifetime, exception);
+        }
         if (!missing.IsEmpty)
         {
             var reason = Describe(new ModelsUnavailableException(missing));
@@ -108,6 +122,13 @@ public sealed class AppEngine : IAsyncDisposable
             }
         }, CancellationToken.None);
         return engine;
+    }
+
+    /// <summary>An engine that could not start: the reason in a sentence, for the window to show.</summary>
+    private static AppEngine Failed(IHost host, bool ownsHost, CancellationTokenSource lifetime, Exception exception)
+    {
+        var reason = "Corvid cannot start: " + exception.Message;
+        return new AppEngine(host, ownsHost, Task.FromException<CorvidRuntime>(new ServiceUnavailableException(reason)), [], reason, lifetime);
     }
 
     /// <summary>An engine over a runtime already started (tests, and a head that starts the runtime itself).</summary>

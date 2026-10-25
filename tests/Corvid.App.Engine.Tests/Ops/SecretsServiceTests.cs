@@ -149,7 +149,7 @@ public sealed class SecretsServiceTests
         await using var host = EngineHosts.Create(new Corvid.Host.Tests.FakeModels(generatorReady: false), Settings("{root}/absent.sock"));
         await using var engine = await AppEngine.StartAsync(host.Host, ownsHost: false, cancellationToken: Token);
         using var composition = new AppComposition(new AppOptions { Demo = false }, new InlineDispatcher(), Corvid.App.Core.Tests.ManualTimeProvider.Demo(),
-            new EngineAppServices(engine));
+            new EngineAppServices(engine, host.Root, _ => null));
 
         var service = Assert.IsType<EngineSecretsService>(composition.SecretsService);
         Assert.Equal(VaultState.Absent, (await service.LoadAsync(Token)).Vault.State);

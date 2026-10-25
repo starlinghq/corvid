@@ -174,7 +174,7 @@ public sealed class GatewayServiceTests
         Assert.Equal("There is no paired user telegram:8.",
             (await Assert.ThrowsAsync<InvalidOperationException>(() => service.RevokeAsync("telegram:8", Token))).Message);
 
-        using var composition = new AppComposition(new AppOptions { Demo = false }, new InlineDispatcher(), fixture.Time, new EngineAppServices(fixture.Engine));
+        using var composition = new AppComposition(new AppOptions { Demo = false }, new InlineDispatcher(), fixture.Time, new EngineAppServices(fixture.Engine, fixture.Host.Root, _ => null));
         Assert.IsType<EngineGatewayService>(composition.GatewayService);
     }
 }

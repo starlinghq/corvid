@@ -135,6 +135,35 @@ public sealed class SessionStreamTests
         Assert.All(replay.Updates, update => Assert.NotEqual(default, update.At));
     }
 
+    [Fact]
+    public async Task ACallTheLogHoldsNoResultForReplaysAsCancelledInTheFullReplayOnly()
+    {
+        await using var host = TestHost.Create();
+        var runtime = await host.StartAsync();
+        await using var _ = runtime;
+        var session = runtime.OpenSession(surface: "test");
+        using var arguments = System.Text.Json.JsonDocument.Parse("""{"path":"notes.txt"}""");
+        // The process stopped under the call: the log has the call and no result.
+        runtime.Log.Append(session.Id, runtime.Log.GetHead(session.Id, TestContext.Current.CancellationToken),
+        [
+            Corvid.Abstractions.Events.EventData.Create(new Corvid.Abstractions.Events.UserMessage("read my notes")),
+            Corvid.Abstractions.Events.EventData.Create(new Corvid.Abstractions.Events.ToolCallIssued("c1", "read_file", arguments.RootElement.Clone())),
+        ], TestContext.Current.CancellationToken);
+        var tools = new ToolPresentation(runtime);
+
+        var full = await SessionReplay.ReadAsync(runtime, session.Id, tools, ReplayOptions.Full, cancellationToken: TestContext.Current.CancellationToken);
+        var transcript = await SessionReplay.ReadAsync(runtime, session.Id, tools, ReplayOptions.Transcript,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        // As a live turn closes a call its interrupt cut: failed, cancelled; never completed.
+        Assert.Equal(ToolCallState.Failed, Assert.Single(full.Updates.OfType<ToolCallStarted>()).Status);
+        var closed = Assert.Single(full.Updates.OfType<ToolCallChanged>());
+        Assert.Equal(("c1", ToolCallState.Failed, "cancelled"), (closed.CallId, closed.Status, closed.Outcome));
+        // ACP's session/load (the transcript replay) is unchanged: its recorded exchanges keep such a call as completed.
+        Assert.Equal(ToolCallState.Completed, Assert.Single(transcript.Updates.OfType<ToolCallStarted>()).Status);
+        Assert.Empty(transcript.Updates.OfType<ToolCallChanged>());
+    }
+
     private sealed class DenyWithReason(string reason) : IApprovalPrompter
     {
         public ValueTask<ApprovalAnswer> AskAsync(ApprovalPrompt prompt, CancellationToken cancellationToken) =>

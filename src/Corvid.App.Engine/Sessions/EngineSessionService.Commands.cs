@@ -26,7 +26,8 @@ public sealed partial class EngineSessionService
             throw new ArgumentException("A command starts with / and its name, such as /help.", nameof(line));
         var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
         var channel = await LoadAsync(sessionId, cancellationToken).ConfigureAwait(false);
-        var session = Session(runtime, sessionId);
+        Writable(channel);
+        var session = await SessionAsync(runtime, sessionId, cancellationToken).ConfigureAwait(false);
         var registry = Registry;
         var invocation = SlashCommandRegistry.Parse(line);
         if (registry.TryGet(invocation.Name, out var command) && command.Name == "cancel")

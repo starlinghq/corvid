@@ -252,7 +252,7 @@ public sealed class MemoryServiceTests
     public async Task TheCompositionBuildsTheEnginesMemoryWithItsStatusLine()
     {
         await using var fixture = await EngineFixture.StartAsync();
-        using var composition = new AppComposition(new AppOptions { Demo = false }, new InlineDispatcher(), fixture.Time, new EngineAppServices(fixture.Engine));
+        using var composition = new AppComposition(new AppOptions { Demo = false }, new InlineDispatcher(), fixture.Time, new EngineAppServices(fixture.Engine, fixture.Host.Root, _ => null));
 
         Assert.IsType<EngineMemoryService>(composition.MemoryService);
         var status = EngineMemoryService.Status(fixture.Engine)!;

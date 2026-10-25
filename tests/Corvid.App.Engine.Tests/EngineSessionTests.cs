@@ -116,7 +116,28 @@ public sealed class EngineSessionTests
 
         using var b = await service.OpenAsync(id, _ => { }, TestContext.Current.CancellationToken);
 
-        Assert.Equal([.. a.History, .. first.Updates], b.History);
+        // The history keeps a streamed run of chunks as one chunk (so it grows by run, not by token), and folds the same.
+        List<SessionUpdate> heard = [.. a.History, .. first.Updates];
+        Assert.True(heard.OfType<AgentMessageChunk>().Count() > 1);
+        Assert.Equal(Joined(heard), b.History);
+        Assert.Single(b.History.OfType<AgentMessageChunk>());
+        Assert.Equal(Describe(SessionFold.Replay(id, heard)), Describe(SessionFold.Replay(id, b.History)));
+    }
+
+    /// <summary>Updates with each run of consecutive answer (or thought) chunks joined into the first of the run.</summary>
+    private static List<SessionUpdate> Joined(IEnumerable<SessionUpdate> updates)
+    {
+        var joined = new List<SessionUpdate>();
+        foreach (var update in updates)
+        {
+            if (joined.Count > 0 && joined[^1] is AgentMessageChunk last && update is AgentMessageChunk next)
+                joined[^1] = last with { Text = last.Text + next.Text };
+            else if (joined.Count > 0 && joined[^1] is AgentThoughtChunk thought && update is AgentThoughtChunk more)
+                joined[^1] = thought with { Text = thought.Text + more.Text };
+            else
+                joined.Add(update);
+        }
+        return joined;
     }
 
     [Fact]
