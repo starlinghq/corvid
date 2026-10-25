@@ -199,7 +199,7 @@ public sealed class TranslatorTests
         var translator = new SessionUpdateTranslator(Workspace) { Model = "fake-gen", ShellLine = true };
 
         var shell = Assert.IsType<TurnStarted>(translator.Translate(new PromptSent("!echo x", 1) { At = T0 })[1]);
-        var next = Assert.IsType<TurnStarted>(translator.Translate(new PromptSent("hello", 4) { At = T0 })[1]);
+        var next = Assert.Single(translator.Translate(new PromptSent("hello", 4) { At = T0 }).OfType<TurnStarted>());
 
         Assert.Equal(("", "fake-gen"), (shell.Model, next.Model));
         var header = Assert.Single(SessionFold.Replay("s", [shell]).Transcript.OfType<TurnHeaderEntry>());
