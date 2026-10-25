@@ -323,6 +323,10 @@ public sealed class PaletteTests
         using var composition = Compose();
         var palette = composition.Palette;
         var source = composition.Sessions.Session!.SessionId;
+        // The aside's surface offers the same fork to ask in, until the scratch fork (F7) comes.
+        palette.Execute(KeyCommands.Aside);
+        Assert.Contains(palette.Items, item => item.Title == "Fork it and ask there" && item.IsEnabled);
+        palette.Close();
 
         palette.Execute(KeyCommands.Palette);
         palette.Query = "fork";

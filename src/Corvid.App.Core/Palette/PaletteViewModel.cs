@@ -458,7 +458,10 @@ public sealed class PaletteViewModel : ObservableObject
             ? [Go("Open Sessions", "Pick a session in the rail", Area.Sessions)]
             : [new PaletteItem("Put the question in the composer", "Ask it in the session itself for now",
                 session.IsReadOnly ? null : () => Compose(session, ""), "", "", IconKind.Chat)
-                { Note = session.IsReadOnly ? "This session is read-only here." : "" }];
+                { Note = session.IsReadOnly ? "This session is read-only here." : "" },
+              // G-15: a fork at the head, the running turn's last completed step while one runs, to ask the question in.
+              new PaletteItem("Fork it and ask there", session.IsRunning ? "At the running turn's last completed step; the turn goes on" : "A new session at its head",
+                Then(session.ForkAtHead), "", "", IconKind.Chat)];
         OpenPending("Aside", note, items);
     }
 
