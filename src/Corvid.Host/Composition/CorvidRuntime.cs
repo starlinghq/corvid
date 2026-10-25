@@ -464,7 +464,7 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     /// gateway or ACP process takes the scheduler over once the chat that held it has exited, and its first pass runs what
     /// became due meanwhile (missed ticks collapse into one run, as in C-012). Nothing happens after disposal starts.
     /// </summary>
-    internal void WakeScheduler()
+    public void WakeScheduler()
     {
         if (!Options.Scheduler.Enabled)
             return;
