@@ -197,6 +197,9 @@ public sealed class EngineRewindTests
         Assert.Contains(view.Transcript, entry => entry is Corvid.App.Core.Sessions.UserEntry { Text: "make notes", Turn: 2 });
         Assert.DoesNotContain(view.Transcript, entry => entry is Corvid.App.Core.Sessions.ToolEntry { CallId: "call-2" });
         Assert.DoesNotContain(view.Transcript, entry => entry.Turn >= 3);
+        // The rollback cut turn 2 before its answer: it reads interrupted, not failed, live and replayed alike.
+        var cut = Assert.Single(view.Transcript.OfType<Corvid.App.Core.Sessions.TurnHeaderEntry>(), header => header.Number == 2);
+        Assert.Equal((Corvid.App.Core.Sessions.TurnOutcome.Cancelled, "interrupted"), (cut.Outcome, cut.Error));
         Assert.Equal(await ReplayedAsync(fixture, id), Shown(view));
 
         // The next prompt is numbered as the replay numbers it, and the two still agree after it.

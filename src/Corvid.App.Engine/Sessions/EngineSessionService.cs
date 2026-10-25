@@ -715,7 +715,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             throw new KeyNotFoundException($"There is no session '{id}' in Corvid's log.");
         // A call with no result is cancelled only when no turn of the session is running: one opened mid-turn (a job
         // run from the Board, another surface's turn) is still working on it.
-        var options = runtime.IsTurnRunning(id) ? ReplayOptions.Full with { UnfinishedCalls = false } : ReplayOptions.Full;
+        var elsewhere = runtime.IsTurnRunning(id);
+        var options = elsewhere ? ReplayOptions.Full with { UnfinishedCalls = false } : ReplayOptions.Full;
         var history = await SessionReplay.ReadAsync(runtime, id, tools, options).ConfigureAwait(false);
         var goal = Corvid.Kernel.Events.SessionProjection.Load(runtime.Log, id).Goal;
         var summary = Summarize(runtime, id) ?? Empty(runtime, id, _time.GetUtcNow());
@@ -732,7 +733,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 updates.Add(new DriverChanged(true) { Holder = summary.Holder, At = at });
             foreach (var update in history.Updates)
                 updates.AddRange(channel.Translator.Translate(update));
-            updates.AddRange(channel.Translator.EndReplay(running: channel.Running));
+            // A turn running in this runtime that the window did not start (a job's run, another surface's) is still running,
+            // not interrupted: its header stays open until the session is opened again.
+            updates.AddRange(channel.Translator.EndReplay(running: channel.Running || elsewhere));
             updates.Add(changes);
             // The rail's title (the first message, until K-9 titles and G-6 renames are events) heads the session too.
             if (summary.Turns > 0 && summary.Title != id)

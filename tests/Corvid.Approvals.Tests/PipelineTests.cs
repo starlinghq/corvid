@@ -336,6 +336,59 @@ public sealed class PipelineTests
     }
 
     [Fact]
+    public async Task A_change_waiting_on_another_process_lock_does_not_hold_up_rule_checks()
+    {
+        using var db = new TempLog();
+        var path = Path.Combine(db.Root, "config", "corvid", "approvals.json");
+        var at = new DateTimeOffset(2026, 10, 24, 12, 0, 0, TimeSpan.Zero);
+        var make = new ApprovalRule(RuleDecision.Allow, "shell", "make", null, ActionEffects.None, false, ["/w"], [], "make", at);
+        var store = new JsonFileApprovalRuleStore(path, TimeSpan.FromMinutes(5));
+        store.Add([make]);
+        var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        store.Waiting = () => waiting.TrySetResult();
+        Task adding;
+
+        using (new FileStream(JsonFileApprovalRuleStore.LockPath(path), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+        {
+            adding = Task.Run(() => store.Add([make with { Verb = "ninja" }]), Ct);
+            await waiting.Task.WaitAsync(Ct);
+            // The change is waiting on the other process's lock; a rule check still reads the rules it has.
+            var check = Task.Run(() => store.Rules, Ct);
+            Assert.Same(check, await Task.WhenAny(check, adding));
+            Assert.Equal([make], await check);
+        }
+
+        await adding;
+        Assert.Equal(2, store.Rules.Length);
+    }
+
+    [Fact]
+    public void A_read_only_rules_directory_is_reported_as_such_at_once_not_as_another_process()
+    {
+        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
+            return; // a read-only directory is a Unix mode here, and root writes through it
+        using var db = new TempLog();
+        var directory = Path.Combine(db.Root, "config", "corvid");
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "approvals.json");
+        var at = new DateTimeOffset(2026, 10, 24, 12, 0, 0, TimeSpan.Zero);
+        var make = new ApprovalRule(RuleDecision.Allow, "shell", "make", null, ActionEffects.None, false, ["/w"], [], "make", at);
+        var store = new JsonFileApprovalRuleStore(path, TimeSpan.FromMinutes(5));
+        File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try
+        {
+            var refused = Assert.Throws<UnauthorizedAccessException>(() => store.Add([make]));
+            Assert.Contains("is read-only to Corvid", refused.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("Another Corvid process", refused.Message, StringComparison.Ordinal);
+            Assert.Empty(store.Rules);
+        }
+        finally
+        {
+            File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    [Fact]
     public async Task An_always_answer_whose_rule_cannot_be_stored_still_stands_for_this_action_as_once()
     {
         using var db = new TempLog();
