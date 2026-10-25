@@ -84,7 +84,8 @@ public sealed class RunningTurnStreamTests
         var replay = await SessionReplay.ReadAsync(runtime, session.Id, new ToolPresentation(runtime), cancellationToken: Ct);
         Assert.Equal(["PromptSent", "TurnStepped", "ToolCallStarted", "ToolCallChanged", "SteerSent", "AnswerChunk"],
             replay.Updates.Where(update => update is not DecisionsMade).Select(update => update.GetType().Name));
-        Assert.Equal(new TurnStepped(1, null), replay.Updates.OfType<TurnStepped>().Single() with { At = default });
+        // A5 (switch): the replayed step names the generator whose response began it, from its call in the log.
+        Assert.Equal(new TurnStepped(1, null) { Generator = "fake-gen@cpu" }, replay.Updates.OfType<TurnStepped>().Single() with { At = default });
         Assert.Equal(steered with { At = default }, replay.Updates.OfType<SteerSent>().Single() with { At = default });
         Assert.DoesNotContain(replay.Updates, update => update is ToolCallChanged { Tail: not null });
     }
