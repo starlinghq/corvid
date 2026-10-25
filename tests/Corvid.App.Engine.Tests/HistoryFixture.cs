@@ -46,7 +46,7 @@ internal sealed class HistoryFixture : IAsyncDisposable
 
     public static async Task<HistoryFixture> StartAsync(FakeModels? models = null)
     {
-        var host = TestHost.Create(models, new Dictionary<string, string?> { ["Corvid:Tools:Builtin"] = "true" });
+        var host = EngineHosts.Create(models, new Dictionary<string, string?> { ["Corvid:Tools:Builtin"] = "true" });
         var runtime = await host.StartAsync();
         Assert.NotNull(runtime.Checkpoints);
         return new HistoryFixture(host, runtime);

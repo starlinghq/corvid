@@ -692,6 +692,20 @@ public sealed class EngineModelService : IModelService, IDisposable
             : slots.TryGetValue(ModelSlots.Extractor, out var extractor) && extractor.Model is { } model
               && availability.TryGetValue(model, out var ready) && ready.IsReady;
 
+    /// <summary>
+    /// The decider in a status bar's words, as Models words it (<c>ModelsViewModel.StatusDecider</c>), for the pages that
+    /// read the running engine rather than a Models snapshot (Memory, the Board): "kev-0.8b, calibrated", "degraded until
+    /// kev-0.8b is downloaded", or "degraded tier (no decider configured)" when the slot is unbound.
+    /// </summary>
+    public static string StatusDecider(CorvidRuntime runtime)
+    {
+        ArgumentNullException.ThrowIfNull(runtime);
+        var model = runtime.Options.Models.EffectiveSlots().GetValueOrDefault(ModelSlots.Decider)?.Model;
+        if (runtime.Fabric.CalibratedDecider is { } calibrated)
+            return $"{(model is { Length: > 0 } ? model : calibrated)}, calibrated";
+        return model is { Length: > 0 } ? $"degraded until {model} is downloaded" : "degraded tier (no decider configured)";
+    }
+
     private DeciderStatus Decider(CorvidOptions options, IReadOnlyDictionary<string, SlotSettings> slots, Dictionary<string, ModelAvailability> availability,
         CorvidRuntime? runtime)
     {

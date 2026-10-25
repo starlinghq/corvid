@@ -157,6 +157,23 @@ public sealed class EngineSessionTests
     }
 
     [Fact]
+    public async Task AShellOrMemoryLineIsRefusedNotSentAsText()
+    {
+        await using var fixture = await EngineFixture.StartAsync(NotesTurn());
+        var id = fixture.Runtime.OpenSession(surface: "app").Id;
+        using var service = fixture.Sessions();
+        var head = fixture.Runtime.Log.GetHead(id, TestContext.Current.CancellationToken);
+
+        var shell = await Assert.ThrowsAsync<ServiceUnavailableException>(() => service.SendAsync(id, "!ls", TestContext.Current.CancellationToken));
+        Assert.StartsWith("The ! shell line comes with the composer's shell mode", shell.Message, StringComparison.Ordinal);
+        var memory = await Assert.ThrowsAsync<ServiceUnavailableException>(() => service.QueueAsync(id, "  # I prefer tabs", TestContext.Current.CancellationToken));
+        Assert.StartsWith("The # memory line comes with the composer's memory mode", memory.Message, StringComparison.Ordinal);
+
+        // Nothing reached the log or the generator.
+        Assert.Equal(head, fixture.Runtime.Log.GetHead(id, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task NothingReachesASubscriberAfterTheServiceIsDisposed()
     {
         await using var fixture = await EngineFixture.StartAsync(NotesTurn());

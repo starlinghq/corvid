@@ -267,7 +267,7 @@ public sealed class EngineRewindTests
     [Fact]
     public async Task WithoutARuntimeTheTimelineSaysWhy()
     {
-        await using var host = TestHost.Create(new FakeModels(generatorReady: false));
+        await using var host = EngineHosts.Create(new FakeModels(generatorReady: false));
         await using var engine = await AppEngine.StartAsync(host.Host, ownsHost: false, cancellationToken: Ct);
         using var sessions = new EngineSessionService(engine, new InlineDispatcher(), TimeProvider.System);
         using var signals = new HistorySignals(sessions, new InlineDispatcher());

@@ -574,6 +574,7 @@ public sealed class ApprovalCardBlock : TranscriptBlock
                 Answer(new ApprovalAnswer(ApprovalChoice.Session));
                 break;
             case ApprovalOptionKind.Always when RulePreview is not null:
+                _context.Session.ClearError();
                 IsAskingWhy = false;
                 IsRulePreviewOpen = true;
                 break;
@@ -584,6 +585,7 @@ public sealed class ApprovalCardBlock : TranscriptBlock
                 Answer(ApprovalAnswer.Deny);
                 break;
             case ApprovalOptionKind.DenyWithReason:
+                _context.Session.ClearError();
                 IsRulePreviewOpen = false;
                 IsAskingWhy = true;
                 break;
@@ -611,6 +613,7 @@ public sealed class ApprovalCardBlock : TranscriptBlock
 
     private void Back()
     {
+        _context.Session.ClearError();
         IsRulePreviewOpen = false;
         IsAskingWhy = false;
         UpdateFocus();

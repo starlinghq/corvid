@@ -333,9 +333,11 @@ public sealed class SessionHub : IDisposable
         };
     }
 
+    // The rail's times follow the clock: a running step and a deadline every second, and an idle session's last activity
+    // too ("25 s" becomes "1 m"), as the Board's do.
     private void UpdateTicker()
     {
-        var needed = !_disposed && _summaries.Values.Any(summary => summary.State is SessionState.Running or SessionState.Waiting);
+        var needed = !_disposed && _summaries.Count > 0;
         if (needed && _ticker is null)
             _ticker = _time.CreateTimer(_ => _dispatcher.Post(Tick), null, TickInterval, TickInterval);
         else if (!needed && _ticker is not null)
@@ -351,7 +353,7 @@ public sealed class SessionHub : IDisposable
             return;
         foreach (var summary in _summaries.Values)
         {
-            if (summary.State is SessionState.Running or SessionState.Waiting && _shell.FindSession(summary.Id) is { } item)
+            if (_shell.FindSession(summary.Id) is { } item)
                 item.When = When(summary);
         }
     }

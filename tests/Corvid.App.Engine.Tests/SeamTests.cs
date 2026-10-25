@@ -128,7 +128,7 @@ public sealed class SeamTests
     public async Task WhenModelsAreMissingTheEngineStartsNothingAndEveryRequestSaysWhy()
     {
         // The generator is not in the fake cache: the head opens First run, and the sessions say what to fetch.
-        await using var host = TestHost.Create(new FakeModels(generatorReady: false));
+        await using var host = EngineHosts.Create(new FakeModels(generatorReady: false));
         await using var engine = await AppEngine.StartAsync(host.Host, ownsHost: false, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("fake-gen", Assert.Single(engine.MissingModels).Model.Name);
@@ -147,7 +147,7 @@ public sealed class SeamTests
     [Fact]
     public async Task AnEngineThatStartsItsRuntimeInTheBackgroundReportsEachStage()
     {
-        await using var host = TestHost.Create();
+        await using var host = EngineHosts.Create();
         var steps = new List<(string Description, bool Ended)>();
         var progress = new Steps(step =>
         {

@@ -142,7 +142,7 @@ public sealed class SecretsServiceTests
     [Fact]
     public async Task TheCompositionMakesTheEnginesSecretsWhichWorkWhileTheRuntimeIsDown()
     {
-        await using var host = Corvid.Host.Tests.TestHost.Create(new Corvid.Host.Tests.FakeModels(generatorReady: false), Settings("{root}/absent.sock"));
+        await using var host = EngineHosts.Create(new Corvid.Host.Tests.FakeModels(generatorReady: false), Settings("{root}/absent.sock"));
         await using var engine = await AppEngine.StartAsync(host.Host, ownsHost: false, cancellationToken: Token);
         using var composition = new AppComposition(new AppOptions { Demo = false }, new InlineDispatcher(), Corvid.App.Core.Tests.ManualTimeProvider.Demo(),
             new EngineAppServices(engine));

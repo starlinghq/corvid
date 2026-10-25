@@ -32,7 +32,7 @@ internal sealed class OpsFixture : IAsyncDisposable
     public static async Task<OpsFixture> StartAsync(IReadOnlyDictionary<string, string?>? settings = null, Action<IServiceCollection>? services = null,
         FakeModels? models = null, Action<TestHost>? before = null)
     {
-        var host = TestHost.Create(models, settings, services);
+        var host = EngineHosts.Create(models, settings, services);
         try
         {
             before?.Invoke(host);

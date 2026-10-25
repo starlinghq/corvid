@@ -110,7 +110,7 @@ public sealed class EngineBoardService : IBoardService, IDisposable
         var scheduler = await Read(() => _jobs.LoadAsync(cancellationToken), Scheduler).ConfigureAwait(false);
         var gateway = await Read(() => _gateway.LoadAsync(cancellationToken),
             snapshot => snapshot.Adapters.Count == 0 ? "no adapters" : GatewayText.Summary(snapshot.Adapters)).ConfigureAwait(false);
-        return new BoardStatus("in-process", runtime.DeciderState, scheduler, gateway);
+        return new BoardStatus("in-process", Models.EngineModelService.StatusDecider(runtime), scheduler, gateway);
     }
 
     public void Dispose()

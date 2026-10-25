@@ -65,7 +65,7 @@ public sealed class EngineMemoryService : IMemoryService
         var generator = !runtime.Registry.TryGet(ModelSlots.Generator, out var slot) ? "no generator"
             : slot.Default.Profile.Id.Contains(slot.Default.Profile.Placement, StringComparison.Ordinal) ? slot.Default.Profile.Id
             : $"{slot.Default.Profile.Id} · {slot.Default.Profile.Placement}";
-        return new MemoryEngineStatus(generator, runtime.DeciderState, runtime.SchedulerState);
+        return new MemoryEngineStatus(generator, Models.EngineModelService.StatusDecider(runtime), runtime.SchedulerState);
     }
 
     public async Task<MemorySnapshot> LoadAsync(CancellationToken cancellationToken)

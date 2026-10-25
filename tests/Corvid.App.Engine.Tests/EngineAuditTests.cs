@@ -36,7 +36,7 @@ public sealed class EngineAuditTests
     [Fact]
     public async Task ALogThatIsNotThereYetIsEmptyAndIsNotCreated()
     {
-        await using var host = TestHost.Create(new FakeModels(generatorReady: false));
+        await using var host = EngineHosts.Create(new FakeModels(generatorReady: false));
         await using var engine = await AppEngine.StartAsync(host.Host, ownsHost: false, cancellationToken: Ct);
         var path = CorvidPaths.EventLog(host.Services.GetRequiredService<IOptions<CorvidOptions>>().Value);
         var audit = new EngineAuditService(engine, TimeProvider.System);

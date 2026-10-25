@@ -165,7 +165,7 @@ public sealed class BoardServiceTests
 
         var status = await areas.Board.GetStatusAsync(Token);
         Assert.Equal("in-process", status.Engine);
-        Assert.Equal(fixture.Runtime.DeciderState, status.Decider);
+        Assert.Equal("degraded tier (no decider configured)", status.Decider);
         // The test host turns the scheduler off, and this app hosts no gateway (G-14).
         Assert.Equal("off here", status.Scheduler);
         Assert.Contains("telegram not hosted here", status.Gateway, StringComparison.Ordinal);
@@ -195,7 +195,7 @@ public sealed class BoardServiceTests
     [Fact]
     public async Task WhenTheRuntimeCannotStartTheTrayAndTheStatusRefuseWithItsReason()
     {
-        await using var host = TestHost.Create(new FakeModels(generatorReady: false));
+        await using var host = EngineHosts.Create(new FakeModels(generatorReady: false));
         await using var engine = await AppEngine.StartAsync(host.Host, ownsHost: false, cancellationToken: Token);
         var reason = Unavailable.ComesWith("ops", "test");
         using var board = new EngineBoardService(engine, new Unavailable.Mcp(reason), new Unavailable.Gateway(reason), new Unavailable.Jobs(reason),

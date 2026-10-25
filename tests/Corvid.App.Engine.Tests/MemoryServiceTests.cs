@@ -217,7 +217,7 @@ public sealed class MemoryServiceTests
 
         Assert.IsType<EngineMemoryService>(composition.MemoryService);
         var status = EngineMemoryService.Status(fixture.Engine)!;
-        Assert.Equal(("fake-gen@cpu", fixture.Runtime.DeciderState, fixture.Runtime.SchedulerState), (status.Generator, status.Decider, status.Scheduler));
+        Assert.Equal(("fake-gen@cpu", "degraded tier (no decider configured)", fixture.Runtime.SchedulerState), (status.Generator, status.Decider, status.Scheduler));
     }
 
     private static EngineLesson Lesson(string project, string title)

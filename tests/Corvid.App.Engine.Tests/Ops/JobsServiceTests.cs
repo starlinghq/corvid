@@ -255,7 +255,7 @@ public sealed class JobsServiceTests
             Assert.Empty((await composition.JobsService.LoadAsync(Token)).Jobs);
         }
 
-        await using var host = Corvid.Host.Tests.TestHost.Create(new Corvid.Host.Tests.FakeModels(generatorReady: false));
+        await using var host = EngineHosts.Create(new Corvid.Host.Tests.FakeModels(generatorReady: false));
         await using var engine = await AppEngine.StartAsync(host.Host, ownsHost: false, cancellationToken: Token);
         using var missing = new EngineJobsService(engine, new InlineDispatcher(), fixture.Time);
         var refusal = await Assert.ThrowsAsync<ServiceUnavailableException>(() => missing.LoadAsync(Token));

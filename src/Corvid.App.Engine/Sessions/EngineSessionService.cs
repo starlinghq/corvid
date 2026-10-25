@@ -121,12 +121,31 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     public Task SendAsync(string sessionId, string text, CancellationToken cancellationToken = default) =>
         QueueAsync(sessionId, text, cancellationToken);
 
+    /// <summary>
+    /// The composer's <c>!</c> shell line and <c>#</c> memory line (docs/plan/tui.md §4.1, ui.md §3) are modes of their own,
+    /// not built yet in the app or the CLI: a message starting with one is refused, not sent to the model as text, so the
+    /// mode the placeholder names never quietly does something else. The draft stays in the composer.
+    /// </summary>
+    private static void RefuseComposerMode(string text)
+    {
+        var line = text.TrimStart();
+        if (line.StartsWith('!'))
+            throw new ServiceUnavailableException(
+                "The ! shell line comes with the composer's shell mode (docs/plan/tui.md §4.1): the command would run through the approvals, " +
+                "the sandbox and the checkpoints. Nothing was sent. Ask for the command in words, or start the message with another character.");
+        if (line.StartsWith('#'))
+            throw new ServiceUnavailableException(
+                "The # memory line comes with the composer's memory mode (docs/plan/tui.md §4.1): the fact would be staged for review. " +
+                "Nothing was sent. Ask in words for it to be remembered, or start the message with another character.");
+    }
+
     /// <summary>Queues a message behind the running turn; with none running it starts one at once.</summary>
     public async Task<QueuedMessage> QueueAsync(string sessionId, string text, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(text);
         ObjectDisposedException.ThrowIf(_disposed, this);
+        RefuseComposerMode(text);
         var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
         var tools = await _engine.ToolsAsync().ConfigureAwait(false);
         var channel = await LoadAsync(sessionId, cancellationToken).ConfigureAwait(false);
@@ -259,13 +278,16 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         string id;
         if (through is <= 0)
         {
-            // Before the first message there is nothing to copy: a new, empty session.
-            id = runtime.OpenSession(surface: Surface).Id;
+            // Before the first message there is nothing to copy: a new, empty session. Opening one writes to the log: off
+            // the UI thread.
+            id = await Task.Run(() => runtime.OpenSession(surface: Surface).Id, cancellationToken).ConfigureAwait(false);
             _created[id] = _time.GetUtcNow();
         }
         else
         {
-            var fork = await runtime.ForkSessionAsync(sessionId, through, Surface, cancellationToken: cancellationToken).ConfigureAwait(false);
+            // A source not open in the runtime is copied inline, event by event, in SQLite: off the UI thread.
+            var fork = await Task.Run(() => runtime.ForkSessionAsync(sessionId, through, Surface, cancellationToken: cancellationToken), cancellationToken)
+                .ConfigureAwait(false);
             id = fork.Id;
         }
         int turn;
@@ -282,8 +304,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     public async Task<string> CreateAsync(CancellationToken cancellationToken = default)
     {
         var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
-        var id = runtime.OpenSession(surface: Surface).Id;
+        // Opening a session writes to the log: off the UI thread.
+        var id = await Task.Run(() => runtime.OpenSession(surface: Surface).Id, cancellationToken).ConfigureAwait(false);
         _created[id] = _time.GetUtcNow();
         Refresh(runtime, id);
         return id;

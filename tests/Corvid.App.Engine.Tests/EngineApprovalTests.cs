@@ -36,7 +36,7 @@ internal sealed class CustomEngine : IAsyncDisposable
     public static async Task<CustomEngine> StartAsync(FakeModels models, IReadOnlyDictionary<string, string?>? settings = null,
         Action<IServiceCollection>? services = null)
     {
-        var host = TestHost.Create(models, settings, services);
+        var host = EngineHosts.Create(models, settings, services);
         return new CustomEngine(host, await host.StartAsync());
     }
 

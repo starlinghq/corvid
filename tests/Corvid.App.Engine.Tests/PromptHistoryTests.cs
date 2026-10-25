@@ -40,7 +40,7 @@ public sealed class PromptHistoryTests
     [Fact]
     public async Task WhenTheRuntimeCannotStartTheHistoryRefusesWithItsReason()
     {
-        await using var host = TestHost.Create(new FakeModels(generatorReady: false));
+        await using var host = EngineHosts.Create(new FakeModels(generatorReady: false));
         await using var engine = await AppEngine.StartAsync(host.Host, ownsHost: false, cancellationToken: Token);
 
         var refusal = await Assert.ThrowsAsync<ServiceUnavailableException>(() => new EnginePromptHistory(engine).LoadAsync(Token));

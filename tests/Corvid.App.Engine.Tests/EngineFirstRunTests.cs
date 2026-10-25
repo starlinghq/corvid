@@ -39,7 +39,9 @@ public sealed class EngineFirstRunTests : IDisposable
         Assert.Contains(configuration, check => check is { Name: "configuration", Status: CheckStatus.Ok });
         Assert.Contains(configuration, check => check.Name == "data directory" && check.Detail.Contains(Path.Combine(fixture.Host.Root, "data"), StringComparison.Ordinal));
         Assert.Contains(report.Checks, check => check is { Section: CheckSections.Sandbox, Name: "bubblewrap" });
-        Assert.Contains(report.Checks, check => check is { Section: CheckSections.Sandbox, Name: "Vault socket" });
+        // The socket the test host names, in its own directory: never a Vault running on this machine.
+        var vault = Assert.Single(report.Checks, check => check is { Section: CheckSections.Sandbox, Name: "Vault socket" });
+        Assert.Contains(Path.Combine(fixture.Host.Root, "no-vault.sock"), vault.Detail, StringComparison.Ordinal);
         Assert.Contains(report.Checks, check => check is { Section: CheckSections.Gpu, Name: "driver" });
         // The models are the Models step's, from the catalogue: none of them is a check row here.
         Assert.DoesNotContain(report.Checks, check => check.Name.StartsWith("fake-", StringComparison.Ordinal) || check.Name == "decider");
@@ -160,7 +162,7 @@ public sealed class EngineFirstRunTests : IDisposable
         using (var running = Service(fixture))
             Assert.Equal("in-process", running.EngineStatus);
 
-        await using var host = TestHost.Create(new FakeModels(generatorReady: false));
+        await using var host = EngineHosts.Create(new FakeModels(generatorReady: false));
         await using var engine = await AppEngine.StartAsync(host.Host, ownsHost: false, cancellationToken: Token);
         using var missing = new EngineFirstRunService(engine, new InlineDispatcher(), _home, _ => null);
         Assert.Equal("not started · 1 model missing", missing.EngineStatus);
@@ -169,7 +171,7 @@ public sealed class EngineFirstRunTests : IDisposable
     [Fact]
     public async Task ThePageStartsOnTheConfiguredWorkspaceAndTheEnginesLine()
     {
-        await using var host = TestHost.Create(new FakeModels(generatorReady: false));
+        await using var host = EngineHosts.Create(new FakeModels(generatorReady: false));
         await using var engine = await AppEngine.StartAsync(host.Host, ownsHost: false, cancellationToken: Token);
         using var composition = new AppComposition(new AppOptions { Demo = false, Page = Area.FirstRun }, new InlineDispatcher(),
             ManualTimeProvider.Demo(), new EngineAppServices(engine));
