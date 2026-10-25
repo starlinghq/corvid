@@ -807,7 +807,8 @@ public sealed partial class SessionsPage : Page, IDockProvider
         RenameBox.Text = _session?.Title ?? "";
         RenameBox.SelectAll();
         PinButton.IsEnabled = _session?.CanPin == true;
-        RecapButton.IsEnabled = _session?.CanRecap == true;
+        // G-12: a read-only view writes nothing to the session's log, a recap or a title included.
+        RecapButton.IsEnabled = _session is { CanRecap: true, IsReadOnly: false };
         RenameButton.IsEnabled = _session is { IsReadOnly: false };
     }
 

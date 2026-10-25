@@ -42,8 +42,11 @@ public sealed partial class SessionViewModel
     public RelayCommand TogglePinCommand => _togglePinCommand ??= new RelayCommand(
         () => Run(() => _service.SetPinnedAsync(SessionId, !_pinned)), () => _service.CanPin);
 
-    /// <summary>A recap of what happened since the last one, written by the local generator (G-6); it arrives as a notice.</summary>
-    public RelayCommand RecapCommand => _recapCommand ??= new RelayCommand(() => Run(() => _service.RecapAsync(SessionId)), () => _service.CanRecap);
+    /// <summary>
+    /// A recap of what happened since the last one, written by the local generator (G-6); it arrives as a notice. Not while
+    /// the view is read-only (G-12): the session's log is the driving process's to write.
+    /// </summary>
+    public RelayCommand RecapCommand => _recapCommand ??= new RelayCommand(() => Run(() => _service.RecapAsync(SessionId)), () => _service.CanRecap && !IsReadOnly);
 
     /// <summary>The summary's pin, from the hub.</summary>
     internal void SetPinned(bool pinned) => IsPinned = pinned;

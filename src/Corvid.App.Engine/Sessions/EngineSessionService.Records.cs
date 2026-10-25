@@ -49,12 +49,21 @@ public sealed partial class EngineSessionService
         if (IsJobRun(sessionId))
             throw new InvalidOperationException($"Session {sessionId} is read-only here: {JobHolder}.");
         var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
-        // The log is SQLite: off the UI thread. A title never starts a session of its own.
+        // The log is SQLite: off the UI thread. A title never starts a session of its own, and is never written to one another
+        // process drives (G-12: the runtime refuses it, and the view turns read-only naming the holder).
         var rename = Task.Run(() =>
         {
             if (runtime.Log.GetHead(sessionId, cancellationToken) == 0 && !_created.ContainsKey(sessionId) && !runtime.TryGetSession(sessionId, out _))
                 throw new KeyNotFoundException($"There is no session '{sessionId}' in Corvid's log.");
-            runtime.Rename(sessionId, title);
+            try
+            {
+                runtime.Rename(sessionId, title);
+            }
+            catch (SessionHeldException exception)
+            {
+                Held(sessionId, exception);
+                throw;
+            }
         }, cancellationToken);
         // Waited for by IdleAsync, as a turn is.
         Track(rename);
@@ -88,7 +97,8 @@ public sealed partial class EngineSessionService
 
     /// <summary>
     /// A recap of what happened since the last one (G-6), by the local generator; it arrives through the runtime's
-    /// <see cref="CorvidRuntime.Recapped"/>. Refused when there is no local generator, with why.
+    /// <see cref="CorvidRuntime.Recapped"/>. Refused when there is no local generator, with why, and (G-12) for a session
+    /// the window only shows: a job's run, or one another process drives, whose log only that process writes.
     /// </summary>
     public async Task RecapAsync(string sessionId, CancellationToken cancellationToken = default)
     {
@@ -97,7 +107,20 @@ public sealed partial class EngineSessionService
         if (runtime.Titles.Unavailable is { } why)
             throw new ServiceUnavailableException($"No recap: {why}.");
         var channel = await LoadAsync(sessionId, cancellationToken).ConfigureAwait(false);
-        var writing = Task.Run(() => runtime.RecapAsync(sessionId, RecapSources.Requested, cancellationToken), cancellationToken);
+        Writable(channel);
+        var writing = Task.Run(async () =>
+        {
+            try
+            {
+                return await runtime.RecapAsync(sessionId, RecapSources.Requested, cancellationToken).ConfigureAwait(false);
+            }
+            catch (SessionHeldException exception)
+            {
+                // Taken by another process since the view last looked: refused, and the view turns read-only now.
+                Held(sessionId, exception);
+                throw;
+            }
+        }, cancellationToken);
         Track(writing);
         var recap = await writing.ConfigureAwait(false);
         if (recap is null)
@@ -134,7 +157,9 @@ public sealed partial class EngineSessionService
             if (IsJobRun(sessionId) || SessionCatalogue.Describe(runtime.Log, sessionId, cancellationToken) is not { } session)
                 return false;
             var now = _time.GetUtcNow();
-            var due = runtime.Titles.ShouldRecapOnReturn(session, Ui.LastSeen(sessionId)?.At, now);
+            // G-12: a session another process drives is only shown here; its recap is that process's to write.
+            var due = runtime.Driver(sessionId).State != LockState.HeldElsewhere
+                && runtime.Titles.ShouldRecapOnReturn(session, Ui.LastSeen(sessionId)?.At, now);
             Ui.MarkSeen(sessionId, session.Head, now);
             return due;
         }, cancellationToken).ConfigureAwait(false);
@@ -147,6 +172,10 @@ public sealed partial class EngineSessionService
         try
         {
             await runtime.RecapAsync(sessionId, RecapSources.Absence).ConfigureAwait(false);
+        }
+        catch (SessionHeldException)
+        {
+            // Another process took the session while the recap was written: its log is that process's, and nothing was written.
         }
         catch (InvalidOperationException exception)
         {

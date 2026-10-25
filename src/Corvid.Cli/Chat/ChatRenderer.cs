@@ -197,19 +197,21 @@ internal sealed class ChatRenderer : ITurnObserver
             // K-6: a clarifying question's choices, answered on the next line by number or in words.
             if (result.Question is { Options.IsDefaultOrEmpty: false } question)
                 _console.MarkupLine("[blue]?[/] " + string.Join(" · ", question.Options.Select((option, i) =>
-                    $"[green]{i + 1}[/] {Markup.Escape(Clean(option))}")) + " [grey](a number picks it, or answer in your words)[/]");
+                    $"[green]{i + 1}[/] {Markup.Escape(TerminalText.Choice(option))}")) + " [grey](a number picks it, or answer in your words)[/]");
             _console.MarkupLine($"[grey]{Markup.Escape(Footer(result))}[/]");
         }
     }
 
     /// <summary>
-    /// K-6: the line typed after a clarifying question with choices: a choice's number becomes that choice (as the model
-    /// offered it); anything else is the answer as typed.
+    /// K-6: the line typed after a clarifying question with choices: a choice's number becomes that choice's visible text
+    /// (<see cref="TerminalText.ChosenAnswer"/>: the model wrote it, and hidden characters in it, shown as codes above,
+    /// are never sent as the person's words); anything else, or a choice with nothing visible, is the answer as typed.
     /// </summary>
     public static string Answer(ClarifyingQuestion? question, string line) =>
         question is { Options.IsDefaultOrEmpty: false } asked
         && int.TryParse(line.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var pick) && pick >= 1 && pick <= asked.Options.Length
-            ? asked.Options[pick - 1]
+        && TerminalText.ChosenAnswer(asked.Options[pick - 1]) is { Length: > 0 } visible
+            ? visible
             : line;
 
     /// <summary>The most lines of a <c>!</c> line's output shown; the rest is in the log.</summary>

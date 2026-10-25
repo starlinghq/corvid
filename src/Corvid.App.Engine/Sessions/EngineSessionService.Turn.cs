@@ -1,3 +1,4 @@
+using Corvid.App.Core;
 using Corvid.App.Core.Sessions;
 using Corvid.Host.Sessions;
 
@@ -140,10 +141,19 @@ public sealed partial class EngineSessionService
         Writable(channel);
         lock (channel.Gate)
         {
-            if (channel.View?.Question?.QuestionId != questionId)
+            if (channel.View?.Question is not { } open || open.QuestionId != questionId)
                 throw new InvalidOperationException("That question is no longer open; nothing was sent.");
             if (channel.Running)
                 throw new InvalidOperationException("A turn is running; answer the question once it ends.");
+            // The model wrote the options: one passed as it was offered, hidden characters and all, is sent only as the text
+            // a reader sees, so nothing the person did not see goes to the generator as their words (or clears the
+            // session's taint). The view models already send the visible text; this holds for any caller.
+            if (SafeText.HasHidden(answer) && open.Options.Contains(answer, StringComparer.Ordinal))
+            {
+                answer = SafeText.Clean(answer).Trim();
+                if (answer.Length == 0)
+                    throw new InvalidOperationException("That option is only hidden characters; answer in your own words. Nothing was sent.");
+            }
         }
         // An option is the model's word, sent as it was offered: never read as a ! or # composer line.
         await EnqueueAsync(sessionId, answer, modeLines: false, cancellationToken).ConfigureAwait(false);

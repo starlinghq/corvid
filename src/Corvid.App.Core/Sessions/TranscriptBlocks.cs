@@ -727,8 +727,16 @@ public sealed class QuestionBlock : TranscriptBlock
         if (QuestionId != asked.QuestionId || Options.Count != asked.Options.Length)
         {
             QuestionId = asked.QuestionId;
-            Options = [.. asked.Options.Select(option => new QuestionOption(SafeText.Clean(option),
-                new RelayCommand(() => _context.Session.AnswerQuestion(asked.QuestionId, option), () => IsOpen)))];
+            // The model wrote the options, and a click sends one as the person's own message: its label shows every hidden
+            // character (SafeText.Reveal) rather than dropping it, and what is sent is only the text a reader sees
+            // (SafeText.Clean), so nothing the person did not see reaches the generator as their words. An option that is
+            // all hidden characters cannot be chosen; the composer answers it.
+            Options = [.. asked.Options.Select(option =>
+            {
+                var visible = SafeText.Clean(option).Trim();
+                return new QuestionOption(SafeText.Reveal(option),
+                    new RelayCommand(() => _context.Session.AnswerQuestion(asked.QuestionId, visible), () => IsOpen && visible.Length > 0));
+            })];
         }
 
         Title = SafeText.Clean(asked.Title ?? "Question");

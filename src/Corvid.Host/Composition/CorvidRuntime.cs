@@ -317,9 +317,10 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
 
     /// <summary>Renames a session (G-6): a <c>SessionTitled</c> by the user in the log, then <see cref="TitleChanged"/>.</summary>
     /// <exception cref="ArgumentException">The title is blank.</exception>
+    /// <exception cref="SessionHeldException">Another process drives the session (G-12); nothing was written.</exception>
     public SessionTitled Rename(string sessionId, string title)
     {
-        var titled = Titles.Rename(sessionId, title);
+        var titled = Titles.Rename(sessionId, title, () => RefuseIfHeld(sessionId));
         _titled[sessionId] = 0;
         TitleChanged?.Invoke(sessionId, titled);
         return titled;
@@ -330,9 +331,13 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     /// <see cref="Recapped"/>; null when nothing happened since.
     /// </summary>
     /// <exception cref="InvalidOperationException">No local generator, or it failed.</exception>
+    /// <exception cref="SessionHeldException">
+    /// Another process drives the session (G-12), checked before the recap is generated and again before it is written;
+    /// nothing was written.
+    /// </exception>
     public async Task<SessionRecapped?> RecapAsync(string sessionId, string source = RecapSources.Requested, CancellationToken cancellationToken = default)
     {
-        var recap = await Titles.RecapAsync(sessionId, source, cancellationToken).ConfigureAwait(false);
+        var recap = await Titles.RecapAsync(sessionId, source, () => RefuseIfHeld(sessionId), cancellationToken).ConfigureAwait(false);
         if (recap is not null)
             Recapped?.Invoke(sessionId, recap);
         return recap;

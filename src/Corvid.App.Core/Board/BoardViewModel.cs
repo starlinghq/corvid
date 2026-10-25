@@ -408,11 +408,16 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
             foreach (var option in question.Options)
             {
                 var questionId = question.QuestionId;
-                // One click sends the option as the answer, so its label shows every hidden character (SafeText.Reveal);
-                // the answer sent is the option as the session gave it.
+                // One click sends the option as the person's own message, so its label shows every hidden character
+                // (SafeText.Reveal), and the answer sent is only the text a reader sees (SafeText.Clean): a hidden
+                // instruction in a model-written option never reaches the generator as the person's words. An option that
+                // is all hidden characters gets no button; "Answer…" opens the session to answer in words.
+                var visible = SafeText.Clean(option).Trim();
+                if (visible.Length == 0)
+                    continue;
                 var shown = SafeText.Reveal(option);
                 buttons.Add(new AttentionButton(shown, AttentionActionStyle.Default, $"Answer \"{shown}\"",
-                    new RelayCommand(() => _ = AnswerAsync(summary.Id, questionId, option))));
+                    new RelayCommand(() => _ = AnswerAsync(summary.Id, questionId, visible))));
             }
         }
 

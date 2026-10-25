@@ -38,6 +38,18 @@ public sealed partial class CorvidRuntime
         return ProcessLock.Probe(DriverLockPath(Options, sessionId));
     }
 
+    /// <summary>
+    /// G-12 for a write that does not open the session (a rename, a recap): refused while another process drives it. The
+    /// lock is not taken, so a window that only shows a session never keeps the terminal that drives it from opening it.
+    /// </summary>
+    /// <exception cref="SessionHeldException">Another process drives the session.</exception>
+    private void RefuseIfHeld(string sessionId)
+    {
+        var driver = Driver(sessionId);
+        if (driver.State == LockState.HeldElsewhere)
+            throw new SessionHeldException(sessionId, driver.Holder);
+    }
+
     /// <summary>Takes the session's driver lock for this process, once; refuses when another process holds it.</summary>
     private void TakeDriver(string sessionId)
     {

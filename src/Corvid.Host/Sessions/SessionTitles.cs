@@ -224,13 +224,14 @@ public sealed class SessionTitler
     /// Renames the session (G-6): a <c>SessionTitled</c> by the user. The title is one line, trimmed and cut to
     /// <see cref="SessionCatalogue.TitleLength"/>.
     /// </summary>
+    /// <param name="beforeWrite">Called just before each append; it throws to refuse the write (G-12: the driver lock).</param>
     /// <exception cref="ArgumentException">The title is blank.</exception>
-    public SessionTitled Rename(string sessionId, string title)
+    public SessionTitled Rename(string sessionId, string title, Action? beforeWrite = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         var line = SessionCatalogue.Line(title) ?? throw new ArgumentException("A title needs some text.", nameof(title));
         var titled = new SessionTitled(line, TitleSources.User);
-        return (SessionTitled)Append(sessionId, titled, _ => true)!.Payload;
+        return (SessionTitled)Append(sessionId, titled, _ => true, beforeWrite)!.Payload;
     }
 
     /// <summary>
@@ -285,12 +286,21 @@ public sealed class SessionTitler
     /// <c>SessionRecapped</c>. Null when nothing happened since the last recap.
     /// </summary>
     /// <exception cref="InvalidOperationException">Nothing can be generated here (<see cref="Unavailable"/>), or the generator failed.</exception>
-    public async Task<SessionRecapped?> RecapAsync(string sessionId, string source, CancellationToken cancellationToken = default)
+    public Task<SessionRecapped?> RecapAsync(string sessionId, string source, CancellationToken cancellationToken = default) =>
+        RecapAsync(sessionId, source, null, cancellationToken);
+
+    /// <inheritdoc cref="RecapAsync(string, string, CancellationToken)"/>
+    /// <param name="beforeWrite">
+    /// Called before the recap is generated and again just before each append; it throws to refuse the write (G-12: a
+    /// session another process drives is not written to, however long the generator took).
+    /// </param>
+    public async Task<SessionRecapped?> RecapAsync(string sessionId, string source, Action? beforeWrite, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(source);
         if (_generator is null)
             throw new InvalidOperationException("No recap: " + Unavailable + ".");
+        beforeWrite?.Invoke();
         var snapshot = SessionProjection.Load(_log, sessionId, cancellationToken: cancellationToken);
         var from = snapshot.Recap?.ThroughSequence ?? 0;
         var lines = Lines(snapshot, from);
@@ -311,7 +321,7 @@ public sealed class SessionTitler
         if (text.Length == 0)
             throw new InvalidOperationException("The local generator wrote an empty recap.");
         var through = snapshot.Head;
-        return Append(sessionId, new SessionRecapped(text, from, through, source), _ => true)?.Payload as SessionRecapped;
+        return Append(sessionId, new SessionRecapped(text, from, through, source), _ => true, beforeWrite)?.Payload as SessionRecapped;
     }
 
     /// <summary>
@@ -331,11 +341,12 @@ public sealed class SessionTitler
         return (now ?? _time.GetUtcNow()) - since >= Options.RecapAfter;
     }
 
-    private StoredEvent? Append(string sessionId, SessionEvent payload, Func<SessionSnapshot, bool> still)
+    private StoredEvent? Append(string sessionId, SessionEvent payload, Func<SessionSnapshot, bool> still, Action? beforeWrite = null)
     {
         var events = new[] { EventData.Create(payload) };
         for (var attempt = 1; ; attempt++)
         {
+            beforeWrite?.Invoke();
             var head = _log.GetHead(sessionId);
             if (!still(SessionProjection.Load(_log, sessionId, head)))
                 return null;
