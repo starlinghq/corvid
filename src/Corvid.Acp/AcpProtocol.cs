@@ -94,7 +94,11 @@ internal sealed record SessionRequest
     public JsonElement? Meta { get; init; }
 }
 
-internal sealed record NewSessionResponse(string SessionId);
+internal sealed record NewSessionResponse(string SessionId)
+{
+    /// <summary>A5: the session's configuration options (the generator, the decider); see AcpServer.Models.cs.</summary>
+    public ConfigOption[]? ConfigOptions { get; init; }
+}
 
 internal sealed record EmptyResponse;
 
@@ -156,6 +160,7 @@ internal sealed record SessionNotification(string SessionId, SessionUpdate Updat
 [JsonDerivedType(typeof(ToolCall), "tool_call")]
 [JsonDerivedType(typeof(ToolCallUpdate), "tool_call_update")]
 [JsonDerivedType(typeof(AvailableCommandsUpdate), "available_commands_update")]
+[JsonDerivedType(typeof(ConfigOptionUpdate), "config_option_update")]
 internal abstract record SessionUpdate;
 
 internal sealed record UserMessageChunk(ContentBlock Content) : SessionUpdate;
@@ -287,5 +292,7 @@ internal sealed record JsonRpcError(int Code, string Message);
 [JsonSerializable(typeof(RequestPermissionRequest))]
 [JsonSerializable(typeof(RequestPermissionResponse))]
 [JsonSerializable(typeof(CorvidMeta))]
+[JsonSerializable(typeof(SetConfigOptionRequest))]
+[JsonSerializable(typeof(ConfigOptionsResponse))]
 [JsonSerializable(typeof(JsonRpcError))]
 internal sealed partial class AcpJson : JsonSerializerContext;
