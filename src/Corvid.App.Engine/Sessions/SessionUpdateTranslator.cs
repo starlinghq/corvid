@@ -295,7 +295,7 @@ public sealed partial class SessionUpdateTranslator(string workspace)
             // A5: a child session started or ended (replayed with ReplayOptions.Children, live from runtime.ChildChanged).
             case ChildStarted or ChildEnded:
                 outside = true;
-                output.AddRange(Child(update));
+                output.AddRange(Child(update, replayed: true));
                 break;
             // CheckpointLogged: Rewind's timeline reads the ledger itself (A3 history); the transcript shows no row for it.
         }

@@ -117,4 +117,51 @@ public sealed class ChildSessionViewTests
         var card = Assert.Single(session.Blocks.OfType<ApprovalCardBlock>());
         Assert.Equal("Child: summarise the docs\n  tools: read_file\n  budget: 8 steps, 64,000 tokens, 600 s", card.DelegationText);
     }
+
+    [Fact]
+    public void M5_a_cards_child_tree_is_capped_with_the_running_children_kept_and_the_rest_counted()
+    {
+        var time = ManualTimeProvider.Demo();
+        var card = new SessionCardViewModel(new SessionSummary("cli-p", "parent"), time.GetUtcNow(), TimeZoneInfo.Utc, _ => { }, _ => { }, () => { });
+        // Twenty children, the oldest one still running.
+        var children = Enumerable.Range(0, 20).Select(i => Child($"child-{i:00}", i == 0 ? ChildSessionChanged.Running : "answered")).ToList();
+
+        card.SetChildren(children, _ => { }, null);
+
+        Assert.Equal(SessionCardViewModel.MaxChildRows, card.Children.Count);
+        Assert.Equal("+12 more", card.MoreChildren);
+        Assert.Equal("20 child sessions · 1 running", card.ChildrenHeader);
+        // In order: the running one, then the latest seven.
+        Assert.Equal(["child-00", .. Enumerable.Range(13, 7).Select(i => $"child-{i:00}")], card.Children.Select(row => row.Id));
+
+        card.SetChildren(children.Take(3).ToList(), _ => { }, null);
+        Assert.Equal(3, card.Children.Count);
+        Assert.Equal("", card.MoreChildren);
+    }
+
+    [Fact]
+    public async Task Security_L5_a_cut_goal_on_the_spawn_card_can_be_shown_whole()
+    {
+        var time = ManualTimeProvider.Demo();
+        var service = new DemoSessionService(new InlineDispatcher(), time, DemoScene.Main);
+        using var session = new SessionViewModel(DemoSessionService.MainSessionId, service, new InlineDispatcher(), time);
+        await session.OpenAsync(Ct);
+
+        service.Push(DemoSessionService.MainSessionId, new ApprovalRequested("a-9", "delegate_task", "delegate_task {}", time.GetUtcNow().AddMinutes(5))
+        {
+            CallId = "c-9",
+            Delegation = ["Child: look aaaa… (600 more characters)"],
+            DelegationWhole = ["Child: look " + new string('a', 604) + "\u202E"],
+        });
+
+        var card = Assert.Single(session.Blocks.OfType<ApprovalCardBlock>());
+        Assert.True(card.CanShowWholeGoal);
+        Assert.EndsWith("(600 more characters)", card.DelegationText, StringComparison.Ordinal);
+        card.ShowWholeGoalCommand.Execute(null);
+        Assert.False(card.CanShowWholeGoal);
+        Assert.StartsWith("Child: look aaaa", card.DelegationText, StringComparison.Ordinal);
+        Assert.Contains(new string('a', 604), card.DelegationText, StringComparison.Ordinal);
+        // Revealed: the hidden character shows, as on every card line.
+        Assert.DoesNotContain("\u202E", card.DelegationText, StringComparison.Ordinal);
+    }
 }

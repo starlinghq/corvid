@@ -415,6 +415,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         UnwatchRecords();
         StopWatchingLog();
         StopTails();
+        foreach (var id in _childPrompters.Keys)
+            if (_childPrompters.TryRemove(id, out var child))
+                child.Dispose();
         foreach (var channel in _channels.Values)
         {
             PendingApproval[] open;
@@ -734,7 +737,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         var tools = await _engine.ToolsAsync().ConfigureAwait(false);
         while (true)
         {
-            var channel = _channels.GetOrAdd(sessionId, id => new Channel(id, new SessionUpdateTranslator(tools.WorkspaceRoot)));
+            var channel = _channels.GetOrAdd(sessionId, id => new Channel(id, new SessionUpdateTranslator(tools.WorkspaceRoot) { IsChildRunning = runtime.IsChildRunning }));
             Task loading;
             lock (channel.Gate)
             {

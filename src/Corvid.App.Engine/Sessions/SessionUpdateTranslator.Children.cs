@@ -17,7 +17,15 @@ public sealed partial class SessionUpdateTranslator
     /// A5: the host's <see cref="ChildStarted"/> and <see cref="ChildEnded"/> as the app's <see cref="ChildSessionChanged"/>:
     /// the session header's children and the Board's tree. An end whose start this translator never saw still names the child.
     /// </summary>
-    public IReadOnlyList<SessionUpdate> Child(SessionStreamUpdate update)
+    public IReadOnlyList<SessionUpdate> Child(SessionStreamUpdate update) => Child(update, replayed: false);
+
+    /// <summary>
+    /// L1 (A5 review): whether a child runs in this process now, for a replayed start: one that is not running and has no end
+    /// in the log is shown unfinished, without a Stop that could not reach it. Null: every replayed start shows running.
+    /// </summary>
+    public Func<string, bool>? IsChildRunning { get; set; }
+
+    private IReadOnlyList<SessionUpdate> Child(SessionStreamUpdate update, bool replayed)
     {
         ArgumentNullException.ThrowIfNull(update);
         switch (update)
@@ -25,6 +33,8 @@ public sealed partial class SessionUpdateTranslator
             case ChildStarted started:
             {
                 var child = Started(started.Child) with { At = update.At };
+                if (replayed && IsChildRunning is { } running && !running(child.ChildId))
+                    child = child with { Status = Unfinished };
                 _children[child.ChildId] = child;
                 return [child];
             }
@@ -39,6 +49,9 @@ public sealed partial class SessionUpdateTranslator
                 return [];
         }
     }
+
+    /// <summary>The status of a child whose start the log holds without an end, and which no process here runs.</summary>
+    internal const string Unfinished = "unfinished";
 
     /// <summary>A child as it started (the parent's <c>ChildSpawned</c>).</summary>
     internal static ChildSessionChanged Started(ChildSpawned spawned) => new(spawned.ChildId, spawned.Goal, ChildSessionChanged.Running)
