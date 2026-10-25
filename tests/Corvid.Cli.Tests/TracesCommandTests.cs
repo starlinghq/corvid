@@ -57,6 +57,8 @@ public sealed class TracesCommandTests
             Assert.Equal("s-a", line["session"]!["id"]!.GetValue<string>());
             Assert.Equal(Path.Combine(run.Root, "work"), line["session"]!["working_directory"]!.GetValue<string>());
             Assert.Equal("corvid", line["harness"]!["name"]!.GetValue<string>());
+            // The CLI's own version, as before the export moved to the host (A3 review nit).
+            Assert.Equal(Corvid.Host.Audit.TraceExport.VersionOf(typeof(TracesCommand).Assembly), line["harness"]!["version"]!.GetValue<string>());
             Assert.Equal("1.0", line["schema_version"]!.GetValue<string>());
         });
         Assert.Equal("hello", lines[0]["prompt"]!["text"]!.GetValue<string>());
