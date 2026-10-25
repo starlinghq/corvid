@@ -31,8 +31,14 @@ namespace Corvid.App.Engine.Sessions;
 /// Each opened session has one channel: its updates so far (the replay translated, then every live update appended), the
 /// state they fold to, and its subscribers. A second open of the same session gets the channel's updates as its history, so
 /// two views of one session (the Sessions page and the Board's watch) always agree, and live updates follow exactly after
-/// it. A session's summary for the rail and the Board is the log's, with the open channel's live state over it (running,
-/// waiting on an approval with its deadline, the step and what runs).
+/// it. The history joins each run of streamed chunks into one. A channel nobody watches and no turn of the window's uses
+/// is let go, and the session's next open replays the log (the hub keeps the sessions it opened, so this is the Board's
+/// watch letting go). A session's summary for the rail and the Board is the log's, with the open channel's live state over
+/// it (running, waiting on an approval with its deadline, the step and what runs).
+/// </para>
+/// <para>
+/// A job's run (<c>job:…</c>) is the scheduler's: read-only here, as the demo's run is, and every request that would write to
+/// it is refused.
 /// </para>
 /// <para>
 /// The queue is the engine's (messages posted to the session actor cannot be taken back): Enter while a turn runs queues,
