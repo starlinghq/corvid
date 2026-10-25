@@ -553,7 +553,10 @@ mix may not name a child's decider (a child judges with its parent's decider unl
 content, `Corvid:Agents:Models` covers inherited models in the slots a remote model can serve (generator, summarizer,
 vision), and the egress threshold is back to 0.4. Still open: a plain-word password in prose ("my wifi password is
 sunshinerainbow") reaches a cloud model when GLiNER2 labels nothing, since the credential detector's prose rule wants a
-digit or symbol (a `Corvid.Secrets` change).
+digit or symbol (a `Corvid.Secrets` change). From the fix verification, also left: an abandoned child frees its
+concurrency place while a tool that ignores cancellation still runs (its driver lock holds until it is idle); a reset on
+a pinned slot is logged without the pin, so replay shows it unpinned; a tainted child's answer is labelled with a
+prefix, not enclosed, so the injection checkpoint is the defence against text after it.
 
 ### What the running app shows today
 

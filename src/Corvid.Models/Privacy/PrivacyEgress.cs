@@ -337,8 +337,16 @@ public sealed partial class PrivacyEgress
     internal static bool CredentialNoun(string value)
     {
         var words = value.Split([' ', '-', '_'], StringSplitOptions.RemoveEmptyEntries);
+        // A word that is as likely the value as the noun ("my password is secret", "the pin is admin") is a value on its own.
+        if (words.Length == 1 && AmbiguousAlone.Contains(words[0]))
+            return false;
         return words.Length > 0 && words.All(CredentialWords.Contains) && words.Any(CredentialHeads.Contains);
     }
+
+    private static readonly FrozenSet<string> AmbiguousAlone = new[]
+    {
+        "secret", "secrets", "key", "keys", "pin", "pins", "handle", "login", "master", "root", "admin", "private", "public",
+    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
     private static readonly FrozenSet<string> CredentialHeads = new[]
     {

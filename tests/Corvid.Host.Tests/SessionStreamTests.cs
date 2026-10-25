@@ -127,6 +127,32 @@ public sealed class SessionStreamTests
     }
 
     [Fact]
+    public async Task ATaintTheSessionHadWhenTheTurnBeganIsReportedAtOnceAndCreditedToNoCall()
+    {
+        await using var host = TestHost.Create(new FakeModels(new FakeGenerator()));
+        var runtime = await host.StartAsync();
+        await using var _ = runtime;
+        var session = runtime.OpenSession(surface: "test");
+        var live = new List<SessionStreamUpdate>();
+        var reporter = new SessionUpdateReporter(runtime, session.Id, new ToolPresentation(runtime), 0, update =>
+        {
+            lock (live)
+                live.Add(update);
+        }, tainted: () => true);
+
+        // An External message (a child's goal, a tainted fork) tainted the session before any call: no call brought it in.
+        reporter.Text("Reading it.");
+        reporter.ToolStarted("c1", "read_file", approval: false);
+        reporter.ToolFinished("c1", "read_file", "completed", TimeSpan.FromMilliseconds(5));
+        await reporter.FinishAsync("Reading it.");
+
+        var noted = Assert.Single(live.OfType<TaintNoted>());
+        Assert.True(noted.Tainted);
+        Assert.Null(noted.Source);
+        Assert.True(live.IndexOf(noted) < live.FindIndex(update => update is ToolCallStarted));
+    }
+
+    [Fact]
     public async Task ATaintTheSessionAlreadyHasWhenTheCallsStartIsQueuedWaitsForTheCallThatNamesIt()
     {
         await using var host = TestHost.Create(new FakeModels(new FakeGenerator()));

@@ -284,3 +284,20 @@ public sealed class EgressStructureTests
     public void Identifier_keys_are_structure(string key, bool structure) =>
         Assert.Equal(structure, PrivacyEgress.IdentifierKey(key));
 }
+
+/// <summary>Which credential spans name a kind of credential (structure, left as it is) and which hold one (redacted).</summary>
+public sealed class CredentialNounTests
+{
+    [Theory]
+    [InlineData("API key", true)]
+    [InlineData("wifi password", true)]
+    [InlineData("client secret", true)]
+    [InlineData("password", true)]
+    // A5 fix verification: a word as likely the value as the noun is a value on its own ("my password is secret").
+    [InlineData("secret", false)]
+    [InlineData("admin", false)]
+    [InlineData("pin", false)]
+    [InlineData("sunshinerainbow", false)]
+    public void ASpanIsANounOnlyWhenItNamesAKindOfCredential(string value, bool noun) =>
+        Assert.Equal(noun, PrivacyEgress.CredentialNoun(value));
+}

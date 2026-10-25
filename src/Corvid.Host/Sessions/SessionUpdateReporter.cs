@@ -321,7 +321,12 @@ public sealed class SessionUpdateReporter : ITurnObserver
             return;
         // A taint read before any finished call named its source (the feed's start of a call can reach the chain after the
         // call's result tainted the session) waits for the step that names it, or for the turn's end.
-        if (now && _taintSource is null && !_finishing)
+        // Only a taint a call of this turn can have brought in waits: one the session had when the turn began (an External
+        // message, a tainted fork, a child) has no call to name and is reported at once.
+        bool callsStarted;
+        lock (_gate)
+            callsStarted = _announced.Count > 0;
+        if (now && _taintSource is null && !_finishing && callsStarted)
             return;
         // The source is the last call that finished, kept until a taint is reported: the session can turn tainted just after
         // that call's step was queued, so the taint is read with the next step (the answer's text), which names no call.

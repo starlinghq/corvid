@@ -105,8 +105,10 @@ internal sealed class InstrumentedChatClient(IChatClient inner, ModelProfile pro
     {
         var counter = GetService(typeof(Abstractions.Tokens.ITokenCounter)) as Abstractions.Tokens.ITokenCounter;
         long Count(string text) => text.Length == 0 ? 0 : counter?.CountTokens(text) ?? (text.Length + 3) / 4;
+        // Tool results too (a fetched page is most of a prompt), so a child's token budget holds on such a provider.
         long Of(ChatMessage message) => Count(message.Text) + message.Contents.OfType<FunctionCallContent>()
-            .Sum(call => Count(call.Name) + Count(call.Arguments is null ? "" : string.Join(" ", call.Arguments.Select(pair => pair.Key + " " + pair.Value))));
+            .Sum(call => Count(call.Name) + Count(call.Arguments is null ? "" : string.Join(" ", call.Arguments.Select(pair => pair.Key + " " + pair.Value))))
+            + message.Contents.OfType<FunctionResultContent>().Sum(result => Count(result.Result?.ToString() ?? ""));
         return (messages.Sum(Of), response.Messages.Sum(Of));
     }
 
