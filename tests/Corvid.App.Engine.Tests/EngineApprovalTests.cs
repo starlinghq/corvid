@@ -419,6 +419,46 @@ public sealed class EngineApprovalTests
         Assert.False(SessionFold.Replay(id, [.. subscription.History, .. waiter.Updates]).Tainted);
     }
 
+    /// <summary>
+    /// The turn's report runs behind the turn on a busy machine: here it is held at the prompt until the fetch's result is in.
+    /// The taint still shows once, after the call that brought it in and naming it, not on the call's start as the session's
+    /// taint read late used to.
+    /// </summary>
+    [Fact]
+    public async Task A_report_running_behind_the_turn_still_shows_the_taint_on_the_call_that_brought_it_in()
+    {
+        var fetched = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var generator = new FakeGenerator(Reply.Call("web_fetch", """{"url":"http://seed.example/page"}"""), messages =>
+        {
+            // The next request after the call: the kernel tainted the session as its result came in.
+            fetched.TrySetResult();
+            return Reply.Text("The page says hello.");
+        });
+        await using var engine = await CustomEngine.StartAsync(new FakeModels(generator), new Dictionary<string, string?> { ["Corvid:Tools:Builtin"] = "true" },
+            services => services.AddSingleton(new WebFetchTransport(new PageHandler())));
+        var id = engine.Runtime.OpenSession(surface: "app").Id;
+        using var service = engine.Sessions();
+        var waiter = new SessionWaiter();
+        var held = 0;
+        using var subscription = await service.OpenAsync(id, update =>
+        {
+            // On the report's chain: nothing after the prompt is reported until the turn has fetched the page.
+            if (update is UserMessage && Interlocked.Exchange(ref held, 1) == 0)
+                Assert.True(fetched.Task.Wait(TimeSpan.FromSeconds(60), Ct), "the turn never fetched the page");
+            waiter.Add(update);
+        }, Ct);
+
+        await service.SendAsync(id, "fetch the page and report what it says", Ct);
+        await waiter.WaitAsync<TurnEnded>();
+        await service.IdleAsync();
+
+        var updates = waiter.Updates;
+        var tainted = Assert.Single(updates.OfType<TaintChanged>());
+        Assert.Equal((true, "web_fetch http://seed.example/page"), (tainted.Tainted, tainted.Source));
+        var finished = updates.ToList().FindIndex(update => update is ToolCallUpdate { Status: ToolCallStatus.Completed });
+        Assert.InRange(updates.ToList().IndexOf(tainted), finished + 1, updates.Count - 1);
+    }
+
     private sealed class PageHandler : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>

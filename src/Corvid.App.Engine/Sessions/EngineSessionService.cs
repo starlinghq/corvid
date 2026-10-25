@@ -480,7 +480,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 .ConfigureAwait(false);
             SessionUpdateReporter? reporter = null;
             reporter = new SessionUpdateReporter(runtime, sessionId, tools, head, update => Report(channel, session, reporter!, update),
-                reason => Log("corvid app: could not report a session update: " + reason), _time);
+                reason => Log("corvid app: could not report a session update: " + reason), _time, () => session.Tainted);
             lock (channel.Gate)
             {
                 channel.Translator.Model = Generator(runtime);
@@ -660,7 +660,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     }
 
     /// <summary>
-    /// A live update of the turn, translated, with a taint change when the session's taint moved with it. The turn's first
+    /// A live update of the turn, translated; a taint the reporter notes shows when it differs from the window's. The turn's first
     /// prompt is the session beginning the window's message: an interrupt asked for before it is carried out now.
     /// </summary>
     private void Report(Channel channel, CorvidSession session, SessionUpdateReporter reporter, SessionStreamUpdate update)
@@ -683,22 +683,24 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         // Before the prompt shows, so nothing of the interrupted turn runs on after the person sees it begin.
         if (cancel)
             session.Cancel();
-        Publish(channel, translator =>
+        // The kernel taints the session when a network tool's result or outside content enters (plan §10.3), and clears it
+        // when the user's own message starts a turn. The reporter reads it in order with the turn and says so after the
+        // update it came with (a call's result names the call); read here instead, as the chain got to an update, a busy
+        // machine showed a call's taint on the call's start (no source), or before it.
+        if (update is TaintNoted noted)
         {
-            var output = new List<SessionUpdate>(translator.Translate(update));
-            var tainted = session.Tainted;
-            if (tainted != channel.Tainted)
+            Publish(channel, translator =>
             {
-                channel.Tainted = tainted;
-                // The kernel taints the session when a network tool's result or outside content enters (plan §10.3), and
-                // clears it when the user's own message starts a turn; the call that finished is what brought it in.
-                string? source = update is ToolCallChanged changed ? $"{changed.Tool} {ToolPresentation.Target(changed.Input)}".Trim() : null;
-                if (tainted)
-                    channel.TaintSource = source;
-                output.Add(new TaintChanged(tainted) { At = update.At, Source = tainted ? source : null });
-            }
-            return output;
-        });
+                if (noted.Tainted == channel.Tainted)
+                    return [];
+                channel.Tainted = noted.Tainted;
+                if (noted.Tainted)
+                    channel.TaintSource = noted.Source;
+                return translator.Translate(noted);
+            });
+            return;
+        }
+        Publish(channel, translator => translator.Translate(update));
     }
 
     private static TurnOutcome Map(TurnStatus status) => status switch

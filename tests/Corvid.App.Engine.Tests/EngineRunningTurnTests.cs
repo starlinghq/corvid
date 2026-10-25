@@ -74,11 +74,21 @@ public sealed class EngineRunningTurnTests
         var id = fixture.Runtime.OpenSession(surface: "app").Id;
         using var service = fixture.Sessions();
         var waiter = new SessionWaiter();
-        using var subscription = await service.OpenAsync(id, waiter.Add, Ct);
+        var held = 0;
+        using var subscription = await service.OpenAsync(id, update =>
+        {
+            // The report runs behind the turn, as on a busy machine: held at the prompt until the call is in its tool.
+            if (update is UserMessage && Interlocked.Exchange(ref held, 1) == 0)
+                weather.Entered.Wait(Ct);
+            waiter.Add(update);
+        }, Ct);
 
         await service.SendAsync(id, "what's the weather?", Ct);
         await weather.Entered;
         await waiter.WaitAsync<UserMessage>();
+        // So the window hears of the step and the call's start after the call has begun: wait for them, not for the call.
+        await waiter.WaitAsync<TurnProgress>(progress => progress.Step == 1);
+        await waiter.WaitAsync<ToolCall>(call => call.Tool == "check_weather");
         // Turn progress: the rail's summary says the step and what runs.
         var running = (await service.ListAsync(Ct)).Single(summary => summary.Id == id);
         Assert.Equal((AppSessionState.Running, 1, fixture.Runtime.Options.Turn.MaxSteps, "check_weather"),

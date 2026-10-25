@@ -76,7 +76,8 @@ public sealed class EngineModelTests
         try
         {
             Check(null, EventArgs.Empty);
-            await reached.Task.WaitAsync(TimeSpan.FromSeconds(30), Token);
+            // A guard, not a pace, as long as the suite's others: a download's end reads the models again on the pool.
+            await reached.Task.WaitAsync(TimeSpan.FromSeconds(60), Token);
             return service.Snapshot;
         }
         finally

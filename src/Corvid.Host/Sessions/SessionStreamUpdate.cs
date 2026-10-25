@@ -182,10 +182,11 @@ public sealed record PlanChanged(ImmutableArray<TodoItem> Items) : SessionStream
 public sealed record DecisionsMade(CheckpointDecisions Decisions) : SessionStreamUpdate;
 
 /// <summary>
-/// Outside content entered the conversation, or the user's next message cleared it (plan §10.3): replay only
-/// (<see cref="ReplayOptions.Taint"/>), from a network tool's result in the log and the next user message. Live, a surface
-/// reads the session's own taint as the turn goes. The log does not record taint from an untrusted description or a hub
-/// skill, so a replay shows the network reads only.
+/// Outside content entered the conversation, or the user's next message cleared it (plan §10.3). In a replay
+/// (<see cref="ReplayOptions.Taint"/>), from a network tool's result in the log and the next user message; the log does not
+/// record taint from an untrusted description or a hub skill, so a replay shows the network reads only. Live, from a
+/// <see cref="SessionUpdateReporter"/> given the session's taint, which it reads in order with the turn (the first report
+/// says the taint the turn starts with).
 /// </summary>
 /// <param name="Source">What brought it in: the tool and what it read ("web_fetch https://example.org").</param>
 public sealed record TaintNoted(bool Tainted, string? Source) : SessionStreamUpdate;
