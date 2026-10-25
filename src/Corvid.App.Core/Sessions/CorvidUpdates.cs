@@ -249,7 +249,7 @@ public sealed record EngineStatus : SessionUpdate
 /// <summary>
 /// A clarifying question (<c>_corvid/question</c>): options as buttons and a free-text answer, pinned until answered.
 /// K-6: the log's <c>ClarificationAsked</c>, the structured question a <c>Clarifying</c> turn ended on (the decider's
-/// clarify, or the generator's <c>ask_user</c> with its options). Nothing answers it but the person's next message.
+/// clarify, or the generator's <c>ask_user</c> with its options). Nothing answers it but the person: their next message, or (A5) their answer inside the turn where a surface can take it.
 /// </summary>
 public sealed record QuestionAsked(string QuestionId, string Text) : SessionUpdate
 {
@@ -261,7 +261,7 @@ public sealed record QuestionAsked(string QuestionId, string Text) : SessionUpda
     public bool AllowsFreeText { get; init; } = true;
 }
 
-/// <summary>The question was answered; the answer is sent as the user's reply.</summary>
+/// <summary>The question was answered: sent as the user's reply, or (A5) taken inside the turn as its call's result; an empty answer withdraws it.</summary>
 public sealed record QuestionAnswered(string QuestionId, string Answer) : SessionUpdate;
 
 /// <summary>

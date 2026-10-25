@@ -109,8 +109,8 @@ public sealed record TurnEnded(int Turn, TurnOutcome Outcome) : SessionUpdate
 public sealed record ContextPart(string Label, int Tokens);
 
 /// <summary>
-/// Token usage and the context gauge (ACP draft <c>usage_update</c>). Needs K-5: usage persisted and reported per call
-/// and per session, and the renderer's prompt token count.
+/// Token usage and the context gauge (ACP draft <c>usage_update</c>). K-5: each generator call's tokens live and, since A5,
+/// replayed from the log (on the answer or call each response produced); the latest prompt's count fills the gauge.
 /// </summary>
 public sealed record UsageUpdate : SessionUpdate
 {

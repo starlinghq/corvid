@@ -474,6 +474,11 @@ public sealed class ApprovalSettings
 
 public sealed class TurnSettings
 {
+    /// <summary>
+    /// The turn's system prompt (default <c>TurnOptions.DefaultSystemPrompt</c>). Since A5 the privacy egress gate treats it as
+    /// Corvid's own text and neither scans nor rewrites it, so PII written into it reaches a gated model as written; keep
+    /// personal facts in memory, which is scanned.
+    /// </summary>
     public string? SystemPrompt { get; set; }
 
     public int MaxSteps { get; set; } = 8;

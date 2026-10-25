@@ -1432,6 +1432,7 @@ public sealed class TurnRunner
                 answer = null;
             }
             answer = answer?.Trim();
+            string? pick;
             var answered = answer is { Length: > 0 };
             var result = JsonValues.ToElement(new Dictionary<string, object?>(StringComparer.Ordinal)
             {
@@ -1450,11 +1451,11 @@ public sealed class TurnRunner
                     _question = question;
                 }
                 _open.Remove(callId);
-                _pickDecisions.Remove(tool, out var decisionId);
-                if (decisionId is not null)
-                    _services.CurrentFabric().RecordOutcome(runner.SessionId, decisionId, "tool_succeeded", CancellationToken.None);
+                _pickDecisions.Remove(tool, out pick);
             }
             activity?.SetTag(KernelTelemetry.ToolOutcome, "succeeded");
+            if (pick is not null)
+                _services.CurrentFabric().RecordOutcome(runner.SessionId, pick, "tool_succeeded", CancellationToken.None);
             return true;
         }
 

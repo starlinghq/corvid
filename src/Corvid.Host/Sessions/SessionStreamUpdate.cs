@@ -41,7 +41,8 @@ public sealed record SteerSent(string Text, long Sequence) : SessionStreamUpdate
 
 /// <summary>
 /// The clarifying question a turn ended on (K-6), from its <c>ClarificationAsked</c> event (after the answer that carries
-/// the same text). Model text: untrusted. The person's next message answers it.
+/// the same text). Model text: untrusted. The person's next message answers it; A5: or, asked inside the turn where a
+/// surface could answer, <see cref="QuestionClosed"/> follows with their answer.
 /// </summary>
 /// <param name="Options">Answers to pick from; empty for free text.</param>
 public sealed record QuestionRaised(string QuestionId, string Text, ImmutableArray<string> Options) : SessionStreamUpdate;
