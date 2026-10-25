@@ -134,6 +134,7 @@ public sealed class SessionUpdateTranslator(string workspace)
                     Elapsed = changed.Elapsed,
                     Diffs = [.. changed.Diffs.Select(diff => new FileEdit(RelativePath(diff.Path), diff.OldText, diff.NewText))],
                     Locations = Relative(changed.Locations),
+                    Verdict = changed.Approval is { } approval ? Verdict(approval) : null,
                 });
                 break;
             case HostPlan plan:
@@ -215,6 +216,28 @@ public sealed class SessionUpdateTranslator(string workspace)
         ToolCallState.Completed => ToolCallStatus.Completed,
         _ => ToolCallStatus.Failed,
     };
+
+    /// <summary>
+    /// A replayed call's approval answer as the live card closed it (<c>CardPrompter</c>): approved once, for the session or
+    /// always; denied, with the person's reason; or unanswered by the deadline or cancelled.
+    /// </summary>
+    internal static CallVerdict Verdict(CallApproval approval)
+    {
+        var kind = approval switch
+        {
+            { Approved: true, Scope: "session" } => VerdictKind.ApprovedSession,
+            { Approved: true, Scope: "always" } => VerdictKind.ApprovedAlways,
+            { Approved: true } => VerdictKind.ApprovedOnce,
+            { Answered: true } => VerdictKind.Denied,
+            _ when approval.Reason.StartsWith("timeout", StringComparison.Ordinal) => VerdictKind.TimedOut,
+            _ => VerdictKind.Cancelled,
+        };
+        return new CallVerdict(kind)
+        {
+            ApprovalId = approval.ApprovalId,
+            Detail = kind == VerdictKind.Denied ? approval.Note : null,
+        };
+    }
 
     /// <summary>The span's outcome; a replayed call has only its status, which says succeeded or failed.</summary>
     private static ToolOutcome? Outcome(string? outcome, ToolCallState? status) => outcome switch

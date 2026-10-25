@@ -150,6 +150,21 @@ public sealed class EventJsonTests
         Assert.Null(stored.Paths);
     }
 
+    [Fact]
+    public void An_approvals_scope_and_note_are_written_only_when_set_so_older_answers_keep_their_form()
+    {
+        Assert.Equal("""{"type":"approval_resolved","approval_id":"a-1","approved":false,"reason":"user: denied (once)"}""",
+            EventJson.Serialize(new ApprovalResolved("a-1", false, "user: denied (once)")));
+        var json = EventJson.Serialize(new ApprovalResolved("a-1", false, "user: denied (once)", "once", "not now"));
+        Assert.EndsWith("""
+            "reason":"user: denied (once)","scope":"once","note":"not now"}
+            """, json, StringComparison.Ordinal);
+        var restored = Assert.IsType<ApprovalResolved>(EventJson.Deserialize(EventJson.Version, json));
+        Assert.Equal(("once", "not now"), (restored.Scope, restored.Note));
+        var stored = Assert.IsType<ApprovalResolved>(EventJson.Deserialize(1, """{"type":"approval_resolved","approval_id":"a","approved":true,"reason":"user: approved (session)"}"""));
+        Assert.Equal((null, null), (stored.Scope, stored.Note));
+    }
+
     [Theory]
     [InlineData("""{"type":"no_such_event","text":"x"}""")]
     [InlineData("""{"text":"missing discriminator"}""")]

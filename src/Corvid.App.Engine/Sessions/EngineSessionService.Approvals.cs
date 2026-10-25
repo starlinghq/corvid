@@ -93,7 +93,11 @@ public sealed partial class EngineSessionService
                     throw new InvalidOperationException("The rule was not written: " + error);
                 return (PipelineAnswer.Approve(PipelineScope.Always) with { RulePaths = paths }, narrowed);
             default:
-                return (PipelineAnswer.Deny(), []);
+                // The reason goes into the log with the answer, so a replay shows it as this card does.
+                return (PipelineAnswer.Deny() with
+                {
+                    Reason = answer.Choice == ApprovalChoice.Deny && !string.IsNullOrWhiteSpace(answer.Reason) ? answer.Reason.Trim() : null,
+                }, []);
         }
     }
 

@@ -96,6 +96,26 @@ public sealed record ToolCallChanged(string CallId) : SessionStreamUpdate
     public ImmutableArray<FileDiff> Diffs { get; init; } = [];
 
     public TimeSpan? Elapsed { get; init; }
+
+    /// <summary>
+    /// How the call's approval prompt was answered, from the log (replay only, with <see cref="ReplayOptions.Approvals"/>);
+    /// null when nobody was asked. Live, the surface's own prompter knows the answer.
+    /// </summary>
+    public CallApproval? Approval { get; init; }
+}
+
+/// <summary>A call's approval prompt and its answer as the log records them (<c>ApprovalRequested</c>, <c>ApprovalResolved</c>).</summary>
+/// <param name="Reason">The pipeline's words for the resolution: "user: denied (once)", "timeout: …", "cancelled".</param>
+public sealed record CallApproval(string ApprovalId, bool Approved, string Reason)
+{
+    /// <summary>The person answered (approved or denied), rather than a deadline, a cancellation or a failed prompt.</summary>
+    public bool Answered => Reason.StartsWith("user:", StringComparison.Ordinal);
+
+    /// <summary>The answer's scope as applied: <c>once</c>, <c>session</c> or <c>always</c>; null when nobody answered.</summary>
+    public string? Scope { get; init; }
+
+    /// <summary>The reason the person gave with a denial.</summary>
+    public string? Note { get; init; }
 }
 
 /// <summary>The model's task list, replaced whole (ACP <c>plan</c>), from a <c>TodosSet</c> event.</summary>

@@ -107,6 +107,12 @@ public sealed record ApprovalAnswer(bool Approved, ApprovalScope Scope = Approva
     /// </summary>
     public ImmutableArray<ImmutableArray<string>> RulePaths { get; init; } = [];
 
+    /// <summary>
+    /// The reason the person gave with a denial, logged with the answer (<see cref="ApprovalResolved.Note"/>) so a replay
+    /// shows it as the live card did; null when none was given.
+    /// </summary>
+    public string? Reason { get; init; }
+
     public static ApprovalAnswer Approve(ApprovalScope scope = ApprovalScope.Once) => new(true, scope);
 
     public static ApprovalAnswer Deny(ApprovalScope scope = ApprovalScope.Once) => new(false, scope);
@@ -388,7 +394,8 @@ public sealed class ApprovalPipeline
             && !Remember(context.SessionId, assessment.Analysis, answer.Approved ? RuleDecision.Allow : RuleDecision.Deny, scope, answer.RulePaths))
             scope = ApprovalScope.Once;
         var result = Resolve(context, assessment, approvalId, answer.Approved ? ApprovalResolution.UserApproved : ApprovalResolution.UserDenied,
-            $"user: {(answer.Approved ? "approved" : "denied")} ({WireNames.Scope(scope)})");
+            $"user: {(answer.Approved ? "approved" : "denied")} ({WireNames.Scope(scope)})", WireNames.Scope(scope),
+            string.IsNullOrWhiteSpace(answer.Reason) ? null : answer.Reason.Trim());
         return result with { Scope = scope };
     }
 
@@ -479,10 +486,10 @@ public sealed class ApprovalPipeline
     }
 
     private ApprovalResult Resolve(ApprovalContext context, ApprovalAssessment assessment, string approvalId, ApprovalResolution resolution,
-        string reason)
+        string reason, string? scope = null, string? note = null)
     {
         var approved = resolution == ApprovalResolution.UserApproved;
-        Append(context.SessionId, new ApprovalResolved(approvalId, approved, reason), CancellationToken.None);
+        Append(context.SessionId, new ApprovalResolved(approvalId, approved, reason, scope, note), CancellationToken.None);
         RecordOutcome(context, assessment, resolution switch
         {
             ApprovalResolution.UserApproved => "user_approved",

@@ -44,6 +44,7 @@ public sealed class PipelineTests
         var resolved = Assert.IsType<ApprovalResolved>(events[2]);
         Assert.True(resolved.Approved);
         Assert.Equal("user: approved (once)", resolved.Reason);
+        Assert.Equal(("once", (string?)null), (resolved.Scope, resolved.Note));
         Assert.Equal(new DecisionOutcomeRecorded(decision.DecisionId, "user_approved"), events[3]);
 
         var snapshot = SessionProjection.Load(db.Log, Session, cancellationToken: Ct);

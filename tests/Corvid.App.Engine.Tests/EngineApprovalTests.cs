@@ -147,6 +147,42 @@ public sealed class EngineApprovalTests
     }
 
     [Fact]
+    public async Task AReopenedSessionShowsEachAnswerAsTheLiveCardClosedIt()
+    {
+        // Turn 1's call is denied with a reason, which turn 2 sends; turn 2 calls again, and that call is allowed once.
+        var models = AddNote(Reply.Say("Understood, no note."), Reply.Call("add_note", """{"text":"water plants"}"""), Reply.Say("Added."));
+        await using var fixture = await EngineFixture.StartAsync(models);
+        var id = fixture.Runtime.OpenSession(surface: "app").Id;
+        using var service = fixture.Sessions();
+        var waiter = new SessionWaiter();
+        using var subscription = await service.OpenAsync(id, waiter.Add, Ct);
+
+        await service.SendAsync(id, "add a note: water plants", Ct);
+        var first = await waiter.WaitAsync<ApprovalRequested>();
+        await service.AnswerApprovalAsync(id, first.ApprovalId, new ApprovalAnswer(ApprovalChoice.Deny, "do not write notes"), Ct);
+        var second = await waiter.WaitAsync<ApprovalRequested>(request => request.ApprovalId != first.ApprovalId);
+        await service.AnswerApprovalAsync(id, second.ApprovalId, ApprovalAnswer.Once, Ct);
+        await waiter.WaitAsync<TurnEnded>(ended => ended.Turn == 2);
+        await service.IdleAsync();
+
+        static List<string> Calls(SessionView view) =>
+        [
+            .. view.Transcript.OfType<ToolEntry>().Select(tool => $"{tool.Tool} {tool.Status} {tool.Outcome} {tool.Verdict?.Kind} {tool.Verdict?.Detail} {tool.Verdict?.ApprovalId}"),
+        ];
+        var shown = Calls(SessionFold.Replay(id, [.. subscription.History, .. waiter.Updates]));
+        Assert.Equal(
+        [
+            $"add_note Failed Denied Denied do not write notes {first.ApprovalId}",
+            $"add_note Completed Succeeded ApprovedOnce  {second.ApprovalId}",
+        ], shown);
+
+        // A fresh service has no channel for the session: its history is the log's, and it folds to the same cards.
+        using var fresh = fixture.Sessions();
+        using var reopened = await fresh.OpenAsync(id, _ => { }, Ct);
+        Assert.Equal(shown, Calls(SessionFold.Replay(id, reopened.History)));
+    }
+
+    [Fact]
     public async Task InterruptingAWaitingTurnCancelsItsPromptAndTheQueueGoesNext()
     {
         var models = AddNote(Reply.Say("The queued one."));

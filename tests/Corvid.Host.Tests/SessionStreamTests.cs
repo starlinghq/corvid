@@ -135,6 +135,49 @@ public sealed class SessionStreamTests
         Assert.All(replay.Updates, update => Assert.NotEqual(default, update.At));
     }
 
+    private sealed class DenyWithReason(string reason) : IApprovalPrompter
+    {
+        public ValueTask<ApprovalAnswer> AskAsync(ApprovalPrompt prompt, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(ApprovalAnswer.Deny() with { Reason = reason });
+    }
+
+    [Fact]
+    public async Task AReplayedCallWhoseApprovalWasRefusedIsDeniedWithThePersonsReason()
+    {
+        await using var host = TestHost.Create(FileWrite(), FileTools);
+        var runtime = await host.StartAsync();
+        await using var _ = runtime;
+        var session = runtime.OpenSession(surface: "test");
+        var tools = new ToolPresentation(runtime);
+        var live = new List<SessionStreamUpdate>();
+        var reporter = new SessionUpdateReporter(runtime, session.Id, tools, runtime.Log.GetHead(session.Id, TestContext.Current.CancellationToken), update =>
+        {
+            lock (live)
+                live.Add(update);
+        });
+        using (runtime.AttachPrompter(session.Id, new DenyWithReason(" do not write scripts ")))
+        using (runtime.Feed.Subscribe(session.Id, reporter))
+        {
+            var delivery = await session.SendAsync(Prompt, TestContext.Current.CancellationToken);
+            await reporter.FinishAsync(delivery.Result?.Text);
+        }
+
+        var finished = Assert.Single(live.OfType<ToolCallChanged>());
+        Assert.Equal((ToolCallState.Failed, "denied"), (finished.Status, finished.Outcome));
+        var replay = await SessionReplay.ReadAsync(runtime, session.Id, tools, cancellationToken: TestContext.Current.CancellationToken);
+        var result = Assert.Single(replay.Updates.OfType<ToolCallChanged>());
+        Assert.Equal((ToolCallState.Failed, "denied"), (result.Status, result.Outcome));
+        var approval = Assert.IsType<CallApproval>(result.Approval);
+        Assert.Equal((false, true, "once", "do not write scripts"), (approval.Approved, approval.Answered, approval.Scope, approval.Note));
+        Assert.Equal("user: denied (once)", approval.Reason);
+
+        // The conversation alone (ACP's session/load) stays as it was: a failed call, no approval.
+        var transcript = await SessionReplay.ReadAsync(runtime, session.Id, tools, ReplayOptions.Transcript,
+            cancellationToken: TestContext.Current.CancellationToken);
+        var plain = Assert.Single(transcript.Updates.OfType<ToolCallChanged>());
+        Assert.Equal((ToolCallState.Failed, null, null), (plain.Status, plain.Outcome, plain.Approval));
+    }
+
     [Fact]
     public void ATitleNamesTheTargetOnOneLineAndCutsALongOne()
     {
