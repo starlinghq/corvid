@@ -125,7 +125,7 @@ public sealed class ChatTests
         Assert.Contains("/model picks a model", output, StringComparison.Ordinal);
         Assert.Contains("generator: fake-gen@cpu", output, StringComparison.Ordinal);
         Assert.Contains("Switch generator to 2 fake-gen-large (Enter keeps it) ›", output, StringComparison.Ordinal);
-        Assert.Contains("generator: fake-gen@cpu → fake-gen-large@cpu.", output, StringComparison.Ordinal);
+        Assert.Contains("generator: fake-gen@cpu → fake-gen-large@cpu for this session.", output, StringComparison.Ordinal);
     }
 
     [Fact]
