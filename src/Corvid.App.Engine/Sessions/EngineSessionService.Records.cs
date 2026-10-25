@@ -250,14 +250,15 @@ public sealed partial class EngineSessionService
             if (_disposed)
                 return;
             if (_channels.TryGetValue(id, out var channel))
-                Publish(channel, _ => [new TitleChanged(titled.Title) { Generated = titled.Source == TitleSources.Generated, At = _time.GetUtcNow() }]);
+                // No time: a title is about the session, not activity in it, so the rail's time since activity stays.
+                Publish(channel, _ => [new TitleChanged(titled.Title) { Generated = titled.Source == TitleSources.Generated }]);
             Refresh(runtime, id);
         }
 
         void OnRecap(string id, SessionRecapped recap)
         {
             if (!_disposed && _channels.TryGetValue(id, out var channel))
-                Publish(channel, _ => [Recap(recap, _time.GetUtcNow())]);
+                Publish(channel, _ => [Recap(recap, default)]);
         }
 
         runtime.TitleChanged += OnTitle;

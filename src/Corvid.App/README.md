@@ -56,9 +56,23 @@ gave). It does not show what the log does not keep: the generator and tokens of 
 ended beyond "answered" (an interrupted turn reads "the log holds no answer"), the session's taint, a call's elapsed
 time, the rule text a session or always answer wrote, a call refused without a prompt (the hardline list, a remembered
 denial, no approver) as "denied" rather than "failed", and the reason for denials logged before `approval_resolved`
-carried it (`note`). The composer's `!` shell and `#` memory lines are not built (docs/plan/tui.md §4.1), so the
-placeholder leaves them out: a one-line message starting with either is refused with a notice and stays in the composer;
-text of more than one line (pasted notes under a Markdown heading) and a Markdown image are sent. A rollback from Rewind
+carried it (`note`). The composer's mode lines (A4, docs/plan/tui.md §4.1) are read by the host's `ComposerLine`, as
+`corvid chat` reads them: `#fact` is staged at once through memory's gated write path (a "Staged for review" notice
+with a review link; it starts no turn and the model never sees it), `!command` is a turn of its own that runs the command
+as the person's `shell` call through the approval card, the sandbox and the checkpoints with no generator call (its output
+is in the conversation for the next message), and `!!command` does the same with the message, call and output kept out
+of every later prompt, compaction, the decider's recent events and the episodic index (the log keeps them). Only a
+one-line message is a mode line: text of more than one line (pasted notes under a Markdown heading) and a Markdown image
+are sent; a mark with nothing after it is refused with what to type, and the draft stays.
+
+Titles, recaps, pins and drafts (A4, G-6 and G-7): a session's title is its rename, else the one the local generator
+wrote after its first exchange (never a cloud generator), else its first message; the header's ••• menu renames it, pins
+it to the rail and asks for a recap, and the CLI's `/rename`, `/pin`, `/recap` and `/sessions` do the same over the same
+log and `ui.db`. Drafts (with the one put aside by `Ctrl+S`) are written to `ui.db` once the composer has been still for
+0.75 s and come back after a restart; the CLI shows the app's draft when it resumes the session. Opening a session the
+person last saw over an hour ago (`Corvid:Sessions:RecapAfterMinutes`) recaps what happened meanwhile ("While you were
+away"). Settings › Appearance, Notifications and Layout are kept in `ui.db`; the window applies the layout ones (rail or
+dock hidden, Focus, Board) when it starts. A rollback from Rewind
 to before a call keeps that call's turn and its message, as the kernel does (it goes back to just before the call): the
 call and what came after it in the turn leave, and so do the later turns, and the open transcript then reads as a replay
 of the log would.
