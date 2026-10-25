@@ -336,7 +336,8 @@
       "type": "approval_resolved",
       "approval_id": "0659460c521042349af659a34910ff73",
       "approved": true,
-      "reason": "user: approved (once)"
+      "reason": "user: approved (once)",
+      "scope": "once"
     },
     {
       "type": "decision_outcome_recorded",
