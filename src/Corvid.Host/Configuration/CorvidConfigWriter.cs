@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Corvid.Abstractions.IO;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Configuration.Json;
 using Microsoft.Extensions.Options;
@@ -411,18 +412,19 @@ public sealed class CorvidConfigWriter(CorvidConfigFile file, IConfiguration con
                 Directory.CreateDirectory(directory);
                 return new FileStream(path, options);
             }
-            catch (IOException) when (waited.Elapsed < LockTimeout)
+            catch (IOException exception) when (FileLocks.IsHeldElsewhere(exception) && waited.Elapsed < LockTimeout)
             {
                 Thread.Sleep(LockPoll);
             }
-            catch (IOException exception)
+            catch (IOException exception) when (FileLocks.IsHeldElsewhere(exception))
             {
                 busy = $"Another Corvid process is writing {file.Path} (it holds {path}), so nothing was written; try again in a moment. ({exception.Message})";
                 return null;
             }
-            catch (UnauthorizedAccessException exception)
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                busy = $"{path} cannot be opened to lock {file.Path}, so nothing was written: {exception.Message}";
+                // A read-only directory or file system refuses at once and for good: no other process is involved.
+                busy = $"{file.Path} cannot be locked for writing, so nothing was written: {FileLocks.Unopenable(path, exception)}.";
                 return null;
             }
         }

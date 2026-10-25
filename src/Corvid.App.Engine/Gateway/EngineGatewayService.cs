@@ -57,6 +57,25 @@ public sealed class EngineGatewayService : IGatewayService, IDisposable
         _engine = engine;
         _changed = new ChangeSignal(dispatcher, () => Changed?.Invoke(this, EventArgs.Empty));
         _work.Track(SubscribeAsync());
+        _engine.Started += OnEngineStarted;
+    }
+
+    /// <summary>
+    /// A runtime that could not start at first (models were missing) started later: its gateway is a new one, so the page
+    /// hears it from now on and shows it.
+    /// </summary>
+    private void OnEngineStarted(CorvidRuntime runtime)
+    {
+        Action? unsubscribe;
+        lock (_gate)
+        {
+            if (_disposed)
+                return;
+            (unsubscribe, _unsubscribe) = (_unsubscribe, null);
+        }
+        unsubscribe?.Invoke();
+        _work.Track(SubscribeAsync());
+        _changed.Raise();
     }
 
     /// <summary>Waits for the subscription to the hosted gateway (tests).</summary>
@@ -208,6 +227,7 @@ public sealed class EngineGatewayService : IGatewayService, IDisposable
             _disposed = true;
             (unsubscribe, _unsubscribe) = (_unsubscribe, null);
         }
+        _engine.Started -= OnEngineStarted;
         unsubscribe?.Invoke();
         _changed.Dispose();
     }

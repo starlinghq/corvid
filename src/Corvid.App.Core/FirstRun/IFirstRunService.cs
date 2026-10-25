@@ -52,6 +52,19 @@ public sealed record SetupChoices(string Workspace, ApprovalMode? Mode, string? 
 public sealed record CurrentSetup(ApprovalMode? Mode, string? Posture)
 {
     public static CurrentSetup None { get; } = new(null, null);
+
+    /// <summary>
+    /// The value this run's environment or <c>--set</c> gives the approval mode (<c>CORVID__Approvals__Mode</c>), over
+    /// corvid.json: a mode the first run writes reaches the file, and this run (and every run with the same override) keeps
+    /// the override's. Null when nothing overrides it.
+    /// </summary>
+    public string? ModeOverride { get; init; }
+
+    /// <summary>The override of <c>Corvid:Privacy:Cloud</c>, as <see cref="ModeOverride"/>; null when nothing overrides it.</summary>
+    public string? PostureOverride { get; init; }
+
+    /// <summary>The override of <c>Corvid:Workspace</c>, as <see cref="ModeOverride"/>; null when nothing overrides it.</summary>
+    public string? WorkspaceOverride { get; init; }
 }
 
 /// <summary>

@@ -147,6 +147,17 @@ public interface ISessionService
     event EventHandler<SessionSummary>? SessionChanged;
 
     /// <summary>
+    /// The whole list may differ from the last <see cref="ListAsync"/>: the engine started after the window opened (First
+    /// run's downloads finished), so a list that failed then can be read now. Raised on the UI thread. Added in A4 as a
+    /// default member that is never raised (the demo lists at once).
+    /// </summary>
+    event EventHandler? ListChanged
+    {
+        add { }
+        remove { }
+    }
+
+    /// <summary>
     /// Opens a session: its history, then each later update through <paramref name="onUpdate"/> on the UI thread, in
     /// order, until the subscription is disposed.
     /// </summary>
@@ -170,6 +181,12 @@ public interface ISessionService
 
     /// <summary>Delivers a message at the running turn's next step checkpoint, before the generator sees it (Ctrl+Enter, K-3).</summary>
     Task SteerAsync(string sessionId, string text, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Whether <see cref="SteerAsync"/> reaches a running turn here: the turn strip offers Ctrl+Enter only when it does, and
+    /// Ctrl+Enter queues like Enter otherwise. Added in A4 as a default member (the demo steers); an engine without K-3 says false.
+    /// </summary>
+    bool CanSteer => true;
 
     /// <summary>Interrupts the running turn (Esc): the work so far stays, open prompts are denied, and the queue goes next.</summary>
     Task InterruptAsync(string sessionId, CancellationToken cancellationToken = default);

@@ -24,4 +24,32 @@ public sealed class SessionHubTests
 
         Assert.Equal("2 h", idle.When);
     }
+
+    [Fact]
+    public async Task SendIsDisabledWithNoSessionOpenAndSendsTheOpenSessionsDraft()
+    {
+        var time = ManualTimeProvider.Demo();
+        var dispatcher = new InlineDispatcher();
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar);
+
+        // No engine, no session: the Send buttons have nothing to send to.
+        var empty = new SessionsViewModel(shell);
+        Assert.False(empty.HasSession);
+        Assert.False(empty.SendCommand.CanExecute(null));
+
+        using var sessions = new DemoSessionService(dispatcher, time, DemoScene.Main);
+        using var hub = new SessionHub(sessions, dispatcher, time, shell, bar);
+        var area = new SessionsViewModel(shell, hub);
+        var changes = 0;
+        area.SendCommand.CanExecuteChanged += (_, _) => changes++;
+        await hub.StartAsync("cli-9f2e", null, TestContext.Current.CancellationToken);
+
+        Assert.True(area.HasSession);
+        Assert.True(changes > 0);
+        Assert.True(area.SendCommand.CanExecute(null));
+        area.Session!.Draft = "also check the hosts";
+        area.SendCommand.Execute(null);
+        Assert.Equal("", area.Session.Draft);
+    }
 }

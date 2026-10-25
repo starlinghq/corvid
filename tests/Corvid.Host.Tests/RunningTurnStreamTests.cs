@@ -80,10 +80,10 @@ public sealed class RunningTurnStreamTests
         Assert.True(live.IndexOf(started) < live.IndexOf(tail) && live.IndexOf(tail) < live.IndexOf(finished));
         Assert.True(live.IndexOf(steered) < live.FindIndex(update => update is AnswerChunk));
 
-        // The log holds the steer and the call's step; a tail is live only.
+        // The log holds the steer and the call's step; a tail is live only. (The checkpoints' decisions replay too, A4 parity.)
         var replay = await SessionReplay.ReadAsync(runtime, session.Id, new ToolPresentation(runtime), cancellationToken: Ct);
         Assert.Equal(["PromptSent", "TurnStepped", "ToolCallStarted", "ToolCallChanged", "SteerSent", "AnswerChunk"],
-            replay.Updates.Select(update => update.GetType().Name));
+            replay.Updates.Where(update => update is not DecisionsMade).Select(update => update.GetType().Name));
         Assert.Equal(new TurnStepped(1, null), replay.Updates.OfType<TurnStepped>().Single() with { At = default });
         Assert.Equal(steered with { At = default }, replay.Updates.OfType<SteerSent>().Single() with { At = default });
         Assert.DoesNotContain(replay.Updates, update => update is ToolCallChanged { Tail: not null });

@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.Json;
+using Corvid.Abstractions.IO;
 
 namespace Corvid.Approvals;
 
@@ -224,6 +225,9 @@ public sealed class JsonFileApprovalRuleStore : IApprovalRuleStore
         }
     }
 
+    /// <summary>Test seam: called each time a change finds the lock held by another handle, before it waits again.</summary>
+    internal Action? Waiting { get; set; }
+
     /// <summary>The lock file every store on <paramref name="path"/> takes for a change.</summary>
     internal static string LockPath(string path) => Path.GetFullPath(path) + ".lock";
 
@@ -254,9 +258,10 @@ public sealed class JsonFileApprovalRuleStore : IApprovalRuleStore
     {
         ArgumentNullException.ThrowIfNull(rules);
         var added = rules.ToArray();
+        // The file lock first, outside the gate: a wait on another process's change never holds up a rule check here.
+        using var held = AcquireFileLock();
         lock (_gate)
         {
-            using var held = AcquireFileLock();
             var current = ReadLocked();
             var updated = current;
             foreach (var rule in added)
@@ -275,9 +280,9 @@ public sealed class JsonFileApprovalRuleStore : IApprovalRuleStore
     public bool Remove(ApprovalRule rule)
     {
         ArgumentNullException.ThrowIfNull(rule);
+        using var held = AcquireFileLock();
         lock (_gate)
         {
-            using var held = AcquireFileLock();
             var current = ReadLocked();
             var kept = current.RemoveAll(stored => stored.Equals(rule));
             if (kept.Length == current.Length)
@@ -289,29 +294,39 @@ public sealed class JsonFileApprovalRuleStore : IApprovalRuleStore
 
     /// <summary>
     /// The cross-process lock: the lock file opened with no sharing, which .NET takes as an exclusive <c>flock</c> on Unix
-    /// (and a share-none open on Windows), so it excludes another store on the same file in this process too.
+    /// (and a share-none open on Windows), so it excludes another store on the same file in this process too. Only a lock
+    /// another handle holds is waited on; a lock file that cannot be opened (a read-only directory or file system) refuses at
+    /// once and says why.
     /// </summary>
+    /// <exception cref="TimeoutException">Another process held the lock past the lock timeout.</exception>
+    /// <exception cref="UnauthorizedAccessException">The lock file cannot be opened, with why.</exception>
     private FileStream AcquireFileLock()
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
         var deadline = Environment.TickCount64 + (long)_lockTimeout.TotalMilliseconds;
         var wait = 2;
         while (true)
         {
             try
             {
+                Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
                 return new FileStream(_lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.None);
             }
-            catch (IOException) when (Environment.TickCount64 < deadline)
+            catch (IOException exception) when (FileLocks.IsHeldElsewhere(exception) && Environment.TickCount64 < deadline)
             {
+                Waiting?.Invoke();
                 Thread.Sleep(wait);
                 wait = Math.Min(wait * 2, 100);
             }
-            catch (IOException exception)
+            catch (IOException exception) when (FileLocks.IsHeldElsewhere(exception))
             {
                 throw new TimeoutException(
                     $"Another Corvid process held {_lockPath} for over {_lockTimeout.TotalSeconds:0.#} seconds; the approval rules were not changed.",
                     exception);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                throw new UnauthorizedAccessException(
+                    $"The approval rules were not changed: {FileLocks.Unopenable(_lockPath, exception)}.", exception);
             }
         }
     }

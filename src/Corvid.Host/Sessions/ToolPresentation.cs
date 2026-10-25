@@ -61,6 +61,9 @@ public sealed class ToolPresentation(CorvidRuntime runtime)
         };
     }
 
+    /// <summary>The tool reads the network: its result is outside content, which taints the session (plan §10.3).</summary>
+    public bool Network(string tool) => runtime.Tools.TryGet(tool, out var function) && function.Descriptor.Risk.Network;
+
     /// <summary>What a call acts on, in a line: its command line, path, URL, query or name; null when it names none.</summary>
     public static string? Target(JsonElement? arguments) =>
         arguments is { ValueKind: JsonValueKind.Object } args

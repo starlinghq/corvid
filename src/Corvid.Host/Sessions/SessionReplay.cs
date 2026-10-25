@@ -1,6 +1,9 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using Corvid.Abstractions.Events;
+using Corvid.Fabric;
 using Corvid.Host.Composition;
+using Corvid.Host.Telemetry;
 using Corvid.Kernel.Events;
 
 namespace Corvid.Host.Sessions;
@@ -25,8 +28,13 @@ namespace Corvid.Host.Sessions;
 /// completed: another process is still working on it (G-12's tail of a session that process drives).
 /// </param>
 /// <param name="After">Only what the log holds past this position: the next part of a session read before (G-12's tail).</param>
+/// <param name="Decisions">Each checkpoint's decisions (<see cref="DecisionsMade"/>), from the <c>Decision</c> events.</param>
+/// <param name="Generators">Each turn's generator on its <see cref="PromptSent"/>, from its first decision's TurnState.</param>
+/// <param name="Taint">Where outside content entered and where the user's next message cleared it (<see cref="TaintNoted"/>).</param>
+/// <param name="Compactions">Each compaction's marker and record (<see cref="CompactionLogged"/>).</param>
 public sealed record ReplayOptions(bool LedgerDiffs = true, bool Plans = true, bool Checkpoints = true, bool Approvals = true,
-    bool UnfinishedCalls = true, bool Steps = true, bool Questions = true, bool UnfinishedAsRunning = false, long After = 0)
+    bool UnfinishedCalls = true, bool Steps = true, bool Questions = true, bool UnfinishedAsRunning = false, long After = 0,
+    bool Decisions = true, bool Generators = true, bool Taint = true, bool Compactions = true)
 {
     /// <summary>Everything a live turn reports that the log holds.</summary>
     public static ReplayOptions Full { get; } = new();
@@ -36,7 +44,7 @@ public sealed record ReplayOptions(bool LedgerDiffs = true, bool Plans = true, b
     /// exchanges keep a call without a result as completed).
     /// </summary>
     public static ReplayOptions Transcript { get; } = new(LedgerDiffs: false, Plans: false, Checkpoints: false, Approvals: false, UnfinishedCalls: false,
-        Steps: false, Questions: false);
+        Steps: false, Questions: false, Decisions: false, Generators: false, Taint: false, Compactions: false);
 }
 
 /// <summary>A session read back from the log: its updates in order, and the log head they run to.</summary>
@@ -45,11 +53,14 @@ public sealed record SessionHistory(string SessionId, long Head, ImmutableArray<
 
 /// <summary>
 /// A stored session as the same updates a live turn reports (K-10): the conversation as it stands (compactions expanded,
-/// undone turns left out), so a resumed session and a live one look alike on every surface. Steers (K-3) replay in the turn
-/// that took them, a clarifying question (K-6) after the answer that carries it, and each step from its calls' round;
-/// running tails (K-2) are live only. Decisions are not replayed:
-/// the log keeps each answer, not the checkpoint that asked it. An asked call carries its approval's answer. The log has
-/// no record of how a turn ended (an interrupt) or of the session's taint, so a replay shows neither.
+/// undone turns left out), so a resumed session and a live one look alike on every surface. With
+/// <see cref="ReplayOptions.Full"/> it also carries what a live turn shows beside the conversation, as far as the log holds
+/// it: each checkpoint's decisions (grouped from the <c>Decision</c> events), each turn's generator (from its first
+/// decision's TurnState), an asked call's approval answer and assessment, where a network read tainted the session, each
+/// compaction's marker, the steers (K-3) in the turn that took them, a clarifying question (K-6) after the answer that
+/// carries it, and each step from its calls' round. The log has no record of how a turn ended: a turn with no answer was
+/// interrupted, cut by a rollback or stopped with its process, and a surface shows it as interrupted. Thoughts, token usage
+/// and running tails (K-2) are live only.
 /// </summary>
 public static class SessionReplay
 {
@@ -81,6 +92,8 @@ public static class SessionReplay
             ? stored.Values.Select(item => item.Payload).OfType<ApprovalRequested>().Select(request => request.CallId).OfType<string>()
                 .ToHashSet(StringComparer.Ordinal)
             : [];
+        var generators = options.Generators ? Generators(stored.Values, snapshot.IsVisible) : [];
+        var tainted = false;
 
         var items = new List<(long Sequence, SessionStreamUpdate Update)>();
         int? round = null;
@@ -95,14 +108,30 @@ public static class SessionReplay
                     ToolCallIssued { Round: { } step and > 0 } => step,
                     _ => round,
                 };
+                // And its taint was reported then: a later message clears it, a later network read adds none.
+                if (entry.Content is UserMessage)
+                    tainted = false;
+                else if (entry.Content is ToolResult { CallId: var readId } && calls.GetValueOrDefault(readId) is { } read && tools.Network(read.ToolName))
+                    tainted = true;
                 continue;
             }
             var at = stored.TryGetValue(entry.FromSequence, out var item) ? item.RecordedAt : default;
             switch (entry.Content)
             {
                 case UserMessage user:
-                    items.Add((entry.FromSequence, new PromptSent(user.Text, entry.FromSequence) { At = at }));
+                    items.Add((entry.FromSequence, new PromptSent(user.Text, entry.FromSequence)
+                    {
+                        At = at,
+                        Generator = generators.GetValueOrDefault(entry.FromSequence),
+                    }));
                     round = null;
+                    // The user's own message clears taint (plan §10.3), as the live turn reports when it begins. The log does not
+                    // say whose message it was, so a guest's or a job's (which keeps the taint) reads as the user's.
+                    if (options.Taint && tainted)
+                    {
+                        tainted = false;
+                        items.Add((entry.FromSequence, new TaintNoted(false, null) { At = at }));
+                    }
                     break;
                 // K-3: a steer is part of the turn that took it.
                 case UserSteered steer:
@@ -168,6 +197,12 @@ public static class SessionReplay
                         OutputText = ToolPresentation.ResultText(result.Result),
                         Diffs = [.. diffs],
                     }));
+                    // A network read's result is outside content: the session is tainted from here until the user speaks.
+                    if (options.Taint && !tainted && calls.GetValueOrDefault(result.CallId) is { } read && tools.Network(read.ToolName))
+                    {
+                        tainted = true;
+                        items.Add((entry.FromSequence, new TaintNoted(true, $"{read.ToolName} {ToolPresentation.Target(read.Arguments)}".Trim()) { At = at }));
+                    }
                     break;
             }
         }
@@ -184,6 +219,11 @@ public static class SessionReplay
                 At = item.RecordedAt,
             }));
         }
+        if (options.Decisions)
+            items.AddRange(Decisions(stored.Values, snapshot.IsVisible, runtime.Fabric.Policy.Catalogue).Where(item => item.Sequence > options.After));
+        if (options.Compactions)
+            items.AddRange(Compactions(stored.Values, snapshot).Where(item => item.Sequence > options.After));
+
         if (options.Plans)
             foreach (var item in stored.Values.Where(item => item.Payload is TodosSet && item.Sequence > options.After && snapshot.IsVisible(item.Sequence)))
                 items.Add((item.Sequence, new PlanChanged(((TodosSet)item.Payload).Items) { At = item.RecordedAt }));
@@ -196,7 +236,9 @@ public static class SessionReplay
 
         // The transcript in its own order; plans and checkpoints placed among it by position (a stable sort, so the
         // transcript's order holds for entries at one position).
-        var ordered = options.Plans || options.Checkpoints || questions ? items.OrderBy(item => item.Sequence).ToList() : items;
+        var ordered = options.Plans || options.Checkpoints || options.Decisions || options.Compactions || questions
+            ? items.OrderBy(item => item.Sequence).ToList()
+            : items;
         return new SessionHistory(sessionId, head, [.. ordered.Select(item => item.Update)]);
     }
 
@@ -227,6 +269,152 @@ public static class SessionReplay
             }
         }
         return answers;
+    }
+
+    /// <summary>
+    /// Each turn's generator, by its user message's position: the <c>generator</c> field of the TurnState its first decision
+    /// was asked with ("qwen3.5-0.8b local, 8k" gives "qwen3.5-0.8b"). A state cut to fit its budget ("qwen3.5-0.…") names
+    /// no model, and a turn with no decision (a job's script) has none.
+    /// </summary>
+    private static Dictionary<long, string> Generators(IEnumerable<StoredEvent> stored, Func<long, bool> visible)
+    {
+        var generators = new Dictionary<long, string>();
+        long? turn = null;
+        foreach (var item in stored.OrderBy(item => item.Sequence))
+        {
+            if (!visible(item.Sequence))
+                continue;
+            switch (item.Payload)
+            {
+                case UserMessage:
+                    turn = item.Sequence;
+                    break;
+                case Decision { State: { ValueKind: JsonValueKind.Object } state } when turn is { } at && !generators.ContainsKey(at):
+                    if (state.TryGetProperty("generator", out var described) && described.ValueKind == JsonValueKind.String
+                        && GeneratorName(described.GetString()) is { } name)
+                        generators[at] = name;
+                    break;
+            }
+        }
+        return generators;
+    }
+
+    /// <summary>The model a TurnState's generator line names ("qwen3.5-0.8b@2 local, 8k" gives "qwen3.5-0.8b"); null when cut short.</summary>
+    internal static string? GeneratorName(string? described)
+    {
+        if (string.IsNullOrWhiteSpace(described))
+            return null;
+        var space = described.IndexOf(' ', StringComparison.Ordinal);
+        // No space: the line was cut inside the model's id, which then names no model.
+        if (space <= 0)
+            return null;
+        var id = described[..space];
+        var at = id.IndexOf('@', StringComparison.Ordinal);
+        return at > 0 ? id[..at] : id;
+    }
+
+    /// <summary>
+    /// The decisions in the log as the checkpoints that asked them: one checkpoint appends its questions together, in key
+    /// order, all asked over one TurnState, so a run of <c>Decision</c> events with the same state and no question twice is
+    /// one checkpoint. Its name is the checkpoint every question of the run is asked at; for a run whose questions are asked
+    /// at more than one (the <c>tool</c> question alone), the turn's first run is ingress and a later one a step. An answer
+    /// acted when its action is not the question's below-floor one.
+    /// </summary>
+    private static IEnumerable<(long Sequence, SessionStreamUpdate Update)> Decisions(IEnumerable<StoredEvent> stored, Func<long, bool> visible,
+        QuestionCatalogue catalogue)
+    {
+        var run = new List<(StoredEvent Item, Decision Decision)>();
+        var firstInTurn = true;
+        var output = new List<(long, SessionStreamUpdate)>();
+
+        void Flush()
+        {
+            if (run.Count == 0)
+                return;
+            var checkpoints = Shared(run.Select(pair => pair.Decision.QuestionId), catalogue);
+            // A question the catalogue no longer has names no checkpoint: the first one its neighbours are asked at, or a step.
+            if (checkpoints.Count == 0)
+                checkpoints = [.. run.SelectMany(pair => catalogue.TryResolve(pair.Decision.QuestionId, out var known) ? known.Checkpoints : []).Take(1)];
+            if (checkpoints.Count == 0)
+                checkpoints = [Checkpoint.Step];
+            var checkpoint = checkpoints.Count == 1 ? checkpoints[0]
+                : checkpoints.Contains(Checkpoint.Ingress) && firstInTurn ? Checkpoint.Ingress
+                : checkpoints.Contains(Checkpoint.Step) ? Checkpoint.Step
+                : checkpoints.Count > 0 ? checkpoints[0] : (Checkpoint?)null;
+            var decider = run.Select(pair => pair.Decision.Decider).FirstOrDefault(name => name is { Length: > 0 } && !name.StartsWith("skipped", StringComparison.Ordinal))
+                ?? run[0].Decision.Decider ?? "";
+            var decisions = new CheckpointDecisions(checkpoint is { } named ? DecisionFabric.CheckpointWireName(named) : "", decider,
+                [.. run.Select(pair => new QuestionDecision(pair.Decision.QuestionId, pair.Decision.Confidence, pair.Decision.Action,
+                    catalogue.TryResolve(pair.Decision.QuestionId, out var question) && !string.Equals(pair.Decision.Action, question.BelowFloor, StringComparison.Ordinal)))]);
+            output.Add((run[0].Item.Sequence, new DecisionsMade(decisions) { At = run[0].Item.RecordedAt }));
+            firstInTurn = false;
+            run.Clear();
+        }
+
+        long previous = -1;
+        foreach (var item in stored.OrderBy(item => item.Sequence))
+        {
+            if (!visible(item.Sequence))
+                continue;
+            if (item.Payload is Decision decision)
+            {
+                // Two checkpoints back to back over one state (a step's, then egress's) part where no checkpoint asks both.
+                var continues = run.Count > 0 && item.Sequence == previous + 1
+                    && SameState(run[0].Decision.State, decision.State)
+                    && run.All(pair => !string.Equals(pair.Decision.QuestionId, decision.QuestionId, StringComparison.Ordinal))
+                    && Shared(run.Select(pair => pair.Decision.QuestionId).Append(decision.QuestionId), catalogue).Count > 0;
+                if (!continues)
+                    Flush();
+                run.Add((item, decision));
+            }
+            else
+            {
+                Flush();
+                if (item.Payload is UserMessage)
+                    firstInTurn = true;
+            }
+            previous = item.Sequence;
+        }
+        Flush();
+        return output;
+    }
+
+    /// <summary>The checkpoints every one of the questions is asked at; a question the catalogue lacks asks at none.</summary>
+    private static List<Checkpoint> Shared(IEnumerable<string> questions, QuestionCatalogue catalogue)
+    {
+        IEnumerable<Checkpoint>? shared = null;
+        foreach (var id in questions)
+        {
+            var at = catalogue.TryResolve(id, out var question) ? question.Checkpoints : [];
+            shared = shared is null ? at : shared.Intersect(at);
+        }
+        return [.. shared ?? []];
+    }
+
+    private static bool SameState(JsonElement? first, JsonElement? second) =>
+        (first, second) switch
+        {
+            (null, null) => true,
+            ({ } a, { } b) => a.GetRawText() == b.GetRawText(),
+            _ => false,
+        };
+
+    /// <summary>
+    /// The compactions the conversation holds (a rewind may have taken one back, and the projection drops a malformed one),
+    /// each with whether a later <c>CompactionExpanded</c> shows its range again.
+    /// </summary>
+    private static IEnumerable<(long Sequence, SessionStreamUpdate Update)> Compactions(IEnumerable<StoredEvent> stored, SessionSnapshot snapshot)
+    {
+        var issues = snapshot.Issues.Select(issue => issue.Sequence).ToHashSet();
+        var visible = stored.Where(item => snapshot.IsVisible(item.Sequence) && !issues.Contains(item.Sequence)).OrderBy(item => item.Sequence).ToList();
+        var expanded = visible.Select(item => item.Payload).OfType<CompactionExpanded>().Select(item => item.CompactedSequence).ToHashSet();
+        return visible.Where(item => item.Payload is Compacted)
+            .Select(item => (item.Sequence, (SessionStreamUpdate)new CompactionLogged((Compacted)item.Payload, item.Sequence)
+            {
+                At = item.RecordedAt,
+                Expanded = expanded.Contains(item.Sequence),
+            }))
+            .ToList();
     }
 
     /// <summary>

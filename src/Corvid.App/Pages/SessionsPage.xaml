@@ -1037,7 +1037,7 @@
                    AutomationProperties.Name="Message to Corvid" />
           <controls:CorvidButton x:Name="PhoneSendButton" Grid.Column="1" Variant="Primary" Visibility="Collapsed" VerticalAlignment="Bottom"
                                  Width="44" Height="44" Padding="0" HorizontalContentAlignment="Center"
-                                 Command="{x:Bind ViewModel.Session.SubmitCommand, Mode=OneWay, FallbackValue={x:Null}}"
+                                 Command="{x:Bind ViewModel.SendCommand}"
                                  AutomationProperties.Name="Send" ToolTipService.ToolTip="Send; queued while a turn runs">
             <controls:Icon Kind="Send" Foreground="{ThemeResource CorvidOnAccent}" />
           </controls:CorvidButton>
@@ -1055,7 +1055,7 @@
                      VerticalAlignment="Center" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
           <TextBlock Grid.Column="2" Text="{x:Bind ViewModel.Session.TokenEstimate, Mode=OneWay, FallbackValue=''}" Style="{StaticResource CorvidSmallText}"
                      VerticalAlignment="Center" TextWrapping="NoWrap" />
-          <controls:CorvidButton x:Name="SendButton" Grid.Column="3" Variant="Primary" Command="{x:Bind ViewModel.Session.SubmitCommand, Mode=OneWay, FallbackValue={x:Null}}"
+          <controls:CorvidButton x:Name="SendButton" Grid.Column="3" Variant="Primary" Command="{x:Bind ViewModel.SendCommand}"
                                  Padding="12,0,8,0" AutomationProperties.Name="Send" ToolTipService.ToolTip="Send (Enter); queued while a turn runs">
             <StackPanel Orientation="Horizontal" Spacing="6">
               <TextBlock Text="Send" VerticalAlignment="Center" />

@@ -20,7 +20,14 @@ public abstract record SessionStreamUpdate
 
 /// <summary>The user's message (ACP <c>user_message_chunk</c>, whole), from its <c>UserMessage</c> event.</summary>
 /// <param name="Sequence">The event's position in the log: a fork point.</param>
-public sealed record PromptSent(string Text, long Sequence) : SessionStreamUpdate;
+public sealed record PromptSent(string Text, long Sequence) : SessionStreamUpdate
+{
+    /// <summary>
+    /// The generator the turn ran on, as its first decision's TurnState names it ("qwen3.5-0.8b"): replay only, with
+    /// <see cref="ReplayOptions.Generators"/>; null live (the surface knows its slot) and when the log has no decision for it.
+    /// </summary>
+    public string? Generator { get; init; }
+}
 
 /// <summary>
 /// A message the person steered into a running turn (K-3), from its <c>UserSteered</c> event: part of the turn it was taken
@@ -165,8 +172,32 @@ public sealed record CallApproval(string ApprovalId, bool Approved, string Reaso
 /// <summary>The model's task list, replaced whole (ACP <c>plan</c>), from a <c>TodosSet</c> event.</summary>
 public sealed record PlanChanged(ImmutableArray<TodoItem> Items) : SessionStreamUpdate;
 
-/// <summary>A checkpoint's decisions, from the feed (live only: the log has each answer but not its checkpoint).</summary>
+/// <summary>
+/// A checkpoint's decisions: live from the feed; on replay (<see cref="ReplayOptions.Decisions"/>) from the
+/// <c>Decision</c> events one checkpoint appended together, its name read from the catalogue's questions.
+/// </summary>
 public sealed record DecisionsMade(CheckpointDecisions Decisions) : SessionStreamUpdate;
+
+/// <summary>
+/// Outside content entered the conversation, or the user's next message cleared it (plan §10.3): replay only
+/// (<see cref="ReplayOptions.Taint"/>), from a network tool's result in the log and the next user message. Live, a surface
+/// reads the session's own taint as the turn goes. The log does not record taint from an untrusted description or a hub
+/// skill, so a replay shows the network reads only.
+/// </summary>
+/// <param name="Source">What brought it in: the tool and what it read ("web_fetch https://example.org").</param>
+public sealed record TaintNoted(bool Tainted, string? Source) : SessionStreamUpdate;
+
+/// <summary>
+/// A compaction recorded in the log (<c>Compacted</c>), replay only (<see cref="ReplayOptions.Compactions"/>): live, the
+/// surface that compacted reports its own result. The replay shows the conversation expanded, so the marker heads its
+/// record over the range it summarized.
+/// </summary>
+/// <param name="Sequence">The event's position; <see cref="Compacted.FromSequence"/> and <c>ThroughSequence</c> the range.</param>
+public sealed record CompactionLogged(Compacted Compaction, long Sequence) : SessionStreamUpdate
+{
+    /// <summary>A later <c>CompactionExpanded</c> shows the range expanded again.</summary>
+    public bool Expanded { get; init; }
+}
 
 /// <summary>A write-ledger checkpoint was recorded (<c>CheckpointTaken</c>), for a rewind timeline.</summary>
 public sealed record CheckpointLogged(CheckpointTaken Checkpoint, long Sequence) : SessionStreamUpdate;

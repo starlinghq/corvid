@@ -23,24 +23,33 @@ public sealed class AppEngine : IAsyncDisposable
     private readonly IHost _host;
     private readonly bool _ownsHost;
     private readonly CancellationTokenSource _lifetime;
-    private readonly Lazy<Task<ToolPresentation>> _tools;
-    private readonly Lazy<Task<HostedGateway?>> _gateway;
+    private readonly SemaphoreSlim _starting = new(1, 1);
+    private Lazy<Task<ToolPresentation>> _tools;
+    private Lazy<Task<HostedGateway?>> _gateway;
+    private Task<CorvidRuntime> _runtime;
+    private ImmutableArray<ModelAvailability> _missing;
+    private string? _failure;
     private StartupStep? _step;
     private int _disposed;
 
     private AppEngine(IHost host, bool ownsHost, Task<CorvidRuntime> runtime, ImmutableArray<ModelAvailability> missing, string? failure,
-        CancellationTokenSource lifetime, bool hostGateway)
+        CancellationTokenSource lifetime, bool hostGateway, bool hostStarted = false)
     {
         _host = host;
         _ownsHost = ownsHost;
-        Runtime = runtime;
-        MissingModels = missing;
-        StartFailure = failure;
+        _runtime = runtime;
+        _missing = missing;
+        _failure = failure;
         _lifetime = lifetime;
         HostsGateway = hostGateway;
-        _tools = new Lazy<Task<ToolPresentation>>(async () => new ToolPresentation(await RuntimeAsync().ConfigureAwait(false)));
-        _gateway = new Lazy<Task<HostedGateway?>>(HostGatewayAsync);
+        HostStarted = hostStarted;
+        _tools = NewTools();
+        _gateway = NewGateway();
     }
+
+    private Lazy<Task<ToolPresentation>> NewTools() => new(async () => new ToolPresentation(await RuntimeAsync().ConfigureAwait(false)));
+
+    private Lazy<Task<HostedGateway?>> NewGateway() => new(HostGatewayAsync);
 
     /// <summary>
     /// Whether this engine hosts the gateway (U-8, G-14): the app does when it is the engine, under the one-lock rule shared
@@ -48,17 +57,29 @@ public sealed class AppEngine : IAsyncDisposable
     /// </summary>
     public bool HostsGateway { get; }
 
+    /// <summary>The host started (its configuration passed the validator), so a runtime can be started over it again.</summary>
+    private bool HostStarted { get; }
+
     /// <summary>The host's services: <c>CorvidConfigWriter</c>, <c>ModelCatalogue</c>, <c>Doctor</c>, the options.</summary>
     public IServiceProvider Services => _host.Services;
 
-    /// <summary>The runtime as it starts; faulted when it cannot (<see cref="RuntimeAsync"/> says why in a sentence).</summary>
-    public Task<CorvidRuntime> Runtime { get; }
+    /// <summary>
+    /// The runtime as it starts; faulted when it cannot (<see cref="RuntimeAsync"/> says why in a sentence). A runtime that
+    /// could not start for want of models is started again by <see cref="StartAgainAsync"/>, which replaces this task.
+    /// </summary>
+    public Task<CorvidRuntime> Runtime => Volatile.Read(ref _runtime);
 
     /// <summary>Configured models the cache lacks, found before anything loaded; the head opens First run when there are any.</summary>
-    public ImmutableArray<ModelAvailability> MissingModels { get; }
+    public ImmutableArray<ModelAvailability> MissingModels => _missing;
 
     /// <summary>Why the runtime cannot start (invalid configuration, missing models), known before the window opens; null otherwise.</summary>
-    public string? StartFailure { get; }
+    public string? StartFailure => Volatile.Read(ref _failure);
+
+    /// <summary>
+    /// A runtime started by <see cref="StartAgainAsync"/> is up: services that subscribed to the runtime once (the
+    /// scheduler's runs) subscribe again, and the window lists its sessions. Raised from a pool thread.
+    /// </summary>
+    public event Action<CorvidRuntime>? Started;
 
     /// <summary>The stage the start is at, or null once the runtime is up (or could not start).</summary>
     public StartupStep? CurrentStep => Volatile.Read(ref _step);
@@ -109,24 +130,33 @@ public sealed class AppEngine : IAsyncDisposable
         if (!missing.IsEmpty)
         {
             var reason = Describe(new ModelsUnavailableException(missing));
-            return new AppEngine(host, ownsHost, Task.FromException<CorvidRuntime>(new ModelsUnavailableException(missing)), missing, reason, lifetime, false);
+            return new AppEngine(host, ownsHost, Task.FromException<CorvidRuntime>(new ModelsUnavailableException(missing)), missing, reason, lifetime,
+                hostGateway: true, hostStarted: true);
         }
 
         var started = new TaskCompletionSource<CorvidRuntime>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var engine = new AppEngine(host, ownsHost, started.Task, [], null, lifetime, hostGateway: true);
-        // Loading reads the models from disk for seconds; the window must not wait on it. Its outcome is the Runtime task,
-        // which every service and DisposeAsync awaits, so a failure is always observed.
+        var engine = new AppEngine(host, ownsHost, started.Task, [], null, lifetime, hostGateway: true, hostStarted: true);
+        engine.Load(factory, started, progress);
+        return engine;
+    }
+
+    /// <summary>
+    /// Loads the runtime on the pool: loading reads the models from disk for seconds, and the window must not wait on it. Its
+    /// outcome is the task given, which every service and DisposeAsync await, so a failure is always observed. The gateway
+    /// starts with the runtime (G-14), not when its page is first opened.
+    /// </summary>
+    private void Load(CorvidRuntimeFactory factory, TaskCompletionSource<CorvidRuntime> started, IProgress<StartupStep>? progress) =>
         _ = Task.Run(async () =>
         {
             try
             {
                 started.TrySetResult(await factory.StartAsync(new Relay(step =>
                 {
-                    engine.Report(step);
+                    Report(step);
                     progress?.Report(step);
-                }), lifetime.Token).ConfigureAwait(false));
+                }), _lifetime.Token).ConfigureAwait(false));
                 // G-14: the gateway starts with the runtime, not when its page is first opened.
-                _ = engine.GatewayAsync();
+                _ = GatewayAsync();
             }
             catch (Exception exception)
             {
@@ -134,10 +164,69 @@ public sealed class AppEngine : IAsyncDisposable
             }
             finally
             {
-                Volatile.Write(ref engine._step, null);
+                Volatile.Write(ref _step, null);
             }
         }, CancellationToken.None);
-        return engine;
+
+    /// <summary>
+    /// Starts the runtime again when it could not start for want of models (First run's or Models' downloads finished): the
+    /// cache is checked again and, when nothing configured is missing now, the runtime loads, so Sessions and every other
+    /// area work without restarting the app. True once a runtime is up (already, or now); false, with
+    /// <see cref="MissingModels"/> and <see cref="StartFailure"/> brought up to date, when models are still missing, the
+    /// configuration was refused at start, or the start failed again. Never replaces a runtime that is up or loading. The
+    /// configuration is the one the host read at start: what First run wrote since applies from the next start.
+    /// </summary>
+    public async Task<bool> StartAgainAsync(IProgress<StartupStep>? progress = null)
+    {
+        await _starting.WaitAsync().ConfigureAwait(false);
+        TaskCompletionSource<CorvidRuntime> started;
+        try
+        {
+            var current = Runtime;
+            if (!current.IsCompleted)
+            {
+                await ((Task)current).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+                return current.IsCompletedSuccessfully;
+            }
+            if (current.IsCompletedSuccessfully)
+                return true;
+            // A configuration the validator refused, or a host that never started, has no factory to start from.
+            if (!HostStarted || Volatile.Read(ref _disposed) != 0 || current.Exception?.GetBaseException() is not ModelsUnavailableException)
+                return false;
+            var factory = _host.Services.GetRequiredService<CorvidRuntimeFactory>();
+            var missing = await Task.Run(() => factory.CheckModels().ToImmutableArray()).ConfigureAwait(false);
+            if (!missing.IsEmpty)
+            {
+                _missing = missing;
+                Volatile.Write(ref _failure, Describe(new ModelsUnavailableException(missing)));
+                Volatile.Write(ref _runtime, Task.FromException<CorvidRuntime>(new ModelsUnavailableException(missing)));
+                return false;
+            }
+            started = new TaskCompletionSource<CorvidRuntime>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _missing = [];
+            Volatile.Write(ref _failure, null);
+            _tools = NewTools();
+            // The gateway waited on the runtime that could not start: it starts with this one (Load).
+            _gateway = NewGateway();
+            Volatile.Write(ref _runtime, started.Task);
+            Load(factory, started, progress);
+        }
+        finally
+        {
+            _starting.Release();
+        }
+
+        try
+        {
+            var runtime = await started.Task.ConfigureAwait(false);
+            Started?.Invoke(runtime);
+            return true;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            // The failure is the Runtime task's, which RuntimeAsync words for every page.
+            return false;
+        }
     }
 
     /// <summary>An engine that could not start: the reason in a sentence, for the window to show.</summary>

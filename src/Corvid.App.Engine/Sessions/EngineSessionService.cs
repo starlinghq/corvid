@@ -79,11 +79,28 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         _engine = engine;
         _dispatcher = dispatcher;
         _time = time;
+        _engine.Started += OnEngineStarted;
         _ = WatchJobsAsync();
         _ = WatchRecordsAsync();
     }
 
     public event EventHandler<SessionSummary>? SessionChanged;
+
+    /// <summary>Raised once a runtime that could not start at first (models missing) is up: the window lists its sessions.</summary>
+    public event EventHandler? ListChanged;
+
+    /// <summary>The runtime started after the window opened (First run's downloads): the scheduler's runs are heard, and the list read again.</summary>
+    private void OnEngineStarted(CorvidRuntime runtime)
+    {
+        if (_disposed)
+            return;
+        _ = WatchJobsAsync();
+        _dispatcher.Post(() =>
+        {
+            if (!_disposed)
+                ListChanged?.Invoke(this, EventArgs.Empty);
+        });
+    }
 
     /// <summary>The turns and summary refreshes in flight, for a test or a shutdown that waits for them; a turn the queue starts counts.</summary>
     public async Task IdleAsync()
@@ -369,6 +386,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     public void Dispose()
     {
         _disposed = true;
+        _engine.Started -= OnEngineStarted;
         UnwatchJobs();
         UnwatchRecords();
         StopTails();
@@ -449,6 +467,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 channel.Translator.MaxSteps = runtime.Options.Turn.MaxSteps;
                 channel.Translator.ContextWindow = session.Slots.TryCurrent(ModelSlots.Generator, out var generator) ? generator.Profile.AcceptedContext : null;
                 channel.TurnBegun = false;
+                channel.Sent = text;
                 channel.Reporter = reporter;
             }
             feed = runtime.Feed.Subscribe(sessionId, reporter);
@@ -461,6 +480,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             // the person renames it (G-6), as the rail shows it.
             if (Line(text) is { Length: > 0 } title)
                 Publish(channel, _ => channel.View is { Title.Length: > 0 } ? [] : [new TitleChanged(title) { At = _time.GetUtcNow() }]);
+            await PauseAt("post").ConfigureAwait(false);
             // Returns once the session's actor has the message (or the ! line's command); the turn runs on, and its end is
             // tracked below.
             var delivery = await PostLineAsync(session, text, verbatim, cancellationToken).ConfigureAwait(false);
@@ -619,11 +639,14 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     private void Report(Channel channel, CorvidSession session, SessionUpdateReporter reporter, SessionStreamUpdate update)
     {
         var cancel = false;
-        if (update is PromptSent)
+        // Only the window's own message begins its turn: another surface may post between the head the reporter reads from
+        // and the window's post, and its turn runs first; an interrupt asked for meanwhile must not reach it. The log keeps a
+        // user's message as it was sent (it is not scrubbed), so its text tells the two apart.
+        if (update is PromptSent prompt)
         {
             lock (channel.Gate)
             {
-                if (ReferenceEquals(channel.Reporter, reporter) && !channel.TurnBegun)
+                if (ReferenceEquals(channel.Reporter, reporter) && !channel.TurnBegun && string.Equals(prompt.Text, channel.Sent, StringComparison.Ordinal))
                 {
                     channel.TurnBegun = true;
                     cancel = channel.Cancelling;
@@ -711,8 +734,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         // G-12: a session another process drives is followed read-only; its open calls are that process's, still running.
         var driven = IsJobRun(id) ? Corvid.Host.Composition.LockState.Free : runtime.Driver(id).State;
         var elsewhere = driven == Corvid.Host.Composition.LockState.HeldElsewhere;
+        var runningHere = runtime.IsTurnRunning(id);
         var options = elsewhere ? TailOptions(0)
-            : runtime.IsTurnRunning(id) ? ReplayOptions.Full with { UnfinishedCalls = false } : ReplayOptions.Full;
+            : runningHere ? ReplayOptions.Full with { UnfinishedCalls = false } : ReplayOptions.Full;
         var history = await SessionReplay.ReadAsync(runtime, id, tools, options).ConfigureAwait(false);
         var goal = Corvid.Kernel.Events.SessionProjection.Load(runtime.Log, id).Goal;
         var summary = Summarize(runtime, id) ?? Empty(runtime, id, _time.GetUtcNow());
@@ -730,7 +754,11 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 updates.Add(new DriverChanged(true) { Holder = summary.Holder, At = at });
             foreach (var update in history.Updates)
                 updates.AddRange(channel.Translator.Translate(update));
-            updates.AddRange(channel.Translator.EndReplay(running: channel.Running || (elsewhere && !history.Updates.IsEmpty && !Answered(history.Updates))));
+            // A turn running in this runtime that the window did not start (a job's run, another surface's) is still running,
+            // not interrupted: its header stays open until the session is opened again. So is one another process drives
+            // whose log does not end on an answer yet (G-12).
+            updates.AddRange(channel.Translator.EndReplay(running: channel.Running || runningHere
+                || (elsewhere && !history.Updates.IsEmpty && !Answered(history.Updates))));
             updates.Add(changes);
             // The rail's title (a rename, the generated title, else the first message) heads the session too.
             if (summary.Title != id && (summary.Turns > 0 || described?.Titled is not null))
@@ -745,9 +773,15 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             if (goal is not null)
                 updates.Add(new GoalChanged(goal) { At = at });
             updates.Add(new ApprovalModeChanged(mode) { At = at });
-            channel.Tainted = open && session.Tainted;
-            if (channel.Tainted)
-                updates.Add(new TaintChanged(true) { At = at });
+            // The replay's taint rows show what the log holds (network reads); a session open here knows its own taint, which
+            // also counts an untrusted description, a hub skill or a guest's message.
+            var tainted = open ? session.Tainted : channel.Translator.Tainted;
+            if (tainted != channel.Translator.Tainted)
+                updates.Add(new TaintChanged(tainted) { At = at });
+            channel.Tainted = tainted;
+            // The status bar's generator before a turn runs: what the next one starts on.
+            if (CurrentGenerator(runtime, open ? session : null) is { Length: > 0 } generator)
+                updates.Add(new EngineStatus { Model = generator, At = at });
             updates.Add(new AvailableCommandsUpdate(commands) { At = at });
             channel.ReadOnly = summary.ReadOnly;
             channel.Holder = summary.Holder;
@@ -969,6 +1003,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         (string CallId, string Tool, string? Target)? tool = running && channel.OpenCalls.Count > 0 ? channel.OpenCalls[^1] : null;
         return logged with
         {
+            // A session with no message in the log yet ("New session", or its id) is titled by the first message the window
+            // sent, while that message's turn has not begun or still runs.
+            Title = logged.Turns == 0 && view.Title is { Length: > 0 } title ? title : logged.Title,
             State = waiting ? SessionState.Waiting : running ? SessionState.Running : logged.State,
             LastActivity = view.LastActivity > logged.LastActivity ? view.LastActivity : logged.LastActivity,
             StepStarted = running ? view.ActivitySince : null,
@@ -1077,8 +1114,11 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         return end > 0 ? id[..end] : "cli";
     }
 
-    /// <summary>The conversations a person had, not the stores' own sessions (MCP pins, the gateway's delivery ledger).</summary>
-    private static bool IsConversation(string id) => id is not (McpSessions.Pins or GatewaySessions.Ledger);
+    /// <summary>
+    /// The conversations a person had, not the stores' own sessions (MCP pins, the gateway's delivery ledger, the session
+    /// Memory's Hermes import stages its facts from).
+    /// </summary>
+    private static bool IsConversation(string id) => id is not (McpSessions.Pins or GatewaySessions.Ledger or Memory.EngineMemoryService.ImportSession);
 
     // ---- Helpers ----
 
@@ -1132,6 +1172,10 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     /// <summary>The generator slot's model now ("qwen3.5-0.8b"): what a turn the window starts runs on first.</summary>
     private static string Generator(CorvidRuntime runtime) =>
         runtime.Registry.TryGet(ModelSlots.Generator, out var slot) ? slot.Default.Profile.Id.Split('@')[0] : "";
+
+    /// <summary>The generator the session's next turn starts on: its own slot when it is open here (a <c>/model</c> switch), the runtime's otherwise.</summary>
+    private static string CurrentGenerator(CorvidRuntime runtime, CorvidSession? session) =>
+        session is not null && session.Slots.TryCurrent(ModelSlots.Generator, out var current) ? current.Profile.Id.Split('@')[0] : Generator(runtime);
 
     private static AppMode Mode(PipelineMode mode) => mode switch
     {
@@ -1190,6 +1234,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
 
         /// <summary>The session has begun the window's message (its prompt is in the log): an interrupt cancels it at once.</summary>
         public bool TurnBegun { get; set; }
+
+        /// <summary>The text of the message the running turn posted, which tells its prompt from another surface's.</summary>
+        public string? Sent { get; set; }
 
         public SessionView? View { get; set; }
 

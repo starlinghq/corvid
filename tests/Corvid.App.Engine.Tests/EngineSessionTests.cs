@@ -22,24 +22,25 @@ public sealed class EngineSessionTests
         using var service = fixture.Sessions();
         var recorder = new Recorder();
         using var subscription = await service.OpenAsync(id, recorder.Add, TestContext.Current.CancellationToken);
-        // A new session has no transcript yet: only what it is beside one (its approval mode, the commands it offers, no changed files).
-        Assert.All(subscription.History, update => Assert.True(update is ApprovalModeChanged or AvailableCommandsUpdate or ChangesUpdate { Session.IsEmpty: true },
-            update.GetType().Name));
+        // A new session has no transcript yet: only what it is beside one (its approval mode, the commands it offers, no changed
+        // files, the generator its first turn starts on).
+        Assert.All(subscription.History, update => Assert.True(update is ApprovalModeChanged or AvailableCommandsUpdate or ChangesUpdate { Session.IsEmpty: true }
+            or EngineStatus { Model: "fake-gen" }, update.GetType().Name));
 
         await service.SendAsync(id, Prompt, TestContext.Current.CancellationToken);
         await service.IdleAsync();
         return (id, recorder.Updates);
     }
 
-    /// <summary>The updates that both a live turn and a replay carry: decisions and usage come from the feed alone.</summary>
-    private static List<SessionUpdate> Shared(IEnumerable<SessionUpdate> updates) => [.. updates.Where(update => update is not (CheckpointDecided or UsageUpdate))];
+    /// <summary>The updates that both a live turn and a replay carry: usage comes from the feed alone (the log keeps decisions).</summary>
+    private static List<SessionUpdate> Shared(IEnumerable<SessionUpdate> updates) => [.. updates.Where(update => update is not UsageUpdate)];
 
     [Fact]
     public async Task ATurnWithAToolCallStreamsTheContractsUpdatesInOrder()
     {
         await using var fixture = await EngineFixture.StartAsync(NotesTurn());
         var (_, live) = await RunTurnAsync(fixture);
-        var updates = Shared(live);
+        var updates = Shared(live).Where(update => update is not CheckpointDecided).ToList();
         // A new session's first message titles it, as the rail shows it (until K-9 titles are events).
         Assert.Equal(Prompt, Assert.IsType<TitleChanged>(updates[0]).Title);
         updates.RemoveAt(0);
@@ -108,6 +109,80 @@ public sealed class EngineSessionTests
     }
 
     [Fact]
+    public async Task AReplayedTurnCarriesTheLiveTurnsGeneratorAndDecisions()
+    {
+        await using var fixture = await EngineFixture.StartAsync(NotesTurn());
+        var (id, live) = await RunTurnAsync(fixture);
+
+        using var fresh = fixture.Sessions();
+        using var reopened = await fresh.OpenAsync(id, _ => { }, TestContext.Current.CancellationToken);
+
+        // The generator the turn ran on, read from its first decision's TurnState, as the live turn named it.
+        Assert.Equal("fake-gen", Assert.Single(reopened.History.OfType<TurnStarted>()).Model);
+        // Every checkpoint's decisions, as the feed reported them live: the checkpoint, the decider and each answer.
+        static List<string> Decisions(IEnumerable<SessionUpdate> updates) =>
+        [
+            .. updates.OfType<CheckpointDecided>().Select(decided => $"{decided.Checkpoint} {decided.Decider}: " +
+                string.Join(", ", decided.Answers.Select(answer => $"{answer.Question} {answer.Action} {answer.Acted} {answer.Confidence:F3}"))),
+        ];
+        Assert.NotEmpty(Decisions(live));
+        Assert.Equal(Decisions(live), Decisions(reopened.History));
+        // The status bar names the generator the next turn starts on before one runs.
+        Assert.Equal("fake-gen", SessionFold.Replay(id, reopened.History).Model);
+    }
+
+    [Fact]
+    public async Task ACompactedSessionReplaysWithItsMarkerAsTheLiveOneShowedIt()
+    {
+        const string record = """{"goal":"ship it","constraints":["keep tests green"],"decisions":[],"files":["a.cs"],"open_questions":[],"next_step":"release"}""";
+        await using var fixture = await EngineFixture.StartAsync(new FakeModels(new FakeGenerator(
+            Reply.Say("First answer."), Reply.Say("Second answer."), Reply.Say(record), Reply.Say(record))));
+        var id = fixture.Runtime.OpenSession(surface: "app").Id;
+        using var service = fixture.Sessions();
+        var live = new Recorder();
+        using var subscription = await service.OpenAsync(id, live.Add, TestContext.Current.CancellationToken);
+        await service.SendAsync(id, "one", TestContext.Current.CancellationToken);
+        await service.IdleAsync();
+        await service.SendAsync(id, "two", TestContext.Current.CancellationToken);
+        await service.IdleAsync();
+        await service.RunCommandAsync(id, "/compact keep the plan", TestContext.Current.CancellationToken);
+        await service.IdleAsync();
+        var shown = SessionFold.Replay(id, [.. subscription.History, .. live.Updates]);
+        var marker = Assert.Single(shown.Transcript.OfType<CompactionEntry>());
+
+        using var fresh = fixture.Sessions();
+        using var reopened = await fresh.OpenAsync(id, _ => { }, TestContext.Current.CancellationToken);
+        var replayed = SessionFold.Replay(id, reopened.History);
+
+        var again = Assert.Single(replayed.Transcript.OfType<CompactionEntry>());
+        Assert.Equal((marker.Compaction.FromTurn, marker.Compaction.ThroughTurn, marker.Compaction.Goal, marker.Compaction.Focus),
+            (again.Compaction.FromTurn, again.Compaction.ThroughTurn, again.Compaction.Goal, again.Compaction.Focus));
+        // Every checkpoint named as live, none blank.
+        Assert.Equal(live.Updates.OfType<CheckpointDecided>().Select(decided => decided.Checkpoint),
+            reopened.History.OfType<CheckpointDecided>().Select(decided => decided.Checkpoint));
+        // And a view model opens it.
+        using var view = new SessionViewModel(id, fresh, new Corvid.App.Core.Mvvm.InlineDispatcher(), fixture.Time);
+        await view.OpenAsync(TestContext.Current.CancellationToken);
+        Assert.Contains(view.Blocks, block => block is CompactionBlock);
+    }
+
+    [Fact]
+    public async Task ATurnTheLogHoldsNoAnswerForReplaysAsInterruptedAsTheLiveOneEnded()
+    {
+        await using var fixture = await EngineFixture.StartAsync(NotesTurn());
+        var id = fixture.Runtime.OpenSession(surface: "app").Id;
+        // An interrupted turn leaves its prompt and no answer in the log.
+        fixture.Runtime.Log.Append(id, fixture.Runtime.Log.GetHead(id, TestContext.Current.CancellationToken),
+            [Corvid.Abstractions.Events.EventData.Create(new Corvid.Abstractions.Events.UserMessage("stop halfway"))], TestContext.Current.CancellationToken);
+        using var service = fixture.Sessions();
+
+        using var opened = await service.OpenAsync(id, _ => { }, TestContext.Current.CancellationToken);
+
+        var header = Assert.Single(SessionFold.Replay(id, opened.History).Transcript.OfType<TurnHeaderEntry>());
+        Assert.Equal((TurnOutcome.Cancelled, "interrupted"), (header.Outcome, header.Error));
+    }
+
+    [Fact]
     public async Task ASecondOpenOfALiveSessionGetsWhatTheFirstHeardAsItsHistory()
     {
         await using var fixture = await EngineFixture.StartAsync(NotesTurn());
@@ -163,6 +238,22 @@ public sealed class EngineSessionTests
     }
 
     [Fact]
+    public async Task TheHermesImportsStagingSessionIsNotListedAsAConversation()
+    {
+        await using var fixture = await EngineFixture.StartAsync(NotesTurn());
+        var (id, _) = await RunTurnAsync(fixture);
+        // What staging the import's facts writes to the log, in the session Memory stages them from.
+        fixture.Runtime.Log.Append(Memory.EngineMemoryService.ImportSession, 0,
+            [Corvid.Abstractions.Events.EventData.Create(new Corvid.Abstractions.Events.MemoryWritten("m-1", "stage"))], TestContext.Current.CancellationToken);
+        using var service = fixture.Sessions();
+
+        var sessions = await service.ListAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains(sessions, session => session.Id == id);
+        Assert.DoesNotContain(sessions, session => session.Id == Memory.EngineMemoryService.ImportSession);
+    }
+
+    [Fact]
     public async Task AnUnknownSessionCannotBeOpenedAndUnbuiltRequestsSayWhatBringsThem()
     {
         await using var fixture = await EngineFixture.StartAsync();
@@ -170,7 +261,8 @@ public sealed class EngineSessionTests
 
         await Assert.ThrowsAsync<KeyNotFoundException>(() => service.OpenAsync("cli-nowhere", _ => { }, TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<KeyNotFoundException>(() => service.QueueAsync("cli-nowhere", "later", TestContext.Current.CancellationToken));
-        // Steering (K-3) and answers (K-6) are built: an unknown session is unknown to them too.
+        // Steering (K-3) and answers (K-6) are built: an unknown session is unknown to them too, and the strip offers Ctrl+Enter.
+        Assert.True(((ISessionService)service).CanSteer);
         await Assert.ThrowsAsync<KeyNotFoundException>(() => service.SteerAsync("cli-nowhere", "now", TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<KeyNotFoundException>(() =>
             service.AnswerQuestionAsync("cli-nowhere", "q-1", "yes", TestContext.Current.CancellationToken));

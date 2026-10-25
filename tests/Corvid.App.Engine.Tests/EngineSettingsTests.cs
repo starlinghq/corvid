@@ -36,9 +36,17 @@ public sealed class EngineSettingsTests
         Assert.Equal(Path.Combine(fixture.Host.Root, "data"), snapshot.RunOverrides["DataDirectory"]);
         Assert.Equal(Path.Combine(fixture.Host.Root, "work"), snapshot.RunOverrides["Workspace"]);
         Assert.False(snapshot.RunOverrides.ContainsKey("Turn:MaxSteps"));
-        // The runtime reads corvid.json once, at start: every setting in it applies after a restart.
+        // The runtime reads corvid.json once, at start, except what it takes live: the approval mode and deadline at once, the
+        // step budget and output tokens in sessions opened from then on.
+        var live = new Dictionary<string, SettingApplies>
+        {
+            ["Approvals:Mode"] = SettingApplies.NewSessions,
+            ["Approvals:TimeoutSeconds"] = SettingApplies.Now,
+            ["Turn:MaxSteps"] = SettingApplies.NewSessions,
+            ["Turn:MaxOutputTokens"] = SettingApplies.NewSessions,
+        };
         Assert.All(service.Definitions.Where(definition => definition.Store == SettingStore.CorvidJson),
-            definition => Assert.Equal(SettingApplies.Restart, definition.Applies));
+            definition => Assert.Equal(live.GetValueOrDefault(definition.Key, SettingApplies.Restart), definition.Applies));
         Assert.Contains(service.Definitions, definition => definition is { Store: SettingStore.App, Applies: SettingApplies.Now });
     }
 
@@ -58,7 +66,10 @@ public sealed class EngineSettingsTests
 
         Assert.True(write.Written, write.Message);
         Assert.Contains("after a restart", write.Message, StringComparison.Ordinal);
-        Assert.Equal(["Approvals:Mode", "Privacy:Threshold", "Tools:ShellNetwork", "Turn:MaxSteps"], write.RestartKeys.Order(StringComparer.Ordinal));
+        // The mode and the step budget apply to the running runtime now; the others after a restart.
+        Assert.Contains("Applied now: default mode (in sessions opened from now on), steps per turn (in sessions opened from now on).", write.Message, StringComparison.Ordinal);
+        Assert.Equal(["Privacy:Threshold", "Tools:ShellNetwork"], write.RestartKeys.Order(StringComparer.Ordinal));
+        Assert.Equal((Corvid.Approvals.ApprovalMode.Manual, 12), (fixture.Runtime.Options.Approvals.Mode, fixture.Runtime.Options.Turn.MaxSteps));
         var file = await ReadAsync(fixture);
         Assert.Equal(12, (int)file["Corvid"]!["Turn"]!["MaxSteps"]!);
         Assert.True((bool)file["Corvid"]!["Tools"]!["ShellNetwork"]!);
@@ -117,8 +128,33 @@ public sealed class EngineSettingsTests
 
         Assert.True(write.Written, write.Message);
         Assert.Equal(text, await File.ReadAllTextAsync(FileOf(fixture), Token));
-        Assert.Contains("Turn:MaxSteps", write.RestartKeys);
+        // The step budget is taken live: not a restart key.
+        Assert.DoesNotContain("Turn:MaxSteps", write.RestartKeys);
+        Assert.Equal(5, fixture.Runtime.Options.Turn.MaxSteps);
         Assert.Equal("5", (await service.LoadAsync(Token)).Values["Turn:MaxSteps"]);
+    }
+
+    [Fact]
+    public async Task ALiveSettingReachesTheRunningRuntimeAndTheNextSession()
+    {
+        await using var fixture = await EngineFixture.StartAsync();
+        var service = new EngineSettingsService(fixture.Engine);
+        var open = fixture.Runtime.OpenSession(surface: "app");
+
+        var write = await service.SaveAsync(new Dictionary<string, string>
+        {
+            ["Approvals:TimeoutSeconds"] = "45",
+            ["Approvals:Mode"] = "Manual",
+        }, Token);
+
+        Assert.True(write.Written, write.Message);
+        Assert.Contains("deadline (seconds) (from the next prompt)", write.Message, StringComparison.Ordinal);
+        Assert.Empty(write.RestartKeys);
+        Assert.DoesNotContain("after a restart", write.Message, StringComparison.Ordinal);
+        // The deadline from the next prompt of every session; the mode in sessions opened from now on.
+        Assert.Equal(TimeSpan.FromSeconds(45), fixture.Runtime.Approvals.Options.Timeout);
+        Assert.Equal(Corvid.Approvals.ApprovalMode.Smart, open.ApprovalMode);
+        Assert.Equal(Corvid.Approvals.ApprovalMode.Manual, fixture.Runtime.OpenSession(surface: "app").ApprovalMode);
     }
 
     [Fact]
@@ -213,7 +249,9 @@ public sealed class EngineSettingsTests
         Assert.True(page.CanSave);
         await page.SaveCommand.ExecuteAsync();
 
-        Assert.Contains("after a restart", page.Notice, StringComparison.Ordinal);
+        // The step budget is taken live: the notice says so, and it needs no restart.
+        Assert.Contains("Applied now: steps per turn (in sessions opened from now on).", page.Notice, StringComparison.Ordinal);
+        Assert.Equal(3, fixture.Runtime.Options.Turn.MaxSteps);
         Assert.Equal(3, (int)(await ReadAsync(fixture))["Corvid"]!["Turn"]!["MaxSteps"]!);
     }
 }

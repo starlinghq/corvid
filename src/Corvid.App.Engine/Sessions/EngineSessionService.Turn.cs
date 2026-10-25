@@ -9,6 +9,9 @@ namespace Corvid.App.Engine.Sessions;
 /// </summary>
 public sealed partial class EngineSessionService
 {
+    /// <summary>K-3: the turn strip offers Ctrl+Enter, which <see cref="SteerAsync"/> takes.</summary>
+    public bool CanSteer => true;
+
     /// <summary>
     /// K-3, Ctrl+Enter: a message for the window's running turn, taken at its next step checkpoint. It shows as a steer chip
     /// in the queue until then; once taken the chip goes and the message shows in the turn as a steer. A steer the turn

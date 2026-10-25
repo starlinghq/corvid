@@ -76,6 +76,25 @@ public sealed class EngineModelService : IModelService, IDisposable
         // Until the first load: nothing known, which the pages show as "checking" rather than as Vault's absence.
         _base = _snapshot = new ModelsSnapshot(_writer.Path, false, [], [], new CloudPrivacy("", false, false, 0, 0, 0),
             new DeciderStatus("", "", DeciderTier.Degraded, "", "", "", ""), [], [], "") { IsLoaded = false };
+        _engine.Started += OnEngineStarted;
+    }
+
+    /// <summary>The runtime started after the window opened (a model fetched since): the list reads the cache and the slots again.</summary>
+    private void OnEngineStarted(Corvid.Host.Composition.CorvidRuntime runtime)
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+            return;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await RefreshAsync(_lifetime.Token).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                Console.Error.WriteLine($"corvid app: the models could not be read again after the start: {exception.Message}");
+            }
+        });
     }
 
     public event EventHandler? Changed;
@@ -367,6 +386,7 @@ public sealed class EngineModelService : IModelService, IDisposable
             background = [.. _background];
         }
 
+        _engine.Started -= OnEngineStarted;
         _lifetime.Cancel();
         _http.Dispose();
         // The pump stops at its next report; whatever it was fetching keeps its partial file for a later resume.
@@ -513,6 +533,10 @@ public sealed class EngineModelService : IModelService, IDisposable
             Console.Error.WriteLine($"corvid app: downloading {name} failed: {failure}");
         if (Volatile.Read(ref _disposed) != 0)
             return;
+        // The runtime could not start for want of models (First run): with this one in, it may start now, so Sessions works
+        // without restarting the app. It loads on the pool; the status bar and the rail follow it.
+        if (failure is null && !_engine.MissingModels.IsEmpty)
+            _ = StartEngineAsync();
         try
         {
             await RefreshAsync(CancellationToken.None).ConfigureAwait(false);
@@ -526,6 +550,20 @@ public sealed class EngineModelService : IModelService, IDisposable
                 _problem = $"{(failure is null ? $"{name} downloaded" : $"Downloading {name} ended")}, but the models could not be read again, " +
                     $"so this list may be out of date: {exception.Message}";
             Republish();
+        }
+    }
+
+    /// <summary>Starts the runtime once nothing configured is missing; a start that fails again is written to the log, never lost.</summary>
+    private async Task StartEngineAsync()
+    {
+        try
+        {
+            if (await _engine.StartAgainAsync().ConfigureAwait(false))
+                Republish();
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            Console.Error.WriteLine($"corvid app: the runtime could not start after the downloads: {exception.Message}");
         }
     }
 

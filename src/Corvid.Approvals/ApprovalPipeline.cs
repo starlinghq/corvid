@@ -217,7 +217,25 @@ public sealed class ApprovalPipeline
 
     public ApprovalEnvironment Environment { get; }
 
-    public ApprovalOptions Options { get; }
+    public ApprovalOptions Options { get => Volatile.Read(ref _options); private init => _options = value; }
+
+    private ApprovalOptions _options = ApprovalOptions.Default;
+
+    /// <summary>
+    /// Changes how long an unanswered prompt waits before it is denied, from the next prompt on (a prompt already waiting keeps
+    /// its deadline): Settings applies <c>Corvid:Approvals:TimeoutSeconds</c> to a running runtime this way.
+    /// </summary>
+    public void SetTimeout(TimeSpan timeout)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
+        ApprovalOptions current, next;
+        do
+        {
+            current = Volatile.Read(ref _options);
+            next = current with { Timeout = timeout };
+        }
+        while (!ReferenceEquals(Interlocked.CompareExchange(ref _options, next, current), current));
+    }
 
     public ImmutableArray<ApprovalRule> SessionRules(string sessionId) =>
         _session.TryGetValue(sessionId, out var rules) ? rules : [];
@@ -357,7 +375,9 @@ public sealed class ApprovalPipeline
         }
 
         var approvalId = Guid.NewGuid().ToString("N");
-        var deadline = _time.GetUtcNow() + Options.Timeout;
+        // Read once: a deadline changed while this prompt waits (SetTimeout) applies from the next prompt.
+        var wait = Options.Timeout;
+        var deadline = _time.GetUtcNow() + wait;
         Append(context.SessionId, new ApprovalRequested(approvalId,
             ActionDocuments.Json(assessment.Analysis, context.Tainted, context.Reversible), assessment.Summary, context.CallId), cancellationToken);
 
@@ -371,12 +391,12 @@ public sealed class ApprovalPipeline
         {
             try
             {
-                answer = await _prompter.AskAsync(prompt, timeout.Token).AsTask().WaitAsync(Options.Timeout, _time, cancellationToken);
+                answer = await _prompter.AskAsync(prompt, timeout.Token).AsTask().WaitAsync(wait, _time, cancellationToken);
             }
             catch (TimeoutException)
             {
                 await timeout.CancelAsync();
-                return Resolve(context, assessment, approvalId, ApprovalResolution.TimedOut, "timeout: unanswered after " + Options.Timeout);
+                return Resolve(context, assessment, approvalId, ApprovalResolution.TimedOut, "timeout: unanswered after " + wait);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {

@@ -100,14 +100,14 @@ public sealed class TranslatorTests
     }
 
     [Fact]
-    public void AReplayedTurnWithoutAnAnswerSaysTheLogHasNoneRatherThanGuessing()
+    public void AReplayedTurnWithoutAnAnswerEndsInterruptedAsTheLiveTurnDidNotFailed()
     {
         var translator = new SessionUpdateTranslator(Workspace);
         translator.Translate(new PromptSent("hi", 1) { At = T0 });
 
         var ended = Assert.IsType<TurnEnded>(Assert.Single(translator.EndReplay()));
-        Assert.Equal(TurnOutcome.Failed, ended.Outcome);
-        Assert.Equal("The log holds no answer for this turn.", ended.Error);
+        Assert.Equal(TurnOutcome.Cancelled, ended.Outcome);
+        Assert.Equal("interrupted", ended.Error);
         Assert.Empty(translator.EndReplay());
     }
 
@@ -121,6 +121,37 @@ public sealed class TranslatorTests
 
         var ended = Assert.IsType<TurnEnded>(Assert.Single(translator.EndReplay()));
         Assert.Equal((TurnOutcome.Answered, (string?)null), (ended.Outcome, ended.Error));
+    }
+
+    [Fact]
+    public void AReplayedTurnNamesItsGeneratorAndALiveOneTheSlots()
+    {
+        var translator = new SessionUpdateTranslator(Workspace) { Model = "live-gen" };
+
+        var replayed = translator.Translate(new PromptSent("hi", 1) { At = T0, Generator = "qwen3.5-0.8b" });
+        var live = translator.Translate(new PromptSent("again", 5) { At = T0 });
+
+        Assert.Equal("qwen3.5-0.8b", Assert.IsType<TurnStarted>(replayed[1]).Model);
+        Assert.Equal("live-gen", Assert.IsType<TurnStarted>(live[^1]).Model);
+    }
+
+    [Fact]
+    public void ReplayedTaintAndCompactionBecomeTheRowAndTheMarker()
+    {
+        var translator = new SessionUpdateTranslator(Workspace);
+        translator.Translate(new PromptSent("one", 1) { At = T0 });
+        translator.Translate(new PromptSent("two", 4) { At = T0 });
+
+        var taint = Assert.IsType<TaintChanged>(Assert.Single(translator.Translate(new TaintNoted(true, "web_fetch https://example.org") { At = T0 })));
+        var summary = new Corvid.Abstractions.Events.CompactionSummary("ship it", ["c"], ["d"], ["a.cs"], [], "next");
+        var marker = Assert.IsType<CompactionUpdate>(Assert.Single(translator.Translate(
+            new CompactionLogged(new Corvid.Abstractions.Events.Compacted(1, 4, summary, Summarizer: "qwen", Focus: "the plan"), 6) { Expanded = true, At = T0.AddMinutes(1) })));
+        // A compaction between turns is not the replayed turn's end.
+        Assert.Equal(TimeSpan.Zero, Assert.IsType<TurnEnded>(Assert.Single(translator.EndReplay())).Elapsed);
+
+        Assert.Equal((true, "web_fetch https://example.org"), (taint.Tainted, taint.Source));
+        Assert.True(translator.Tainted);
+        Assert.Equal((1, 2, "ship it", "qwen", "the plan", true), (marker.FromTurn, marker.ThroughTurn, marker.Goal, marker.Summarizer, marker.Focus, marker.Expanded));
     }
 
     [Fact]
