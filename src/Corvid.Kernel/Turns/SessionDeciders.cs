@@ -16,15 +16,20 @@ namespace Corvid.Kernel.Turns;
 public sealed class SessionDeciders
 {
     private readonly DecisionFabric _shared;
-    private readonly ModelSlotRegistry _registry;
+    private readonly ModelBinding? _sharedBinding;
     private readonly ConditionalWeakTable<ModelBinding, Derived> _derived = [];
 
+    /// <param name="shared">The fabric built on <paramref name="registry"/>'s decider as it is now.</param>
+    /// <param name="registry">
+    /// Read once, for the binding the shared fabric was built on: a session on that binding runs on the shared fabric. A later
+    /// rebinding of the registry's decider (a new default for new sessions) reaches them through a fabric of its own.
+    /// </param>
     public SessionDeciders(DecisionFabric shared, ModelSlotRegistry registry)
     {
         ArgumentNullException.ThrowIfNull(shared);
         ArgumentNullException.ThrowIfNull(registry);
         _shared = shared;
-        _registry = registry;
+        _sharedBinding = registry.TryGet(ModelSlots.Decider, out var decider) ? decider.Default : null;
     }
 
     /// <summary>The shared fabric: the configured decider, for sessions that chose none of their own.</summary>
@@ -36,9 +41,8 @@ public sealed class SessionDeciders
         ArgumentNullException.ThrowIfNull(slots);
         if (!slots.TryCurrent(ModelSlots.Decider, out var binding))
             return _shared;
-        var configured = _registry.TryGet(ModelSlots.Decider, out var registered) ? registered : null;
-        // The registry's own decider, the one the shared fabric was built on, unless the session's mix gave it another ladder.
-        if (configured is not null && ReferenceEquals(binding, configured.Default) && !slots.OwnSlots.Contains(ModelSlots.Decider))
+        // The decider the shared fabric was built on, unless the session's mix gave it another ladder.
+        if (ReferenceEquals(binding, _sharedBinding) && !slots.OwnSlots.Contains(ModelSlots.Decider))
             return _shared;
         if (binding.Service is not IDecider calibrated)
             return _shared;

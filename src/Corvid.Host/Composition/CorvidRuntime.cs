@@ -59,6 +59,8 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     // callback run in this process, so the job store needs no column for it.
     private readonly ConcurrentDictionary<string, byte> _taintedRuns = new(StringComparer.Ordinal);
     private readonly ModelComposer _composer;
+    // A5: the decider per session, over the shared fabric.
+    private readonly SessionDeciders _deciders;
     private readonly ApprovalRouter _prompters;
     private readonly EmbedderSwapJob? _swap;
     private readonly ToolShortlist _shortlist = new();
@@ -100,6 +102,7 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         Log = log;
         Registry = registry;
         Fabric = fabric;
+        _deciders = new SessionDeciders(fabric, registry);
         Approvals = approvals;
         _prompters = prompters;
         Tools = tools;
@@ -599,21 +602,32 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     }
 
     // C-006's privacy hook (plan §4.2 step 6): a switch to a gated model checks the conversation first, with the session's taint.
-    private SessionModelSlots NewSlots(string sessionId) => new(Registry, Log, sessionId, new ModelSwitchOptions
-    {
-        Privacy = new ProjectionPrivacyGate(Log, Egress, id => TryGetSession(id, out var session) && session.Tainted),
-    });
+    // A5: a child's own slots (its mix), and every change of a slot told to the surfaces (ModelChanged).
+    private SessionModelSlots NewSlots(string sessionId, IReadOnlyDictionary<string, SlotConfiguration>? own = null) =>
+        new(Registry, Log, sessionId, new ModelSwitchOptions
+        {
+            Privacy = new ProjectionPrivacyGate(Log, Egress, id => TryGetSession(id, out var session) && session.Tainted),
+            Changed = result => RaiseModelChanged(sessionId, result),
+        }, own);
 
     private SessionActor CreateActor(string sessionId)
     {
         // G-12: every actor runs under the session's driver lock, also one made again for a message posted while the session
         // was being let go of (ReleaseDriverAsync): idempotent when OpenSession already took it.
         TakeDriver(sessionId);
-        var slots = NewSlots(sessionId);
         var settings = _settings.TryGetValue(sessionId, out var chosen) ? chosen : SessionSettings.Default;
-        var runner = new TurnRunner(sessionId, Services(slots, settings.Interactive, settings.Tools ? Tools : new ToolRegistry(), settings));
+        // A5: a child session runs on its plan: its own slots, toolset, budget and approval ceiling.
+        var child = _childPlans.GetValueOrDefault(sessionId);
+        var slots = NewSlots(sessionId, child?.Configurations);
+        var tools = child is not null ? ChildTools(child) : settings.Tools ? Tools : new ToolRegistry();
+        var runner = new TurnRunner(sessionId, Services(slots, settings.Interactive, tools, settings, child));
         var actor = new SessionActor(runner, slots, new Sink(this), new SessionActorOptions { EmbedderSwap = _swap });
-        _sessions[sessionId] = new CorvidSession(this, sessionId, slots, runner, actor) { Interactive = settings.Interactive };
+        _sessions[sessionId] = new CorvidSession(this, sessionId, slots, runner, actor)
+        {
+            Interactive = settings.Interactive,
+            Tools = tools,
+            Child = child,
+        };
         return actor;
     }
 
@@ -622,20 +636,27 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         new Dictionary<string, ImmutableArray<string>>(BuiltinTools.Examples, StringComparer.Ordinal) { [AskUserTool.ToolName] = AskUserTool.Examples };
 
     /// <summary>One session's turn services over the shared ones. Scheduled runs are not interactive: nobody can be asked.</summary>
-    private TurnServices Services(SessionModelSlots slots, bool interactive, ToolRegistry? tools = null, SessionSettings? session = null)
+    private TurnServices Services(SessionModelSlots slots, bool interactive, ToolRegistry? tools = null, SessionSettings? session = null,
+        ChildPlan? child = null)
     {
         var turn = Options.Turn;
         var prompt = turn.SystemPrompt is { Length: > 0 } configured ? configured : TurnOptions.DefaultSystemPrompt;
         if (session?.Persona is { Length: > 0 } persona)
             prompt = prompt + "\n\n" + persona;
+        if (child is not null)
+            prompt += "\n\n" + ChildPrompt(child);
+        // A5, plan §14: a child writes no memory and learns no skills or lessons; it reads as its parent does.
+        var learns = interactive && child is null;
         return new TurnServices
         {
             Log = Log,
             Slots = slots,
             Fabric = Fabric,
+            // A5: the session's own decider (its mix's, or a person's switch), else the shared one.
+            Deciders = _deciders,
             Tools = tools ?? Tools,
             Approvals = Approvals,
-            Memory = Memory?.Writer,
+            Memory = child is null ? Memory?.Writer : null,
             Retriever = Memory?.Retriever,
             Checkpoints = Checkpoints,
             // Frozen per session (plan §9.1): an edit made during the session shows from the next one.
@@ -643,10 +664,10 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
             Shortlist = _shortlist,
             Skills = Skills.Store,
             // Unattended job turns are not distilled into skills: nobody saw them.
-            SkillLearning = interactive ? Skills.Learner : null,
+            SkillLearning = learns ? Skills.Learner : null,
             // C-025: the project scopes recall and lessons; unattended turns draft none, as for skills.
             Project = Memory?.Lessons is null ? null : Project,
-            LessonLearning = interactive ? Memory?.LessonLearner : null,
+            LessonLearning = learns ? Memory?.LessonLearner : null,
             SkillShortlist = _skillShortlist,
             // Turn progress and K-2's running tails, to whichever surface watches the session.
             Listener = Feed.Listener,
@@ -654,15 +675,18 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
             {
                 SystemPrompt = prompt,
                 // A gateway chat can be answered elsewhere: in a thread, the home channel, or not at all (C-020).
-                AskDeliver = session?.AskDeliver ?? false,
-                MaxSteps = turn.MaxSteps,
+                AskDeliver = child is null && (session?.AskDeliver ?? false),
+                MaxSteps = child?.Budget.MaxSteps ?? turn.MaxSteps,
                 MaxOutputTokens = turn.MaxOutputTokens,
                 // C-029: the six-question ingress (both shortlists) on a smaller state; 600, the default state, turns it off.
                 DualShortlistStateBudget = turn.DualShortlistStateTokens < TurnStateBudget.Default.Total
                     ? new TurnStateBudget(Total: turn.DualShortlistStateTokens)
                     : null,
-                ApprovalMode = Options.Approvals.Mode,
+                // A5: a child's mode, never laxer than its parent's when it was started.
+                ApprovalMode = child?.ApprovalMode ?? Options.Approvals.Mode,
                 Interactive = interactive,
+                // A5, plan §14: a child never asks the person a question (no clarify, no ask_user).
+                AsksQuestions = child is null,
                 // C-005 has no examples file; C-012 wrote the built-in tools' examples by hand.
                 ToolExamples = ToolExamples,
             },
@@ -833,7 +857,7 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         // Not for sessions nobody looks at as a conversation here (an HTTP client's, non-interactive): each would cost a call.
         if (delivery.Result is { Status: TurnStatus.Answered, Text: not null } && Titles is { Unavailable: null, Options.Generate: true }
             && !_titled.ContainsKey(delivery.Request.SessionId)
-            && TryGetSession(delivery.Request.SessionId, out var answered) && answered.Interactive)
+            && TryGetSession(delivery.Request.SessionId, out var answered) && answered.Interactive && answered.Child is null)
             QueueTitle(delivery.Request.SessionId);
         if (delivery.Request.MessageId is { } id && _waiting.TryRemove(id, out var waiter))
             waiter.TrySetResult(delivery);
@@ -948,6 +972,18 @@ public sealed class CorvidSession
 
     internal TurnRunner Runner { get; }
 
+    /// <summary>The tools the session's turns may be offered (A5: a child's explicit toolset is its own registry).</summary>
+    public ToolRegistry Tools { get; internal init; } = new();
+
+    /// <summary>A5: what this child session was started with, or null for a top-level session.</summary>
+    public ChildPlan? Child { get; internal init; }
+
+    /// <summary>A5: the session this one is a child of, or null.</summary>
+    public string? ParentId => Child?.ParentId;
+
+    /// <summary>A5: how deep it is: 0 for a top-level session, 1 for a child.</summary>
+    public int Depth => Child?.Depth ?? 0;
+
     /// <summary>Whether outside content is in the session's context (plan §10.3).</summary>
     public bool Tainted => Runner.Tainted;
 
@@ -955,12 +991,43 @@ public sealed class CorvidSession
     /// The approval mode this session's calls are assessed under (G-10): <c>Corvid:Approvals:Mode</c> until a surface sets
     /// another for this session; applies from the next call assessed, the running turn's included. Held by this process
     /// only: the session opened again in another process starts at the configured mode. The hardline list applies in
-    /// every mode.
+    /// every mode. A5: a child's is never laxer than the mode it was started with (its parent's ceiling).
     /// </summary>
     public ApprovalMode ApprovalMode
     {
         get => Runner.ApprovalMode;
-        set => Runner.ApprovalMode = value;
+        set => Runner.ApprovalMode = Child is { } child ? ChildSessions.Stricter(value, child.ApprovalMode) : value;
+    }
+
+    /// <summary>
+    /// A5: switches one slot of this session to a catalogue model (any slot: generator, decider, extractor…), for as long as
+    /// <paramref name="scope"/> says: the rest of the session (<see cref="SwitchScope.Session"/>, logged as <c>session</c>;
+    /// escalation and fallback still move off it and de-escalation returns to it), the same pinned, or this turn only. A
+    /// running turn takes it at its next step boundary, after its issued tool calls. The runtime's defaults (the registry,
+    /// <c>corvid.json</c>) are not touched: <see cref="CorvidRuntime.SetDefaultModel"/> changes where new sessions start.
+    /// A cloud model passes the privacy gate first (with the session's taint); a refusal is the result, not an exception.
+    /// <see cref="CorvidRuntime.ModelChanged"/> reports it.
+    /// </summary>
+    /// <exception cref="ArgumentException">No such model, or it cannot serve the slot.</exception>
+    /// <exception cref="ModelUnavailableException">The model is not usable offline.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// Memory embeds only with the configured <c>embedder.text</c> models, or (a child) the model is not in <c>Corvid:Agents:Models</c>.
+    /// </exception>
+    public Task<SwitchResult> SetModelAsync(string slot, string model, SwitchScope scope = SwitchScope.Session,
+        CancellationToken cancellationToken = default)
+    {
+        var binding = _runtime.BindForSession(this, slot, model);
+        return Actor.SwitchModelAsync(slot, binding, scope, cancellationToken);
+    }
+
+    /// <summary>
+    /// A5: forgets the person's choice for a slot in this session: its default is the configured one again, and an unpinned
+    /// slot still on the choice switches back now. Null when there was no choice.
+    /// </summary>
+    public Task<SwitchResult?> ClearModelChoiceAsync(string slot, CancellationToken cancellationToken = default)
+    {
+        ModelSlots.ContractOf(slot);
+        return Slots.ClearSessionDefaultAsync(slot, cancellationToken);
     }
 
     /// <summary>Runs one turn and waits for its delivery.</summary>
@@ -1151,6 +1218,8 @@ public sealed class CorvidSession
 internal sealed class ApprovalRouter : IApprovalPrompter
 {
     private readonly ConcurrentDictionary<string, IApprovalPrompter> _prompters = new(StringComparer.Ordinal);
+    // A5: a child session's prompts go to whatever answers its parent's, unless a surface attached to the child itself.
+    private readonly ConcurrentDictionary<string, string> _parents = new(StringComparer.Ordinal);
 
     public IDisposable Attach(string sessionId, IApprovalPrompter prompter)
     {
@@ -1159,8 +1228,14 @@ internal sealed class ApprovalRouter : IApprovalPrompter
         return new Detach(this, sessionId, prompter);
     }
 
+    /// <summary>A5: routes a child's prompts to its parent's prompter until the child is forgotten.</summary>
+    public void SetParent(string childId, string parentId) => _parents[childId] = parentId;
+
+    public void Forget(string childId) => _parents.TryRemove(childId, out _);
+
     public ValueTask<ApprovalAnswer> AskAsync(ApprovalPrompt prompt, CancellationToken cancellationToken) =>
         _prompters.TryGetValue(prompt.SessionId, out var prompter)
+        || _parents.TryGetValue(prompt.SessionId, out var parent) && _prompters.TryGetValue(parent, out prompter)
             ? prompter.AskAsync(prompt, cancellationToken)
             : throw new InvalidOperationException($"No surface is attached to session '{prompt.SessionId}' to answer the approval.");
 

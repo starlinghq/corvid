@@ -35,7 +35,8 @@ public sealed class ModelComposer : IDisposable
     private readonly TurnFeed _feed;
     private readonly Lock _gate = new();
     private readonly Dictionary<string, ModelBinding> _raw = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<(string Slot, string Model), ModelBinding> _bound = [];
+    private readonly Dictionary<(string Slot, string Model, DevicePriority Priority), ModelBinding> _bound = [];
+    private readonly Dictionary<ModelBinding, string> _names = new(ReferenceEqualityComparer.Instance);
     private readonly List<string> _deciderNotices = [];
     private PrivacyEgress? _egress;
 
@@ -202,20 +203,36 @@ public sealed class ModelComposer : IDisposable
     }
 
     /// <summary>A model bound for a slot, loading it on first use. The same instance is returned every time, because a binding's identity is its reference.</summary>
-    public ModelBinding Bind(string slot, string model)
+    public ModelBinding Bind(string slot, string model) => Bind(slot, model, DevicePriority.Interactive);
+
+    /// <summary>
+    /// A model bound for a slot at a device priority (A5: <see cref="DevicePriority.Subagent"/> for a child session, so its
+    /// in-process calls queue behind the interactive turn and the fabric, plan §3.3). One instance per slot, model and
+    /// priority. A decider runs at fabric priority whatever is asked; a remote model is not scheduled on a device at all.
+    /// </summary>
+    public ModelBinding Bind(string slot, string model, DevicePriority priority)
     {
         var descriptor = _catalogue.Find(model);
         if (!descriptor.Serves(slot))
             throw new ArgumentException($"'{descriptor.Name}' cannot serve {slot}; it serves {string.Join(", ", descriptor.Slots)}.", nameof(model));
         lock (_gate)
         {
-            if (_bound.TryGetValue((slot, descriptor.Name), out var bound))
+            if (_bound.TryGetValue((slot, descriptor.Name, priority), out var bound))
                 return bound;
             var raw = Raw(slot, descriptor);
-            bound = new ModelBinding(raw.Profile, Wrap(slot, raw, DevicePriority.Interactive, slot == ModelSlots.Generator ? _feed : null));
-            _bound[(slot, descriptor.Name)] = bound;
+            bound = new ModelBinding(raw.Profile, Wrap(slot, raw, priority, slot == ModelSlots.Generator ? _feed : null));
+            _bound[(slot, descriptor.Name, priority)] = bound;
+            _names[bound] = descriptor.Name;
             return bound;
         }
+    }
+
+    /// <summary>The catalogue name of a binding this composer made (any priority), or null for one it did not.</summary>
+    public string? NameOf(ModelBinding binding)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        lock (_gate)
+            return _names.GetValueOrDefault(binding);
     }
 
     /// <summary>Whether a model is configured for a slot (default, escalation or fallback).</summary>
@@ -275,6 +292,7 @@ public sealed class ModelComposer : IDisposable
                 (raw.Service as IDisposable)?.Dispose();
             _raw.Clear();
             _bound.Clear();
+            _names.Clear();
         }
     }
 

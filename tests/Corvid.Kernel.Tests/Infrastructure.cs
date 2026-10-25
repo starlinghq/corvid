@@ -104,6 +104,12 @@ internal static class Samples
             Slot: "generator", Host: "api.anthropic.com", Secret: "anthropic.key"),
         new EgressRecorded("r-2", "claude@anthropic", EgressOutcomes.Sent, ImmutableDictionary<string, int>.Empty, 0, 12, "no PII found",
             Unkept: "the egress store could not be written"),
+        new ChildSpawned("cli-child-1", "summarize the notes", ["list_notes"], new ChildBudget(4, 8_000, 120), "agent", Tainted: true,
+            Mix: Json("""{"generator":"qwen3.5-9b"}"""), OutputSchema: Json("""{"type":"object"}"""), CallId: "call-9"),
+        new ChildSpawned("cli-child-2", "look it up", [], new ChildBudget(8, 64_000, 600), "user"),
+        new ChildFinished("cli-child-1", ChildStatuses.Answered, 2, 1_234, Text: "{\"notes\":3}", OutputValid: true),
+        new ChildFinished("cli-child-2", ChildStatuses.TimedOut, 1, 99, Tainted: true, Detail: "ran past 120 s"),
+        new ChildOf("cli-parent", 1, "summarize the notes", ["list_notes"], new ChildBudget(4, 8_000, 120), Json("""{"generator":"qwen3.5-9b"}""")),
     ];
 
     public static EventData[] Data(params SessionEvent[] events) => events.Select(EventData.Create).ToArray();

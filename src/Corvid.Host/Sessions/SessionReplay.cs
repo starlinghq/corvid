@@ -36,6 +36,12 @@ public sealed record ReplayOptions(bool LedgerDiffs = true, bool Plans = true, b
     bool UnfinishedCalls = true, bool Steps = true, bool Questions = true, bool UnfinishedAsRunning = false, long After = 0,
     bool Decisions = true, bool Generators = true, bool Taint = true, bool Compactions = true)
 {
+    /// <summary>A5: each <c>ModelSwitched</c> as a <see cref="ModelChanged"/>, by position. Off unless asked for.</summary>
+    public bool Models { get; init; }
+
+    /// <summary>A5: each <c>ChildSpawned</c> and <c>ChildFinished</c> as <see cref="ChildStarted"/> and <see cref="ChildEnded"/>. Off unless asked for.</summary>
+    public bool Children { get; init; }
+
     /// <summary>Everything a live turn reports that the log holds.</summary>
     public static ReplayOptions Full { get; } = new();
 
@@ -243,9 +249,26 @@ public static class SessionReplay
                     At = stored.TryGetValue(checkpoint.Sequence, out var item) ? item.RecordedAt : default,
                 }));
 
+        // A5: model switches and children, by position.
+        foreach (var item in stored.Values.Where(item => item.Sequence > options.After && snapshot.IsVisible(item.Sequence)))
+        {
+            switch (item.Payload)
+            {
+                case ModelSwitched switched when options.Models:
+                    items.Add((item.Sequence, ModelChanges.FromLog(switched, item.Sequence) with { At = item.RecordedAt }));
+                    break;
+                case ChildSpawned spawned when options.Children:
+                    items.Add((item.Sequence, new ChildStarted(spawned, item.Sequence) { At = item.RecordedAt }));
+                    break;
+                case ChildFinished finished when options.Children:
+                    items.Add((item.Sequence, new ChildEnded(finished, item.Sequence) { At = item.RecordedAt }));
+                    break;
+            }
+        }
+
         // The transcript in its own order; plans and checkpoints placed among it by position (a stable sort, so the
         // transcript's order holds for entries at one position).
-        var ordered = options.Plans || options.Checkpoints || options.Decisions || options.Compactions || questions
+        var ordered = options.Plans || options.Checkpoints || options.Decisions || options.Compactions || questions || options.Models || options.Children
             ? items.OrderBy(item => item.Sequence).ToList()
             : items;
         return new SessionHistory(sessionId, head, [.. ordered.Select(item => item.Update)]);

@@ -36,6 +36,9 @@ namespace Corvid.Abstractions.Events;
 [JsonDerivedType(typeof(SessionRecapped), "session_recapped")]
 [JsonDerivedType(typeof(ApprovalAssessed), "approval_assessed")]
 [JsonDerivedType(typeof(EgressRecorded), "egress_recorded")]
+[JsonDerivedType(typeof(ChildSpawned), "child_spawned")]
+[JsonDerivedType(typeof(ChildFinished), "child_finished")]
+[JsonDerivedType(typeof(ChildOf), "child_of")]
 public abstract record SessionEvent;
 
 // Text is the initial message surface. Provider-specific message objects are never stored here.
@@ -291,4 +294,49 @@ public static class EgressOutcomes
     public const string Sent = "sent";
     public const string Redacted = "redacted";
     public const string Refused = "refused";
+}
+
+// A5 (plan §14, delegate_task): a child session's limits as it was started with them, after the parent's ceilings: the most
+// generator steps, tokens (prompt and completion as providers report them) and seconds it may use.
+public sealed record ChildBudget(int MaxSteps, int MaxTokens, int MaxSeconds);
+
+// A5: in the parent's log, a child session was started from it. ChildId is the child's session (whose log starts with ChildOf);
+// Goal what it was asked (the parent model's or the person's words: untrusted); Tools the toolset it was given, by name, after
+// the forbidden ones were taken out; Mix the slots it runs on, by catalogue name ({"generator":"qwen3.5-9b",...}, the
+// ModelMix shape), omitted when it runs on the parent's; OutputSchema the JSON Schema its answer must meet, when one was
+// given; By "agent" (a delegate_task call, CallId naming it) or "user" (/delegate, the app); Tainted whether it starts with
+// the parent's outside content. Optional members are omitted when null.
+public sealed record ChildSpawned(string ChildId, string Goal, ImmutableArray<string> Tools, ChildBudget Budget, string By,
+    bool Tainted = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] JsonElement? Mix = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] JsonElement? OutputSchema = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? CallId = null) : SessionEvent;
+
+// A5: in the parent's log, a child session ended. Status is a ChildStatuses name; Text its answer (model text: untrusted), cut
+// to a readable size; Steps and Tokens what it used; Detail why it ended other than answered (the budget it ran out of, the
+// schema error, the failure); OutputValid whether the answer met the output schema (omitted when none was given); Tainted
+// whether it ended holding outside content.
+public sealed record ChildFinished(string ChildId, string Status, int Steps, long Tokens, bool Tainted = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Text = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Detail = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? OutputValid = null) : SessionEvent;
+
+// A5: the first event of a child session's log: whose child it is (ParentId), how deep (1: the parent is a top-level session),
+// and what it was started with, as on the parent's ChildSpawned.
+public sealed record ChildOf(string ParentId, int Depth, string Goal, ImmutableArray<string> Tools, ChildBudget Budget,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] JsonElement? Mix = null) : SessionEvent;
+
+/// <summary>The wire names of <see cref="ChildFinished.Status"/>.</summary>
+public static class ChildStatuses
+{
+    public const string Answered = "answered";
+    public const string Failed = "failed";
+    /// <summary>The kernel's <c>stuck</c> question acted with nowhere to escalate: the stall monitor.</summary>
+    public const string Stuck = "stuck";
+    public const string StepBudgetExhausted = "step_budget_exhausted";
+    public const string TokenBudgetExhausted = "token_budget_exhausted";
+    public const string TimedOut = "timed_out";
+    public const string Cancelled = "cancelled";
+    /// <summary>It answered, but not in the output schema's shape.</summary>
+    public const string InvalidOutput = "invalid_output";
 }

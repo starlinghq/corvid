@@ -61,6 +61,64 @@ public sealed class CorvidOptions
 
     /// <summary>The windowed app's own choices (U-8); the CLI's commands ignore them.</summary>
     public AppSettings App { get; set; } = new();
+
+    /// <summary>Child sessions (A5, plan §14 <c>delegate_task</c>): limits, the model allowlist and named model mixes.</summary>
+    public AgentsSettings Agents { get; set; } = new();
+}
+
+/// <summary>
+/// Child sessions (A5, plan §14 and §17 row 1.7). These are ceilings: a child asks for less, never more, and neither the
+/// agent nor the person passing a mix can raise them from a session.
+/// </summary>
+public sealed class AgentsSettings
+{
+    /// <summary>The models a child may be given (catalogue names); empty allows any catalogue model.</summary>
+    public List<string> Models { get; set; } = [];
+
+    /// <summary>Children of one session running at once (Hermes' 10).</summary>
+    public int MaxConcurrent { get; set; } = 10;
+
+    /// <summary>How deep children nest: 1, a child cannot delegate; 0 turns delegation off.</summary>
+    public int MaxDepth { get; set; } = 1;
+
+    /// <summary>The most generator steps a child may take (and its default), never more than <c>Corvid:Turn:MaxSteps</c>.</summary>
+    public int MaxSteps { get; set; } = 8;
+
+    /// <summary>The most tokens (prompt and completion, as providers report them) a child may use, and its default.</summary>
+    public int MaxTokens { get; set; } = 64_000;
+
+    /// <summary>The longest a child may run, in seconds, and its default.</summary>
+    public int MaxSeconds { get; set; } = 600;
+
+    /// <summary>Named model mixes, by name, each by slot (<see cref="Corvid.Models.ModelMix"/>), for <c>delegate_task</c> and <c>/delegate</c>.</summary>
+    public Dictionary<string, Dictionary<string, MixSlotSettings>> Mixes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>A configured mix by name, checked; null when none is so named.</summary>
+    /// <exception cref="Corvid.Models.ModelMixException">The configured mix is malformed.</exception>
+    public Corvid.Models.ModelMix? Mix(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return Mixes.TryGetValue(name, out var slots) && slots is not null
+            ? Corvid.Models.ModelMix.Create(slots.Select(pair => KeyValuePair.Create(pair.Key, pair.Value?.ToSlot() ?? new Corvid.Models.ModelMixSlot(""))))
+            : null;
+    }
+}
+
+/// <summary>One slot of a configured mix (<c>Corvid:Agents:Mixes:&lt;name&gt;:&lt;slot&gt;</c>).</summary>
+public sealed class MixSlotSettings
+{
+    public string? Model { get; set; }
+
+    /// <summary>Null keeps the session's ladder.</summary>
+    public List<string>? Ladder { get; set; }
+
+    /// <summary>Null keeps the configured fallbacks.</summary>
+    public List<string>? Fallbacks { get; set; }
+
+    public bool Escalate { get; set; } = true;
+
+    public Corvid.Models.ModelMixSlot ToSlot() =>
+        new(Model ?? "", Ladder is null ? null : [.. Ladder], Fallbacks is null ? null : [.. Fallbacks], Escalate);
 }
 
 /// <summary>

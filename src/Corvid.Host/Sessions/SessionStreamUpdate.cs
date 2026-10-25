@@ -205,3 +205,36 @@ public sealed record CompactionLogged(Compacted Compaction, long Sequence) : Ses
 
 /// <summary>A write-ledger checkpoint was recorded (<c>CheckpointTaken</c>), for a rewind timeline.</summary>
 public sealed record CheckpointLogged(CheckpointTaken Checkpoint, long Sequence) : SessionStreamUpdate;
+
+/// <summary>
+/// A5: a slot's model changed, or the person's choice of it for the session did (any slot: generator, decider, extractor…).
+/// Live from <see cref="Composition.CorvidRuntime.ModelChanged"/> for every switch made in this process, inside a turn
+/// (escalation, fallback, a privacy retreat, de-escalation) or between turns (<c>/model</c>,
+/// <see cref="Composition.CorvidSession.SetModelAsync"/>); on replay (<see cref="ReplayOptions.Models"/>) from the log's
+/// <c>ModelSwitched</c> events, which have no <see cref="SessionDefault"/>, <see cref="Pinned"/> or <see cref="Cloud"/>
+/// beyond what the reason says. Profile ids come from configuration: show them through the surface's sanitizer.
+/// </summary>
+/// <param name="From">The profile id it switched from (<c>none</c> for a slot nothing bound).</param>
+/// <param name="To">The profile id it uses now (<c>none</c> when let go of).</param>
+/// <param name="Reason">The wire reason: <c>session</c>, <c>user</c>, <c>escalation</c>, <c>fallback</c>, <c>de_escalation</c> or <c>privacy</c>.</param>
+/// <param name="Sequence">The <c>ModelSwitched</c> event's position; null when nothing was logged (only the session default changed).</param>
+public sealed record ModelChanged(string Slot, string From, string To, string Reason, long? Sequence) : SessionStreamUpdate
+{
+    /// <summary>The change made <see cref="To"/> the slot's default for the session (the person's "this session" choice).</summary>
+    public bool SessionDefault { get; init; }
+
+    /// <summary>The slot is pinned after it: a turn's end leaves it where it is.</summary>
+    public bool Pinned { get; init; }
+
+    /// <summary>The model it uses now is a cloud one: its requests leave the machine through the egress gate.</summary>
+    public bool Cloud { get; init; }
+}
+
+/// <summary>
+/// A5: a child session was started from this one (<c>ChildSpawned</c>), live from <see cref="Composition.CorvidRuntime.ChildChanged"/>
+/// and on replay (<see cref="ReplayOptions.Children"/>). The goal is untrusted text; the mix's model names are catalogue names.
+/// </summary>
+public sealed record ChildStarted(ChildSpawned Child, long Sequence) : SessionStreamUpdate;
+
+/// <summary>A5: a child session ended (<c>ChildFinished</c>), live and on replay as <see cref="ChildStarted"/>; its text is untrusted.</summary>
+public sealed record ChildEnded(ChildFinished Child, long Sequence) : SessionStreamUpdate;

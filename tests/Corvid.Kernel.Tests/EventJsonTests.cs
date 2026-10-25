@@ -42,7 +42,24 @@ public sealed class EventJsonTests
         [typeof(SessionRecapped)] = "session_recapped",
         [typeof(ApprovalAssessed)] = "approval_assessed",
         [typeof(EgressRecorded)] = "egress_recorded",
+        [typeof(ChildSpawned)] = "child_spawned",
+        [typeof(ChildFinished)] = "child_finished",
+        [typeof(ChildOf)] = "child_of",
     };
+
+    [Fact]
+    public void The_a5_child_events_have_their_documented_persisted_form()
+    {
+        Assert.Equal("""
+            {"type":"child_spawned","child_id":"c-1","goal":"sum it","tools":["list_notes"],"budget":{"max_steps":4,"max_tokens":8000,"max_seconds":120},"by":"agent","tainted":false,"call_id":"call-9"}
+            """, EventJson.Serialize(new ChildSpawned("c-1", "sum it", ["list_notes"], new ChildBudget(4, 8_000, 120), "agent", CallId: "call-9")));
+        Assert.Equal("""
+            {"type":"child_finished","child_id":"c-1","status":"answered","steps":2,"tokens":40,"tainted":false,"text":"3","output_valid":true}
+            """, EventJson.Serialize(new ChildFinished("c-1", ChildStatuses.Answered, 2, 40, Text: "3", OutputValid: true)));
+        Assert.Equal("""
+            {"type":"child_of","parent_id":"p-1","depth":1,"goal":"sum it","tools":[],"budget":{"max_steps":4,"max_tokens":8000,"max_seconds":120}}
+            """, EventJson.Serialize(new ChildOf("p-1", 1, "sum it", [], new ChildBudget(4, 8_000, 120))));
+    }
 
     [Fact]
     public void The_g2_and_g9_events_have_their_documented_persisted_form()

@@ -210,10 +210,10 @@ internal sealed class FakeModelProvider : IModelProvider
     public IReadOnlyList<ModelDescriptor> Models => [.. _models.Values.Select(entry => entry.Model)];
 
     public FakeModelProvider Add(string name, string[] slots, Func<object> create, int context = 8_192,
-        ToolCallSupport tools = ToolCallSupport.TemplateRendered, bool ready = true)
+        ToolCallSupport tools = ToolCallSupport.TemplateRendered, bool ready = true, PrivacyClass privacy = PrivacyClass.Local)
     {
         var profile = new ModelProfile(name + "@cpu", context, context, tools, StructuredOutputSupport.None, PromptCachingStyle.None,
-            ModelCost.Free, PrivacyClass.Local, "cpu");
+            ModelCost.Free, privacy, privacy == PrivacyClass.Local ? "cpu" : "remote");
         _models[name] = (new ModelDescriptor(name, [.. slots], profile, Name, 1L << 20), create);
         if (!ready)
             _missing.Add(name);
