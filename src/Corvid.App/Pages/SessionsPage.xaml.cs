@@ -595,6 +595,29 @@ public sealed partial class SessionsPage : Page, IDockProvider
             args.Cancel = true;
             _swallowLineBreak = false;
         }
+        else if (IsWindowAltLetter(sender.Text, args.NewText))
+        {
+            args.Cancel = true;
+        }
+    }
+
+    /// <summary>
+    /// A5: Alt+P (a window key on Alt and a letter) switches the generator without leaving the composer, but Uno still types
+    /// the letter into it. One letter that a window binding on Alt names, inserted while Alt alone is held, is that key's,
+    /// not text. AltGr (Ctrl with Alt) types its own characters and is left alone.
+    /// </summary>
+    private bool IsWindowAltLetter(string before, string after)
+    {
+        if (_composition is null || after.Length != before.Length + 1 || !IsDown(VirtualKey.Menu) || IsDown(VirtualKey.Control))
+            return false;
+        var at = 0;
+        while (at < before.Length && before[at] == after[at])
+            at++;
+        var typed = after[at];
+        if (!char.IsAsciiLetter(typed) || before[at..] != after[(at + 1)..])
+            return false;
+        return _composition.Keys.Find(new Corvid.App.Core.Keys.KeyGesture(Corvid.App.Core.Keys.KeyModifiers.Alt,
+            char.ToUpperInvariant(typed).ToString())) is not null;
     }
 
     private static int LineBreaks(string text) => text.Count(c => c is '\r' or '\n');
@@ -882,12 +905,29 @@ public sealed partial class SessionsPage : Page, IDockProvider
     /// <summary>The title gives way to the fork pill (CSS's flex shrink): it is cut with an ellipsis, never the pill.</summary>
     private void OnHeaderSizeChanged(object sender, SizeChangedEventArgs e) => FitTitle();
 
+    /// <summary>The title's room the models pill leaves at least; with less, the pill gives way (the status bar names both).</summary>
+    private const double ModelsPillTitleRoom = 220;
+
     private void FitTitle()
     {
         // The room left of the actions, less the pill at its natural width.
         var room = HeaderGrid.ActualWidth - HeaderActions.ActualWidth - HeaderGrid.ColumnSpacing;
-        var pill = (ForkPill.Visibility == Visibility.Visible ? ForkPill.ActualWidth + TitleRow.Spacing : 0)
-            + (ModelsPill.Visibility == Visibility.Visible ? ModelsPill.ActualWidth + TitleRow.Spacing : 0);
+        var pill = ForkPill.Visibility == Visibility.Visible ? ForkPill.ActualWidth + TitleRow.Spacing : 0;
+        // A5: the models pill gives way to the title: it shows only while the title keeps room for a few words beside it.
+        if (ModelsPill.Visibility == Visibility.Visible)
+        {
+            ModelsPill.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+            var wanted = ModelsPill.DesiredSize.Width + TitleRow.Spacing;
+            var fits = room - pill - wanted >= ModelsPillTitleRoom;
+            var limit = fits ? double.PositiveInfinity : 0;
+            if (ModelsPill.MaxWidth != limit)
+            {
+                ModelsPill.MaxWidth = limit;
+                AutomationProperties.SetAccessibilityView(ModelsPill, fits ? Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Content : Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
+            }
+            if (fits)
+                pill += wanted;
+        }
         var width = Math.Max(40, room - pill);
         if (Math.Abs(TitleText.MaxWidth - width) > 0.5)
             TitleText.MaxWidth = width;

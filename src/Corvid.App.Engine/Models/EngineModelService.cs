@@ -190,8 +190,8 @@ public sealed class EngineModelService : IModelService, IDisposable
                 return Refused("Corvid has not started, so there is no session to switch.");
             if (sessionId is null)
                 return Refused("Open a session first: \"This session\" switches the open one. \"Default for new sessions\" needs none.");
-            if (!runtime.TryGetSession(sessionId, out var session))
-                return Refused($"Session {E(sessionId)} is not open in this window yet: open it, then switch.");
+            if (Driven(runtime, sessionId, out var session) is { } held)
+                return Refused(held);
             if (!_catalogue.TryFind(model, out var descriptor))
                 return Refused($"There is no model named {E(model)} in the catalogue.");
             var running = runtime.IsTurnRunning(sessionId);
@@ -225,14 +225,35 @@ public sealed class EngineModelService : IModelService, IDisposable
         {
             if (!ModelSlots.All.Contains(slot, StringComparer.Ordinal))
                 return Refused($"There is no slot named {E(slot)}.");
-            if (Started() is not { } runtime || sessionId is null || !runtime.TryGetSession(sessionId, out var session))
+            if (Started() is not { } runtime || sessionId is null)
                 return Refused("Open a session first: its choice is what this forgets.");
+            if (Driven(runtime, sessionId, out var session) is { } held)
+                return Refused(held);
             var result = await session.ClearModelChoiceAsync(slot, cancellationToken).ConfigureAwait(false);
             await RefreshAsync(cancellationToken).ConfigureAwait(false);
             return result is null
                 ? Written($"This session made no choice for the {slot}; it follows the default.")
                 : Written($"This session's {slot} follows the default again: {E(result.To?.Id.Split('@')[0] ?? "none")}.");
         }, cancellationToken);
+    }
+
+    /// <summary>
+    /// A5: the window's session for a "this session" change, opened here when no surface has it open yet (its choices come
+    /// back from its log as it opens); a refusal's text when another process drives it (G-12), which is where to switch it.
+    /// </summary>
+    private static string? Driven(CorvidRuntime runtime, string sessionId, out CorvidSession session)
+    {
+        if (runtime.TryGetSession(sessionId, out session!))
+            return null;
+        try
+        {
+            session = runtime.OpenSession(sessionId, Corvid.App.Engine.Sessions.EngineSessionService.Surface);
+            return null;
+        }
+        catch (SessionHeldException exception)
+        {
+            return $"{E(exception.Message.TrimEnd('.'))}: switch it there, with /model.";
+        }
     }
 
     public Task<ConfigWrite> SetLadderAsync(string slot, IReadOnlyList<string> ladder, CancellationToken cancellationToken = default)
@@ -714,6 +735,8 @@ public sealed class EngineModelService : IModelService, IDisposable
         }
 
         var session = runtime is not null && _sessionId is { } id && runtime.TryGetSession(id, out var open) ? open : null;
+        // A5: a session viewed here but not open yet starts on the choices its log holds: shown as its models.
+        var logged = session is null && runtime is not null && _sessionId is { } viewed ? runtime.ModelChoices(viewed) : null;
         var ladders = slots.ToDictionary(pair => pair.Key, pair => pair.Value.Escalation, StringComparer.Ordinal);
         var catalogue = new List<CatalogueModel>();
         foreach (var model in _catalogue.Models)
@@ -725,7 +748,7 @@ public sealed class EngineModelService : IModelService, IDisposable
         return new ModelsSnapshot(
             _writer.Path,
             validated,
-            [.. ModelSlots.All.Select(slot => Slot(slot, slots.GetValueOrDefault(slot), runtime, session))],
+            [.. ModelSlots.All.Select(slot => Slot(slot, slots.GetValueOrDefault(slot), runtime, session, logged))],
             catalogue,
             Privacy(options, ExtractorBound(runtime, slots, availability), vaultPresent),
             Decider(options, slots, availability, runtime),
@@ -758,7 +781,8 @@ public sealed class EngineModelService : IModelService, IDisposable
         }
     }
 
-    private ModelSlot Slot(string slot, SlotSettings? settings, CorvidRuntime? runtime, CorvidSession? session)
+    private ModelSlot Slot(string slot, SlotSettings? settings, CorvidRuntime? runtime, CorvidSession? session,
+        IReadOnlyDictionary<string, string>? logged = null)
     {
         var note = slot switch
         {
@@ -770,8 +794,9 @@ public sealed class EngineModelService : IModelService, IDisposable
             _ => null,
         };
         // A5: what the window's open session uses for the slot, and whether the person chose it for that session.
-        var inSession = session is not null && session.Slots.TryCurrent(slot, out var sessionBinding) ? sessionBinding.Profile.Id.Split('@')[0] : null;
-        var chosen = session?.Slots.HasSessionChoice(slot) ?? false;
+        var inSession = session is not null && session.Slots.TryCurrent(slot, out var sessionBinding) ? sessionBinding.Profile.Id.Split('@')[0]
+            : logged?.GetValueOrDefault(slot)?.Split('@')[0];
+        var chosen = session?.Slots.HasSessionChoice(slot) ?? logged?.ContainsKey(slot) ?? false;
         if (settings?.Model is not { Length: > 0 } model)
             return new ModelSlot(slot, null, Note: note, SessionModel: inSession, SessionChoice: chosen);
 
