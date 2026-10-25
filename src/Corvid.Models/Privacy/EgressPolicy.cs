@@ -33,8 +33,12 @@ public sealed record EgressPolicy
     /// <summary>User-defined labels, scanned with <see cref="Labels"/> (for example "project codename", "medical condition").</summary>
     public ImmutableArray<string> ExtraLabels { get; init; } = [];
 
-    /// <summary>Minimum span confidence. Lower is stricter: more spans count as PII.</summary>
-    public float Threshold { get; init; } = 0.6f;
+    /// <summary>
+    /// Minimum span confidence. Lower is stricter: more spans count as PII. A5 review: back to 0.4 (A5 had raised it to 0.6
+    /// with no measure of what it then missed); the false positives behind the raise were structure (JSON keys, Corvid's own
+    /// prompt, "status" as an email, "API key" as a credential), which the structure and shape rules drop at any threshold.
+    /// </summary>
+    public float Threshold { get; init; } = 0.4f;
 
     /// <summary>
     /// The least the gate does when the request carries content from outside the user (plan §10.3): other people's text is

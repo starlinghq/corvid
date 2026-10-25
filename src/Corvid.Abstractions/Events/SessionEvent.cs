@@ -125,8 +125,13 @@ public sealed record ApprovalRequested(string ApprovalId, string Action, string 
 public sealed record ApprovalResolved(string ApprovalId, bool Approved, string Reason,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Scope = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Note = null) : SessionEvent;
-// Profiles are snapshots, not mutable registry references; the slot implementation follows in C-006.
-public sealed record ModelSwitched(string Slot, JsonElement OldProfile, JsonElement NewProfile, string Reason) : SessionEvent;
+// Profiles are snapshots, not mutable registry references; the slot implementation follows in C-006. A5 review: Pinned (the
+// slot's pin after a person's change: a "session" choice, or an "unpin") and Reset (a "de_escalation" that forgets the
+// session's choice, logged even when the slot stays where it is) let a session opened again restore its choices and pins
+// exactly. Both are omitted when null, so events written before them keep their persisted form.
+public sealed record ModelSwitched(string Slot, JsonElement OldProfile, JsonElement NewProfile, string Reason,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Pinned = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Reset = null) : SessionEvent;
 // Summarizer (the profile that wrote the record) and Chunks (how many map calls it took, 1 when the range fit one call) were
 // added by C-016. Both are omitted when null, so events written before them keep their persisted form. Focus (C-041) is
 // what the user asked `/compact <focus>` to keep, recorded for audit and trace and not rendered; omitted when null too.

@@ -160,4 +160,99 @@ public sealed class InTurnQuestionTests
         Assert.Null(SessionCatalogue.Describe(runtime.Log, session.Id, Ct)?.OpenQuestion);
         Assert.Single(models.Generator.Calls);
     }
+
+    /// <summary>Holds the question until the test answers it.</summary>
+    private sealed class HeldAsker : IQuestionAsker
+    {
+        public TaskCompletionSource<QuestionPrompt> Asked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource<string?> Answer { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool CanAsk(string sessionId) => true;
+
+        public async ValueTask<string?> AskAsync(QuestionPrompt prompt, CancellationToken cancellationToken)
+        {
+            Asked.TrySetResult(prompt);
+            return await Answer.Task.WaitAsync(cancellationToken);
+        }
+    }
+
+    // A failure detector, never a synchronisation.
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+
+    [Fact]
+    public async Task A_switch_while_the_turn_waits_on_a_question_is_made_and_the_turn_takes_it_after_the_answer()
+    {
+        // A5 review: the waiting ask_user call is parked, so a switch meanwhile neither waits for it nor refuses it as an
+        // issued call with no result that is neither tracked nor parked.
+        var models = Models();
+        await using var host = TestHost.Create(models, BuiltinOn);
+        await using var runtime = await host.StartAsync();
+        var session = runtime.OpenSession(surface: "test");
+        var asker = new HeldAsker();
+
+        Delivery delivery;
+        using (runtime.AttachQuestioner(session.Id, asker))
+        {
+            var turn = session.SendAsync("tag it", Ct);
+            await asker.Asked.Task.WaitAsync(Bound, Ct);
+
+            var switched = await session.SetModelAsync(Corvid.Models.ModelSlots.Generator, "fake-gen-large", Corvid.Models.SwitchScope.Session, Ct)
+                .WaitAsync(Bound, Ct);
+            Assert.Equal(Corvid.Models.SwitchStatus.Switched, switched.Status);
+            Assert.False(turn.IsCompleted);
+
+            asker.Answer.SetResult("release");
+            delivery = await turn.WaitAsync(Bound, Ct);
+        }
+
+        Assert.Equal(TurnStatus.Answered, delivery.Result!.Status);
+        // The step after the answer ran on the model chosen while the question waited.
+        Assert.Equal("Hello from the larger model.", delivery.Result.Text);
+        Assert.Single(models.Generator.Calls);
+    }
+
+    [Fact]
+    public async Task A_surface_that_detaches_leaves_the_one_attached_before_it_asking()
+    {
+        // A5 review: a second surface on the session (the window beside corvid chat) no longer takes the first one's place for good.
+        var models = Models();
+        await using var host = TestHost.Create(models, BuiltinOn);
+        await using var runtime = await host.StartAsync();
+        var session = runtime.OpenSession(surface: "test");
+        var first = new Asker(_ => "release");
+        var second = new Asker(_ => "main");
+
+        Delivery delivery;
+        using (runtime.AttachQuestioner(session.Id, first))
+        {
+            runtime.AttachQuestioner(session.Id, second).Dispose();
+            delivery = await session.SendAsync("tag it", Ct);
+        }
+
+        Assert.Equal(TurnStatus.Answered, delivery.Result!.Status);
+        Assert.Single(first.Asked);
+        Assert.Empty(second.Asked);
+    }
+
+    [Fact]
+    public async Task The_latest_surface_attached_asks_and_detaching_the_earlier_one_leaves_it()
+    {
+        var models = Models();
+        await using var host = TestHost.Create(models, BuiltinOn);
+        await using var runtime = await host.StartAsync();
+        var session = runtime.OpenSession(surface: "test");
+        var first = new Asker(_ => "release");
+        var second = new Asker(_ => "release");
+
+        var earlier = runtime.AttachQuestioner(session.Id, first);
+        using (runtime.AttachQuestioner(session.Id, second))
+        {
+            earlier.Dispose();
+            await session.SendAsync("tag it", Ct);
+        }
+
+        Assert.Empty(first.Asked);
+        Assert.Single(second.Asked);
+    }
 }

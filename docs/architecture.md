@@ -1626,7 +1626,7 @@ Everything was verified against fake HTTP handlers and a stand-in Vault on a Uni
 
 - Privacy egress (`Corvid.Models/Privacy`, core, `IsAotCompatible`). `PrivacyEgress` is one per process. For a target profile
   it takes an `EgressPolicy`: action `Send`, `Redact` or `Refuse`; labels person, email, phone number, address, account
-  number and credential, plus user-defined ones; a confidence threshold (0.6 since A5, 0.4 before); and `Tainted`, the least it does for a tainted
+  number and credential, plus user-defined ones; a confidence threshold (0.4; A5 raised it to 0.6 and its review put it back); and `Tainted`, the least it does for a tainted
   request (`Redact` by default), which only tightens. The default gates every `cloud` profile with `Redact` and nothing
   else. Before a request it scans every string the request carries (text, tool-call arguments and tool results at their
   JSON leaves, numbers included) with the `IExtractor`, in chunks of 1,200 characters with 100 of overlap, cut at whitespace;
@@ -1639,10 +1639,12 @@ Everything was verified against fake HTTP handlers and a stand-in Vault on a Uni
   object keys are scanned and redacted like values, except (A5) lowercase identifier keys of letters (`status`,
   `exit_code`, `toolCallId`), which are structure. A5 also keeps Corvid's own configured system prompt
   (`PrivacyEgressOptions.TrustedTexts`) out of the scan and the rewrite, inside system messages only, while the core memory
-  and recalled memory after it are scanned as before; drops spans that are not values (a `credential` span of plain words,
-  an `email` without `@`, a phone or account number without digits, a lowercase word the request uses as a key or the
-  trusted prompt uses); and replaces a one-word value of letters only where it stands as a word ("Mark", not inside
-  "Marketing"). In the A4 pass GLiNER2 had labelled "status" an email and "Corvid" and "user" people. It fails closed: no extractor, an extractor exception, or content it
+  and recalled memory after it are scanned as before; drops spans that are not values (a `credential` span made only of
+  credential nouns such as "API key" or "wifi password", an `email` without `@`, a phone or account number without digits,
+  a lowercase identifier made only of Corvid's fixed `StructureWords`); and replaces a value of three letters or fewer only
+  where it stands as a word ("Ann", not inside "Annual"), anything longer wherever it appears ("Smith" in "SmithJ"). The A5
+  review narrowed the A5 rules: a letters-only credential span that is no credential noun ("sunshinerainbow") is a value, the
+  trusted prompt's words are no longer structure outside it, and the threshold went back to 0.4. In the A4 pass GLiNER2 had labelled "status" an email and "Corvid" and "user" people. It fails closed: no extractor, an extractor exception, or content it
   cannot read under `Redact` or `Refuse` refuses the request. Unreadable means images and files, and also any tool argument
   or result that is not a string, number, boolean or JSON (an adapter would serialize such an object, which the scan cannot
   see). A request marked local-only (below) is refused by every cloud model, whatever its policy. Under `Send` the scan still runs and the same extractor failures refuse, because without it the gate

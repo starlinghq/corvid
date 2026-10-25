@@ -174,6 +174,91 @@ public sealed class SessionModelTests
         Assert.Contains("Corvid:Agents:Mixes:wrong:generator: 'fake-embed' cannot serve generator", text, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Choosing_the_model_in_use_a_pin_and_a_reset_each_last_when_the_session_is_opened_again()
+    {
+        await using var host = TestHost.Create(new FakeModels());
+        string id;
+        await using (var first = await host.StartAsync())
+        {
+            var session = first.OpenSession();
+            id = session.Id;
+            // The slot already runs fake-gen: the choice changes nothing now, and must still come back.
+            var chosen = await session.SetModelAsync(ModelSlots.Generator, "fake-gen", SwitchScope.Session, Ct);
+            Assert.Equal((SwitchStatus.Unchanged, true), (chosen.Status, chosen.SessionDefaultChanged));
+        }
+
+        await using (var second = await host.StartAsync())
+        {
+            var session = second.OpenSession(id);
+            Assert.True(session.Slots.HasSessionChoice(ModelSlots.Generator));
+            Assert.False(session.Slots.IsPinned(ModelSlots.Generator));
+            Assert.Equal(SwitchStatus.Switched, (await session.SetModelAsync(ModelSlots.Generator, "fake-gen-large", SwitchScope.Pin, Ct)).Status);
+        }
+
+        await using (var third = await host.StartAsync())
+        {
+            var session = third.OpenSession(id);
+            Assert.Equal("fake-gen-large@cpu", session.Slots.Current(ModelSlots.Generator).Profile.Id);
+            Assert.True(session.Slots.IsPinned(ModelSlots.Generator));
+            Assert.Equal(new ModelChoice("fake-gen-large@cpu", true), third.ModelChoiceStates(id)[ModelSlots.Generator]);
+            // Pinned, the reset leaves the slot where it is, and is logged all the same.
+            Assert.Equal(SwitchStatus.Unchanged, (await session.ClearModelChoiceAsync(ModelSlots.Generator, Ct))!.Status);
+            Assert.False(session.Slots.HasSessionChoice(ModelSlots.Generator));
+        }
+
+        await using var fourth = await host.StartAsync();
+        var reopened = fourth.OpenSession(id);
+        Assert.False(reopened.Slots.HasSessionChoice(ModelSlots.Generator));
+        Assert.False(reopened.Slots.IsPinned(ModelSlots.Generator));
+        Assert.Equal("fake-gen@cpu", reopened.Slots.Current(ModelSlots.Generator).Profile.Id);
+        Assert.Empty(fourth.ModelChoices(id));
+    }
+
+    [Fact]
+    public async Task An_unpin_lasts_when_the_session_is_opened_again_and_the_choice_stays()
+    {
+        await using var host = TestHost.Create(new FakeModels());
+        string id;
+        await using (var first = await host.StartAsync())
+        {
+            var session = first.OpenSession();
+            id = session.Id;
+            await session.SetModelAsync(ModelSlots.Generator, "fake-gen-large", SwitchScope.Pin, Ct);
+            var commands = host.Services.GetRequiredService<Corvid.Host.Commands.SlashCommandRegistry>();
+            var output = await commands.ExecuteAsync("/model unpin generator", new Corvid.Host.Commands.SlashCommandContext(first, session, commands), Ct);
+            Assert.Contains("unpinned", string.Join("\n", output.Lines), StringComparison.Ordinal);
+        }
+
+        await using var second = await host.StartAsync();
+        var reopened = second.OpenSession(id);
+        Assert.True(reopened.Slots.HasSessionChoice(ModelSlots.Generator));
+        Assert.False(reopened.Slots.IsPinned(ModelSlots.Generator));
+        Assert.Equal("unpin", Switches(second, id).Last().Reason);
+    }
+
+    [Fact]
+    public async Task A_fork_at_an_earlier_position_starts_on_the_choice_logged_by_then_not_the_sources_latest()
+    {
+        await using var host = TestHost.Create(new FakeModels());
+        await using var runtime = await host.StartAsync();
+        var source = runtime.OpenSession(surface: "test");
+        await source.SetModelAsync(ModelSlots.Generator, "fake-gen-large", SwitchScope.Session, Ct);
+        await source.SendAsync("hello", Ct);
+        var then = runtime.Log.GetHead(source.Id, Ct);
+        await source.SetModelAsync(ModelSlots.Generator, "fake-gen", SwitchScope.Pin, Ct);
+
+        var fork = await runtime.ForkAsync(source.Id, new ForkOptions { Through = then, Surface = "test" }, Ct);
+
+        Assert.Equal("fake-gen-large@cpu", fork.Session.Slots.Current(ModelSlots.Generator).Profile.Id);
+        Assert.False(fork.Session.Slots.IsPinned(ModelSlots.Generator));
+        var reported = Assert.Single(fork.Models);
+        Assert.Equal((SwitchStatus.Unchanged, "fake-gen-large@cpu", false), (reported.Status, reported.To!.Id, reported.Pinned));
+        // Nothing of the source's later choice is in the fork.
+        Assert.DoesNotContain(runtime.Log.Read(fork.Session.Id, limit: 4096, cancellationToken: Ct), item => item.Sequence > fork.Through);
+        Assert.Equal("fake-gen@cpu", source.Slots.Current(ModelSlots.Generator).Profile.Id);
+    }
+
     private static IEnumerable<ModelSwitched> Switches(CorvidRuntime runtime, string sessionId) =>
         runtime.Log.Read(sessionId, limit: 4096).Select(item => item.Payload).OfType<ModelSwitched>();
 

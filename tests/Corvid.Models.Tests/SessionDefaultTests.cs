@@ -96,22 +96,78 @@ public sealed class SessionDefaultTests : IDisposable
         Assert.Same(_server, slots.Current(Generator));
 
         // Unpinned: back to the session choice, not the registry default.
-        slots.Unpin(Generator);
+        Assert.True(await slots.UnpinAsync(Generator, Ct));
         Assert.Equal(_other.Profile, Assert.Single(await slots.CompleteTurnAsync(Ct)).To);
     }
 
     [Fact]
-    public async Task Choosing_the_model_the_slot_already_uses_changes_the_default_without_logging()
+    public async Task Choosing_the_model_the_slot_already_uses_changes_the_default_and_logs_it_in_place()
     {
         var slots = Slots();
         await slots.EscalateAsync(Generator, Ct);
 
         var result = await slots.SetSessionDefaultAsync(Generator, _server, cancellationToken: Ct);
+        var again = await slots.SetSessionDefaultAsync(Generator, _server, cancellationToken: Ct);
 
         Assert.Equal((SwitchStatus.Unchanged, true), (result.Status, result.SessionDefaultChanged));
+        Assert.NotNull(result.Sequence);
         Assert.Empty(await slots.CompleteTurnAsync(Ct));
-        Assert.Equal(["escalation"], Switches().Select(change => change.Reason));
+        // A5 review: logged from the model to itself, so a session opened again restores the choice; the same choice again
+        // (same pin) logs nothing more.
+        var logged = Switches().ToArray();
+        Assert.Equal(["escalation", "session"], logged.Select(change => change.Reason));
+        Assert.Equal((_server.Profile.Id, _server.Profile.Id, (bool?)false),
+            (ModelProfile.FromSnapshot(logged[1].OldProfile).Id, ModelProfile.FromSnapshot(logged[1].NewProfile).Id, logged[1].Pinned));
+        Assert.Equal((SwitchStatus.Unchanged, false, (long?)null), (again.Status, again.SessionDefaultChanged, again.Sequence));
         Assert.Contains(_changes, change => change is { Status: SwitchStatus.Unchanged, SessionDefaultChanged: true });
+    }
+
+    [Fact]
+    public async Task Pinning_the_choice_in_use_and_unpinning_it_are_logged()
+    {
+        var slots = Slots();
+        await slots.SetSessionDefaultAsync(Generator, _other, cancellationToken: Ct);
+
+        await slots.SetSessionDefaultAsync(Generator, _other, pin: true, Ct);
+        Assert.True(slots.IsPinned(Generator));
+        Assert.True(await slots.UnpinAsync(Generator, Ct));
+        Assert.False(await slots.UnpinAsync(Generator, Ct));
+
+        var logged = Switches().ToArray();
+        Assert.Equal(["session", "session", "unpin"], logged.Select(change => change.Reason));
+        Assert.Equal(new bool?[] { false, true, false }, logged.Select(change => change.Pinned));
+        Assert.All(logged.Skip(1), change => Assert.Equal(_other.Profile.Id, ModelProfile.FromSnapshot(change.NewProfile).Id));
+    }
+
+    [Fact]
+    public async Task A_reset_that_leaves_a_pinned_slot_where_it_is_is_still_logged()
+    {
+        var slots = Slots();
+        await slots.SwitchAsync(Generator, _other, SwitchScope.Pin, Ct);
+        await slots.EscalateAsync(Generator, Ct);
+
+        var cleared = await slots.ClearSessionDefaultAsync(Generator, Ct);
+
+        Assert.Equal((SwitchStatus.Unchanged, true), (cleared!.Status, cleared.SessionDefaultChanged));
+        Assert.False(slots.HasSessionChoice(Generator));
+        Assert.Same(_server, slots.Current(Generator));
+        var reset = Switches().Last();
+        Assert.Equal(("de_escalation", (bool?)true), (reset.Reason, reset.Reset));
+        Assert.Equal(_server.Profile.Id, ModelProfile.FromSnapshot(reset.NewProfile).Id);
+        Assert.Equal(_db.Log.Read(Session, cancellationToken: Ct).Last(item => item.Payload is ModelSwitched).Sequence, cleared.Sequence);
+    }
+
+    [Fact]
+    public async Task A_reset_that_switches_back_says_it_was_a_reset()
+    {
+        var slots = Slots();
+        await slots.SetSessionDefaultAsync(Generator, _other, cancellationToken: Ct);
+
+        await slots.ClearSessionDefaultAsync(Generator, Ct);
+
+        var reset = Switches().Last();
+        Assert.Equal(("de_escalation", (bool?)true), (reset.Reason, reset.Reset));
+        Assert.Equal(_local.Profile.Id, ModelProfile.FromSnapshot(reset.NewProfile).Id);
     }
 
     [Fact]

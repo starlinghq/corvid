@@ -78,4 +78,45 @@ public sealed class EgressModelTests
             (bound.Service as IDisposable)?.Dispose();
         }
     }
+
+    [Fact]
+    public async Task Gliner2_at_the_default_threshold_leaves_the_nouns_of_a_turn_about_logins()
+    {
+        // A5 review: the default threshold is 0.4 again and a credential span of letters is a value unless it is a credential
+        // noun. On this turn GLiNER2 labels "John Smith" a person and "handle" a credential (a noun, so kept); it labels
+        // neither "sunshinerainbow" nor "SmithJ", and the credential detector's prose gate (C-032) wants a digit or a symbol,
+        // so both are sent as written: see docs/plan/ui-handoff.md §1.6 (left).
+        var cache = Environment.GetEnvironmentVariable(ModelTests.CacheVariable);
+        Assert.SkipWhen(string.IsNullOrEmpty(cache), $"Set {ModelTests.CacheVariable} to a Starling model cache to run model-backed tests.");
+        var store = new StarlingModelStore(cache);
+        var status = store.Check(StarlingModel.Gliner2, Starlings.Acquisition.CacheVerification.Size);
+        Assert.SkipWhen(status.State == StarlingModelState.Missing, status.Describe());
+        var bound = StarlingBindings.Gliner2Extractor(store.OpenGliner2());
+        try
+        {
+            var egress = new PrivacyEgress(bound.GetService<IExtractor>(), new PrivacyEgressOptions
+            {
+                PolicyFor = _ => EgressPolicy.Default,
+                TrustedTexts = [TurnOptions.DefaultSystemPrompt],
+            });
+            List<ChatMessage> turn =
+            [
+                new(ChatRole.System, TurnOptions.DefaultSystemPrompt),
+                new(ChatRole.User, "my wifi password is sunshinerainbow. Also ask John Smith about the build; his handle is SmithJ."),
+            ];
+
+            var prepared = await egress.PrepareAsync(Server, turn, new ModelRequestContext("s3", Tainted: false), TestContext.Current.CancellationToken);
+
+            var sent = prepared.Messages[1].Text;
+            TestContext.Current.TestOutputHelper?.WriteLine(sent);
+            Assert.Equal(TurnOptions.DefaultSystemPrompt, prepared.Messages[0].Text);
+            Assert.DoesNotContain("John Smith", sent, StringComparison.Ordinal);
+            Assert.StartsWith("my wifi password is ", sent, StringComparison.Ordinal);
+            Assert.Contains("about the build; his handle is ", sent, StringComparison.Ordinal);
+        }
+        finally
+        {
+            (bound.Service as IDisposable)?.Dispose();
+        }
+    }
 }

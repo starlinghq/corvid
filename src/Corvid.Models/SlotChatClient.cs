@@ -15,6 +15,23 @@ public static class FallbackErrors
 }
 
 /// <summary>
+/// A5 review: the model that answered a request through a slot's client (<see cref="SessionModelSlots.GetChatClient"/>),
+/// which after a fallback, a privacy retreat or a switch made during the call is not the one the call started on.
+/// </summary>
+public static class ModelResponses
+{
+    /// <summary>The <see cref="ChatResponse.AdditionalProperties"/> key holding the answering profile's id.</summary>
+    public const string ProfileKey = ModelRequestKeys.Prefix + "answered_by";
+
+    /// <summary>The id of the profile that answered (<c>qwen3.5-27b@cuda0</c>), or null for a response that did not come through a slot.</summary>
+    public static string? AnsweredBy(ChatResponse response)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        return response.AdditionalProperties?.TryGetValue(ProfileKey, out var value) == true ? value as string : null;
+    }
+}
+
+/// <summary>
 /// The chat client the turn loop holds for a slot. Each call resolves the slot's current binding, so a switch takes
 /// effect at the next call. A provider failure falls back along the slot's chain through the logged switch procedure.
 /// </summary>
@@ -32,7 +49,10 @@ internal sealed class SlotChatClient(SessionModelSlots slots, string slot, Func<
             var binding = slots.Current(slot);
             try
             {
-                return await binding.GetService<IChatClient>().GetResponseAsync(history, options, cancellationToken).ConfigureAwait(false);
+                var response = await binding.GetService<IChatClient>().GetResponseAsync(history, options, cancellationToken).ConfigureAwait(false);
+                // A5 review: which binding answered, set after the inner client returns so no wrapper can drop it.
+                (response.AdditionalProperties ??= [])[ModelResponses.ProfileKey] = binding.Profile.Id;
+                return response;
             }
             catch (PrivacyEgressRefusedException exception) when (!cancellationToken.IsCancellationRequested)
             {

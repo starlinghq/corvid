@@ -169,6 +169,29 @@ public sealed class ForkDuringTurnTests
     }
 
     [Fact]
+    public async Task A_shell_line_that_is_the_sessions_first_message_has_a_boundary_before_it_and_nothing_to_fork()
+    {
+        // A5 review: the boundary was the head before the line, 0 here, which read as "no turn"; the fork then fell back to
+        // the log's last resting point and copied the ! line without its call.
+        await using var host = TestHost.Create(new FakeModels(), new Dictionary<string, string?> { ["Corvid:Tools:Builtin"] = "true" });
+        await using var runtime = await host.StartAsync();
+        var source = runtime.OpenSession(surface: "test");
+        var prompter = new HeldPrompter();
+        using var _ = runtime.AttachPrompter(source.Id, prompter);
+        // A command that needs the person's approval (ls would run at once), so the line waits at its prompt; it is denied below.
+        var line = await source.PostShellAsync("!rm notes.txt", new ShellLine("rm notes.txt"), Ct);
+        await prompter.Asked.Task.WaitAsync(Bound, Ct);
+
+        Assert.Equal((long?)0, source.Runner.StepBoundary);
+        var refused = await Assert.ThrowsAsync<SessionForkException>(() => runtime.ForkAsync(source.Id, new ForkOptions { Surface = "test" }, Ct));
+        Assert.Contains("first line, a shell command", refused.Message, StringComparison.Ordinal);
+
+        prompter.Answer.SetResult(ApprovalAnswer.Deny());
+        await line.WaitAsync(Bound, Ct);
+        Assert.Null(source.Runner.StepBoundary);
+    }
+
+    [Fact]
     public async Task A_fork_starts_with_the_sources_taint_and_its_session_model_choices()
     {
         await using var host = TestHost.Create(new FakeModels(new FakeGenerator(Reply.Say("noted"))));

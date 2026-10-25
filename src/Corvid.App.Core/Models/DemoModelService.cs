@@ -151,8 +151,8 @@ public sealed class DemoModelService : IModelService, IDisposable
             return Refused($"The {current.Name} cannot be pinned.");
         Replace(current with { Pinned = pinned });
         return Written(pinned
-            ? $"The {current.Name} is pinned to {E(current.Model)} for this session: escalation leaves it alone."
-            : $"The {current.Name} is no longer pinned: a hard step escalates again.");
+            ? $"The {current.Name} is pinned to {E(current.Model)} for this session: a turn's end leaves it where it is (escalation still moves it)."
+            : $"The {current.Name} is no longer pinned: a turn's end returns it to this session's choice again.");
     }
 
     public Task<ConfigWrite> SetPlacementAsync(string model, string device, CancellationToken cancellationToken = default)

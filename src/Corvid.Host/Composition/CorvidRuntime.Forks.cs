@@ -48,7 +48,8 @@ public sealed partial class CorvidRuntime
     /// approval waits) and the turn goes on untouched; a position past that step is refused. Between turns it is taken
     /// between them, never splitting a turn; for a source another process drives, at the latest point where no call or
     /// approval is open. The fork starts with the source's taint and with the source's session model choices (its pins
-    /// too) as its own, then <see cref="ForkOptions.Mix"/>'s.
+    /// too) as they stood at the fork's position, as its own, then <see cref="ForkOptions.Mix"/>'s. While a session's first
+    /// message, a <c>!</c> line, runs, there is nothing to fork yet.
     /// </summary>
     /// <exception cref="SessionForkException">
     /// The source has no such position, the position leaves a call or prompt open or is past the running turn's last step,
@@ -74,6 +75,11 @@ public sealed partial class CorvidRuntime
         if (open && source.Runner.StepBoundary is { } boundary)
         {
             duringTurn = true;
+            // A5 review: a `!` line that is the session's first message holds nothing before it (its boundary is 0), and
+            // the line without its call is no resting point.
+            if (boundary == 0)
+                throw new SessionForkException($"Session '{TerminalText.Visible(sourceId)}' is running its first line, a shell command, " +
+                    "and holds nothing before it to fork yet; fork once it finishes.");
             if (options.Through is { } asked && asked > boundary)
                 throw new SessionForkException($"A turn of session '{TerminalText.Visible(sourceId)}' is running: it can be forked through " +
                     $"position {boundary}, its last completed step, or earlier, not {asked}.");
@@ -102,16 +108,24 @@ public sealed partial class CorvidRuntime
         var fork = OpenSession(id, options.Surface, options.Settings);
         if (tainted)
             fork.Runner.Taint();
+        // The source's choices as they stood at the fork's position, not as they are now (A5 review): the copied log holds the
+        // ones logged through it, and opening the fork restored those. A cloud choice is not restored without the privacy
+        // gate, so it is chosen again here, through the gate with the fork's taint.
         var models = ImmutableArray.CreateBuilder<SwitchResult>();
-        if (open)
+        foreach (var (slot, choice) in ModelChoiceStates(id))
         {
-            foreach (var slot in ModelSlots.All)
+            if (slot == ModelSlots.TextEmbedder || !ModelSlots.All.Contains(slot, StringComparer.Ordinal) || options.Mix?.Slots.ContainsKey(slot) == true)
+                continue;
+            if (fork.Slots.HasSessionChoice(slot))
             {
-                if (!source.Slots.HasSessionChoice(slot) || options.Mix?.Slots.ContainsKey(slot) == true)
-                    continue;
-                models.Add(await fork.Slots.SetSessionDefaultAsync(slot, source.Slots.SessionDefault(slot), source.Slots.IsPinned(slot),
-                    cancellationToken).ConfigureAwait(false));
+                var restored = fork.Slots.Current(slot).Profile;
+                models.Add(new SwitchResult(SwitchStatus.Unchanged, slot, restored, restored, SwitchReason.Session) { Pinned = fork.Slots.IsPinned(slot) });
+                continue;
             }
+            if (Catalogue.TryFind(choice.Profile.Split('@')[0], out var model) && model.Serves(slot)
+                && model.Profile.Privacy == PrivacyClass.Cloud && Catalogue.Check(model.Name).IsReady)
+                models.Add(await fork.SetModelAsync(slot, model.Name, choice.Pinned ? SwitchScope.Pin : SwitchScope.Session, cancellationToken)
+                    .ConfigureAwait(false));
         }
         foreach (var (slot, pick) in options.Mix?.Slots ?? ImmutableSortedDictionary<string, ModelMixSlot>.Empty)
             models.Add(await fork.SetModelAsync(slot, pick.Model, SwitchScope.Session, cancellationToken).ConfigureAwait(false));

@@ -33,6 +33,9 @@ public sealed record ModelDefaultChange(ModelDefaultWrite Write, bool Live, stri
     }
 }
 
+/// <summary>A5 review: a "this session" choice a session's log holds: the profile id (<c>qwen3.5-0.8b@cuda0</c>) and its pin.</summary>
+public sealed record ModelChoice(string Profile, bool Pinned);
+
 public sealed partial class CorvidRuntime
 {
     /// <summary>
@@ -67,15 +70,15 @@ public sealed partial class CorvidRuntime
     }
 
     /// <summary>
-    /// A5: the person's "this session" choices in a session's log (<c>ModelSwitched</c> with the reason <c>session</c>, the
-    /// latest per slot; a de-escalation to another model after it is a reset, which forgets it), put back when the session is
+    /// A5: the person's "this session" choices in a session's log (<see cref="ModelChoiceStates"/>: the latest <c>session</c>
+    /// switch per slot with its pin, unless a reset came after it), put back, pinned or not, when the session is
     /// opened again, so a choice lasts for the session across a restart, <c>corvid chat --session</c> or a fork. A model no
     /// longer in the catalogue or not usable now is left out with a notice, and so is a cloud one: a cloud binding is chosen
     /// again through the privacy gate, never brought back without it. Memory's embedder is left to its configuration.
     /// </summary>
     private void RestoreModelChoices(string sessionId, SessionModelSlots slots)
     {
-        foreach (var (slot, id) in ModelChoices(sessionId))
+        foreach (var (slot, (id, pinned)) in ModelChoiceStates(sessionId))
         {
             if (slot == ModelSlots.TextEmbedder || !ModelSlots.All.Contains(slot, StringComparer.Ordinal))
                 continue;
@@ -97,7 +100,7 @@ public sealed partial class CorvidRuntime
             }
             try
             {
-                slots.RestoreSessionDefault(slot, _composer.Bind(slot, model.Name, Corvid.Kernel.Scheduling.DevicePriority.Interactive));
+                slots.RestoreSessionDefault(slot, _composer.Bind(slot, model.Name, Corvid.Kernel.Scheduling.DevicePriority.Interactive), pinned);
             }
             catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or ModelUnavailableException or IOException)
             {
@@ -123,24 +126,49 @@ public sealed partial class CorvidRuntime
 
     /// <summary>
     /// A5: the person's "this session" choices a session's log holds, by slot, as profile ids (<c>qwen3.5-0.8b@cuda0</c>): the
-    /// latest <c>ModelSwitched</c> with the reason <c>session</c> per slot, unless a de-escalation to another model (a reset)
-    /// came after it. What a session opened again starts on; a surface can show it for a session not open here.
+    /// latest <c>ModelSwitched</c> with the reason <c>session</c> per slot, unless a reset came after it. What a session opened
+    /// again starts on; a surface can show it for a session not open here.
     /// </summary>
-    public IReadOnlyDictionary<string, string> ModelChoices(string sessionId)
+    public IReadOnlyDictionary<string, string> ModelChoices(string sessionId) =>
+        ModelChoiceStates(sessionId).ToDictionary(pair => pair.Key, pair => pair.Value.Profile, StringComparer.Ordinal);
+
+    /// <summary>
+    /// A5 review: the choices <see cref="ModelChoices"/> reads, with whether each is pinned, as the log stood at
+    /// <paramref name="through"/> (its head when null). A <c>session</c> switch is a choice (its <c>Pinned</c> says whether it
+    /// was pinned; a log from before A5's review has none, so unpinned); a <c>de_escalation</c> with <c>Reset</c> forgets it
+    /// (and, in an older log, one to another model after it); an <c>unpin</c> or a turn switch that changed the pin sets the pin.
+    /// </summary>
+    public IReadOnlyDictionary<string, ModelChoice> ModelChoiceStates(string sessionId, long? through = null)
     {
-        var choices = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (Log.GetHead(sessionId) == 0)
+        var choices = new Dictionary<string, ModelChoice>(StringComparer.Ordinal);
+        var head = Log.GetHead(sessionId);
+        if (head == 0)
             return choices;
-        foreach (var item in Log.Read(sessionId))
+        var last = Math.Min(through ?? head, head);
+        // Paged: Read returns a page (256 events by default), and a choice can come late in a long session.
+        for (var after = 0L; after < last;)
         {
-            if (item.Payload is not Corvid.Abstractions.Events.ModelSwitched switched || Profile(switched.NewProfile) is not { } to)
-                continue;
-            if (switched.Reason == SwitchReason.Session.ToWireName())
-                choices[switched.Slot] = to;
-            else if (switched.Reason == SwitchReason.DeEscalation.ToWireName() && choices.TryGetValue(switched.Slot, out var chosen) && chosen != to)
-                choices.Remove(switched.Slot);
+            var page = Log.Read(sessionId, after, last, 512);
+            if (page.Count == 0)
+                break;
+            after = page[^1].Sequence;
+            foreach (var item in page)
+                Take(item);
         }
         return choices;
+
+        void Take(Corvid.Abstractions.Events.StoredEvent item)
+        {
+            if (item.Payload is not Corvid.Abstractions.Events.ModelSwitched switched || Profile(switched.NewProfile) is not { } to)
+                return;
+            if (switched.Reason == SwitchReason.Session.ToWireName())
+                choices[switched.Slot] = new ModelChoice(to, switched.Pinned == true);
+            else if (switched.Reason == SwitchReason.DeEscalation.ToWireName()
+                && choices.TryGetValue(switched.Slot, out var chosen) && (switched.Reset == true || chosen.Profile != to))
+                choices.Remove(switched.Slot);
+            else if (switched.Pinned is { } pinned && choices.TryGetValue(switched.Slot, out var held))
+                choices[switched.Slot] = held with { Pinned = pinned };
+        }
 
         static string? Profile(System.Text.Json.JsonElement snapshot)
         {

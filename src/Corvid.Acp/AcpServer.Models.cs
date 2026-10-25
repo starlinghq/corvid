@@ -63,6 +63,9 @@ internal static class AcpConfig
     /// <summary>The decider's value while nothing binds it (the degraded tier).</summary>
     public const string Degraded = "degraded";
 
+    /// <summary>A5 review: the value that forgets the session's choice for the slot (offered only while it has one).</summary>
+    public const string FollowDefault = "default";
+
     /// <summary>
     /// The options for a session: each slot's catalogue models that can serve it and are usable now, the one in use marked as
     /// current (offered even when it is not usable any more, so the current value is always among the options). A name that
@@ -83,7 +86,7 @@ internal static class AcpConfig
         var values = new List<ConfigOptionValue>();
         foreach (var model in runtime.Catalogue.ForSlot(slot))
         {
-            if (TerminalText.Visible(model.Name) != model.Name)
+            if (TerminalText.Visible(model.Name) != model.Name || string.Equals(model.Name, FollowDefault, StringComparison.OrdinalIgnoreCase))
                 continue;
             var isCurrent = string.Equals(model.Name, current, StringComparison.OrdinalIgnoreCase);
             if (!isCurrent && !runtime.Catalogue.Check(model.Name).IsReady)
@@ -101,6 +104,13 @@ internal static class AcpConfig
             values.Insert(0, new ConfigOptionValue(TerminalText.Visible(shown), slot == ModelSlots.Decider && current is null ? "Degraded tier" : TerminalText.Visible(shown)));
             current = values[0].Value;
         }
+        // A5 review: a session that chose its own model can follow the default again (a decider chosen on the degraded tier
+        // goes back to none). Never the current value; a catalogue model of that name is left out above.
+        if (session.Slots.HasSessionChoice(slot))
+            values.Add(new ConfigOptionValue(FollowDefault, "Follow the default")
+            {
+                Description = "forget this session's choice: the slot goes back to the default for new sessions",
+            });
         return new ConfigOption(id, name, "select", current, [.. values]) { Category = category, Description = description };
     }
 
@@ -140,7 +150,7 @@ internal sealed partial class AcpAgent
         {
             try
             {
-                if (slot == ModelSlots.Decider && value == AcpConfig.Degraded)
+                if (value == AcpConfig.FollowDefault || (slot == ModelSlots.Decider && value == AcpConfig.Degraded))
                     await session.ClearModelChoiceAsync(slot, cancellationToken).ConfigureAwait(false);
                 else if (await session.SetModelAsync(slot, value, SwitchScope.Session, cancellationToken).ConfigureAwait(false) is { Status: SwitchStatus.Refused } refused)
                     throw new AcpException(AcpErrors.InvalidParams, $"The privacy gate refused {TerminalText.Visible(value)}: {TerminalText.Visible(refused.Detail ?? "")}");

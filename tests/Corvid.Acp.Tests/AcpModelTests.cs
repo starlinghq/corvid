@@ -51,6 +51,36 @@ public sealed class AcpModelTests
     }
 
     [Fact]
+    public async Task AChosenDeciderOrGeneratorCanFollowTheDefaultAgain()
+    {
+        // A5 review: once chosen, the decider had no value that went back to the degraded tier; "default" forgets the choice.
+        var models = new FakeModels(new FakeGenerator(Reply.Say("Hello.")));
+        await using var client = AcpClient.Start(TestHost.Create(models));
+        await client.RequestAsync("initialize", Initialize());
+        var session = await client.NewSessionAsync();
+        var runtime = await client.Runtime;
+        static string[] Values(JsonNode option) => [.. option["options"]!.AsArray().Select(value => value!["value"]!.GetValue<string>())];
+
+        var created = await client.RequestAsync("session/set_config_option", new { sessionId = session, configId = "decider", value = "fake-kev" });
+        var decider = Option(created["result"]!["configOptions"]!, "decider");
+        Assert.Equal("fake-kev", decider["currentValue"]!.GetValue<string>());
+        Assert.Contains("default", Values(decider));
+        Assert.DoesNotContain("default", Values(Option(created["result"]!["configOptions"]!, "model")));
+
+        var reset = await client.RequestAsync("session/set_config_option", new { sessionId = session, configId = "decider", value = "default" });
+        decider = Option(reset["result"]!["configOptions"]!, "decider");
+        Assert.Equal("degraded", decider["currentValue"]!.GetValue<string>());
+        Assert.DoesNotContain("default", Values(decider));
+        Assert.True(runtime.TryGetSession(session, out var open));
+        Assert.False(open.Slots.HasSessionChoice(ModelSlots.Decider));
+
+        await client.RequestAsync("session/set_config_option", new { sessionId = session, configId = "model", value = "fake-gen-large" });
+        reset = await client.RequestAsync("session/set_config_option", new { sessionId = session, configId = "model", value = "default" });
+        Assert.Equal("fake-gen", Option(reset["result"]!["configOptions"]!, "model")["currentValue"]!.GetValue<string>());
+        Assert.False(open.Slots.HasSessionChoice(ModelSlots.Generator));
+    }
+
+    [Fact]
     public async Task ABadOptionOrValueIsRefusedAndAHiddenNameIsNotOffered()
     {
         var models = new FakeModels(new FakeGenerator(Reply.Say("Hello.")));
