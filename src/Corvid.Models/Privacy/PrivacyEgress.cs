@@ -262,12 +262,21 @@ public sealed partial class PrivacyEgress
             return true;
         // A value of a built-in label has its shape: an email has an @, a phone or account number has digits. GLiNER2 called
         // "status" an email in the A4 pass. A user-defined label has no known shape and is taken as found.
-        if (label == "email" && !value.Contains('@', StringComparison.Ordinal))
+        if (label == "email" && (value.IndexOf('@', StringComparison.Ordinal) is var at && at <= 0 || value.IndexOf('.', at + 1) < 0))
+            return true;
+        // A pronoun or a role is nobody in particular ("You answer one question", "User:", "the assistant").
+        if (label == "person" && RoleWords.Contains(value))
             return true;
         if (label is "phone number" or "account number" && !value.Any(char.IsAsciiDigit))
             return true;
         return vocabulary is not null && value.All(c => char.IsAsciiLetterLower(c) || c is '_' or '-') && vocabulary.Contains(value);
     }
+
+    private static readonly HashSet<string> RoleWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "I", "me", "you", "he", "him", "she", "her", "we", "us", "they", "them", "it", "someone", "everyone", "user", "users",
+        "assistant", "system", "human", "agent", "model", "person", "people",
+    };
 
     /// <summary>The label credential values are redacted under: <c>&lt;CREDENTIAL_1&gt;</c>.</summary>
     public const string CredentialLabel = "credential";

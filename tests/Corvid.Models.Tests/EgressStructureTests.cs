@@ -149,11 +149,17 @@ public sealed class EgressStructureTests
     {
         // The real GLiNER2 called "status" an email in plain text, at a confidence over the threshold.
         var extractor = new EagerExtractor(("email", "status", 0.93f), ("phone number", "nightly", 0.8f), ("email", "ann@example.org", 0.95f),
-            ("phone number", "555-0142", 0.9f));
-        List<ChatMessage> messages = [new(ChatRole.User, "What is the nightly status? Tell ann@example.org or call 555-0142.")];
+            ("phone number", "555-0142", 0.9f), ("email", "fake@openai-compatible", 0.9f), ("person", "You", 0.85f), ("person", "User", 0.8f),
+            ("person", "Ann", 0.9f));
+        List<ChatMessage> messages =
+        [
+            new(ChatRole.User, "User: What is the nightly status? You know Ann: tell ann@example.org or call 555-0142.\ngenerator: fake@openai-compatible"),
+        ];
         var prepared = await Egress(extractor).PrepareAsync(Server, messages, new ModelRequestContext("s1", Tainted: false), Ct);
 
-        Assert.Equal("What is the nightly status? Tell <EMAIL_1> or call <PHONE_NUMBER_1>.", Text(prepared.Messages[0]));
+        // The real GLiNER2 (A5 pass) also called "You" and "User" people, and the TurnState's "fake@openai-compatible" an email.
+        Assert.Equal("User: What is the nightly status? You know <PERSON_1>: tell <EMAIL_1> or call <PHONE_NUMBER_1>.\ngenerator: fake@openai-compatible",
+            Text(prepared.Messages[0]));
     }
 
     [Fact]

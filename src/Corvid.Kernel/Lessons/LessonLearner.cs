@@ -50,7 +50,8 @@ public sealed record LessonLearnerOptions
 /// </summary>
 public sealed class LessonLearner : ILessonLearning
 {
-    private const string SystemPrompt =
+    /// <summary>Its fixed system prompt, Corvid's own text (A5: the egress gate neither scans nor rewrites it).</summary>
+    public const string SystemPrompt =
         "You write lessons for a coding assistant's memory: something a future session in the same project should do "
         + "differently or know. Reply with one JSON object only.";
 
