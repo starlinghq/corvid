@@ -13,13 +13,21 @@ namespace Corvid.Host.Sessions;
 /// Each asked call's approval answer (<see cref="ToolCallChanged.Approval"/>), and a refused call's outcome as
 /// <c>denied</c>, as a live turn shows it.
 /// </param>
-public sealed record ReplayOptions(bool LedgerDiffs = true, bool Plans = true, bool Checkpoints = true, bool Approvals = true)
+/// <param name="UnfinishedCalls">
+/// A call the log holds no result for (its turn was interrupted, or the process stopped under it) replays as failed and
+/// cancelled, as the live turn closed it, rather than as completed.
+/// </param>
+public sealed record ReplayOptions(bool LedgerDiffs = true, bool Plans = true, bool Checkpoints = true, bool Approvals = true,
+    bool UnfinishedCalls = true)
 {
     /// <summary>Everything a live turn reports that the log holds.</summary>
     public static ReplayOptions Full { get; } = new();
 
-    /// <summary>The conversation alone: messages, calls and their results as text (ACP's <c>session/load</c>).</summary>
-    public static ReplayOptions Transcript { get; } = new(LedgerDiffs: false, Plans: false, Checkpoints: false, Approvals: false);
+    /// <summary>
+    /// The conversation alone: messages, calls and their results as text (ACP's <c>session/load</c>, whose recorded
+    /// exchanges keep a call without a result as completed).
+    /// </summary>
+    public static ReplayOptions Transcript { get; } = new(LedgerDiffs: false, Plans: false, Checkpoints: false, Approvals: false, UnfinishedCalls: false);
 }
 
 /// <summary>A session read back from the log: its updates in order, and the log head they run to.</summary>
@@ -66,7 +74,9 @@ public static class SessionReplay
                     items.Add((entry.FromSequence, new AnswerChunk(assistant.Text) { At = at }));
                     break;
                 case ToolCallIssued call:
-                    var failed = results.TryGetValue(call.CallId, out var outcome) && outcome.IsError;
+                    var finished = results.TryGetValue(call.CallId, out var outcome);
+                    var unfinished = !finished && options.UnfinishedCalls;
+                    var failed = (finished && outcome!.IsError) || unfinished;
                     items.Add((entry.FromSequence, new ToolCallStarted(call.CallId, ToolPresentation.Title(call.ToolName, call.Arguments),
                         tools.Kind(call.ToolName), failed ? ToolCallState.Failed : ToolCallState.Completed)
                     {
@@ -75,6 +85,17 @@ public static class SessionReplay
                         Input = call.Arguments,
                         Locations = tools.Locations(call.Arguments),
                     }));
+                    // No result in the log: the call never finished. A live turn closes it as cancelled when its turn is
+                    // interrupted, and so does the replay.
+                    if (unfinished)
+                        items.Add((entry.FromSequence, new ToolCallChanged(call.CallId)
+                        {
+                            At = at,
+                            Tool = call.ToolName,
+                            Kind = tools.Kind(call.ToolName),
+                            Status = ToolCallState.Failed,
+                            Outcome = "cancelled",
+                        }));
                     break;
                 case ToolResult result:
                     IReadOnlyList<FileDiff> diffs = [];
