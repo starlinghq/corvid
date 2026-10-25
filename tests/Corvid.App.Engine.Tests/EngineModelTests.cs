@@ -176,6 +176,27 @@ public sealed class EngineModelTests
     }
 
     [Fact]
+    public async Task ASessionViewedButNotOpenShowsItsLoggedChoiceAndThisSessionOpensIt()
+    {
+        await using var setup = await StartAsync();
+        var runtime = setup.Fixture.Runtime;
+        var session = runtime.OpenSession(surface: "app");
+        await session.SetModelAsync(ModelSlotNames.Generator, "fake-gen-large", Corvid.Models.SwitchScope.Session, Token);
+        Assert.True(await runtime.ReleaseDriverAsync(session.Id));
+        setup.Session = session.Id;
+
+        // Not open here: the page shows what its log says it chose, as the session will start on.
+        var snapshot = await setup.Service.LoadAsync(Token);
+        Assert.Equal(("fake-gen-large", true), (snapshot.Slot(ModelSlotNames.Generator)!.SessionModel, snapshot.Slot(ModelSlotNames.Generator)!.SessionChoice));
+
+        // "This session" opens the session it switches.
+        var answer = await setup.Service.SwitchSessionAsync(ModelSlotNames.Generator, "fake-gen", Token);
+        Assert.True(answer.Written, answer.Message);
+        Assert.True(runtime.TryGetSession(session.Id, out var reopened));
+        Assert.Equal("fake-gen@cpu", reopened.Slots.Current(ModelSlotNames.Generator).Profile.Id);
+    }
+
+    [Fact]
     public async Task ThisSessionSwitchesTheOpenSessionOnlyAndWritesNothing()
     {
         await using var setup = await StartAsync();
