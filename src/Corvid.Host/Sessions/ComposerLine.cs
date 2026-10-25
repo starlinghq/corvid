@@ -62,23 +62,29 @@ public abstract record ComposerLine
     }
 
     /// <summary>
-    /// The latest <c>!</c> line's result in the session: its standard output and error joined (or the refusal's text) and
-    /// its exit code, null when it did not run.
+    /// The latest <c>!</c> line's result in the session: its standard output and error joined (or the refusal's text), its
+    /// exit code, null when it did not run, and when the call failed its error kind
+    /// (<see cref="Corvid.Kernel.Turns.ToolErrorKinds"/>: <c>not run</c> when it never ran, <c>tool failed</c> when the sandbox
+    /// could not run it), null when the command ran (whatever its exit code).
     /// </summary>
-    public static (string? Output, int? ExitCode) LastShellResult(Corvid.Kernel.Events.SessionSnapshot snapshot)
+    public static (string? Output, int? ExitCode, string? Error) LastShellResult(Corvid.Kernel.Events.SessionSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         var result = snapshot.Transcript.Select(entry => entry.Content).OfType<Corvid.Abstractions.Events.ToolResult>()
             .LastOrDefault(item => item.CallId.StartsWith(Corvid.Kernel.Turns.TurnRunner.UserShellCall, StringComparison.Ordinal));
         if (result is null)
-            return (null, null);
+            return (null, null, null);
         var value = result.Result;
         if (result.IsError || value.ValueKind != System.Text.Json.JsonValueKind.Object)
-            return (ToolPresentation.ResultText(value), null);
+        {
+            var kind = value.ValueKind == System.Text.Json.JsonValueKind.Object && value.TryGetProperty("error", out var error)
+                && error.ValueKind == System.Text.Json.JsonValueKind.String ? error.GetString() : null;
+            return (ToolPresentation.ResultText(value), null, kind ?? Corvid.Kernel.Turns.ToolErrorKinds.ToolFailed);
+        }
         string Text(string name) => value.TryGetProperty(name, out var part) && part.ValueKind == System.Text.Json.JsonValueKind.String ? part.GetString()! : "";
         var output = string.Join("\n", new[] { Text("stdout"), Text("stderr") }.Where(part => part.Length > 0).Select(part => part.TrimEnd('\n')));
         int? exit = value.TryGetProperty("exit_code", out var code) && code.TryGetInt32(out var number) ? number : null;
-        return (output, exit);
+        return (output, exit, null);
     }
 
     private static ComposerLine ShellOf(string rest, bool local)

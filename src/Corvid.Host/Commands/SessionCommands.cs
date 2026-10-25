@@ -83,6 +83,9 @@ internal static class SessionCommands
         var off = invocation.Arguments is ["off"] or ["remove"];
         if (!off && invocation.Arguments.Length > 0)
             return ValueTask.FromResult(CommandOutput.Error("Usage: /pin [off]."));
+        // A4V2-8: a session with nothing in the log is listed nowhere (/sessions, the app's rail), so a pin would keep nothing.
+        if (!off && context.Runtime.Log.GetHead(context.Session.Id, cancellationToken) == 0)
+            return ValueTask.FromResult(CommandOutput.Warning("Nothing to pin yet: this session has no messages. Send one, then /pin."));
         context.Runtime.UiState.SetPinned(context.Session.Id, !off, DateTimeOffset.UtcNow);
         return ValueTask.FromResult(CommandOutput.Success(off
             ? "Unpinned."

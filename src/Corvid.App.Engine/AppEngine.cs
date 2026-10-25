@@ -88,6 +88,16 @@ public sealed class AppEngine : IAsyncDisposable
     public event Action<StartupStep>? Progress;
 
     /// <summary>
+    /// Memory may have changed in this process (A4V2-3): the window staged a <c>#</c> line, or a turn ended that could have
+    /// written (its <c>memory_add</c> calls, its <c>remember</c> checkpoint). The memory store raises nothing itself, so the
+    /// Memory page, its badge and the Board's tray read it again on this. Raised on the thread that wrote.
+    /// </summary>
+    public event Action? MemoryChanged;
+
+    /// <summary>Raises <see cref="MemoryChanged"/>.</summary>
+    internal void NotifyMemoryChanged() => MemoryChanged?.Invoke();
+
+    /// <summary>
     /// Starts the host (validating the configuration) and checks the model cache, then starts the runtime on the pool.
     /// A configuration the validator refuses, a host that cannot start for another reason (a hosted service that throws, a
     /// file it cannot read), or models the cache lacks, leave the runtime unstarted with the reason in

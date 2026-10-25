@@ -38,7 +38,7 @@ internal sealed class ChatRenderer : ITurnObserver
     }
 
     /// <param name="Tail">K-2: the running call's last line of output, cleaned for the terminal.</param>
-    private sealed record ToolRow(string CallId, string Tool, bool Approval, long Started, string? Outcome = null, TimeSpan Elapsed = default,
+    private sealed record ToolRow(string CallId, string Tool, long Started, string? Outcome = null, TimeSpan Elapsed = default,
         string? Tail = null)
     {
         public bool Running => Outcome is null;
@@ -112,11 +112,13 @@ internal sealed class ChatRenderer : ITurnObserver
         lock (_gate)
         {
             EndText();
-            _tools = _tools.Add(new ToolRow(callId, tool, approval, Stopwatch.GetTimestamp()));
+            // A call that may ask (approval) is checked first and often runs unasked (smart mode, a ! line that only reads):
+            // only the approval box, when one opens, says it waits on the person (A4V2-6).
+            _tools = _tools.Add(new ToolRow(callId, tool, Stopwatch.GetTimestamp()));
             if (_live)
                 StartPanel();
             else
-                _console.MarkupLine($"  [yellow]⏺[/] {Markup.Escape(tool)} [grey]{(approval ? "awaiting approval" : "running")}[/]");
+                _console.MarkupLine($"  [yellow]⏺[/] {Markup.Escape(tool)} [grey]running[/]");
         }
     }
 
@@ -128,7 +130,7 @@ internal sealed class ChatRenderer : ITurnObserver
             if (row is not null)
                 _tools = _tools.Replace(row, row with { Outcome = outcome, Elapsed = elapsed });
             else
-                _tools = _tools.Add(new ToolRow(callId, tool, false, Stopwatch.GetTimestamp(), outcome, elapsed));
+                _tools = _tools.Add(new ToolRow(callId, tool, Stopwatch.GetTimestamp(), outcome, elapsed));
             if (!_live)
                 _console.MarkupLine($"  {Mark(outcome)} {Markup.Escape(tool)} [grey]{Markup.Escape(Describe(outcome))} · {Duration(elapsed)}[/]");
             else if (_tools.All(item => !item.Running))
@@ -174,7 +176,8 @@ internal sealed class ChatRenderer : ITurnObserver
 
     // ---- the end of a turn ----
 
-    public void EndTurn(Delivery delivery)
+    /// <param name="status">What the footer leads with instead of the turn's status: a <c>!</c> line's own (<see cref="ShellResult"/>).</param>
+    public void EndTurn(Delivery delivery, string? status = null)
     {
         lock (_gate)
         {
@@ -198,7 +201,7 @@ internal sealed class ChatRenderer : ITurnObserver
             if (result.Question is { Options.IsDefaultOrEmpty: false } question)
                 _console.MarkupLine("[blue]?[/] " + string.Join(" · ", question.Options.Select((option, i) =>
                     $"[green]{i + 1}[/] {Markup.Escape(TerminalText.Choice(option))}")) + " [grey](a number picks it, or answer in your words)[/]");
-            _console.MarkupLine($"[grey]{Markup.Escape(Footer(result))}[/]");
+            _console.MarkupLine($"[grey]{Markup.Escape(Footer(result, status))}[/]");
         }
     }
 
@@ -219,10 +222,14 @@ internal sealed class ChatRenderer : ITurnObserver
 
     /// <summary>
     /// A <c>!</c> line's output (A4): standard output and error as the sandbox returned them, without control characters,
-    /// its last <see cref="ShellLines"/> lines, then the exit code and where the output went.
+    /// its last <see cref="ShellLines"/> lines, then the exit code and where the output went. A line that never ran (denied)
+    /// says "not run", one the sandbox could not run says "failed" (A4V2-6); that word is returned for the turn's footer,
+    /// null when the command ran.
     /// </summary>
-    public void ShellResult(string? output, int? exitCode, bool localOnly)
+    /// <param name="error">The failed call's error kind (<see cref="Corvid.Host.Sessions.ComposerLine.LastShellResult"/>); null when it ran.</param>
+    public string? ShellResult(string? output, int? exitCode, bool localOnly, string? error = null)
     {
+        var status = error is null ? null : error == ToolErrorKinds.NotRun ? "not run" : "failed";
         lock (_gate)
         {
             StopPanel();
@@ -235,9 +242,10 @@ internal sealed class ChatRenderer : ITurnObserver
                 foreach (var line in lines.TakeLast(ShellLines))
                     _console.Write(new Text(line + "\n"));
             }
-            var exit = exitCode is { } code ? $"exit {code.ToString(CultureInfo.InvariantCulture)}" : "not run";
+            var exit = exitCode is { } code ? $"exit {code.ToString(CultureInfo.InvariantCulture)}" : status ?? "not run";
             _console.MarkupLine($"[grey]{Markup.Escape(exit)} · {(localOnly ? "the output stays here (!!): the model never sees it" : "the output is in the conversation for your next message")}[/]");
         }
+        return status;
     }
 
     public void Cancelled()
@@ -388,7 +396,7 @@ internal sealed class ChatRenderer : ITurnObserver
                 new Markup(tool.Running ? "[yellow]⏺[/]" : Mark(tool.Outcome!)),
                 new Text(tool.Tool),
                 new Markup($"[grey]{Markup.Escape(tool.Running
-                    ? (tool.Approval ? "awaiting approval · " : "running · ") + Duration(Stopwatch.GetElapsedTime(tool.Started))
+                    ? "running · " + Duration(Stopwatch.GetElapsedTime(tool.Started))
                     : Describe(tool.Outcome!) + " · " + Duration(tool.Elapsed))}[/]"));
             // K-2: the running call's last line, dim, under it.
             if (tool.Running && tool.Tail is { Length: > 0 } tail)
@@ -426,9 +434,9 @@ internal sealed class ChatRenderer : ITurnObserver
 
     private static string Normalize(string text) => text.Trim().ReplaceLineEndings("\n");
 
-    private static string Footer(TurnResult result)
+    private static string Footer(TurnResult result, string? status = null)
     {
-        var parts = new List<string> { TurnRunner.StatusName(result.Status).Replace('_', ' ') };
+        var parts = new List<string> { status ?? TurnRunner.StatusName(result.Status).Replace('_', ' ') };
         if (result.Steps > 0)
             parts.Add($"{result.Steps} step(s), {result.ToolCalls} tool call(s)");
         parts.AddRange(result.Escalations.Select(escalation => escalation.EndsWith(": " + TurnRunner.PrivacyRetreat, StringComparison.Ordinal)

@@ -473,6 +473,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             lock (channel.Gate)
             {
                 channel.Translator.Model = Generator(runtime);
+                // A4V2-5: a ! line's turn runs its command, no generator.
+                channel.Translator.ShellLine = !verbatim && ComposerLine.Parse(text) is ComposerLine.Shell;
                 channel.Translator.MaxSteps = runtime.Options.Turn.MaxSteps;
                 channel.Translator.ContextWindow = session.Slots.TryCurrent(ModelSlots.Generator, out var generator) ? generator.Profile.AcceptedContext : null;
                 channel.TurnBegun = false;
@@ -526,6 +528,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         {
             var done = await delivery.ConfigureAwait(false);
             await reporter.FinishAsync(done.Result?.Text).ConfigureAwait(false);
+            // A turn that called tools (memory_add) or whose remember checkpoint wrote may have staged memory (A4V2-3).
+            if (done.Result is { MemoryWrite: not null } or { ToolCalls: > 0 })
+                _engine.NotifyMemoryChanged();
             (outcome, error) = done switch
             {
                 { Error: { } failure } => (TurnOutcome.Failed, failure.Message),

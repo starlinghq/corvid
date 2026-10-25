@@ -147,6 +147,59 @@ public sealed class EngineRecordsTests
         Assert.True(((ISessionService)service).HasComposerModes);
     }
 
+    /// <summary>
+    /// A4V2-3: a <c>#</c> line staged in the window tells the Memory service, which tells the Board's tray and the rail's
+    /// Memory badge to count again, on the UI thread; nothing is raised before the write.
+    /// </summary>
+    [Fact]
+    public async Task A_memory_line_tells_the_memory_page_and_the_board_to_count_again()
+    {
+        await using var fixture = await EngineFixture.StartAsync(new FakeModels());
+        var id = fixture.Runtime.OpenSession(surface: "app").Id;
+        using var service = fixture.Sessions();
+        var ui = new QueuedDispatcher();
+        using var memory = new Engine.Memory.EngineMemoryService(fixture.Engine, fixture.Time, dispatcher: ui);
+        var dispatcher = new InlineDispatcher();
+        using var mcp = new Engine.Mcp.EngineMcpService(fixture.Engine, dispatcher, fixture.Time);
+        using var gateway = new Engine.Gateway.EngineGatewayService(fixture.Engine, dispatcher, fixture.Time);
+        using var jobs = new Engine.Jobs.EngineJobsService(fixture.Engine, dispatcher, fixture.Time);
+        using var board = new Engine.Board.EngineBoardService(fixture.Engine, mcp, gateway, jobs, memory, dispatcher, fixture.Time);
+        var (memoryChanged, trayChanged) = (0, 0);
+        memory.Changed += (_, _) => memoryChanged++;
+        board.AttentionChanged += (_, _) => trayChanged++;
+        Assert.Empty((await memory.LoadAsync(Ct)).StagedFacts);
+
+        await service.SendAsync(id, "# my deploy target is staging-2", Ct);
+        await service.IdleAsync();
+        Assert.Equal((0, 0), (memoryChanged, trayChanged));
+        ui.RunAll();
+
+        Assert.Equal((1, 1), (memoryChanged, trayChanged));
+        Assert.Single((await memory.LoadAsync(Ct)).StagedFacts);
+        var tray = await board.ListAttentionAsync(Ct);
+        Assert.Contains(tray, item => item.Kind == Core.Board.AttentionKind.Memory);
+    }
+
+    /// <summary>A UI thread that is elsewhere: what is posted waits until the test runs it.</summary>
+    private sealed class QueuedDispatcher : IDispatcher
+    {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<Action> _queue = new();
+
+        public bool HasThreadAccess => false;
+
+        public bool Post(Action action)
+        {
+            _queue.Enqueue(action);
+            return true;
+        }
+
+        public void RunAll()
+        {
+            while (_queue.TryDequeue(out var action))
+                action();
+        }
+    }
+
     [Fact]
     public async Task A_shell_line_asks_on_the_card_and_a_denial_runs_nothing()
     {

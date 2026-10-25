@@ -424,6 +424,10 @@ public sealed class EngineAuditService : IAuditService
             case LoggedUserMessage user:
                 summary = [P("user: "), P(Line(user.Text, TextPreview))];
                 break;
+            // K-3: the person's words, taken by the running turn at a checkpoint (A4V2-7).
+            case UserSteered steer:
+                summary = [P("user (steer): "), P(Line(steer.Text, TextPreview))];
+                break;
             case AssistantMessage answer:
                 summary = [P("answer: "), P(Line(answer.Text, TextPreview))];
                 break;

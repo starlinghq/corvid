@@ -73,8 +73,26 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
 
     public string SessionId { get; }
 
-    /// <summary>Asks the page to put the caret in the composer (a prompt from the history was put there).</summary>
-    public void RequestComposerFocus() => FocusRequested?.Invoke(this, SessionFocusTarget.Composer);
+    /// <summary>
+    /// Asks the page to put the caret in the composer (a prompt from the history was put there, a new session opened). The
+    /// request is kept until a page takes it (<see cref="TakeComposerFocusRequest"/>), so one made before the page that shows
+    /// the session has loaded is taken when it attaches.
+    /// </summary>
+    public void RequestComposerFocus()
+    {
+        _composerFocusWanted = true;
+        FocusRequested?.Invoke(this, SessionFocusTarget.Composer);
+    }
+
+    /// <summary>Whether a composer focus request waits for a page to take it; true once, then false until the next request.</summary>
+    public bool TakeComposerFocusRequest()
+    {
+        var wanted = _composerFocusWanted;
+        _composerFocusWanted = false;
+        return wanted;
+    }
+
+    private bool _composerFocusWanted;
 
     /// <summary>The fold's current state, for tests and for views that need a raw value.</summary>
     public SessionView State => _state;

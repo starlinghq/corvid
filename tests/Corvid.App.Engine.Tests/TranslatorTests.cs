@@ -154,6 +154,58 @@ public sealed class TranslatorTests
         Assert.Equal((1, 2, "ship it", "qwen", "the plan", true), (marker.FromTurn, marker.ThroughTurn, marker.Goal, marker.Summarizer, marker.Focus, marker.Expanded));
     }
 
+    /// <summary>
+    /// A4V2-4: a # line logs no message, only its memory gate's decision. Replayed after a turn's answer, that decision is
+    /// neither the turn's nor its end, as live (where the line shows only as its notice); a turn's own memory_add asks
+    /// before its answer, and its remember checkpoint's write after a remember that chose to write, and both stay the turn's.
+    /// </summary>
+    [Fact]
+    public void AMemoryLinesGateAfterATurnIsNotTheTurnsAndDoesNotRunItsTimeOn()
+    {
+        static DecisionsMade Gate(DateTimeOffset at) =>
+            new(new CheckpointDecisions("pre_execute", "degraded", [new QuestionDecision("memory_op", 0, "stage_for_review", false)])) { At = at };
+        var translator = new SessionUpdateTranslator(Workspace);
+        translator.Translate(new PromptSent("count", 1) { At = T0 });
+        Assert.Single(translator.Translate(Gate(T0.AddSeconds(5))));
+        translator.Translate(new AnswerChunk("Done.") { At = T0.AddSeconds(72) });
+        translator.Translate(new DecisionsMade(new CheckpointDecisions("post_turn", "degraded",
+            [new QuestionDecision("remember", 0, "write_nothing", false)])) { At = T0.AddSeconds(72) });
+
+        // The # line, typed 19 s after the turn ended.
+        Assert.Empty(translator.Translate(Gate(T0.AddSeconds(91))));
+        // The next message closes the replayed turn where its answer was.
+        var ended = Assert.IsType<TurnEnded>(translator.Translate(new PromptSent("!echo x", 9) { At = T0.AddSeconds(95) })[0]);
+        Assert.Equal(TimeSpan.FromSeconds(72), ended.Elapsed);
+
+        // A turn whose remember chose to write: the gate after its answer is its own.
+        var writes = new SessionUpdateTranslator(Workspace);
+        writes.Translate(new PromptSent("my deploy target is staging-2", 1) { At = T0 });
+        writes.Translate(new AnswerChunk("Noted.") { At = T0.AddSeconds(2) });
+        writes.Translate(new DecisionsMade(new CheckpointDecisions("post_turn", "degraded",
+            [new QuestionDecision("remember", 0.9, "start_memory_write", true)])) { At = T0.AddSeconds(2) });
+        Assert.Single(writes.Translate(Gate(T0.AddSeconds(3))));
+        Assert.Equal(TimeSpan.FromSeconds(3), Assert.IsType<TurnEnded>(Assert.Single(writes.EndReplay())).Elapsed);
+
+        // Before any turn, a # line's gate waits for no prompt.
+        var first = new SessionUpdateTranslator(Workspace);
+        Assert.Empty(first.Translate(Gate(T0)));
+        Assert.Equal(["UserMessage", "TurnStarted"], first.Translate(new PromptSent("hi", 3) { At = T0 }).Select(update => update.GetType().Name));
+    }
+
+    /// <summary>A4V2-5: a ! line's turn runs no generator, so its header names none, live as on replay.</summary>
+    [Fact]
+    public void AShellLinesTurnNamesNoGenerator()
+    {
+        var translator = new SessionUpdateTranslator(Workspace) { Model = "fake-gen", ShellLine = true };
+
+        var shell = Assert.IsType<TurnStarted>(translator.Translate(new PromptSent("!echo x", 1) { At = T0 })[1]);
+        var next = Assert.IsType<TurnStarted>(translator.Translate(new PromptSent("hello", 4) { At = T0 })[1]);
+
+        Assert.Equal(("", "fake-gen"), (shell.Model, next.Model));
+        var header = Assert.Single(SessionFold.Replay("s", [shell]).Transcript.OfType<TurnHeaderEntry>());
+        Assert.Empty(header.Models);
+    }
+
     [Fact]
     public void AReplayOfATurnStillRunningLeavesItOpenAndTheLiveEndClosesIt()
     {

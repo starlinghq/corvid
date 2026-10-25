@@ -141,7 +141,8 @@ public static class SessionFold
         var header = new TurnHeaderEntry(id, started.Turn, started.At)
         {
             Turn = started.Turn,
-            Models = [started.Model],
+            // A turn that runs no generator (a ! line) names none, live and replayed alike.
+            Models = started.Model is { Length: > 0 } model ? [model] : [],
             MaxSteps = started.MaxSteps,
         };
         return Advance(state) with
@@ -155,7 +156,7 @@ public static class SessionFold
             ActivitySince = started.At,
             Step = null,
             MaxSteps = started.MaxSteps,
-            Model = started.Model,
+            Model = started.Model is { Length: > 0 } ? started.Model : state.Model,
         };
     }
 

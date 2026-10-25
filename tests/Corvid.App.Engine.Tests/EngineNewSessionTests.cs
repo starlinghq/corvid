@@ -91,6 +91,36 @@ public sealed class EngineNewSessionTests
         Assert.Equal((id, "New session"), (shell.CurrentSession?.Id, shell.CurrentSession?.Title));
     }
 
+    /// <summary>
+    /// A4V2-2: Ctrl+N's new session asks for the composer once the page has drawn it, and a page that attaches later (one
+    /// opened from the Board) still finds the request waiting, so typing goes into the composer rather than the page's keys.
+    /// </summary>
+    [Fact]
+    public async Task ANewSessionAsksForTheComposerAfterThePageHasDrawnIt()
+    {
+        await using var fixture = await EngineFixture.StartAsync(new FakeModels(new FakeGenerator(Reply.Say("Hello."))));
+        using var service = fixture.Sessions(new UiQueue());
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar);
+        var ui = new UiQueue();
+        using var hub = new SessionHub(service, ui, fixture.Time, shell, bar);
+        await hub.StartAsync(null, null, Ct);
+
+        var id = await hub.CreateAsync(Ct);
+        var session = hub.Current!;
+        var asked = new List<SessionFocusTarget>();
+        session.FocusRequested += (_, target) => asked.Add(target);
+        Assert.Empty(asked);
+
+        ui.RunAll();
+
+        Assert.Equal([SessionFocusTarget.Composer], asked);
+        // No page took it here: the next page to attach does, once.
+        Assert.True(session.TakeComposerFocusRequest());
+        Assert.False(session.TakeComposerFocusRequest());
+        Assert.Equal(id, session.SessionId);
+    }
+
     /// <summary>A UI thread that is elsewhere: posts from any thread queue until the test runs them.</summary>
     private sealed class UiQueue : IDispatcher
     {

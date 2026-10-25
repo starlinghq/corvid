@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using Corvid.App.Core.Sessions;
 using Corvid.Host.Sessions;
+using Corvid.Host.Telemetry;
 using HostPlan = Corvid.Host.Sessions.PlanChanged;
 using ApprovalAssessed = Corvid.Abstractions.Events.ApprovalAssessed;
 using ApprovalResolutions = Corvid.Abstractions.Events.ApprovalResolutions;
@@ -42,9 +43,17 @@ public sealed class SessionUpdateTranslator(string workspace)
     // is the latest, so the answer that repeats it is not shown twice.
     private string? _openQuestion;
     private string? _questionText;
+    // A4V2-4: the turn's remember checkpoint chose to write, so the memory gate asked after its answer is the turn's.
+    private bool _turnRemembers;
 
     /// <summary>The generator a turn opened from here on starts on ("fake-gen"); empty when unknown (a replay).</summary>
     public string Model { get; set; } = "";
+
+    /// <summary>
+    /// The next turn opened is a <c>!</c> line's (A4V2-5): it runs its command and no generator, so its header names none,
+    /// as its replay (whose log has no decision to name one) does. Taken by that turn's prompt.
+    /// </summary>
+    public bool ShellLine { get; set; }
 
     /// <summary>The step budget a turn opened from here on has (<c>Corvid:Turn:MaxSteps</c>); null when unknown (a replay).</summary>
     public int? MaxSteps { get; set; }
@@ -97,6 +106,7 @@ public sealed class SessionUpdateTranslator(string workspace)
         ArgumentNullException.ThrowIfNull(update);
         var output = new List<SessionUpdate>(2);
         var at = update.At;
+        var outside = false;
         switch (update)
         {
             case PromptSent prompt:
@@ -110,6 +120,9 @@ public sealed class SessionUpdateTranslator(string workspace)
                 _turnTokens = 0;
                 _turnStarts.Add(prompt.Sequence);
                 _questionText = null;
+                _turnRemembers = false;
+                var generator = prompt.Generator ?? (ShellLine ? "" : Model);
+                ShellLine = false;
                 // K-6: the person's next message is their answer to the open question; nothing else answers it.
                 if (_openQuestion is { } open)
                 {
@@ -118,7 +131,7 @@ public sealed class SessionUpdateTranslator(string workspace)
                 }
                 output.Add(new UserMessage(prompt.Text) { Position = prompt.Sequence, At = at });
                 // A replayed turn names the generator its first decision saw; a live one starts on the slot's.
-                output.Add(new TurnStarted(Turn, prompt.Generator ?? Model) { At = at, MaxSteps = MaxSteps });
+                output.Add(new TurnStarted(Turn, generator) { At = at, MaxSteps = MaxSteps });
                 output.AddRange(_early);
                 _early.Clear();
                 break;
@@ -211,7 +224,13 @@ public sealed class SessionUpdateTranslator(string workspace)
                     At = at,
                 });
                 break;
+            // A4V2-4: the memory gate asked for a # line, which logs no message: it belongs to no turn. Live it shows only as
+            // the line's notice, so a replay neither lists it in the turn before nor runs that turn's time on to it.
+            case DecisionsMade made when OutsideTurn(made.Decisions):
+                outside = true;
+                break;
             case DecisionsMade made:
+                _turnRemembers |= TurnOpen && made.Decisions.Questions.Any(question => question is { Question: Remember, Action: StartMemoryWrite });
                 var decided = new CheckpointDecided(made.Decisions.Checkpoint, made.Decisions.Decider,
                     [.. made.Decisions.Questions.Select(question => new DecisionAnswer(question.Question, question.Confidence, question.Action, question.Acted))])
                 {
@@ -245,11 +264,24 @@ public sealed class SessionUpdateTranslator(string workspace)
                 break;
             // CheckpointLogged: Rewind's timeline reads the ledger itself (A3 history); the transcript shows no row for it.
         }
-        // A compaction comes between turns: its time is not the replayed turn's end.
-        if (at > _last && update is not CompactionLogged)
+        // A compaction comes between turns, and so does a # line's memory gate: their time is not the replayed turn's end.
+        if (at > _last && update is not CompactionLogged && !outside)
             _last = at;
         return output;
     }
+
+    private const string MemoryOp = "memory_op";
+    private const string Remember = "remember";
+    private const string StartMemoryWrite = "start_memory_write";
+
+    /// <summary>
+    /// A run of decisions that only asks the memory gate (<c>memory_op</c>), outside a turn or after its answer when the
+    /// turn's own remember checkpoint did not write: a <c>#</c> line's (A4V2-4). One a turn's <c>memory_add</c> call asks
+    /// comes before its answer, and one its remember checkpoint asks follows a remember that chose to write.
+    /// </summary>
+    private bool OutsideTurn(CheckpointDecisions decisions) =>
+        !decisions.Questions.IsDefaultOrEmpty && decisions.Questions.All(question => question.Question == MemoryOp)
+        && (!TurnOpen || (_answered && !_turnRemembers));
 
     /// <summary>The question in a few words for the attention tray: its first line, cut to a short title.</summary>
     internal static string QuestionTitle(string text)

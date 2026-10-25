@@ -554,8 +554,29 @@ public sealed class MemoryViewModel : AreaViewModel
 
     // ---- state ----
 
+    /// <summary>
+    /// The store changed outside the page (A4V2-3: a <c>#</c> line, a turn's write): read again now, which keeps the badge
+    /// right, unless the page shows, where a review in progress keeps what it shows until the person leaves the page.
+    /// </summary>
+    internal void StoreChanged()
+    {
+        if (_shell?.CurrentArea == Area.Memory)
+        {
+            _stale = true;
+            return;
+        }
+        _ = LoadAsync(CancellationToken.None);
+    }
+
+    private bool _stale;
+
     private void OnShellChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (e.PropertyName == nameof(ShellViewModel.CurrentArea) && _shell!.CurrentArea != Area.Memory && _stale)
+        {
+            _stale = false;
+            _ = LoadAsync(CancellationToken.None);
+        }
         if (e.PropertyName == nameof(ShellViewModel.CurrentArea) && _shell!.CurrentArea == Area.Memory)
             ApplyStatus();
     }

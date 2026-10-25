@@ -37,6 +37,23 @@ public sealed class ChatRecordsTests
         Assert.Empty(run.Models!.Generator.Calls);
     }
 
+    /// <summary>A4V2-8: an empty session is listed nowhere, so /pin refuses it rather than pinning what nobody can see.</summary>
+    [Fact]
+    public async Task Pin_refuses_a_session_with_no_messages_and_pins_one_with_them()
+    {
+        using var run = new CliRun();
+
+        await run.RunAsync(["chat"], "/pin", "/exit");
+        Assert.Contains("Nothing to pin yet: this session has no messages.", run.Output, StringComparison.Ordinal);
+        var store = new UiStateStore(Path.Combine(run.Root, "data", "ui.db"));
+        Assert.DoesNotContain(Session(run), store.Pinned());
+
+        using var second = new CliRun();
+        await second.RunAsync(["chat"], "first message", "/pin", "/exit");
+        Assert.Contains("Pinned: the app keeps this session at the top of its rail", second.Output, StringComparison.Ordinal);
+        Assert.Contains(Session(second), new UiStateStore(Path.Combine(second.Root, "data", "ui.db")).Pinned());
+    }
+
     [Fact]
     public async Task Rename_shows_in_sessions_and_on_resume_with_the_apps_draft()
     {

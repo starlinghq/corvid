@@ -650,6 +650,33 @@ public sealed class RendererTests
         Assert.Equal("[31mPassed 11   Failed 1[0m", ChatRenderer.LastLine("Building…\n\u001b[31mPassed 11   Failed 1\u001b[0m\n\n"));
     }
 
+    /// <summary>
+    /// A4V2-6: a call that may ask starts as running (the approval box says when it does wait), and a ! line the sandbox
+    /// could not run says failed, in its status line and its footer, where one that was denied says not run.
+    /// </summary>
+    [Fact]
+    public void AShellLineThatMayAskStartsRunningAndOneThatFailedSaysSo()
+    {
+        var console = new TestConsole();
+        var renderer = new ChatRenderer(console, live: false);
+        renderer.BeginTurn();
+        renderer.ToolStarted("user-shell", "shell", approval: true);
+        Assert.Equal("failed", renderer.ShellResult("{\"error\":\"tool failed\"}", null, localOnly: false, ToolErrorKinds.ToolFailed));
+        var result = new TurnResult(TurnStatus.Answered, null, 1, 1, false, "reply", [], []);
+        renderer.EndTurn(new Delivery(new Corvid.Abstractions.Sessions.Envelope("cli-1", "cli", "!echo hi", Corvid.Abstractions.Sessions.EnvelopeOrigin.User), result), "failed");
+
+        Assert.Contains("shell running", console.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("awaiting approval", console.Output, StringComparison.Ordinal);
+        Assert.Contains("failed · the output is in the conversation", console.Output, StringComparison.Ordinal);
+        Assert.Contains("· failed · 1 step(s)", console.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("answered", console.Output, StringComparison.Ordinal);
+
+        var denied = new TestConsole();
+        Assert.Equal("not run", new ChatRenderer(denied, live: false).ShellResult("denied", null, localOnly: false, ToolErrorKinds.NotRun));
+        Assert.Contains("not run · ", denied.Output, StringComparison.Ordinal);
+        Assert.Null(new ChatRenderer(new TestConsole(), live: false).ShellResult("hi", 0, localOnly: false));
+    }
+
     [Fact]
     public void AClarifyingQuestionsChoicesAreListedAndANumberPicksOne()
     {

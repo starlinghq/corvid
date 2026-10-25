@@ -168,6 +168,10 @@ public sealed class SessionHub : IDisposable
             RebuildRail();
         }
         _shell.OpenSession(id);
+        // ui.md F2: a new session is for typing in. After the page has drawn it: a page that is loading takes the request
+        // when it attaches.
+        var opened = Get(id);
+        _dispatcher.Post(opened.RequestComposerFocus);
         return id;
     }
 

@@ -81,6 +81,7 @@ public sealed partial class AppComposition : IDisposable
     public void Dispose()
     {
         DisposeBoard();
+        DisposeMemory();
         DisposeSafety();
         DisposeSecrets();
         _skills?.Dispose();

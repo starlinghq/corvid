@@ -25,7 +25,8 @@ namespace Corvid.App.Engine.Board;
 /// </para>
 /// <para>
 /// <see cref="AttentionChanged"/> follows the areas' <c>Changed</c> events and this service's own answers, posted to the UI
-/// thread and coalesced. Memory has no change event, so staged memory is read again whenever the tray reloads. A pairing
+/// thread and coalesced. Memory's <c>Changed</c> says when this process staged or wrote (a <c>#</c> line, a turn); what another
+/// process staged is read again whenever the tray reloads. A pairing
 /// code another process's gateway gave is seen at the next reload. An area that is off (its service refuses with
 /// <see cref="ServiceUnavailableException"/>) lists nothing; one that fails otherwise lists one item saying so, which opens
 /// the area. When the runtime itself cannot start, the whole list refuses with its reason.
@@ -66,6 +67,7 @@ public sealed class EngineBoardService : IBoardService, IDisposable
         _mcp.Changed += OnAreaChanged;
         _gateway.Changed += OnAreaChanged;
         _jobs.Changed += OnAreaChanged;
+        _memory.Changed += OnAreaChanged;
     }
 
     public event EventHandler? AttentionChanged;
@@ -120,6 +122,7 @@ public sealed class EngineBoardService : IBoardService, IDisposable
         _mcp.Changed -= OnAreaChanged;
         _gateway.Changed -= OnAreaChanged;
         _jobs.Changed -= OnAreaChanged;
+        _memory.Changed -= OnAreaChanged;
         _changed.Dispose();
     }
 

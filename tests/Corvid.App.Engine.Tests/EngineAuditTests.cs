@@ -266,4 +266,15 @@ public sealed class EngineAuditTests
         Assert.Contains("more characters", row.Json, StringComparison.Ordinal);
         Assert.EndsWith("…", AuditText.Plain(row.Summary), StringComparison.Ordinal);
     }
+
+    /// <summary>A4V2-7: a steer's row says what the person said, as a message's does.</summary>
+    [Fact]
+    public void ASteersRowSaysWhatWasSaid()
+    {
+        var stored = new StoredEvent("app-1", 45, Guid.NewGuid(), DateTimeOffset.UnixEpoch, new UserSteered("steer text two"));
+
+        var row = EngineAuditService.Describe(stored, 45, ImmutableDictionary<string, ToolCallIssued>.Empty);
+
+        Assert.Equal("user (steer): steer text two", AuditText.Plain(row.Summary));
+    }
 }

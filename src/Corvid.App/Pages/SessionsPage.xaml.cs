@@ -354,6 +354,9 @@ public sealed partial class SessionsPage : Page, IDockProvider
         UpdateJump();
         WatchApproval();
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, PositionAtLatest);
+        // A focus request made before this page showed the session (a new session opened from the Board).
+        if (_session.TakeComposerFocusRequest())
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, FocusComposer);
     }
 
     private void Detach()
@@ -435,13 +438,21 @@ public sealed partial class SessionsPage : Page, IDockProvider
     private void OnFocusRequested(object? sender, SessionFocusTarget target)
     {
         if (target == SessionFocusTarget.Composer)
-        {
-            Composer.Focus(FocusState.Programmatic);
-            // With the caret after the draft, so typing goes on from it (a prompt put back from the history).
-            Composer.SelectionStart = Composer.Text.Length;
-        }
+            FocusComposer();
         else
             FocusApproval();
+    }
+
+    /// <summary>
+    /// Puts the caret in the composer, after the draft so typing goes on from it (a prompt put back from the history). A
+    /// request the page could not take yet (it was not loaded) stays with the session and is taken when it attaches.
+    /// </summary>
+    private void FocusComposer()
+    {
+        if (!Composer.Focus(FocusState.Programmatic))
+            return;
+        _session?.TakeComposerFocusRequest();
+        Composer.SelectionStart = Composer.Text.Length;
     }
 
     /// <summary>Gives the keys to the open card's focused answer, bringing the card into view.</summary>

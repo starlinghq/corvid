@@ -183,12 +183,13 @@ internal static class ChatCommand
                     {
                         break;
                     }
+                    string? shellStatus = null;
                     if (mode is ComposerLine.Shell ran && delivery.Error is null)
                     {
-                        var (output, exit) = ComposerLine.LastShellResult(session.Snapshot());
-                        renderer.ShellResult(output, exit, ran.LocalOnly);
+                        var (output, exit, error) = ComposerLine.LastShellResult(session.Snapshot());
+                        shellStatus = renderer.ShellResult(output, exit, ran.LocalOnly, error);
                     }
-                    renderer.EndTurn(delivery);
+                    renderer.EndTurn(delivery, shellStatus);
                     question = delivery.Result?.Question;
                 }
             }
