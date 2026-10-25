@@ -7,24 +7,32 @@ namespace Corvid.Host.Configuration;
 /// <summary>
 /// Validates <see cref="CorvidOptions"/> when the host starts, so a typo in a slot or model name fails before any model
 /// loads rather than in the middle of a turn. Every problem is reported at once.
+/// <para>
+/// The options are judged on their own terms, so the same validator serves the configuration the host started with and
+/// any other (the file <see cref="CorvidConfigWriter"/> is about to save): the remote models (C-015) are the options' own
+/// <c>Corvid:Models:Remote</c> entries, never the ones the host started with, and the in-process models come from the
+/// catalogue. So a server added and bound to a slot in one edit passes, and a broken remote entry does not block the edit
+/// that fixes it.
+/// </para>
 /// </summary>
-public sealed class CorvidOptionsValidator(ModelCatalogue catalogue, IEnumerable<IModelProvider>? providers = null) : IValidateOptions<CorvidOptions>
+public sealed class CorvidOptionsValidator(ModelCatalogue catalogue) : IValidateOptions<CorvidOptions>
 {
     public ValidateOptionsResult Validate(string? name, CorvidOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         var errors = new List<string>();
+        var models = new Models(catalogue, options.Models.Remote);
 
         var slots = options.Models.EffectiveSlots();
         foreach (var slot in options.Models.Slots.Keys.Where(slot => !ModelSlots.All.Contains(slot, StringComparer.Ordinal)))
             errors.Add($"Corvid:Models:Slots: '{slot}' is not a slot; the slots are {string.Join(", ", ModelSlots.All)}.");
         foreach (var (slot, settings) in slots.Where(pair => ModelSlots.All.Contains(pair.Key, StringComparer.Ordinal)))
         {
-            CheckModel(errors, slot, "Model", settings.Model!);
+            CheckModel(errors, models, slot, "Model", settings.Model!);
             foreach (var model in settings.Escalation)
-                CheckModel(errors, slot, "Escalation", model);
+                CheckModel(errors, models, slot, "Escalation", model);
             foreach (var model in settings.Fallbacks)
-                CheckModel(errors, slot, "Fallbacks", model);
+                CheckModel(errors, models, slot, "Fallbacks", model);
             if (settings.Escalation.Concat(settings.Fallbacks).Contains(settings.Model, StringComparer.OrdinalIgnoreCase))
                 errors.Add($"Corvid:Models:Slots:{slot}: the default model cannot also be its own escalation or fallback.");
         }
@@ -41,12 +49,12 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue, IEnumerable
             if (!slots.ContainsKey(required))
                 errors.Add($"Corvid:Models:Slots:{required} must be bound: the turn loop and the degraded decider need it.");
 
-        // Remote models (C-015) that could not be described are left out of the catalogue; say why. The options' own entries
-        // are checked too, so a configuration other than the one the host started with (the file a writer is about to save)
-        // is refused for the same reasons.
-        errors.AddRange((providers ?? []).OfType<RemoteModelProvider>().SelectMany(remote => remote.Problems)
-            .Concat(RemoteModelProvider.ProblemsOf(options.Models.Remote))
-            .Distinct(StringComparer.Ordinal));
+        // Remote models (C-015) that could not be described are left out of the catalogue; say why, for these options' own
+        // entries (the provider the host started with reports the same for the configuration it was built from).
+        errors.AddRange(RemoteModelProvider.ProblemsOf(options.Models.Remote).Distinct(StringComparer.Ordinal));
+        // The catalogue refuses two providers naming one model, so the next start would fail on it.
+        foreach (var remote in options.Models.Remote.Keys.Where(models.IsLocal).Order(StringComparer.Ordinal))
+            errors.Add($"Corvid:Models:Remote:{remote}: an in-process model is named '{remote}' already; give the remote model another name.");
         var privacy = options.Privacy;
         if (!Enum.IsDefined(privacy.Cloud) || !Enum.IsDefined(privacy.Tainted) || privacy.LocalServer is { } local && !Enum.IsDefined(local))
             errors.Add("Corvid:Privacy: Cloud, LocalServer and Tainted are Send, Redact or Refuse.");
@@ -57,7 +65,7 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue, IEnumerable
 
         if (options.Devices.CpuThreads is < 1 or > 64)
             errors.Add("Corvid:Devices:CpuThreads must be between 1 and 64.");
-        ValidatePlacement(errors, options.Models.Placement);
+        ValidatePlacement(errors, models, options.Models.Placement);
         if (options.Turn.DualShortlistStateTokens is < 100 or > 600)
             errors.Add("Corvid:Turn:DualShortlistStateTokens must be between 100 and 600 (600 turns it off).");
         if (!Enum.IsDefined(options.Turn.ReducedCheckpoints))
@@ -97,7 +105,7 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue, IEnumerable
         // values in a server's environment, absolute paths, timeouts and limits).
         errors.AddRange(Composition.McpComposition.Definitions(options).Problems);
 
-        ValidateGateway(errors, options.Gateway, options.Mcp.Servers.Keys);
+        ValidateGateway(errors, models, options.Gateway, options.Mcp.Servers.Keys);
 
         // The file tools and the shell are confined to it, so it must be there before anything runs.
         if (options.Workspace is { Length: > 0 } workspace && Path.IsPathFullyQualified(CorvidPaths.ExpandHome(workspace))
@@ -124,7 +132,7 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue, IEnumerable
     }
 
     // The gateway (C-020): token secrets are Vault names, never values, and chat overrides name real models and slots.
-    private void ValidateGateway(List<string> errors, GatewaySettings gateway, IEnumerable<string> mcpServers)
+    private static void ValidateGateway(List<string> errors, Models models, GatewaySettings gateway, IEnumerable<string> mcpServers)
     {
         var servers = mcpServers.ToHashSet(StringComparer.Ordinal);
         if (gateway.ConnectTimeoutSeconds is < 1 or > 600)
@@ -174,23 +182,23 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue, IEnumerable
                     else if (slot == ModelSlots.Decider)
                         errors.Add($"{key}:Chats:{chat}:Slots: the decider is process-wide and cannot be overridden per chat.");
                     else
-                        CheckModel(errors, slot, $"(gateway chat {chat})", model);
+                        CheckModel(errors, models, slot, $"(gateway chat {chat})", model);
                 }
             }
         }
     }
 
     // C-029: placement applies to in-process Starling models, and in v1 only Kev can go on CUDA.
-    private void ValidatePlacement(List<string> errors, IReadOnlyDictionary<string, ModelPlacementSettings> placement)
+    private static void ValidatePlacement(List<string> errors, Models models, IReadOnlyDictionary<string, ModelPlacementSettings> placement)
     {
         foreach (var (model, settings) in placement)
         {
             var key = $"Corvid:Models:Placement:{model}";
             if (settings is null)
                 continue;
-            if (!catalogue.TryFind(model, out var descriptor))
+            if (!models.TryFind(model, out var descriptor))
             {
-                errors.Add($"{key}: no model is named '{model}'; known models: {string.Join(", ", catalogue.Models.Select(item => item.Name))}.");
+                errors.Add($"{key}: no model is named '{model}'; known models: {models.Names}.");
                 continue;
             }
             if (descriptor.Provider != StarlingModelProvider.ProviderName)
@@ -209,12 +217,33 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue, IEnumerable
         }
     }
 
-    private void CheckModel(List<string> errors, string slot, string field, string model)
+    private static void CheckModel(List<string> errors, Models models, string slot, string field, string model)
     {
-        if (!catalogue.TryFind(model, out var descriptor))
-            errors.Add($"Corvid:Models:Slots:{slot}:{field}: no model is named '{model}'; known models: " +
-                $"{string.Join(", ", catalogue.Models.Select(item => item.Name))}.");
+        if (!models.TryFind(model, out var descriptor))
+            errors.Add($"Corvid:Models:Slots:{slot}:{field}: no model is named '{model}'; known models: {models.Names}.");
         else if (!descriptor.Serves(slot))
             errors.Add($"Corvid:Models:Slots:{slot}:{field}: '{model}' cannot serve {slot}; it serves {string.Join(", ", descriptor.Slots)}.");
+    }
+
+    /// <summary>
+    /// The models the options can name: the catalogue's in-process models and the options' own remote entries (those that
+    /// describe a model), never the remote models the host started with.
+    /// </summary>
+    private sealed class Models(ModelCatalogue catalogue, IReadOnlyDictionary<string, RemoteModelSettings> remote)
+    {
+        private readonly Dictionary<string, ModelDescriptor> _remote =
+            RemoteModelProvider.DescriptorsOf(remote).ToDictionary(model => model.Name, StringComparer.OrdinalIgnoreCase);
+
+        public string Names => string.Join(", ", catalogue.Models.Where(model => model.Provider != RemoteModelProvider.ProviderName)
+            .Concat(_remote.Values).Select(model => model.Name).Order(StringComparer.Ordinal));
+
+        public bool IsLocal(string name) => catalogue.TryFind(name, out var model) && model.Provider != RemoteModelProvider.ProviderName;
+
+        public bool TryFind(string name, out ModelDescriptor model)
+        {
+            if (!string.IsNullOrWhiteSpace(name) && _remote.TryGetValue(name, out model!))
+                return true;
+            return catalogue.TryFind(name, out model) && model.Provider != RemoteModelProvider.ProviderName;
+        }
     }
 }

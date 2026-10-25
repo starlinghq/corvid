@@ -50,6 +50,8 @@ public sealed class EngineModelService : IModelService, IDisposable
     private ModelsSnapshot _base;
     private ModelsSnapshot _snapshot;
     private Running? _running;
+    // Why the last built snapshot may be out of date (a refresh after a download failed); cleared by the next good build.
+    private string? _problem;
     private string? _sessionId;
     private int _disposed;
 
@@ -135,12 +137,27 @@ public sealed class EngineModelService : IModelService, IDisposable
             }
             else
             {
-                message += " " + await SwitchLiveAsync(runtime, slot, descriptor.Name, sessionId, cancellationToken).ConfigureAwait(false);
+                // The file is written by now: a live switch that fails says so as what it is, not as a refused switch.
+                try
+                {
+                    message += " " + await SwitchLiveAsync(runtime, slot, descriptor.Name, sessionId, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is not OutOfMemoryException)
+                {
+                    message += $" Written; the live switch failed: {E(exception.Message)} It applies when Corvid next starts.";
+                }
             }
 
             if (!result.ShadowedKeys.IsEmpty)
                 message += $" This run's environment or `--set` overrides {E(string.Join(", ", result.ShadowedKeys))}, so the next start goes on using that.";
-            await RefreshAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await RefreshAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                message += $" Written; the page could not read the models again: {E(exception.Message)}";
+            }
             return Written(message);
         }, cancellationToken);
     }
@@ -239,7 +256,7 @@ public sealed class EngineModelService : IModelService, IDisposable
             }
 
             if (_running is null && _queue.Count > 0)
-                Track(PumpAsync());
+                Track(PumpGuardedAsync());
         }
 
         Republish();
@@ -302,6 +319,10 @@ public sealed class EngineModelService : IModelService, IDisposable
         url = (url ?? "").Trim();
         if (name.Length == 0 || name.Any(char.IsWhiteSpace) || name.Contains(':', StringComparison.Ordinal))
             return Refused("Give the server a name without spaces or colons, such as qwen-coder.");
+        // Nothing is stored while it holds characters that render as nothing or reorder text (the name becomes a model's).
+        if (SafeText.HasHidden(name) || SafeText.HasHidden(url))
+            return Refused($"The name or the address holds hidden characters ({E(SafeText.Reveal(name))}, {E(SafeText.Reveal(url))}). " +
+                "Nothing was written: type them again.");
         if (_catalogue.TryFind(name, out _) || NextStartOptions().Models.Remote.ContainsKey(name))
             return Refused($"The catalogue already has a model named {E(name)}.");
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
@@ -319,6 +340,9 @@ public sealed class EngineModelService : IModelService, IDisposable
                 ? $"{E(name)} at `{E(uri.ToString())}` answered but lists no model. Nothing was written."
                 : $"{E(name)} at `{E(uri.ToString())}` serves {E(string.Join(", ", served))}: name the server after the one to use.");
         }
+        // The server's own answer is outside text: a model id with hidden characters is not written into the configuration.
+        if (SafeText.HasHidden(id))
+            return Refused($"{E(name)} at `{E(uri.ToString())}` names its model with hidden characters ({E(SafeText.Reveal(id))}). Nothing was written.");
 
         var server = new JsonObject { ["Provider"] = "openai-compatible", ["Endpoint"] = uri.ToString(), ["Model"] = id };
         var result = _writer.Apply(new ConfigEdit($"{CorvidOptions.Section}:Models:Remote:{name}", server));
@@ -382,11 +406,42 @@ public sealed class EngineModelService : IModelService, IDisposable
             {
                 await DownloadOneAsync(running).ConfigureAwait(false);
             }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                // Whatever went wrong with this one, the queue goes on: it leaves the queue with its reason on its row.
+                Console.Error.WriteLine($"corvid app: downloading {running.Model} failed: {exception.Message}");
+                lock (_gate)
+                {
+                    _queue.RemoveAll(item => string.Equals(item, running.Model, StringComparison.OrdinalIgnoreCase));
+                    _progress.Remove(running.Model);
+                    _failures[running.Model] = exception.Message;
+                }
+                Republish();
+            }
             finally
             {
                 running.Cancellation.Dispose();
                 running.Stopped.TrySetResult();
             }
+        }
+    }
+
+    /// <summary>
+    /// The pump, which never leaves <see cref="_running"/> set when it stops: a later download starts a pump of its own only
+    /// while none runs, so a pump gone without clearing it would leave every later download queued for good.
+    /// </summary>
+    private async Task PumpGuardedAsync()
+    {
+        try
+        {
+            await PumpAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            // A pump that ends normally cleared it under the lock itself (and a new one may have started since).
+            lock (_gate)
+                _running = null;
+            throw;
         }
     }
 
@@ -455,8 +510,22 @@ public sealed class EngineModelService : IModelService, IDisposable
 
         if (failure is not null)
             Console.Error.WriteLine($"corvid app: downloading {name} failed: {failure}");
-        if (Volatile.Read(ref _disposed) == 0)
+        if (Volatile.Read(ref _disposed) != 0)
+            return;
+        try
+        {
             await RefreshAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            // corvid.json stopped parsing (or holds a value of the wrong shape) while the download ran: the page keeps the
+            // last list it read, says why it is out of date, and the queue goes on.
+            Console.Error.WriteLine($"corvid app: after downloading {name}, the models could not be read again: {exception.Message}");
+            lock (_gate)
+                _problem = $"{(failure is null ? $"{name} downloaded" : $"Downloading {name} ended")}, but the models could not be read again, " +
+                    $"so this list may be out of date: {exception.Message}";
+            Republish();
+        }
     }
 
     /// <summary>Progress reported on the download's own thread as it happens (a <see cref="Progress{T}"/> would post it).</summary>
@@ -485,7 +554,10 @@ public sealed class EngineModelService : IModelService, IDisposable
     private ModelsSnapshot Publish(ModelsSnapshot built)
     {
         lock (_gate)
+        {
             _base = built;
+            _problem = null;
+        }
         return Republish();
     }
 
@@ -507,7 +579,7 @@ public sealed class EngineModelService : IModelService, IDisposable
                     ? model with { Fit = $"{model.Fit} · the last download failed: {SafeText.Clean(failure)}" }
                     : model;
             }).ToList();
-            snapshot = _snapshot = _base with { Catalogue = catalogue };
+            snapshot = _snapshot = _base with { Catalogue = catalogue, Problem = _problem };
             if (_disposed != 0)
                 return snapshot;
         }

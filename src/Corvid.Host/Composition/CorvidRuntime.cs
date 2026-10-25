@@ -251,6 +251,51 @@ public sealed class CorvidRuntime : IAsyncDisposable
 
     public bool TryGetSession(string sessionId, out CorvidSession session) => _sessions.TryGetValue(sessionId, out session!);
 
+    /// <summary>Whether a turn of the session is running in this process now (opened here and mid-turn; a snapshot).</summary>
+    public bool IsTurnRunning(string sessionId) => TryGetSession(sessionId, out var session) && session.Actor.TurnRunning;
+
+    /// <summary>
+    /// What going back to before the ledger entry whose before checkpoint is <paramref name="checkpointId"/> would revert,
+    /// read from the log without opening the session (<see cref="CorvidSession.PlanRollbackTo"/> for an open one). Null
+    /// when no visible ledger entry has that checkpoint.
+    /// </summary>
+    public RestorePlan? PlanRollbackTo(string sessionId, string checkpointId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpointId);
+        return CheckpointService.PlanRollbackTo(SessionProjection.Load(Log, sessionId, cancellationToken: cancellationToken), checkpointId, ChangesFiles);
+    }
+
+    /// <summary>
+    /// What a rollback to before <paramref name="checkpointId"/> would do to the files, worked out without writing and
+    /// without opening the session (the Rewind plan and preview). Null when no ledger entry has the checkpoint or
+    /// checkpoints are off. With a turn of the session running here (<see cref="IsTurnRunning"/>), the files are as the
+    /// turn has left them so far.
+    /// </summary>
+    public async Task<RestoreDraft?> DraftRollbackToAsync(string sessionId, string checkpointId, IReadOnlyCollection<string>? only = null,
+        CancellationToken cancellationToken = default) =>
+        PlanRollbackTo(sessionId, checkpointId, cancellationToken) is { } plan && Checkpoints is { } checkpoints
+            ? await checkpoints.DraftAsync(plan, only, cancellationToken).ConfigureAwait(false)
+            : null;
+
+    /// <summary>A call that would have taken a checkpoint: a tool that changes files, running something other than a read-only command.</summary>
+    internal bool ChangesFiles(ToolCallIssued call)
+    {
+        // A tool no longer registered cannot be analysed, so its call counts as one that may have changed files (fail closed).
+        if (Tools.List().FirstOrDefault(tool => tool.Name == call.ToolName) is not { } descriptor)
+            return true;
+        if (!descriptor.Risk.SideEffects.HasFlag(SideEffects.Filesystem))
+            return false;
+        try
+        {
+            return CheckpointService.Covers(descriptor, Approvals.Analyze(new ToolAction(descriptor, call.Arguments)));
+        }
+        catch (ArgumentException)
+        {
+            return true;
+        }
+    }
+
     /// <summary>Routes a session's approval prompts to its surface until the returned handle is disposed.</summary>
     public IDisposable AttachPrompter(string sessionId, IApprovalPrompter prompter) => _prompters.Attach(sessionId, prompter);
 
@@ -697,23 +742,7 @@ public sealed class CorvidSession
         }, cancellationToken);
     }
 
-    /// <summary>A call that would have taken a checkpoint: a tool that changes files, running something other than a read-only command.</summary>
-    private bool ChangesFiles(ToolCallIssued call)
-    {
-        // A tool no longer registered cannot be analysed, so its call counts as one that may have changed files (fail closed).
-        if (_runtime.Tools.List().FirstOrDefault(tool => tool.Name == call.ToolName) is not { } descriptor)
-            return true;
-        if (!descriptor.Risk.SideEffects.HasFlag(SideEffects.Filesystem))
-            return false;
-        try
-        {
-            return CheckpointService.Covers(descriptor, _runtime.Approvals.Analyze(new ToolAction(descriptor, call.Arguments)));
-        }
-        catch (ArgumentException)
-        {
-            return true;
-        }
-    }
+    private bool ChangesFiles(ToolCallIssued call) => _runtime.ChangesFiles(call);
 
     /// <summary>
     /// Starts an empty session with a conversation held elsewhere (an HTTP client that sends its whole history): the user's

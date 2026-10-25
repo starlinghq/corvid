@@ -201,12 +201,34 @@ public sealed class EngineAuditService : IAuditService
                     continue;
                 }
                 int count;
-                await using (file.ConfigureAwait(false))
-                    count = await TraceExport.WriteAsync(log, sessions, export, file, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await using (file.ConfigureAwait(false))
+                    {
+                        TraceFileCreated?.Invoke(path);
+                        count = await TraceExport.WriteAsync(log, sessions, export, file, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                catch
+                {
+                    // Cancelled or failed part-way: a partial trace would read as a whole one, so it goes.
+                    try
+                    {
+                        File.Delete(path);
+                    }
+                    catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                    {
+                        Console.Error.WriteLine($"corvid app: the partial trace {path} could not be removed: {exception.Message}");
+                    }
+                    throw;
+                }
                 return new TraceExportResult(Display(path), count, new FileInfo(path).Length, options.Retention);
             }
         }, cancellationToken);
     }
+
+    /// <summary>Test seam: runs with the trace's path once its file is created, before anything is written to it.</summary>
+    internal Action<string>? TraceFileCreated { get; set; }
 
     private CorvidOptions Options()
     {

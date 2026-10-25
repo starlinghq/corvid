@@ -17,11 +17,15 @@ public static class TraceExport
     // IEventLog.Read pages; one page at a time keeps a long session's memory flat.
     private const int Page = 4096;
 
-    /// <summary>The export options for this user's configuration: the workspace, this build's version and the OS.</summary>
-    public static BeaconExportOptions Options(CorvidOptions options, BeaconRetention retention, bool includeLocalMemory)
+    /// <summary>The export options for this user's configuration: the workspace, the exporting program's version and the OS.</summary>
+    /// <param name="version">
+    /// The version the trace records for the program that exported it: the CLI passes its own assembly's, as <c>corvid
+    /// traces export</c> always has; Corvid.Host's when null.
+    /// </param>
+    public static BeaconExportOptions Options(CorvidOptions options, BeaconRetention retention, bool includeLocalMemory, string? version = null)
     {
         ArgumentNullException.ThrowIfNull(options);
-        return new BeaconExportOptions(CorvidPaths.Workspace(options), Version(), BeaconExportOptions.CurrentOs)
+        return new BeaconExportOptions(CorvidPaths.Workspace(options), version ?? VersionOf(typeof(TraceExport).Assembly), BeaconExportOptions.CurrentOs)
         {
             Retention = retention,
             IncludeLocalMemory = includeLocalMemory,
@@ -87,6 +91,10 @@ public static class TraceExport
         return new FileStream(path, options);
     }
 
-    private static string Version() =>
-        typeof(TraceExport).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "";
+    /// <summary>An assembly's informational version ("1.0.0+abc123"), as a trace records it; empty when it has none.</summary>
+    public static string VersionOf(Assembly assembly)
+    {
+        ArgumentNullException.ThrowIfNull(assembly);
+        return assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "";
+    }
 }

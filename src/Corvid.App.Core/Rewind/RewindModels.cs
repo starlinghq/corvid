@@ -95,6 +95,12 @@ public sealed record RestorePlan(string CheckpointId, DateTimeOffset At, int Tur
     /// <summary>"/rollback 4": the Nth latest call's before checkpoint; null for a restore point.</summary>
     public string? Command { get; init; }
 
+    /// <summary>
+    /// The plan was worked out while a turn of the session was running: the files are as the turn has left them so far,
+    /// and the restore itself waits for the turn to end, so what it puts back can differ.
+    /// </summary>
+    public bool MidTurn { get; init; }
+
     public bool HasConflicts => Files.Any(file => file.Kind == PutBackKind.Conflict);
 
     public int TurnsLeaving => Math.Max(0, ToTurn - FromTurn + 1);

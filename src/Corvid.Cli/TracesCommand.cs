@@ -43,8 +43,9 @@ internal static class TracesCommand
         if (!all && log.GetHead(session!, cancellationToken) == 0)
             return Fail(console, $"Session '{session}' has no events.", ExitCodes.Failure);
 
+        // The trace names the CLI's own version as its producer, as it did before the export moved to the host.
         var export = TraceExport.Options(options, retention == "metadata" ? BeaconRetention.Metadata : BeaconRetention.Full,
-            arguments.Flag("--include-local-memory"));
+            arguments.Flag("--include-local-memory"), TraceExport.VersionOf(typeof(TracesCommand).Assembly));
 
         var outPath = arguments.Option("--out") is { } file ? CorvidPaths.ExpandHome(file) : null;
         Stream output;

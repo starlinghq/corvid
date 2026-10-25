@@ -113,6 +113,7 @@ public sealed class ModelsViewModel : AreaViewModel
     private readonly StatusBarLease _lease;
     private bool _active;
     private IReadOnlyList<TextRun> _notice = [];
+    private string? _problem;
     private Tone _noticeTone = Tone.Green;
     private ModelsPicker _picker;
     private string _switchTitle = "";
@@ -373,6 +374,14 @@ public sealed class ModelsViewModel : AreaViewModel
 
     private async Task AddServerAsync(CancellationToken cancellationToken)
     {
+        // A name or address with hidden characters is not sent to be stored; the service refuses it too.
+        if (SafeText.HasHidden(_serverName) || SafeText.HasHidden(_serverUrl))
+        {
+            Say(false, $"The server's name or address holds hidden characters (`{Spans.Escape(SafeText.Reveal(_serverName))}`, " +
+                $"`{Spans.Escape(SafeText.Reveal(_serverUrl))}`). Nothing was written: type them again.");
+            return;
+        }
+
         var answer = await _service.AddServerAsync(_serverName, _serverUrl, cancellationToken).ConfigureAwait(true);
         if (answer.Written)
         {
@@ -456,6 +465,10 @@ public sealed class ModelsViewModel : AreaViewModel
     private void Refresh()
     {
         var snapshot = _service.Snapshot;
+        // A store that could not read the configuration again after its own change (a download finishing) says so once.
+        if (snapshot.Problem is { } problem && !string.Equals(problem, _problem, StringComparison.Ordinal))
+            Say(false, Spans.Escape(problem));
+        _problem = snapshot.Problem;
         Subtitle = snapshot.IsLoaded
             ? Spans.Parse($"config `{Spans.Escape(snapshot.ConfigPath)}` · {(snapshot.Validated ? "validated" : "not valid")} · {ConfigNote}")
             : Spans.Parse("reading the configuration and the model cache…");

@@ -171,6 +171,12 @@ public sealed record ModelsSnapshot(
     /// </summary>
     public bool IsLoaded { get; init; } = true;
 
+    /// <summary>
+    /// Why this snapshot may be out of date: the store could not read the configuration again after a change it made
+    /// itself (a download finishing over a corvid.json that no longer parses). Null when it is current.
+    /// </summary>
+    public string? Problem { get; init; }
+
     public CatalogueModel? Find(string name) => Catalogue.FirstOrDefault(model => string.Equals(model.Name, name, StringComparison.Ordinal));
 
     public ModelSlot? Slot(string name) => Slots.FirstOrDefault(slot => string.Equals(slot.Name, name, StringComparison.Ordinal));

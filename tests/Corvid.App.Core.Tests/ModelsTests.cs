@@ -389,22 +389,24 @@ public sealed class ModelsTests
     }
 
     [Fact]
-    public void AModelNamesHiddenCharactersShowWhereItIsDownloadedAndGoElsewhere()
+    public async Task AModelNamesHiddenCharactersShowWhereItIsDownloadedAndGoElsewhere()
     {
         var (service, _) = Demo();
         var models = ViewModel(service);
 
+        // A3 security review L3: the page stores no server whose name holds a hidden character, and shows it in the refusal.
         models.ServerName = "evil\u202Egpj.exe";
         models.ServerUrl = "http://127.0.0.1:11434/v1";
         models.AddServerCommand.Execute(null);
-
-        // The catalogue row's one button acts on the model: its name shows the override.
-        Assert.Equal("evil⟨U+202E⟩gpj.exe", models.Catalogue[^1].Name);
-        Assert.Equal("evil\u202Egpj.exe", models.Catalogue[^1].Model.Name);
-        // The notice only reports it: drawn without the override.
         var notice = string.Concat(models.Notice.Select(run => run.Text));
         Assert.DoesNotContain('\u202E', notice);
-        Assert.Contains("evilgpj.exe", notice, StringComparison.Ordinal);
+        Assert.Contains("evil\u27E8U+202E\u27E9gpj.exe", notice, StringComparison.Ordinal);
+        Assert.DoesNotContain(models.Catalogue, row => row.Model.Name == "evil\u202Egpj.exe");
+
+        // One that came another way (written by hand): the catalogue row's one button acts on it, so its name shows the override.
+        await service.AddServerAsync("evil\u202Egpj.exe", "http://127.0.0.1:11434/v1", TestContext.Current.CancellationToken);
+        Assert.Equal("evil\u27E8U+202E\u27E9gpj.exe", models.Catalogue[^1].Name);
+        Assert.Equal("evil\u202Egpj.exe", models.Catalogue[^1].Model.Name);
 
         var choice = new DownloadChoiceViewModel(
             new CatalogueModel("kev\u202E-9b", ModelKind.Local, "decider", "decider", "Starling", "1 GB", 1_000_000_000, ModelState.Missing, [ModelSlotNames.Decider]),

@@ -247,4 +247,227 @@ public sealed class ConfigWriterTests
         var server = new JsonObject { ["Provider"] = "openai-compatible", ["Endpoint"] = "http://127.0.0.1:11434/v1", ["Model"] = "qwen" };
         Assert.True(writer.Apply(new ConfigEdit("Corvid:Models:Remote:local", server)).Written);
     }
+
+    /// <summary>A3 review M3: an edit changes only its keys' text; the person's comments, layout and key order stay.</summary>
+    [Fact]
+    public async Task AnEditKeepsTheFilesCommentsAndLayout()
+    {
+        await using var host = TestHost.Create();
+        const string original = """
+            {
+              // the person's own notes
+              "corvid": {
+                "Turn": { "MaxSteps": 4 }, // four is enough
+                "Privacy": { "Threshold": 0.5 },
+                /* models below */
+                "Models": {
+                  "Slots": {
+                    "summarizer": { "Model": "fake-gen" } // for now
+                  }
+                },
+                "Devices": {
+                  "CpuThreads": 2,
+                  // keep this one
+                  "Unused": 1,
+                },
+              },
+            }
+            """;
+        await System.IO.File.WriteAllTextAsync(File(host), original, TestContext.Current.CancellationToken);
+
+        var result = Writer(host).Apply(
+            new ConfigEdit("Corvid:Turn:MaxSteps", JsonValue.Create(6)),
+            new ConfigEdit("Corvid:Turn:MaxOutputTokens", JsonValue.Create(512)),
+            ConfigEdit.Remove("Corvid:Devices:Unused"),
+            ConfigEdit.Set("Corvid:Approvals:Mode", "Manual"),
+            new ConfigEdit("Corvid:Privacy:ExtraLabels", new JsonArray("account")));
+
+        Assert.True(result.Written, result.FailureText);
+        Assert.Equal("""
+            {
+              // the person's own notes
+              "corvid": {
+                "Turn": { "MaxSteps": 6, "MaxOutputTokens": 512 }, // four is enough
+                "Privacy": { "Threshold": 0.5, "ExtraLabels": ["account"] },
+                /* models below */
+                "Models": {
+                  "Slots": {
+                    "summarizer": { "Model": "fake-gen" } // for now
+                  }
+                },
+                "Devices": {
+                  "CpuThreads": 2
+                  // keep this one
+                },
+                "Approvals": {
+                  "Mode": "Manual"
+                }
+              },
+            }
+            """, await ReadAsync(host));
+        var next = Writer(host).NextStart();
+        Assert.Equal("6", next["Corvid:Turn:MaxSteps"]);
+        Assert.Equal("account", next["Corvid:Privacy:ExtraLabels:0"]);
+        Assert.Null(next["Corvid:Devices:Unused"]);
+    }
+
+    /// <summary>A3 review M3: a new file and the objects a key needs are written indented, one key a line.</summary>
+    [Fact]
+    public async Task ANewFileIsWrittenIndented()
+    {
+        await using var host = TestHost.Create();
+
+        Assert.True(Writer(host).Apply(ConfigEdit.Set(Summarizer, "fake-gen")).Written);
+        Assert.True(Writer(host).Apply(ConfigEdit.Set("Corvid:Approvals:Mode", "Manual"), ConfigEdit.Remove(Summarizer)).Written);
+
+        Assert.Equal("""
+            {
+              "Corvid": {
+                "Models": {
+                  "Slots": {
+                    "summarizer": {
+                    }
+                  }
+                },
+                "Approvals": {
+                  "Mode": "Manual"
+                }
+              }
+            }
+            """, await ReadAsync(host));
+    }
+
+    /// <summary>A3 review M4: a server added and bound in one edit is judged by the edited file's own remote models.</summary>
+    [Fact]
+    public async Task AServerAddedAndBoundToASlotInOneEditIsWritten()
+    {
+        await using var host = TestHost.Create();
+        var writer = Writer(host);
+        var server = new JsonObject { ["Provider"] = "openai-compatible", ["Endpoint"] = "http://127.0.0.1:11434/v1", ["Model"] = "qwen" };
+
+        var applied = writer.Apply(new ConfigEdit("Corvid:Models:Remote:local", server), ConfigEdit.Set(Summarizer, "local"));
+        Assert.True(applied.Written, applied.FailureText);
+
+        // The raw editor's whole file, the same way; and a slot naming a server the file no longer has is refused.
+        const string replaced = """{ "Corvid": { "Models": { "Remote": { "other": { "Provider": "openai-compatible", "Endpoint": "http://127.0.0.1:8080/v1", "Model": "m" } }, "Slots": { "summarizer": { "Model": "other" } } } } }""";
+        var replace = writer.Replace(replaced);
+        Assert.True(replace.Written, replace.FailureText);
+        var gone = writer.Apply(ConfigEdit.Remove("Corvid:Models:Remote:other"));
+        Assert.False(gone.Written);
+        Assert.Contains(gone.Failures, failure => failure.StartsWith("Corvid:Models:Slots:summarizer:Model: no model is named 'other'", StringComparison.Ordinal));
+    }
+
+    /// <summary>A3 review M4: a broken remote entry the host started with does not block the edit that fixes it.</summary>
+    [Fact]
+    public async Task ABrokenRemoteEntryCanBeFixed()
+    {
+        // The provider the host started with, built from the broken entry (the fakes replace the host's own providers).
+        var started = new Models.RemoteModelProvider(
+            new Dictionary<string, RemoteModelSettings> { ["local"] = new() { Provider = "nonsense" } }, vaultSocket: null);
+        Assert.NotEmpty(started.Problems);
+        await using var host = TestHost.Create(services: services => services.AddSingleton<Corvid.Host.Models.IModelProvider>(started));
+        await System.IO.File.WriteAllTextAsync(File(host), """{ "Corvid": { "Models": { "Remote": { "local": { "Provider": "nonsense" } } } } }""",
+            TestContext.Current.CancellationToken);
+        var writer = Writer(host);
+        Assert.False(writer.Apply(ConfigEdit.Set(Summarizer, "fake-gen")).Written);
+
+        var fixedServer = new JsonObject { ["Provider"] = "openai-compatible", ["Endpoint"] = "http://127.0.0.1:11434/v1", ["Model"] = "qwen" };
+        var result = writer.Apply(new ConfigEdit("Corvid:Models:Remote:local", fixedServer));
+
+        Assert.True(result.Written, result.FailureText);
+        Assert.Equal("openai-compatible", writer.NextStart()["Corvid:Models:Remote:local:Provider"]);
+    }
+
+    /// <summary>A3 review M4: a remote model cannot take an in-process model's name; the next start's catalogue would refuse it.</summary>
+    [Fact]
+    public async Task ARemoteModelCannotTakeAnInProcessModelsName()
+    {
+        await using var host = TestHost.Create();
+        var server = new JsonObject { ["Provider"] = "openai-compatible", ["Endpoint"] = "http://127.0.0.1:11434/v1", ["Model"] = "qwen" };
+
+        var result = Writer(host).Apply(new ConfigEdit("Corvid:Models:Remote:fake-gen", server));
+
+        Assert.False(result.Written);
+        Assert.Contains(result.Failures, failure => failure.StartsWith("Corvid:Models:Remote:fake-gen: an in-process model is named", StringComparison.Ordinal));
+    }
+
+    /// <summary>A3 review L5: the replacement keeps the file's permissions, and a new file is the owner's alone.</summary>
+    [Fact]
+    public async Task TheFileKeepsItsPermissions()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        await using var host = TestHost.Create();
+        Assert.True(Writer(host).Apply(ConfigEdit.Set(Summarizer, "fake-gen")).Written);
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, System.IO.File.GetUnixFileMode(File(host)));
+
+        var shared = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead;
+        System.IO.File.SetUnixFileMode(File(host), shared);
+        Assert.True(Writer(host).Apply(ConfigEdit.Set("Corvid:Approvals:Mode", "Manual")).Written);
+
+        Assert.Equal(shared, System.IO.File.GetUnixFileMode(File(host)));
+    }
+
+    /// <summary>A3 review L5: a corvid.json that is a symbolic link is written through to its target and stays a link.</summary>
+    [Fact]
+    public async Task ASymbolicLinkIsWrittenThroughAndStaysALink()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        await using var host = TestHost.Create();
+        var dotfiles = Directory.CreateDirectory(Path.Combine(host.Root, "dotfiles")).FullName;
+        var target = Path.Combine(dotfiles, "corvid.json");
+        await System.IO.File.WriteAllTextAsync(target, """{ "Corvid": { "Turn": { "MaxSteps": 4 } } }""", TestContext.Current.CancellationToken);
+        System.IO.File.CreateSymbolicLink(File(host), target);
+
+        var result = Writer(host).Apply(new ConfigEdit("Corvid:Turn:MaxSteps", JsonValue.Create(5)));
+
+        Assert.True(result.Written, result.FailureText);
+        Assert.Equal(target, new FileInfo(File(host)).LinkTarget);
+        Assert.Equal("""{ "Corvid": { "Turn": { "MaxSteps": 5 } } }""", await System.IO.File.ReadAllTextAsync(target, TestContext.Current.CancellationToken));
+        Assert.Empty(Directory.EnumerateFiles(dotfiles, "*.tmp"));
+    }
+
+    /// <summary>A3 review L6: a second writer (another process) waits for the lock beside the file, and is refused past its wait.</summary>
+    [Fact]
+    public async Task AWriteWaitsForAnotherWritersLock()
+    {
+        await using var host = TestHost.Create();
+        var writer = Writer(host);
+        writer.LockTimeout = TimeSpan.Zero;
+        Assert.True(writer.Apply(ConfigEdit.Set(Summarizer, "fake-gen")).Written);
+        var before = await ReadAsync(host);
+
+        // The lock another process's writer holds while it reads, validates and replaces the file.
+        var lockPath = Path.Combine(host.Root, ".corvid.json.lock");
+        using (new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+        {
+            var refused = writer.Apply(ConfigEdit.Set("Corvid:Approvals:Mode", "Manual"));
+            Assert.False(refused.Written);
+            Assert.Contains("Another Corvid process is writing", refused.FailureText, StringComparison.Ordinal);
+            Assert.Equal(before, await ReadAsync(host));
+            // Checking writes nothing, so it needs no lock.
+            Assert.True(writer.Check(ConfigEdit.Set("Corvid:Approvals:Mode", "Manual")).Failures.IsEmpty);
+        }
+
+        Assert.True(writer.Apply(ConfigEdit.Set("Corvid:Approvals:Mode", "Manual")).Written);
+    }
+
+    /// <summary>A3 review L6: a file changed by something that takes no lock (an editor) after it was read is not overwritten.</summary>
+    [Fact]
+    public async Task AFileChangedDuringTheEditIsNotOverwritten()
+    {
+        await using var host = TestHost.Create();
+        var writer = Writer(host);
+        await System.IO.File.WriteAllTextAsync(File(host), """{ "Corvid": { "Turn": { "MaxSteps": 4 } } }""", TestContext.Current.CancellationToken);
+        const string edited = """{ "Corvid": { "Turn": { "MaxSteps": 9 } } }""";
+        writer.BeforeReplace = () => System.IO.File.WriteAllText(File(host), edited);
+
+        var result = writer.Apply(ConfigEdit.Set("Corvid:Approvals:Mode", "Manual"));
+
+        Assert.False(result.Written);
+        Assert.Contains("changed while this edit was being made", result.FailureText, StringComparison.Ordinal);
+        Assert.Equal(edited, await ReadAsync(host));
+        AssertNoTemporaryFiles(host);
+    }
 }

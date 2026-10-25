@@ -156,6 +156,27 @@ public sealed class EngineAuditTests
         await Assert.ThrowsAsync<KeyNotFoundException>(() => audit.ExportAsync("cli-none", new TraceExportOptions(TraceRetention.Full, false), Ct));
     }
 
+    /// <summary>A3 review L10: an export cancelled part-way leaves no partial trace behind to pass for a whole one.</summary>
+    [Fact]
+    public async Task ACancelledExportLeavesNoPartialFile()
+    {
+        await using var fixture = await EngineFixture.StartAsync();
+        var (notes, _) = Seed(fixture);
+        var audit = Audit(fixture);
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        string? created = null;
+        audit.TraceFileCreated = path =>
+        {
+            created = path;
+            cancel.Cancel();
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => audit.ExportAsync(notes, new TraceExportOptions(TraceRetention.Full, false), cancel.Token));
+
+        Assert.NotNull(created);
+        Assert.False(File.Exists(created));
+    }
+
     [Fact]
     public async Task TheEgressLedgerIsRefusedWithItsWorkItemAndThePageStillShowsTheLog()
     {

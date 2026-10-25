@@ -62,10 +62,12 @@ public sealed class EngineRewindService : IRewindService, IDisposable
         return await Task.Run(async () =>
         {
             var ledger = SessionLedger.Load(runtime, sessionId, cancellationToken);
-            var open = runtime.TryGetSession(sessionId, out _);
+            // Pending means a turn running here now, not merely a session this process has open: a call that a crash or a
+            // cancelled turn left without a result is stopped, whether or not the session was opened since.
+            var running = runtime.IsTurnRunning(sessionId);
             var rows = new List<(long Sequence, AppLedgerEntry Entry)>();
             foreach (var entry in ledger.Entries)
-                rows.Add((entry.CallSequence, await EntryAsync(entry, ledger, texts, open).ConfigureAwait(false)));
+                rows.Add((entry.CallSequence, await EntryAsync(entry, ledger, texts, running).ConfigureAwait(false)));
             var rewinds = ledger.Rewinds.ToList();
             foreach (var restore in ledger.Restores)
             {
@@ -89,10 +91,13 @@ public sealed class EngineRewindService : IRewindService, IDisposable
 
     public async Task<AppPlan> PlanAsync(string sessionId, string checkpointId, CancellationToken cancellationToken = default)
     {
-        var (ledger, entry, session) = await FindAsync(sessionId, checkpointId, cancellationToken).ConfigureAwait(false);
+        var (ledger, entry, runtime) = await FindAsync(sessionId, checkpointId, cancellationToken).ConfigureAwait(false);
         var texts = await _texts.Value.ConfigureAwait(false);
-        var plan = session.PlanRollbackTo(checkpointId) ?? throw Missing(sessionId, checkpointId);
-        var draft = await session.DraftRollbackToAsync(checkpointId, null, cancellationToken).ConfigureAwait(false);
+        // Planned from the log, without opening the session: only a restore opens it.
+        var midTurn = runtime.IsTurnRunning(sessionId);
+        var plan = runtime.PlanRollbackTo(sessionId, checkpointId, cancellationToken) ?? throw Missing(sessionId, checkpointId);
+        var draft = await runtime.DraftRollbackToAsync(sessionId, checkpointId, null, cancellationToken).ConfigureAwait(false);
+        midTurn |= runtime.IsTurnRunning(sessionId);
 
         // Each path the plan's calls changed, in the order they first changed it, with what they changed summed.
         var files = new List<(string Path, int Added, int Removed, string LastAfter)>();
@@ -143,15 +148,16 @@ public sealed class EngineRewindService : IRewindService, IDisposable
             ToTurn = ledger.Turn,
             PartTurn = ledger.TurnAt(entry.CallSequence) is var turn && turn == ledger.TurnAt(plan.Position) && turn > 0 ? turn : null,
             Command = string.Create(CultureInfo.InvariantCulture, $"/rollback {number}"),
+            MidTurn = midTurn,
         };
     }
 
     public async Task<IReadOnlyList<RestorePreviewFile>> PreviewAsync(string sessionId, string checkpointId, CancellationToken cancellationToken = default)
     {
-        var (ledger, entry, session) = await FindAsync(sessionId, checkpointId, cancellationToken).ConfigureAwait(false);
+        var (_, _, runtime) = await FindAsync(sessionId, checkpointId, cancellationToken).ConfigureAwait(false);
         var texts = await _texts.Value.ConfigureAwait(false);
-        var plan = session.PlanRollbackTo(checkpointId) ?? throw Missing(sessionId, checkpointId);
-        var draft = await session.DraftRollbackToAsync(checkpointId, null, cancellationToken).ConfigureAwait(false);
+        var plan = runtime.PlanRollbackTo(sessionId, checkpointId, cancellationToken) ?? throw Missing(sessionId, checkpointId);
+        var draft = await runtime.DraftRollbackToAsync(sessionId, checkpointId, null, cancellationToken).ConfigureAwait(false);
         if (draft is null || draft.Detail is not null)
         {
             var reason = draft?.Detail ?? "checkpoints are off, so no file can be put back";
@@ -182,8 +188,9 @@ public sealed class EngineRewindService : IRewindService, IDisposable
 
     public async Task<RestoreOutcome> RestoreAsync(string sessionId, string checkpointId, AppScope scope, CancellationToken cancellationToken = default)
     {
-        var (ledger, entry, session) = await FindAsync(sessionId, checkpointId, cancellationToken).ConfigureAwait(false);
-        var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
+        var (ledger, entry, runtime) = await FindAsync(sessionId, checkpointId, cancellationToken).ConfigureAwait(false);
+        // The restore runs on the session's actor, so it opens the session (no turn of it can start meanwhile).
+        var session = runtime.TryGetSession(sessionId, out var open) ? open : runtime.OpenSession(sessionId, EngineSessionService.Surface);
         var label = $"rollback to before {checkpointId}";
         // The kernel rolls back to just before the call (its position minus one): the call's turn keeps its prompt, and only
         // the turns after it leave whole, as the plan says.
@@ -231,8 +238,11 @@ public sealed class EngineRewindService : IRewindService, IDisposable
 
     private void OnChanged(string sessionId) => TimelineChanged?.Invoke(this, sessionId);
 
-    /// <summary>The session's ledger, the entry before which the checkpoint is, and the session's handle to plan and restore with.</summary>
-    private async Task<(SessionLedger Ledger, KernelEntry Entry, CorvidSession Session)> FindAsync(string sessionId, string checkpointId,
+    /// <summary>
+    /// The session's ledger and the entry before which the checkpoint is, read from the log: the session is not opened
+    /// (opening registers it for good, and a plan or a preview needs no actor).
+    /// </summary>
+    private async Task<(SessionLedger Ledger, KernelEntry Entry, CorvidRuntime Runtime)> FindAsync(string sessionId, string checkpointId,
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
@@ -244,17 +254,16 @@ public sealed class EngineRewindService : IRewindService, IDisposable
                 "rollback reverts tool calls, not restores. Select the call before it.");
         var entry = ledger.Entries.FirstOrDefault(candidate => candidate.Before.Checkpoint.CheckpointId == checkpointId)
             ?? throw Missing(sessionId, checkpointId);
-        var running = runtime.TryGetSession(sessionId, out var open);
-        if (entry.After is null && running && !ledger.Finished.Contains(entry.CallId))
+        // Only a call of a turn running now is unfinished; one a crash or a cancelled turn left without a result can be undone.
+        if (entry.After is null && runtime.IsTurnRunning(sessionId) && !ledger.Finished.Contains(entry.CallId))
             throw new InvalidOperationException($"The call at {checkpointId} has not finished; there is nothing of it to go back from yet.");
-        var session = running ? open : runtime.OpenSession(sessionId, EngineSessionService.Surface);
-        return (ledger, entry, session);
+        return (ledger, entry, runtime);
     }
 
     private static KeyNotFoundException Missing(string sessionId, string checkpointId) =>
         new($"No checkpoint {checkpointId} in the ledger of {sessionId}.");
 
-    private static async Task<AppLedgerEntry> EntryAsync(KernelEntry entry, SessionLedger ledger, LedgerTexts texts, bool open)
+    private static async Task<AppLedgerEntry> EntryAsync(KernelEntry entry, SessionLedger ledger, LedgerTexts texts, bool turnRunning)
     {
         var id = entry.Before.Checkpoint.CheckpointId;
         var at = ledger.TimeOf(entry.Before.Sequence);
@@ -268,8 +277,8 @@ public sealed class EngineRewindService : IRewindService, IDisposable
                 AfterId = after.Checkpoint.CheckpointId,
                 Changes = await texts.ChangesAsync(entry).ConfigureAwait(false),
             };
-        // No after checkpoint: still running here (no result yet, in a session this process has open), or it ended without one.
-        var pending = open && !ledger.Finished.Contains(entry.CallId);
+        // No after checkpoint: still running (no result yet, in a turn running here now), or it ended without one.
+        var pending = turnRunning && !ledger.Finished.Contains(entry.CallId);
         return new AppLedgerEntry(id, pending ? LedgerEntryKind.Pending : LedgerEntryKind.Call, at, turn)
         {
             Tool = entry.Tool,
