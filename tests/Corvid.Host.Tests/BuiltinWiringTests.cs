@@ -87,6 +87,33 @@ public sealed class BuiltinWiringTests
         Assert.Contains("protected location", result.Result.GetRawText(), StringComparison.Ordinal);
     }
 
+    // A5 (A4 leftover): Sandbox:LauncherPath naming the real corvid-sandbox put the launcher on the sandbox's deny list, and
+    // its stage 2, which re-executes the launcher inside bubblewrap, failed every command. It stays protected from the
+    // tools' writes; the shell and sandboxed MCP servers no longer hide it.
+    [Fact]
+    public async Task TheConfiguredLauncherIsProtectedButNeverHiddenFromItsOwnSandbox()
+    {
+        await using var host = TestHost.Create(settings: new Dictionary<string, string?>
+        {
+            ["Corvid:Tools:Builtin"] = "true",
+            ["Corvid:Sandbox:LauncherPath"] = "{root}/bin/corvid-sandbox",
+        });
+        var launcher = Path.Combine(host.Root, "bin", "corvid-sandbox");
+        Directory.CreateDirectory(Path.GetDirectoryName(launcher)!);
+        await File.WriteAllTextAsync(launcher, "", TestContext.Current.CancellationToken);
+        await using var runtime = await host.StartAsync();
+
+        Assert.Contains(launcher, runtime.Builtin.Environment.Protected.SafetyConfiguration);
+        var options = runtime.Options;
+        var denied = CorvidRuntimeFactory.McpDeniedPaths(options, Path.Combine(host.Root, "corvid.json")).ToList();
+        Assert.DoesNotContain(launcher, denied);
+        Assert.Contains(Path.Combine(host.Root, "corvid.json"), denied);
+        Assert.DoesNotContain(launcher, CorvidRuntimeFactory.WithoutLauncher(runtime.Builtin.Environment.Protected.SafetyConfiguration, options));
+        // Outside the workspace it is read-only to commands already; inside it, it is bound read-only.
+        Assert.Empty(CorvidRuntimeFactory.LauncherInside(options, Path.Combine(host.Root, "work")));
+        Assert.Equal([launcher], CorvidRuntimeFactory.LauncherInside(options, host.Root));
+    }
+
     [Fact]
     public async Task AFileToolRunsInTheConfiguredWorkspace()
     {

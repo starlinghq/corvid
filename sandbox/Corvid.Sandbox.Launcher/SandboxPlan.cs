@@ -178,6 +178,16 @@ internal sealed partial record SandboxPlan
                 throw new RefusedException($"The working directory {cwd} is inside the denied path {real}.");
             }
 
+            // Stage 2 is this launcher started again inside the sandbox: hiding it (or the directory it runs from) would fail
+            // every command with execve's "Permission denied". Say so instead.
+            foreach (string self in (string[])[launcher.Executable, launcher.Directory])
+            {
+                if (Native.RealPath(self) is { } own && Under(own, real))
+                {
+                    throw new RefusedException($"The denied path {real} hides corvid-sandbox itself ({own}), which runs again inside the sandbox; do not deny the launcher's own path.");
+                }
+            }
+
             (Directory.Exists(real) ? maskedDirectories : maskedFiles).Add(real);
         }
 
