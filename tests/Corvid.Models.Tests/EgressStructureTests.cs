@@ -168,6 +168,37 @@ public sealed class EgressStructureTests
         Assert.True(EgressPolicy.Default.Threshold >= 0.6f);
     }
 
+    [Fact]
+    public async Task A_key_that_only_looks_like_structure_is_read_as_a_value()
+    {
+        // A5 fix round (D7): a result keyed by a lowercase username; the key is data, so it is scanned and redacted, and no
+        // key of the request makes the same word in free text read as structure.
+        var extractor = new EagerExtractor(("person", "jsmith", 0.9f), ("email", "j@example.org", 0.95f));
+        List<ChatMessage> messages =
+        [
+            new(ChatRole.User, "who is jsmith?"),
+            new(ChatRole.Tool, [new FunctionResultContent("c1", JsonDocument.Parse("""{"jsmith":{"email":"j@example.org","exit_code":0}}""").RootElement.Clone())]),
+        ];
+        var prepared = await Egress(extractor).PrepareAsync(Server, messages, new ModelRequestContext("s1", Tainted: false), Ct);
+
+        Assert.Equal(EgressOutcome.Redacted, prepared.Decision.Outcome);
+        Assert.Equal("who is <PERSON_1>?", Text(prepared.Messages[0]));
+        Assert.Equal("""{"<PERSON_1>":{"email":"<EMAIL_1>","exit_code":0}}""",
+            Text(prepared.Messages[1]).Replace("\\u003C", "<", StringComparison.Ordinal).Replace("\\u003E", ">", StringComparison.Ordinal));
+        Assert.DoesNotContain(extractor.Requests, text => text is "email" or "exit_code");
+    }
+
+    [Theory]
+    [InlineData("status", true)]
+    [InlineData("exit_code", true)]
+    [InlineData("toolCallId", true)]
+    [InlineData("content-type", true)]
+    [InlineData("jsmith", false)]
+    [InlineData("john_smith", false)]
+    [InlineData("Mark Walls", false)]
+    public void Structure_keys_are_made_of_known_words(string key, bool structure) =>
+        Assert.Equal(structure, PrivacyEgress.StructureKey(key));
+
     [Theory]
     [InlineData("status", true)]
     [InlineData("exit_code", true)]

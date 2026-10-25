@@ -400,6 +400,67 @@ public sealed class ChildSessionTests
     }
 
     [Fact]
+    public async Task The_schema_repair_turn_gets_only_what_is_left_of_the_step_budget()
+    {
+        // A5 fix round (D2): one step, an answer outside the schema, then a repair that would take two more steps if it had
+        // a budget of its own. With 2 steps approved, the whole run takes 2.
+        var models = new FakeModels(new FakeGenerator(Reply.Call("list_notes"), Reply.Say("two"), Reply.Call("list_notes"),
+            Reply.Call("list_notes"), Reply.Say("""{"count": 2}""")));
+        await using var host = Host(models);
+        await using var runtime = await host.StartAsync();
+        var parent = runtime.OpenSession();
+        using var schema = JsonDocument.Parse("""{"type":"object","properties":{"count":{"type":"integer"}},"required":["count"]}""");
+
+        var result = await runtime.RunChildAsync(parent.Id, new ChildRequest("list my notes and count them")
+        {
+            Tools = ["list_notes"],
+            MaxSteps = 2,
+            OutputSchema = schema.RootElement,
+        }, Ct);
+
+        Assert.Equal(2, result.Steps);
+        Assert.Equal(2, Assert.Single(Events(runtime, parent.Id).OfType<ChildFinished>()).Steps);
+        Assert.Equal(ChildStatuses.StepBudgetExhausted, result.Status);
+    }
+
+    [Fact]
+    public async Task A_listed_child_that_has_not_run_yet_can_be_stopped()
+    {
+        // A5 fix round (D6): opened (ChildSpawned logged, listed as running) but not run yet, as while delegate_task plans
+        // its other tasks: the stop is taken, and the child never starts.
+        var models = new FakeModels(new FakeGenerator(Reply.Say("never")));
+        await using var host = Host(models);
+        await using var runtime = await host.StartAsync();
+        var parent = runtime.OpenSession();
+        var child = runtime.OpenChildSession(await runtime.PlanChildAsync(parent.Id, new ChildRequest("wait"), Ct));
+
+        Assert.True(Assert.Single(runtime.Children(parent.Id)).Running);
+        Assert.True(runtime.StopChild(child.Id));
+        var result = await runtime.RunChildAsync(child, Ct);
+
+        Assert.Equal((ChildStatuses.Cancelled, "stopped by the person"), (result.Status, result.Detail));
+        Assert.Empty(models.Generator.Calls);
+        Assert.False(runtime.StopChild(child.Id));
+    }
+
+    [Fact]
+    public void A_long_schema_output_reaches_the_parent_bounded()
+    {
+        // A5 fix round (D3): the output is bounded as the answer is.
+        var big = JsonSerializer.SerializeToElement(new { text = new string('a', CorvidRuntime.MaxChildTextChars * 3) });
+        var small = JsonSerializer.SerializeToElement(new { count = 2 });
+
+        var bounded = CorvidRuntime.Outcome(new ChildResult("child-1", ChildStatuses.Answered, big.GetRawText(), big, 1, 10, false, null));
+        var whole = CorvidRuntime.Outcome(new ChildResult("child-2", ChildStatuses.Answered, small.GetRawText(), small, 1, 10, false, null));
+
+        Assert.False(bounded.ContainsKey("output"));
+        Assert.Equal(CorvidRuntime.MaxChildTextChars + 1, Assert.IsType<string>(bounded["answer"]).Length);
+        Assert.Contains("only its first", Assert.IsType<string>(bounded["detail"]), StringComparison.Ordinal);
+        Assert.Equal(small, whole["output"]);
+        Assert.False(whole.ContainsKey("detail"));
+    }
+
+    [Fact]
     public async Task A_child_past_its_token_budget_is_stopped()
     {
         // Each fake call reports 49 tokens: the second one passes a budget of 60.

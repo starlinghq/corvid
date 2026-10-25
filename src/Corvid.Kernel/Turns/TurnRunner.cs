@@ -188,6 +188,29 @@ public sealed class TurnRunner
 
     private int _approvalMode = -1;
 
+    private int _stepLimit = int.MaxValue;
+
+    /// <summary>
+    /// A5: a step budget below <see cref="TurnOptions.MaxSteps"/> for the turns that start from now on, or null for the
+    /// options' own. A child session's output-schema repair turn gets what its first turn left of the budget the person
+    /// approved, so the two turns together stay within it. It only lowers the budget: a value above the options' has no
+    /// effect. Thread-safe; a running turn keeps the budget it started with.
+    /// </summary>
+    public int? StepLimit
+    {
+        get => Volatile.Read(ref _stepLimit) is var limit && limit < _options.MaxSteps ? limit : null;
+        set
+        {
+            if (value is < 1)
+                throw new ArgumentOutOfRangeException(nameof(value), value, "A step limit is one or more.");
+            Volatile.Write(ref _stepLimit, value ?? int.MaxValue);
+        }
+    }
+
+    // The options a turn starting now runs with: StepLimit applied.
+    private TurnOptions OptionsNow() =>
+        Volatile.Read(ref _stepLimit) is var limit && limit < _options.MaxSteps ? _options with { MaxSteps = limit } : _options;
+
     /// <summary>
     /// The approval mode this session's calls are assessed under (G-10): <see cref="TurnOptions.ApprovalMode"/> until a
     /// surface sets another for the session, which applies from the next call assessed, the running turn's included. Kept
@@ -434,7 +457,7 @@ public sealed class TurnRunner
     private sealed class Turn(TurnRunner runner, Envelope envelope)
     {
         private readonly TurnServices _services = runner._services;
-        private readonly TurnOptions _options = runner._options;
+        private readonly TurnOptions _options = runner.OptionsNow();
         private readonly Lock _gate = new();
         private readonly HashSet<string> _open = new(StringComparer.Ordinal);
         private readonly List<string> _escalations = [];
@@ -1476,6 +1499,15 @@ public sealed class TurnRunner
             {
                 // A surface that fails to ask leaves the question for the person's next message, as nobody attached would.
                 answer = null;
+            }
+            // Cancelled as the surface returned (an interrupt racing the question): the answer, if any, is not taken and the
+            // question goes with the turn, as on the cancelled wait above, so no replay shows it still open.
+            if (cancellationToken.IsCancellationRequested)
+            {
+                lock (_gate)
+                    runner.Append(new ClarificationAnswered(question.Id, ""));
+                activity?.SetTag(KernelTelemetry.ToolOutcome, "cancelled");
+                cancellationToken.ThrowIfCancellationRequested();
             }
             answer = answer?.Trim();
             string? pick;

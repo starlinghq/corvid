@@ -55,12 +55,15 @@ public sealed partial class EngineSessionService
                 var expected = Interlocked.Exchange(ref channel.Expected, null);
                 waiting = expected is not null && expected.QuestionId == prompt.QuestionId ? expected
                     : new InTurnQuestion(prompt.QuestionId, new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously));
-                if (channel.Cancelling || service._disposed)
+                if (service._disposed)
                 {
                     if (ReferenceEquals(channel.AskedInTurn, waiting))
                         channel.AskedInTurn = null;
                     return null;
                 }
+                // An interrupt under way (it sets Cancelling, then cancels the turn's token) is not answered with null, which
+                // would leave the question for the next message: the wait below ends with the token, and the kernel withdraws
+                // the question with the turn. AnswerQuestionAsync refuses an answer meanwhile.
                 channel.AskedInTurn = waiting;
             }
             try

@@ -179,7 +179,12 @@ public sealed partial class EngineSessionService
                 throw new InvalidOperationException("That question is no longer open; nothing was sent.");
             // A5: the running turn asked it and waits for the answer inside the turn.
             if ((channel.AskedInTurn ?? Volatile.Read(ref channel.Expected)) is { } waiting && waiting.QuestionId == questionId)
+            {
+                // Interrupted (the turn's token is being cancelled): the question goes with the turn, so no answer is taken.
+                if (channel.Cancelling)
+                    throw new InvalidOperationException("The turn is being interrupted, and its question with it; nothing was sent.");
                 inTurn = waiting.Answer;
+            }
             else if (channel.Running)
                 throw new InvalidOperationException("A turn is running; answer the question once it ends.");
             // The model wrote the options: one passed as it was offered, hidden characters and all, is sent only as the text

@@ -44,7 +44,8 @@ public sealed partial class CorvidRuntime
     /// <summary>
     /// A5: what a <c>delegate_task</c> call would start, for its approval card: each child's plan (its clamped budget, its
     /// toolset with what was left out, its resolved model mix and approval mode), or the reason it would be refused. Nothing
-    /// is started or logged. Called while the call waits on its approval, so the card shows what the person grants.
+    /// is started or logged, and no model is loaded (the approved call loads them). Called while the call waits on its approval,
+    /// so the card shows what the person grants.
     /// </summary>
     public async Task<IReadOnlyList<DelegationPreview>> PreviewDelegationAsync(string sessionId, JsonElement arguments,
         CancellationToken cancellationToken = default)
@@ -58,7 +59,7 @@ public sealed partial class CorvidRuntime
             try
             {
                 var request = DelegationRequest(sessionId, task, offered: null, ChildSessions.ByAgent, callId: null);
-                previews.Add(new(task.Goal, await PlanChildAsync(sessionId, request, cancellationToken).ConfigureAwait(false), null));
+                previews.Add(new(task.Goal, await PlanChildAsync(sessionId, request, preview: true, cancellationToken).ConfigureAwait(false), null));
             }
             catch (ChildRefusedException exception)
             {
@@ -154,11 +155,22 @@ public sealed partial class CorvidRuntime
             ["child_id"] = result.ChildId,
             ["status"] = result.Status,
         };
+        string? note = null;
         if (result.Status == ChildStatuses.Answered && result.Output is { } output)
-            outcome["output"] = output;
+        {
+            // Bounded as the answer is: an output longer than the cap goes as the start of its JSON text, and says so.
+            var json = output.GetRawText();
+            if (json.Length <= MaxChildTextChars)
+                outcome["output"] = output;
+            else
+            {
+                outcome["answer"] = json[..MaxChildTextChars] + "…";
+                note = $"the output met the schema but is {json.Length} characters; only its first {MaxChildTextChars} are here";
+            }
+        }
         else if (result.Text is { Length: > 0 } text)
             outcome["answer"] = text.Length > MaxChildTextChars ? text[..MaxChildTextChars] + "…" : text;
-        if (result.Detail is { Length: > 0 } detail)
+        if ((result.Detail is { Length: > 0 } given ? (note is null ? given : given + "; " + note) : note) is { } detail)
             outcome["detail"] = detail.Length > 600 ? detail[..600] + "…" : detail;
         outcome["steps"] = result.Steps;
         outcome["tokens"] = result.Tokens;

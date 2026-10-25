@@ -102,6 +102,14 @@ public interface IGatewayAgent
 
     /// <summary>Routes the session's approval prompts to <paramref name="prompter"/> until disposed.</summary>
     IDisposable AttachPrompter(string sessionId, IApprovalPrompter prompter);
+
+    /// <summary>
+    /// A5: the lines an approval message adds for a prompt, as every surface's card shows them: a <c>delegate_task</c>
+    /// spawn's children (goal, tools, budget, models, approval mode, taint), or which child a child's prompt comes from.
+    /// Untrusted names come back with hidden characters shown as escapes. None by default.
+    /// </summary>
+    Task<IReadOnlyList<string>> CardLinesAsync(ApprovalPrompt prompt, CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<string>>([]);
 }
 
 /// <summary>Gateway session ids: one session per chat, <c>gateway:{adapter}:{chat}</c>, so a job's origin session names its chat.</summary>

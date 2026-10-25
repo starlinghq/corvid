@@ -239,6 +239,10 @@ internal sealed class RuntimeGatewayAgent(CorvidRuntime runtime, SlashCommandReg
 
     public IDisposable AttachPrompter(string sessionId, IApprovalPrompter prompter) => runtime.AttachPrompter(sessionId, prompter);
 
+    // A5: a spawn's plan on the owner's /approve message, as the CLI, the app and ACP show it.
+    public Task<IReadOnlyList<string>> CardLinesAsync(ApprovalPrompt prompt, CancellationToken cancellationToken) =>
+        DelegationCard.LinesAsync(runtime, prompt, cancellationToken);
+
     private CorvidSession Session(string sessionId) =>
         runtime.TryGetSession(sessionId, out var session) ? session : throw new InvalidOperationException($"Session {sessionId} is not open.");
 

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Frozen;
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Security.Cryptography;
@@ -192,8 +193,9 @@ public sealed partial class PrivacyEgress
     /// <paramref name="texts"/> lose the key that labels a value (<c>{"password": "..."}</c>).
     /// </param>
     /// <param name="vocabulary">
-    /// A5: the request's structural words (identifier JSON keys, the lowercase words of the trusted system text): a lowercase
-    /// one-word span that is one of them is the request's structure, not a value ("status", "details").
+    /// A5: the request's structural words (Corvid's built-in structure words, the lowercase words of the trusted system text):
+    /// a lowercase identifier-shaped span made only of them is the request's structure, not a value ("status", "details").
+    /// The request's own JSON keys are not among them: a key is data too (a result keyed by a username).
     /// </param>
     private async Task<EgressScan> ScanAsync(IEnumerable<string> texts, IEnumerable<string> structured, EgressPolicy policy,
         CancellationToken cancellationToken, IReadOnlySet<string>? vocabulary = null)
@@ -269,8 +271,58 @@ public sealed partial class PrivacyEgress
             return true;
         if (label is "phone number" or "account number" && !value.Any(char.IsAsciiDigit))
             return true;
-        return vocabulary is not null && value.All(c => char.IsAsciiLetterLower(c) || c is '_' or '-') && vocabulary.Contains(value);
+        return vocabulary is not null && IdentifierKey(value) && KnownWords(value, vocabulary);
     }
+
+    /// <summary>
+    /// A5 fix: a JSON key Corvid takes as structure (neither scanned nor rewritten): identifier-shaped (<see cref="IdentifierKey"/>)
+    /// and made only of <see cref="StructureWords"/> ("status", "exit_code", "toolCallId"). Any other key is read as a value
+    /// would be, so a result keyed by a username (<c>{"jsmith": …}</c>) is redacted like the username.
+    /// </summary>
+    internal static bool StructureKey(string key) => IdentifierKey(key) && KnownWords(key, StructureWords);
+
+    // Every part of an identifier (split at _, - and a capital) is one of the words.
+    private static bool KnownWords(string identifier, IReadOnlySet<string> words)
+    {
+        if (words.Contains(identifier))
+            return true;
+        var start = 0;
+        for (var i = 1; i <= identifier.Length; i++)
+        {
+            if (i < identifier.Length && !char.IsAsciiLetterUpper(identifier[i]) && identifier[i] is not ('_' or '-'))
+                continue;
+            if (i == start || !words.Contains(identifier[start..i].ToLowerInvariant()))
+                return false;
+            start = i < identifier.Length && identifier[i] is '_' or '-' ? i + 1 : i;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// The words of JSON structure and tool plumbing Corvid knows, lowercase: field names tools and APIs use. A fixed list, so
+    /// nothing in a request can make a value read as structure.
+    /// </summary>
+    internal static readonly FrozenSet<string> StructureWords = new[]
+    {
+        "id", "ids", "uid", "uuid", "key", "keys", "name", "names", "type", "kind", "value", "values", "status", "state", "code",
+        "exit", "error", "errors", "message", "messages", "detail", "details", "result", "results", "data", "item", "items",
+        "list", "count", "total", "size", "length", "offset", "limit", "page", "next", "prev", "previous", "cursor", "more",
+        "text", "content", "body", "title", "summary", "description", "label", "labels", "tag", "tags", "note", "notes",
+        "owner", "author", "user", "group", "role", "roles", "created", "updated", "modified", "deleted", "at", "on", "by",
+        "time", "timestamp", "date", "start", "end", "started", "ended", "duration", "elapsed", "ms", "seconds",
+        "path", "paths", "file", "files", "dir", "directory", "line", "lines", "column", "url", "uri", "link", "links", "href",
+        "host", "port", "method", "query", "params", "args", "arguments", "options", "config", "settings", "env",
+        "input", "output", "stdout", "stderr", "command", "cmd", "tool", "tools", "call", "calls", "function", "response",
+        "request", "headers", "header", "format", "mode", "level", "version", "schema", "properties", "required", "default",
+        "enum", "min", "max", "minimum", "maximum", "pattern", "number", "string", "boolean", "object", "array", "null",
+        "ok", "success", "failed", "enabled", "disabled", "is", "has", "can", "visible", "hidden", "public", "private",
+        "parent", "child", "children", "source", "target", "from", "to", "old", "new", "before", "after", "diff", "changes",
+        "match", "matches", "score", "rank", "index", "position", "row", "rows", "cell", "field", "fields", "entry", "entries",
+        "branch", "commit", "repo", "ref", "sha", "hash", "language", "lang", "encoding", "mime", "extension", "ext",
+        "priority", "progress", "step", "steps", "budget", "tokens", "usage", "model", "models", "session", "turn", "reason",
+        "category", "categories", "action", "actions", "event", "events", "warning", "warnings", "info", "debug",
+        "width", "height", "x", "y", "lat", "lon", "unit", "units", "amount", "currency", "price", "quantity",
+    }.ToFrozenSet(StringComparer.Ordinal);
 
     private static readonly HashSet<string> RoleWords = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -562,50 +614,23 @@ public sealed partial class PrivacyEgress
         }
     }
 
-    /// <summary>The request's structural words: identifier JSON keys and the lowercase words of the trusted system text.</summary>
+    /// <summary>
+    /// The request's structural words: Corvid's <see cref="StructureWords"/> and the lowercase words of the trusted system
+    /// texts (Corvid's own prompts). Not the request's JSON keys, which tools and outside content choose.
+    /// </summary>
     internal HashSet<string> Vocabulary(IEnumerable<ChatMessage> messages)
     {
-        var words = new HashSet<string>(StringComparer.Ordinal);
+        var words = new HashSet<string>(StructureWords, StringComparer.Ordinal);
         foreach (var text in Options.TrustedTexts.IsDefault ? [] : Options.TrustedTexts)
             foreach (Match word in LowerWord().Matches(text))
                 words.Add(word.Value);
-        foreach (var json in StructuredTexts(messages))
-        {
-            try
-            {
-                using var document = JsonDocument.Parse(json);
-                Keys(document.RootElement, words);
-            }
-            catch (JsonException)
-            {
-                // Not JSON after all: it has no keys to learn.
-            }
-        }
         return words;
     }
 
-    private static void Keys(JsonElement json, HashSet<string> words)
-    {
-        switch (json.ValueKind)
-        {
-            case JsonValueKind.Object:
-                foreach (var property in json.EnumerateObject())
-                {
-                    if (IdentifierKey(property.Name))
-                        words.Add(property.Name);
-                    Keys(property.Value, words);
-                }
-                break;
-            case JsonValueKind.Array:
-                foreach (var item in json.EnumerateArray())
-                    Keys(item, words);
-                break;
-        }
-    }
-
     /// <summary>
-    /// A JSON key that is structure, not a value: a lowercase identifier of letters (snake, kebab or camel case) of at most 32
-    /// characters. A key with a capital first, a number, a space, a dot or <c>@</c> (a name, an email, a token) is read as a value.
+    /// A JSON key shaped like structure: a lowercase identifier of letters (snake, kebab or camel case) of at most 32
+    /// characters. A key with a capital first, a number, a space, a dot or <c>@</c> (a name, an email, a token) is always read
+    /// as a value; one of this shape is structure only when <see cref="StructureKey"/> also knows its words.
     /// </summary>
     internal static bool IdentifierKey(string key) => key.Length <= 32 && IdentifierPattern().IsMatch(key);
 
@@ -770,8 +795,9 @@ public sealed partial class PrivacyEgress
             case JsonValueKind.Object:
                 foreach (var property in json.EnumerateObject())
                 {
-                    // A key can be a value too (results keyed by email address); an identifier key is structure (A5).
-                    if (!IdentifierKey(property.Name))
+                    // A key can be a value too (results keyed by email address or username); only a key of Corvid's
+                    // structure words is left unread (A5).
+                    if (!StructureKey(property.Name))
                         yield return property.Name;
                     foreach (var leaf in Leaves(property.Value))
                         yield return leaf;
@@ -855,7 +881,7 @@ public sealed partial class PrivacyEgress
             case JsonValueKind.Object:
                 var obj = new JsonObject();
                 foreach (var property in json.EnumerateObject())
-                    obj[IdentifierKey(property.Name) ? property.Name : rewrite(property.Name)] = Rewrite(property.Value, rewrite);
+                    obj[StructureKey(property.Name) ? property.Name : rewrite(property.Name)] = Rewrite(property.Value, rewrite);
                 return obj;
             case JsonValueKind.True:
                 return JsonValue.Create(true);

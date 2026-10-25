@@ -131,4 +131,33 @@ public sealed class InTurnQuestionTests
             Assert.Equal("Which branch?", SessionCatalogue.Describe(runtime.Log, session.Id, Ct)?.OpenQuestion?.Text);
         }
     }
+
+    [Fact]
+    public async Task An_interrupt_racing_the_question_withdraws_it_even_when_the_surface_returns_no_answer()
+    {
+        // A5 fix round: an interrupt that reaches the surface before the turn's token is cancelled (the app sets its cancelling
+        // flag first) must not leave the question open for the next message: the turn ends cancelled and the question goes.
+        var models = Models();
+        await using var host = TestHost.Create(models, BuiltinOn);
+        await using var runtime = await host.StartAsync();
+        var session = runtime.OpenSession(surface: "test");
+        var asker = new Asker(_ =>
+        {
+            session.Cancel();
+            return null;
+        });
+
+        Delivery delivery;
+        using (runtime.AttachQuestioner(session.Id, asker))
+            delivery = await session.SendAsync("tag it", Ct);
+
+        Assert.Equal(TurnStatus.Cancelled, delivery.Result!.Status);
+        Assert.Single(asker.Asked);
+        var log = Corvid.Kernel.Events.SessionProjection.ReadRange(runtime.Log, session.Id, 0, runtime.Log.GetHead(session.Id, Ct), Ct)
+            .Select(item => item.Payload).ToList();
+        var asked = Assert.Single(log.OfType<ClarificationAsked>());
+        Assert.Equal(new ClarificationAnswered(asked.QuestionId, ""), Assert.Single(log.OfType<ClarificationAnswered>()));
+        Assert.Null(SessionCatalogue.Describe(runtime.Log, session.Id, Ct)?.OpenQuestion);
+        Assert.Single(models.Generator.Calls);
+    }
 }

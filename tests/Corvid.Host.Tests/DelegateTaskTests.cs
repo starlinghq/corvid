@@ -380,6 +380,32 @@ public sealed class DelegateTaskTests
         Assert.Empty(Events(runtime, parent.Id).OfType<ChildSpawned>());
     }
 
+    [Fact]
+    public async Task The_preview_loads_no_model_the_mix_names()
+    {
+        // A5 fix round (D5): the card waits on the person, so it reads the catalogue and binds nothing; the approved call loads.
+        var models = new FakeModels();
+        models.Provider.Add("fake-gen-other", [ModelSlots.Generator], () => models.Larger);
+        await using var host = Host(models);
+        await using var runtime = await host.StartAsync();
+        var parent = runtime.OpenSession();
+        Assert.DoesNotContain("fake-gen-other", models.Provider.Loaded);
+
+        var previews = await runtime.PreviewDelegationAsync(parent.Id, JsonSerializer.SerializeToElement(new
+        {
+            goal = "go",
+            mix = new { generator = "fake-gen-other" },
+        }), Ct);
+
+        Assert.Equal("fake-gen-other", Assert.Single(previews).Plan!.Slots.Single(slot => slot.Slot == ModelSlots.Generator).Model);
+        Assert.DoesNotContain("fake-gen-other", models.Provider.Loaded);
+        var plan = await runtime.PlanChildAsync(parent.Id, new ChildRequest("go") { Mix = ModelMix.Parse("""{"generator":"fake-gen-other"}""") }, Ct);
+        Assert.Contains("fake-gen-other", models.Provider.Loaded);
+        static IEnumerable<string> Shown(ChildPlan shown) =>
+            shown.Slots.Select(slot => $"{slot.Slot}={slot.Model} {slot.Privacy} [{string.Join(",", slot.Ladder)}] {slot.Escalate}");
+        Assert.Equal(Shown(previews[0].Plan!), Shown(plan));
+    }
+
     private static ValueTask<Corvid.Host.Commands.CommandOutput> Command(CorvidRuntime runtime, CorvidSession session, string line)
     {
         var commands = Corvid.Host.Commands.CoreCommands.Register(new Corvid.Host.Commands.SlashCommandRegistry());

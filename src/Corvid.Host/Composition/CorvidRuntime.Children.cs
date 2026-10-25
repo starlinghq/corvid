@@ -132,7 +132,15 @@ public sealed partial class CorvidRuntime
     /// refuse is left out. Slots the mix leaves out run on the parent's session defaults and ladders, at subagent priority.
     /// </summary>
     /// <exception cref="ChildRefusedException">Why not, in a sentence; names in it are shown with their hidden characters escaped.</exception>
-    public async Task<ChildPlan> PlanChildAsync(string parentId, ChildRequest request, CancellationToken cancellationToken = default)
+    public Task<ChildPlan> PlanChildAsync(string parentId, ChildRequest request, CancellationToken cancellationToken = default) =>
+        PlanChildAsync(parentId, request, preview: false, cancellationToken);
+
+    /// <summary>
+    /// <paramref name="preview"/>: for an approval card, which waits on the person: the mix is checked against the catalogue,
+    /// its availability and the egress gate on the catalogue's profiles, and nothing is loaded or bound. The plan has no
+    /// <see cref="ChildPlan.Configurations"/> and is never opened; the approved call plans again and loads then.
+    /// </summary>
+    private async Task<ChildPlan> PlanChildAsync(string parentId, ChildRequest request, bool preview, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(parentId);
         ArgumentNullException.ThrowIfNull(request);
@@ -171,7 +179,7 @@ public sealed partial class CorvidRuntime
         }
         mix = mix.With(request.Mix ?? ModelMix.Empty);
         var tainted = parent.Tainted;
-        var (configurations, slots, resolved) = await ResolveMixAsync(parent, mix, goal, tainted, cancellationToken).ConfigureAwait(false);
+        var (configurations, slots, resolved) = await ResolveMixAsync(parent, mix, goal, tainted, preview, cancellationToken).ConfigureAwait(false);
 
         return new ChildPlan(parentId, goal, [.. functions.Select(tool => tool.Name)], dropped, budget, slots,
             ChildSessions.Stricter(request.ApprovalMode ?? parent.ApprovalMode, parent.ApprovalMode), tainted, parent.Depth + 1)
@@ -217,6 +225,8 @@ public sealed partial class CorvidRuntime
             _childPlans[id] = plan;
             _prompters.SetParent(id, plan.ParentId);
             var child = OpenChild(id, new SessionSettings(Interactive: parent.Interactive));
+            // Its usage from the start, so StopChild finds a child that is listed but not run yet; its run then stops at once.
+            _childUsage[id] = new ChildUsage(plan.Budget.MaxTokens, child.Cancel);
             ChildChanged?.Invoke(plan.ParentId, new ChildStarted(spawned, sequence) { At = DateTimeOffset.UtcNow });
             return child;
         }
@@ -248,8 +258,8 @@ public sealed partial class CorvidRuntime
     {
         ArgumentNullException.ThrowIfNull(child);
         var plan = child.Child ?? throw new ArgumentException("The session is not a child session.", nameof(child));
-        var usage = new ChildUsage(plan.Budget.MaxTokens, child.Cancel);
-        _childUsage[child.Id] = usage;
+        // Made when the child was opened (so a listed child can be stopped before it runs); a fresh one otherwise.
+        var usage = _childUsage.GetOrAdd(child.Id, _ => new ChildUsage(plan.Budget.MaxTokens, child.Cancel));
         using var watch = Feed.Subscribe(child.Id, usage);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(plan.Budget.MaxSeconds), ChildClock);
         using var timedOut = timeout.Token.Register(() =>
@@ -265,6 +275,9 @@ public sealed partial class CorvidRuntime
         var earlierSteps = 0;
         for (var attempt = 0; ; attempt++)
         {
+            // Stopped while it waited to run (StopChild on a listed child): it never starts.
+            if (attempt == 0 && usage.Stopping)
+                break;
             try
             {
                 // A tainted child stays tainted: Corvid's repair line is posted as outside content too, never as the person.
@@ -277,19 +290,22 @@ public sealed partial class CorvidRuntime
                 failure = exception;
             }
             // Plan §14, "validated on return": an answer outside the schema gets one repair turn within the same budget.
+            // The repair turn gets only what the first left of the step budget (TurnRunner.StepLimit), so the whole run stays
+            // within the steps the person approved; with none left there is no repair and the answer is invalid output.
             if (attempt == 0 && failure is null && plan.OutputSchema is { } schema && !usage.OverBudget && !usage.TimedOut
                 && !cancellationToken.IsCancellationRequested && !usage.Stopping
-                && delivery?.Result is { Status: TurnStatus.Answered } first
+                && delivery?.Result is { Status: TurnStatus.Answered } first && first.Steps < plan.Budget.MaxSteps
                 && OutputSchema.Validate(schema, first.Text, out _) is { Count: > 0 } errors)
             {
                 earlierSteps = first.Steps;
+                child.Runner.StepLimit = plan.Budget.MaxSteps - first.Steps;
                 message = RepairMessage(errors);
                 continue;
             }
             break;
         }
 
-        var result = Finish(child, plan, delivery, failure, usage, cancellationToken.IsCancellationRequested);
+        var result = Finish(child, plan, delivery, failure, usage, cancellationToken.IsCancellationRequested || (delivery is null && failure is null && usage.Stopping));
         if (earlierSteps > 0)
             result = result with { Steps = result.Steps + earlierSteps };
         if (_stoppedChildren.TryRemove(child.Id, out _) && result.Status == ChildStatuses.Cancelled)
@@ -443,7 +459,7 @@ public sealed partial class CorvidRuntime
     /// the mix with catalogue names as <c>ChildSpawned</c> records it.
     /// </summary>
     private async Task<(IReadOnlyDictionary<string, SlotConfiguration> Configurations, ImmutableArray<ChildSlot> Slots, ModelMix Resolved)>
-        ResolveMixAsync(CorvidSession parent, ModelMix mix, string goal, bool tainted, CancellationToken cancellationToken)
+        ResolveMixAsync(CorvidSession parent, ModelMix mix, string goal, bool tainted, bool preview, CancellationToken cancellationToken)
     {
         var configurations = new Dictionary<string, SlotConfiguration>(StringComparer.Ordinal);
         var view = ImmutableArray.CreateBuilder<ChildSlot>();
@@ -451,8 +467,9 @@ public sealed partial class CorvidRuntime
         foreach (var (slot, entry) in mix.Slots)
         {
             var name = ResolveModel(slot, entry.Model);
-            var primary = BindChild(slot, name);
-            if (await GateRefusalAsync(primary.Profile, goal, tainted, cancellationToken).ConfigureAwait(false) is { } refusal)
+            var primary = preview ? null : BindChild(slot, name);
+            var primaryProfile = primary?.Profile ?? Catalogue.Find(name).Profile;
+            if (await GateRefusalAsync(primaryProfile, goal, tainted, cancellationToken).ConfigureAwait(false) is { } refusal)
                 throw new ChildRefusedException($"The privacy gate would refuse {TerminalText.Visible(name)} for the {slot}" +
                     (tainted ? " in a session holding outside content" : "") + $": {refusal}");
             var inherited = parent.Slots.TryConfiguration(slot, out var parentConfiguration) ? parentConfiguration : null;
@@ -465,40 +482,44 @@ public sealed partial class CorvidRuntime
                     && Catalogue.Check(step).IsReady)];
             var ladderBindings = await GatedAsync(slot, ladder, goal, tainted, cancellationToken).ConfigureAwait(false);
             var fallbackBindings = await GatedAsync(slot, fallbacks, goal, tainted, cancellationToken).ConfigureAwait(false);
-            configurations[slot] = new SlotConfiguration(slot, primary, [.. ladderBindings.Select(pair => pair.Binding)],
-                [.. fallbackBindings.Select(pair => pair.Binding)]);
+            if (primary is not null)
+                configurations[slot] = new SlotConfiguration(slot, primary, [.. ladderBindings.Select(pair => pair.Binding!)],
+                    [.. fallbackBindings.Select(pair => pair.Binding!)]);
             ImmutableArray<string> ladderNames = [.. ladderBindings.Select(pair => pair.Name)];
             ImmutableArray<string>? fallbackNames = entry.Fallbacks is null ? null : [.. fallbackBindings.Select(pair => pair.Name)];
-            view.Add(new ChildSlot(slot, name, primary.Profile.Privacy, ladderNames, entry.Escalate));
+            view.Add(new ChildSlot(slot, name, primaryProfile.Privacy, ladderNames, entry.Escalate));
             resolved.Add(KeyValuePair.Create(slot, new ModelMixSlot(name, ladderNames, fallbackNames, entry.Escalate)));
         }
 
         // The rest run on the parent's choices. The decider stays the registry's (the shared fabric) unless the parent chose one.
+        var named = mix.Slots.Select(pair => pair.Key).ToHashSet(StringComparer.Ordinal);
         foreach (var slot in Registry.BoundSlots.Concat(parent.Slots.OwnSlots).Concat(ModelSlots.All.Where(parent.Slots.HasSessionChoice))
                      .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
         {
-            if (configurations.ContainsKey(slot))
+            if (named.Contains(slot))
                 continue;
             if (slot == ModelSlots.Decider && !parent.Slots.HasSessionChoice(slot) && !parent.Slots.OwnSlots.Contains(slot))
                 continue;
             var current = parent.Slots.SessionDefault(slot);
             var configuration = parent.Slots.TryConfiguration(slot, out var found) ? found : new SlotConfiguration(slot, current, [], []);
-            configurations[slot] = new SlotConfiguration(slot, Rebind(slot, current), [.. configuration.Escalation.Select(step => Rebind(slot, step))],
+            if (!preview)
+                configurations[slot] = new SlotConfiguration(slot, Rebind(slot, current), [.. configuration.Escalation.Select(step => Rebind(slot, step))],
                 [.. configuration.Fallbacks.Select(step => Rebind(slot, step))]);
             view.Add(new ChildSlot(slot, _composer.NameOf(current) ?? current.Profile.Id, current.Profile.Privacy,
                 [.. configuration.Escalation.Select(step => _composer.NameOf(step) ?? step.Profile.Id)], !configuration.Escalation.IsEmpty));
         }
         return (configurations, view.ToImmutable(), resolved.Count == 0 ? ModelMix.Empty : ModelMix.Create(resolved));
 
-        async Task<List<(string Name, ModelBinding Binding)>> GatedAsync(string slot, IEnumerable<string> names, string text, bool taint,
+        async Task<List<(string Name, ModelBinding? Binding)>> GatedAsync(string slot, IEnumerable<string> names, string text, bool taint,
             CancellationToken token)
         {
-            var kept = new List<(string, ModelBinding)>();
+            var kept = new List<(string, ModelBinding?)>();
             foreach (var step in names)
             {
-                var binding = BindChild(slot, step);
+                // A preview binds nothing: the catalogue's profile is what the gate reads.
+                var binding = preview ? null : BindChild(slot, step);
                 // A step the gate would refuse is left out: escalation and fallback then never reach it.
-                if (await GateRefusalAsync(binding.Profile, text, taint, token).ConfigureAwait(false) is null)
+                if (await GateRefusalAsync(binding?.Profile ?? Catalogue.Find(step).Profile, text, taint, token).ConfigureAwait(false) is null)
                     kept.Add((step, binding));
             }
             return kept;
