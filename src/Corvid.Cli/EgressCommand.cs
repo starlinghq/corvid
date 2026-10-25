@@ -52,26 +52,19 @@ internal static class EgressCommand
                 : $"Nothing in session {Markup.Escape(TerminalText.Visible(session))} went to a gated model.");
             return ExitCodes.Success;
         }
-        var table = new Table().Border(TableBorder.Simple)
-            .AddColumns("#", "when", "session", "model", "slot", "outcome", "values", "size");
+        // One line per request, so a narrow terminal wraps it whole rather than splitting every column.
         foreach (var entry in entries)
         {
-            table.AddRow(
-                entry.Number.ToString(CultureInfo.InvariantCulture),
-                entry.At.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
-                Markup.Escape(TerminalText.Visible(entry.SessionId ?? "(none)")),
-                Markup.Escape(entry.Model),
-                Markup.Escape(entry.Slot),
-                entry.Outcome switch
-                {
-                    EgressOutcomes.Refused => "[red]refused[/]",
-                    EgressOutcomes.Redacted => "[yellow]redacted[/]",
-                    _ => "sent",
-                },
-                entry.Placeholders.ToString(CultureInfo.InvariantCulture),
-                entry.Left ? Size(entry.Bytes) : "-");
+            var outcome = entry.Outcome switch
+            {
+                EgressOutcomes.Refused => "[red]refused [/]",
+                EgressOutcomes.Redacted => "[yellow]redacted[/]",
+                _ => "sent    ",
+            };
+            console.MarkupLine(string.Create(CultureInfo.InvariantCulture,
+                $"{entry.Number,5}  {entry.At.ToLocalTime():yyyy-MM-dd HH:mm:ss}  {outcome}  {entry.Placeholders,3} values  {(entry.Left ? Size(entry.Bytes) : "-"),8}  ") +
+                $"{Markup.Escape(entry.Slot)} → {Markup.Escape(entry.Model)}  [grey]{Markup.Escape(TerminalText.Visible(entry.SessionId ?? "(no session)"))}[/]");
         }
-        console.Write(table);
         console.MarkupLine("[grey]corvid egress show <#> prints a request as it was sent.[/]");
         return ExitCodes.Success;
     }
