@@ -103,7 +103,15 @@ public sealed class SessionStreamTests
 
         var replay = await SessionReplay.ReadAsync(runtime, session.Id, tools, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(runtime.Log.GetHead(session.Id, TestContext.Current.CancellationToken), replay.Head);
-        Assert.Equal(prompt with { At = default }, Assert.IsType<PromptSent>(replay.Updates[0]) with { At = default });
+        var replayed = Assert.IsType<PromptSent>(replay.Updates[0]);
+        Assert.Equal(prompt with { At = default }, replayed with { At = default, Generator = null });
+        // The replay names the generator the turn ran on (its first decision's TurnState); live, the surface knows its slot.
+        Assert.Equal(("fake-gen", (string?)null), (replayed.Generator, prompt.Generator));
+        // Each checkpoint's decisions, as the feed reported them live.
+        static string Checkpoints(IEnumerable<SessionStreamUpdate> updates) => string.Join(" | ", updates.OfType<DecisionsMade>().Select(made =>
+            $"{made.Decisions.Checkpoint} {made.Decisions.Decider}: " + string.Join(", ", made.Decisions.Questions.Select(q => $"{q.Question} {q.Action} {q.Acted}"))));
+        Assert.NotEmpty(live.OfType<DecisionsMade>());
+        Assert.Equal(Checkpoints(live), Checkpoints(replay.Updates));
         var call = Assert.Single(replay.Updates.OfType<ToolCallStarted>());
         Assert.Equal((started.CallId, "write_file: notes.txt", ToolCallState.Completed), (call.CallId, call.Title, call.Status));
         Assert.Equal("notes.txt", call.Input?.GetProperty("path").GetString());
@@ -206,6 +214,82 @@ public sealed class SessionStreamTests
         var plain = Assert.Single(transcript.Updates.OfType<ToolCallChanged>());
         Assert.Equal((ToolCallState.Failed, null, null), (plain.Status, plain.Outcome, plain.Approval));
     }
+
+    private static Corvid.Abstractions.Events.EventData Event(Corvid.Abstractions.Events.SessionEvent payload) =>
+        Corvid.Abstractions.Events.EventData.Create(payload);
+
+    [Fact]
+    public async Task ANetworkReadTaintsTheReplayUntilTheUsersNextMessage()
+    {
+        await using var host = TestHost.Create(FileWrite(), FileTools);
+        var runtime = await host.StartAsync();
+        await using var _ = runtime;
+        var session = runtime.OpenSession(surface: "test");
+        using var url = System.Text.Json.JsonDocument.Parse("""{"url":"https://example.org/page"}""");
+        using var result = System.Text.Json.JsonDocument.Parse("\"the page\"");
+        runtime.Log.Append(session.Id, runtime.Log.GetHead(session.Id, TestContext.Current.CancellationToken),
+        [
+            Event(new Corvid.Abstractions.Events.UserMessage("read the page")),
+            Event(new Corvid.Abstractions.Events.ToolCallIssued("c1", "web_fetch", url.RootElement.Clone())),
+            Event(new Corvid.Abstractions.Events.ToolResult("c1", result.RootElement.Clone())),
+            Event(new Corvid.Abstractions.Events.AssistantMessage("It says hello.")),
+            Event(new Corvid.Abstractions.Events.UserMessage("thanks")),
+        ], TestContext.Current.CancellationToken);
+        var tools = new ToolPresentation(runtime);
+
+        var full = await SessionReplay.ReadAsync(runtime, session.Id, tools, cancellationToken: TestContext.Current.CancellationToken);
+        var transcript = await SessionReplay.ReadAsync(runtime, session.Id, tools, ReplayOptions.Transcript, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(["PromptSent", "ToolCallStarted", "ToolCallChanged", "TaintNoted", "AnswerChunk", "PromptSent", "TaintNoted"],
+            full.Updates.Select(update => update.GetType().Name));
+        Assert.Equal([new TaintNoted(true, "web_fetch https://example.org/page"), new TaintNoted(false, null)],
+            full.Updates.OfType<TaintNoted>().Select(update => update with { At = default }));
+        Assert.Empty(transcript.Updates.OfType<TaintNoted>());
+    }
+
+    [Fact]
+    public async Task ACompactionReplaysAsItsMarkerAndAnExpansionSaysSo()
+    {
+        await using var host = TestHost.Create();
+        var runtime = await host.StartAsync();
+        await using var _ = runtime;
+        var session = runtime.OpenSession(surface: "test");
+        var head = runtime.Log.GetHead(session.Id, TestContext.Current.CancellationToken);
+        var summary = new Corvid.Abstractions.Events.CompactionSummary("ship it", ["keep tests green"], [], ["a.cs"], [], "release");
+        runtime.Log.Append(session.Id, head,
+        [
+            Event(new Corvid.Abstractions.Events.UserMessage("one")),
+            Event(new Corvid.Abstractions.Events.AssistantMessage("first")),
+            Event(new Corvid.Abstractions.Events.UserMessage("two")),
+            Event(new Corvid.Abstractions.Events.AssistantMessage("second")),
+        ], TestContext.Current.CancellationToken);
+        var compacted = runtime.Log.Append(session.Id, head + 4,
+            [Event(new Corvid.Abstractions.Events.Compacted(head + 1, head + 2, summary, Summarizer: "fake-gen", Focus: "the release"))],
+            TestContext.Current.CancellationToken)[0];
+        var tools = new ToolPresentation(runtime);
+
+        var replay = await SessionReplay.ReadAsync(runtime, session.Id, tools, cancellationToken: TestContext.Current.CancellationToken);
+        runtime.Log.Append(session.Id, compacted.Sequence, [Event(new Corvid.Abstractions.Events.CompactionExpanded(compacted.Sequence))],
+            TestContext.Current.CancellationToken);
+        var expanded = await SessionReplay.ReadAsync(runtime, session.Id, tools, cancellationToken: TestContext.Current.CancellationToken);
+        var transcript = await SessionReplay.ReadAsync(runtime, session.Id, tools, ReplayOptions.Transcript, cancellationToken: TestContext.Current.CancellationToken);
+
+        // The conversation is replayed expanded, with the marker after the turns it summarized.
+        var marker = Assert.IsType<CompactionLogged>(replay.Updates[^1]);
+        Assert.Equal((head + 1, head + 2, "ship it", "the release", false),
+            (marker.Compaction.FromSequence, marker.Compaction.ThroughSequence, marker.Compaction.Summary.Goal, marker.Compaction.Focus, marker.Expanded));
+        Assert.Equal(4, replay.Updates.Count(update => update is PromptSent or AnswerChunk));
+        Assert.True(Assert.Single(expanded.Updates.OfType<CompactionLogged>()).Expanded);
+        Assert.Empty(transcript.Updates.OfType<CompactionLogged>());
+    }
+
+    [Theory]
+    [InlineData("qwen3.5-0.8b local, 8k", "qwen3.5-0.8b")]
+    [InlineData("claude-sonnet@2025 cloud, 200k", "claude-sonnet")]
+    [InlineData("qwen3.5-0.…", null)]
+    [InlineData("", null)]
+    public void ATurnStatesGeneratorLineNamesItsModel(string described, string? model) =>
+        Assert.Equal(model, SessionReplay.GeneratorName(described));
 
     [Fact]
     public void ATitleNamesTheTargetOnOneLineAndCutsALongOne()

@@ -163,7 +163,7 @@ public sealed record SessionRewound(int Turn, RewindScope Scope, string Reason) 
 
     /// <summary>
     /// With <see cref="FromCallId"/>: what the kept turn's header says when nothing of its answer is left, as a replay of the
-    /// log marks such a turn failed. Null leaves the header as it was.
+    /// log marks such a turn interrupted. Null leaves the header as it was.
     /// </summary>
     public string? UnansweredError { get; init; }
 
@@ -198,6 +198,12 @@ public sealed record LoadProgress(string Model, int Index, int Count);
 public sealed record EngineStatus : SessionUpdate
 {
     public GeneratorStatus? Generator { get; init; }
+
+    /// <summary>
+    /// The generator the session's next turn starts on ("qwen3.5-0.8b"), when the engine knows no more of it than the name:
+    /// the status bar's model before a turn runs. <see cref="Generator"/> wins when both are set.
+    /// </summary>
+    public string? Model { get; init; }
 
     /// <summary>The decider tier ("Kev-0.8B, calibrated"; "degraded tier").</summary>
     public string? Decider { get; init; }

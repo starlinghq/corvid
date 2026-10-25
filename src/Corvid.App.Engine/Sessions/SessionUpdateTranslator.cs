@@ -14,8 +14,10 @@ namespace Corvid.App.Engine.Sessions;
 /// Turns: the stream has no turn marks, so a user's message opens one (<see cref="UserMessage"/> then
 /// <see cref="TurnStarted"/>, the order <see cref="SessionFold"/> expects); a live turn is closed by
 /// <see cref="EndTurn"/> with its delivery's outcome, a replayed one by the next message or <see cref="EndReplay"/>.
-/// What the log does not record stays unset rather than guessed: the generator a past turn ran on, its tokens, the
-/// outcome beyond "answered" (a replayed turn without an answer is marked failed, saying the log has none).
+/// A replayed turn names the generator its first decision saw (<see cref="PromptSent.Generator"/>) and carries its
+/// decisions, taint rows and compaction markers as the live one did. What the log does not record stays unset rather than
+/// guessed: a past turn's tokens, and the outcome beyond "answered" (a replayed turn without an answer was interrupted, cut
+/// by a rollback or stopped with its process, and ends as interrupted, as the live turn did).
 /// </para>
 /// </summary>
 public sealed class SessionUpdateTranslator(string workspace)
@@ -66,8 +68,14 @@ public sealed class SessionUpdateTranslator(string workspace)
             _turnStarts.RemoveRange(Turn, _turnStarts.Count - Turn);
     }
 
-    /// <summary>What a replayed turn without an answer ends with.</summary>
-    public const string NoAnswer = "The log holds no answer for this turn.";
+    /// <summary>
+    /// What a turn the window interrupted ends with, and a replayed turn without an answer: the log records no end for an
+    /// interrupted turn, one a rollback cut or one whose process stopped, and each of them reads as interrupted.
+    /// </summary>
+    public const string Interrupted = "interrupted";
+
+    /// <summary>The replay's taint so far (<see cref="TaintNoted"/>), for the window to reconcile with the session's own.</summary>
+    public bool Tainted { get; private set; }
 
     public IReadOnlyList<SessionUpdate> Translate(SessionStreamUpdate update)
     {
@@ -87,7 +95,8 @@ public sealed class SessionUpdateTranslator(string workspace)
                 _turnTokens = 0;
                 _turnStarts.Add(prompt.Sequence);
                 output.Add(new UserMessage(prompt.Text) { Position = prompt.Sequence, At = at });
-                output.Add(new TurnStarted(Turn, Model) { At = at, MaxSteps = MaxSteps });
+                // A replayed turn names the generator its first decision saw; a live one starts on the slot's.
+                output.Add(new TurnStarted(Turn, prompt.Generator ?? Model) { At = at, MaxSteps = MaxSteps });
                 output.AddRange(_early);
                 _early.Clear();
                 break;
@@ -161,6 +170,26 @@ public sealed class SessionUpdateTranslator(string workspace)
                 else
                     _early.Add(decided);
                 break;
+            case TaintNoted taint:
+                Tainted = taint.Tainted;
+                output.Add(new TaintChanged(taint.Tainted) { At = at, Source = taint.Source });
+                break;
+            case CompactionLogged logged:
+                var summary = logged.Compaction.Summary;
+                output.Add(new CompactionUpdate(Math.Max(1, TurnAt(logged.Compaction.FromSequence)), Math.Max(1, TurnAt(logged.Compaction.ThroughSequence)))
+                {
+                    At = at,
+                    Goal = summary.Goal,
+                    Constraints = summary.Constraints.IsDefault ? [] : summary.Constraints,
+                    Decisions = summary.Decisions.IsDefault ? [] : summary.Decisions,
+                    Files = summary.Files.IsDefault ? [] : summary.Files,
+                    OpenQuestions = summary.OpenQuestions.IsDefault ? [] : summary.OpenQuestions,
+                    NextStep = summary.NextStep,
+                    Summarizer = logged.Compaction.Summarizer,
+                    Focus = logged.Compaction.Focus,
+                    Expanded = logged.Expanded,
+                });
+                break;
             // CheckpointLogged: Rewind's timeline reads the ledger itself (A3 history); the transcript shows no row for it.
         }
         if (at > _last)
@@ -184,14 +213,15 @@ public sealed class SessionUpdateTranslator(string workspace)
     private List<SessionUpdate> Close(TurnOutcome? outcome, DateTimeOffset at, TimeSpan? elapsed, string? error)
     {
         TurnOpen = false;
-        var known = outcome ?? (_answered ? TurnOutcome.Answered : TurnOutcome.Failed);
+        // A replayed turn the log holds no answer for did not finish: interrupted, as the live one ended.
+        var known = outcome ?? (_answered ? TurnOutcome.Answered : TurnOutcome.Cancelled);
         return
         [
             new TurnEnded(Turn, known)
             {
                 At = at,
                 Elapsed = elapsed ?? (at > _turnStarted ? at - _turnStarted : TimeSpan.Zero),
-                Error = error ?? (outcome is null && !_answered ? NoAnswer : null),
+                Error = error ?? (outcome is null && !_answered ? Interrupted : null),
                 // Live only (K-5): a replay knows no usage.
                 Tokens = _turnTokens > 0 ? (int)Math.Min(int.MaxValue, _turnTokens) : null,
             },

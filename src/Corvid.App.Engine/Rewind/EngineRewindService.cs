@@ -221,7 +221,7 @@ public sealed class EngineRewindService : IRewindService, IDisposable
             _signals.Rewound(sessionId, new AppRewound(firstGone, scope, "rollback")
             {
                 FromCallId = partial ? entry.CallId : null,
-                UnansweredError = partial ? SessionUpdateTranslator.NoAnswer : null,
+                UnansweredError = partial ? SessionUpdateTranslator.Interrupted : null,
                 Restored = outcome.Restored,
                 Merged = outcome.Merged,
                 Conflicts = outcome.Conflicts,

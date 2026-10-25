@@ -22,24 +22,25 @@ public sealed class EngineSessionTests
         using var service = fixture.Sessions();
         var recorder = new Recorder();
         using var subscription = await service.OpenAsync(id, recorder.Add, TestContext.Current.CancellationToken);
-        // A new session has no transcript yet: only what it is beside one (its approval mode, the commands it offers, no changed files).
-        Assert.All(subscription.History, update => Assert.True(update is ApprovalModeChanged or AvailableCommandsUpdate or ChangesUpdate { Session.IsEmpty: true },
-            update.GetType().Name));
+        // A new session has no transcript yet: only what it is beside one (its approval mode, the commands it offers, no changed
+        // files, the generator its first turn starts on).
+        Assert.All(subscription.History, update => Assert.True(update is ApprovalModeChanged or AvailableCommandsUpdate or ChangesUpdate { Session.IsEmpty: true }
+            or EngineStatus { Model: "fake-gen" }, update.GetType().Name));
 
         await service.SendAsync(id, Prompt, TestContext.Current.CancellationToken);
         await service.IdleAsync();
         return (id, recorder.Updates);
     }
 
-    /// <summary>The updates that both a live turn and a replay carry: decisions and usage come from the feed alone.</summary>
-    private static List<SessionUpdate> Shared(IEnumerable<SessionUpdate> updates) => [.. updates.Where(update => update is not (CheckpointDecided or UsageUpdate))];
+    /// <summary>The updates that both a live turn and a replay carry: usage comes from the feed alone (the log keeps decisions).</summary>
+    private static List<SessionUpdate> Shared(IEnumerable<SessionUpdate> updates) => [.. updates.Where(update => update is not UsageUpdate)];
 
     [Fact]
     public async Task ATurnWithAToolCallStreamsTheContractsUpdatesInOrder()
     {
         await using var fixture = await EngineFixture.StartAsync(NotesTurn());
         var (_, live) = await RunTurnAsync(fixture);
-        var updates = Shared(live);
+        var updates = Shared(live).Where(update => update is not CheckpointDecided).ToList();
         // A new session's first message titles it, as the rail shows it (until K-9 titles are events).
         Assert.Equal(Prompt, Assert.IsType<TitleChanged>(updates[0]).Title);
         updates.RemoveAt(0);
@@ -101,6 +102,45 @@ public sealed class EngineSessionTests
         Assert.Equal(shown, replayed);
         Assert.Contains(replayed, line => line.StartsWith("ToolEntry list_notes Completed Succeeded {} buy milk; call Ada", StringComparison.Ordinal));
         Assert.Contains($"AnswerEntry {Answer}", replayed);
+    }
+
+    [Fact]
+    public async Task AReplayedTurnCarriesTheLiveTurnsGeneratorAndDecisions()
+    {
+        await using var fixture = await EngineFixture.StartAsync(NotesTurn());
+        var (id, live) = await RunTurnAsync(fixture);
+
+        using var fresh = fixture.Sessions();
+        using var reopened = await fresh.OpenAsync(id, _ => { }, TestContext.Current.CancellationToken);
+
+        // The generator the turn ran on, read from its first decision's TurnState, as the live turn named it.
+        Assert.Equal("fake-gen", Assert.Single(reopened.History.OfType<TurnStarted>()).Model);
+        // Every checkpoint's decisions, as the feed reported them live: the checkpoint, the decider and each answer.
+        static List<string> Decisions(IEnumerable<SessionUpdate> updates) =>
+        [
+            .. updates.OfType<CheckpointDecided>().Select(decided => $"{decided.Checkpoint} {decided.Decider}: " +
+                string.Join(", ", decided.Answers.Select(answer => $"{answer.Question} {answer.Action} {answer.Acted} {answer.Confidence:F3}"))),
+        ];
+        Assert.NotEmpty(Decisions(live));
+        Assert.Equal(Decisions(live), Decisions(reopened.History));
+        // The status bar names the generator the next turn starts on before one runs.
+        Assert.Equal("fake-gen", SessionFold.Replay(id, reopened.History).Model);
+    }
+
+    [Fact]
+    public async Task ATurnTheLogHoldsNoAnswerForReplaysAsInterruptedAsTheLiveOneEnded()
+    {
+        await using var fixture = await EngineFixture.StartAsync(NotesTurn());
+        var id = fixture.Runtime.OpenSession(surface: "app").Id;
+        // An interrupted turn leaves its prompt and no answer in the log.
+        fixture.Runtime.Log.Append(id, fixture.Runtime.Log.GetHead(id, TestContext.Current.CancellationToken),
+            [Corvid.Abstractions.Events.EventData.Create(new Corvid.Abstractions.Events.UserMessage("stop halfway"))], TestContext.Current.CancellationToken);
+        using var service = fixture.Sessions();
+
+        using var opened = await service.OpenAsync(id, _ => { }, TestContext.Current.CancellationToken);
+
+        var header = Assert.Single(SessionFold.Replay(id, opened.History).Transcript.OfType<TurnHeaderEntry>());
+        Assert.Equal((TurnOutcome.Cancelled, "interrupted"), (header.Outcome, header.Error));
     }
 
     [Fact]

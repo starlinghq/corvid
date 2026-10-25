@@ -744,9 +744,15 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             if (goal is not null)
                 updates.Add(new GoalChanged(goal) { At = at });
             updates.Add(new ApprovalModeChanged(mode) { At = at });
-            channel.Tainted = open && session.Tainted;
-            if (channel.Tainted)
-                updates.Add(new TaintChanged(true) { At = at });
+            // The replay's taint rows show what the log holds (network reads); a session open here knows its own taint, which
+            // also counts an untrusted description, a hub skill or a guest's message.
+            var tainted = open ? session.Tainted : channel.Translator.Tainted;
+            if (tainted != channel.Translator.Tainted)
+                updates.Add(new TaintChanged(tainted) { At = at });
+            channel.Tainted = tainted;
+            // The status bar's generator before a turn runs: what the next one starts on.
+            if (CurrentGenerator(runtime, open ? session : null) is { Length: > 0 } generator)
+                updates.Add(new EngineStatus { Model = generator, At = at });
             updates.Add(new AvailableCommandsUpdate(commands) { At = at });
             channel.ReadOnly = summary.ReadOnly;
             foreach (var update in updates)
@@ -1104,6 +1110,10 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     /// <summary>The generator slot's model now ("qwen3.5-0.8b"): what a turn the window starts runs on first.</summary>
     private static string Generator(CorvidRuntime runtime) =>
         runtime.Registry.TryGet(ModelSlots.Generator, out var slot) ? slot.Default.Profile.Id.Split('@')[0] : "";
+
+    /// <summary>The generator the session's next turn starts on: its own slot when it is open here (a <c>/model</c> switch), the runtime's otherwise.</summary>
+    private static string CurrentGenerator(CorvidRuntime runtime, CorvidSession? session) =>
+        session is not null && session.Slots.TryCurrent(ModelSlots.Generator, out var current) ? current.Profile.Id.Split('@')[0] : Generator(runtime);
 
     private static AppMode Mode(PipelineMode mode) => mode switch
     {

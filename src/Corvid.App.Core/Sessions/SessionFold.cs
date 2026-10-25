@@ -566,7 +566,8 @@ public static class SessionFold
     /// <summary>
     /// A rollback to before a call inside <paramref name="turn"/>: the turn keeps its prompt and what came before the call,
     /// and the call's card and everything after it in the turn leave, as a replay of the log shows it. When nothing of the
-    /// turn's answer is left, its header reads <paramref name="unanswered"/> (when given) as a failed turn, as the replay's does.
+    /// turn's answer is left, its header reads <paramref name="unanswered"/> (when given) as an interrupted turn, as the
+    /// replay's does: the rollback cut it short.
     /// </summary>
     private static ImmutableList<TranscriptEntry> KeepTurnBefore(ImmutableList<TranscriptEntry> transcript, int turn, string callId, string? unanswered)
     {
@@ -583,7 +584,7 @@ public static class SessionFold
         var header = kept.FindIndex(entry => entry.Turn == turn && entry is TurnHeaderEntry { Running: false });
         return header < 0
             ? kept
-            : kept.SetItem(header, (TurnHeaderEntry)kept[header] with { Outcome = TurnOutcome.Failed, Error = unanswered });
+            : kept.SetItem(header, (TurnHeaderEntry)kept[header] with { Outcome = TurnOutcome.Cancelled, Error = unanswered });
     }
 
     /// <summary>
@@ -662,7 +663,7 @@ public static class SessionFold
     {
         Generator = engine.Generator is { } generator ? generator with { Model = SafeText.Clean(generator.Model), Device = SafeText.Clean(generator.Device) } : state.Generator,
         // Engine strings reach the header and status bar: cleaned once here (a branch name may hold bidi marks).
-        Model = Cleaned(engine.Generator?.Model) ?? state.Model,
+        Model = Cleaned(engine.Generator?.Model) ?? Cleaned(engine.Model) ?? state.Model,
         Decider = Cleaned(engine.Decider) ?? state.Decider,
         Scheduler = Cleaned(engine.Scheduler) ?? state.Scheduler,
         Workspace = Cleaned(engine.Workspace) ?? state.Workspace,
