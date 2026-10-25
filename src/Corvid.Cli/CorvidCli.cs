@@ -54,7 +54,7 @@ public static class ExitCodes
 }
 
 /// <summary>
-/// <c>corvid</c> (plan §17 row 1.2): <c>chat</c>, <c>model</c>, <c>doctor</c>, <c>mcp</c>, <c>evals</c>, <c>acp</c>, <c>serve</c>, <c>gateway</c>, <c>traces</c> and <c>scan</c>, with typed configuration
+/// <c>corvid</c> (plan §17 row 1.2): <c>chat</c>, <c>model</c>, <c>doctor</c>, <c>mcp</c>, <c>evals</c>, <c>acp</c>, <c>serve</c>, <c>gateway</c>, <c>traces</c>, <c>scan</c> and <c>egress</c>, with typed configuration
 /// validated before anything runs.
 /// </summary>
 public static class CorvidCli
@@ -88,6 +88,8 @@ public static class CorvidCli
                                      loopback only unless Corvid:Serve:TokenSecret names a Vault secret
           scan                       the detection rules over the event log      [--session <id>] [--fail-on <severity>] [--json]
                                      exit 4 when a finding is at or above --fail-on (info, low, medium, high, critical)
+          egress [list]              the egress ledger: each request to a gated (cloud) model, newest first   [--session <id>] [--limit <n>]
+          egress show <n>            one request as it was sent, after redaction
 
         options:
           --config <file>            the configuration file (default $XDG_CONFIG_HOME/corvid/corvid.json, or $CORVID_CONFIG)
@@ -142,6 +144,7 @@ public static class CorvidCli
                 "serve" => await ServeCommand.RunAsync(host, context, cancellationToken).ConfigureAwait(false),
                 "gateway" => await GatewayCommand.RunAsync(host, parsed, context, cancellationToken).ConfigureAwait(false),
                 "scan" => ScanCommand.Run(host, parsed, context, cancellationToken),
+                "egress" => EgressCommand.Run(host, parsed, context, cancellationToken),
                 "traces" => await TracesCommand.RunAsync(host, parsed, context, cancellationToken).ConfigureAwait(false),
                 _ => UnknownCommand(console, parsed.Command),
             };
