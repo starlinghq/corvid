@@ -75,19 +75,7 @@ public sealed partial class CorvidRuntime
     /// </summary>
     private void RestoreModelChoices(string sessionId, SessionModelSlots slots)
     {
-        if (Log.GetHead(sessionId) == 0)
-            return;
-        var choices = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var item in Log.Read(sessionId))
-        {
-            if (item.Payload is not Corvid.Abstractions.Events.ModelSwitched switched || Profile(switched.NewProfile) is not { } to)
-                continue;
-            if (switched.Reason == SwitchReason.Session.ToWireName())
-                choices[switched.Slot] = to;
-            else if (switched.Reason == SwitchReason.DeEscalation.ToWireName() && choices.TryGetValue(switched.Slot, out var chosen) && chosen != to)
-                choices.Remove(switched.Slot);
-        }
-        foreach (var (slot, id) in choices)
+        foreach (var (slot, id) in ModelChoices(sessionId))
         {
             if (slot == ModelSlots.TextEmbedder || !ModelSlots.All.Contains(slot, StringComparer.Ordinal))
                 continue;
@@ -130,6 +118,29 @@ public sealed partial class CorvidRuntime
             else
                 System.Diagnostics.Trace.WriteLine("corvid: " + line);
         }
+
+    }
+
+    /// <summary>
+    /// A5: the person's "this session" choices a session's log holds, by slot, as profile ids (<c>qwen3.5-0.8b@cuda0</c>): the
+    /// latest <c>ModelSwitched</c> with the reason <c>session</c> per slot, unless a de-escalation to another model (a reset)
+    /// came after it. What a session opened again starts on; a surface can show it for a session not open here.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> ModelChoices(string sessionId)
+    {
+        var choices = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (Log.GetHead(sessionId) == 0)
+            return choices;
+        foreach (var item in Log.Read(sessionId))
+        {
+            if (item.Payload is not Corvid.Abstractions.Events.ModelSwitched switched || Profile(switched.NewProfile) is not { } to)
+                continue;
+            if (switched.Reason == SwitchReason.Session.ToWireName())
+                choices[switched.Slot] = to;
+            else if (switched.Reason == SwitchReason.DeEscalation.ToWireName() && choices.TryGetValue(switched.Slot, out var chosen) && chosen != to)
+                choices.Remove(switched.Slot);
+        }
+        return choices;
 
         static string? Profile(System.Text.Json.JsonElement snapshot)
         {

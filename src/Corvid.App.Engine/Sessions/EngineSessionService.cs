@@ -822,9 +822,11 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 updates.Add(new TaintChanged(tainted) { At = at });
             channel.Tainted = tainted;
             // The status bar's generator before a turn runs: what the next one starts on.
-            // A5: with the session's decider (per session now), for the header beside the generator.
-            var decider = DeciderLabel(runtime, open ? session : null);
-            updates.Add(CurrentGenerator(runtime, open ? session : null) is { Length: > 0 } generator
+            // A5: with the session's decider (per session now), for the header beside the generator; for a session not open
+            // here, the choices its log holds, which it starts on when it opens.
+            var choices = open ? null : runtime.ModelChoices(id);
+            var decider = choices?.GetValueOrDefault(Corvid.Models.ModelSlots.Decider)?.Split('@')[0] ?? DeciderLabel(runtime, open ? session : null);
+            updates.Add((choices?.GetValueOrDefault(Corvid.Models.ModelSlots.Generator)?.Split('@')[0] ?? CurrentGenerator(runtime, open ? session : null)) is { Length: > 0 } generator
                 ? new EngineStatus { Model = generator, Decider = decider, At = at }
                 : new EngineStatus { Decider = decider, At = at });
             updates.Add(new AvailableCommandsUpdate(commands) { At = at });

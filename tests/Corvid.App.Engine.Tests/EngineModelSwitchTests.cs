@@ -94,5 +94,15 @@ public sealed class EngineModelSwitchTests
         using var replayed = await again.OpenAsync(id, _ => { }, Ct);
         Assert.Single(replayed.History.OfType<ModelSwitched>());
         Assert.Equal("fake-gen-large", replayed.History.OfType<TurnStarted>().Single().Model);
+
+        // Let go of here, the header still says the session's own choice, which it starts on when it opens again.
+        subscription.Dispose();
+        replayed.Dispose();
+        Assert.True(await fixture.Runtime.ReleaseDriverAsync(id));
+        Assert.False(fixture.Runtime.TryGetSession(id, out _));
+        using var third = fixture.Sessions();
+        using var closed = await third.OpenAsync(id, _ => { }, Ct);
+        Assert.Equal("fake-gen-large", Assert.IsType<EngineStatus>(closed.History.Last(update => update is EngineStatus)).Model);
+        Assert.Equal("fake-gen-large@cpu", fixture.Runtime.OpenSession(id, "app").Slots.Current(ModelSlots.Generator).Profile.Id);
     }
 }
