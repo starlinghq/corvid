@@ -21,6 +21,13 @@ internal static class AcpMethods
     public const string SessionUpdate = "session/update";
     public const string RequestPermission = "session/request_permission";
     public const string CancelRequest = "$/cancel_request";
+
+    /// <summary>
+    /// A5: Corvid's extension notification (tui.md §3.2's <c>corvid.question</c>, as ACP's <c>_</c>-prefixed custom methods
+    /// go): the clarifying question a prompt turn ended on (K-6), sent before the prompt's response so an editor that
+    /// knows it can show its options. A client that does not ignores it, as ACP asks of unknown notifications.
+    /// </summary>
+    public const string CorvidQuestion = "_corvid/question";
 }
 
 /// <summary>JSON-RPC and ACP error codes (schema <c>ErrorCode</c>).</summary>
@@ -260,6 +267,9 @@ internal sealed record RequestPermissionResponse
     public PermissionOutcome Outcome { get; init; } = new();
 }
 
+/// <summary>A5: <c>_corvid/question</c>'s parameters. The question and options are the model's text.</summary>
+internal sealed record CorvidQuestionNotification(string SessionId, string QuestionId, string Question, string[] Options);
+
 internal sealed record CorvidMeta
 {
     /// <summary>For session/fork: the log position to fork at (default the source's head).</summary>
@@ -287,5 +297,6 @@ internal sealed record JsonRpcError(int Code, string Message);
 [JsonSerializable(typeof(RequestPermissionRequest))]
 [JsonSerializable(typeof(RequestPermissionResponse))]
 [JsonSerializable(typeof(CorvidMeta))]
+[JsonSerializable(typeof(CorvidQuestionNotification))]
 [JsonSerializable(typeof(JsonRpcError))]
 internal sealed partial class AcpJson : JsonSerializerContext;

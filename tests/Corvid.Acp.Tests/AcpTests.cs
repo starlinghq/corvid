@@ -399,6 +399,64 @@ public sealed class AcpTests
         Assert.Equal(-32002, closed["error"]!["code"]!.GetValue<int>());
     }
 
+    private sealed class ExtraTools(params Corvid.Tools.ToolFunction[] tools) : Corvid.Tools.IToolProvider
+    {
+        public IReadOnlyList<Corvid.Tools.ToolFunction> CreateTools() => tools;
+    }
+
+    // A5 (A4 leftover): a running call's output tail reaches the editor as the call's content while it runs.
+    [Fact]
+    public async Task ARunningCallsOutputTailIsAToolCallUpdateInProgress()
+    {
+        var weather = new TestTool(new Corvid.Tools.ToolDescriptor("check_weather", "Check the weather forecast.", """{"type":"object","properties":{}}""",
+            new Corvid.Tools.ToolRisk(Corvid.Tools.SideEffects.None, Network: false, Destructive: false), []), arguments =>
+        {
+            Corvid.Tools.ToolCallContext.From(arguments)!.Output!("asking the forecast service\n");
+            return "sunny";
+        });
+        var models = new FakeModels(new FakeGenerator(Reply.Call("check_weather"), Reply.Say("Sunny.")));
+        await using var client = AcpClient.Start(TestHost.Create(models,
+            services: services => Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions.AddSingleton<Corvid.Tools.IToolProvider>(services, new ExtraTools(weather))));
+        await client.RequestAsync("initialize", Initialize());
+        var session = await client.NewSessionAsync();
+
+        await client.RequestAsync("session/prompt", Prompt(session, "what's the weather?"));
+
+        var updates = client.UpdatesFor(session);
+        var tail = Assert.Single(updates, update => update["sessionUpdate"]?.GetValue<string>() == "tool_call_update"
+            && update["status"]?.GetValue<string>() == "in_progress");
+        Assert.Equal("asking the forecast service", tail["content"]![0]!["content"]!["text"]!.GetValue<string>().TrimEnd());
+        var done = updates.FindIndex(update => update["sessionUpdate"]?.GetValue<string>() == "tool_call_update"
+            && update["status"]?.GetValue<string>() == "completed");
+        Assert.True(updates.IndexOf(tail) < done);
+    }
+
+    // A5 (A4 leftover): a turn that ends on a clarifying question (K-6) tells the editor so, structured, before the prompt's
+    // response; ACP has no way to answer inside the turn, so the person's next prompt answers it.
+    [Fact]
+    public async Task AQuestionTheTurnEndedOnIsACorvidQuestionNotification()
+    {
+        var models = new FakeModels(new FakeGenerator(Reply.Call("ask_user", """{"question":"Which branch?","options":["main","release"]}""")));
+        await using var client = AcpClient.Start(TestHost.Create(models, BuiltinOn));
+        await client.RequestAsync("initialize", Initialize());
+        var session = await client.NewSessionAsync();
+
+        var response = await client.RequestAsync("session/prompt", Prompt(session, "tag the release"));
+
+        Assert.Equal("end_turn", response["result"]!["stopReason"]!.GetValue<string>());
+        List<JsonObject> questions;
+        lock (client.Updates)
+            questions = [.. client.Updates.Where(update => update["method"]?.GetValue<string>() == "_corvid/question")];
+        var question = Assert.Single(questions)["params"]!;
+        Assert.Equal(session, question["sessionId"]!.GetValue<string>());
+        Assert.Equal("Which branch?", question["question"]!.GetValue<string>());
+        Assert.Equal(["main", "release"], question["options"]!.AsArray().Select(option => option!.GetValue<string>()));
+        Assert.StartsWith("q-", question["questionId"]!.GetValue<string>(), StringComparison.Ordinal);
+        // The question's text is the turn's answer too, so a client that ignores the notification still shows it.
+        Assert.Contains(client.UpdatesFor(session), update => update["sessionUpdate"]?.GetValue<string>() == "agent_message_chunk"
+            && update["content"]!["text"]!.GetValue<string>().Contains("Which branch?", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task AResourceLinkReachesTheModelAsText()
     {
