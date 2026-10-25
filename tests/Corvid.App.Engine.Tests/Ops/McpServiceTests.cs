@@ -250,7 +250,7 @@ public sealed class McpServiceTests
         Assert.Equal("fake has no pinned definitions; nothing was forgotten.",
             (await Assert.ThrowsAsync<InvalidOperationException>(() => service.ForgetAsync("fake", Token))).Message);
 
-        using var composition = new AppComposition(new AppOptions { Demo = false }, new InlineDispatcher(), fixture.Time, new EngineAppServices(fixture.Engine));
+        using var composition = new AppComposition(new AppOptions { Demo = false }, new InlineDispatcher(), fixture.Time, new EngineAppServices(fixture.Engine, fixture.Host.Root, _ => null));
         Assert.IsType<EngineMcpService>(composition.McpService);
     }
 }

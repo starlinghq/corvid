@@ -174,7 +174,7 @@ public sealed class EngineFirstRunTests : IDisposable
         await using var host = EngineHosts.Create(new FakeModels(generatorReady: false));
         await using var engine = await AppEngine.StartAsync(host.Host, ownsHost: false, cancellationToken: Token);
         using var composition = new AppComposition(new AppOptions { Demo = false, Page = Area.FirstRun }, new InlineDispatcher(),
-            ManualTimeProvider.Demo(), new EngineAppServices(engine));
+            ManualTimeProvider.Demo(), new EngineAppServices(engine, host.Root, _ => null));
         var page = composition.FirstRun;
         Assert.IsType<EngineFirstRunService>(composition.FirstRunService);
 
@@ -201,7 +201,8 @@ public sealed class EngineFirstRunTests : IDisposable
         page.Downloads.PropertyChanged += (_, _) => Check();
         Check();
         await loaded.Task.WaitAsync(TimeSpan.FromSeconds(30), Token);
-        Assert.Equal(Path.Combine(host.Root, "work"), page.Workspace);
+        // The services read the test's own home (never the person's), so the workspace under it shows as ~/work.
+        Assert.Equal("~/work", page.Workspace);
         Assert.Equal("not started · 1 model missing", composition.StatusBar.Engine);
         Assert.False(page.HasNotice, string.Concat(page.Notice.Select(run => run.Text)));
     }

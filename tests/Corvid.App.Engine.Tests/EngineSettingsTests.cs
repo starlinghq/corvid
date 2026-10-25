@@ -181,7 +181,7 @@ public sealed class EngineSettingsTests
     public async Task ThePageSavesTheRealFileInEngineMode()
     {
         await using var fixture = await EngineFixture.StartAsync();
-        using var composition = new AppComposition(new AppOptions { Demo = false }, new InlineDispatcher(), fixture.Time, new EngineAppServices(fixture.Engine));
+        using var composition = new AppComposition(new AppOptions { Demo = false }, new InlineDispatcher(), fixture.Time, new EngineAppServices(fixture.Engine, fixture.Host.Root, _ => null));
         var page = composition.Settings;
 
         Assert.IsType<EngineSettingsService>(composition.SettingsService);

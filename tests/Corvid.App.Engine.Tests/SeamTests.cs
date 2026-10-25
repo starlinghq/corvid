@@ -69,7 +69,7 @@ public sealed class SeamTests
     public async Task EngineModeBuildsEveryAreaOnTheEngine()
     {
         await using var fixture = await EngineFixture.StartAsync();
-        var source = new Tracking(new EngineAppServices(fixture.Engine));
+        var source = new Tracking(new EngineAppServices(fixture.Engine, fixture.Host.Root, _ => null));
         var composition = new AppComposition(Engine, new InlineDispatcher(), fixture.Time, source);
 
         var sessions = Assert.IsType<EngineSessionService>(composition.SessionService);
@@ -134,7 +134,7 @@ public sealed class SeamTests
         Assert.Equal("fake-gen", Assert.Single(engine.MissingModels).Model.Name);
         Assert.Contains("fake-gen", engine.StartFailure, StringComparison.Ordinal);
         using var composition = new AppComposition(Engine with { Page = Area.FirstRun }, new InlineDispatcher(), ManualTimeProvider.Demo(),
-            new EngineAppServices(engine));
+            new EngineAppServices(engine, host.Root, _ => null));
 
         Assert.Equal(Area.FirstRun, composition.Shell.CurrentArea);
         Assert.Contains("Corvid cannot start: Model 'fake-gen' is not in the fake cache. Run `corvid model download fake-gen`.",

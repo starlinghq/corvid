@@ -121,7 +121,7 @@ public sealed class SafetyServiceTests
     public async Task TheCompositionBuildsTheEnginesSafetyAndItsViewModelLoads()
     {
         await using var fixture = await EngineFixture.StartAsync();
-        using var composition = new AppComposition(new AppOptions { Demo = false }, new InlineDispatcher(), fixture.Time, new EngineAppServices(fixture.Engine));
+        using var composition = new AppComposition(new AppOptions { Demo = false }, new InlineDispatcher(), fixture.Time, new EngineAppServices(fixture.Engine, fixture.Host.Root, _ => null));
 
         Assert.IsType<EngineSafetyService>(composition.SafetyService);
         await composition.Safety.Loaded;

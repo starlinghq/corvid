@@ -249,7 +249,7 @@ public sealed class JobsServiceTests
     {
         await using var fixture = await OpsFixture.StartAsync();
         using (var composition = new AppComposition(new AppOptions { Demo = false }, new InlineDispatcher(), fixture.Time,
-            new EngineAppServices(fixture.Engine)))
+            new EngineAppServices(fixture.Engine, fixture.Host.Root, _ => null)))
         {
             Assert.IsType<EngineJobsService>(composition.JobsService);
             Assert.Empty((await composition.JobsService.LoadAsync(Token)).Jobs);

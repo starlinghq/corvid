@@ -39,15 +39,29 @@ internal static class Program
         {
             // Before the UI thread exists, so nothing waits on it: the host's start validates corvid.json and the check
             // reads file sizes only. The models load on the pool from here on.
-            engine = AppEngine.StartAsync(CorvidHost.CreateBuilder().Build(), ownsHost: true,
-                new Progress(step => Console.Error.WriteLine($"corvid app: {step.Description}{(step.Elapsed is { } took ? $" ({took.TotalSeconds:0.0} s)" : "")}")))
-                .GetAwaiter().GetResult();
-            if (engine.StartFailure is { } failure)
-                Console.Error.WriteLine("corvid app: " + failure);
-            // Missing models open First run, unless the command line named a page (an area's builder looks at its own page).
-            if (!engine.MissingModels.IsEmpty && options.Page is null)
-                options = options with { Page = Area.FirstRun };
-            services = new EngineAppServices(engine);
+            try
+            {
+                engine = AppEngine.StartAsync(CorvidHost.CreateBuilder().Build(), ownsHost: true,
+                    new Progress(step => Console.Error.WriteLine($"corvid app: {step.Description}{(step.Elapsed is { } took ? $" ({took.TotalSeconds:0.0} s)" : "")}")))
+                    .GetAwaiter().GetResult();
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                // The host could not even be built (corvid.json unreadable, a service that cannot be made): the window still
+                // opens, and every area says why.
+                var reason = "Corvid cannot start: " + exception.Message;
+                Console.Error.WriteLine("corvid app: " + reason);
+                services = new UnavailableAppServices(reason);
+            }
+            if (engine is not null)
+            {
+                if (engine.StartFailure is { } failure)
+                    Console.Error.WriteLine("corvid app: " + failure);
+                // Missing models open First run, unless the command line named a page (an area's builder looks at its own page).
+                if (!engine.MissingModels.IsEmpty && options.Page is null)
+                    options = options with { Page = Area.FirstRun };
+                services = new EngineAppServices(engine, Corvid.Host.Configuration.CorvidPaths.Home);
+            }
         }
 
         // CORVID_APP_RENDERER=software draws with Skia on the CPU instead of OpenGL. The visual harness sets it: under Xvfb,

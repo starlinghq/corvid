@@ -181,7 +181,7 @@ public sealed class SkillsServiceTests
     {
         await using var fixture = await EngineFixture.StartAsync();
         Stage(fixture, "review-notes");
-        using var composition = new AppComposition(new AppOptions { Demo = false }, new InlineDispatcher(), fixture.Time, new EngineAppServices(fixture.Engine));
+        using var composition = new AppComposition(new AppOptions { Demo = false }, new InlineDispatcher(), fixture.Time, new EngineAppServices(fixture.Engine, fixture.Host.Root, _ => null));
 
         var service = Assert.IsType<EngineSkillsService>(composition.SkillsService);
         Assert.Single((await service.LoadAsync(Ct)).Drafts);
