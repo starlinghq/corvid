@@ -293,6 +293,65 @@ public sealed class EngineModelTests
         Assert.Contains("the last download failed: the mirror refused the request", snapshot.Find(Slow)!.Fit, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A3 review M2: a download that ends over a corvid.json that no longer parses says the list may be out of date, and the
+    /// next download still starts (the pump does not stay marked as running).
+    /// </summary>
+    [Fact]
+    public async Task ADownloadEndingOverABrokenConfigurationSaysSoAndTheNextOneStarts()
+    {
+        await using var setup = await StartAsync();
+        await setup.Service.LoadAsync(Token);
+
+        await setup.Service.DownloadAsync([Slow], Token);
+        await WaitForAsync(setup.Service, snapshot => snapshot.Find(Slow) is { State: ModelState.Downloading });
+        await File.WriteAllTextAsync(setup.ConfigFile, "{ \"Corvid\": ", Token);
+        setup.Provider.Release.TrySetResult();
+
+        var stale = await WaitForAsync(setup.Service, snapshot => snapshot.Problem is not null);
+        Assert.StartsWith($"{Slow} downloaded, but the models could not be read again", stale.Problem, StringComparison.Ordinal);
+        Assert.Null(stale.Find(Slow)!.Download);
+
+        File.Delete(setup.ConfigFile);
+        await setup.Service.DownloadAsync(["slow-embed"], Token);
+        var done = await WaitForAsync(setup.Service, snapshot => snapshot.Find("slow-embed") is { State: ModelState.Cached });
+        Assert.Equal(2, setup.Provider.Started);
+        Assert.Null(done.Problem);
+        Assert.Equal(ModelState.Cached, done.Find(Slow)!.State);
+    }
+
+    /// <summary>A3 review L11: a switch written to the file whose live switch then fails says it was written.</summary>
+    [Fact]
+    public async Task ALiveSwitchThatFailsAfterTheWriteSaysTheFileWasWritten()
+    {
+        await using var setup = await StartAsync();
+        setup.Provider.LoadFailure = new IOException("the model file vanished");
+
+        var answer = await setup.Service.SwitchAsync(ModelSlotNames.Summarizer, Spare, Token);
+
+        Assert.True(answer.Written, answer.Message);
+        Assert.Contains("Written; the live switch failed: the model file vanished", answer.Message, StringComparison.Ordinal);
+        Assert.Equal(Spare, (string?)(await setup.FileAsync())["Corvid"]!["Models"]!["Slots"]!["summarizer"]!["Model"]);
+    }
+
+    /// <summary>A3 security review L3: a server name, or the model id a server answers with, holding hidden characters is not written.</summary>
+    [Fact]
+    public async Task AServerWithHiddenCharactersInItsNameOrModelIsNotAdded()
+    {
+        await using var setup = await StartAsync();
+        setup.Server.Models = ["qwen‮coder"];
+
+        var model = await setup.Service.AddServerAsync("coder", "http://127.0.0.1:11434/v1", Token);
+        Assert.False(model.Written);
+        Assert.Contains("names its model with hidden characters (qwen⟨U+202E⟩coder)", model.Message, StringComparison.Ordinal);
+
+        setup.Server.Models = ["coder"];
+        var name = await setup.Service.AddServerAsync("co​der", "http://127.0.0.1:11434/v1", Token);
+        Assert.False(name.Written);
+        Assert.Contains("hidden characters", name.Message, StringComparison.Ordinal);
+        Assert.False(File.Exists(setup.ConfigFile));
+    }
+
     [Fact]
     public async Task AServerThatAnswersIsAddedWithTheModelItServes()
     {
@@ -399,8 +458,11 @@ public sealed class EngineModelTests
                 : new ModelAvailability(descriptor, ModelReadiness.Missing, $"{model} is not downloaded.", $"corvid model download {model}");
         }
 
-        public ModelBinding Load(string model, ModelLoadContext context) =>
-            new(Models.Single(item => item.Name == model).Profile, new FakeGenerator(Reply.Say("Hello from the spare.")));
+        public Exception? LoadFailure { get; set; }
+
+        public ModelBinding Load(string model, ModelLoadContext context) => LoadFailure is { } failure
+            ? throw failure
+            : new(Models.Single(item => item.Name == model).Profile, new FakeGenerator(Reply.Say("Hello from the spare.")));
 
         public async Task<ModelAvailability> DownloadAsync(string model, IProgress<ModelDownloadProgress>? progress = null,
             CancellationToken cancellationToken = default)

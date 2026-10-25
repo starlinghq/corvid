@@ -55,6 +55,31 @@ public sealed class AcquisitionTests : IDisposable
         Assert.Equal(0, store.RemovePartialDownloads(StarlingModel.Qwen35));
     }
 
+    /// <summary>A3 review L9: a partial file whose download lock another download holds is still being written, so it stays.</summary>
+    [Fact]
+    public void Removing_partial_downloads_leaves_a_file_another_download_is_writing()
+    {
+        var store = new StarlingModelStore(_cache);
+        var downloads = Path.Combine(_cache, StarlingModelStore.PartialDirectory,
+            Path.GetRelativePath(_cache, store.GetSnapshotDirectory(StarlingModel.Gliner2)));
+        Directory.CreateDirectory(downloads);
+        var writing = Path.Combine(downloads, "model.onnx.partial");
+        var left = Path.Combine(downloads, "tokenizer.json.partial");
+        File.WriteAllText(writing, "half");
+        File.WriteAllText(left, "half");
+
+        // The lock Starling holds while it writes model.onnx.partial (another process's download, as far as this one knows).
+        using (new FileStream(Path.Combine(downloads, "model.onnx.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.Equal(1, store.RemovePartialDownloads(StarlingModel.Gliner2));
+            Assert.True(File.Exists(writing));
+            Assert.False(File.Exists(left));
+        }
+
+        Assert.Equal(1, store.RemovePartialDownloads(StarlingModel.Gliner2));
+        Assert.False(File.Exists(writing));
+    }
+
     [Fact]
     public void Opening_a_missing_model_says_what_is_missing_and_how_to_get_it()
     {
