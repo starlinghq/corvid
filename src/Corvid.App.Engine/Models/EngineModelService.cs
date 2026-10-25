@@ -299,8 +299,9 @@ public sealed class EngineModelService : IModelService, IDisposable
                 return Refused("Corvid has not started, so there is no session to pin for.");
             if (sessionId is null)
                 return Refused("Open a session first: a pin holds for one session.");
-            if (!runtime.TryGetSession(sessionId, out var session))
-                return Refused($"Session {E(sessionId)} is not open in this window yet: open it, then pin.");
+            // A5: the viewed session is opened for the pin as for a "this session" switch.
+            if (Driven(runtime, sessionId, out var session) is { } held)
+                return Refused(held);
             if (!session.Slots.TryCurrent(slot, out var binding))
                 return Refused($"The {slot} is unbound in {E(sessionId)}.");
             if (pinned)
