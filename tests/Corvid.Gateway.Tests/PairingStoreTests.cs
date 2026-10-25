@@ -53,6 +53,66 @@ public sealed class PairingStoreTests : IDisposable
         Assert.Equal(SenderRole.None, store.RoleOf(adapter, "42"));
     }
 
+    /// <summary>
+    /// G-14: a paired guest's own allowlist replaces the adapter's for them alone, and goes with their pairing. The store
+    /// moves to schema 2 only when the first one is written.
+    /// </summary>
+    [Fact]
+    public void AGuestsOwnAllowlistIsKeptUntilTheirPairingGoes()
+    {
+        var store = Store();
+        store.Approve(store.Request("telegram", "42", "mark", "42").Request!.Code, SenderRole.Owner);
+        store.Approve(store.Request("telegram", "43", "ada", "43").Request!.Code, SenderRole.Guest);
+        Assert.Null(store.GuestTools("telegram", "43"));
+        Assert.Equal(1, Version());
+
+        Assert.True(store.SetGuestTools("telegram", "43", ["web_fetch", "list_notes", "list_notes"]));
+        Assert.Equal(["list_notes", "web_fetch"], store.GuestTools("telegram", "43"));
+        Assert.Equal(2, Version());
+        // An empty list is their own too: no tools, whatever the adapter gives guests.
+        Assert.True(store.SetGuestTools("telegram", "43", []));
+        Assert.Empty(store.GuestTools("telegram", "43")!);
+        // Only a paired guest has one: not an owner, not someone unpaired.
+        Assert.False(store.SetGuestTools("telegram", "42", ["list_notes"]));
+        Assert.False(store.SetGuestTools("telegram", "99", ["list_notes"]));
+        Assert.Throws<ArgumentException>(() => store.SetGuestTools("telegram", "43", ["a\nb"]));
+        // Back to the adapter's.
+        Assert.True(store.SetGuestTools("telegram", "43", null));
+        Assert.Null(store.GuestTools("telegram", "43"));
+
+        store.SetGuestTools("telegram", "43", ["list_notes"]);
+        Assert.True(store.Revoke("telegram", "43"));
+        Assert.Null(store.GuestTools("telegram", "43"));
+        // Paired again, they start from the adapter's tools.
+        store.Approve(store.Request("telegram", "43", "ada", "43").Request!.Code, SenderRole.Guest);
+        Assert.Null(store.GuestTools("telegram", "43"));
+        // A store at schema 2 opens again; a later schema is refused.
+        Assert.Equal(["42", "43"], Store().Users().Select(user => user.UserId));
+    }
+
+    [Fact]
+    public void AStoreFromALaterSchemaIsRefused()
+    {
+        Store();
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={Path.Combine(_root, "gateway.db")};Pooling=False"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "PRAGMA user_version = 3;";
+            command.ExecuteNonQuery();
+        }
+        Assert.Throws<InvalidDataException>(() => Store());
+    }
+
+    private int Version()
+    {
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={Path.Combine(_root, "gateway.db")};Pooling=False");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA user_version;";
+        return Convert.ToInt32(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
     /// <summary>G-14: Ignore drops the code; the sender stays unpaired and asking again gets a new code.</summary>
     [Fact]
     public void DismissingACodePairsNobodyAndTheNextAskGetsANewCode()

@@ -57,6 +57,12 @@ public static class CorvidPaths
     /// </summary>
     public static string McpPins(CorvidOptions options) => Path.Combine(DataDirectory(options), "mcp-pins.json");
 
+    /// <summary>
+    /// The sessions' driver locks (G-12): one lock file per session a process has opened to drive, with the note saying
+    /// which process. Beside the event log they guard.
+    /// </summary>
+    public static string SessionDrivers(CorvidOptions options) => Path.Combine(DataDirectory(options), "drivers");
+
     /// <summary>The skill loop's queue, staged drafts, usage and eval results.</summary>
     public static string SkillsDatabase(CorvidOptions options) => Path.Combine(DataDirectory(options), "skills.db");
 

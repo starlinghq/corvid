@@ -251,7 +251,16 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
         var id = Required(request.SessionId);
         if (runtime.Log.GetHead(id) == 0)
             throw new AcpException(AcpErrors.ResourceNotFound, $"There is no session '{id}' in Corvid's log.");
-        var state = _sessions.TryGetValue(id, out var open) ? open : Open(runtime, runtime.OpenSession(id, Surface));
+        AcpSessionState state;
+        try
+        {
+            state = _sessions.TryGetValue(id, out var open) ? open : Open(runtime, runtime.OpenSession(id, Surface));
+        }
+        catch (SessionHeldException exception)
+        {
+            // G-12: another process drives it (a terminal, the app); the editor may not post into it.
+            throw new AcpException(AcpErrors.InvalidRequest, exception.Message);
+        }
         // session/load replays the whole conversation before answering; session/resume must not.
         if (replay)
             await ReplayAsync(runtime, id).ConfigureAwait(false);

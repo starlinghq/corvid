@@ -13,11 +13,11 @@ namespace Corvid.App.Engine.Tests.Ops;
 /// </summary>
 internal sealed class OpsFixture : IAsyncDisposable
 {
-    private OpsFixture(TestHost host, CorvidRuntime runtime)
+    private OpsFixture(TestHost host, CorvidRuntime runtime, bool hostGateway)
     {
         Host = host;
         Runtime = runtime;
-        Engine = AppEngine.ForRuntime(host.Host, runtime);
+        Engine = AppEngine.ForRuntime(host.Host, runtime, hostGateway: hostGateway);
     }
 
     public TestHost Host { get; }
@@ -29,14 +29,15 @@ internal sealed class OpsFixture : IAsyncDisposable
     public ManualTimeProvider Time { get; } = ManualTimeProvider.Demo();
 
     /// <param name="before">Runs on the built host before its runtime starts: state an earlier start left (MCP pins).</param>
+    /// <param name="hostGateway">The engine hosts the gateway (G-14), with the adapters <paramref name="services"/> registers.</param>
     public static async Task<OpsFixture> StartAsync(IReadOnlyDictionary<string, string?>? settings = null, Action<IServiceCollection>? services = null,
-        FakeModels? models = null, Action<TestHost>? before = null)
+        FakeModels? models = null, Action<TestHost>? before = null, bool hostGateway = false)
     {
         var host = EngineHosts.Create(models, settings, services);
         try
         {
             before?.Invoke(host);
-            return new OpsFixture(host, await host.StartAsync());
+            return new OpsFixture(host, await host.StartAsync(), hostGateway);
         }
         catch
         {

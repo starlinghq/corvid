@@ -203,6 +203,27 @@ public sealed class ChatTests
     }
 
     [Fact]
+    public async Task ASessionAnotherProcessDrivesIsNotResumedHere()
+    {
+        using var run = new CliRun();
+        await run.RunAsync(["chat"], "first message", "/exit");
+        var id = System.Text.RegularExpressions.Regex.Match(run.Output, "session (cli-[0-9a-f-]+)").Groups[1].Value;
+        Assert.NotEmpty(id);
+        // G-12: another process (the app, another terminal) holds the session's driver lock.
+        using (var held = Corvid.Host.Composition.ProcessLock.TryAcquire(Path.Combine(run.Root, "data", "drivers", id + ".lock")))
+        {
+            Assert.NotNull(held);
+            Assert.Equal(ExitCodes.Failure, await run.RunAsync(["--session", id], "never sent", "/exit"));
+            Assert.Contains($"Session {id} is driven by", run.Output, StringComparison.Ordinal);
+            Assert.Contains($"(pid {Environment.ProcessId})", run.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("Resumed:", run.Output, StringComparison.Ordinal);
+        }
+        // Once it lets go, the terminal resumes it.
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["--session", id], "/exit"));
+        Assert.Contains("Resumed: 2 entries", run.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task UnknownCommandsAreReportedAndTheChatGoesOn()
     {
         using var run = new CliRun();
@@ -362,6 +383,28 @@ public sealed class GatewayCommandTests
         Assert.Equal(ExitCodes.Success, await run.RunAsync(["gateway", "pair", "revoke", "telegram", "42"]));
         Assert.Empty(store.Users());
         Assert.Equal(ExitCodes.Usage, await run.RunAsync(["gateway", "frobnicate"]));
+    }
+
+    [Fact]
+    public async Task AGuestGetsTheirOwnToolsFromTheMachine()
+    {
+        using var run = new CliRun();
+        var store = new Corvid.Gateway.PairingStore(Path.Combine(run.Root, "data", "gateway.db"));
+        store.Approve(store.Request("telegram", "42", "ada", "42").Request!.Code, Corvid.Gateway.SenderRole.Guest);
+        store.Approve(store.Request("telegram", "7", "me", "7").Request!.Code, Corvid.Gateway.SenderRole.Owner);
+
+        // G-14: the same allowlist the app's Gateway page sets, checked the same way.
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["gateway", "pair", "tools", "telegram", "42", "list_notes", "web_fetch"]));
+        Assert.Equal(["list_notes", "web_fetch"], store.GuestTools("telegram", "42"));
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["gateway", "pair"]));
+        Assert.Contains("list_notes, web_fetch (their own)", run.Output, StringComparison.Ordinal);
+        Assert.Equal(ExitCodes.Usage, await run.RunAsync(["gateway", "pair", "tools", "telegram", "42", "cron_create"]));
+        Assert.Contains("'cron_create' cannot be a guest tool", run.Output, StringComparison.Ordinal);
+        Assert.Equal(ExitCodes.Failure, await run.RunAsync(["gateway", "pair", "tools", "telegram", "7", "list_notes"]));
+        Assert.Equal(ExitCodes.Usage, await run.RunAsync(["gateway", "pair", "tools", "telegram", "42"]));
+        Assert.Equal(["list_notes", "web_fetch"], store.GuestTools("telegram", "42"));
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["gateway", "pair", "tools", "telegram", "42", "--adapter"]));
+        Assert.Null(store.GuestTools("telegram", "42"));
     }
 
     [Fact]

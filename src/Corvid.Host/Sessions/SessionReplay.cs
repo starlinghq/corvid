@@ -20,8 +20,13 @@ namespace Corvid.Host.Sessions;
 /// </param>
 /// <param name="Steps">Each step a turn began, from its calls' rounds (<see cref="TurnStepped"/>), as a live turn reports it.</param>
 /// <param name="Questions">The clarifying question a turn ended on (K-6, <see cref="QuestionRaised"/>).</param>
+/// <param name="UnfinishedAsRunning">
+/// With <paramref name="UnfinishedCalls"/> off, a call the log holds no result for replays as running rather than as
+/// completed: another process is still working on it (G-12's tail of a session that process drives).
+/// </param>
+/// <param name="After">Only what the log holds past this position: the next part of a session read before (G-12's tail).</param>
 public sealed record ReplayOptions(bool LedgerDiffs = true, bool Plans = true, bool Checkpoints = true, bool Approvals = true,
-    bool UnfinishedCalls = true, bool Steps = true, bool Questions = true)
+    bool UnfinishedCalls = true, bool Steps = true, bool Questions = true, bool UnfinishedAsRunning = false, long After = 0)
 {
     /// <summary>Everything a live turn reports that the log holds.</summary>
     public static ReplayOptions Full { get; } = new();
@@ -81,6 +86,17 @@ public static class SessionReplay
         int? round = null;
         foreach (var entry in snapshot.Transcript)
         {
+            if (entry.FromSequence <= options.After)
+            {
+                // Read before: its step was reported then, so a later call of the same step starts none.
+                round = entry.Content switch
+                {
+                    UserMessage => null,
+                    ToolCallIssued { Round: { } step and > 0 } => step,
+                    _ => round,
+                };
+                continue;
+            }
             var at = stored.TryGetValue(entry.FromSequence, out var item) ? item.RecordedAt : default;
             switch (entry.Content)
             {
@@ -105,8 +121,9 @@ public static class SessionReplay
                     var finished = results.TryGetValue(call.CallId, out var outcome);
                     var unfinished = !finished && options.UnfinishedCalls;
                     var failed = (finished && outcome!.IsError) || unfinished;
+                    var running = !finished && !options.UnfinishedCalls && options.UnfinishedAsRunning;
                     items.Add((entry.FromSequence, new ToolCallStarted(call.CallId, ToolPresentation.Title(call.ToolName, call.Arguments),
-                        tools.Kind(call.ToolName), failed ? ToolCallState.Failed : ToolCallState.Completed)
+                        tools.Kind(call.ToolName), failed ? ToolCallState.Failed : running ? ToolCallState.InProgress : ToolCallState.Completed)
                     {
                         At = at,
                         Tool = call.ToolName,
@@ -157,7 +174,8 @@ public static class SessionReplay
 
         // K-6: each clarifying question after the answer that carries it, as the live turn reported it.
         var questions = false;
-        foreach (var item in stored.Values.Where(item => options.Questions && item.Payload is ClarificationAsked && snapshot.IsVisible(item.Sequence)))
+        foreach (var item in stored.Values.Where(item => options.Questions && item.Payload is ClarificationAsked && item.Sequence > options.After
+            && snapshot.IsVisible(item.Sequence)))
         {
             questions = true;
             var question = (ClarificationAsked)item.Payload;
@@ -167,10 +185,10 @@ public static class SessionReplay
             }));
         }
         if (options.Plans)
-            foreach (var item in stored.Values.Where(item => item.Payload is TodosSet && snapshot.IsVisible(item.Sequence)))
+            foreach (var item in stored.Values.Where(item => item.Payload is TodosSet && item.Sequence > options.After && snapshot.IsVisible(item.Sequence)))
                 items.Add((item.Sequence, new PlanChanged(((TodosSet)item.Payload).Items) { At = item.RecordedAt }));
         if (options.Checkpoints)
-            foreach (var checkpoint in checkpoints)
+            foreach (var checkpoint in checkpoints.Where(checkpoint => checkpoint.Sequence > options.After))
                 items.Add((checkpoint.Sequence, new CheckpointLogged(checkpoint.Checkpoint, checkpoint.Sequence)
                 {
                     At = stored.TryGetValue(checkpoint.Sequence, out var item) ? item.RecordedAt : default,

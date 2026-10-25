@@ -222,7 +222,9 @@ public sealed class GatewayHost : IAsyncDisposable
 
         // Anyone but the owner gets the adapter's guest tools only (none by default): taint asks before network and sends, but
         // would not stop a read-only file tool showing the owner's workspace to a guest.
-        var reply = await _agent.PostAsync(sessionId, text, role == SenderRole.Owner ? null : new GuestScope(adapter.GuestTools), cancellationToken)
+        // A paired guest's own allowlist (G-14) replaces the adapter's for them.
+        var reply = await _agent.PostAsync(sessionId, text, role == SenderRole.Owner ? null
+                : new GuestScope(_pairing.GuestTools(message.Adapter, message.SenderId) ?? (IEnumerable<string>)adapter.GuestTools), cancellationToken)
             .ConfigureAwait(false);
         Track(DeliverAsync(message, sessionId, adapter, reply));
     }

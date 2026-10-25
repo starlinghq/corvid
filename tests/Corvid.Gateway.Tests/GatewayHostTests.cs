@@ -66,6 +66,25 @@ public sealed class GatewayHostTests
     }
 
     [Fact]
+    public async Task APairedGuestsOwnAllowlistReplacesTheAdaptersForThemAlone()
+    {
+        await using var fixture = new GatewayFixture();
+        var adapter = new FakeAdapter();
+        await fixture.StartAsync(GatewayFixture.Options(Fake with { GuestTools = ["list_notes"] }), adapter);
+        fixture.Pairing.Approve(fixture.Pairing.Request("fake", "ada", "ada", "ada").Request!.Code, SenderRole.Guest);
+        fixture.Pairing.Approve(fixture.Pairing.Request("fake", "bo", "bo", "bo").Request!.Code, SenderRole.Guest);
+        // G-14: set while the gateway runs (the app's Gateway page, corvid gateway pair tools); read at the next message.
+        fixture.Pairing.SetGuestTools("fake", "ada", ["web_fetch"]);
+
+        adapter.Write(Direct("ada", "ada asks"));
+        adapter.Write(Direct("bo", "bo asks"));
+        await Wait.Until(() => fixture.Agent.Posts.Count == 2, "two messages");
+
+        Assert.Equal("web_fetch", Assert.Single(fixture.Agent.Scopes["ada asks"]!.Tools));
+        Assert.Equal("list_notes", Assert.Single(fixture.Agent.Scopes["bo asks"]!.Tools));
+    }
+
+    [Fact]
     public async Task GroupMessagesThatDoNotAddressTheBotAreIgnoredAndStrangersInGroupsGetNoCode()
     {
         await using var fixture = new GatewayFixture();

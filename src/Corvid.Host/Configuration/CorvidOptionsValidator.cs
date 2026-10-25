@@ -165,16 +165,8 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue) : IValidate
             // too refuses a tool whose risk metadata declares SideEffects.Memory (the turn loop never offers one to a guest);
             // here, the shape, and that an MCP tool names a configured server (its tools are listed only once it runs).
             foreach (var tool in adapter.GuestTools)
-            {
-                if (string.IsNullOrWhiteSpace(tool) || !tool.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-'))
-                    errors.Add($"{key}:GuestTools: '{tool}' is not a tool name (letters, digits, '_' and '-').");
-                // A job's run is a turn of its own with the whole toolset (no guest scope), and reports back to the chat: a
-                // guest's job would read for the guest what the guest's own turn may not.
-                else if (tool == "cron_create")
-                    errors.Add($"{key}:GuestTools: 'cron_create' cannot be a guest tool: a scheduled job runs with every tool and reports to the chat.");
-                else if (Composition.CorvidGateway.McpServerOf(tool) is { } server && !servers.Contains(server))
-                    errors.Add($"{key}:GuestTools: '{tool}' names MCP server '{server}', which is not configured under Corvid:Mcp:Servers.");
-            }
+                if (Composition.CorvidGateway.GuestToolShapeProblem(tool, servers) is { } problem)
+                    errors.Add($"{key}:GuestTools: {problem}");
             foreach (var (chat, settings) in adapter.Chats)
             {
                 foreach (var (slot, model) in settings?.Slots ?? [])

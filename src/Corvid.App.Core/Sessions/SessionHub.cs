@@ -314,9 +314,11 @@ public sealed class SessionHub : IDisposable
 
     /// <summary>
     /// The rail lists the sessions this window drives (pinned, then the rest by latest activity) and job runs; one another
-    /// process drives is on the Board as a read-only live view.
+    /// process drives is on the Board as a read-only live view, and stays in the rail while it is the session shown (G-12:
+    /// another process took it while it was open here, and the page follows it read-only rather than losing it).
     /// </summary>
-    private static bool InRail(SessionSummary summary) => !summary.ReadOnly || summary.Job is not null;
+    private bool InRail(SessionSummary summary) =>
+        !summary.ReadOnly || summary.Job is not null || summary.Id == _shell.CurrentSession?.Id;
 
     private void RebuildRail()
     {

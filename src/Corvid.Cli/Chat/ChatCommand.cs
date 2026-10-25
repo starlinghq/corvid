@@ -44,7 +44,18 @@ internal static class ChatCommand
 
         await using (runtime.ConfigureAwait(false))
         {
-            var session = runtime.OpenSession(arguments.Option("--session"), "cli");
+            CorvidSession session;
+            try
+            {
+                session = runtime.OpenSession(arguments.Option("--session"), "cli");
+            }
+            catch (SessionHeldException exception)
+            {
+                // G-12: one driver per session. Another terminal or the app has it; this one may not post into it.
+                console.MarkupLine($"[red]{Markup.Escape(exception.Message)}[/]");
+                console.MarkupLine("[grey]Resume it here once that process exits; meanwhile the windowed app can follow it read-only.[/]");
+                return ExitCodes.Failure;
+            }
             var renderer = new ChatRenderer(console, verbose: arguments.Flag("--verbose"));
             using var feed = runtime.Feed.Subscribe(session.Id, renderer);
             using var prompter = runtime.AttachPrompter(session.Id, new CliApprovalPrompter(renderer, context.Input));

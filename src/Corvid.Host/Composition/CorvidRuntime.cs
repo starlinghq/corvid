@@ -49,7 +49,7 @@ public sealed record MemoryServices(
 /// configuration. Surfaces open sessions on it and post messages; every session shares the process-wide services and has its
 /// own slots and turn runner.
 /// </summary>
-public sealed class CorvidRuntime : IAsyncDisposable
+public sealed partial class CorvidRuntime : IAsyncDisposable
 {
     private readonly ConcurrentDictionary<string, CorvidSession> _sessions = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<Delivery>> _waiting = new(StringComparer.Ordinal);
@@ -65,7 +65,7 @@ public sealed class CorvidRuntime : IAsyncDisposable
     private readonly Lock _maintenanceGate = new();
     private readonly CancellationTokenSource _lifetime = new();
     private Task _maintenance = Task.CompletedTask;
-    private FileStream? _schedulerLock;
+    private ProcessLock? _schedulerLock;
     private Task? _scheduler;
     private JobScheduler? _jobScheduler;
     // Starting the scheduler (C-041: again on a session open after losing the lock) and disposal's lock release, one at a time.
@@ -198,6 +198,24 @@ public sealed class CorvidRuntime : IAsyncDisposable
     // The state of a runtime that lost jobs.db.lock to another process; the only one a session open retries (C-041).
     private const string SchedulerElsewhere = "run by another corvid process";
 
+    /// <summary>The scheduler's lock beside the job store: whichever process holds it runs the jobs (U-8).</summary>
+    public string SchedulerLockPath => Builtin.Jobs.Path + ".lock";
+
+    /// <summary>
+    /// Who runs the scheduler and since when (G-14's status): this process since it took the lock, or the process whose
+    /// note is beside the lock; null when nobody does, or the holder left no note.
+    /// </summary>
+    public LockHolder? SchedulerHolder
+    {
+        get
+        {
+            lock (_schedulerGate)
+                if (_schedulerLock is { } held)
+                    return held.Holder;
+            return Options.Scheduler.Enabled && ProcessLock.Probe(SchedulerLockPath) is { State: LockState.HeldElsewhere } probe ? probe.Holder : null;
+        }
+    }
+
     /// <summary>
     /// Raised after each scheduled run is recorded; a surface can say so (delivery to chats is C-020's). The scheduler
     /// starts with the runtime, so a run can finish before a surface subscribes (C-039): a new handler is replayed the runs
@@ -278,9 +296,11 @@ public sealed class CorvidRuntime : IAsyncDisposable
     /// scheduler, or takes it over when the process that held it has exited (C-041, <c>WakeScheduler</c>).
     /// </summary>
     /// <param name="settings">How the session's turns run; applied when this process first opens the session.</param>
+    /// <exception cref="SessionHeldException">Another process drives the session (G-12); nothing was opened.</exception>
     public CorvidSession OpenSession(string? sessionId = null, string surface = "cli", SessionSettings? settings = null)
     {
         var id = sessionId ?? NewSessionId(surface);
+        TakeDriver(id);
         if (settings is not null)
             _settings.TryAdd(id, settings);
         Sessions.GetOrCreate(id);
@@ -388,6 +408,8 @@ public sealed class CorvidRuntime : IAsyncDisposable
         lock (_schedulerGate)
             _schedulerLock?.Dispose();
         await Sessions.DisposeAsync().ConfigureAwait(false);
+        // After the sessions, so no turn of theirs is still writing when another process may take one over (G-12).
+        ReleaseDrivers();
         // After the sessions, so no turn is still calling a server; this stops every server process.
         if (Mcp is not null)
             await Mcp.DisposeAsync().ConfigureAwait(false);
@@ -510,7 +532,7 @@ public sealed class CorvidRuntime : IAsyncDisposable
     /// gateway or ACP process takes the scheduler over once the chat that held it has exited, and its first pass runs what
     /// became due meanwhile (missed ticks collapse into one run, as in C-012). Nothing happens after disposal starts.
     /// </summary>
-    internal void WakeScheduler()
+    public void WakeScheduler()
     {
         if (!Options.Scheduler.Enabled)
             return;
@@ -542,17 +564,17 @@ public sealed class CorvidRuntime : IAsyncDisposable
     {
         try
         {
-            _schedulerLock = new FileStream(Builtin.Jobs.Path + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-        }
-        catch (IOException)
-        {
-            SchedulerState = SchedulerElsewhere;
-            return;
+            _schedulerLock = ProcessLock.TryAcquire(SchedulerLockPath, attempts: 3);
         }
         catch (UnauthorizedAccessException exception)
         {
             // An unwritable lock file should not stop the chat; the jobs simply wait for a process that can run them.
             SchedulerState = "off: " + exception.Message;
+            return;
+        }
+        if (_schedulerLock is null)
+        {
+            SchedulerState = SchedulerElsewhere;
             return;
         }
         var scripts = new SandboxedScriptRunner(Builtin.Shell, Approvals, Options.Approvals.Mode);
