@@ -111,25 +111,29 @@ public sealed class DeciderTests
     private sealed class BrokenModelException(string message) : Exception(message);
 
     [Fact]
-    public async Task TheDeciderIsSharedSoModelRefusesToSwitchItPerSessionAndStatusShowsBothTiers()
+    public async Task TheDeciderIsSwitchedPerSessionAndStatusShowsBothTiers()
     {
+        // A5: the decider became switchable per session (it was refused here, as shared by every session).
         await using var host = TestHost.Create(new FakeModels(), Kev("fake-kev-large"));
         await using var runtime = await host.StartAsync();
         var session = runtime.OpenSession();
+        var other = runtime.OpenSession();
         var commands = host.Services.GetRequiredService<SlashCommandRegistry>();
         ValueTask<CommandOutput> Run(string line) => commands.ExecuteAsync(line, new SlashCommandContext(runtime, session, commands), Ct);
-
-        var refused = await Run("/model decider fake-kev-large");
-        Assert.Equal(OutputTone.Error, refused.Tone);
-        Assert.Contains("corvid model switch decider", refused.Lines[0], StringComparison.Ordinal);
-        Assert.Equal(OutputTone.Error, (await Run("/model fake-kev-large")).Tone);
-        Assert.Equal("fake-kev@cpu", session.Slots.Current(ModelSlots.Decider).Profile.Id);
 
         var status = await Run("/status");
         Assert.Contains(status.Table!.Rows, row => row[0] == ModelSlots.Decider && row[1] == "fake-kev@cpu");
         Assert.Contains(status.Table.Rows, row => row[0] == ModelSlots.Decider && row[1] == "fake-kev-large@cpu (second tier)");
         Assert.Contains(status.Table.Rows, row => row[0] == ModelSlots.Decider && row[1] == "degraded (fallback)");
         Assert.Contains(status.Lines, line => line.StartsWith("decider: fake-kev", StringComparison.Ordinal));
+
+        var switched = await Run("/model decider fake-kev-large");
+        Assert.Equal(OutputTone.Success, switched.Tone);
+        Assert.Equal("fake-kev-large@cpu", session.Slots.Current(ModelSlots.Decider).Profile.Id);
+        Assert.Equal("fake-kev-large", runtime.Deciders.DeciderName(session.Slots));
+        Assert.Equal("fake-kev@cpu", other.Slots.Current(ModelSlots.Decider).Profile.Id);
+        Assert.Equal("fake-kev", runtime.Deciders.DeciderName(other.Slots));
+        Assert.Same(runtime.Fabric, runtime.Deciders.For(other.Slots));
     }
 
     [Fact]

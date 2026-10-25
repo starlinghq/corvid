@@ -87,7 +87,7 @@ public static class CoreCommands
         {
             ModelSlots.ContractOf(unpinned);
             context.Session.Slots.Unpin(unpinned);
-            return CommandOutput.Success($"{unpinned} is unpinned: it returns to its default when the turn ends.");
+            return CommandOutput.Success($"{unpinned} is unpinned: escalation moves off it again, and it returns to this session's choice when the turn ends.");
         }
 
         string slot, name;
@@ -120,10 +120,6 @@ public static class CoreCommands
             return CommandOutput.Error($"Usage: /model {ModelUsage}. /model alone lists the models to pick from.");
         }
 
-        // The fabric, approvals and memory share one decider across sessions, so a per-session switch would not reach them.
-        if (slot == ModelSlots.Decider)
-            return CommandOutput.Error($"The decider is shared by every session ({context.Runtime.DeciderState}). Change it with " +
-                $"`corvid model switch {ModelSlots.Decider} <model>` and restart.");
         if (slot == ModelSlots.TextEmbedder && !context.Runtime.IsConfigured(slot, name))
             return CommandOutput.Error($"Memory embeds only with the embedder.text models configured at start. Add {name} to " +
                 "Corvid:Models:Slots:embedder.text:Fallbacks, then restart.");
@@ -131,14 +127,17 @@ public static class CoreCommands
         if (!availability.IsReady)
             return CommandOutput.Error(availability.Detail + (availability.Acquire is { } acquire ? $" Run `{acquire}`." : ""));
 
-        var binding = context.Runtime.Bind(slot, name);
-        var result = await context.Session.Actor.SwitchModelAsync(slot, binding, pin, cancellationToken).ConfigureAwait(false);
+        // A5: the switch is this session's choice until changed (de-escalation returns to it); the decider too, per session.
+        // `corvid model switch` changes the default for new sessions.
+        var result = await context.Session.SetModelAsync(slot, name, pin ? SwitchScope.Pin : SwitchScope.Session, cancellationToken).ConfigureAwait(false);
         var carried = result.PendingApprovals.IsEmpty ? "" : $" {result.PendingApprovals.Length} pending approval(s) carry over.";
+        var target = result.To?.Id ?? name;
         return result.Status switch
         {
-            SwitchStatus.Switched => CommandOutput.Success($"{slot}: {result.From.Id} → {result.To!.Id}{(pin ? " (pinned)" : "")}.{carried}"),
-            SwitchStatus.Unchanged => CommandOutput.Text($"{slot} already uses {binding.Profile.Id}."),
-            SwitchStatus.Refused => CommandOutput.Error($"{slot}: the privacy gate refused {binding.Profile.Id}: {result.Detail}"),
+            SwitchStatus.Switched => CommandOutput.Success($"{slot}: {result.From.Id} → {target}{(pin ? " (pinned)" : "")} for this session.{carried}"),
+            SwitchStatus.Unchanged when result.SessionDefaultChanged => CommandOutput.Success($"{slot} already uses {target}; it is this session's choice now."),
+            SwitchStatus.Unchanged => CommandOutput.Text($"{slot} already uses {target}."),
+            SwitchStatus.Refused => CommandOutput.Error($"{slot}: the privacy gate refused {target}: {result.Detail}"),
             _ => CommandOutput.Error($"{slot}: nothing to switch to ({result.Detail})."),
         };
     }
@@ -186,8 +185,8 @@ public static class CoreCommands
                 : Names(configuration!.Default.Profile.Id, model) ? "default"
                 : configuration.Escalation.Any(item => Names(item.Profile.Id, model)) ? "escalation" : "";
             rows.Add([(i + 1).ToString(CultureInfo.InvariantCulture), model.Name, model.Profile.Privacy.ToString().ToLowerInvariant(), status, role]);
-            // The decider is shared by every session, so it is listed but never offered.
-            if (slot != ModelSlots.Decider && !isCurrent && !restart && availability.IsReady)
+            // A5: the decider is switchable per session too.
+            if (!isCurrent && !restart && availability.IsReady)
                 choices.Add(new CommandChoice(rows[^1][0], model.Name, slot == ModelSlots.Generator ? $"/model {i + 1}" : $"/model {slot} {i + 1}"));
         }
 
@@ -198,8 +197,9 @@ public static class CoreCommands
         var prefix = slot == ModelSlots.Generator ? "/model" : $"/model {slot}";
         string[] lines = models.Count == 0 ? [$"No model can serve {slot}."]
             : slot == ModelSlots.Decider ? [$"decider: {runtime.DeciderState}.",
-                $"The decider is shared by every session: change it with `corvid model switch {slot} <model>` and restart."]
-            : [$"Switch with {prefix} <number> or {prefix} <name>; add --pin to keep it past escalation."];
+                $"Switch this session's decider with {prefix} <number> or {prefix} <name>; `corvid model switch {slot} <model>` changes the default for new sessions."]
+            : [$"Switch this session with {prefix} <number> or {prefix} <name> (it lasts until you change it); add --pin to keep it past escalation. " +
+                $"`corvid model switch {slot} <model>` changes the default for new sessions."];
         return new CommandOutput
         {
             Title = $"{slot}: {(bound ? current!.Profile.Id : slot == ModelSlots.Decider ? "degraded tier" : "unbound")}",

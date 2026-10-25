@@ -77,7 +77,7 @@ public sealed partial class CorvidRuntime
         ModelSlots.ContractOf(slot);
         var descriptor = Catalogue.Find(model);
         if (!descriptor.Serves(slot))
-            throw new ArgumentException($"{TerminalText.Visible(descriptor.Name)} cannot serve as the {slot}; it serves {string.Join(", ", descriptor.Slots)}.",
+            throw new ArgumentException($"'{TerminalText.Visible(descriptor.Name)}' cannot serve {slot}; it serves {string.Join(", ", descriptor.Slots)}.",
                 nameof(model));
         if (slot == ModelSlots.TextEmbedder && !IsConfigured(slot, descriptor.Name))
             throw new InvalidOperationException($"Memory embeds only with the embedder.text models configured at start. Add " +
