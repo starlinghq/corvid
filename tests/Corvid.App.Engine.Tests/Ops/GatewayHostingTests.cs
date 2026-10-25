@@ -164,6 +164,14 @@ public sealed class GatewayHostingTests
         {
             var gateway = await fixture.Engine.GatewayAsync();
             Assert.Equal(GatewayHosting.Here, gateway!.Status.Hosting);
+            // The adapter connects on the gateway's own loop: closing before it was even created would dispose it later,
+            // when its abandoned connect finishes, so the test waits until it is connected.
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+            while (Volatile.Read(ref adapter.Connects) == 0)
+            {
+                Assert.True(DateTime.UtcNow < deadline, "Timed out waiting for the adapter to connect");
+                await Task.Delay(10, Token);
+            }
             await fixture.Engine.DisposeAsync();
 
             Assert.True(adapter.Disposed);
