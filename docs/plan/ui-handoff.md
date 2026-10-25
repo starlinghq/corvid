@@ -446,8 +446,8 @@ Left:
 - From §1.5: a steer's position in the report relative to the call that finished; the Board's Take over; the lock files
   under `drivers/`; a job's message read as the user's on replay; a gateway adapter needs Vault for its token.
 - Delegation: the calls a turn issues in the same round are authorized and run one after another (approved
-  `delegate_task` calls do not run together across calls, only the tasks of one call); a finished child's tail timer keeps ticking until its channel goes; `Children(parentId)` is
-  read again on each list; `--demo` has no children.
+  `delegate_task` calls do not run together across calls, only the tasks of one call); a finished child's tail timer keeps ticking until its channel goes; `--demo` has no children.
+  (`Children(parentId)` now reads only what the parent's log added since its last list; A5 review.)
 - Switching: the live step's model is inferred until `ITurnListener.StepStarted` carries the generator (replay is exact).
 - A person's message clears taint for its turn (plan §10.3), so a child spawned in a tainted fork after the person writes
   is not tainted unless the turn reads outside content again. This is the intended model; it is noted because a fork's
