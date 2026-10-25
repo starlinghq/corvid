@@ -312,6 +312,9 @@ internal sealed class FakeModels
         // The fake scripts would be consumed by tools and jobs they do not expect; tests that want them turn them on.
         ["Corvid:Tools:Builtin"] = "false",
         ["Corvid:Scheduler:Enabled"] = "false",
+        // G-6: titles and recaps would take the generator's script too; tests of them turn them on.
+        ["Corvid:Sessions:Titles"] = "false",
+        ["Corvid:Sessions:RecapAfterMinutes"] = "0",
     };
 
     /// <summary>Replaces the model providers (Starling by default) with these fakes and registers the note tools.</summary>

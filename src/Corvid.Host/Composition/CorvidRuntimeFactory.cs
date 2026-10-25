@@ -5,6 +5,8 @@ using Corvid.Approvals;
 using Corvid.Fabric;
 using Corvid.Host.Configuration;
 using Corvid.Host.Models;
+using Corvid.Host.Sessions;
+using Corvid.Host.State;
 using Corvid.Host.Telemetry;
 using Corvid.Kernel.Checkpoints;
 using Corvid.Kernel.Events;
@@ -67,7 +69,8 @@ public sealed class CorvidRuntimeFactory(
     IEnumerable<ToolFunction> tools,
     CorvidConfigFile? configFile = null,
     IMcpTransports? mcpTransports = null,
-    WebFetchTransport? webTransport = null)
+    WebFetchTransport? webTransport = null,
+    UiStateStore? uiState = null)
 {
     /// <summary>
     /// Configured models that stop the runtime from starting, checked offline (by size for Starling's): every missing or
@@ -219,8 +222,22 @@ public sealed class CorvidRuntimeFactory(
                     environment.Workspace, CorvidPaths.ExpandHome(settings.Checkpoints.GitPath), CorvidPaths.Home).GetAwaiter().GetResult());
             composer.Progress = null;
 
+            // G-6: titles and recaps on the default generator at background priority, only when it runs on this machine.
+            var (titler, untitled) = SessionTitler.Local(composer.CreateBackgroundSlots().Get(ModelSlots.Generator).Default);
+            var titles = new SessionTitler(log, titler, new SessionTitlerOptions
+            {
+                Generate = settings.Sessions.Titles,
+                RecapAfter = TimeSpan.FromMinutes(settings.Sessions.RecapAfterMinutes),
+            }, untitled);
+
             return new CorvidRuntime(settings, catalogue, composer, devices, metrics, feed, log, registry, fabric, approvals, prompters,
-                toolRegistry, memory, counter, builtin, checkpoints, skills, mcp) { UnavailableModels = [.. unavailable], Project = project };
+                toolRegistry, memory, counter, builtin, checkpoints, skills, mcp)
+            {
+                UnavailableModels = [.. unavailable],
+                Project = project,
+                Titles = titles,
+                UiState = uiState ?? new UiStateStore(UiStateStore.PathFor(settings)),
+            };
         }
         catch
         {

@@ -394,17 +394,14 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
 
     private static (SessionInfo Info, DateTimeOffset Updated)? Describe(CorvidRuntime runtime, string id, string workspace)
     {
-        var head = runtime.Log.GetHead(id);
-        if (head == 0)
+        // G-6: the title every list shows (a rename, the generated title, else the first message), from the host.
+        if (SessionCatalogue.Describe(runtime.Log, id) is not { } session)
             return null;
-        var last = runtime.Log.Read(id, head - 1, head, 1);
-        var title = runtime.Log.Read(id, 0, head, 32).Select(item => item.Payload).OfType<UserMessage>().FirstOrDefault()?.Text;
-        var updated = last.Count > 0 ? last[0].RecordedAt : DateTimeOffset.MinValue;
         return (new SessionInfo(id, workspace)
         {
-            Title = title is null ? null : (title.ReplaceLineEndings(" ") is var line && line.Length > 80 ? line[..79] + "…" : line),
-            UpdatedAt = updated.ToString("O", CultureInfo.InvariantCulture),
-        }, updated);
+            Title = session.Title,
+            UpdatedAt = session.LastActivity.ToString("O", CultureInfo.InvariantCulture),
+        }, session.LastActivity);
     }
 
     /// <summary>

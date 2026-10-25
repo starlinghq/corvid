@@ -55,6 +55,22 @@ public sealed class CorvidOptions
 
     /// <summary>Detection rules over the session event log (C-023), inline at pre_execute and by <c>corvid scan</c>.</summary>
     public DetectionSettings Detections { get; set; } = new();
+
+    /// <summary>Session titles and recaps (G-6).</summary>
+    public SessionsSettings Sessions { get; set; } = new();
+}
+
+/// <summary>Session titles and recaps (G-6, extending K-9), written by the local generator only.</summary>
+public sealed class SessionsSettings
+{
+    /// <summary>Title a session with the local generator after its first exchange. Renames work either way.</summary>
+    public bool Titles { get; set; } = true;
+
+    /// <summary>
+    /// Minutes a person must have been away from a session before resuming it shows a recap of what happened (the CLI's
+    /// <c>--session</c>, the app opening it); 0 turns recaps on return off. <c>/recap</c> works either way.
+    /// </summary>
+    public int RecapAfterMinutes { get; set; } = 60;
 }
 
 public sealed class DetectionSettings

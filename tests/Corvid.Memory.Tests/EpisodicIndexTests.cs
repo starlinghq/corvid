@@ -42,6 +42,23 @@ public sealed class EpisodicIndexTests
     }
 
     [Fact]
+    public void A_local_only_shell_line_is_never_indexed()
+    {
+        // A4: the composer's `!!` line keeps its output from the model; recall would hand it back later.
+        using var store = new TempStore();
+        Append(store,
+            new UserMessage("!!cat diary.txt", LocalOnly: true),
+            new ToolCallIssued("user-shell", "shell", Json("""{"command":"cat diary.txt"}"""), LocalOnly: true),
+            new ToolResult("user-shell", Json("""{"stdout":"dear diary"}"""), LocalOnly: true),
+            new UserMessage("what time is it"));
+
+        var added = store.Episodes.CatchUp(store.Log, Session, Ct);
+
+        Assert.Equal("what time is it", Assert.Single(added).Text);
+        Assert.Empty(store.Episodes.Search("diary", 5));
+    }
+
+    [Fact]
     public void Search_ranks_by_bm25_and_can_be_limited_to_a_session()
     {
         using var store = new TempStore();
