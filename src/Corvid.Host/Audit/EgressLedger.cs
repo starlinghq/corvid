@@ -316,7 +316,7 @@ public sealed class EgressLedger
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = Path,
-            Mode = create ? SqliteOpenMode.ReadWrite : SqliteOpenMode.ReadOnly,
+            Mode = SqliteOpenMode.ReadWrite,
             // Not pooled: a connection per operation, so a test's or another process's file is let go of at once.
             Pooling = false,
             DefaultTimeout = 5,
@@ -378,11 +378,11 @@ public sealed class EgressLedger
             if (version == 0)
             {
                 command.CommandText = """
-                    CREATE TABLE messages (
+                    CREATE TABLE IF NOT EXISTS messages (
                         digest TEXT PRIMARY KEY,
                         body TEXT NOT NULL
                     );
-                    CREATE TABLE requests (
+                    CREATE TABLE IF NOT EXISTS requests (
                         number INTEGER PRIMARY KEY AUTOINCREMENT,
                         request_id TEXT NOT NULL UNIQUE,
                         session_id TEXT,
@@ -400,8 +400,8 @@ public sealed class EgressLedger
                         messages TEXT,
                         tools TEXT
                     );
-                    CREATE INDEX requests_session ON requests (session_id, number);
-                    CREATE INDEX requests_time ON requests (recorded_at);
+                    CREATE INDEX IF NOT EXISTS requests_session ON requests (session_id, number);
+                    CREATE INDEX IF NOT EXISTS requests_time ON requests (recorded_at);
                     PRAGMA user_version=1;
                     """;
                 command.ExecuteNonQuery();
