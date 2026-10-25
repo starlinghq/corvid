@@ -454,6 +454,36 @@ Left:
   is not tainted unless the turn reads outside content again. This is the intended model; it is noted because a fork's
   inherited taint lasts only until then.
 
+The end-to-end pass walked the A5 flows in the app and in `corvid chat` (three scripted servers: a local server, one gated
+as a cloud model with `Egress: { Action: Redact, Tainted: Refuse }`, and an escalation step; Kev-0.8B and Kev-4B as deciders).
+A real cloud model needs https and a Vault key, so "cloud-class" here is a gated local server. It fixed:
+
+- A child's fixed system prompt was redacted for a gated child model ("You are a `<PERSON_1>` working on one goal"): it is
+  now one of the egress gate's trusted texts. The output schema after it is still read.
+- `Alt+P` filtered dropped the "This session" and "Default for new sessions" headers, so a model listed in both did not say
+  which choice a row made.
+- A this-session switch to a model not loaded yet (Kev-4B, seconds on the CPU) gave no sign until it was made; a message
+  sent meanwhile ran on the old decider. Models' picker now says it is loading and which model the session stays on.
+- The turn strip said "generating" while the turn waited on an in-turn question.
+- Choosing with Enter in the palette (Fork…) typed a line break into the composer the focus went back to.
+- Coming back from a fork, the header's title stayed cut to a word: a pill that collapses raises no `SizeChanged`.
+
+Found and left:
+
+- Pin semantics differ between layers. `SessionModelSlots` (and its test) lets escalation move a pinned slot and keeps it
+  there after the turn; `/model`'s help ("--pin to keep it past escalation"), `/model unpin` ("escalation moves off it
+  again") and `IModelService.SetPinnedAsync` ("escalation leaves it alone") say a pin is not escalated off. Seen in
+  `corvid chat`: pinned on fake, two failed repairs escalated to fakebig, and the next turn stayed on fakebig.
+- After "default for new sessions", the degraded decider tier (`/status`) and the session titler still use the default
+  the runtime started with.
+- The egress gate redacts some non-PII: "hello two" sent as "hello `<PERSON_1>`", and a tool's own schema default (`200`) in
+  an invalid-arguments result as an account number.
+- A fork's copied turns read "0 s".
+- The spawn card offers Allow once when every child would be refused; the refusal shows on the card and the call fails.
+- `corvid chat` without `corvid-sandbox` beside it refuses sandboxed tools (correctly); the message names
+  `SandboxOptions.LauncherPath` rather than `Corvid:Sandbox:LauncherPath`. With that key set to the app's launcher, the
+  shell runs and the launcher is visible and read-only inside its sandbox.
+
 ### What the running app shows today
 
 
