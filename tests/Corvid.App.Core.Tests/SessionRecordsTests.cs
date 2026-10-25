@@ -52,8 +52,13 @@ public sealed class SessionRecordsTests
             inner.OpenAsync(sessionId, onUpdate, cancellationToken);
 
         public Task<IReadOnlyList<SessionSummary>> ListAsync(CancellationToken cancellationToken = default) => inner.ListAsync(cancellationToken);
-        public Task SendAsync(string sessionId, string text, CancellationToken cancellationToken = default) => inner.SendAsync(sessionId, text, cancellationToken);
-        public Task<QueuedMessage> QueueAsync(string sessionId, string text, CancellationToken cancellationToken = default) => inner.QueueAsync(sessionId, text, cancellationToken);
+        /// <summary>When set, sending or queueing is refused with this reason, as the engine refuses a <c>#</c> line with no extractor.</summary>
+        public string? Refuse { get; set; }
+
+        public Task SendAsync(string sessionId, string text, CancellationToken cancellationToken = default) =>
+            Refuse is { } reason ? Task.FromException(new InvalidOperationException(reason)) : inner.SendAsync(sessionId, text, cancellationToken);
+        public Task<QueuedMessage> QueueAsync(string sessionId, string text, CancellationToken cancellationToken = default) =>
+            Refuse is { } reason ? Task.FromException<QueuedMessage>(new InvalidOperationException(reason)) : inner.QueueAsync(sessionId, text, cancellationToken);
         public Task RemoveQueuedAsync(string sessionId, string queuedId, CancellationToken cancellationToken = default) => inner.RemoveQueuedAsync(sessionId, queuedId, cancellationToken);
         public Task MoveQueuedAsync(string sessionId, string queuedId, int index, CancellationToken cancellationToken = default) => inner.MoveQueuedAsync(sessionId, queuedId, index, cancellationToken);
         public Task<string?> TakeBackQueuedAsync(string sessionId, string queuedId, CancellationToken cancellationToken = default) => inner.TakeBackQueuedAsync(sessionId, queuedId, cancellationToken);
@@ -100,6 +105,27 @@ public sealed class SessionRecordsTests
         time.Advance(SessionViewModel.DraftSaveDelay);
 
         Assert.Equal(new SessionDraft("half a thought, and more", "put aside"), Assert.Single(service.Saves));
+    }
+
+    [Fact]
+    public async Task A_refused_message_keeps_its_reason_on_screen_after_its_restored_draft_is_written()
+    {
+        var (service, time, demo) = Start();
+        using var _ = demo;
+        using var view = new SessionViewModel(DemoSessionService.VaultSessionId, service, new InlineDispatcher(), time);
+        await view.OpenAsync(Ct);
+        service.Refuse = "Memory writes need the extractor slot; bind one to stage and review writes.";
+
+        view.Draft = "# the build uses dotnet 10";
+        view.SubmitCommand.Execute(null);
+
+        // The line comes back to the composer with the reason it was refused.
+        Assert.Equal("# the build uses dotnet 10", view.Draft);
+        Assert.Equal(service.Refuse, view.Error);
+        // Keeping the restored draft is not a new request: the reason stays until the person sends again.
+        time.Advance(SessionViewModel.DraftSaveDelay);
+        Assert.Equal("# the build uses dotnet 10", service.Saves[^1].Text);
+        Assert.Equal(service.Refuse, view.Error);
     }
 
     [Fact]

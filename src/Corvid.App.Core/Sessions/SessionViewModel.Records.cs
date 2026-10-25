@@ -109,7 +109,8 @@ public sealed partial class SessionViewModel
             _service.SaveDraftAsync(SessionId, draft).ContinueWith(task => _ = task.Exception, TaskScheduler.Default);
             return;
         }
-        Run(() => _service.SaveDraftAsync(SessionId, draft));
+        // Not the person's request: a refusal the restored draft came back with stays on screen.
+        Run(() => _service.SaveDraftAsync(SessionId, draft), clearError: false);
     }
 
     private void DisposeRecords()

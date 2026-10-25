@@ -464,11 +464,13 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
     });
 
     /// <summary>Runs a request; a refusal shows in <see cref="Error"/> rather than escaping into the UI loop.</summary>
-    private async void Run(Func<Task> request, Action? failed = null)
+    /// <param name="clearError">False for a request the person did not make (keeping the draft): the last refusal stays shown.</param>
+    private async void Run(Func<Task> request, Action? failed = null, bool clearError = true)
     {
         try
         {
-            Error = "";
+            if (clearError)
+                Error = "";
             await request().ConfigureAwait(true);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
