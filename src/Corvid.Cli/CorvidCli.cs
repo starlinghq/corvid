@@ -1,6 +1,7 @@
 using System.Reflection;
 using Corvid.Cli.Chat;
 using Corvid.Host;
+using Corvid.Host.Composition;
 using Corvid.Host.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -123,6 +124,8 @@ public static class CorvidCli
             return ExitCodes.Success;
         }
 
+        // How this process names itself to another that finds a lock it holds (a session's driver, the scheduler; G-12, U-8).
+        ProcessLock.ProcessName = "corvid " + parsed.Command;
         var builder = CorvidHost.CreateBuilder(parsed.Overrides, parsed.ConfigFile);
         // Only `corvid gateway [run]` starts the gateway; its other verbs work on the stores alone.
         if (GatewayCommand.Runs(parsed))

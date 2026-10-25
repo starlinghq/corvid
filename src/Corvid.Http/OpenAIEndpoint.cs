@@ -176,7 +176,18 @@ internal sealed class ChatHandler(CorvidRuntime runtime, ServeSettings settings)
             return;
         }
 
-        var (session, text) = Open(context, conversation);
+        CorvidSession? session;
+        string text;
+        try
+        {
+            (session, text) = Open(context, conversation);
+        }
+        catch (SessionHeldException exception)
+        {
+            // G-12: another process drives that conversation's session.
+            await OpenAIEndpoint.WriteError(context, 409, exception.Message, "invalid_request_error", "session_busy").ConfigureAwait(false);
+            return;
+        }
         if (session is null)
         {
             await OpenAIEndpoint.WriteError(context, 404, $"There is no served session '{context.Request.Headers[OpenAIEndpoint.SessionHeader]}'.",

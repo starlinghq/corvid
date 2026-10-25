@@ -201,6 +201,27 @@ public sealed class ChatTests
     }
 
     [Fact]
+    public async Task ASessionAnotherProcessDrivesIsNotResumedHere()
+    {
+        using var run = new CliRun();
+        await run.RunAsync(["chat"], "first message", "/exit");
+        var id = System.Text.RegularExpressions.Regex.Match(run.Output, "session (cli-[0-9a-f-]+)").Groups[1].Value;
+        Assert.NotEmpty(id);
+        // G-12: another process (the app, another terminal) holds the session's driver lock.
+        using (var held = Corvid.Host.Composition.ProcessLock.TryAcquire(Path.Combine(run.Root, "data", "drivers", id + ".lock")))
+        {
+            Assert.NotNull(held);
+            Assert.Equal(ExitCodes.Failure, await run.RunAsync(["--session", id], "never sent", "/exit"));
+            Assert.Contains($"Session {id} is driven by", run.Output, StringComparison.Ordinal);
+            Assert.Contains($"(pid {Environment.ProcessId})", run.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("Resumed:", run.Output, StringComparison.Ordinal);
+        }
+        // Once it lets go, the terminal resumes it.
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["--session", id], "/exit"));
+        Assert.Contains("Resumed: 2 entries", run.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task UnknownCommandsAreReportedAndTheChatGoesOn()
     {
         using var run = new CliRun();

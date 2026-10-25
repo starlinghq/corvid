@@ -1,0 +1,159 @@
+using Corvid.Host.Composition;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace Corvid.Host.Tests;
+
+/// <summary>
+/// The one-process rule as a file (U-8, G-12): the lock with its holder's note, each session's driver lock, and the
+/// scheduler's holder. Two runtimes over one data directory stand in for two processes: <c>flock</c> on two open files
+/// conflicts within a process as across processes.
+/// </summary>
+public sealed class DriverLockTests
+{
+    private static CancellationToken Token => TestContext.Current.CancellationToken;
+
+    private static string TempLock() => Path.Combine(Path.GetTempPath(), "corvid-lock-" + Guid.NewGuid().ToString("N"), "a.lock");
+
+    [Fact]
+    public void ALockIsHeldByOneHolderAndItsNoteSaysWho()
+    {
+        var path = TempLock();
+        try
+        {
+            using (var held = ProcessLock.TryAcquire(path))
+            {
+                Assert.NotNull(held);
+                Assert.Equal((ProcessLock.ProcessName, Environment.ProcessId), (held.Holder.Process, held.Holder.ProcessId));
+                Assert.Null(ProcessLock.TryAcquire(path));
+                var probe = ProcessLock.Probe(path);
+                Assert.Equal(LockState.HeldElsewhere, probe.State);
+                Assert.Equal(held.Holder, probe.Holder);
+            }
+            // Released: the note goes, the lock file stays (deleting it would let two processes hold two files).
+            Assert.Equal(LockState.Free, ProcessLock.Probe(path).State);
+            Assert.False(File.Exists(ProcessLock.NotePath(path)));
+            Assert.True(File.Exists(path));
+            using var again = ProcessLock.TryAcquire(path);
+            Assert.NotNull(again);
+        }
+        finally
+        {
+            Directory.Delete(Path.GetDirectoryName(path)!, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ANoteACrashedHolderLeftOverAFreeLockIsStale()
+    {
+        var path = TempLock();
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, "");
+            File.WriteAllText(ProcessLock.NotePath(path), """{"process":"corvid chat","pid":1,"since":"2026-10-24T09:00:00+00:00"}""");
+
+            Assert.Equal(LockProbe.Free, ProcessLock.Probe(path));
+            using var taken = ProcessLock.TryAcquire(path);
+            Assert.NotNull(taken);
+            // The note is this holder's now.
+            Assert.Equal(taken.Holder, ProcessLock.ReadNote(path));
+        }
+        finally
+        {
+            Directory.Delete(Path.GetDirectoryName(path)!, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ASessionHasOneDriverAndAnotherProcessIsToldWhoDrivesIt()
+    {
+        await using var host = TestHost.Create();
+        var first = await host.StartAsync();
+        var factory = host.Services.GetRequiredService<CorvidRuntimeFactory>();
+        await using var second = await factory.StartAsync(Token);
+        try
+        {
+            var session = first.OpenSession("cli-shared");
+
+            Assert.Equal(LockState.HeldHere, first.Driver(session.Id).State);
+            var seen = second.Driver(session.Id);
+            Assert.Equal(LockState.HeldElsewhere, seen.State);
+            Assert.Equal(Environment.ProcessId, seen.Holder!.ProcessId);
+            var refused = Assert.Throws<SessionHeldException>(() => second.OpenSession(session.Id));
+            Assert.Equal(session.Id, refused.SessionId);
+            Assert.Equal(seen.Holder, refused.Holder);
+            Assert.Contains("is driven by", refused.Message, StringComparison.Ordinal);
+            Assert.False(second.TryGetSession(session.Id, out _));
+            // Another session is not held by it, and a session nobody opened is free.
+            Assert.Equal(LockState.Free, second.Driver("cli-other").State);
+            second.OpenSession("cli-other");
+            Assert.Throws<SessionHeldException>(() => first.OpenSession("cli-other"));
+        }
+        finally
+        {
+            // The driver exits: its locks go with it.
+            await first.DisposeAsync();
+        }
+
+        Assert.Equal(LockState.Free, second.Driver("cli-shared").State);
+        var taken = second.OpenSession("cli-shared");
+        Assert.Equal(LockState.HeldHere, second.Driver(taken.Id).State);
+    }
+
+    [Fact]
+    public async Task ReadingASessionAnotherProcessDrivesNeedsNoLock()
+    {
+        await using var host = TestHost.Create(new FakeModels(new FakeGenerator(Reply.Say("Hello."))));
+        await using var first = await host.StartAsync();
+        var factory = host.Services.GetRequiredService<CorvidRuntimeFactory>();
+        await using var second = await factory.StartAsync(Token);
+        var session = first.OpenSession("cli-read");
+        await session.SendAsync("hi", Token);
+
+        // The second process reads it as it stands, without opening it.
+        Assert.Contains(second.Log.Read("cli-read", cancellationToken: Token), item => item.Payload is Abstractions.Events.AssistantMessage);
+        Assert.Equal(LockState.HeldElsewhere, second.Driver("cli-read").State);
+    }
+
+    [Theory]
+    [InlineData("cli-20261024-101500-abc123", "cli-20261024-101500-abc123")]
+    [InlineData("app-x.y_z", "app-x.y_z")]
+    public void APlainSessionIdIsItsOwnFileName(string id, string expected) => Assert.Equal(expected, CorvidRuntime.DriverFileName(id));
+
+    [Fact]
+    public void AnIdWithOtherCharactersGetsAFileNameOfItsOwn()
+    {
+        var gateway = CorvidRuntime.DriverFileName("gateway:telegram:42");
+        Assert.StartsWith("gateway_telegram_42~", gateway, StringComparison.Ordinal);
+        Assert.NotEqual(gateway, CorvidRuntime.DriverFileName("gateway_telegram_42"));
+        Assert.NotEqual(gateway, CorvidRuntime.DriverFileName("gateway:telegram/42"));
+        Assert.DoesNotContain('/', CorvidRuntime.DriverFileName("../../etc/passwd"));
+        Assert.NotEqual("..", CorvidRuntime.DriverFileName(".."));
+    }
+
+    [Fact]
+    public async Task TheSchedulersHolderAndSinceAreKnownHereAndElsewhere()
+    {
+        await using var host = TestHost.Create(settings: new Dictionary<string, string?> { ["Corvid:Scheduler:Enabled"] = "true" });
+        var before = DateTimeOffset.UtcNow;
+        await using var first = await host.StartAsync();
+        var factory = host.Services.GetRequiredService<CorvidRuntimeFactory>();
+        await using var second = await factory.StartAsync(Token);
+
+        Assert.Equal("running in this process", first.SchedulerState);
+        var here = first.SchedulerHolder;
+        Assert.NotNull(here);
+        Assert.InRange(here.Since, before.AddSeconds(-1), DateTimeOffset.UtcNow.AddSeconds(1));
+        Assert.Equal("run by another corvid process", second.SchedulerState);
+        Assert.Equal(here, second.SchedulerHolder);
+    }
+
+    [Fact]
+    public async Task NobodyHoldsTheSchedulerWhenItIsOff()
+    {
+        await using var host = TestHost.Create();
+        await using var runtime = await host.StartAsync();
+
+        Assert.Null(runtime.SchedulerHolder);
+    }
+}
