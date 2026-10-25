@@ -20,7 +20,7 @@ pull request starlinghq/corvid#71.
 | A2 the pages without mockups (Skills, Jobs, MCP, Gateway, Safety, Secrets, Settings), the palette, the rest of the keys, the phone screens, an accessibility pass | done, verified on the running app in three rounds, PR review fixed (§1.3) | PR #76, branch `a2/screens` |
 | A3 `Corvid.App.Engine`: the real runtime behind the services | done behind `--engine`, verified end to end in three rounds, PR review fixed (§1.4) | PR #77 |
 | A4 the gaps A3 left: the running turn, records, egress, hosting, parity; the engine becomes the default | done, verified end to end in three rounds (§1.5) | branch `a4/engine` |
-| A5 model switching at any time, subagents with a model mix, G-15 forks mid-turn, the A4 leftovers | merged and tested, the app run on the engine and the demo (§1.6) | branch `a5/int` |
+| A5 model switching at any time, subagents with a model mix, G-15 forks mid-turn, the A4 leftovers | done, verified end to end in two rounds (§1.6) | branch `a5/engine` |
 
 The build ran as a workflow in a cloud container: one agent per step, each building, launching the app on a virtual
 display, screenshotting it and comparing it with the mockup renders, then an independent verifier. It was stopped during
@@ -504,6 +504,11 @@ The A5 verifier's fix round then fixed:
   the request, so `{"jsmith": …}` went unredacted. A key is structure only when it is made of Corvid's fixed structure
   words (`PrivacyEgress.StructureWords`: "status", "exit_code", "toolCallId"); any other key is scanned and rewritten as a
   value, and only those words and the trusted prompts' own words make a lowercase span structure.
+
+Verification: the end-to-end pass and the first verify round ran side by side (the workflow was revised mid-run to
+build incrementally and to stop after two verify rounds, since A3 and A4 spent most of their hours in serial
+verify-and-fix loops). Round 1 found seven defects, all fixed; round 2 passed. Still open from it: `/model`'s help and
+its unpin reply say a pin holds a model against escalation, while a pin only stops de-escalation (plan §6, C-006).
 
 ### What the running app shows today
 
