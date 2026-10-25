@@ -8,10 +8,10 @@ public sealed partial class AppComposition
     private SecretsViewModel? _secrets;
 
     /// <summary>
-    /// What Vault will say about its secrets, and the features configured to use them. Demo mode (the only mode until
-    /// Corvid.App.Engine exists) starts nothing and writes nothing.
+    /// What Vault will say about its secrets, and the features configured to use them. Demo mode (the engine's comes from
+    /// <see cref="Services"/> instead) starts nothing and writes nothing.
     /// </summary>
-    public ISecretsService SecretsService => _secretsService ??= new DemoSecretsService(Time);
+    public ISecretsService SecretsService => _secretsService ??= Services.CreateSecretsService(this);
 
     /// <summary>The Secrets area: names, policy and what waits on which name. Never a value.</summary>
     public SecretsViewModel Secrets => _secrets ??= new SecretsViewModel(SecretsService, Time);

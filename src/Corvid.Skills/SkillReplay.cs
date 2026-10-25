@@ -15,11 +15,28 @@ namespace Corvid.Skills;
 /// <summary>What a replay or eval turn did, against what was expected.</summary>
 /// <param name="Expected">The tool names expected, in order.</param>
 /// <param name="Actual">The tool names the turn called, in order.</param>
-public sealed record ReplayOutcome(bool Passed, ImmutableArray<string> Expected, ImmutableArray<string> Actual, string Status, string Detail)
+public sealed partial record ReplayOutcome(bool Passed, ImmutableArray<string> Expected, ImmutableArray<string> Actual, string Status, string Detail)
 {
     public string Describe() =>
         $"{(Passed ? "passed" : "failed")}: expected [{string.Join(", ", Expected)}], got [{string.Join(", ", Actual)}], turn {Status}" +
         (Detail.Length > 0 ? $"; {Detail}" : "");
+
+    /// <summary>
+    /// Reads back what <see cref="Describe"/> wrote (a staged draft and an eval record keep only that line), or null when the
+    /// text is not in its form. Tool names are identifiers, so the lists split on their commas.
+    /// </summary>
+    public static ReplayOutcome? Parse(string? described)
+    {
+        if (described is null || DescribedPattern().Match(described) is not { Success: true } match)
+            return null;
+        static ImmutableArray<string> Names(string list) => [.. list.Split(", ", StringSplitOptions.RemoveEmptyEntries)];
+        return new ReplayOutcome(match.Groups["verdict"].Value == "passed", Names(match.Groups["expected"].Value), Names(match.Groups["actual"].Value),
+            match.Groups["status"].Value, match.Groups["detail"].Value);
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"\A(?<verdict>passed|failed): expected \[(?<expected>[^\]]*)\], got \[(?<actual>[^\]]*)\], turn (?<status>[^;\s]+)(?:; (?<detail>.*))?\z",
+        System.Text.RegularExpressions.RegexOptions.Singleline)]
+    private static partial System.Text.RegularExpressions.Regex DescribedPattern();
 }
 
 /// <summary>What a replay or eval turn runs on: the models, a fabric over its own log, the live tools' descriptors.</summary>

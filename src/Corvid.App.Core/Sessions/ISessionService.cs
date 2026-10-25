@@ -131,6 +131,12 @@ public interface ISessionService
     /// <summary>Every session, newest activity first, with its summary and live state.</summary>
     Task<IReadOnlyList<SessionSummary>> ListAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Whether the composer's <c>!</c> shell line and <c>#</c> memory line exist (docs/plan/tui.md §4.1): the placeholder
+    /// names them only when they do. The demo's do; a service without them refuses such a line rather than sending it.
+    /// </summary>
+    bool HasComposerModes => true;
+
     /// <summary>A session's summary changed, or a session appeared (a fork, a job run). Raised on the UI thread.</summary>
     event EventHandler<SessionSummary>? SessionChanged;
 
@@ -188,4 +194,19 @@ public interface ISessionService
 
     /// <summary>Renames the session (G-6).</summary>
     Task RenameAsync(string sessionId, string title, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Whether <see cref="CreateAsync"/> starts sessions here: the engine does, the demo's scripted scenario does not (its
+    /// Board and Ctrl+N say what a new session comes with instead). Added for the A3 end-to-end pass, as a default member
+    /// so every other implementation keeps refusing.
+    /// </summary>
+    bool CanCreate => false;
+
+    /// <summary>
+    /// Starts a new, empty session in the window's workspace and returns its id; the rail lists it as a new session until
+    /// its first message gives it a title.
+    /// </summary>
+    Task<string> CreateAsync(CancellationToken cancellationToken = default) =>
+        Task.FromException<string>(new Composition.ServiceUnavailableException(
+            "New sessions come with the engine, which opens one in the window's workspace."));
 }

@@ -31,13 +31,16 @@ dotnet workload install wasm-tools
 dotnet build src/Corvid.App/Corvid.App.csproj -c Release -f net10.0-browserwasm -p:CorvidAppWasm=true
 ```
 
-It restores and passes the boundary checker here, but has not been built or run, for want of the workload.
+It builds with the workload (A3: `SelectableButtonAutomationPeer` skips the selection property event, which Uno 6.7 does not
+implement in the browser head) but has not been run in a browser yet; it runs on the demo services only, since the engine
+is desktop-only until attached mode (G-1).
 
 ## Command line
 
 | Option | Effect |
 | --- | --- |
-| `--demo` | Demo services and the scripted scenario, with the clock frozen at 2026-10-24 14:05 local so every relative time and screenshot is stable. The default (and the only mode) until `Corvid.App.Engine` exists. |
+| `--demo` | Demo services and the scripted scenario, with the clock frozen at 2026-10-24 14:05 local so every relative time and screenshot is stable. The default. |
+| `--engine` | Corvid's engine in-process (`Corvid.App.Engine`, desktop head only), over the same `corvid.json`, models and event log as the CLI; `CORVID_CONFIG` and `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR` move them (a test home sets them all, and `Corvid:Models:Cache`, to temporary directories). The host starts and the model cache is checked before the window opens; the models load in the background. With models missing it opens First run. Every area runs on the engine; a member the engine cannot honour yet refuses with the work item that brings it ("comes with G-3: …", shown as a red notice or a disabled action). Not with `--demo`. |
 | `--theme light\|dark\|system` | The theme to start in; `system` by default. Settings switches it at run time. |
 | `--page <area>` | The area to open: `sessions`, `board`, `review`, `rewind`, `memory`, `skills`, `jobs`, `models`, `safety`, `mcp`, `gateway`, `secrets`, `audit`, `settings`, `first-run` (any case; `=` works too: `--page=models`). |
 | `--session <id>` | The session to select and open, such as `cli-9f2e`; with `--page`, it is selected and the page shows. |
@@ -45,6 +48,20 @@ It restores and passes the boundary checker here, but has not been built or run,
 | `--help` | The usage. A wrong argument prints the usage and exits with 2. |
 
 `CORVID_APP_RENDERER=software` draws with Skia on the CPU instead of OpenGL (see the harness check below).
+
+On the engine, a session opened from the log (`--session`, the rail after a restart) is replayed (K-10) and folds to
+what the live turn showed for what the log records: messages, calls with their results and diffs, plans, checkpoints,
+and each asked call's approval answer (approved once, for the session or always; denied, with the reason the person
+gave). It does not show what the log does not keep: the generator and tokens of a past turn, its decisions, how a turn
+ended beyond "answered" (an interrupted turn reads "the log holds no answer"), the session's taint, a call's elapsed
+time, the rule text a session or always answer wrote, a call refused without a prompt (the hardline list, a remembered
+denial, no approver) as "denied" rather than "failed", and the reason for denials logged before `approval_resolved`
+carried it (`note`). The composer's `!` shell and `#` memory lines are not built (docs/plan/tui.md §4.1), so the
+placeholder leaves them out: a one-line message starting with either is refused with a notice and stays in the composer;
+text of more than one line (pasted notes under a Markdown heading) and a Markdown image are sent. A rollback from Rewind
+to before a call keeps that call's turn and its message, as the kernel does (it goes back to just before the call): the
+call and what came after it in the turn leave, and so do the later turns, and the open transcript then reads as a replay
+of the log would.
 
 The window's own keys come from the key map (`Corvid.App.Core/Keys/KeyMap.cs`, `ui.md` §6) and can be remapped at once
 in Settings › Keybindings: `Ctrl+K` and `Ctrl+P` the command palette, `Ctrl+Tab` the session switcher (again for the
@@ -54,8 +71,8 @@ sessions, `Alt+P` switch the generator, `F1` and `?` (outside a text field) the 
 `Ctrl+Shift+C` Review, `Esc` closes the palette or an overlay. A page's own key on the same gesture (Audit's, Memory's
 and Skills' `Ctrl+F`, Models' `Alt+P`) wins while that area shows; a new page key goes into `KeyMap`'s defaults and
 `KeyMap.ContextsOf` so the help and the conflict check know it. On the Sessions
-page: `Enter` sends (queued while a turn runs), `Shift+Enter` breaks the line, `Ctrl+Enter` steers, `Esc` interrupts,
-`Esc Esc` on an idle empty composer opens Rewind, `Up` takes the last queued message back, `Shift+Tab` cycles the
+page: `Enter` sends (queued while a turn runs), `Shift+Enter` breaks the line, `Ctrl+Enter` steers, `Esc` interrupts
+(in the composer also while an approval card waits, closing it as cancelled), `Esc Esc` on an idle empty composer opens Rewind, `Up` takes the last queued message back, `Shift+Tab` cycles the
 approval mode, `Ctrl+S` puts the draft aside; on an open approval card the first `Enter` focuses it, then `1` to `5`
 answer and the arrows move; `Ctrl+1` to `Ctrl+7` pick dock tabs; `Ctrl+O`, `Ctrl+T` and `Ctrl+Shift+D` expand the latest
 output, the thoughts and every checkpoint's chips. On Models: `Alt+P` opens the generator's Switch… picker, `Alt+Left`
@@ -124,10 +141,19 @@ src/Corvid.App/
                              Jobs, MCP and Gateway also merge ModelsStyles.xaml, and share OpsStyles.xaml (row button,
                              fields, pairing code) and OpsLayout (head, columns, tables, focus after a change)
   Infrastructure/            UiDispatcher (the core's IDispatcher), Ui (x:Bind helpers), AppLogging
+src/Corvid.App.Engine/       the in-process engine (desktop head only): AppEngine (the host and the runtime starting in the
+                             background), EngineAppServices (one partial file per area), and one folder per area's service:
+                             Sessions/ (EngineSessionService with its approvals and commands, CardPrompter, ApprovalCards,
+                             SessionUpdateTranslator from the host's K-10 stream to the app's updates), Review/, Rewind/,
+                             Audit/ and History/ (the ledger and the signal they share), Models/, FirstRun/, Settings/,
+                             Memory/, Skills/, Safety/, Jobs/, Mcp/, Gateway/, Secrets/ and Ops/ (their shared change
+                             signal), Board/ (the tray and status over the MCP, Gateway, Memory and Jobs services) and
+                             PromptHistory/ (the event log's user messages)
 src/Corvid.App.Core/
   Mvvm/                      ObservableObject, RelayCommand(<T>), AsyncRelayCommand, Choice, IDispatcher, InlineDispatcher
   Shell/                     ShellViewModel, StatusBarViewModel, NavItem, SessionListItem, PhoneTab, ShellLayout, DemoShell
-  Composition/               AppComposition, one partial file per area (and AppComposition.Palette)
+  Composition/               AppComposition, one partial file per area (and AppComposition.Palette); IAppServices with
+                             DemoAppServices and Unavailable (the refusing services engine mode uses until an area is built)
   Keys/                      KeyMap (every key with its context, remapping, conflicts), KeyGesture
   Palette/                   PaletteViewModel (commands, pages, settings, sessions, prompt history, find), FuzzyMatch
   <Area>/                    each area's view model (and, as the area is built, its service, DTOs and demo service)
@@ -142,8 +168,10 @@ Secrets, Audit, Settings, FirstRun (`Area` in the core). An area owns, and only 
 - `src/Corvid.App.Core/<Area>/`: `I<Area>Service`, its DTO records, `Demo<Area>Service`, `<Area>ViewModel` (deriving
   from `AreaViewModel`, which gives the page its title).
 - `src/Corvid.App.Core/Composition/AppComposition.<Area>.cs`: the property named after the area that creates its service
-  and view model on first use. Demo mode passes the demo service and `Time` (the frozen clock); the engine's service
-  comes with `Corvid.App.Engine`.
+  (through `Services`, an `IAppServices`: `DemoAppServices` in demo mode, `Corvid.App.Engine`'s `EngineAppServices` in
+  engine mode) and view model on first use.
+- `src/Corvid.App.Engine/<Area>/` and `src/Corvid.App.Engine/EngineAppServices.<Area>.cs`: the area's engine service and
+  the factory member that makes it (until it is built, one of `Unavailable`'s refusing services).
 - `src/Corvid.App/Pages/<Area>Page.xaml(.cs)`: the page. It takes its view model from the composition the shell
   navigates with (`OnNavigatedTo`: `((AppComposition)e.Parameter).<Area>`, then `Bindings.Update()`) and binds with
   `x:Bind`.

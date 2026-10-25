@@ -62,7 +62,8 @@ public sealed partial class SessionViewModel
             tags.Add(new StatusTag("read-only", Tone.Grey, ReadOnlyNote));
         if (_state.Tainted)
         {
-            var source = _state.TaintSource is { } from ? $": {from}" : "";
+            // The source is the model's tool arguments (a URL, a path): untrusted text.
+            var source = _state.TaintSource is { } from ? $": {SafeText.Clean(from)}" : "";
             tags.Add(new StatusTag("tainted", Tone.Amber,
                 $"Outside content in context{source}. Network reads now ask; egress and new recipients offer only \"once\"."));
         }

@@ -40,8 +40,14 @@ public sealed class SettingsViewModel : AreaViewModel
     private bool _loaded;
     private bool _jsonValid = true;
     private Task? _loading;
+    // The raw editor's check: parsed and validated off the UI thread, a pause after the last keystroke; a newer check wins.
+    private readonly TimeSpan _jsonDebounce;
+    private int _jsonVersion;
+    private bool _jsonChecking;
+    private Task _jsonCheck = Task.CompletedTask;
 
-    public SettingsViewModel(ShellViewModel shell, ISettingsService service, KeyMap keys)
+    /// <param name="jsonDebounce">How long the raw editor waits after a keystroke before it checks the text; 250 ms by default.</param>
+    public SettingsViewModel(ShellViewModel shell, ISettingsService service, KeyMap keys, TimeSpan? jsonDebounce = null)
         : base(Area.Settings, "Configuration over corvid.json with the validator's messages, keybindings, themes, accessibility and notifications.")
     {
         ArgumentNullException.ThrowIfNull(shell);
@@ -50,6 +56,7 @@ public sealed class SettingsViewModel : AreaViewModel
         _shell = shell;
         _service = service;
         _keys = keys;
+        _jsonDebounce = jsonDebounce ?? TimeSpan.FromMilliseconds(250);
         Themes = [.. ThemeOrder.Select(theme => new Choice(theme.ToString().ToLowerInvariant(), Describe(theme),
             new RelayCommand(() => _shell.Theme = theme)))];
         Sections = [.. SettingsCatalogue.Sections.Select(section => new Choice(section, $"Settings: {section}", new RelayCommand(() => SelectSection(section))))];
@@ -180,9 +187,15 @@ public sealed class SettingsViewModel : AreaViewModel
         {
             if (!SetProperty(ref _json, value ?? ""))
                 return;
-            CheckJson();
+            _jsonCheck = CheckJsonAsync(debounce: true);
         }
     }
+
+    /// <summary>The raw editor's latest check: done when the problems shown are the current text's.</summary>
+    public Task JsonChecked => _jsonCheck;
+
+    /// <summary>The raw text is being checked (typed since the last check, or its check still running).</summary>
+    public bool IsJsonChecking => _jsonChecking;
 
     public IReadOnlyList<string> JsonProblems { get => _jsonProblems; private set { if (SetProperty(ref _jsonProblems, value)) OnPropertyChanged(nameof(HasJsonProblems)); } }
 
@@ -190,13 +203,14 @@ public sealed class SettingsViewModel : AreaViewModel
 
     public bool IsJsonChanged => !string.Equals(DemoSettingsService.Lines(_json), DemoSettingsService.Lines(_savedJson), StringComparison.Ordinal);
 
-    public string JsonStatus => !_jsonValid
+    public string JsonStatus => _jsonChecking ? "Checking…"
+        : !_jsonValid
         ? _jsonProblems.Count == 1 ? "1 problem" : $"{_jsonProblems.Count} problems"
         : IsJsonChanged ? "Valid · not saved" : "Valid · saved";
 
-    public Tone JsonTone => _jsonValid ? IsJsonChanged ? Tone.Blue : Tone.Green : Tone.Red;
+    public Tone JsonTone => _jsonChecking ? Tone.Grey : _jsonValid ? IsJsonChanged ? Tone.Blue : Tone.Green : Tone.Red;
 
-    public bool CanApplyJson => _loaded && _jsonValid && IsJsonChanged && !ApplyJsonCommand.IsRunning;
+    public bool CanApplyJson => _loaded && !_jsonChecking && _jsonValid && IsJsonChanged && !ApplyJsonCommand.IsRunning;
 
     public AsyncRelayCommand ApplyJsonCommand { get; }
 
@@ -251,6 +265,7 @@ public sealed class SettingsViewModel : AreaViewModel
         {
             var snapshot = await _service.LoadAsync(cancellationToken);
             Build(snapshot);
+            await _jsonCheck;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -291,7 +306,7 @@ public sealed class SettingsViewModel : AreaViewModel
         OnPropertyChanged(nameof(IsDemo));
         OnPropertyChanged(nameof(Subtitle));
         OnPropertyChanged(nameof(KeysNote));
-        CheckJson();
+        _ = CheckJson();
         Revalidate();
     }
 
@@ -348,7 +363,7 @@ public sealed class SettingsViewModel : AreaViewModel
                 OnPropertyChanged(nameof(JsonText));
             }
 
-            CheckJson();
+            await CheckJson();
             Show(keepRaw
                 ? $"{write.Message} The corvid.json tab keeps your unsaved edits, typed before this save; Revert there shows the saved file."
                 : write.Message, Tone.Green);
@@ -371,11 +386,47 @@ public sealed class SettingsViewModel : AreaViewModel
         Show("Changes put back.", Tone.Grey);
     }
 
-    private void CheckJson()
+    /// <summary>Checks the raw text now (after a load or a save), without waiting for typing to pause.</summary>
+    private Task CheckJson() => _jsonCheck = CheckJsonAsync(debounce: false);
+
+    /// <summary>
+    /// Parses and validates the raw text off the UI thread (the engine's check reads and validates a whole configuration),
+    /// after a pause in the typing when <paramref name="debounce"/>. Only the latest text's check is shown: an older one
+    /// that ends later is dropped.
+    /// </summary>
+    private async Task CheckJsonAsync(bool debounce)
     {
-        var parse = _service.Parse(_json);
+        var version = Interlocked.Increment(ref _jsonVersion);
+        var text = _json;
+        SetJsonChecking(true);
+        if (debounce && _jsonDebounce > TimeSpan.Zero)
+        {
+            await Task.Delay(_jsonDebounce).ConfigureAwait(true);
+            if (version != Volatile.Read(ref _jsonVersion))
+                return;
+        }
+
+        SettingsParse parse;
+        try
+        {
+            parse = await Task.Run(() => _service.Parse(text)).ConfigureAwait(true);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            parse = new SettingsParse(new Dictionary<string, string>(), [new SettingProblem(null, $"The text could not be checked: {SafeText.Clean(exception.Message)}")]);
+        }
+
+        if (version != Volatile.Read(ref _jsonVersion))
+            return; // a newer check wins
         _jsonValid = parse.IsValid;
         JsonProblems = [.. parse.Problems.Select(problem => problem.Message)];
+        SetJsonChecking(false);
+    }
+
+    private void SetJsonChecking(bool checking)
+    {
+        _jsonChecking = checking;
+        OnPropertyChanged(nameof(IsJsonChecking));
         OnPropertyChanged(nameof(IsJsonChanged));
         OnPropertyChanged(nameof(JsonStatus));
         OnPropertyChanged(nameof(JsonTone));
@@ -409,7 +460,7 @@ public sealed class SettingsViewModel : AreaViewModel
                 }
             }
 
-            CheckJson();
+            await CheckJson();
             Revalidate();
             Show(edits.Count > 0 ? $"{write.Message} The typed page now shows the file's values." : write.Message, Tone.Green);
         }

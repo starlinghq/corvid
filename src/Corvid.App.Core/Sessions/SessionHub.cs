@@ -61,6 +61,12 @@ public sealed class SessionHub : IDisposable
     public IReadOnlyCollection<SessionSummary> Summaries => _summaries.Values;
 
     /// <summary>
+    /// The start-up list arrived and <see cref="Summaries"/> holds it. The demo lists at once; the engine lists once its
+    /// runtime is up, so a view made before then (the Board opened with <c>--page board</c>) reads the list again here.
+    /// </summary>
+    public event EventHandler? Listed;
+
+    /// <summary>
     /// Lists the sessions into the rail and selects one: <paramref name="select"/> when the rail lists it, otherwise
     /// <paramref name="fallback"/>. The demo service answers at once, so the rail is full when this returns.
     /// </summary>
@@ -82,6 +88,7 @@ public sealed class SessionHub : IDisposable
         foreach (var summary in summaries)
             _summaries[summary.Id] = summary;
         RebuildRail();
+        Listed?.Invoke(this, EventArgs.Empty);
         var chosen = select is not null ? _shell.FindSession(select) : null;
         chosen ??= fallback is not null ? _shell.FindSession(fallback) : null;
         if (chosen is not null)
@@ -115,6 +122,47 @@ public sealed class SessionHub : IDisposable
             return;
         _shell.SelectSession(_shell.CreateSession(sessionId, SafeText.Clean(summary.Title), summary.State, When(summary)));
         _shell.Navigate(Area.Sessions);
+    }
+
+    /// <summary>Whether <see cref="CreateAsync"/> can start a session (the engine; not the demo).</summary>
+    public bool CanCreate => _service.CanCreate;
+
+    /// <summary>
+    /// Starts a new, empty session, lists it in the rail at once (the engine's own summary follows) and opens it in the
+    /// Sessions area. Throws what the service refused with.
+    /// </summary>
+    public async Task<string> CreateAsync(CancellationToken cancellationToken = default)
+    {
+        var id = await _service.CreateAsync(cancellationToken).ConfigureAwait(true);
+        if (!_summaries.ContainsKey(id))
+        {
+            _summaries[id] = new SessionSummary(id, "New session")
+            {
+                Workspace = _shell.Workspace,
+                Surface = "app",
+                State = SessionState.Idle,
+                LastActivity = _time.GetUtcNow(),
+            };
+            RebuildRail();
+        }
+        _shell.OpenSession(id);
+        return id;
+    }
+
+    /// <summary>
+    /// <see cref="CreateAsync"/> from a button or a key, which cannot await it: a refusal shows as a red status bar tag
+    /// rather than vanishing with the task.
+    /// </summary>
+    public async void StartNew()
+    {
+        try
+        {
+            await CreateAsync().ConfigureAwait(true);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            _statusBar.Tags = [.. _statusBar.Tags, new StatusTag("no new session", Tone.Red, $"A new session could not start: {SafeText.Clean(exception.Message)}")];
+        }
     }
 
     public void Dispose()
@@ -285,9 +333,11 @@ public sealed class SessionHub : IDisposable
         };
     }
 
+    // The rail's times follow the clock: a running step and a deadline every second, and an idle session's last activity
+    // too ("25 s" becomes "1 m"), as the Board's do.
     private void UpdateTicker()
     {
-        var needed = !_disposed && _summaries.Values.Any(summary => summary.State is SessionState.Running or SessionState.Waiting);
+        var needed = !_disposed && _summaries.Count > 0;
         if (needed && _ticker is null)
             _ticker = _time.CreateTimer(_ => _dispatcher.Post(Tick), null, TickInterval, TickInterval);
         else if (!needed && _ticker is not null)
@@ -303,7 +353,7 @@ public sealed class SessionHub : IDisposable
             return;
         foreach (var summary in _summaries.Values)
         {
-            if (summary.State is SessionState.Running or SessionState.Waiting && _shell.FindSession(summary.Id) is { } item)
+            if (_shell.FindSession(summary.Id) is { } item)
                 item.When = When(summary);
         }
     }

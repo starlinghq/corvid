@@ -216,7 +216,7 @@ public sealed partial class SessionsPage : Page, IDockProvider
         Composer.MinHeight = phone ? 44 : 60;
         Composer.MaxHeight = phone ? 120 : 220;
         Composer.Padding = phone ? new Thickness(12, 11, 12, 11) : new Thickness(12, 10, 12, 10);
-        Composer.PlaceholderText = phone ? PhonePlaceholder : SessionViewModel.ComposerPlaceholder;
+        Composer.PlaceholderText = phone ? PhonePlaceholder : WidePlaceholder;
         UpdateTurnStrip();
 
         // The templates read the width class when they are made: Uno does not re-evaluate their static-rooted x:Bind paths
@@ -277,6 +277,12 @@ public sealed partial class SessionsPage : Page, IDockProvider
     /// <summary>Phone.png's composer: the short placeholder, the prefixes being for a keyboard.</summary>
     private const string PhonePlaceholder = "Ask Corvid…";
 
+    /// <summary>The composer's placeholder at desktop widths: the open session's, or the service's with none open.</summary>
+    private string WidePlaceholder => _session?.Placeholder
+        ?? (_composition?.SessionService.HasComposerModes == false
+            ? SessionViewModel.ComposerPlaceholderWithoutModes
+            : SessionViewModel.ComposerPlaceholder);
+
     /// <summary>
     /// The turn strip shows while a turn runs, waits or has a queue. On the phone it shows while the turn works or has a
     /// queue, but not while it waits on an answer (Phone.png: the open card says so and takes the room). The phone has
@@ -327,6 +333,8 @@ public sealed partial class SessionsPage : Page, IDockProvider
         _positioned = false;
         _follow = true;
         _newCount = 0;
+        if (!SessionsLayout.Current.IsPhone)
+            Composer.PlaceholderText = WidePlaceholder;
         if (_session is null)
         {
             UpdateJump();
@@ -513,7 +521,7 @@ public sealed partial class SessionsPage : Page, IDockProvider
                 return;
             case VirtualKey.Escape:
                 e.Handled = true;
-                Escape(session);
+                Escape(session, fromComposer: true);
                 return;
             case VirtualKey.Up when session.Draft.Length == 0 && session.HasQueue:
                 e.Handled = true;
@@ -553,8 +561,12 @@ public sealed partial class SessionsPage : Page, IDockProvider
 
     private static int LineBreaks(string text) => text.Count(c => c is '\r' or '\n');
 
-    /// <summary>Esc interrupts a running turn; on an idle, empty composer a second Esc opens the rewind timeline.</summary>
-    private void Escape(SessionViewModel session)
+    /// <summary>
+    /// Esc interrupts a running turn; on an idle, empty composer a second Esc opens the rewind timeline. While an approval
+    /// card waits, Esc in the composer interrupts too (the interrupt closes the card as cancelled), but one from elsewhere
+    /// does not: Esc on the card goes back to the composer, and in the card's reason field it leaves the field.
+    /// </summary>
+    private void Escape(SessionViewModel session, bool fromComposer = false)
     {
         if (_composition?.Shell.ShowScrim == true)
         {
@@ -562,7 +574,7 @@ public sealed partial class SessionsPage : Page, IDockProvider
             return;
         }
 
-        if (session.IsRunning && !session.HasApproval)
+        if (session.IsRunning && (fromComposer || !session.HasApproval))
         {
             session.InterruptCommand.Execute(null);
             _lastEscape = default;

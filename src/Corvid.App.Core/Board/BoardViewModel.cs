@@ -77,7 +77,8 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         Filters = [.. Enum.GetValues<BoardFilter>().Select(filter =>
             new Choice(FilterLabel(filter), FilterHelp(filter), new RelayCommand(() => Filter = filter)))];
         Filters[0].IsSelected = true;
-        NewSessionCommand = new RelayCommand(() => { }, () => false);
+        // The engine starts a session in the window's workspace; the demo's scenario cannot, so there it stays disabled.
+        NewSessionCommand = new RelayCommand(_hub.StartNew, () => _hub.CanCreate);
         OpenWorkspaceCommand = new RelayCommand(() => { }, () => false);
         ClosePeekCommand = new RelayCommand(ClosePeek, () => _peek is not null);
         // Nothing sends native notifications yet, so the toggle is off and says why, as New session does.
@@ -85,6 +86,7 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         NewSession = new NewSessionTile(NewSessionText(_shell.Workspace), NewSessionCommand, OpenWorkspaceCommand);
 
         _hub.Service.SessionChanged += OnSessionChanged;
+        _hub.Listed += OnListed;
         _service.AttentionChanged += OnAttentionChanged;
         _shell.PropertyChanged += OnShellChanged;
         foreach (var summary in _hub.Summaries)
@@ -192,6 +194,7 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
             return;
         _disposed = true;
         _hub.Service.SessionChanged -= OnSessionChanged;
+        _hub.Listed -= OnListed;
         _service.AttentionChanged -= OnAttentionChanged;
         _shell.PropertyChanged -= OnShellChanged;
         _ticker?.Dispose();
@@ -226,6 +229,16 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         if (_disposed)
             return;
         Upsert(summary);
+        Rebuild();
+    }
+
+    /// <summary>The hub's start-up list arrived after this was made (the engine lists once its runtime is up).</summary>
+    private void OnListed(object? sender, EventArgs e)
+    {
+        if (_disposed)
+            return;
+        foreach (var summary in _hub.Summaries)
+            Upsert(summary);
         Rebuild();
     }
 

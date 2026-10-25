@@ -321,6 +321,7 @@ public static class GatewayText
         AdapterState.Up => "up",
         AdapterState.Connecting => "connecting",
         AdapterState.Down => "down",
+        AdapterState.Unknown => "not hosted here",
         _ => "off",
     };
 

@@ -3,9 +3,33 @@ using System.Collections.Immutable;
 namespace Corvid.Skills;
 
 /// <summary>One skill's eval run: each case's outcome.</summary>
-public sealed record SkillEvalReport(string Skill, string Revision, ImmutableArray<(SkillEvalCase Case, ReplayOutcome Outcome)> Cases)
+public sealed partial record SkillEvalReport(string Skill, string Revision, ImmutableArray<(SkillEvalCase Case, ReplayOutcome Outcome)> Cases)
 {
     public int Passed => Cases.Count(item => item.Outcome.Passed);
+
+    /// <summary>
+    /// The cases of a recorded run (<see cref="EvalRecord.Detail"/>, written by <see cref="SkillCurator.RunEvalsAsync"/> as
+    /// <c>case: outcome; case: outcome</c>), each read back with <see cref="ReplayOutcome.Parse"/>. A part not in that form
+    /// is left out, so a caller compares the count with <see cref="EvalRecord.Total"/>.
+    /// </summary>
+    public static ImmutableArray<(string Case, ReplayOutcome Outcome)> ParseDetail(string? detail)
+    {
+        if (string.IsNullOrEmpty(detail))
+            return [];
+        var starts = CaseStart().Matches(detail).ToList();
+        var cases = ImmutableArray.CreateBuilder<(string, ReplayOutcome)>();
+        for (var i = 0; i < starts.Count; i++)
+        {
+            var start = starts[i].Index + starts[i].Length;
+            var end = i + 1 < starts.Count ? starts[i + 1].Index : detail.Length;
+            if (ReplayOutcome.Parse(detail[start..end]) is { } outcome)
+                cases.Add((starts[i].Groups["case"].Value, outcome));
+        }
+        return cases.ToImmutable();
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"(?:\A|; )(?<case>[^:;\s][^:;]*?): (?=(?:passed|failed): expected \[)")]
+    private static partial System.Text.RegularExpressions.Regex CaseStart();
 }
 
 /// <summary>

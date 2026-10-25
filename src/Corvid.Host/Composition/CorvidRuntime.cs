@@ -251,6 +251,51 @@ public sealed class CorvidRuntime : IAsyncDisposable
 
     public bool TryGetSession(string sessionId, out CorvidSession session) => _sessions.TryGetValue(sessionId, out session!);
 
+    /// <summary>Whether a turn of the session is running in this process now (opened here and mid-turn; a snapshot).</summary>
+    public bool IsTurnRunning(string sessionId) => TryGetSession(sessionId, out var session) && session.Actor.TurnRunning;
+
+    /// <summary>
+    /// What going back to before the ledger entry whose before checkpoint is <paramref name="checkpointId"/> would revert,
+    /// read from the log without opening the session (<see cref="CorvidSession.PlanRollbackTo"/> for an open one). Null
+    /// when no visible ledger entry has that checkpoint.
+    /// </summary>
+    public RestorePlan? PlanRollbackTo(string sessionId, string checkpointId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpointId);
+        return CheckpointService.PlanRollbackTo(SessionProjection.Load(Log, sessionId, cancellationToken: cancellationToken), checkpointId, ChangesFiles);
+    }
+
+    /// <summary>
+    /// What a rollback to before <paramref name="checkpointId"/> would do to the files, worked out without writing and
+    /// without opening the session (the Rewind plan and preview). Null when no ledger entry has the checkpoint or
+    /// checkpoints are off. With a turn of the session running here (<see cref="IsTurnRunning"/>), the files are as the
+    /// turn has left them so far.
+    /// </summary>
+    public async Task<RestoreDraft?> DraftRollbackToAsync(string sessionId, string checkpointId, IReadOnlyCollection<string>? only = null,
+        CancellationToken cancellationToken = default) =>
+        PlanRollbackTo(sessionId, checkpointId, cancellationToken) is { } plan && Checkpoints is { } checkpoints
+            ? await checkpoints.DraftAsync(plan, only, cancellationToken).ConfigureAwait(false)
+            : null;
+
+    /// <summary>A call that would have taken a checkpoint: a tool that changes files, running something other than a read-only command.</summary>
+    internal bool ChangesFiles(ToolCallIssued call)
+    {
+        // A tool no longer registered cannot be analysed, so its call counts as one that may have changed files (fail closed).
+        if (Tools.List().FirstOrDefault(tool => tool.Name == call.ToolName) is not { } descriptor)
+            return true;
+        if (!descriptor.Risk.SideEffects.HasFlag(SideEffects.Filesystem))
+            return false;
+        try
+        {
+            return CheckpointService.Covers(descriptor, Approvals.Analyze(new ToolAction(descriptor, call.Arguments)));
+        }
+        catch (ArgumentException)
+        {
+            return true;
+        }
+    }
+
     /// <summary>Routes a session's approval prompts to its surface until the returned handle is disposed.</summary>
     public IDisposable AttachPrompter(string sessionId, IApprovalPrompter prompter) => _prompters.Attach(sessionId, prompter);
 
@@ -582,6 +627,18 @@ public sealed class CorvidSession
     /// <summary>Whether outside content is in the session's context (plan §10.3).</summary>
     public bool Tainted => Runner.Tainted;
 
+    /// <summary>
+    /// The approval mode this session's calls are assessed under (G-10): <c>Corvid:Approvals:Mode</c> until a surface sets
+    /// another for this session; applies from the next call assessed, the running turn's included. Held by this process
+    /// only: the session opened again in another process starts at the configured mode. The hardline list applies in
+    /// every mode.
+    /// </summary>
+    public ApprovalMode ApprovalMode
+    {
+        get => Runner.ApprovalMode;
+        set => Runner.ApprovalMode = value;
+    }
+
     /// <summary>Runs one turn and waits for its delivery.</summary>
     public Task<Delivery> SendAsync(string text, CancellationToken cancellationToken = default) =>
         _runtime.SendAsync(this, text, EnvelopeOrigin.User, cancellationToken);
@@ -643,23 +700,49 @@ public sealed class CorvidSession
                 : CheckpointService.Rewind(_runtime.Log, Id, chosen, token);
         }, cancellationToken);
 
-    /// <summary>A call that would have taken a checkpoint: a tool that changes files, running something other than a read-only command.</summary>
-    private bool ChangesFiles(ToolCallIssued call)
+    /// <summary>
+    /// What going back to before the ledger entry whose before checkpoint is <paramref name="checkpointId"/> would revert
+    /// (the plan <c>/rollback</c> makes for it, with the same check for calls that changed files unrecorded). Null when
+    /// no visible ledger entry has that checkpoint.
+    /// </summary>
+    public RestorePlan? PlanRollbackTo(string checkpointId) => CheckpointService.PlanRollbackTo(Snapshot(), checkpointId, ChangesFiles);
+
+    /// <summary>
+    /// What a rollback to before <paramref name="checkpointId"/> would do to the files, worked out without writing (the
+    /// Rewind preview and plan). Null when no ledger entry has the checkpoint or checkpoints are off.
+    /// </summary>
+    public async Task<RestoreDraft?> DraftRollbackToAsync(string checkpointId, IReadOnlyCollection<string>? only = null,
+        CancellationToken cancellationToken = default) =>
+        PlanRollbackTo(checkpointId) is { } plan && _runtime.Checkpoints is { } checkpoints
+            ? await checkpoints.DraftAsync(plan, only, cancellationToken).ConfigureAwait(false)
+            : null;
+
+    /// <summary>
+    /// Rolls back to before <paramref name="checkpointId"/> with a scope (the windowed app's Rewind and Review): files and
+    /// conversation as <c>/rollback</c> does, the conversation only, or the files only, or with <paramref name="only"/>
+    /// just those files (G-3). On the actor, like <see cref="RollbackAsync"/>. Null when no ledger entry has the checkpoint.
+    /// </summary>
+    public Task<RestoreResult?> RollbackToAsync(string checkpointId, RestoreScope scope, IReadOnlyCollection<string>? only = null,
+        CancellationToken cancellationToken = default)
     {
-        // A tool no longer registered cannot be analysed, so its call counts as one that may have changed files (fail closed).
-        if (_runtime.Tools.List().FirstOrDefault(tool => tool.Name == call.ToolName) is not { } descriptor)
-            return true;
-        if (!descriptor.Risk.SideEffects.HasFlag(SideEffects.Filesystem))
-            return false;
-        try
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpointId);
+        return Actor.RunExclusiveAsync<RestoreResult?>(async token =>
         {
-            return CheckpointService.Covers(descriptor, _runtime.Approvals.Analyze(new ToolAction(descriptor, call.Arguments)));
-        }
-        catch (ArgumentException)
-        {
-            return true;
-        }
+            if (CheckpointService.PlanRollbackTo(SessionProjection.Load(_runtime.Log, Id, cancellationToken: token), checkpointId, ChangesFiles) is not { } plan)
+                return null;
+            if (_runtime.Checkpoints is { } checkpoints)
+                return await checkpoints.RestoreAsync(_runtime.Log, Id, plan, scope, only, token).ConfigureAwait(false);
+            // Without checkpoints only the transcript can move.
+            return scope switch
+            {
+                RestoreScope.FilesAndConversation => CheckpointService.Rewind(_runtime.Log, Id, plan, token),
+                RestoreScope.ConversationOnly => CheckpointService.RewindConversation(_runtime.Log, Id, plan, token),
+                _ => new RestoreResult(RestoreStatus.Refused, plan, [], [], [], "checkpoints are off, so no file can be put back"),
+            };
+        }, cancellationToken);
     }
+
+    private bool ChangesFiles(ToolCallIssued call) => _runtime.ChangesFiles(call);
 
     /// <summary>
     /// Starts an empty session with a conversation held elsewhere (an HTTP client that sends its whole history): the user's

@@ -37,8 +37,22 @@ public sealed record WorkspaceInfo(string Path, string Description);
 /// <summary>A Hermes installation found on this machine, with what it would import.</summary>
 public sealed record HermesImport(string Path, int Memories, int Skills);
 
-/// <summary>What the first run settles: the workspace, the approval mode and the cloud privacy posture.</summary>
-public sealed record SetupChoices(string Workspace, ApprovalMode Mode, string Posture);
+/// <summary>
+/// What the first run settles: the workspace, the approval mode and the cloud privacy posture ("redact", "local only").
+/// A null mode or posture leaves the configuration's as it is: the first run writes only what the person changed, so a
+/// setup opened on a configured machine (a model went missing) never loosens a mode or a posture chosen before.
+/// </summary>
+public sealed record SetupChoices(string Workspace, ApprovalMode? Mode, string? Posture);
+
+/// <summary>
+/// The approval mode and the cloud posture the configuration has now, which the first run starts from; null where it says
+/// nothing (the built-in default applies). The posture is "redact", "local only" or "send" (<c>Corvid:Privacy:Cloud</c>
+/// Redact, Refuse or Send).
+/// </summary>
+public sealed record CurrentSetup(ApprovalMode? Mode, string? Posture)
+{
+    public static CurrentSetup None { get; } = new(null, null);
+}
 
 /// <summary>
 /// The first run's seam to the engine (docs/plan/ui.md F1): the doctor's checks before any model loads, the workspace,
@@ -60,4 +74,17 @@ public interface IFirstRunService
 
     /// <summary>Writes the choices to <c>corvid.json</c> (creating it) when the setup finishes or is skipped.</summary>
     Task SaveAsync(SetupChoices choices, CancellationToken cancellationToken = default);
+
+    /// <summary>The mode and posture configured now, which the setup starts on; nothing configured by default (the demo's fresh machine).</summary>
+    Task<CurrentSetup> CurrentAsync(CancellationToken cancellationToken = default) => Task.FromResult(CurrentSetup.None);
+
+    /// <summary>
+    /// The engine's start as the status bar's engine line says it while the setup shows ("starting · Loading kev-0.8b",
+    /// "not started · 2 models missing"), from K-4's load progress; null when there is nothing to report (the demo, whose
+    /// line is the mockup's).
+    /// </summary>
+    string? EngineStatus => null;
+
+    /// <summary>Raised on the UI thread when <see cref="EngineStatus"/> changes.</summary>
+    event EventHandler? EngineStatusChanged { add { } remove { } }
 }

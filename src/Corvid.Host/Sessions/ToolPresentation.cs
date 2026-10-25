@@ -1,51 +1,79 @@
+using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
 using Corvid.Host.Composition;
 using Corvid.Tools;
 using Corvid.Tools.Builtin;
 
-namespace Corvid.Acp;
+namespace Corvid.Host.Sessions;
 
 /// <summary>
-/// How a Corvid tool call looks to an editor: its ACP kind, a title, the files it names, and the text of a file before and
-/// after an edit. Every file read here goes through the file tools' own <see cref="Workspace"/> rules first, so a path the
-/// tools may not open (outside the workspace, a protected location, a credential file) is never read or shown.
+/// A tool call's kind as ACP names it (<c>tool_call.kind</c>), which every surface draws its card's icon from. The wire
+/// names, so a surface that speaks ACP passes them on unchanged.
 /// </summary>
-internal sealed class ToolPresentation(CorvidRuntime runtime)
+public static class ToolCallKinds
 {
-    // An editor shows a diff of the whole file; past this size, or for binary content, the call reports text only.
-    internal const int MaxDiffBytes = 256 * 1024;
+    public const string Read = "read";
+    public const string Edit = "edit";
+    public const string Delete = "delete";
+    public const string Search = "search";
+    public const string Execute = "execute";
+    public const string Fetch = "fetch";
+    public const string Other = "other";
+}
+
+/// <summary>A file edit: the whole file before (null for a new file) and after.</summary>
+public sealed record FileDiff(string Path, string? OldText, string NewText);
+
+/// <summary>
+/// How a Corvid tool call looks to a surface: its kind, a title, the files it names, and the text of a file before and
+/// after an edit (moved here from Corvid.Acp with K-10, so the ACP server and the windowed app show calls alike). Every
+/// file read here goes through the file tools' own <see cref="Workspace"/> rules first, so a path the tools may not open
+/// (outside the workspace, a protected location, a credential file) is never read or shown.
+/// </summary>
+public sealed class ToolPresentation(CorvidRuntime runtime)
+{
+    /// <summary>A surface shows a diff of the whole file; past this size, or for binary content, the call reports text only.</summary>
+    public const int MaxDiffBytes = 256 * 1024;
     private const int MaxTitle = 160;
     private const int MaxResultText = 8 * 1024;
+    private const int MaxDiffFiles = 16;
 
     private readonly Workspace _workspace = Workspace.For(runtime.Builtin.Environment);
+
+    /// <summary>The workspace the tools work in, as an absolute path.</summary>
+    public string WorkspaceRoot => _workspace.Root;
 
     public string Kind(string tool)
     {
         if (!runtime.Tools.TryGet(tool, out var function))
-            return ToolKinds.Other;
+            return ToolCallKinds.Other;
         var risk = function.Descriptor.Risk;
         return tool switch
         {
-            "shell" or "skill_run_script" => ToolKinds.Execute,
-            "search_files" or "memory_search" => ToolKinds.Search,
-            _ when risk.Network => ToolKinds.Fetch,
-            _ when risk.Destructive && risk.SideEffects.HasFlag(SideEffects.Filesystem) && tool.Contains("delete", StringComparison.Ordinal) => ToolKinds.Delete,
-            _ when risk.SideEffects.HasFlag(SideEffects.Filesystem) => ToolKinds.Edit,
-            _ when risk.ReadOnly => ToolKinds.Read,
-            _ => ToolKinds.Other,
+            "shell" or "skill_run_script" => ToolCallKinds.Execute,
+            "search_files" or "memory_search" => ToolCallKinds.Search,
+            _ when risk.Network => ToolCallKinds.Fetch,
+            _ when risk.Destructive && risk.SideEffects.HasFlag(SideEffects.Filesystem) && tool.Contains("delete", StringComparison.Ordinal) => ToolCallKinds.Delete,
+            _ when risk.SideEffects.HasFlag(SideEffects.Filesystem) => ToolCallKinds.Edit,
+            _ when risk.ReadOnly => ToolCallKinds.Read,
+            _ => ToolCallKinds.Other,
         };
     }
+
+    /// <summary>What a call acts on, in a line: its command line, path, URL, query or name; null when it names none.</summary>
+    public static string? Target(JsonElement? arguments) =>
+        arguments is { ValueKind: JsonValueKind.Object } args
+            ? new[] { "command", "path", "url", "query", "name" }
+                .Select(name => args.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null)
+                .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.ReplaceLineEndings(" ")
+            : null;
 
     /// <summary>The tool's name and what it acts on: its command line, path or URL when it has one.</summary>
     public static string Title(string tool, JsonElement? arguments)
     {
-        var target = arguments is { ValueKind: JsonValueKind.Object } args
-            ? new[] { "command", "path", "url", "query", "name" }
-                .Select(name => args.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null)
-                .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))
-            : null;
-        var title = target is null ? tool : $"{tool}: {target.ReplaceLineEndings(" ")}";
+        var target = Target(arguments);
+        var title = target is null ? tool : $"{tool}: {target}";
         return title.Length <= MaxTitle ? title : title[..(MaxTitle - 1)] + "…";
     }
 
@@ -65,13 +93,14 @@ internal sealed class ToolPresentation(CorvidRuntime runtime)
         }
     }
 
-    public ToolCallLocation[]? Locations(JsonElement? arguments) => Path(arguments) is { } path ? [new ToolCallLocation(path)] : null;
+    /// <summary>The files a call names, as absolute paths; empty when it names none the tools may open.</summary>
+    public ImmutableArray<string> Locations(JsonElement? arguments) => Path(arguments) is { } path ? [path] : [];
 
     /// <summary>
     /// The edit a pending <c>write_file</c> or <c>patch_file</c> call would make, for the permission prompt: the file as it is
     /// now and as the call would leave it. Null when it cannot be shown exactly.
     /// </summary>
-    public DiffToolCallContent? ProposedDiff(string tool, JsonElement? arguments)
+    public FileDiff? ProposedDiff(string tool, JsonElement? arguments)
     {
         if (tool is not ("write_file" or "patch_file") || Path(arguments) is not { } path || arguments is not { } args)
             return null;
@@ -79,7 +108,7 @@ internal sealed class ToolPresentation(CorvidRuntime runtime)
         if (exists && current is null)
             return null;
         if (tool == "write_file")
-            return String(args, "content") is { } content ? new DiffToolCallContent(path, current, content) : null;
+            return String(args, "content") is { } content ? new FileDiff(path, current, content) : null;
         if (current is null || String(args, "old_text") is not { Length: > 0 } old || String(args, "new_text") is not { } replacement)
             return null;
         var all = args.TryGetProperty("replace_all", out var flag) && flag.ValueKind == JsonValueKind.True;
@@ -87,7 +116,7 @@ internal sealed class ToolPresentation(CorvidRuntime runtime)
         var first = current.IndexOf(old, StringComparison.Ordinal);
         if (first < 0 || !all && current.IndexOf(old, first + old.Length, StringComparison.Ordinal) >= 0)
             return null;
-        return new DiffToolCallContent(path, current, all ? current.Replace(old, replacement, StringComparison.Ordinal)
+        return new FileDiff(path, current, all ? current.Replace(old, replacement, StringComparison.Ordinal)
             : string.Concat(current.AsSpan(0, first), replacement, current.AsSpan(first + old.Length)));
     }
 
@@ -95,13 +124,12 @@ internal sealed class ToolPresentation(CorvidRuntime runtime)
     /// What a finished call changed, from its write ledger (C-014): each path its after-checkpoint lists, as it was in the
     /// before-checkpoint and as it is in the after one. Empty without checkpoints.
     /// </summary>
-    public async Task<IReadOnlyList<DiffToolCallContent>> LedgerDiffsAsync(string beforeRevision, string afterRevision,
-        IReadOnlyList<string> paths)
+    public async Task<IReadOnlyList<FileDiff>> LedgerDiffsAsync(string beforeRevision, string afterRevision, IReadOnlyList<string> paths)
     {
         if (runtime.Checkpoints is not { Store: { IsAvailable: true } store })
             return [];
-        var diffs = new List<DiffToolCallContent>();
-        foreach (var relative in paths.Take(16))
+        var diffs = new List<FileDiff>();
+        foreach (var relative in paths.Take(MaxDiffFiles))
         {
             string absolute;
             try
@@ -122,12 +150,12 @@ internal sealed class ToolPresentation(CorvidRuntime runtime)
             // A binary or oversized side means no faithful diff; a path absent before is a new file, absent after a deletion.
             if (oldFile.Blob is not null && oldText is null || newFile.Blob is not null && newText is null)
                 continue;
-            diffs.Add(new DiffToolCallContent(absolute, oldText, newText ?? ""));
+            diffs.Add(new FileDiff(absolute, oldText, newText ?? ""));
         }
         return diffs;
     }
 
-    /// <summary>A tool result as text for the editor: strings as they are, anything else as JSON, cut to a readable size.</summary>
+    /// <summary>A tool result as text for a surface: strings as they are, anything else as JSON, cut to a readable size.</summary>
     public static string ResultText(JsonElement result)
     {
         var text = result.ValueKind == JsonValueKind.String ? result.GetString() ?? "" : result.GetRawText();

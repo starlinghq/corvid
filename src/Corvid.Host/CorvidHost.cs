@@ -74,6 +74,10 @@ public static class CorvidHost
         services.TryAddSingleton<TurnFeed>();
         services.TryAddSingleton<CorvidRuntimeFactory>();
         services.TryAddSingleton<Doctor>();
+        // The one way to change corvid.json: validated as the next start would read it, then written atomically.
+        services.TryAddSingleton(provider => new CorvidConfigWriter(
+            provider.GetService<CorvidConfigFile>() ?? new CorvidConfigFile(CorvidPaths.UserConfigFile),
+            provider.GetRequiredService<IConfiguration>(), provider.GetRequiredService<IValidateOptions<CorvidOptions>>()));
         services.TryAddSingleton(_ => CoreCommands.Register(new SlashCommandRegistry()));
         services.AddLogging(logging => logging.ClearProviders());
 

@@ -113,6 +113,9 @@ public sealed class StarlingModelProvider : IModelProvider
         return ToAvailability(await Store.DownloadAsync(info.Model, relay, cancellationToken).ConfigureAwait(false));
     }
 
+    /// <summary>Starling keeps a cancelled download's files to resume from; this removes them (<see cref="StarlingModelStore.RemovePartialDownloads"/>).</summary>
+    public int RemovePartialDownloads(string model) => Store.RemovePartialDownloads(Info(model).Model);
+
     private static StarlingModelInfo Info(string model) =>
         StarlingModels.TryFind(model, out var info) ? info : throw new ArgumentException($"Starling has no model '{model}'.", nameof(model));
 

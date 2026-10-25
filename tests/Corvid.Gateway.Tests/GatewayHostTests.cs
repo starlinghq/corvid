@@ -155,7 +155,9 @@ public sealed class GatewayHostTests
             [new ApprovalReason("side_effect", "writes a file")], [ApprovalScope.Once, ApprovalScope.Session], DateTimeOffset.UtcNow.AddMinutes(1));
         var answer = fixture.Agent.Prompters["gateway:fake:c1"].AskAsync(prompt, TestContext.Current.CancellationToken).AsTask();
         await Wait.Until(() => adapter.Sent.Any(sent => sent.Text.StartsWith("Approval needed", StringComparison.Ordinal)), "the prompt");
-        Assert.Contains("write_file notes.md", adapter.Sent.Last().Text, StringComparison.Ordinal);
+        // The prompt itself: the echo of "write the file" is sent concurrently and can land after it.
+        Assert.Contains("write_file notes.md", adapter.Sent.Last(sent => sent.Text.StartsWith("Approval needed", StringComparison.Ordinal)).Text,
+            StringComparison.Ordinal);
 
         adapter.Write(Direct("guest", "/approve", id: "20"));
         await Wait.Until(() => adapter.Sent.Any(sent => sent.ReplyTo == "20"), "the refusal");

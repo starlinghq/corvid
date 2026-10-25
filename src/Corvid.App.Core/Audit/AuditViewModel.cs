@@ -28,6 +28,8 @@ public sealed class AuditViewModel : AreaViewModel
     private readonly List<AuditEvent> _events = [];
     private readonly Dictionary<long, AuditEventRow> _rows = [];
     private IReadOnlyList<EgressRequest> _egress = [];
+    /// <summary>Why the egress ledger could not be listed (the engine has no record of requests yet, G-9); null when it was.</summary>
+    private string? _egressUnavailable;
     private int _sessionIndex = -1;
     private string _pathFilter = "";
     private HashSet<long>? _match;
@@ -180,7 +182,9 @@ public sealed class AuditViewModel : AreaViewModel
     /// <summary>Nothing is selected: the column says how to read an event.</summary>
     public bool HasNoSelection => _selected is null;
 
-    public string NoSelectionText => _egress.Count == 0
+    public string NoSelectionText => _egressUnavailable is { } reason
+        ? $"Select an event to read it as stored. {reason}"
+        : _egress.Count == 0
         ? "Select an event to read it as stored. Nothing in this log left the machine."
         : string.Create(CultureInfo.InvariantCulture,
             $"Select an event to read it as stored. {(_egress.Count == 1 ? "One request" : $"{_egress.Count} requests")} left the machine; selecting {(_egress.Count == 1 ? "it" : "one")} opens the egress ledger.");
@@ -469,12 +473,22 @@ public sealed class AuditViewModel : AreaViewModel
         var sessionId = SessionId;
         IReadOnlyList<AuditEvent> events;
         IReadOnlyList<EgressRequest> egress;
+        string? egressUnavailable = null;
         IReadOnlyList<DetectionMatch> detections;
         ScanResult? scan;
         try
         {
             events = await _service.ReadEventsAsync(sessionId, CancellationToken.None);
-            egress = await _service.ListEgressAsync(sessionId, CancellationToken.None);
+            try
+            {
+                egress = await _service.ListEgressAsync(sessionId, CancellationToken.None);
+            }
+            catch (Composition.ServiceUnavailableException exception)
+            {
+                // The ledger alone is missing: the log still shows, and the page says why it cannot claim nothing left.
+                egress = [];
+                egressUnavailable = SafeText.Clean(exception.Message);
+            }
             detections = await _service.ListDetectionsAsync(sessionId, CancellationToken.None);
             scan = await _service.GetLastScanAsync(sessionId, CancellationToken.None);
         }
@@ -498,6 +512,7 @@ public sealed class AuditViewModel : AreaViewModel
         _events.AddRange(events);
         _rows.Clear();
         _egress = egress;
+        _egressUnavailable = egressUnavailable;
         OnPropertyChanged(nameof(NoSelectionText));
         var match = detections.FirstOrDefault();
         Detection = match is null ? null : new AuditDetectionView(match,

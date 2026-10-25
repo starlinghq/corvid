@@ -29,10 +29,19 @@
          (the checker refuses them), and the in-app MCP endpoint is not wanted in a process that will host the engine. -->
     <UnoDisableHotDesign>true</UnoDisableHotDesign>
     <UnoDisableMCPSupport>true</UnoDisableMCPSupport>
+    <!-- Uno.Sdk's implicit Microsoft.Extensions.Logging.Console is 10.0.12; the desktop target also reaches the composition
+         root (through Corvid.App.Engine), whose Microsoft.Extensions.Hosting needs 10.0.13 (NU1605 otherwise). -->
+    <MicrosoftLoggingVersion>10.0.13</MicrosoftLoggingVersion>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="../Corvid.App.Core/Corvid.App.Core.csproj" />
+  </ItemGroup>
+
+  <!-- The in-process engine (the engine option), in the desktop target alone: the browser runs attached to an engine elsewhere and
+       never references the composition root (the checker's AppHead rule). Platforms/Desktop/Program.cs starts it. -->
+  <ItemGroup Condition="$(TargetFramework.Contains('-desktop'))">
+    <ProjectReference Include="../Corvid.App.Engine/Corvid.App.Engine.csproj" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(IsBrowserWasm)' == 'true'">

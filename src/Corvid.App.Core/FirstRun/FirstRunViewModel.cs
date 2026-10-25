@@ -212,11 +212,19 @@ public sealed class FirstRunViewModel : AreaViewModel
     private bool _active;
     private bool _finished;
     private int _step;
-    private string _workspace = DemoFirstRunService.Workspace;
+    // The service's first suggestion (the configured workspace) once the page loads, unless the person typed one first.
+    private string _workspace = "";
+    private bool _workspaceTyped;
     private IReadOnlyList<TextRun> _workspaceNote = [];
     private bool _choosingWorkspace;
+    // The built-in defaults until the configuration's own mode and posture arrive (CurrentAsync), unless the person chose first.
     private ApprovalMode _mode = ApprovalMode.Smart;
     private string _posture = "redact";
+    private CurrentSetup _current = CurrentSetup.None;
+    private bool _modeChosen;
+    private bool _postureChosen;
+    private bool _currentUnknown;
+    private readonly Task _currentLoad;
     private IReadOnlyList<TextRun> _hermes = [];
     private bool _hasHermes;
     private IReadOnlyList<TextRun> _notice = [];
@@ -243,14 +251,14 @@ public sealed class FirstRunViewModel : AreaViewModel
         Downloads.Started += (_, _) => Say("Downloading. The rest of the setup does not wait for it.");
         Modes =
         [
-            new(ApprovalMode.Manual, "Manual", " · every side effect asks", SetMode),
-            new(ApprovalMode.Smart, "Smart", " · runs unasked only when Kev rates it low risk and it stays in the workspace, with no network, elevation or destructive tool", SetMode),
-            new(ApprovalMode.Permissive, "Permissive", " · follows the fabric: calibrated levels 0 to 1 run, 2 to 4 ask", SetMode),
+            new(ApprovalMode.Manual, "Manual", " · every side effect asks", ChooseMode),
+            new(ApprovalMode.Smart, "Smart", " · runs unasked only when Kev rates it low risk and it stays in the workspace, with no network, elevation or destructive tool", ChooseMode),
+            new(ApprovalMode.Permissive, "Permissive", " · follows the fabric: calibrated levels 0 to 1 run, 2 to 4 ask", ChooseMode),
         ];
         Postures =
         [
-            new("redact", "Redact: PII and credential values are replaced before a request leaves", new RelayCommand(() => Posture = "redact")),
-            new("local only", "Local only: cloud models are never asked", new RelayCommand(() => Posture = "local only")),
+            new("redact", "Redact: PII and credential values are replaced before a request leaves", new RelayCommand(() => ChoosePosture("redact"))),
+            new("local only", "Local only: cloud models are never asked", new RelayCommand(() => ChoosePosture("local only"))),
         ];
 
         RunAgainCommand = new AsyncRelayCommand(RunChecksAsync);
@@ -265,11 +273,19 @@ public sealed class FirstRunViewModel : AreaViewModel
             ReportFailures(command);
 
         _models.Changed += (_, _) => RefreshModels();
+        _service.EngineStatusChanged += (_, _) =>
+        {
+            if (_active)
+                ApplyStatus();
+            else
+                ApplyRunningStatus();
+        };
         _shell.PropertyChanged += OnShellChanged;
         _bar.ModeRequested += OnModeRequested;
         SetMode(_mode);
         Posture = _posture;
         RefreshModels();
+        _currentLoad = LoadCurrentAsync();
         _ = LoadAsync();
         UpdateActive();
     }
@@ -343,6 +359,7 @@ public sealed class FirstRunViewModel : AreaViewModel
         get => _workspace;
         set
         {
+            _workspaceTyped = true;
             if (SetProperty(ref _workspace, value ?? ""))
                 _ = DescribeWorkspaceAsync();
         }
@@ -359,13 +376,27 @@ public sealed class FirstRunViewModel : AreaViewModel
 
     public ApprovalMode Mode => _mode;
 
-    /// <summary>The cloud privacy posture: "redact" (the default) or "local only".</summary>
+    /// <summary>
+    /// "Manual → Smart" when the mode chosen differs from the one configured now: finishing the setup writes it. Empty when
+    /// the configured mode stays (it is then not written at all).
+    /// </summary>
+    public string ModeChange => _current.Mode is { } configured && configured != _mode
+        ? $"Configured now: {configured}. Finishing the setup changes it: {configured} → {_mode}."
+        : "";
+
+    /// <summary>"Local only → Redact" when the posture chosen differs from the one configured now; empty when it stays.</summary>
+    public string PostureChange => _current.Posture is { } configured && !string.Equals(configured, _posture, StringComparison.Ordinal)
+        ? $"Configured now: {PostureName(configured)}. Finishing the setup changes it: {PostureName(configured)} → {PostureName(_posture)}."
+        : "";
+
+    /// <summary>The cloud privacy posture: "redact" (the default), "local only", or "send" when the configuration sends unredacted.</summary>
     public string Posture
     {
         get => _posture;
         set
         {
             SetProperty(ref _posture, value ?? "redact");
+            OnPropertyChanged(nameof(PostureChange));
             foreach (var posture in Postures)
                 posture.IsSelected = posture.Label == _posture;
         }
@@ -447,7 +478,14 @@ public sealed class FirstRunViewModel : AreaViewModel
 
     private async Task FinishAsync(CancellationToken cancellationToken)
     {
-        await _service.SaveAsync(new SetupChoices(_workspace, _mode, _posture), cancellationToken).ConfigureAwait(true);
+        // Only what differs from the configuration now is written: a setup opened on a configured machine (a model went
+        // missing) leaves a Manual mode or a Refuse posture as it was unless the person changed it here. When the
+        // configured values could not be read, only what the person chose is written.
+        await _currentLoad.ConfigureAwait(true);
+        ApprovalMode? mode = _currentUnknown ? (_modeChosen ? _mode : null) : _current.Mode == _mode ? null : _mode;
+        string? posture = _currentUnknown ? (_postureChosen ? _posture : null)
+            : string.Equals(_current.Posture, _posture, StringComparison.Ordinal) ? null : _posture;
+        await _service.SaveAsync(new SetupChoices(_workspace, mode, posture), cancellationToken).ConfigureAwait(true);
         // The app now runs with what it has; the Models badge says how many default models are still missing (F23).
         _shell.SetBadge(Area.Models, _models.Snapshot.Catalogue.Count(model => model.InDefaultSet && model.IsMissing));
         // F1 ends on an empty session, not on whichever session the rail lists first, and the status bar keeps what the
@@ -459,13 +497,45 @@ public sealed class FirstRunViewModel : AreaViewModel
         ApplyRunningStatus();
     }
 
-    private async Task LoadAsync()
+    /// <summary>
+    /// The model store reads the configuration and the cache on its first load (the demo's has its snapshot already); the
+    /// first run can be the first page to show it, so it asks too. A failure is said here, beside the checks.
+    /// </summary>
+    private async Task LoadModelsAsync()
     {
         try
         {
+            await _models.LoadAsync().ConfigureAwait(true);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            Fail($"The models could not be read: {Spans.Escape(exception.Message)}");
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        await _currentLoad.ConfigureAwait(true);
+        var models = LoadModelsAsync();
+        await LoadChecksAsync().ConfigureAwait(true);
+        await models.ConfigureAwait(true);
+    }
+
+    private async Task LoadChecksAsync()
+    {
+        try
+        {
+            // The suggestions first: their first is the workspace the configuration names, which the page starts on.
+            var suggestions = await _service.SuggestWorkspacesAsync().ConfigureAwait(true);
+            if (!_workspaceTyped && suggestions.Count > 0)
+            {
+                _workspace = suggestions[0];
+                OnPropertyChanged(nameof(Workspace));
+            }
+
             await RunChecksAsync(CancellationToken.None).ConfigureAwait(true);
             await DescribeWorkspaceAsync().ConfigureAwait(true);
-            foreach (var path in await _service.SuggestWorkspacesAsync().ConfigureAwait(true))
+            foreach (var path in suggestions)
             {
                 var folder = path;
                 WorkspaceChoices.Add(new Choice(SafeText.Reveal(folder), SafeText.Reveal(folder), new RelayCommand(() =>
@@ -479,13 +549,15 @@ public sealed class FirstRunViewModel : AreaViewModel
             HasHermes = hermes is not null;
             HermesText = Spans.Parse(hermes is null
                 ? "No Hermes installation was found. Nothing to import."
-                : $"Found `{Spans.Escape(hermes.Path)}`: {hermes.Memories} memories and {hermes.Skills} skills. Memory previews every entry; nothing is staged until you approve it.");
+                : $"Found `{Spans.Escape(hermes.Path)}`: {Count(hermes.Memories, "memory", "memories")} and {Count(hermes.Skills, "skill", "skills")}. Memory previews every entry; nothing is staged until you approve it.");
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
             Fail($"The checks could not run: {Spans.Escape(exception.Message)}");
         }
     }
+
+    private static string Count(int count, string one, string many) => count == 1 ? $"1 {one}" : $"{count} {many}";
 
     private async Task RunChecksAsync(CancellationToken cancellationToken)
     {
@@ -525,12 +597,55 @@ public sealed class FirstRunViewModel : AreaViewModel
             Fail($"The clipboard did not take `{shown}`: select it in the fix and copy it by hand.");
     }
 
+    /// <summary>The mode and posture configured now: the setup starts on them, so finishing it changes nothing it was not asked to.</summary>
+    private async Task LoadCurrentAsync()
+    {
+        try
+        {
+            _current = await _service.CurrentAsync().ConfigureAwait(true) ?? CurrentSetup.None;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            _currentUnknown = true;
+            Fail($"The configured approval mode and cloud privacy could not be read, so finishing writes only a mode or posture you pick: {Spans.Escape(exception.Message)}");
+            return;
+        }
+
+        if (_current.Mode is { } mode && !_modeChosen)
+            SetMode(mode);
+        if (_current.Posture is { } posture && !_postureChosen)
+            Posture = posture;
+        OnPropertyChanged(nameof(ModeChange));
+        OnPropertyChanged(nameof(PostureChange));
+    }
+
+    private void ChooseMode(ApprovalMode mode)
+    {
+        _modeChosen = true;
+        SetMode(mode);
+    }
+
+    private void ChoosePosture(string posture)
+    {
+        _postureChosen = true;
+        Posture = posture;
+    }
+
+    private static string PostureName(string posture) => posture switch
+    {
+        "redact" => "Redact",
+        "local only" => "Local only",
+        "send" => "Send (unredacted)",
+        _ => posture,
+    };
+
     private void SetMode(ApprovalMode mode)
     {
         _mode = mode;
         foreach (var option in Modes)
             option.IsSelected = option.Mode == mode;
         OnPropertyChanged(nameof(Mode));
+        OnPropertyChanged(nameof(ModeChange));
     }
 
     private void Say(string message)
@@ -563,8 +678,9 @@ public sealed class FirstRunViewModel : AreaViewModel
     {
         var snapshot = _models.Snapshot;
         Downloads.Refresh();
-        VaultPresent = snapshot.Privacy.VaultPresent;
-        var decider = snapshot.Find(snapshot.Decider.Model);
+        // A snapshot not loaded yet says nothing about Vault or the decider.
+        VaultPresent = !snapshot.IsLoaded || snapshot.Privacy.VaultPresent;
+        var decider = snapshot.IsLoaded ? snapshot.Find(snapshot.Decider.Model) : null;
         DeciderWarning = decider is { State: not ModelState.Cached }
             ? Spans.Parse($"Without `{Spans.Escape(decider.Name)}`, decisions run on the degraded tier and every chat says so. Memory writes then wait for your review.")
             : [];
@@ -614,17 +730,15 @@ public sealed class FirstRunViewModel : AreaViewModel
     private void ApplyStatus()
     {
         var snapshot = _models.Snapshot;
-        var decider = snapshot.Decider.Tier == DeciderTier.Calibrated
-            ? $"{SafeText.Clean(snapshot.Decider.DisplayName)}, calibrated"
-            : $"degraded until {SafeText.Clean(snapshot.Decider.Model)} is downloaded";
+        var decider = ModelsViewModel.StatusDecider(snapshot);
         var downloads = ModelsViewModel.StatusDownloads(snapshot);
-        _lease.Engine = "not started · models load after this page";
+        _lease.Engine = _service.EngineStatus ?? "not started · models load after this page";
         _lease.Generator = "";
         _lease.Decider = decider;
         _lease.Context = "";
         _lease.AreaFields = downloads;
         _lease.Mode = null;
-        _lease.Tags = snapshot.Privacy.VaultPresent
+        _lease.Tags = !snapshot.IsLoaded || snapshot.Privacy.VaultPresent
             ? []
             : [new StatusTag("Vault absent", Tone.Amber, "No answer at $XDG_RUNTIME_DIR/corvid-vault.sock: cloud models and gateway bots are unavailable.")];
         _lease.Scheduler = "";
@@ -645,7 +759,7 @@ public sealed class FirstRunViewModel : AreaViewModel
             return;
         var snapshot = _models.Snapshot;
         var missing = snapshot.Catalogue
-            .Where(model => model.InDefaultSet && model.Kind == ModelKind.Local && model.State != ModelState.Cached)
+            .Where(model => snapshot.IsLoaded && model.InDefaultSet && model.Kind == ModelKind.Local && model.State != ModelState.Cached)
             .Select(model => model.Name)
             .ToList();
         var tags = new List<StatusTag>();
@@ -655,9 +769,9 @@ public sealed class FirstRunViewModel : AreaViewModel
                 "Corvid runs with what it has: decisions use the degraded tier and memory writes wait for review until these models are downloaded."));
         }
 
-        if (!snapshot.Privacy.VaultPresent)
+        if (snapshot.IsLoaded && !snapshot.Privacy.VaultPresent)
             tags.Add(new StatusTag("Vault absent", Tone.Amber, "No answer at $XDG_RUNTIME_DIR/corvid-vault.sock: cloud models and gateway bots are unavailable."));
-        _bar.Engine = "in-process";
+        _bar.Engine = _service.EngineStatus ?? "in-process";
         _bar.Generator = "";
         _bar.Decider = ModelsViewModel.StatusDecider(snapshot);
         _bar.Context = "";

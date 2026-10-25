@@ -48,6 +48,35 @@ public enum RestoreStatus
 public sealed record RestoreResult(RestoreStatus Status, RestorePlan Plan, ImmutableArray<string> Restored, ImmutableArray<string> Merged,
     ImmutableArray<RestoreConflict> Conflicts, string? Detail = null, string? CheckpointId = null);
 
+/// <summary>What a restore puts back (docs/plan/ui.md §4.6): the files and the transcript, the transcript alone, or the files alone.</summary>
+public enum RestoreScope
+{
+    /// <summary><c>/undo</c> and <c>/rollback</c>: the files go back and the transcript moves to the plan's position.</summary>
+    FilesAndConversation,
+
+    /// <summary>The transcript moves to the plan's position; the files stay as they are.</summary>
+    ConversationOnly,
+
+    /// <summary>The files go back (all of the plan's, or only some paths, G-3); the transcript stays.</summary>
+    FilesOnly,
+}
+
+/// <summary>One file a restore would change: as it is now and as the restore would leave it (null: absent).</summary>
+/// <param name="Merged">The restore would merge three ways with content that is not Corvid's rather than replace it.</param>
+public sealed record DraftedFile(string Path, StoredFile? Now, StoredFile? Restored, bool Merged);
+
+/// <summary>
+/// What putting a plan's files back would do, worked out without writing anything (<see cref="CheckpointService.DraftAsync"/>):
+/// the files it changes, those it merges, and the conflicts that would refuse it. <see cref="Detail"/> says why the files
+/// cannot be put back at all (checkpoints unavailable, a call not recorded); then nothing else is filled in.
+/// </summary>
+/// <param name="Revision">The store's snapshot of the workspace as it is now, which <see cref="DraftedFile.Now"/> comes from.</param>
+public sealed record RestoreDraft(RestorePlan Plan, string? Revision, ImmutableArray<DraftedFile> Files, ImmutableArray<RestoreConflict> Conflicts,
+    string? Detail = null)
+{
+    public bool CanRestore => Detail is null && Conflicts.IsEmpty;
+}
+
 /// <summary>
 /// Checkpoints for the turn loop and the <c>/undo</c> and <c>/rollback</c> commands (plan §15, §3.2, §10.2). A checkpoint
 /// is taken before a tool call that changes files and another after it, both recorded as <c>CheckpointTaken</c> events
@@ -194,6 +223,19 @@ public sealed class CheckpointService
         return Plan(snapshot, ledger[^number].CallSequence - 1, "rollback", changesFiles);
     }
 
+    /// <summary>
+    /// Rollback to before the ledger entry whose before checkpoint is <paramref name="checkpointId"/>: the same plan as
+    /// <see cref="PlanRollback"/> for that entry's number, named by the checkpoint so it cannot shift when a later call
+    /// takes one. Null when no visible ledger entry has it.
+    /// </summary>
+    public static RestorePlan? PlanRollbackTo(SessionSnapshot snapshot, string checkpointId, Func<ToolCallIssued, bool>? changesFiles = null)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpointId);
+        var entry = Ledger(snapshot).FirstOrDefault(candidate => string.Equals(candidate.Before.Checkpoint.CheckpointId, checkpointId, StringComparison.Ordinal));
+        return entry is null ? null : Plan(snapshot, entry.CallSequence - 1, "rollback", changesFiles);
+    }
+
     private static RestorePlan Plan(SessionSnapshot snapshot, long position, string reason, Func<ToolCallIssued, bool>? changesFiles)
     {
         var entries = Ledger(snapshot).Where(entry => entry.CallSequence > position).ToImmutableArray();
@@ -217,22 +259,99 @@ public sealed class CheckpointService
     /// and nothing appended, unless every path can be reverted without losing the user's content. Call it only while the
     /// session runs no turn (the session actor's exclusive work).
     /// </summary>
-    public async Task<RestoreResult> RestoreAsync(IEventLog log, string sessionId, RestorePlan plan, CancellationToken cancellationToken = default)
+    public Task<RestoreResult> RestoreAsync(IEventLog log, string sessionId, RestorePlan plan, CancellationToken cancellationToken = default) =>
+        RestoreAsync(log, sessionId, plan, RestoreScope.FilesAndConversation, null, cancellationToken);
+
+    /// <summary>
+    /// Applies a plan with a scope (docs/plan/ui.md §4.6). <see cref="RestoreScope.FilesAndConversation"/> is the restore
+    /// <c>/undo</c> and <c>/rollback</c> make. <see cref="RestoreScope.ConversationOnly"/> appends <c>SessionRewound</c>
+    /// with no paths and writes no file: the files keep every change, recorded or not, as the person chose.
+    /// <see cref="RestoreScope.FilesOnly"/> puts the files back exactly as a full restore would (the same merges and
+    /// refusals, a restore checkpoint first) and leaves the transcript where it is; with <paramref name="only"/> it puts back
+    /// just those paths (G-3: one file from the ledger), each to how it was before the plan's first call that changed it.
+    /// Call it only while the session runs no turn.
+    /// </summary>
+    /// <param name="only">Workspace-relative paths a files-only restore is limited to; null for all of the plan's.</param>
+    public async Task<RestoreResult> RestoreAsync(IEventLog log, string sessionId, RestorePlan plan, RestoreScope scope,
+        IReadOnlyCollection<string>? only, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(log);
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentNullException.ThrowIfNull(plan);
-        if (plan.Entries.IsEmpty || Refusal(log, sessionId, plan, cancellationToken) is not null)
-            return Rewind(log, sessionId, plan, cancellationToken);
+        if (only is not null && scope != RestoreScope.FilesOnly)
+            throw new ArgumentException("Only a files-only restore can be limited to some paths.", nameof(only));
+        switch (scope)
+        {
+            case RestoreScope.ConversationOnly:
+                return RewindConversation(log, sessionId, plan, cancellationToken);
+            case RestoreScope.FilesAndConversation when plan.Entries.IsEmpty || Refusal(log, sessionId, plan, cancellationToken) is not null:
+                return Rewind(log, sessionId, plan, cancellationToken);
+            case RestoreScope.FilesOnly when !plan.Unrecorded.IsEmpty:
+                return Refused(plan, UnrecordedReason(plan));
+            case RestoreScope.FilesOnly when !plan.Entries.Any(entry => entry.After is null || entry.Paths.Any(path => only is null || only.Contains(path))):
+                return Refused(plan, only is null ? "no call after this point changed files" : $"no call after this point changed {string.Join(", ", only)}");
+        }
+
+        var draft = await DraftAsync(plan, only, cancellationToken).ConfigureAwait(false);
+        if (draft.Detail is { } detail)
+            return Refused(plan, detail);
+        if (!draft.Conflicts.IsEmpty)
+            return new RestoreResult(RestoreStatus.Refused, plan, [], [], draft.Conflicts,
+                "nothing was changed: putting these back would lose content that is not Corvid's");
+        // Files only, and every file is already as it was: nothing to write, and no restore to record.
+        if (scope == RestoreScope.FilesOnly && draft.Files.IsEmpty)
+            return new RestoreResult(RestoreStatus.Restored, plan, [], [], []);
+
+        // The workspace as it is now is logged before anything is written, so a restore that stops part way (a disk error,
+        // a permission) still leaves a recorded checkpoint of what was there.
+        var restoreId = NewId();
+        var restored = draft.Files.Select(file => file.Path).ToImmutableArray();
+        Append(log, sessionId, new CheckpointTaken(restoreId, draft.Revision!, Kind: CheckpointKinds.Restore, Paths: restored));
+        var writing = "";
+        try
+        {
+            // Deletions first, deepest first, so a file can replace what was a directory of Corvid's files.
+            foreach (var file in draft.Files.Where(file => file.Restored is null).OrderByDescending(file => file.Path.Length))
+            {
+                writing = file.Path;
+                File.Delete(Path.Combine(Store.Workspace, file.Path));
+            }
+            foreach (var file in draft.Files.Where(file => file.Restored is not null))
+            {
+                writing = file.Path;
+                await WriteAsync(file.Path, file.Restored!.Value).ConfigureAwait(false);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new CheckpointException($"the restore stopped at {writing} ({exception.Message}): some files were put back and the " +
+                $"conversation was not moved; the workspace as it was before is checkpoint {restoreId} (revision {draft.Revision})", exception);
+        }
+
+        if (scope == RestoreScope.FilesAndConversation)
+            Append(log, sessionId, new SessionRewound(plan.Position, plan.Reason, restored, restoreId));
+        return new RestoreResult(RestoreStatus.Restored, plan, restored, [.. draft.Files.Where(file => file.Merged).Select(file => file.Path)], [],
+            CheckpointId: restoreId);
+    }
+
+    /// <summary>
+    /// What putting the plan's files back would do, without writing to the workspace or the log: each file's content now and
+    /// as restored, the three-way merges, and the conflicts that would refuse the restore. Like the restore itself, it first
+    /// snapshots the workspace into the checkpoint store (a commit there, never a write to the workspace).
+    /// </summary>
+    /// <param name="only">Workspace-relative paths to limit it to (G-3); null for all of the plan's.</param>
+    public async Task<RestoreDraft> DraftAsync(RestorePlan plan, IReadOnlyCollection<string>? only = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
         if (Store.UnavailableReason is { } unavailable)
-            return Refused(plan, $"checkpoints are unavailable ({unavailable}), so the files cannot be put back");
+            return Undraftable(plan, $"checkpoints are unavailable ({unavailable}), so the files cannot be put back");
         if (plan.Entries.FirstOrDefault(entry => entry.After is null) is { } unfinished)
-            return Refused(plan, $"the checkpoint for call '{unfinished.CallId}' has no record of what the call changed, so Corvid's " +
+            return Undraftable(plan, $"the checkpoint for call '{unfinished.CallId}' has no record of what the call changed, so Corvid's " +
                 "changes cannot be told from yours");
         foreach (var entry in plan.Entries)
             if (!await Store.ContainsAsync(entry.Before.Checkpoint.Revision).ConfigureAwait(false)
                 || !await Store.ContainsAsync(entry.After!.Checkpoint.Revision).ConfigureAwait(false))
-                return Refused(plan, $"the checkpoints for call '{entry.CallId}' are not in this workspace's store ({Store.Workspace})");
+                return Undraftable(plan, $"the checkpoints for call '{entry.CallId}' are not in this workspace's store ({Store.Workspace})");
 
         var current = await Store.SnapshotAsync($"restore {plan.Reason}").ConfigureAwait(false);
         var now = await Store.ReadAsync(current).ConfigureAwait(false);
@@ -253,6 +372,8 @@ public sealed class CheckpointService
             foreach (var path in entry.Paths)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (only is not null && !only.Contains(path))
+                    continue;
                 if (uncaptured.Contains(path))
                 {
                     conflicts.Add(new(path, $"was not in the checkpoint before {entry.Tool} changed it (too large or protected), so it cannot be put back"));
@@ -296,39 +417,13 @@ public sealed class CheckpointService
         foreach (var (path, file) in changes)
             if (Unsafe(path, now.ContainsKey(path), file) is { } reason)
                 conflicts.Add(new(path, reason));
-        if (conflicts.Count > 0)
-            return new RestoreResult(RestoreStatus.Refused, plan, [], [], [.. conflicts.DistinctBy(conflict => conflict.Path)],
-                "nothing was changed: putting these back would lose content that is not Corvid's");
-
-        // The workspace as it is now is logged before anything is written, so a restore that stops part way (a disk error,
-        // a permission) still leaves a recorded checkpoint of what was there.
-        var restoreId = NewId();
-        var restored = changes.Select(change => change.Key).ToImmutableArray();
-        Append(log, sessionId, new CheckpointTaken(restoreId, current, Kind: CheckpointKinds.Restore, Paths: restored));
-        var writing = "";
-        try
-        {
-            // Deletions first, deepest first, so a file can replace what was a directory of Corvid's files.
-            foreach (var (path, _) in changes.Where(change => change.Value is null).OrderByDescending(change => change.Key.Length))
-            {
-                writing = path;
-                File.Delete(Path.Combine(Store.Workspace, path));
-            }
-            foreach (var (path, file) in changes.Where(change => change.Value is not null))
-            {
-                writing = path;
-                await WriteAsync(path, file!.Value).ConfigureAwait(false);
-            }
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            throw new CheckpointException($"the restore stopped at {writing} ({exception.Message}): some files were put back and the " +
-                $"conversation was not moved; the workspace as it was before is checkpoint {restoreId} (revision {current})", exception);
-        }
-
-        Append(log, sessionId, new SessionRewound(plan.Position, plan.Reason, restored, restoreId));
-        return new RestoreResult(RestoreStatus.Restored, plan, restored, [.. merged.Where(restored.Contains)], [], CheckpointId: restoreId);
+        return new RestoreDraft(plan, current,
+            [.. changes.Select(change => new DraftedFile(change.Key, now.TryGetValue(change.Key, out var stored) ? stored : null, change.Value,
+                merged.Contains(change.Key)))],
+            [.. conflicts.DistinctBy(conflict => conflict.Path)]);
     }
+
+    private static RestoreDraft Undraftable(RestorePlan plan, string detail) => new(plan, null, [], [], detail);
 
     /// <summary>
     /// A restore with no files to put back: only the transcript moves. Refused when the position would split a call from
@@ -348,15 +443,34 @@ public sealed class CheckpointService
         return new RestoreResult(RestoreStatus.Restored, plan, [], [], []);
     }
 
+    /// <summary>
+    /// A conversation-only restore (<see cref="RestoreScope.ConversationOnly"/>): the transcript moves to the plan's position
+    /// and every file stays as it is, so neither the plan's entries nor its unrecorded calls stop it; a position that would
+    /// split a call from its result still does. Needs no store.
+    /// </summary>
+    public static RestoreResult RewindConversation(IEventLog log, string sessionId, RestorePlan plan, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(log);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentNullException.ThrowIfNull(plan);
+        if (SessionProjection.CheckRewind(log, sessionId, plan.Position, cancellationToken) is { } invalid)
+            return Refused(plan, invalid);
+        Append(log, sessionId, new SessionRewound(plan.Position, plan.Reason, []));
+        return new RestoreResult(RestoreStatus.Restored, plan, [], [], []);
+    }
+
     private static string? Refusal(IEventLog log, string sessionId, RestorePlan plan, CancellationToken cancellationToken)
     {
         if (SessionProjection.CheckRewind(log, sessionId, plan.Position, cancellationToken) is { } invalid)
             return invalid;
         if (!plan.Unrecorded.IsEmpty)
-            return $"{string.Join(", ", plan.Unrecorded.Select(call => $"{call.ToolName} ({call.CallId})"))} changed files without a " +
-                "checkpoint, so those changes cannot be put back";
+            return UnrecordedReason(plan);
         return null;
     }
+
+    private static string UnrecordedReason(RestorePlan plan) =>
+        $"{string.Join(", ", plan.Unrecorded.Select(call => $"{call.ToolName} ({call.CallId})"))} changed files without a " +
+        "checkpoint, so those changes cannot be put back";
 
     /// <summary>
     /// Why a path may not be written or deleted now: it is excluded, a component on the way is a link or a file, or the disk

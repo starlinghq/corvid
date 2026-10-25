@@ -99,6 +99,20 @@ public sealed record ApprovalPrompt(
 /// <param name="Scope">Session or always stores a structural rule (allow or deny) for each side-effecting command.</param>
 public sealed record ApprovalAnswer(bool Approved, ApprovalScope Scope = ApprovalScope.Once)
 {
+    /// <summary>
+    /// For a session or always answer (G-11): each rule's paths as the user narrowed them, in the order of
+    /// <see cref="ApprovalPipeline.RulesFor"/>; an empty entry, or none at all, keeps that rule's paths. Only narrower paths
+    /// are written: a narrowing the pipeline cannot verify (<see cref="ApprovalPipeline.Narrow"/>) writes no rule, and the
+    /// answer applies to this action only.
+    /// </summary>
+    public ImmutableArray<ImmutableArray<string>> RulePaths { get; init; } = [];
+
+    /// <summary>
+    /// The reason the person gave with a denial, logged with the answer (<see cref="ApprovalResolved.Note"/>) so a replay
+    /// shows it as the live card did; null when none was given.
+    /// </summary>
+    public string? Reason { get; init; }
+
     public static ApprovalAnswer Approve(ApprovalScope scope = ApprovalScope.Once) => new(true, scope);
 
     public static ApprovalAnswer Deny(ApprovalScope scope = ApprovalScope.Once) => new(false, scope);
@@ -208,6 +222,32 @@ public sealed class ApprovalPipeline
         _session.TryGetValue(sessionId, out var rules) ? rules : [];
 
     public ImmutableArray<ApprovalRule> AlwaysRules => _always.Rules;
+
+    /// <summary>Every session that holds remembered rules, with its rules (K-7's listing), ordered by session id.</summary>
+    public ImmutableArray<(string SessionId, ImmutableArray<ApprovalRule> Rules)> AllSessionRules =>
+        [.. _session.Where(pair => !pair.Value.IsEmpty).OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => (pair.Key, pair.Value))];
+
+    /// <summary>
+    /// Removes a session's remembered rule (K-7): the next matching call in that session asks again. False when the session
+    /// holds no such rule (already removed), which changes nothing.
+    /// </summary>
+    public bool RemoveSessionRule(string sessionId, ApprovalRule rule)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentNullException.ThrowIfNull(rule);
+        while (_session.TryGetValue(sessionId, out var current))
+        {
+            var kept = current.RemoveAll(stored => stored.Equals(rule));
+            if (kept.Length == current.Length)
+                return false;
+            if (_session.TryUpdate(sessionId, kept, current))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>Removes an "always" rule from the rule store (K-7). False when the store holds no such rule.</summary>
+    public bool RemoveAlwaysRule(ApprovalRule rule) => _always.Remove(rule);
 
     /// <summary>Parses and describes an action without deciding anything.</summary>
     public ActionAnalysis Analyze(ProposedAction action) => Resolve(action) switch
@@ -350,10 +390,12 @@ public sealed class ApprovalPipeline
         }
 
         var scope = assessment.Offered.Contains(answer.Scope) ? answer.Scope : ApprovalScope.Once;
-        if (scope != ApprovalScope.Once)
-            Remember(context.SessionId, assessment.Analysis, answer.Approved ? RuleDecision.Allow : RuleDecision.Deny, scope);
+        if (scope != ApprovalScope.Once
+            && !Remember(context.SessionId, assessment.Analysis, answer.Approved ? RuleDecision.Allow : RuleDecision.Deny, scope, answer.RulePaths))
+            scope = ApprovalScope.Once;
         var result = Resolve(context, assessment, approvalId, answer.Approved ? ApprovalResolution.UserApproved : ApprovalResolution.UserDenied,
-            $"user: {(answer.Approved ? "approved" : "denied")} ({WireNames.Scope(scope)})");
+            $"user: {(answer.Approved ? "approved" : "denied")} ({WireNames.Scope(scope)})", WireNames.Scope(scope),
+            string.IsNullOrWhiteSpace(answer.Reason) ? null : answer.Reason.Trim());
         return result with { Scope = scope };
     }
 
@@ -444,10 +486,10 @@ public sealed class ApprovalPipeline
     }
 
     private ApprovalResult Resolve(ApprovalContext context, ApprovalAssessment assessment, string approvalId, ApprovalResolution resolution,
-        string reason)
+        string reason, string? scope = null, string? note = null)
     {
         var approved = resolution == ApprovalResolution.UserApproved;
-        Append(context.SessionId, new ApprovalResolved(approvalId, approved, reason), CancellationToken.None);
+        Append(context.SessionId, new ApprovalResolved(approvalId, approved, reason, scope, note), CancellationToken.None);
         RecordOutcome(context, assessment, resolution switch
         {
             ApprovalResolution.UserApproved => "user_approved",
@@ -464,17 +506,89 @@ public sealed class ApprovalPipeline
             _fabric.RecordOutcome(context.SessionId, risk.DecisionId, outcome, CancellationToken.None);
     }
 
-    private void Remember(string sessionId, ActionAnalysis analysis, RuleDecision decision, ApprovalScope scope)
+    /// <summary>Stores the answer's rules, narrowed as it says; false (and nothing stored) when the narrowing is not narrower.</summary>
+    private bool Remember(string sessionId, ActionAnalysis analysis, RuleDecision decision, ApprovalScope scope,
+        ImmutableArray<ImmutableArray<string>> narrowed)
     {
-        var now = _time.GetUtcNow();
+        if (!Narrow(RulesFor(analysis, decision, _time.GetUtcNow()), narrowed, out var rules, out _))
+            return false;
+        if (scope == ApprovalScope.Always)
+        {
+            // The person has answered: a rules file that cannot be written (another process holding its lock too long, a full
+            // disk) costs only the rule, and the answer stands for this action, recorded as once.
+            try
+            {
+                _always.Add(rules);
+            }
+            catch (Exception exception) when (exception is IOException or TimeoutException or UnauthorizedAccessException or InvalidDataException)
+            {
+                return false;
+            }
+        }
+        else
+            _session.AddOrUpdate(sessionId, _ => rules, (_, existing) => existing.AddRange(rules));
+        return true;
+    }
+
+    /// <summary>
+    /// The rules a session or always answer to an action writes, one per side-effecting command (every command when none
+    /// is), in this order: what a surface previews before the user confirms "always" (G-11).
+    /// </summary>
+    public static ImmutableArray<ApprovalRule> RulesFor(ActionAnalysis analysis, RuleDecision decision, DateTimeOffset createdAt)
+    {
+        ArgumentNullException.ThrowIfNull(analysis);
         var commands = analysis.Commands.Where(command => !command.ReadOnly).ToList();
         if (commands.Count == 0)
             commands = [.. analysis.Commands];
-        var rules = commands.Select(command => ApprovalRule.From(decision, analysis.Kind, command, analysis.Text, now)).ToList();
-        if (scope == ApprovalScope.Always)
-            _always.Add(rules);
-        else
-            _session.AddOrUpdate(sessionId, _ => [.. rules], (_, existing) => existing.AddRange(rules));
+        return [.. commands.Select(command => ApprovalRule.From(decision, analysis.Kind, command, analysis.Text, createdAt))];
+    }
+
+    /// <summary>
+    /// Narrows each rule's paths to the user's (G-11): <paramref name="paths"/> holds one entry per rule, in order, and an
+    /// empty entry (or no entries) keeps that rule's paths. Every narrowed path must be absolute and at or under one of the
+    /// rule's own paths (equal to it for a pattern); a rule without paths cannot be narrowed this way. Nothing is narrowed
+    /// when any path fails, and <paramref name="error"/> says which.
+    /// </summary>
+    public static bool Narrow(ImmutableArray<ApprovalRule> rules, ImmutableArray<ImmutableArray<string>> paths,
+        out ImmutableArray<ApprovalRule> narrowed, out string? error)
+    {
+        narrowed = rules;
+        error = null;
+        if (paths.IsDefaultOrEmpty)
+            return true;
+        if (paths.Length > rules.Length)
+        {
+            error = $"{paths.Length} rules were narrowed but the answer writes {rules.Length}.";
+            return false;
+        }
+        var result = rules.ToBuilder();
+        for (var i = 0; i < paths.Length; i++)
+        {
+            if (paths[i].IsDefaultOrEmpty)
+                continue;
+            var rule = rules[i];
+            var kept = new List<string>();
+            foreach (var path in paths[i])
+            {
+                if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path))
+                {
+                    error = $"'{path}' is not an absolute path.";
+                    return false;
+                }
+                var normal = PathMath.Normalize(path);
+                if (!rule.Paths.Any(original => original.AsSpan().IndexOfAny("*?[") >= 0 ? original == normal : PathMath.IsAtOrUnder(normal, original)))
+                {
+                    error = rule.Paths.IsEmpty
+                        ? $"the rule for '{rule.Verb}' names no paths, so it cannot be narrowed to {normal}."
+                        : $"{normal} is not under {string.Join(" or ", rule.Paths)}; a rule can only be narrowed.";
+                    return false;
+                }
+                kept.Add(normal);
+            }
+            result[i] = rule with { Paths = [.. kept.Distinct(StringComparer.Ordinal)] };
+        }
+        narrowed = result.ToImmutable();
+        return true;
     }
 
     /// <param name="skip">Log <c>risk</c> as skipped (C-030) instead of asking it: its below-floor action, ask, applies.</param>

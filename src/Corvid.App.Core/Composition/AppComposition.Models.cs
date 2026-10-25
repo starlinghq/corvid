@@ -9,11 +9,10 @@ public sealed partial class AppComposition
 
     /// <summary>
     /// The model store the Models page and the first run share, so a download started on the first run shows its progress
-    /// on Models. Demo mode (the only mode until Corvid.App.Engine exists) draws Models.png's moment, or, when the window
+    /// on Models. Demo mode (the engine's comes from <see cref="Services"/> instead) draws Models.png's moment, or, when the window
     /// opens on the first run (<c>--page first-run</c>), FirstRun.png's fresh machine with two default models missing.
     /// </summary>
-    public IModelService ModelService => _modelService ??= new DemoModelService(Dispatcher, Time,
-        Options.Page == Area.FirstRun ? DemoModelScene.FirstRun : DemoModelScene.Main);
+    public IModelService ModelService => _modelService ??= Services.CreateModelService(this);
 
     /// <summary>The Models area: slots, the catalogue, downloads and placement.</summary>
     public ModelsViewModel Models => _models ??= new ModelsViewModel(ModelService, Shell, StatusBar);

@@ -882,8 +882,13 @@
       </Grid>
     </Border>
 
-    <!-- The transcript: a virtualised list, at most 960 wide, 16px 24px 8px; blocks 10 apart, turns 14. -->
+    <!-- The transcript: a virtualised list, at most 960 wide, 16px 24px 8px; blocks 10 apart, turns 14. A refusal's red
+         strip takes its own row under it, so it never covers the card it is about. -->
     <Grid Grid.Row="1">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="*" />
+        <RowDefinition Height="Auto" />
+      </Grid.RowDefinitions>
       <ScrollViewer x:Name="TranscriptScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                     HorizontalScrollMode="Disabled" ViewChanged="OnTranscriptViewChanged" AutomationProperties.Name="Transcript">
         <!-- At most 960 wide and on the left, as .transcript's max-width in its flex column. -->
@@ -904,8 +909,13 @@
               <StackLayout Spacing="10" />
             </ItemsRepeater.Layout>
           </ItemsRepeater>
-          <TextBlock Text="No session is open. Pick one in the rail." Style="{StaticResource CorvidMutedText}"
-                     Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.HasSession), Mode=OneWay}" />
+          <StackPanel Spacing="10" Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.HasSession), Mode=OneWay}">
+            <TextBlock Text="{x:Bind ViewModel.EmptyText}" Style="{StaticResource CorvidMutedText}" TextWrapping="Wrap" />
+            <!-- The engine starts one in the window's workspace (Ctrl+N); the demo always has a session open. -->
+            <controls:CorvidButton Content="New session" Variant="Primary" Style="{StaticResource CorvidSmallButton}" HorizontalAlignment="Left"
+                                   Command="{x:Bind ViewModel.NewSessionCommand}"
+                                   Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.CanCreateSession)}" />
+          </StackPanel>
         </StackPanel>
         </Grid>
       </ScrollViewer>
@@ -925,7 +935,7 @@
           </StackPanel>
         </Border>
       </Button>
-      <controls:ToneRow Tone="Red" Margin="24,0,24,8" VerticalAlignment="Bottom" AutomationProperties.LiveSetting="Assertive"
+      <controls:ToneRow Grid.Row="1" Tone="Red" Margin="24,4,24,8" AutomationProperties.LiveSetting="Assertive"
                         Visibility="{x:Bind ui:Ui.VisibleIfText(ViewModel.Session.Error), Mode=OneWay, FallbackValue=Collapsed}">
         <TextBlock Text="{x:Bind ViewModel.Session.Error, Mode=OneWay, FallbackValue=''}" TextWrapping="Wrap" />
       </controls:ToneRow>

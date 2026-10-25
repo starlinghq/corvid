@@ -376,6 +376,8 @@
                       </DataTemplate>
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
+                  <TextBlock Margin="14,0,14,12" Text="{x:Bind ViewModel.ModeChange, Mode=OneWay}" Style="{StaticResource PanelSmall}" TextWrapping="Wrap"
+                             Visibility="{x:Bind ui:Ui.VisibleIfText(ViewModel.ModeChange), Mode=OneWay}" />
                 </StackPanel>
               </Border>
 
@@ -400,6 +402,8 @@
                         </DataTemplate>
                       </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                    <TextBlock Text="{x:Bind ViewModel.PostureChange, Mode=OneWay}" Style="{StaticResource PanelSmall}" TextWrapping="Wrap"
+                               Visibility="{x:Bind ui:Ui.VisibleIfText(ViewModel.PostureChange), Mode=OneWay}" />
                   </StackPanel>
                 </StackPanel>
               </Border>

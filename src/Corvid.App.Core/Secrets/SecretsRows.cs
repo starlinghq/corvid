@@ -18,18 +18,26 @@ public sealed class SecretRowView
         HasHidden = SafeText.HasHidden(secret.Name);
         Description = SafeText.Clean(secret.Description);
         Hosts = string.Join(", ", secret.Hosts.Select(SafeText.Clean));
-        Methods = [.. secret.Methods.Select(rule => new StatusTag(
-            $"{SafeText.Clean(rule.Method)} {SecretsText.Policy(rule.Policy)}", SecretsText.PolicyTone(rule.Policy), SecretsText.PolicyHelp(rule.Policy)))];
-        var toolsets = string.Join(", ", secret.Toolsets.Select(SafeText.Clean));
+        Methods = secret.PolicyReported
+            ? [.. secret.Methods.Select(rule => new StatusTag(
+                $"{SafeText.Clean(rule.Method)} {SecretsText.Policy(rule.Policy)}", SecretsText.PolicyTone(rule.Policy), SecretsText.PolicyHelp(rule.Policy)))]
+            : [new StatusTag("policy not reported", Tone.Grey, NotReported)];
+        var toolsets = secret.Toolsets.IsEmpty && !secret.PolicyReported ? "any toolset" : string.Join(", ", secret.Toolsets.Select(SafeText.Clean));
         Use = secret.Role is { Length: > 0 } role ? $"{toolsets} · role {SafeText.Clean(role)}" : toolsets;
-        Budget = secret.BudgetLimit is { } limit
-            ? string.Create(CultureInfo.InvariantCulture, $"{secret.BudgetUsed} of {limit} this {secret.BudgetWindow}")
-            : "no ceiling";
+        Budget = !secret.PolicyReported ? "budget not reported"
+            : secret.BudgetLimit is { } limit
+                ? string.Create(CultureInfo.InvariantCulture, $"{secret.BudgetUsed} of {limit} this {secret.BudgetWindow}")
+                : "no ceiling";
         BudgetFraction = secret.BudgetLimit is { } max && max > 0 ? Math.Clamp((double)secret.BudgetUsed / max, 0, 1) : 0;
         UsedBy = users.Count == 0 ? "nothing uses it" : string.Join(", ", users.Select(user => SafeText.Clean(user.Name)));
-        LastUsed = secret.LastUsed is { } at ? "last used " + RuleTime(at, time) : "never used";
-        TaintedUse = $"in a tainted turn: {SecretsText.Policy(secret.Tainted)}";
+        LastUsed = !secret.PolicyReported ? "last use not reported"
+            : secret.LastUsed is { } at ? "last used " + RuleTime(at, time) : "never used";
+        TaintedUse = secret.PolicyReported ? $"in a tainted turn: {SecretsText.Policy(secret.Tainted)}" : "in a tainted turn: not reported";
     }
+
+    /// <summary>What the page says of a secret Vault described only by name, hosts and toolsets.</summary>
+    public const string NotReported =
+        "Vault's catalogue gives a secret's name, description, hosts and toolsets; its method policy, role, budget and last use are not reported yet (V-n).";
 
     public SecretInfo Secret { get; }
 

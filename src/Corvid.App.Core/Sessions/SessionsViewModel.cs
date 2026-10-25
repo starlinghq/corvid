@@ -37,6 +37,7 @@ public sealed class SessionsViewModel : AreaViewModel
         _selectedPanel = Panels[0];
         _selectedPanel.IsSelected = true;
         OpenRewindCommand = new RelayCommand(() => _shell.Navigate(Area.Rewind));
+        NewSessionCommand = new RelayCommand(() => _hub?.StartNew(), () => CanCreateSession);
         if (_hub is not null)
         {
             _hub.CurrentChanged += (_, _) => Follow(_hub.Current);
@@ -62,6 +63,17 @@ public sealed class SessionsViewModel : AreaViewModel
 
     /// <summary>The session header's Rewind: the checkpoint timeline (Esc Esc on an empty composer).</summary>
     public RelayCommand OpenRewindCommand { get; }
+
+    /// <summary>Whether a new session can start here (the engine), so the empty page offers one.</summary>
+    public bool CanCreateSession => _hub?.CanCreate == true;
+
+    /// <summary>Starts an empty session in the window's workspace and opens it (Ctrl+N does the same).</summary>
+    public RelayCommand NewSessionCommand { get; }
+
+    /// <summary>What the page says while no session is open.</summary>
+    public string EmptyText => CanCreateSession
+        ? "No session is open. Pick one in the rail, or start a new one (Ctrl+N)."
+        : "No session is open. Pick one in the rail.";
 
     /// <summary>
     /// A transcript block find-in-session (Ctrl+F) asked to bring into view; the page takes it with

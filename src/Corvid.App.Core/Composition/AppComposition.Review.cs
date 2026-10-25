@@ -15,8 +15,8 @@ public sealed partial class AppComposition
     private ReviewViewModel? _review;
     private IReviewService? _reviewService;
 
-    /// <summary>Review's seam: the demo's over the demo sessions until Corvid.App.Engine brings the write ledger's.</summary>
-    public IReviewService ReviewService => _reviewService ??= new DemoReviewService(SessionHub, (DemoSessionService)SessionService, Time);
+    /// <summary>Review's seam: the demo's over the demo sessions, or the engine's over the write ledger (<see cref="Services"/>).</summary>
+    public IReviewService ReviewService => _reviewService ??= Services.CreateReviewService(this);
 
     /// <summary>The Review area: the changes, with line comments.</summary>
     public ReviewViewModel Review => _review ??= CreateReview();

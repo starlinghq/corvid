@@ -33,8 +33,14 @@ internal sealed class InstrumentedChatClient(IChatClient inner, ModelProfile pro
                     updates.Add(update);
                     if (update.Text is { Length: > 0 } text)
                         stream.Publish(session, observer => observer.Text(text));
+                    // K-1: the reasoning a model streams beside its text, for the transcript's thought row.
+                    foreach (var reasoning in update.Contents.OfType<TextReasoningContent>())
+                        if (reasoning.Text is { Length: > 0 } thought)
+                            stream.Publish(session, observer => observer.Thought(thought));
                 }
                 response = updates.ToChatResponse();
+                if (response.Usage is { } used)
+                    stream.Publish(session, observer => observer.Usage(used.InputTokenCount, used.OutputTokenCount));
             }
             else
             {

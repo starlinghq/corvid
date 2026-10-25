@@ -7,6 +7,7 @@ using System.Text.Json.Serialization.Metadata;
 using Corvid.Abstractions.Events;
 using Corvid.Host.Commands;
 using Corvid.Host.Composition;
+using Corvid.Host.Sessions;
 using Corvid.Kernel.Events;
 using Corvid.Kernel.Sessions;
 using Corvid.Kernel.Turns;
@@ -253,7 +254,7 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
         var state = _sessions.TryGetValue(id, out var open) ? open : Open(runtime, runtime.OpenSession(id, Surface));
         // session/load replays the whole conversation before answering; session/resume must not.
         if (replay)
-            Replay(runtime, id);
+            await ReplayAsync(runtime, id).ConfigureAwait(false);
         return Result(new EmptyResponse(), AcpJson.Default.EmptyResponse, () => SendCommands(state.Session.Id));
     }
 
@@ -381,40 +382,14 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
             })]));
 
     /// <summary>The conversation as it stands (compactions expanded, undone turns left out), as the client would have seen it.</summary>
-    private void Replay(CorvidRuntime runtime, string sessionId)
+    private async Task ReplayAsync(CorvidRuntime runtime, string sessionId)
     {
-        var snapshot = SessionProjection.Load(runtime.Log, sessionId, expandCompactions: true);
-        var results = snapshot.Transcript.Select(entry => entry.Content).OfType<ToolResult>()
-            .GroupBy(result => result.CallId, StringComparer.Ordinal).ToDictionary(group => group.Key, group => group.Last(), StringComparer.Ordinal);
-        foreach (var entry in snapshot.Transcript)
-        {
-            switch (entry.Content)
-            {
-                case UserMessage user:
-                    _context.Update(sessionId, new UserMessageChunk(new TextContent(user.Text)));
-                    break;
-                case AssistantMessage assistant:
-                    _context.Update(sessionId, new AgentMessageChunk(new TextContent(assistant.Text)));
-                    break;
-                case ToolCallIssued call:
-                    var failed = results.TryGetValue(call.CallId, out var outcome) && outcome.IsError;
-                    _context.Update(sessionId, new ToolCall(call.CallId, ToolPresentation.Title(call.ToolName, call.Arguments),
-                        _context.Tools?.Kind(call.ToolName) ?? ToolKinds.Other, failed ? ToolStatuses.Failed : ToolStatuses.Completed)
-                    {
-                        RawInput = call.Arguments,
-                        Locations = _context.Tools?.Locations(call.Arguments),
-                    });
-                    break;
-                case ToolResult result:
-                    _context.Update(sessionId, new ToolCallUpdate(result.CallId)
-                    {
-                        Status = result.IsError ? ToolStatuses.Failed : ToolStatuses.Completed,
-                        RawOutput = result.Result,
-                        Content = [new ContentToolCallContent(new TextContent(ToolPresentation.ResultText(result.Result)))],
-                    });
-                    break;
-            }
-        }
+        // The host's replay (K-10), the conversation alone: session/load has always sent results as text, without diffs.
+        var history = await SessionReplay.ReadAsync(runtime, sessionId, _context.Tools ?? new ToolPresentation(runtime), ReplayOptions.Transcript)
+            .ConfigureAwait(false);
+        foreach (var update in history.Updates)
+            if (TurnReporter.Replayed(update) is { } notification)
+                _context.Update(sessionId, notification);
     }
 
     private static (SessionInfo Info, DateTimeOffset Updated)? Describe(CorvidRuntime runtime, string id, string workspace)

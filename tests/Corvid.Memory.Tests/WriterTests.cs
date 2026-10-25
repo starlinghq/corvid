@@ -221,6 +221,58 @@ public sealed class WriterTests
     }
 
     [Fact]
+    public async Task A_corrected_fact_is_written_as_the_reviewer_wrote_it_G8()
+    {
+        using var store = new TempStore();
+        var writer = Writer(store);
+        var staged = await writer.WriteAsync(new MemoryWriteRequest(Session, "Sam lives in Leeds"), Ct);
+
+        // A credential value in the correction refuses it and leaves the write pending.
+        await Assert.ThrowsAsync<ArgumentException>(() => writer.ApproveAsync(staged.Pending!.PendingId, null, null, "Sam's token is " + Token, Ct));
+        Assert.Single(writer.ListPending());
+
+        var approved = await writer.ApproveAsync(staged.Pending!.PendingId, null, null, "Sam lives in York", Ct);
+        Assert.Equal("Sam lives in York", approved.Added!.Text);
+        // The entities are found again from the corrected text.
+        Assert.Equal(["Sam", "York"], approved.Added.Entities.Select(entity => entity.Name).Order(StringComparer.Ordinal));
+        Assert.Equal("corrected", Events(store).OfType<DecisionOutcomeRecorded>().Single().Outcome);
+        Assert.Equal(["Sam lives in York"], store.Facts.Recent().Select(fact => fact.Text));
+        Assert.Equal(1, store.Facts.CountCurrent());
+    }
+
+    [Fact]
+    public async Task A_corrected_block_edit_writes_the_corrected_content_G8()
+    {
+        using var store = new TempStore();
+        var staged = await Writer(store).EditBlockAsync(Session, "user", "Sam's partner. Lives in Leeds.", cancellationToken: Ct);
+
+        var approved = await Writer(store).ApproveAsync(staged.Pending!.PendingId, null, null, "Sam's partner. Lives in York.", Ct);
+
+        Assert.Equal("Sam's partner. Lives in York.", approved.Block!.Content);
+        Assert.Equal("corrected", Events(store).OfType<DecisionOutcomeRecorded>().Single().Outcome);
+        // An unchanged "correction" is a plain approval.
+        var second = await Writer(store).EditBlockAsync(Session, "agent", "Use metric.", cancellationToken: Ct);
+        await Writer(store).ApproveAsync(second.Pending!.PendingId, null, null, "Use metric.", Ct);
+        Assert.Equal("approved", Events(store).OfType<DecisionOutcomeRecorded>().Last().Outcome);
+    }
+
+    [Fact]
+    public void Recent_facts_list_ended_ones_too_newest_first()
+    {
+        using var store = new TempStore();
+        var york = store.Facts.Add(new FactInput("Sam lives in York"));
+        store.Time.Advance(TimeSpan.FromDays(1));
+        store.Facts.Add(new FactInput("Acme is in Leeds"));
+        store.Time.Advance(TimeSpan.FromDays(1));
+        store.Facts.Invalidate(york.FactId);
+
+        Assert.Equal(["Sam lives in York", "Acme is in Leeds"], store.Facts.Recent().Select(fact => fact.Text));
+        Assert.Equal(["Sam lives in York"], store.Facts.Recent(1).Select(fact => fact.Text));
+        Assert.Equal(1, store.Facts.CountCurrent());
+        Assert.Equal(0, store.Episodes.Count());
+    }
+
+    [Fact]
     public async Task A_block_edit_approved_after_the_block_changed_is_refused()
     {
         using var store = new TempStore();

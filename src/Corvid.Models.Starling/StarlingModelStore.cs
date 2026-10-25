@@ -99,6 +99,57 @@ public sealed class StarlingModelStore(string? cacheDirectory = null, HttpClient
         return new StarlingModelStatus(info, StarlingModelState.Ready, snapshot.Directory, []);
     }
 
+    /// <summary>
+    /// Removes the <c>.partial</c> files a cancelled or failed download left for a later one to resume from. Starling keeps
+    /// them beside the download's locks, under <c>.downloads/&lt;repository&gt;/&lt;revision&gt;</c> in the cache root; the
+    /// snapshot itself (finished, verified files) and the locks are left alone. Each file goes only under its download lock,
+    /// as Starling takes it, so one another download is still writing is kept. Returns how many files were removed.
+    /// </summary>
+    public int RemovePartialDownloads(StarlingModel model)
+    {
+        var cache = Path.GetFullPath(CacheDirectory);
+        var snapshot = Path.GetFullPath(GetSnapshotDirectory(model));
+        var relative = Path.GetRelativePath(cache, snapshot);
+        if (relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative))
+            return 0;
+        var downloads = Path.Combine(cache, PartialDirectory, relative);
+        if (!Directory.Exists(downloads))
+            return 0;
+        var removed = 0;
+        foreach (var file in Directory.EnumerateFiles(downloads, "*" + PartialSuffix, SearchOption.AllDirectories).ToList())
+        {
+            // Starling writes <file>.partial while it holds <file>.lock (an exclusive open: flock on Unix). A file whose lock
+            // another download holds (another process fetching the model) is still being written and is left alone.
+            var lockPath = file[..^PartialSuffix.Length] + LockSuffix;
+            FileStream held;
+            try
+            {
+                held = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1);
+            }
+            catch (IOException)
+            {
+                continue;
+            }
+            using (held)
+            {
+                if (!File.Exists(file))
+                    continue; // finished (renamed into the snapshot) before the lock was taken
+                File.Delete(file);
+                removed++;
+            }
+        }
+        return removed;
+    }
+
+    /// <summary>The suffix of the lock Starling holds beside a file it is downloading.</summary>
+    public const string LockSuffix = ".lock";
+
+    /// <summary>Where Starling keeps a download in progress, under the cache root.</summary>
+    public const string PartialDirectory = ".downloads";
+
+    /// <summary>The suffix of a file Starling is still receiving.</summary>
+    public const string PartialSuffix = ".partial";
+
     // Opening defaults to size-only verification so startup does not hash gigabytes; downloads were hashed, and
     // Check(Sha256) finds same-size corruption.
     public Qwen35ModelFiles OpenQwen35(CacheVerification verification = CacheVerification.Size) =>

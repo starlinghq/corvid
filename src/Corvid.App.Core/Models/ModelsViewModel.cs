@@ -113,6 +113,7 @@ public sealed class ModelsViewModel : AreaViewModel
     private readonly StatusBarLease _lease;
     private bool _active;
     private IReadOnlyList<TextRun> _notice = [];
+    private string? _problem;
     private Tone _noticeTone = Tone.Green;
     private ModelsPicker _picker;
     private string _switchTitle = "";
@@ -170,6 +171,21 @@ public sealed class ModelsViewModel : AreaViewModel
         _shell.PropertyChanged += OnShellChanged;
         Refresh();
         UpdateActive();
+        // The store reads the configuration and the cache on its first load (the demo's has its snapshot already); one that
+        // cannot (the engine's, before A3 setup) says why here rather than leaving an empty page unexplained.
+        _ = LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            await _service.LoadAsync().ConfigureAwait(true);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            Say(false, $"The models could not be read: {Spans.Escape(exception.Message)}");
+        }
     }
 
     public IReadOnlyList<TextRun> Subtitle { get => _subtitle; private set => SetRuns(ref _subtitle, value); }
@@ -296,7 +312,8 @@ public sealed class ModelsViewModel : AreaViewModel
         SwitchChoices.Clear();
         foreach (var model in snapshot.Catalogue.Where(model => model.CanServe.Contains(slot.Name)))
         {
-            var reason = model.IsAvailable ? ""
+            // The current model says so; why another could not be picked is for the others.
+            var reason = model.IsAvailable || model.Name == slot.BoundModel ? ""
                 : model.Kind == ModelKind.Local ? (model.State is ModelState.Downloading or ModelState.Queued ? "downloading" : "not downloaded")
                 : model.Secret is { } secret ? $"set {SafeText.Clean(secret)} in Vault" : "unavailable";
             var name = model.Name;
@@ -357,6 +374,14 @@ public sealed class ModelsViewModel : AreaViewModel
 
     private async Task AddServerAsync(CancellationToken cancellationToken)
     {
+        // A name or address with hidden characters is not sent to be stored; the service refuses it too.
+        if (SafeText.HasHidden(_serverName) || SafeText.HasHidden(_serverUrl))
+        {
+            Say(false, $"The server's name or address holds hidden characters (`{Spans.Escape(SafeText.Reveal(_serverName))}`, " +
+                $"`{Spans.Escape(SafeText.Reveal(_serverUrl))}`). Nothing was written: type them again.");
+            return;
+        }
+
         var answer = await _service.AddServerAsync(_serverName, _serverUrl, cancellationToken).ConfigureAwait(true);
         if (answer.Written)
         {
@@ -440,7 +465,13 @@ public sealed class ModelsViewModel : AreaViewModel
     private void Refresh()
     {
         var snapshot = _service.Snapshot;
-        Subtitle = Spans.Parse($"config `{Spans.Escape(snapshot.ConfigPath)}` · {(snapshot.Validated ? "validated" : "not valid")} · {ConfigNote}");
+        // A store that could not read the configuration again after its own change (a download finishing) says so once.
+        if (snapshot.Problem is { } problem && !string.Equals(problem, _problem, StringComparison.Ordinal))
+            Say(false, Spans.Escape(problem));
+        _problem = snapshot.Problem;
+        Subtitle = snapshot.IsLoaded
+            ? Spans.Parse($"config `{Spans.Escape(snapshot.ConfigPath)}` · {(snapshot.Validated ? "validated" : "not valid")} · {ConfigNote}")
+            : Spans.Parse("reading the configuration and the model cache…");
 
         if (!snapshot.Slots.Select(slot => slot.Name).SequenceEqual(Slots.Select(slot => slot.Name)))
         {
@@ -496,23 +527,34 @@ public sealed class ModelsViewModel : AreaViewModel
     {
         var privacy = snapshot.Privacy;
         PrivacyTag = $"cloud: {privacy.Posture}";
-        var gate = (privacy.VaultPresent, privacy.ExtractorBound) switch
+        var gate = !snapshot.IsLoaded ? "Checking whether Vault answers." : (privacy.VaultPresent, privacy.ExtractorBound) switch
         {
             (false, _) => "Vault is absent, so cloud slots are hidden until it answers.",
             (true, false) => "No extractor is bound, so every cloud request is refused.",
             _ => "The extractor is bound, so cloud slots are available.",
         };
-        PrivacySummary = Spans.Parse($"Requests to cloud models are redacted before they leave: PII and any credential value. {gate}");
+        // What the posture does to a request, as the configuration says it (Corvid:Privacy:Cloud).
+        var posture = privacy.Posture switch
+        {
+            "refuse" => "Requests to cloud models are refused: nothing that holds PII or a credential leaves for a cloud model.",
+            "send" => "Requests to cloud models are sent as they are: nothing is redacted.",
+            _ => "Requests to cloud models are redacted before they leave: PII and any credential value.",
+        };
+        PrivacySummary = Spans.Parse($"{posture} {gate}");
         PrivacyFacts =
         [
-            Fact("today", $"{privacy.RequestsToday} cloud requests · {privacy.RedactedToday} values redacted · {privacy.RefusedToday} refused"),
+            Fact("today", privacy.TodayUnknown is { } unknown
+                ? Spans.Escape(unknown)
+                : $"{privacy.RequestsToday} cloud requests · {privacy.RedactedToday} values redacted · {privacy.RefusedToday} refused"),
             Fact("without Vault", "cloud slots disappear; no key is ever read from the environment"),
         ];
 
         var decider = snapshot.Decider;
         var calibrated = decider.Tier == DeciderTier.Calibrated;
-        DeciderTag = calibrated ? $"{decider.DisplayName}, calibrated" : $"{decider.DisplayName} missing: degraded";
-        DeciderTone = calibrated ? Tone.Green : Tone.Amber;
+        DeciderTag = !snapshot.IsLoaded ? "checking" : calibrated ? $"{decider.DisplayName}, calibrated"
+            // No decider configured at all (the slot is unbound): nothing is missing, the tier is simply degraded.
+            : decider.Model.Length == 0 ? "no decider: degraded" : $"{decider.DisplayName} missing: degraded";
+        DeciderTone = !snapshot.IsLoaded ? Tone.Grey : calibrated ? Tone.Green : Tone.Amber;
         DeciderFacts =
         [
             Fact("floors", decider.Floors),
@@ -605,12 +647,18 @@ public sealed class ModelsViewModel : AreaViewModel
         _lease.Trailing = "idle";
     }
 
-    /// <summary>"Kev-0.8B, calibrated", or "degraded until kev-0.8b is downloaded".</summary>
+    /// <summary>
+    /// "Kev-0.8B, calibrated", "degraded until kev-0.8b is downloaded", or "degraded tier (no decider configured)" when the
+    /// decider slot is unbound.
+    /// </summary>
     public static string StatusDecider(ModelsSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        if (!snapshot.IsLoaded)
+            return "";
         return SafeText.Clean(snapshot.Decider.Tier == DeciderTier.Calibrated
             ? $"{snapshot.Decider.DisplayName}, calibrated"
+            : snapshot.Decider.Model.Length == 0 ? "degraded tier (no decider configured)"
             : $"degraded until {snapshot.Decider.Model} is downloaded");
     }
 

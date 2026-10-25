@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text.Json;
 using Corvid.Abstractions.Events;
 using Corvid.Kernel.Events;
@@ -44,6 +45,7 @@ public sealed class PipelineTests
         var resolved = Assert.IsType<ApprovalResolved>(events[2]);
         Assert.True(resolved.Approved);
         Assert.Equal("user: approved (once)", resolved.Reason);
+        Assert.Equal(("once", (string?)null), (resolved.Scope, resolved.Note));
         Assert.Equal(new DecisionOutcomeRecorded(decision.DecisionId, "user_approved"), events[3]);
 
         var snapshot = SessionProjection.Load(db.Log, Session, cancellationToken: Ct);
@@ -111,6 +113,56 @@ public sealed class PipelineTests
         Assert.Equal(ApprovalOutcome.Ask, (await pipeline.AssessAsync(context, new ShellAction("sudo rm -rf build"), Ct)).Outcome);
         Assert.Equal(ApprovalOutcome.Deny, (await pipeline.AssessAsync(context, new ShellAction("rm -rf /"), Ct)).Outcome);
         Assert.Equal(ApprovalOutcome.Ask, (await pipeline.AssessAsync(context with { SessionId = "s-2" }, new ShellAction("rm -rf build"), Ct)).Outcome);
+    }
+
+    [Fact]
+    public async Task An_always_answer_writes_the_previewed_rule_narrowed_to_the_users_paths()
+    {
+        using var db = new TempLog();
+        var build = Fixtures.Workspace + "/build";
+        var answer = ApprovalAnswer.Approve(ApprovalScope.Always) with { RulePaths = [[build + "/cache"]] };
+        var pipeline = Fixtures.Pipeline(db, prompter: ScriptedPrompter.Always(answer));
+        var context = Fixtures.Context(ApprovalMode.Manual);
+
+        // G-11: the preview is exactly what the answer writes, before narrowing.
+        var preview = ApprovalPipeline.RulesFor(Fixtures.Analyze("rm -rf build"), RuleDecision.Allow, DateTimeOffset.UnixEpoch);
+        Assert.Equal([build], Assert.Single(preview).Paths);
+
+        Assert.Equal(ApprovalScope.Always, (await pipeline.AuthorizeAsync(context, new ShellAction("rm -rf build"), Ct)).Scope);
+        Assert.Equal([build + "/cache"], Assert.Single(pipeline.AlwaysRules).Paths);
+        Assert.Equal(ApprovalOutcome.Auto, (await pipeline.AssessAsync(context, new ShellAction("rm -rf build/cache/x"), Ct)).Outcome);
+        Assert.Equal(ApprovalOutcome.Ask, (await pipeline.AssessAsync(context, new ShellAction("rm -rf build/other"), Ct)).Outcome);
+    }
+
+    [Fact]
+    public async Task A_narrowing_that_widens_writes_no_rule_and_applies_once()
+    {
+        using var db = new TempLog();
+        var answer = ApprovalAnswer.Approve(ApprovalScope.Session) with { RulePaths = [[Fixtures.Workspace + "/src"]] };
+        var pipeline = Fixtures.Pipeline(db, prompter: ScriptedPrompter.Always(answer));
+
+        var result = await pipeline.AuthorizeAsync(Fixtures.Context(ApprovalMode.Manual), new ShellAction("rm -rf build"), Ct);
+
+        Assert.True(result.Allowed);
+        Assert.Equal(ApprovalScope.Once, result.Scope);
+        Assert.Empty(pipeline.SessionRules(Session));
+        Assert.Empty(pipeline.AlwaysRules);
+    }
+
+    [Theory]
+    [InlineData("build/cache", "not an absolute path")]
+    [InlineData("/elsewhere", "a rule can only be narrowed")]
+    [InlineData("{ws}/build/../src", "a rule can only be narrowed")]
+    public void Narrowing_accepts_only_absolute_paths_at_or_under_the_rules_own(string path, string error)
+    {
+        var rules = ApprovalPipeline.RulesFor(Fixtures.Analyze("rm -rf build"), RuleDecision.Allow, DateTimeOffset.UnixEpoch);
+
+        Assert.False(ApprovalPipeline.Narrow(rules, [[path.Replace("{ws}", Fixtures.Workspace, StringComparison.Ordinal)]], out var kept, out var why));
+        Assert.Contains(error, why, StringComparison.Ordinal);
+        Assert.Equal(rules, kept);
+        Assert.True(ApprovalPipeline.Narrow(rules, [[]], out var unchanged, out _));
+        Assert.Equal(rules, unchanged);
+        Assert.False(ApprovalPipeline.Narrow(rules, [[], []], out _, out _));
     }
 
     [Fact]
@@ -186,6 +238,121 @@ public sealed class PipelineTests
         Assert.Equal(ApprovalResolution.RuleAllowed, commit.Resolution);
         var push = await fresh.AuthorizeAsync(context with { SessionId = "s-9" }, new ShellAction("git push"), Ct);
         Assert.Equal(ApprovalResolution.RuleDenied, push.Resolution);
+    }
+
+    [Fact]
+    public async Task Remembered_rules_are_listed_with_their_scope_and_removed_K7()
+    {
+        using var db = new TempLog();
+        var path = Path.Combine(db.Root, "config", "corvid", "approvals.json");
+        var answers = new Queue<ApprovalAnswer>([ApprovalAnswer.Approve(ApprovalScope.Session), ApprovalAnswer.Approve(ApprovalScope.Always)]);
+        var pipeline = Fixtures.Pipeline(db, prompter: new ScriptedPrompter(_ => answers.Dequeue()), always: new JsonFileApprovalRuleStore(path));
+        var context = Fixtures.Context(ApprovalMode.Manual);
+        await pipeline.AuthorizeAsync(context, new ShellAction("git commit -m wip"), Ct);
+        await pipeline.AuthorizeAsync(context, new ShellAction("git push origin main"), Ct);
+
+        var (sessionId, sessionRules) = Assert.Single(pipeline.AllSessionRules);
+        Assert.Equal(Session, sessionId);
+        var sessionRule = Assert.Single(sessionRules);
+        Assert.Equal("commit", sessionRule.Subcommand);
+        var alwaysRule = Assert.Single(pipeline.AlwaysRules);
+        Assert.Equal("push", alwaysRule.Subcommand);
+
+        // Removed, each call asks again; removing twice changes nothing.
+        Assert.True(pipeline.RemoveSessionRule(Session, sessionRule));
+        Assert.False(pipeline.RemoveSessionRule(Session, sessionRule));
+        Assert.Empty(pipeline.AllSessionRules);
+        Assert.True(pipeline.RemoveAlwaysRule(alwaysRule));
+        Assert.False(pipeline.RemoveAlwaysRule(alwaysRule));
+        Assert.Empty(new JsonFileApprovalRuleStore(path).Rules);
+        Assert.Equal(ApprovalOutcome.Ask, (await pipeline.AssessAsync(context, new ShellAction("git commit -m again"), Ct)).Outcome);
+        Assert.Equal(ApprovalOutcome.Ask, (await pipeline.AssessAsync(context, new ShellAction("git push origin main"), Ct)).Outcome);
+    }
+
+    [Fact]
+    public void The_in_memory_store_removes_equal_rules_only()
+    {
+        var store = new InMemoryApprovalRuleStore();
+        var at = new DateTimeOffset(2026, 10, 24, 12, 0, 0, TimeSpan.Zero);
+        var a = new ApprovalRule(RuleDecision.Allow, "shell", "make", null, ActionEffects.None, false, ["/w"], [], "make", at);
+        var b = a with { Verb = "ninja", Source = "ninja" };
+        store.Add([a, b]);
+        Assert.True(store.Remove(a with { Paths = ["/w"] }));
+        Assert.Equal([b], store.Rules);
+        Assert.False(store.Remove(a));
+    }
+
+    [Fact]
+    public void Two_stores_on_one_file_see_each_others_changes_and_never_resurrect_a_removed_rule()
+    {
+        using var db = new TempLog();
+        var path = Path.Combine(db.Root, "config", "corvid", "approvals.json");
+        var at = new DateTimeOffset(2026, 10, 24, 12, 0, 0, TimeSpan.Zero);
+        var make = new ApprovalRule(RuleDecision.Allow, "shell", "make", null, ActionEffects.None, false, ["/w"], [], "make", at);
+        var ninja = make with { Verb = "ninja", Source = "ninja" };
+        var deny = make with { Decision = RuleDecision.Deny, Verb = "rm", Source = "rm -rf /w" };
+        // The app and the CLI: each reads the file once at start and outlives the other's changes.
+        var app = new JsonFileApprovalRuleStore(path);
+        var cli = new JsonFileApprovalRuleStore(path);
+
+        app.Add([make]);
+        Assert.Equal([make], cli.Rules);
+        Assert.True(cli.Remove(make));
+        Assert.Empty(app.Rules);
+        // The app's next write adds its rule to the file as it is now: the CLI's removal holds.
+        app.Add([ninja]);
+        Assert.Equal([ninja], cli.Rules);
+        // And the CLI's deny survives the app's next write.
+        cli.Add([deny]);
+        app.Add([ninja, make]);
+        Assert.Equal([ninja, deny, make], JsonFileApprovalRuleStore.Parse(File.ReadAllText(path)));
+        Assert.Equal([ninja, deny, make], cli.Rules);
+        Assert.False(app.Remove(make with { Verb = "cmake" }));
+        Assert.DoesNotContain(Directory.GetFiles(Path.GetDirectoryName(path)!), file => file.EndsWith(".tmp", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_store_waits_for_another_process_lock_and_gives_up_without_changing_the_file()
+    {
+        using var db = new TempLog();
+        var path = Path.Combine(db.Root, "config", "corvid", "approvals.json");
+        var at = new DateTimeOffset(2026, 10, 24, 12, 0, 0, TimeSpan.Zero);
+        var make = new ApprovalRule(RuleDecision.Allow, "shell", "make", null, ActionEffects.None, false, ["/w"], [], "make", at);
+        var store = new JsonFileApprovalRuleStore(path, TimeSpan.Zero);
+        store.Add([make]);
+        var before = File.ReadAllText(path);
+        // A stale approvals.json.tmp from an older Corvid is not this store's temporary file.
+        File.WriteAllText(path + ".tmp", "stale");
+
+        using (new FileStream(JsonFileApprovalRuleStore.LockPath(path), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.Throws<TimeoutException>(() => store.Add([make with { Verb = "ninja" }]));
+            Assert.Throws<TimeoutException>(() => store.Remove(make));
+        }
+
+        Assert.Equal(before, File.ReadAllText(path));
+        Assert.True(store.Remove(make));
+        Assert.Empty(new JsonFileApprovalRuleStore(path).Rules);
+    }
+
+    [Fact]
+    public async Task An_always_answer_whose_rule_cannot_be_stored_still_stands_for_this_action_as_once()
+    {
+        using var db = new TempLog();
+        var pipeline = Fixtures.Pipeline(db, prompter: ScriptedPrompter.Always(ApprovalAnswer.Approve(ApprovalScope.Always)),
+            always: new UnwritableRuleStore());
+        var result = await pipeline.AuthorizeAsync(Fixtures.Context(ApprovalMode.Manual), new ShellAction("git push origin main"), Ct);
+        Assert.True(result.Allowed);
+        Assert.Equal(ApprovalScope.Once, result.Scope);
+    }
+
+    private sealed class UnwritableRuleStore : IApprovalRuleStore
+    {
+        public ImmutableArray<ApprovalRule> Rules => [];
+
+        public void Add(IEnumerable<ApprovalRule> rules) => throw new TimeoutException("held");
+
+        public bool Remove(ApprovalRule rule) => false;
     }
 
     [Fact]

@@ -34,7 +34,14 @@ public enum PendingSkillStatus
 /// <param name="DecisionId">The <c>skill_write_safe</c> decision, whose outcome the review records.</param>
 /// <param name="Replay">What the replay test found, for the reviewer.</param>
 public sealed record PendingSkill(string Id, string Skill, string Content, string SessionId, string DecisionId, string Reason,
-    string Replay, string? OpportunityId, PendingSkillStatus Status, DateTimeOffset Created);
+    string Replay, string? OpportunityId, PendingSkillStatus Status, DateTimeOffset Created)
+{
+    /// <summary>
+    /// What the draft was staged against: the skill's last revision then, <c>""</c> when there was no such skill, or null when
+    /// it is not known (a draft staged before schema version 3).
+    /// </summary>
+    public string? BaseRevision { get; init; }
+}
 
 /// <summary>Per-skill state the curator reads: last use, use count and whether the user pinned it.</summary>
 public sealed record SkillUsage(string Skill, DateTimeOffset? LastUsed, int Uses, bool Pinned);
@@ -48,7 +55,7 @@ public sealed record EvalRecord(string Skill, string Revision, int Passed, int T
 /// </summary>
 public sealed class SkillsDatabase
 {
-    private const int SchemaVersion = 2;
+    private const int SchemaVersion = 3;
 
     private readonly string _connectionString;
 
@@ -76,7 +83,7 @@ public sealed class SkillsDatabase
         command.Transaction = transaction;
         command.CommandText = "PRAGMA user_version;";
         var version = Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
-        if (version is not (0 or 1 or SchemaVersion))
+        if (version is not (0 or 1 or 2 or SchemaVersion))
             throw new InvalidDataException($"Unsupported skills database schema version {version}.");
         if (version == 0)
         {
@@ -86,6 +93,11 @@ public sealed class SkillsDatabase
         if (version < 2)
         {
             command.CommandText = SuccessMigration;
+            command.ExecuteNonQuery();
+        }
+        if (version < 3)
+        {
+            command.CommandText = BaseRevisionMigration;
             command.ExecuteNonQuery();
         }
         transaction.Commit();
@@ -146,6 +158,12 @@ public sealed class SkillsDatabase
         ALTER TABLE opportunities ADD COLUMN success_decision TEXT;
         ALTER TABLE opportunities ADD COLUMN success_calibrated INTEGER NOT NULL DEFAULT 0 CHECK (success_calibrated IN (0, 1));
         PRAGMA user_version = 2;
+        """;
+
+    // Version 3: what a staged draft was made against, so a review never applies it over a skill changed since.
+    internal const string BaseRevisionMigration = """
+        ALTER TABLE pending ADD COLUMN base_revision TEXT;
+        PRAGMA user_version = 3;
         """;
 
     private SqliteConnection Open()
@@ -251,22 +269,27 @@ public sealed class SkillsDatabase
 
     // ---- pending ----
 
-    public PendingSkill Stage(string skill, string content, string sessionId, string decisionId, string reason, string replay, string? opportunityId)
+    /// <param name="baseRevision">The skill's last revision when the draft was made, <c>""</c> for a new skill, null when unknown.</param>
+    public PendingSkill Stage(string skill, string content, string sessionId, string decisionId, string reason, string replay, string? opportunityId,
+        string? baseRevision = null)
     {
         var id = "sk-" + Guid.NewGuid().ToString("N")[..8];
         var now = Now;
-        Execute("INSERT INTO pending VALUES ($id, $skill, $content, $session, $decision, $reason, $replay, $opportunity, 'pending', $now)",
+        Execute("INSERT INTO pending VALUES ($id, $skill, $content, $session, $decision, $reason, $replay, $opportunity, 'pending', $now, $base)",
             ("$id", id), ("$skill", skill), ("$content", content), ("$session", sessionId), ("$decision", decisionId), ("$reason", reason),
-            ("$replay", replay), ("$opportunity", opportunityId), ("$now", now));
-        return new PendingSkill(id, skill, content, sessionId, decisionId, reason, replay, opportunityId, PendingSkillStatus.Pending, At(now));
+            ("$replay", replay), ("$opportunity", opportunityId), ("$now", now), ("$base", baseRevision));
+        return new PendingSkill(id, skill, content, sessionId, decisionId, reason, replay, opportunityId, PendingSkillStatus.Pending, At(now))
+        {
+            BaseRevision = baseRevision,
+        };
     }
 
     public IReadOnlyList<PendingSkill> Pending() =>
-        Query("SELECT id, skill, content, session, decision_id, reason, replay, opportunity, status, created FROM pending WHERE status = 'pending' ORDER BY created",
+        Query("SELECT id, skill, content, session, decision_id, reason, replay, opportunity, status, created, base_revision FROM pending WHERE status = 'pending' ORDER BY created",
             ReadPending);
 
     public PendingSkill? FindPending(string id) =>
-        Query("SELECT id, skill, content, session, decision_id, reason, replay, opportunity, status, created FROM pending WHERE id = $id",
+        Query("SELECT id, skill, content, session, decision_id, reason, replay, opportunity, status, created, base_revision FROM pending WHERE id = $id",
             ReadPending, ("$id", id)).FirstOrDefault();
 
     /// <summary>Resolves a pending draft once; false when it was not pending.</summary>
@@ -277,7 +300,10 @@ public sealed class SkillsDatabase
     private static PendingSkill ReadPending(SqliteDataReader reader) => new(reader.GetString(0), reader.GetString(1), reader.GetString(2),
         reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetString(6), reader.IsDBNull(7) ? null : reader.GetString(7),
         reader.GetString(8) switch { "approved" => PendingSkillStatus.Approved, "rejected" => PendingSkillStatus.Rejected, _ => PendingSkillStatus.Pending },
-        At(reader.GetInt64(9)));
+        At(reader.GetInt64(9)))
+    {
+        BaseRevision = reader.IsDBNull(10) ? null : reader.GetString(10),
+    };
 
     // ---- usage ----
 
@@ -300,6 +326,12 @@ public sealed class SkillsDatabase
         Execute("INSERT INTO evals VALUES ($skill, $revision, $passed, $total, $detail, $at)",
             ("$skill", record.Skill), ("$revision", record.Revision), ("$passed", record.Passed), ("$total", record.Total),
             ("$detail", record.Detail), ("$at", record.At.UtcTicks));
+
+    /// <summary>A skill's eval runs, newest first, at most <paramref name="limit"/>.</summary>
+    public IReadOnlyList<EvalRecord> Evals(string skill, int limit = 20) =>
+        Query("SELECT skill, revision, passed, total, detail, at FROM evals WHERE skill = $skill ORDER BY at DESC LIMIT $limit",
+            reader => new EvalRecord(reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.GetInt32(3), reader.GetString(4),
+                At(reader.GetInt64(5))), ("$skill", skill), ("$limit", Math.Clamp(limit, 1, 500)));
 
     public EvalRecord? LastEval(string skill) =>
         Query("SELECT skill, revision, passed, total, detail, at FROM evals WHERE skill = $skill ORDER BY at DESC LIMIT 1",

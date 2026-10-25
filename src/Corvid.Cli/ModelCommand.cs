@@ -22,7 +22,7 @@ internal static class ModelCommand
         return positional switch
         {
             [] or ["list"] => List(host, context.Console),
-            ["switch", var slot, var model] => Switch(host, context.Console, arguments, slot, model),
+            ["switch", var slot, var model] => Switch(host, context.Console, slot, model),
             ["download", .. var models] => await DownloadAsync(host, context.Console, models, arguments.Flag("--all"), cancellationToken).ConfigureAwait(false),
             _ => Usage(context.Console),
         };
@@ -69,7 +69,7 @@ internal static class ModelCommand
         return ExitCodes.Success;
     }
 
-    private static int Switch(IHost host, IAnsiConsole console, CliArguments arguments, string slot, string model)
+    private static int Switch(IHost host, IAnsiConsole console, string slot, string model)
     {
         var catalogue = host.Services.GetRequiredService<ModelCatalogue>();
         if (!ModelSlots.All.Contains(slot, StringComparer.Ordinal))
@@ -84,27 +84,17 @@ internal static class ModelCommand
         }
 
         // The file is validated with the change applied before it is written, so a bad switch never breaks the next start.
-        var file = arguments.ConfigFile ?? CorvidPaths.UserConfigFile;
-        var document = File.Exists(file) ? JsonNode.Parse(File.ReadAllText(file)) as JsonObject ?? new JsonObject() : new JsonObject();
-        var slotNode = Ensure(Ensure(Ensure(document, CorvidOptions.Section), "Models"), "Slots");
-        Ensure(slotNode, slot)["Model"] = descriptor.Name;
-        // Everything this run sees (environment, --set) with the switch applied, which is what the next start will validate.
-        var candidate = new ConfigurationBuilder()
-            .AddConfiguration(host.Services.GetRequiredService<IConfiguration>())
-            .AddInMemoryCollection(new Dictionary<string, string?> { [$"{CorvidOptions.Section}:Models:Slots:{slot}:Model"] = descriptor.Name })
-            .Build().GetSection(CorvidOptions.Section).Get<CorvidOptions>() ?? new CorvidOptions();
-        var validation = host.Services.GetRequiredService<IValidateOptions<CorvidOptions>>().Validate(null, candidate);
-        if (validation.Failed)
+        var key = $"{CorvidOptions.Section}:Models:Slots:{slot}:Model";
+        var result = host.Services.GetRequiredService<CorvidConfigWriter>().Apply(ConfigEdit.Set(key, descriptor.Name));
+        if (!result.Written)
         {
-            foreach (var failure in validation.Failures ?? [])
+            foreach (var failure in result.Failures)
                 console.MarkupLine($"[red]•[/] {Markup.Escape(failure)}");
             return ExitCodes.Usage;
         }
-        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-        var temporary = file + ".tmp";
-        File.WriteAllText(temporary, document.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
-        File.Move(temporary, file, overwrite: true);
-        console.MarkupLine($"[green]{Markup.Escape(slot)} now defaults to {Markup.Escape(descriptor.Name)}[/] [grey]({Markup.Escape(file)}; new sessions use it)[/]");
+        console.MarkupLine($"[green]{Markup.Escape(slot)} now defaults to {Markup.Escape(descriptor.Name)}[/] [grey]({Markup.Escape(result.Path)}; new sessions use it)[/]");
+        if (result.ShadowedKeys.Length > 0)
+            console.MarkupLine($"[yellow]This run's environment or --set overrides {Markup.Escape(key)}, so it goes on using that.[/]");
         var availability = catalogue.Check(descriptor.Name);
         if (!availability.IsReady)
             console.MarkupLine($"[yellow]It is not in the model cache yet:[/] run [bold]{Markup.Escape(availability.Acquire ?? "corvid model download " + descriptor.Name)}[/].");
@@ -179,15 +169,4 @@ internal static class ModelCommand
     internal static string FormatBytes(long bytes) => bytes >= 1L << 30
         ? (bytes / (double)(1L << 30)).ToString("0.0 GiB", CultureInfo.InvariantCulture)
         : (bytes / (double)(1L << 20)).ToString("0 MiB", CultureInfo.InvariantCulture);
-
-    private static JsonObject Ensure(JsonObject parent, string key)
-    {
-        // Configuration keys ignore case, so an existing "corvid" or "models" object is the one to extend.
-        var existing = parent.FirstOrDefault(pair => string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase));
-        if (existing.Value is JsonObject found)
-            return found;
-        var created = new JsonObject();
-        parent[existing.Key ?? key] = created;
-        return created;
-    }
 }

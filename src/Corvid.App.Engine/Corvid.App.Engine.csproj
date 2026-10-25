@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>The windowed app's in-process engine (docs/plan/ui.md §8): Corvid.App.Core's service interfaces over the composition root's CorvidRuntime, as Corvid.Acp adapts it to ACP. Only Corvid.App's desktop target references it.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- A composition project (the checker's AppEngine rule): the composition root and the app's core, never Uno, the
+         CLI, a front end or the head. -->
+    <ProjectReference Include="../Corvid.Host/Corvid.Host.csproj" />
+    <ProjectReference Include="../Corvid.App.Core/Corvid.App.Core.csproj" />
+    <InternalsVisibleTo Include="Corvid.App.Engine.Tests" />
+  </ItemGroup>
+</Project>

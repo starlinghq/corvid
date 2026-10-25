@@ -182,6 +182,64 @@ public sealed partial class SkillRepository
             .Select(parts => new SkillCommit(parts[0], parts[1], DateTimeOffset.Parse(parts[2], System.Globalization.CultureInfo.InvariantCulture), parts[3]))];
     }
 
+    /// <summary>
+    /// The history as <see cref="LogAsync"/> gives it, with the files each commit changed (relative to the repository), for
+    /// a surface that shows which skills a commit touched.
+    /// </summary>
+    public async Task<ImmutableArray<(SkillCommit Commit, ImmutableArray<string> Files)>> LogWithFilesAsync(string? path = null, int limit = 20,
+        CancellationToken cancellationToken = default)
+    {
+        string[] scope = path is null ? [] : ["--", Relative(path) is { Length: > 0 } relative ? relative : "."];
+        var result = await _git.RunAsync(["-c", "core.quotePath=false", "log", "--no-renames", $"-n{Math.Clamp(limit, 1, 500)}",
+            "--format=%x1e%H%x1f%an%x1f%aI%x1f%s", "--name-only", .. scope], null, cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (!result.Succeeded)
+            return [];
+        var commits = ImmutableArray.CreateBuilder<(SkillCommit, ImmutableArray<string>)>();
+        foreach (var record in result.Output.Split('\x1e', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var lines = record.Split('\n');
+            var parts = lines[0].Split('\x1f');
+            if (parts.Length != 4)
+                continue;
+            commits.Add((new SkillCommit(parts[0], parts[1], DateTimeOffset.Parse(parts[2], System.Globalization.CultureInfo.InvariantCulture), parts[3]),
+                [.. lines.Skip(1).Where(line => line.Length > 0)]));
+        }
+        return commits.ToImmutable();
+    }
+
+    /// <summary>
+    /// What a commit changed, file by file: each file's text before it (null for an added file) and after it (null for a
+    /// deleted one), each at most <paramref name="maxChars"/> characters. Null when there is no such commit.
+    /// </summary>
+    public async Task<(SkillCommit Commit, ImmutableArray<(string Path, string? Before, string? After)> Files)?> ShowFilesAsync(string revision,
+        int maxChars = 64_000, CancellationToken cancellationToken = default)
+    {
+        var checkedRevision = CheckRevision(revision);
+        var log = await _git.RunAsync(["-c", "core.quotePath=false", "show", "--no-renames", "--no-ext-diff", "--no-textconv",
+            "--format=%H%x1f%an%x1f%aI%x1f%s", "--name-only", checkedRevision, "--"], null, cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (!log.Succeeded)
+            return null;
+        var lines = log.Output.Split('\n');
+        var parts = lines[0].Split('\x1f');
+        if (parts.Length != 4)
+            return null;
+        var commit = new SkillCommit(parts[0], parts[1], DateTimeOffset.Parse(parts[2], System.Globalization.CultureInfo.InvariantCulture), parts[3]);
+        var files = ImmutableArray.CreateBuilder<(string, string?, string?)>();
+        foreach (var file in lines.Skip(1).Where(line => line.Length > 0).Take(200))
+            files.Add((file, await TextAtAsync(commit.Revision + "^", file, maxChars, cancellationToken).ConfigureAwait(false),
+                await TextAtAsync(commit.Revision, file, maxChars, cancellationToken).ConfigureAwait(false)));
+        return (commit, files.ToImmutable());
+    }
+
+    // The file's text at a revision; null when it is not there (or the revision has no parent).
+    private async Task<string?> TextAtAsync(string revision, string file, int maxChars, CancellationToken cancellationToken)
+    {
+        var result = await _git.RunAsync(["show", "--no-textconv", $"{revision}:{file}"], null, cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (!result.Succeeded)
+            return null;
+        return result.Output.Length > maxChars ? result.Output[..maxChars] + "\n… [cut]" : result.Output;
+    }
+
     /// <summary>The patch a commit made (<c>/skills diff</c>), at most <paramref name="maxChars"/> characters.</summary>
     public async Task<string> ShowAsync(string revision, int maxChars = 16_000, CancellationToken cancellationToken = default)
     {

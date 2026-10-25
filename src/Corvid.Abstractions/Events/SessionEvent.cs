@@ -68,7 +68,12 @@ public sealed record DecisionOutcomeRecorded(string DecisionId, string Outcome) 
 // persisted form; approvals asked outside a tool call (a memory or skill write) have none.
 public sealed record ApprovalRequested(string ApprovalId, string Action, string Reason,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? CallId = null) : SessionEvent;
-public sealed record ApprovalResolved(string ApprovalId, bool Approved, string Reason) : SessionEvent;
+// Scope (the answer's scope as the pipeline applied it: once, session or always) and Note (the reason the person gave with
+// a denial) were added in A3 so a replayed session shows an answer as the live one did. Both are omitted when null, so
+// events written before them keep their persisted form.
+public sealed record ApprovalResolved(string ApprovalId, bool Approved, string Reason,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Scope = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Note = null) : SessionEvent;
 // Profiles are snapshots, not mutable registry references; the slot implementation follows in C-006.
 public sealed record ModelSwitched(string Slot, JsonElement OldProfile, JsonElement NewProfile, string Reason) : SessionEvent;
 // Summarizer (the profile that wrote the record) and Chunks (how many map calls it took, 1 when the range fit one call) were

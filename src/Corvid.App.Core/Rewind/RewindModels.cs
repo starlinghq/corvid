@@ -86,8 +86,20 @@ public sealed record RestorePlan(string CheckpointId, DateTimeOffset At, int Tur
 
     public int ToTurn { get; init; }
 
+    /// <summary>
+    /// The turn the checkpoint is part-way through, when it keeps its message and loses only the call and what came after
+    /// it (the engine's rollback goes back to just before the call); null when only whole turns leave.
+    /// </summary>
+    public int? PartTurn { get; init; }
+
     /// <summary>"/rollback 4": the Nth latest call's before checkpoint; null for a restore point.</summary>
     public string? Command { get; init; }
+
+    /// <summary>
+    /// The plan was worked out while a turn of the session was running: the files are as the turn has left them so far,
+    /// and the restore itself waits for the turn to end, so what it puts back can differ.
+    /// </summary>
+    public bool MidTurn { get; init; }
 
     public bool HasConflicts => Files.Any(file => file.Kind == PutBackKind.Conflict);
 

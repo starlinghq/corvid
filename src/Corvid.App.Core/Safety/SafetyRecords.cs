@@ -115,4 +115,14 @@ public sealed record SafetySnapshot(
     ImmutableArray<DetectionPack> Packs,
     ImmutableArray<SafetyDetection> Detections,
     ImmutableArray<HardlineCode> Hardline,
-    ImmutableArray<SessionTaint> Taint);
+    ImmutableArray<SessionTaint> Taint)
+{
+    /// <summary>Matches found but left out of <see cref="Detections"/>, which holds the latest only: older ones, for Audit.</summary>
+    public int MoreDetections { get; init; }
+
+    /// <summary>Sessions whose logs were not searched for matches (only the most recently active are).</summary>
+    public int SessionsNotScanned { get; init; }
+
+    /// <summary>Every match found, listed or not.</summary>
+    public int DetectionCount => Detections.Length + MoreDetections;
+}

@@ -276,4 +276,110 @@ public sealed class FirstRunTests
         Assert.Equal("step 1 of 6", composition.StatusBar.Trailing);
         Assert.Equal("1 warning", composition.FirstRun.Sections[1].Summary);
     }
+
+    [Fact]
+    public void AModelStoreThatHasNotLoadedClaimsNeitherVaultsAbsenceNorADegradedDecider()
+    {
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar);
+        shell.Navigate(Area.FirstRun);
+        var models = new Unavailable.Models("not yet");
+        Assert.False(models.Snapshot.IsLoaded);
+
+        var firstRun = new FirstRunViewModel(new DemoFirstRunService(freshMachine: true), models, shell, bar, isSetup: true);
+
+        Assert.True(firstRun.VaultPresent);
+        Assert.False(firstRun.HasDeciderWarning);
+        Assert.Empty(bar.Tags);
+        Assert.Equal("", bar.Decider);
+        Assert.Equal("", ModelsViewModel.StatusDecider(models.Snapshot));
+        // The workspace is the service's first suggestion.
+        Assert.Equal(DemoFirstRunService.Workspace, firstRun.Workspace);
+    }
+
+    [Fact]
+    public void AServiceThatReportsTheEnginesStartWritesTheSetupsEngineLine()
+    {
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar);
+        shell.Navigate(Area.FirstRun);
+        var service = new ReportingFirstRun { EngineStatus = "starting · Loading kev-0.8b" };
+        var models = new DemoModelService(new InlineDispatcher(), ManualTimeProvider.Demo(), DemoModelScene.FirstRun);
+
+        _ = new FirstRunViewModel(service, models, shell, bar, isSetup: true);
+        Assert.Equal("starting · Loading kev-0.8b", bar.Engine);
+
+        service.Report("in-process");
+        Assert.Equal("in-process", bar.Engine);
+    }
+
+    /// <summary>
+    /// A3 security review M1: a setup opened on a configured machine (a model went missing) starts on the configured mode
+    /// and posture, writes neither unless the person changes it, and says "Manual → Smart" before a change is saved.
+    /// </summary>
+    [Fact]
+    public void ASetupOverAConfiguredMachineWritesOnlyWhatThePersonChanged()
+    {
+        static (FirstRunViewModel FirstRun, ReportingFirstRun Service, ShellViewModel Shell) Open()
+        {
+            var bar = new StatusBarViewModel();
+            var shell = new ShellViewModel(bar);
+            shell.Navigate(Area.FirstRun);
+            var service = new ReportingFirstRun { Current = new CurrentSetup(ApprovalMode.Manual, "local only") };
+            var models = new DemoModelService(new InlineDispatcher(), ManualTimeProvider.Demo(), DemoModelScene.FirstRun);
+            return (new FirstRunViewModel(service, models, shell, bar, isSetup: true), service, shell);
+        }
+
+        var (untouched, service, shell) = Open();
+        Assert.Equal(ApprovalMode.Manual, untouched.Mode);
+        Assert.True(untouched.Modes[0].IsSelected);
+        Assert.Equal("local only", untouched.Posture);
+        Assert.True(untouched.Postures[1].IsSelected);
+        Assert.Equal("", untouched.ModeChange);
+        Assert.Equal("", untouched.PostureChange);
+        untouched.SkipSetupCommand.Execute(null);
+        Assert.Equal(Area.Sessions, shell.CurrentArea);
+        Assert.Equal(new SetupChoices("~/src/corvid", null, null), service.Saved);
+
+        var (changed, changedService, _) = Open();
+        changed.Modes[1].Choose.Execute(null);
+        Assert.Equal("Configured now: Manual. Finishing the setup changes it: Manual → Smart.", changed.ModeChange);
+        changed.Postures[0].Choose.Execute(null);
+        Assert.Equal("Configured now: Local only. Finishing the setup changes it: Local only → Redact.", changed.PostureChange);
+        changed.Postures[1].Choose.Execute(null);
+        Assert.Equal("", changed.PostureChange);
+        changed.SkipSetupCommand.Execute(null);
+        Assert.Equal(new SetupChoices("~/src/corvid", ApprovalMode.Smart, null), changedService.Saved);
+    }
+
+    private sealed class ReportingFirstRun : IFirstRunService
+    {
+        private readonly DemoFirstRunService _demo = new(freshMachine: true);
+
+        public CurrentSetup Current { get; init; } = CurrentSetup.None;
+
+        public SetupChoices? Saved => _demo.Saved;
+
+        public Task<CurrentSetup> CurrentAsync(CancellationToken cancellationToken = default) => Task.FromResult(Current);
+
+        public string? EngineStatus { get; set; }
+
+        public event EventHandler? EngineStatusChanged;
+
+        public void Report(string status)
+        {
+            EngineStatus = status;
+            EngineStatusChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        public Task<DoctorReport> RunChecksAsync(CancellationToken cancellationToken = default) => _demo.RunChecksAsync(cancellationToken);
+
+        public Task<IReadOnlyList<string>> SuggestWorkspacesAsync(CancellationToken cancellationToken = default) => _demo.SuggestWorkspacesAsync(cancellationToken);
+
+        public Task<WorkspaceInfo> DescribeWorkspaceAsync(string path, CancellationToken cancellationToken = default) => _demo.DescribeWorkspaceAsync(path, cancellationToken);
+
+        public Task<HermesImport?> FindHermesAsync(CancellationToken cancellationToken = default) => _demo.FindHermesAsync(cancellationToken);
+
+        public Task SaveAsync(SetupChoices choices, CancellationToken cancellationToken = default) => _demo.SaveAsync(choices, cancellationToken);
+    }
 }

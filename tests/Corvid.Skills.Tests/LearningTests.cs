@@ -396,7 +396,7 @@ public sealed class LearningTests
     }
 
     [Fact]
-    public void AVersionOneSkillsDatabaseMigratesToVersionTwo()
+    public void AVersionOneSkillsDatabaseMigratesToVersionThree()
     {
         using var root = new TempRoot();
         var path = root["skills.db"];
@@ -405,7 +405,8 @@ public sealed class LearningTests
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = SkillsDatabase.Schema
-                + "INSERT INTO opportunities VALUES ('old', 's', 1, 9, 'decision-0', 'list notes', 'queued', NULL, 0, 0, 0);";
+                + "INSERT INTO opportunities VALUES ('old', 's', 1, 9, 'decision-0', 'list notes', 'queued', NULL, 0, 0, 0);"
+                + "INSERT INTO pending VALUES ('sk-old', 'notes', 'x', 's', 'decision-0', 'why', 'replay', NULL, 'pending', 0);";
             command.ExecuteNonQuery();
         }
 
@@ -417,12 +418,15 @@ public sealed class LearningTests
         Assert.Equal(queued, database.FindOpportunity(queued.Id));
         Assert.Equal(2, database.Opportunities().Count);
         Assert.Null(database.FindOpportunity("missing"));
+        // A draft staged before version 3 has no known base; a new one keeps its own.
+        Assert.Null(database.FindPending("sk-old")!.BaseRevision);
+        Assert.Equal("abc", database.FindPending(database.Stage("lists", "y", "s", "d", "why", "replay", null, "abc").Id)!.BaseRevision);
         using (var connection = new SqliteConnection($"Data Source={path};Pooling=False"))
         {
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = "PRAGMA user_version;";
-            Assert.Equal(2L, command.ExecuteScalar());
+            Assert.Equal(3L, command.ExecuteScalar());
         }
         // Opening again is a no-op.
         Assert.Equal(2, new SkillsDatabase(path).Opportunities().Count);

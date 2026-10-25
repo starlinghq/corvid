@@ -192,6 +192,9 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
 
     internal void ReportError(string message) => Error = message;
 
+    /// <summary>The person moved on (another option on the card): the last refusal no longer applies to what is shown.</summary>
+    internal void ClearError() => Error = "";
+
     /// <summary>Opens the session: draws its history, then follows its updates until disposed.</summary>
     public async Task OpenAsync(CancellationToken cancellationToken = default)
     {

@@ -15,7 +15,7 @@ public sealed partial class AppComposition
     private SessionsViewModel? _sessions;
 
     /// <summary>
-    /// The engine's sessions as the views see them. Demo mode (the only mode until Corvid.App.Engine exists) serves the
+    /// The engine's sessions as the views see them. Demo mode (the engine's comes from <see cref="Services"/> instead) serves the
     /// mockups' scenario, opening at the moment <c>--scene</c> names.
     /// </summary>
     public ISessionService SessionService { get; private set; } = null!;
@@ -28,10 +28,11 @@ public sealed partial class AppComposition
 
     private void StartSessions()
     {
-        SessionService = new DemoSessionService(Dispatcher, Time, Options.Scene);
+        SessionService = Services.CreateSessionService(this);
         SessionHub = new SessionHub(SessionService, Dispatcher, Time, Shell, StatusBar);
-        // The demo answers at once, so the rail is full and the session open when this returns.
-        _ = SessionHub.StartAsync(Options.Session, DemoShell.CurrentSessionId);
+        // The demo answers at once, so the rail is full and the session open when this returns; the engine lists its log
+        // in the background, and its failure shows as the hub's status bar tag. Only the demo falls back to Main.png's session.
+        _ = SessionHub.StartAsync(Options.Session, Options.Demo ? DemoShell.CurrentSessionId : null);
         if (Options.Demo)
             SetScene(SessionHub.Get(DemoSessionService.MainSessionId));
     }

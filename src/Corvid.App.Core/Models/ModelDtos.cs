@@ -95,6 +95,7 @@ public sealed record CatalogueModel(
 }
 
 /// <summary>Where a slot's model runs and how fast: device, queue depth (for generating slots) and median latency.</summary>
+/// <param name="P50Milliseconds">The median latency; negative before the slot's first call, when there is none to show.</param>
 public sealed record SlotPlacement(string Device, int? Queue, int P50Milliseconds);
 
 /// <summary>
@@ -134,7 +135,14 @@ public sealed record DeciderStatus(string Model, string DisplayName, DeciderTier
 /// is bound (without one every cloud request is refused), whether Vault answers (without it cloud slots disappear), and
 /// today's counts.
 /// </summary>
-public sealed record CloudPrivacy(string Posture, bool ExtractorBound, bool VaultPresent, int RequestsToday, int RedactedToday, int RefusedToday);
+public sealed record CloudPrivacy(string Posture, bool ExtractorBound, bool VaultPresent, int RequestsToday, int RedactedToday, int RefusedToday)
+{
+    /// <summary>
+    /// What the "today" line says in place of the counts when they are not known (the engine's, until the egress ledger
+    /// counts requests, G-9); null when the counts are real.
+    /// </summary>
+    public string? TodayUnknown { get; init; }
+}
 
 /// <summary>One of the doctor's checks for a GPU (the driver, the CUDA runtime), shown beside a model placed on it.</summary>
 public sealed record DeviceCheck(string Name, bool Ok, string Detail);
@@ -157,6 +165,18 @@ public sealed record ModelsSnapshot(
     IReadOnlyList<ModelPlacement> Placements,
     string Cpu)
 {
+    /// <summary>
+    /// False for a snapshot standing in until the first load (or for a store that cannot load): its empty lists and
+    /// flags say nothing, so the pages claim neither Vault's absence nor a degraded decider from it.
+    /// </summary>
+    public bool IsLoaded { get; init; } = true;
+
+    /// <summary>
+    /// Why this snapshot may be out of date: the store could not read the configuration again after a change it made
+    /// itself (a download finishing over a corvid.json that no longer parses). Null when it is current.
+    /// </summary>
+    public string? Problem { get; init; }
+
     public CatalogueModel? Find(string name) => Catalogue.FirstOrDefault(model => string.Equals(model.Name, name, StringComparison.Ordinal));
 
     public ModelSlot? Slot(string name) => Slots.FirstOrDefault(slot => string.Equals(slot.Name, name, StringComparison.Ordinal));
@@ -218,10 +238,17 @@ public static class ModelText
             : string.Create(CultureInfo.InvariantCulture, $"about {minutes} minutes at {Rate(bytesPerSecond)}");
     }
 
-    /// <summary>"cuda:0 · q0 · 180 ms", "cpu · 38 ms".</summary>
+    /// <summary>"cuda:0 · q0 · 180 ms", "cpu · 38 ms"; "cpu · q0 · no calls yet" before the slot's first call (a negative median).</summary>
     public static string Placement(SlotPlacement placement)
     {
         ArgumentNullException.ThrowIfNull(placement);
+        if (placement.P50Milliseconds < 0)
+        {
+            return placement.Queue is { } waiting
+                ? string.Create(CultureInfo.InvariantCulture, $"{placement.Device} · q{waiting} · no calls yet")
+                : $"{placement.Device} · no calls yet";
+        }
+
         return placement.Queue is { } queue
             ? string.Create(CultureInfo.InvariantCulture, $"{placement.Device} · q{queue} · {placement.P50Milliseconds} ms")
             : string.Create(CultureInfo.InvariantCulture, $"{placement.Device} · {placement.P50Milliseconds} ms");
