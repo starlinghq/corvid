@@ -234,6 +234,12 @@ public sealed class GatewayHost : IAsyncDisposable
                 Answer(message, sessionId, text);
                 return;
             }
+            // Security L2: /sessions lists the titles of every conversation, on every surface: never to a group.
+            if (!message.Direct && IsCommandNamed(text, "sessions"))
+            {
+                Queue(message, "/sessions lists every conversation's title, so it answers only in a direct message with this bot.", "notice");
+                return;
+            }
             // Off the receive loop: /undo waits for a running turn, which may itself wait for an /approve still to come.
             Track(RunCommandAsync(message, sessionId, text));
             return;
@@ -242,13 +248,35 @@ public sealed class GatewayHost : IAsyncDisposable
         // Anyone but the owner gets the adapter's guest tools only (none by default): taint asks before network and sends, but
         // would not stop a read-only file tool showing the owner's workspace to a guest.
         // A paired guest's own allowlist (G-14) replaces the adapter's for them.
+        // Security M2: the guest is named on their message in the log, so the owner's next turn reads it as theirs.
         var reply = await _agent.PostAsync(sessionId, text, role == SenderRole.Owner ? null
-                : new GuestScope(_pairing.GuestTools(message.Adapter, message.SenderId) ?? (IEnumerable<string>)adapter.GuestTools), cancellationToken)
+                : new GuestScope(_pairing.GuestTools(message.Adapter, message.SenderId) ?? (IEnumerable<string>)adapter.GuestTools)
+                {
+                    Sender = GuestName(message),
+                }, cancellationToken)
             .ConfigureAwait(false);
         Track(DeliverAsync(message, sessionId, adapter, reply));
     }
 
-    private static string PairingNotice(PairingRequest request) =>
+    /// <summary>Whether the line is <c>/name</c>, alone or with arguments, or addressed as Telegram does (<c>/name@bot</c>).</summary>
+    internal static bool IsCommandNamed(string text, string name)
+    {
+        var line = text.TrimStart();
+        if (!line.StartsWith('/') || !line.AsSpan(1).StartsWith(name, StringComparison.OrdinalIgnoreCase))
+            return false;
+        var rest = line[(1 + name.Length)..];
+        return rest.Length == 0 || char.IsWhiteSpace(rest[0]) || rest[0] == '@';
+    }
+
+    /// <summary>"telegram guest dana (1001)": one line, no control characters, at most 100 characters (names are the platform's).</summary>
+    internal static string GuestName(InboundMessage message)
+    {
+        var name = $"{message.Adapter} guest " + (message.SenderName is { Length: > 0 } shown ? $"{shown} ({message.SenderId})" : message.SenderId);
+        name = new string([.. name.Where(c => !char.IsControl(c) && c is not ('\u2028' or '\u2029'))]);
+        return name.Length <= 100 ? name : name[..100] + "…";
+    }
+
+        private static string PairingNotice(PairingRequest request) =>
         $"This is a private agent. To talk to it, its owner must approve you: on their machine, " +
         $"`corvid gateway pair approve {PairingStore.Display(request.Code)}`. The code expires at " +
         $"{request.ExpiresAt.UtcDateTime.ToString("HH:mm", CultureInfo.InvariantCulture)} UTC.";

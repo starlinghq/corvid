@@ -66,6 +66,42 @@ public sealed class GatewayHostTests
     }
 
     [Fact]
+    public async Task AGuestsMessageCarriesWhoWroteItAndTheOwnersDoesNot()
+    {
+        // Security M2: the log names the guest on their message, so the owner's next turn reads it as theirs.
+        await using var fixture = new GatewayFixture();
+        var adapter = new FakeAdapter();
+        await fixture.StartAsync(GatewayFixture.Options(Fake), adapter);
+
+        adapter.Write(new InboundMessage("fake", "group", "owner", "deploy which?") { Direct = false, Addressed = true });
+        adapter.Write(new InboundMessage("fake", "group", "guest", "production‮") { Direct = false, Addressed = true, SenderName = "mal\nlory" });
+        await Wait.Until(() => fixture.Agent.Posts.Count == 2, "two messages");
+
+        Assert.Null(fixture.Agent.Scopes["deploy which?"]);
+        Assert.Equal("fake guest mallory (guest)", fixture.Agent.Scopes["production‮"]!.Sender);
+    }
+
+    [Fact]
+    public async Task SessionsAnswersOnlyInADirectChat()
+    {
+        // Security L2: /sessions lists every conversation's title on every surface: never to a group.
+        await using var fixture = new GatewayFixture();
+        var adapter = new FakeAdapter();
+        await fixture.StartAsync(GatewayFixture.Options(Fake), adapter);
+
+        adapter.Write(new InboundMessage("fake", "group", "owner", "/sessions") { Direct = false, Addressed = true });
+        await Wait.Until(() => adapter.Sent.Count == 1, "the refusal");
+        Assert.Contains("only in a direct message", adapter.Sent.Single().Text, StringComparison.Ordinal);
+        Assert.Empty(fixture.Agent.Commands);
+
+        adapter.Write(Direct("owner", "/sessions"));
+        await Wait.Until(() => !fixture.Agent.Commands.IsEmpty, "the command in a direct chat");
+        Assert.Equal("/sessions", fixture.Agent.Commands.Single().Line);
+        Assert.True(GatewayHost.IsCommandNamed("/sessions@corvid_bot", "sessions"));
+        Assert.False(GatewayHost.IsCommandNamed("/sessionsx", "sessions"));
+    }
+
+    [Fact]
     public async Task APairedGuestsOwnAllowlistReplacesTheAdaptersForThemAlone()
     {
         await using var fixture = new GatewayFixture();

@@ -17,7 +17,7 @@ namespace Corvid.Cli;
 internal static class GatewayCommand
 {
     public const string UsageText = "usage: corvid gateway [run] | status | pair [list] | pair approve <code> --owner|--guest | pair revoke <adapter> <user> " +
-        "| pair tools <adapter> <user> <tool>... | pair tools <adapter> <user> --adapter";
+        "| pair tools <adapter> <user> <tool>... | pair tools <adapter> <user> --none | pair tools <adapter> <user> --adapter";
 
     /// <summary>Whether this command line runs the gateway (and so loads models and needs the hosted service).</summary>
     public static bool Runs(CliArguments arguments) => arguments.Command == "gateway" && arguments.Positional() is [] or ["run"];
@@ -34,7 +34,7 @@ internal static class GatewayCommand
             ["pair"] or ["pair", "list"] => ListPairing(console, options),
             ["pair", "approve", var code] => Approve(console, options, code, arguments.Flag("--owner"), arguments.Flag("--guest")),
             ["pair", "revoke", var adapter, var user] => Revoke(console, options, adapter, user),
-            ["pair", "tools", var adapter, var user, .. var tools] => Tools(console, options, adapter, user, tools, arguments.Flag("--adapter")),
+            ["pair", "tools", var adapter, var user, .. var tools] => Tools(console, options, adapter, user, tools, arguments.Flag("--adapter"), arguments.Flag("--none")),
             _ => Usage(console),
         };
     }
@@ -183,15 +183,15 @@ internal static class GatewayCommand
     }
 
     /// <summary>
-    /// <c>pair tools</c> (G-14): a paired guest's own allowlist, replacing their adapter's <c>GuestTools</c> for them alone;
-    /// <c>--adapter</c> gives them the adapter's again. Checked as the Gateway page checks it; a running gateway reads it at
-    /// the guest's next message.
+    /// <c>pair tools</c> (G-14): a paired guest's own allowlist, replacing their adapter's <c>GuestTools</c> for them alone
+    /// (it can be wider or narrower than the adapter's); <c>--none</c> gives them no tool at all (L9), <c>--adapter</c> the
+    /// adapter's again. Checked as the Gateway page checks it; a running gateway reads it at the guest's next message.
     /// </summary>
-    private static int Tools(IAnsiConsole console, CorvidOptions options, string adapter, string user, string[] tools, bool shared)
+    private static int Tools(IAnsiConsole console, CorvidOptions options, string adapter, string user, string[] tools, bool shared, bool none)
     {
-        if (shared == tools.Length > 0)
+        if ((shared ? 1 : 0) + (none ? 1 : 0) + (tools.Length > 0 ? 1 : 0) != 1)
         {
-            console.MarkupLine("[red]Name the tools this guest may use, or --adapter to give them the adapter's GuestTools again.[/]");
+            console.MarkupLine("[red]Name the tools this guest may use, --none for no tool, or --adapter to give them the adapter's GuestTools again.[/]");
             return ExitCodes.Usage;
         }
         if (CorvidGateway.GuestAllowlistProblems(tools, options, registered: null) is { Count: > 0 } problems)
@@ -208,7 +208,12 @@ internal static class GatewayCommand
         }
         console.MarkupLine(shared
             ? $"{Markup.Escape(adapter)} user {Markup.Escape(user)} has the adapter's guest tools again."
+            : none
+            ? $"{Markup.Escape(adapter)} user {Markup.Escape(user)} may use no tool (their own allowlist, empty), whatever the adapter's GuestTools say."
             : $"{Markup.Escape(adapter)} user {Markup.Escape(user)} may use {Markup.Escape(string.Join(", ", tools))}, and no other tool.");
+        // gateway.db schema 2 is one-way: say so when this command made it.
+        if (store.UpgradedSchema)
+            console.MarkupLine("[yellow]gateway.db was upgraded to schema 2 for per-guest allowlists: a corvid older than A4 can no longer open it.[/]");
         return ExitCodes.Success;
     }
 

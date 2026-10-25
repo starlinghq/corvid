@@ -243,6 +243,20 @@ public sealed class SessionTitlerTests : IDisposable
     }
 
     [Fact]
+    public void A_guests_reply_in_a_gateway_chat_leaves_the_owners_question_open()
+    {
+        // Security M2: only the owner's message answers the question asked of them.
+        var log = Log(new UserMessage("tag the release"), new AssistantMessage("0.2.0, or 0.2.0-rc1?"),
+            new ClarificationAsked("q-1", "0.2.0, or 0.2.0-rc1?", ["0.2.0", "0.2.0-rc1"]));
+
+        log.Append("s", log.GetHead("s", Ct), [EventData.Create(new UserMessage("0.2.0", From: "telegram guest mallory (66)"))], Ct);
+        Assert.Equal("q-1", SessionCatalogue.Describe(log, "s", Ct)!.OpenQuestion?.QuestionId);
+
+        log.Append("s", log.GetHead("s", Ct), [EventData.Create(new UserMessage("0.2.0-rc1"))], Ct);
+        Assert.Null(SessionCatalogue.Describe(log, "s", Ct)!.OpenQuestion);
+    }
+
+    [Fact]
     public async Task A_rename_while_the_generator_writes_wins()
     {
         var log = Log(new UserMessage("hello"), new AssistantMessage("Hi."));

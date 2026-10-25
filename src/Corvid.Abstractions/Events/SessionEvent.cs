@@ -42,8 +42,12 @@ public abstract record SessionEvent;
 // LocalOnly (A4: the composer's `!!` line, docs/plan/tui.md §4.1) marks the message of a turn that ran a shell command for the
 // user with its output kept from the model: the prompt and the episodic index leave the message, its call and the call's
 // result out, and the log keeps all of them for audit. Omitted when null, so events written before it keep their form.
+// From (A4 review, security M2): who wrote it when it is not the session's own user (a gateway guest, "telegram guest dana
+// (1001)"); null for the user's own message, and in every log written before it existed. Such a message is outside content:
+// the prompt quotes it as someone else's words, and it answers no question asked of the owner.
 public sealed record UserMessage(string Text,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? LocalOnly = null) : SessionEvent;
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? LocalOnly = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? From = null) : SessionEvent;
 public sealed record AssistantMessage(string Text) : SessionEvent;
 // K-3: a message the user sent into a running turn (steer now, Ctrl+Enter), taken at the turn's next step checkpoint. It is
 // part of the conversation like a UserMessage (the generator reads it as the user's words, after the results before it),

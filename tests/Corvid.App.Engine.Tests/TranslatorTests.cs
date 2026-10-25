@@ -56,6 +56,22 @@ public sealed class TranslatorTests
     }
 
     [Fact]
+    public void AGuestsReplyIsShownAsTheirsAndLeavesTheQuestionOpenForTheOwner()
+    {
+        // Security M2: in a shared gateway chat only the owner answers the question asked of them.
+        var translator = new SessionUpdateTranslator(Workspace);
+        translator.Translate(new PromptSent("tag the release", 1) { At = T0 });
+        translator.Translate(new QuestionRaised("q-1", "0.2.0 or 0.2.0-rc1?", ["0.2.0", "0.2.0-rc1"]) { At = T0 });
+        translator.EndTurn(TurnOutcome.Clarifying, T0.AddSeconds(1));
+
+        var guest = translator.Translate(new PromptSent("0.2.0", 7) { At = T0.AddSeconds(5), From = "telegram guest mallory (66)" });
+
+        Assert.DoesNotContain(guest, update => update is QuestionAnswered);
+        Assert.Equal("telegram guest mallory (66)", guest.OfType<UserMessage>().Single().From);
+        Assert.Equal("q-1", translator.OpenQuestion);
+    }
+
+    [Fact]
     public void AQuestionStaysOpenPastItsTurnItsRepeatedAnswerIsNotShownTwiceAndTheNextMessageAnswersIt()
     {
         var translator = new SessionUpdateTranslator(Workspace);

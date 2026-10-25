@@ -27,6 +27,9 @@ public sealed record PromptSent(string Text, long Sequence) : SessionStreamUpdat
     /// <see cref="ReplayOptions.Generators"/>; null live (the surface knows its slot) and when the log has no decision for it.
     /// </summary>
     public string? Generator { get; init; }
+
+    /// <summary>Who wrote it when it is not the session's own user (a gateway guest, security M2); null for the user's own.</summary>
+    public string? From { get; init; }
 }
 
 /// <summary>
