@@ -124,7 +124,7 @@ public sealed partial class SessionViewModel
     /// <summary>The strip shows while a turn runs or messages are queued.</summary>
     public bool ShowTurnStrip => _state.Running || Queue.Count > 0;
 
-    /// <summary>"step 4 of 6 · shell running · 12 s", "step 2 of 6 · waiting on you · 2 approvals".</summary>
+    /// <summary>"step 4 of 6 · shell running · 12 s", "step 2 of 6 · waiting on you · 2 approvals", "step 1 of 9 · waiting on you · a question".</summary>
     public string TurnStripText { get => _stripText; private set => SetProperty(ref _stripText, value); }
 
     /// <summary>
@@ -342,6 +342,14 @@ public sealed partial class SessionViewModel
         {
             parts.Add("waiting on you");
             parts.Add(SessionText.Plural(_state.Approvals.Count, "approval"));
+            return string.Join(" · ", parts);
+        }
+
+        // A5: ask_user waits inside the turn; the turn is on the person then, not generating.
+        if (_state.Question is not null)
+        {
+            parts.Add("waiting on you");
+            parts.Add("a question");
             return string.Join(" · ", parts);
         }
 

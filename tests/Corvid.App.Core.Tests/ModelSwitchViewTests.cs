@@ -10,7 +10,7 @@ public sealed class ModelSwitchViewTests
     private const string Idle = "cli-a410";
 
     /// <summary>The demo's sessions, with the view's update callback kept so a test can send it live updates.</summary>
-    private sealed class PushingService(DemoSessionService inner) : ISessionService
+    internal sealed class PushingService(DemoSessionService inner) : ISessionService
     {
         private Action<SessionUpdate>? _push;
 
@@ -46,7 +46,7 @@ public sealed class ModelSwitchViewTests
         public Task RenameAsync(string sessionId, string title, CancellationToken cancellationToken = default) => inner.RenameAsync(sessionId, title, cancellationToken);
     }
 
-    private static async Task<(SessionViewModel Session, PushingService Service, ManualTimeProvider Time)> Open()
+    internal static async Task<(SessionViewModel Session, PushingService Service, ManualTimeProvider Time)> Open()
     {
         var time = ManualTimeProvider.Demo();
         var service = new PushingService(new DemoSessionService(new InlineDispatcher(), time));
@@ -112,5 +112,25 @@ public sealed class ModelSwitchViewTests
         var header = session.Blocks.OfType<TurnHeaderBlock>().Last();
         Assert.Contains("qwen3.5-0.8b → qwen-27b", header.Detail, StringComparison.Ordinal);
         Assert.Contains("step 2 of 6 on qwen-27b", header.Detail, StringComparison.Ordinal);
+    }
+}
+
+/// <summary>A5: an in-turn question (ask_user waiting inside the turn) in the turn strip.</summary>
+public sealed class InTurnQuestionStripTests
+{
+    [Fact]
+    public async Task TheStripSaysTheTurnWaitsOnTheQuestionNotThatItIsGenerating()
+    {
+        // The demo's cli-a410 is a running turn waiting on a question.
+        var (session, service, time) = await ModelSwitchViewTests.Open();
+        Assert.True(session.IsRunning);
+        Assert.NotNull(session.PendingQuestion);
+
+        Assert.Matches("^step \\d of \\d · waiting on you · a question$", session.TurnStripText);
+        Assert.Equal(session.TurnStripText, session.TurnStripStatus);
+
+        // Answered, the turn is its own again.
+        service.Push(new QuestionAnswered(session.PendingQuestion!.QuestionId, "0.2.0") { At = time.GetUtcNow() });
+        Assert.DoesNotContain("waiting on you", session.TurnStripText, StringComparison.Ordinal);
     }
 }
