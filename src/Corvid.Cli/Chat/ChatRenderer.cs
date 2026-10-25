@@ -50,7 +50,7 @@ internal sealed class ChatRenderer : ITurnObserver
         {
             _console.Write(new Rule($"[bold]corvid[/] [grey]· {Markup.Escape(generator)} · {tools} tool(s) · session {Markup.Escape(session)}[/]")
                 .LeftJustified().RuleStyle("grey"));
-            _console.MarkupLine("[grey]/help lists commands · /model picks a model · Ctrl-C cancels a turn · /exit leaves[/]");
+            _console.MarkupLine("[grey]/help lists commands · /model picks a model, during a turn too · Ctrl-C cancels a turn · /exit leaves[/]");
             _console.MarkupLine(@"[grey]! cmd runs a shell command · # fact stages a memory · \! or \# at the start sends the line as a message[/]");
         }
     }
@@ -305,6 +305,40 @@ internal sealed class ChatRenderer : ITurnObserver
             _console.Markup($"{Markup.Escape(output.ChoicePrompt ?? "Pick")} " +
                 string.Join(" · ", output.Choices.Select(choice => $"[green]{Markup.Escape(choice.Key)}[/] {Markup.Escape(choice.Label)}")) +
                 " [grey](Enter keeps it)[/] › ");
+    }
+
+    /// <summary>A5: the lines a running turn can take as they are typed: <c>/model</c> (the turn takes the switch at its next step).</summary>
+    public static bool TakesMidTurn(string line)
+    {
+        if (!SlashCommandRegistry.IsCommand(line))
+            return false;
+        var name = line.TrimStart()[1..].Split(' ', 2, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
+        return name is "model" or "models";
+    }
+
+    /// <summary>
+    /// A5: the notice for a slot that moved on its own (escalation, a fallback, the privacy gate, back at the turn's end); null
+    /// for the person's own switch, which <c>/model</c>'s reply already says, and for a change of choice alone. Ids are
+    /// configuration text, escaped for the terminal.
+    /// </summary>
+    public static string? ModelNotice(Corvid.Host.Sessions.ModelChanged change)
+    {
+        ArgumentNullException.ThrowIfNull(change);
+        if (change.Sequence is null || change.From == change.To)
+            return null;
+        var what = change.Reason switch
+        {
+            "escalation" => "escalated to",
+            "fallback" => "fell back to",
+            "privacy" => "kept local: the privacy gate moved it to",
+            "de_escalation" => "back to",
+            _ => null,
+        };
+        if (what is null)
+            return null;
+        var cloud = change.Cloud ? " (cloud: requests leave the machine through the egress gate)" : "";
+        return $"[grey]↳ {Markup.Escape(TerminalText.Visible(change.Slot))} {what} {Markup.Escape(TerminalText.Visible(change.To))}" +
+            $" from {Markup.Escape(TerminalText.Visible(change.From))}{Markup.Escape(cloud)}[/]";
     }
 
     public void Notice(string markup)
