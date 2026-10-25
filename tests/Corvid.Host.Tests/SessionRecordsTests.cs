@@ -34,6 +34,9 @@ internal sealed class ScriptedChat(Func<IReadOnlyList<ChatMessage>, string> repl
     public async Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
+        // As Starling's local generator refuses it: sampling with no seed (it keeps every sampled response reproducible).
+        if (options is { Seed: null } && (options.Temperature > 0 || options.TopP is not null || options.TopK is not null))
+            throw new InvalidOperationException("Sampling (ChatOptions.Temperature > 0, TopP or TopK) requires ChatOptions.Seed.");
         var list = messages.ToList();
         Prompts.Enqueue(list);
         Asked.TrySetResult();
@@ -196,6 +199,17 @@ public sealed class SessionTitlerTests : IDisposable
         Assert.Equal("Fix the flaky sandbox test", SessionCatalogue.Describe(log, "s", Ct)!.Title);
         // Once titled, never again.
         Assert.Null(await titler.TitleAsync("s", Ct));
+    }
+
+    [Fact]
+    public async Task A_local_generator_that_refuses_unseeded_sampling_writes_titles_and_recaps()
+    {
+        var log = Log(new UserMessage("what is a binary search?"), new AssistantMessage("Halving the range each step."));
+        var chat = new ScriptedChat(prompt => prompt[0].Text.StartsWith("You name", StringComparison.Ordinal) ? "Binary search" : "You asked about binary search.");
+        var titler = new SessionTitler(log, chat);
+
+        Assert.Equal("Binary search", (await titler.TitleAsync("s", Ct))?.Title);
+        Assert.Equal("You asked about binary search.", (await titler.RecapAsync("s", RecapSources.Requested, Ct))?.Text);
     }
 
     [Fact]

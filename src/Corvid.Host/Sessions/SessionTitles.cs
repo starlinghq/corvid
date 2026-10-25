@@ -171,6 +171,10 @@ public sealed record SessionTitlerOptions
 public sealed class SessionTitler
 {
     private const int MaxAppendAttempts = 8;
+
+    // A fixed seed beside the low temperature: the local generator (Starling) refuses sampling without one, and the same
+    // exchange gets the same title.
+    private const long Seed = 20_261;
     private const int LineChars = 300;
 
     private const string TitlePrompt =
@@ -263,7 +267,7 @@ public sealed class SessionTitler
         {
             var response = await _generator.GetResponseAsync(
                 [new ChatMessage(ChatRole.System, TitlePrompt), new ChatMessage(ChatRole.User, $"User: {Cut(message, 1_000)}\nAssistant: {Cut(answer, 1_000)}")],
-                new ChatOptions { MaxOutputTokens = Options.TitleTokens, Temperature = 0.2f }, cancellationToken).ConfigureAwait(false);
+                new ChatOptions { MaxOutputTokens = Options.TitleTokens, Temperature = 0.2f, Seed = Seed }, cancellationToken).ConfigureAwait(false);
             title = Clean(response.Text);
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
@@ -297,7 +301,7 @@ public sealed class SessionTitler
         {
             var response = await _generator.GetResponseAsync(
                 [new ChatMessage(ChatRole.System, RecapPrompt), new ChatMessage(ChatRole.User, string.Join('\n', Window(lines)))],
-                new ChatOptions { MaxOutputTokens = Options.RecapTokens, Temperature = 0.2f }, cancellationToken).ConfigureAwait(false);
+                new ChatOptions { MaxOutputTokens = Options.RecapTokens, Temperature = 0.2f, Seed = Seed }, cancellationToken).ConfigureAwait(false);
             text = response.Text.Trim();
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
