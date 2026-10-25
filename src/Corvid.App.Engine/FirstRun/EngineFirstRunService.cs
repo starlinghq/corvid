@@ -166,12 +166,18 @@ public sealed class EngineFirstRunService : IFirstRunService, IDisposable
         }, cancellationToken);
     }
 
-    /// <summary>The mode and posture the next start would run with (the built-in defaults where the file says nothing).</summary>
+    /// <summary>
+    /// The mode and posture the configuration sets (corvid.json, or this run's environment and <c>--set</c> over it); null
+    /// for one it leaves to the built-in default, which the setup then writes as chosen.
+    /// </summary>
     public Task<CurrentSetup> CurrentAsync(CancellationToken cancellationToken = default) => Task.Run(() =>
     {
-        var options = Options(_writer.NextStart());
-        Corvid.App.Core.Shell.ApprovalMode? mode = Enum.TryParse<Corvid.App.Core.Shell.ApprovalMode>(options.Approvals.Mode.ToString(), out var parsed) ? parsed : null;
-        var posture = options.Privacy.Cloud.ToString() switch
+        var configuration = _writer.NextStart();
+        var options = Options(configuration);
+        Corvid.App.Core.Shell.ApprovalMode? mode =
+            configuration[$"{CorvidOptions.Section}:Approvals:Mode"] is { Length: > 0 }
+            && Enum.TryParse<Corvid.App.Core.Shell.ApprovalMode>(options.Approvals.Mode.ToString(), out var parsed) ? parsed : null;
+        var posture = configuration[$"{CorvidOptions.Section}:Privacy:Cloud"] is not { Length: > 0 } ? null : options.Privacy.Cloud.ToString() switch
         {
             "Refuse" => "local only",
             "Send" => "send",

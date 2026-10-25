@@ -152,6 +152,8 @@ public sealed class EngineFirstRunTests : IDisposable
         await using var fixture = await EngineFixture.StartAsync();
         using var service = Service(fixture);
         var path = Path.Combine(fixture.Host.Root, "corvid.json");
+        // Nothing configured: the setup's choices are written as chosen, with no "configured now" to change from.
+        Assert.Equal(CurrentSetup.None, await service.CurrentAsync(Token));
         const string configured = """
             {
               // chosen with care
