@@ -49,6 +49,16 @@ is desktop-only until attached mode (G-1).
 
 `CORVID_APP_RENDERER=software` draws with Skia on the CPU instead of OpenGL (see the harness check below).
 
+On the engine, a session opened from the log (`--session`, the rail after a restart) is replayed (K-10) and folds to
+what the live turn showed for what the log records: messages, calls with their results and diffs, plans, checkpoints,
+and each asked call's approval answer (approved once, for the session or always; denied, with the reason the person
+gave). It does not show what the log does not keep: the generator and tokens of a past turn, its decisions, how a turn
+ended beyond "answered" (an interrupted turn reads "the log holds no answer"), the session's taint, a call's elapsed
+time, the rule text a session or always answer wrote, a call refused without a prompt (the hardline list, a remembered
+denial, no approver) as "denied" rather than "failed", and the reason for denials logged before `approval_resolved`
+carried it (`note`). The composer's `!` shell and `#` memory lines are not built (docs/plan/tui.md §4.1): a message
+starting with either is refused with a notice and stays in the composer.
+
 The window's own keys come from the key map (`Corvid.App.Core/Keys/KeyMap.cs`, `ui.md` §6) and can be remapped at once
 in Settings › Keybindings: `Ctrl+K` and `Ctrl+P` the command palette, `Ctrl+Tab` the session switcher (again for the
 next, `Ctrl+Shift+Tab` back), `Ctrl+R` prompt history, `Ctrl+F` find in the session, `Ctrl+Shift+F` search across
