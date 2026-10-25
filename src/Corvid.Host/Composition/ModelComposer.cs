@@ -173,7 +173,9 @@ public sealed class ModelComposer : IDisposable
                 var extractor = _slots.TryGetValue(ModelSlots.Extractor, out var settings)
                     ? Raw(ModelSlots.Extractor, _catalogue.Find(settings.Model!)).Service as IExtractor
                     : null;
-                return _egress = new PrivacyEgress(extractor, new PrivacyEgressOptions { PolicyFor = PolicyFor });
+                // A5: the turn's configured system prompt is Corvid's own text, not the person's: never scanned nor rewritten.
+                var prompt = _options.Turn.SystemPrompt is { Length: > 0 } configured ? configured : Kernel.Turns.TurnOptions.DefaultSystemPrompt;
+                return _egress = new PrivacyEgress(extractor, new PrivacyEgressOptions { PolicyFor = PolicyFor, TrustedTexts = [prompt] });
             }
         }
     }

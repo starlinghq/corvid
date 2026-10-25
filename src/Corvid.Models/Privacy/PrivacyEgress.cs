@@ -40,6 +40,14 @@ public sealed record PrivacyEgressOptions
     public int MinValueLength { get; init; } = 2;
 
     /// <summary>
+    /// A5: Corvid's own fixed instructions (the configured system prompt). Inside a system message their text is neither
+    /// scanned nor rewritten, since it holds no PII and GLiNER2 reads its words as names ("Corvid", "status"); whatever else
+    /// the system message carries (core memory blocks, recalled memory) is scanned and redacted as before. Honoured only in
+    /// system messages, so text the person or a tool sends that repeats it is scanned like any other.
+    /// </summary>
+    public ImmutableArray<string> TrustedTexts { get; init; } = [];
+
+    /// <summary>
     /// Finds credential values (C-032): the shared detector under its egress rules. Tests replace it to reach the timeout path.
     /// </summary>
     internal Func<string, ImmutableArray<CredentialMatch>> FindCredentials { get; init; } =
@@ -132,7 +140,7 @@ public sealed class PrivacyEgressRefusedException : Exception
 /// send to redact, and refuse stays refuse. A detector timeout refuses the request.
 /// </remarks>
 /// <remarks>Thread-safe; one instance serves every session and binding of a process.</remarks>
-public sealed class PrivacyEgress
+public sealed partial class PrivacyEgress
 {
     private readonly IExtractor? _extractor;
     private readonly ConcurrentDictionary<string, ImmutableArray<ExtractedSpan>> _chunks = new(StringComparer.Ordinal);
@@ -183,8 +191,12 @@ public sealed class PrivacyEgress
     /// Tool-call arguments and JSON tool results as JSON text, for the credential detector only: the leaves in
     /// <paramref name="texts"/> lose the key that labels a value (<c>{"password": "..."}</c>).
     /// </param>
+    /// <param name="vocabulary">
+    /// A5: the request's structural words (identifier JSON keys, the lowercase words of the trusted system text): a lowercase
+    /// one-word span that is one of them is the request's structure, not a value ("status", "details").
+    /// </param>
     private async Task<EgressScan> ScanAsync(IEnumerable<string> texts, IEnumerable<string> structured, EgressPolicy policy,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, IReadOnlySet<string>? vocabulary = null)
     {
         ArgumentNullException.ThrowIfNull(texts);
         ArgumentNullException.ThrowIfNull(policy);
@@ -231,11 +243,30 @@ public sealed class PrivacyEgress
                     var value = span.Text.Trim();
                     if (span.Confidence < policy.Threshold || value.Length < Options.MinValueLength || !value.Any(char.IsLetterOrDigit))
                         continue;
+                    if (Structural(span.Label, value, vocabulary))
+                        continue;
                     values.TryAdd(value, new DetectedValue(span.Label, value));
                 }
             }
         }
         return new([.. values.Values], null);
+    }
+
+    /// <summary>
+    /// A5: spans GLiNER2 labels that are not values: a <c>credential</c> span of plain words is the noun ("API key",
+    /// "password"; values are the credential detector's), and a lowercase single word the request uses as structure.
+    /// </summary>
+    internal static bool Structural(string label, string value, IReadOnlySet<string>? vocabulary)
+    {
+        if (string.Equals(label, CredentialLabel, StringComparison.OrdinalIgnoreCase) && value.All(c => char.IsLetter(c) || c is ' ' or '-'))
+            return true;
+        // A value of a built-in label has its shape: an email has an @, a phone or account number has digits. GLiNER2 called
+        // "status" an email in the A4 pass. A user-defined label has no known shape and is taken as found.
+        if (label == "email" && !value.Contains('@', StringComparison.Ordinal))
+            return true;
+        if (label is "phone number" or "account number" && !value.Any(char.IsAsciiDigit))
+            return true;
+        return vocabulary is not null && value.All(c => char.IsAsciiLetterLower(c) || c is '_' or '-') && vocabulary.Contains(value);
     }
 
     /// <summary>The label credential values are redacted under: <c>&lt;CREDENTIAL_1&gt;</c>.</summary>
@@ -347,7 +378,8 @@ public sealed class PrivacyEgress
             return new(new(EgressOutcome.Refused, action, $"the request holds {opaque.GetType().Name}, which the PII extractor cannot read",
                 ImmutableSortedDictionary<string, int>.Empty), messages, null);
 
-        var scan = await ScanAsync(OutgoingTexts(messages), StructuredTexts(messages), policy, cancellationToken).ConfigureAwait(false);
+        var scan = await ScanAsync(ScannedTexts(messages), StructuredTexts(messages), policy, cancellationToken, Vocabulary(messages))
+            .ConfigureAwait(false);
         var decision = Decide(action, scan);
         if (decision.Outcome != EgressOutcome.Redacted)
             return new(decision, messages, null);
@@ -360,7 +392,7 @@ public sealed class PrivacyEgress
         var map = MapFor(context.SessionId);
         foreach (var value in scan.Values)
             map.PlaceholderFor(value.Label, value.Value);
-        List<ChatMessage> redacted = [.. messages.Select(message => Transform(message, map.Redact))];
+        List<ChatMessage> redacted = [.. messages.Select(message => Transform(message, map.Redact, message.Role == ChatRole.System ? Options.TrustedTexts : []))];
         // The credential floor is checked on what would be sent, not assumed from the scan.
         if (CredentialLeft(scan, redacted) is { } left)
             return new(new(EgressOutcome.Refused, decision.Action, left, decision.Labels), messages, null);
@@ -489,6 +521,119 @@ public sealed class PrivacyEgress
 
     private static bool IsReadableValue(object? value) => value is null or bool or string or JsonElement or IFormattable;
 
+    /// <summary>
+    /// A5: what the extractor reads, as <see cref="OutgoingTexts"/> less the request's structure: a system message's trusted
+    /// text (<see cref="PrivacyEgressOptions.TrustedTexts"/>) and JSON keys that are identifiers (<c>status</c>,
+    /// <c>exit_code</c>). The person's words, the model's, memory and tool results' values are all read.
+    /// </summary>
+    internal IEnumerable<string> ScannedTexts(IEnumerable<ChatMessage> messages)
+    {
+        foreach (var message in messages)
+        {
+            if (message.Role != ChatRole.System || Options.TrustedTexts.IsDefaultOrEmpty)
+            {
+                foreach (var text in OutgoingTexts([message]))
+                    yield return text;
+                continue;
+            }
+            foreach (var content in message.Contents)
+            {
+                if (content is TextContent { Text: { Length: > 0 } text })
+                {
+                    foreach (var (segment, trusted) in Segments(text, Options.TrustedTexts))
+                        if (!trusted && !string.IsNullOrWhiteSpace(segment))
+                            yield return segment;
+                }
+                else
+                {
+                    foreach (var other in OutgoingTexts([new ChatMessage(message.Role, [content])]))
+                        yield return other;
+                }
+            }
+        }
+    }
+
+    /// <summary>The request's structural words: identifier JSON keys and the lowercase words of the trusted system text.</summary>
+    internal HashSet<string> Vocabulary(IEnumerable<ChatMessage> messages)
+    {
+        var words = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var text in Options.TrustedTexts.IsDefault ? [] : Options.TrustedTexts)
+            foreach (Match word in LowerWord().Matches(text))
+                words.Add(word.Value);
+        foreach (var json in StructuredTexts(messages))
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(json);
+                Keys(document.RootElement, words);
+            }
+            catch (JsonException)
+            {
+                // Not JSON after all: it has no keys to learn.
+            }
+        }
+        return words;
+    }
+
+    private static void Keys(JsonElement json, HashSet<string> words)
+    {
+        switch (json.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var property in json.EnumerateObject())
+                {
+                    if (IdentifierKey(property.Name))
+                        words.Add(property.Name);
+                    Keys(property.Value, words);
+                }
+                break;
+            case JsonValueKind.Array:
+                foreach (var item in json.EnumerateArray())
+                    Keys(item, words);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// A JSON key that is structure, not a value: a lowercase identifier of letters (snake, kebab or camel case) of at most 32
+    /// characters. A key with a capital first, a number, a space, a dot or <c>@</c> (a name, an email, a token) is read as a value.
+    /// </summary>
+    internal static bool IdentifierKey(string key) => key.Length <= 32 && IdentifierPattern().IsMatch(key);
+
+    [GeneratedRegex(@"^[a-z]+(?:[_-][a-z]+)*$|^[a-z]+(?:[A-Z][a-z]+)+$", RegexOptions.CultureInvariant)]
+    private static partial Regex IdentifierPattern();
+
+    [GeneratedRegex(@"\b[a-z][a-z_-]*\b", RegexOptions.CultureInvariant)]
+    private static partial Regex LowerWord();
+
+    /// <summary>Splits text into the trusted texts it holds (each occurrence) and what lies between them, in order.</summary>
+    internal static IEnumerable<(string Text, bool Trusted)> Segments(string text, ImmutableArray<string> trusted)
+    {
+        var position = 0;
+        while (position < text.Length)
+        {
+            var next = -1;
+            var length = 0;
+            foreach (var candidate in trusted)
+            {
+                if (string.IsNullOrEmpty(candidate))
+                    continue;
+                var at = text.IndexOf(candidate, position, StringComparison.Ordinal);
+                if (at >= 0 && (next < 0 || at < next || at == next && candidate.Length > length))
+                    (next, length) = (at, candidate.Length);
+            }
+            if (next < 0)
+            {
+                yield return (text[position..], false);
+                yield break;
+            }
+            if (next > position)
+                yield return (text[position..next], false);
+            yield return (text.Substring(next, length), true);
+            position = next + length;
+        }
+    }
+
     /// <summary>Every string the request carries: text, tool-call arguments and tool results, at their leaves.</summary>
     public static IEnumerable<string> OutgoingTexts(IEnumerable<ChatMessage> messages)
     {
@@ -616,8 +761,9 @@ public sealed class PrivacyEgress
             case JsonValueKind.Object:
                 foreach (var property in json.EnumerateObject())
                 {
-                    // A key can be a value too (results keyed by email address).
-                    yield return property.Name;
+                    // A key can be a value too (results keyed by email address); an identifier key is structure (A5).
+                    if (!IdentifierKey(property.Name))
+                        yield return property.Name;
                     foreach (var leaf in Leaves(property.Value))
                         yield return leaf;
                 }
@@ -625,10 +771,13 @@ public sealed class PrivacyEgress
         }
     }
 
-    private static ChatMessage Transform(ChatMessage message, Func<string, string> rewrite)
+    private static ChatMessage Transform(ChatMessage message, Func<string, string> rewrite, ImmutableArray<string> trusted = default)
     {
         var contents = message.Contents.Select(content => content switch
         {
+            // A5: a system message's trusted text is sent as written; the rest of it is redacted.
+            TextContent text when !trusted.IsDefaultOrEmpty => Copy(text, new TextContent(string.Concat(
+                Segments(text.Text ?? "", trusted).Select(segment => segment.Trusted ? segment.Text : rewrite(segment.Text))))),
             TextContent text => Copy(text, new TextContent(rewrite(text.Text ?? ""))),
             TextReasoningContent reasoning => Copy(reasoning, new TextReasoningContent(rewrite(reasoning.Text ?? ""))),
             FunctionCallContent call => Copy(call, new FunctionCallContent(call.CallId, call.Name, Arguments(call.Arguments, rewrite))),
@@ -697,7 +846,7 @@ public sealed class PrivacyEgress
             case JsonValueKind.Object:
                 var obj = new JsonObject();
                 foreach (var property in json.EnumerateObject())
-                    obj[rewrite(property.Name)] = Rewrite(property.Value, rewrite);
+                    obj[IdentifierKey(property.Name) ? property.Name : rewrite(property.Name)] = Rewrite(property.Value, rewrite);
                 return obj;
             case JsonValueKind.True:
                 return JsonValue.Create(true);
