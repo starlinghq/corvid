@@ -39,8 +39,9 @@ public interface IChatInput
 /// the next ordinary read. Reads can be cancelled (a deadline, Ctrl-C) without leaving a blocked
 /// <see cref="Console.ReadLine"/> that would swallow the next line.
 /// </summary>
-internal sealed class ConsoleChatInput : IChatInput
+internal sealed class ConsoleChatInput(Func<string?>? readLine = null, bool? echoes = null) : IChatInput
 {
+    private readonly Func<string?> _readLine = readLine ?? Console.ReadLine;
     private readonly Queue<string> _typedAhead = new();
     private readonly Lock _gate = new();
     private Task? _reader;
@@ -49,7 +50,7 @@ internal sealed class ConsoleChatInput : IChatInput
     private TaskCompletionSource<string?>? _ordinary;
     private TaskCompletionSource<string?>? _duringTurn;
 
-    public bool Echoes => !Console.IsInputRedirected;
+    public bool Echoes => echoes ?? !Console.IsInputRedirected;
 
     public bool ReadsDuringTurn => true;
 
@@ -117,7 +118,7 @@ internal sealed class ConsoleChatInput : IChatInput
 
     private void Read()
     {
-        while (Console.ReadLine() is { } line)
+        while (_readLine() is { } line)
             Deliver(line);
         TaskCompletionSource<string?>?[] waiting;
         lock (_gate)
