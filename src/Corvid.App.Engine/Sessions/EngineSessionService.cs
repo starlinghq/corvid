@@ -742,6 +742,18 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         }
     }
 
+    /// <summary>
+    /// Whether a replay leaves its last turn open: the window's own turn runs, or a turn of the session runs here or in the
+    /// process that drives it and the log does not end on its answer yet. A turn the log shows answered is over even while
+    /// the actor still counts it running: the actor hands a turn's delivery to its sink before it marks the turn finished,
+    /// so a window opened in between used to leave the answered turn open (no <see cref="TurnEnded"/>).
+    /// </summary>
+    internal static bool ReplayEndsRunning(bool windowRunning, bool runningHere, bool elsewhere, IReadOnlyList<SessionStreamUpdate> history)
+    {
+        var answered = history.Count > 0 && Answered(history);
+        return windowRunning || (runningHere || elsewhere && history.Count > 0) && !answered;
+    }
+
     private async Task ReplayAsync(CorvidRuntime runtime, ToolPresentation tools, Channel channel)
     {
         var id = channel.SessionId;
@@ -776,8 +788,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             // A turn running in this runtime that the window did not start (a job's run, another surface's) is still running,
             // not interrupted: its header stays open until the session is opened again. So is one another process drives
             // whose log does not end on an answer yet (G-12).
-            updates.AddRange(channel.Translator.EndReplay(running: channel.Running || runningHere
-                || (elsewhere && !history.Updates.IsEmpty && !Answered(history.Updates))));
+            updates.AddRange(channel.Translator.EndReplay(ReplayEndsRunning(channel.Running, runningHere, elsewhere, history.Updates)));
             updates.Add(changes);
             // The rail's title (a rename, the generated title, else the first message) heads the session too.
             if (summary.Title != id && (summary.Turns > 0 || described?.Titled is not null))
