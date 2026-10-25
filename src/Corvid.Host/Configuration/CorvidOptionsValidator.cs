@@ -226,6 +226,17 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue) : IValidate
                         errors.Add($"Corvid:Agents:Mixes:{ModelMix.Escape(name)}:{slot}: '{model}' is not in Corvid:Agents:Models.");
                 }
         }
+        // A5: named toolsets. Whether each tool exists is known only once the registry is; a child is cut to its parent's anyway.
+        foreach (var (name, tools) in agents.Toolsets.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        {
+            if (string.Equals(name, Composition.CorvidRuntime.ReadOnlyToolset, StringComparison.OrdinalIgnoreCase))
+                errors.Add($"Corvid:Agents:Toolsets:{name}: '{Composition.CorvidRuntime.ReadOnlyToolset}' is built in and cannot be configured.");
+            else if (string.IsNullOrWhiteSpace(name) || !name.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-'))
+                errors.Add($"Corvid:Agents:Toolsets: '{ModelMix.Escape(name ?? "")}' is not a toolset name (letters, digits, '_' and '-').");
+            foreach (var tool in tools ?? [])
+                if (string.IsNullOrWhiteSpace(tool) || !tool.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.'))
+                    errors.Add($"Corvid:Agents:Toolsets:{ModelMix.Escape(name ?? "")}: '{ModelMix.Escape(tool ?? "")}' is not a tool name.");
+        }
     }
 
     // C-029: placement applies to in-process Starling models, and in v1 only Kev can go on CUDA.

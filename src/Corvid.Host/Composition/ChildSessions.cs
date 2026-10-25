@@ -119,7 +119,7 @@ public sealed class ChildRefusedException : InvalidOperationException
 public static class ChildSessions
 {
     /// <summary>The tool a builder registers for the agent (plan §14); a child is never given it (depth 1).</summary>
-    public const string DelegateToolName = "delegate_task";
+    public const string DelegateToolName = Corvid.Kernel.Turns.DelegateTaskTool.ToolName;
 
     /// <summary>The surface a child session's id starts with (<c>child-…</c>).</summary>
     public const string Surface = "child";

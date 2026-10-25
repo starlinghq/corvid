@@ -73,6 +73,9 @@ public static class CorvidGateway
             return $"'{tool}' is not a tool name (letters, digits, '_' and '-').";
         if (tool == "cron_create")
             return "'cron_create' cannot be a guest tool: a scheduled job runs with every tool and reports to the chat.";
+        // A5: a child session works for the session's owner, with the owner's tools and models.
+        if (tool == Corvid.Kernel.Turns.DelegateTaskTool.ToolName)
+            return $"'{tool}' cannot be a guest tool: a child session would work for the guest with the owner's tools and models.";
         if (McpServerOf(tool) is { } server && !mcpServers.Contains(server))
             return $"'{tool}' names MCP server '{server}', which is not configured under Corvid:Mcp:Servers.";
         return null;

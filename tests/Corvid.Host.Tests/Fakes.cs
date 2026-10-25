@@ -320,6 +320,8 @@ internal sealed class FakeModels
         ["Corvid:Models:Slots:decider:Model"] = "",
         // The fake scripts would be consumed by tools and jobs they do not expect; tests that want them turn them on.
         ["Corvid:Tools:Builtin"] = "false",
+        // A5: delegate_task too; its tests turn it on.
+        ["Corvid:Tools:Delegate"] = "false",
         ["Corvid:Scheduler:Enabled"] = "false",
         // G-6: titles and recaps would take the generator's script too; tests of them turn them on.
         ["Corvid:Sessions:Titles"] = "false",

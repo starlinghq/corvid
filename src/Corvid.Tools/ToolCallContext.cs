@@ -34,6 +34,12 @@ public sealed record ToolCallContext(string SessionId, string CallId)
     /// </summary>
     public Action<string>? Output { get; init; }
 
+    /// <summary>
+    /// A5: the tools the calling turn may be offered, after a guest's scope and the turn's own filters, by name; null outside
+    /// a turn. A tool that hands work on (<c>delegate_task</c>) never grants more than this.
+    /// </summary>
+    public IReadOnlySet<string>? OfferedTools { get; init; }
+
     private int _resultTainted;
 
     /// <summary>

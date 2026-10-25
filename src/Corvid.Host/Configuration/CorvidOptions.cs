@@ -93,6 +93,12 @@ public sealed class AgentsSettings
     /// <summary>Named model mixes, by name, each by slot (<see cref="Corvid.Models.ModelMix"/>), for <c>delegate_task</c> and <c>/delegate</c>.</summary>
     public Dictionary<string, Dictionary<string, MixSlotSettings>> Mixes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// A5: named toolsets a child can be given by name (<c>delegate_task</c>'s <c>toolset</c>, <c>/delegate --toolset</c>),
+    /// each a list of tool names; still cut to the parent's tools. <c>read_only</c> is built in.
+    /// </summary>
+    public Dictionary<string, List<string>> Toolsets { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>A configured mix by name, checked; null when none is so named.</summary>
     /// <exception cref="Corvid.Models.ModelMixException">The configured mix is malformed.</exception>
     public Corvid.Models.ModelMix? Mix(string name)
@@ -539,6 +545,12 @@ public sealed class ToolSettings
     /// egress; scheduled scripts from tainted jobs never do. With it on, a shell command does not run when Vault is absent.
     /// </summary>
     public bool ShellNetwork { get; set; }
+
+    /// <summary>
+    /// A5: offer <c>delegate_task</c> (plan §14), which starts child sessions within <c>Corvid:Agents</c>. On by default;
+    /// <c>Corvid:Agents:MaxDepth</c> 0 turns it off too.
+    /// </summary>
+    public bool Delegate { get; set; } = true;
 }
 
 public sealed class SchedulerSettings

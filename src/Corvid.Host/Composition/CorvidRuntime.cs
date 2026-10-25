@@ -633,7 +633,7 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
 
     /// <summary>The built-in tools' examples and the kernel's <c>ask_user</c>'s (K-6), for the shortlist.</summary>
     private static readonly IReadOnlyDictionary<string, ImmutableArray<string>> ToolExamples =
-        new Dictionary<string, ImmutableArray<string>>(BuiltinTools.Examples, StringComparer.Ordinal) { [AskUserTool.ToolName] = AskUserTool.Examples };
+        new Dictionary<string, ImmutableArray<string>>(BuiltinTools.Examples, StringComparer.Ordinal) { [AskUserTool.ToolName] = AskUserTool.Examples, [DelegateTaskTool.ToolName] = DelegateTaskTool.Examples };
 
     /// <summary>One session's turn services over the shared ones. Scheduled runs are not interactive: nobody can be asked.</summary>
     private TurnServices Services(SessionModelSlots slots, bool interactive, ToolRegistry? tools = null, SessionSettings? session = null,
