@@ -716,8 +716,9 @@ public sealed class CheckpointTurnTests : IDisposable
     }
 
     [Fact]
-    public async Task A_draft_says_what_a_restore_would_do_and_writes_nothing_to_the_workspace_or_the_log()
+    public async Task A_draft_says_what_a_restore_would_do_and_leaves_the_workspace_and_the_log_as_they_were()
     {
+        // It does write to the checkpoint store: like a restore, it first commits a snapshot of the workspace there.
         using var harness = await TwoWritesAsync();
         _fixture.Write("a.txt", "ONE\ntwo\nthree\nfour\nfive, mine\n");
         var plan = CheckpointService.PlanRollback(Snapshot(harness), 2)!;

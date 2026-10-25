@@ -311,6 +311,78 @@ public sealed class EngineRewindTests
         Assert.StartsWith("Corvid cannot start", refused.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A3 review M1: planning and previewing a session this process has not opened leaves it closed, so a call a crash cut
+    /// short stays "stopped" (not pending) and its restore is the kernel's to judge; only the restore opens the session.
+    /// </summary>
+    [Fact]
+    public async Task APlanDoesNotOpenTheSessionAndACrashedCallStaysStopped()
+    {
+        await using var fixture = await HistoryFixture.StartAsync();
+        const string id = "cli-crashed";
+        fixture.Write("story.txt", Story);
+        await fixture.CrashedCallAsync(id, "call-1", "story.txt", Corvids);
+        using var rewind = fixture.Rewind();
+
+        var crashed = Assert.Single((await rewind.GetTimelineAsync(id, Ct)).Entries);
+        Assert.Equal(LedgerEntryKind.Call, crashed.Kind);
+        Assert.True(crashed.Stopped);
+
+        var plan = await rewind.PlanAsync(id, crashed.CheckpointId, Ct);
+        await rewind.PreviewAsync(id, crashed.CheckpointId, Ct);
+
+        Assert.False(plan.MidTurn);
+        Assert.False(fixture.Runtime.TryGetSession(id, out _));
+        var again = Assert.Single((await rewind.GetTimelineAsync(id, Ct)).Entries);
+        Assert.Equal((LedgerEntryKind.Call, true), (again.Kind, again.Stopped));
+
+        // Not "has not finished": the restore reaches the kernel, which gives its own reason (a crashed call recorded no
+        // after checkpoint, so its changes cannot be told from the person's) and overwrites nothing.
+        var outcome = await rewind.RestoreAsync(id, crashed.CheckpointId, AppScope.FilesOnly, Ct);
+
+        Assert.True(outcome.Refused);
+        Assert.Contains("has no record of what the call changed", outcome.Detail, StringComparison.Ordinal);
+        Assert.Equal(Corvids, fixture.Read("story.txt"));
+        // The restore opened it; with no turn running, nothing in the timeline is pending.
+        Assert.True(fixture.Runtime.TryGetSession(id, out _));
+        Assert.DoesNotContain((await rewind.GetTimelineAsync(id, Ct)).Entries, entry => entry.Kind == LedgerEntryKind.Pending);
+    }
+
+    /// <summary>A3 review L8: a plan worked out while a turn runs says so; the same plan after the turn does not.</summary>
+    [Fact]
+    public async Task APlanMadeWhileATurnRunsSaysSo()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        Func<IReadOnlyList<Microsoft.Extensions.AI.ChatMessage>, Microsoft.Extensions.AI.ChatResponse> hold = messages =>
+        {
+            if (messages[^1].Text.Contains("hold the turn", StringComparison.Ordinal))
+            {
+                entered.TrySetResult();
+                release.Wait(TimeSpan.FromSeconds(30));
+            }
+            return Reply.Text("Done.");
+        };
+        await using var fixture = await HistoryFixture.StartAsync(new FakeModels(new FakeGenerator(hold, hold, hold, hold)));
+        var id = await ThreeTurnsAsync(fixture);
+        using var rewind = fixture.Rewind();
+        var first = (await rewind.GetTimelineAsync(id, Ct)).Entries[^1];
+        Assert.True(fixture.Runtime.TryGetSession(id, out var session));
+
+        var delivery = await session.PostAsync("hold the turn", Corvid.Abstractions.Sessions.EnvelopeOrigin.User, Ct);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        Assert.True(fixture.Runtime.IsTurnRunning(id));
+
+        var during = await rewind.PlanAsync(id, first.CheckpointId, Ct);
+        release.Set();
+        await delivery.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        var after = await rewind.PlanAsync(id, first.CheckpointId, Ct);
+
+        Assert.True(during.MidTurn);
+        Assert.False(after.MidTurn);
+        Assert.False(fixture.Runtime.IsTurnRunning(id));
+    }
+
     [Fact]
     public async Task ATurnThatEndsOrARevertTellsTheTimeline()
     {

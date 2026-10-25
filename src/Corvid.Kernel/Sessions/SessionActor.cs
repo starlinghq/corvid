@@ -67,6 +67,12 @@ public sealed class SessionActor : IAsyncDisposable
 
     public string SessionId => _runner.SessionId;
 
+    /// <summary>
+    /// Whether a turn (a message's) is running now; exclusive work (<see cref="RunExclusiveAsync{T}"/>) and queued messages
+    /// whose turn has not started are not turns. A snapshot: a turn can start or end as soon as this returns.
+    /// </summary>
+    public bool TurnRunning => Volatile.Read(ref _turnCancellation) is not null;
+
     /// <summary>Queues a message. Waits while the session already holds <see cref="SessionActorOptions.MaxPendingMessages"/>.</summary>
     public async ValueTask SubmitAsync(Envelope envelope, CancellationToken cancellationToken = default)
     {

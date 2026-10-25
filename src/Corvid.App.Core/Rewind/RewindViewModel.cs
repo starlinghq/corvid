@@ -351,6 +351,11 @@ public sealed class RewindViewModel : AreaViewModel
             }
         }
 
+        if (plan is { MidTurn: true })
+            PlanNotes.Add(new RestoreNoteView("A turn is running",
+                "so this plan and its preview show the files as the turn has left them so far. The restore waits for the turn to end, and what it puts back can differ.",
+                Tone.Amber));
+
         if (plan is not null)
         {
             Options[0].Detail = $"the workspace and the transcript as they were at {plan.CheckpointId}";

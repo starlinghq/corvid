@@ -95,6 +95,16 @@ internal sealed class HistoryFixture : IAsyncDisposable
             new ToolResult(callId, JsonSerializer.SerializeToElement(new { path })));
     }
 
+    /// <summary>A turn whose write call a crash cut short: the message, the call, its before checkpoint and the write; no after checkpoint, no result.</summary>
+    public async Task CrashedCallAsync(string sessionId, string callId, string path, string content)
+    {
+        Append(sessionId, new UserMessage($"write {path}"),
+            new ToolCallIssued(callId, "write_file", JsonSerializer.SerializeToElement(new { path, content })));
+        var analysis = Runtime.Approvals.Analyze(new ShellAction("rm " + path));
+        Append(sessionId, await Runtime.Checkpoints!.BeforeAsync(callId, analysis));
+        Write(path, content);
+    }
+
     public async ValueTask DisposeAsync()
     {
         Signals.Dispose();
