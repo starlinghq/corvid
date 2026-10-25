@@ -307,10 +307,14 @@ Left:
 - A question that blocks mid-turn (a question router beside the approval router); ACP has no tail or question
   notifications; `corvid chat` shows `ask_user`'s call in its panel.
 - A steer is reported wherever the reporter next reads the log, not at a fixed place relative to the call that finished.
-- The Board's "Take over" stays disabled even when the lock is free; whether held sessions belong in the rail; the app
-  keeps the driver lock of a session it no longer views.
-- A replayed message is read as the user's even when a guest or a job wrote it (the log does not say whose it was), so a
-  replay can show the taint cleared where the live turn kept it.
+- The Board's "Take over" stays disabled even when the lock is free; whether held sessions belong in the rail. (Since the
+  A4 review the app lets go of a session's driver lock once it stops viewing it and nothing of it runs or waits there,
+  and after a Rewind restore or a Review revert it opened: `CorvidRuntime.ReleaseDriverAsync`.)
+- A job's message is still read as the user's on replay (the log does not say a tainted job wrote it), so a replay can
+  show the taint cleared where the live turn kept it. A gateway guest's is not: since the A4 review `UserMessage.From`
+  names the guest, the prompt quotes it as outside content, and it never answers the owner's open question.
+- The lock files under `drivers/` are never removed (deleting a lock file another process may have just opened would let
+  two processes hold "the" lock); they are empty and one per session ever driven.
 
 The A4 end-to-end pass (engine by default, a scripted generator, Qwen3.5-0.8B for titles) fixed: sessions another
 process starts reaching the rail and the Board without a restart (the log is read every 3 s), a replayed call's time,
@@ -338,7 +342,8 @@ minor ones. Still open from verification:
   logged); it could not be reproduced on demand, and may be a focus race between the card and the composer.
 - The kernel does not reserve the call id of the person's own `!` call, so a model could choose the same id; the CLI's
   `!` line reports the last shell result even when the turn issued no call; a `#` line typed just after answering a
-  question was once lost; a Board card's relative time can stand still after its session's holder exits.
+  question was once lost. (A Board card's relative time standing still after its session's holder exits was fixed in the
+  A4 review: idle cards tick every 15 s.)
 
 ### What the running app shows today
 
