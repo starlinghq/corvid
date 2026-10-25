@@ -417,8 +417,17 @@ Decisions taken while merging:
 - A fork's copied session choices come back through the restore when it opens (`ForkResult.Models` reports them
   `Unchanged`). So `/fork` lets go of a fork with local choices, and keeps one open only when it holds a cloud choice.
 - The session header gives the parent link and the children button their room before the models pill (`FitTitle`).
+- The models pill measured itself to decide whether it fits. Once it had given way (`MaxWidth` 0) it measured 0 wide and
+  came back, a layout cycle whenever the title's room was near the line: at 1440 with the dock open the composer stopped
+  showing typed text. It now measures its text.
 - ACP's `available_commands` still leave out `/agents`, `/delegate` and `/fork`. A re-record (`CORVID_RECORD_ACP=1`)
   after every merge produced no diff.
+
+The integrator ran the merged app once on the engine and once with `--demo`, in a temporary home with two scripted
+OpenAI-compatible servers. On the engine: a spawn's approval card showed the child's goal, tools, budget and models; the
+child ran on the second server, and the header's "1 child" list and the Board card showed it. `/model generator fake2`
+switched this session, and the next turn ran on it and stayed on it after the turn ended. At 1920 px the header showed
+the models pill and the children button side by side.
 
 New on the wire: `clarification_answered`, plus the optional `generator` and `usage` fields on `tool_call_issued` and
 `usage` on `assistant_message`. A binary older than A5 cannot read a log that holds the new event (the same one-way step
