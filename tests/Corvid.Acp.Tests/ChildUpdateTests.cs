@@ -44,5 +44,9 @@ public sealed class ChildUpdateTests
             && update["toolCallId"]!.GetValue<string>() == childId);
         Assert.Equal("completed", ended["status"]!.GetValue<string>());
         Assert.Equal("Two items.", ended["content"]![0]!["content"]!["text"]!.GetValue<string>());
+
+        // The editor cannot load the child and drive it: it is read-only, its parent's record.
+        var load = await client.RequestAsync("session/load", new { sessionId = childId, cwd = client.Workspace, mcpServers = Array.Empty<object>() });
+        Assert.Contains("child session: read-only", load["error"]!["message"]!.GetValue<string>(), StringComparison.Ordinal);
     }
 }

@@ -423,6 +423,9 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     public CorvidSession OpenSession(string? sessionId = null, string surface = "cli", SessionSettings? settings = null)
     {
         var id = sessionId ?? NewSessionId(surface);
+        // A5: a child session is opened only by its parent's run (OpenChildSession); opened again by id (an editor, the
+        // HTTP API, a terminal) it would be an ordinary session with the full toolset. Every surface shows it read-only.
+        RefuseChildSession(id);
         TakeDriver(id);
         if (settings is not null)
             _settings.TryAdd(id, settings);

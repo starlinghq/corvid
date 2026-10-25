@@ -210,6 +210,34 @@ public sealed partial class CorvidRuntime
 
     private readonly ConcurrentDictionary<string, Task<ChildResult>> _startedChildren = new(StringComparer.Ordinal);
 
+    // A5: the child ids OpenChildSession is opening now: the only way a child-… session is opened.
+    private readonly ConcurrentDictionary<string, byte> _openingChildren = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// A5: refuses to open a child session by id outside its parent's run, as another process's session is refused: it is
+    /// read-only on every surface (<see cref="SessionHeldException"/>, which they already show as such).
+    /// </summary>
+    private void RefuseChildSession(string id)
+    {
+        if (id.StartsWith(ChildSessions.Surface + "-", StringComparison.Ordinal) && !_openingChildren.ContainsKey(id))
+            throw new SessionHeldException($"Session {TerminalText.Visible(id)} is a child session: read-only, its parent's record. " +
+                "Its parent's /agents show (or the app's Board) shows it.");
+    }
+
+    /// <summary>Opens a child's session for <see cref="OpenChildSession"/>, the one caller <see cref="RefuseChildSession"/> lets through.</summary>
+    private CorvidSession OpenChild(string id, SessionSettings settings)
+    {
+        _openingChildren[id] = 0;
+        try
+        {
+            return OpenSession(id, ChildSessions.Surface, settings);
+        }
+        finally
+        {
+            _openingChildren.TryRemove(id, out _);
+        }
+    }
+
     /// <summary>
     /// A5: starts a child a person asked for (<c>/delegate</c>, the app) and lets it run in the background: the plan's child
     /// opened now (its <c>ChildSpawned</c> logged), run until it ends, stops with <see cref="StopChild"/> or the runtime's

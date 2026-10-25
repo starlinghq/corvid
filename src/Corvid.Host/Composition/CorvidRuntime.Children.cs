@@ -216,7 +216,7 @@ public sealed partial class CorvidRuntime
             var sequence = AppendTo(plan.ParentId, spawned);
             _childPlans[id] = plan;
             _prompters.SetParent(id, plan.ParentId);
-            var child = OpenSession(id, ChildSessions.Surface, new SessionSettings(Interactive: parent.Interactive));
+            var child = OpenChild(id, new SessionSettings(Interactive: parent.Interactive));
             ChildChanged?.Invoke(plan.ParentId, new ChildStarted(spawned, sequence) { At = DateTimeOffset.UtcNow });
             return child;
         }

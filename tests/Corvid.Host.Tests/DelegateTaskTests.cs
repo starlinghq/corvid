@@ -96,6 +96,9 @@ public sealed class DelegateTaskTests
         Assert.Equal(ChildStatuses.Answered, Assert.Single(Events(runtime, parent.Id).OfType<ChildFinished>()).Status);
         // The child's turn was offered its own toolset only, without delegate_task.
         Assert.DoesNotContain(models.Generator.OfferedTools[1], name => name == DelegateTaskTool.ToolName);
+        // Finished, it is its parent's record: no surface opens it by id as a session of its own (with the full toolset).
+        var reopened = Assert.Throws<SessionHeldException>(() => runtime.OpenSession(spawned.ChildId, "acp"));
+        Assert.Contains("child session: read-only", reopened.Message, StringComparison.Ordinal);
     }
 
     [Fact]
