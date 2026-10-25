@@ -449,6 +449,8 @@ public sealed class TurnRunner
         private ClarifyingQuestion? _question;
         // A4: a `!!` line's turn, whose call and result are logged local-only.
         private bool _localOnly;
+        // A5: the generator calls' tokens not yet on an event: the next answer or first issued call carries them.
+        private TokenUsage? _usage;
 
         public async Task<TurnResult> RunAsync(CancellationToken cancellationToken)
         {
@@ -698,6 +700,7 @@ public sealed class TurnRunner
                     try
                     {
                         var answer = await generator.GetResponseAsync(messages, forced, cancellationToken).ConfigureAwait(false);
+                        NoteUsage(answer.Usage);
                         NotePrivacyRetreat(head, cancellationToken);
                         return answer;
                     }
@@ -708,8 +711,38 @@ public sealed class TurnRunner
                 messages.Add(new ChatMessage(ChatRole.User, string.Format(CultureInfo.InvariantCulture, NudgeRequired, required)));
             }
             var response = await generator.GetResponseAsync(messages, options, cancellationToken).ConfigureAwait(false);
+            NoteUsage(response.Usage);
             NotePrivacyRetreat(head, cancellationToken);
             return response;
+        }
+
+        /// <summary>
+        /// A5 (K-5 in the log): a generator call's tokens, as its provider reported them, held until the next event this turn
+        /// appends for a response (its answer, or its first call), so a replay shows the turn's tokens and the context gauge.
+        /// </summary>
+        private void NoteUsage(UsageDetails? usage)
+        {
+            if (usage is null || usage.InputTokenCount is null && usage.OutputTokenCount is null)
+                return;
+            lock (_gate)
+            {
+                var held = _usage;
+                _usage = new TokenUsage(Sum(held?.InputTokens, usage.InputTokenCount), Sum(held?.OutputTokens, usage.OutputTokenCount),
+                    (held?.Calls ?? 0) + 1, usage.InputTokenCount ?? held?.PromptTokens);
+            }
+
+            static long? Sum(long? a, long? b) => a is null && b is null ? null : (a ?? 0) + (b ?? 0);
+        }
+
+        /// <summary>The held usage, once: the event that takes it carries it.</summary>
+        private TokenUsage? TakeUsage()
+        {
+            lock (_gate)
+            {
+                var usage = _usage;
+                _usage = null;
+                return usage;
+            }
         }
 
         // The egress gate refused the cloud model and the slot moved to a local one (plan §10.4); the user is told, as
@@ -1312,7 +1345,7 @@ public sealed class TurnRunner
                 lock (_gate)
                 {
                     runner.Append(new ToolCallIssued(call.CallId, call.Tool.Function.Name, call.Arguments, _steps, call.Tool.Descriptor.Risk.ReadOnly,
-                        _localOnly ? true : null));
+                        _localOnly ? true : null, TakeUsage()));
                     _open.Add(call.CallId);
                 }
             }
@@ -1340,7 +1373,7 @@ public sealed class TurnRunner
                         ? "The question goes to the user and the turn ends here; their answer comes as their next message."
                         : text.Length == 0 ? "The question was empty, so nothing was asked." : "One question per turn: the first one was asked.",
                 });
-                runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, true), new ToolResult(callId, result, IsError: !first));
+                runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, true, Usage: TakeUsage()), new ToolResult(callId, result, IsError: !first));
                 if (first)
                     _question = new ClarifyingQuestion(NewQuestionId(), text, options);
                 _pickDecisions.Remove(tool, out decisionId);
@@ -1361,7 +1394,7 @@ public sealed class TurnRunner
             activity?.SetTag(KernelTelemetry.ToolOutcome, "invalid_arguments");
             activity?.SetStatus(ActivityStatusCode.Error);
             lock (_gate)
-                runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, readOnly), new ToolResult(callId, error, IsError: true));
+                runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, readOnly, Usage: TakeUsage()), new ToolResult(callId, error, IsError: true));
         }
 
         // Read-only calls finish concurrently, so the shared turn state they touch is updated under the lock.
@@ -1819,9 +1852,10 @@ public sealed class TurnRunner
             // K-6: a clarifying turn's question is logged with its answer, structured, so every surface shows it as a question.
             if (status == TurnStatus.Clarifying)
                 question ??= new ClarifyingQuestion(NewQuestionId(), text, []);
+            var usage = TakeUsage();
             var answer = question is null
-                ? runner.Append(new AssistantMessage(text)).Sequence
-                : runner.Append(new AssistantMessage(text), new ClarificationAsked(question.Id, question.Text, question.Options))[0].Sequence;
+                ? runner.Append(new AssistantMessage(text, usage)).Sequence
+                : runner.Append(new AssistantMessage(text, usage), new ClarificationAsked(question.Id, question.Text, question.Options))[0].Sequence;
             _question = question;
             var deliver = "reply";
             var egress = new List<KeyValuePair<string, DecisionQuestion>>();

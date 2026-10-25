@@ -178,7 +178,8 @@ public sealed class SessionUpdateTranslator(string workspace)
                 {
                     At = at,
                     TurnTokens = (int)Math.Min(int.MaxValue, _turnTokens),
-                    ContextTokens = usage.InputTokens is { } sent ? (int)Math.Min(int.MaxValue, sent) : null,
+                    // A5: a replayed record that sums several calls names the latest one's prompt.
+                    ContextTokens = (usage.PromptTokens ?? usage.InputTokens) is { } sent ? (int)Math.Min(int.MaxValue, sent) : null,
                     ContextWindow = ContextWindow,
                 });
                 break;

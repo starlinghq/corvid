@@ -488,7 +488,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 // A4V2-5: a ! line's turn runs its command, no generator.
                 channel.Translator.ShellLine = !verbatim && ComposerLine.Parse(text) is ComposerLine.Shell;
                 channel.Translator.MaxSteps = runtime.Options.Turn.MaxSteps;
-                channel.Translator.ContextWindow = session.Slots.TryCurrent(ModelSlots.Generator, out var generator) ? generator.Profile.AcceptedContext : null;
+                channel.Translator.ContextWindow = ContextWindow(runtime, session);
                 channel.TurnBegun = false;
                 channel.Sent = text;
                 channel.Reporter = reporter;
@@ -794,6 +794,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             // A job's run is the scheduler's: the window shows it as it ran and sends nothing into it.
             if (summary.ReadOnly)
                 updates.Add(new DriverChanged(true) { Holder = summary.Holder, At = at });
+            // A5: the replayed usage fills the context gauge against the window of the generator the next turn starts on.
+            channel.Translator.ContextWindow ??= ContextWindow(runtime, open ? session : null);
             foreach (var update in history.Updates)
                 updates.AddRange(channel.Translator.Translate(update));
             // A turn running in this runtime that the window did not start (a job's run, another surface's) is still running,
@@ -1237,6 +1239,14 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     /// <summary>The generator the session's next turn starts on: its own slot when it is open here (a <c>/model</c> switch), the runtime's otherwise.</summary>
     private static string CurrentGenerator(CorvidRuntime runtime, CorvidSession? session) =>
         session is not null && session.Slots.TryCurrent(ModelSlots.Generator, out var current) ? current.Profile.Id.Split('@')[0] : Generator(runtime);
+
+    /// <summary>A5: the accepted context of the session's generator, or the registry default's for a session not open here.</summary>
+    private static int? ContextWindow(CorvidRuntime runtime, CorvidSession? session)
+    {
+        if (session is not null && session.Slots.TryCurrent(ModelSlots.Generator, out var current))
+            return current.Profile.AcceptedContext;
+        return runtime.Registry.TryGet(ModelSlots.Generator, out var slot) ? slot.Default.Profile.AcceptedContext : null;
+    }
 
     private static AppMode Mode(PipelineMode mode) => mode switch
     {
