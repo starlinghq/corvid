@@ -424,10 +424,18 @@ public sealed partial class CorvidRuntime
         return registry;
     }
 
-    private static string ChildPrompt(ChildPlan plan) =>
+    /// <summary>
+    /// A child's fixed system text, one of the egress gate's trusted texts (<see cref="ModelComposer.Egress"/>): Corvid's own
+    /// words, never read as PII nor rewritten for a gated child model. The output schema after it is the model's and is read.
+    /// </summary>
+    internal const string ChildSystemPrompt =
         "You are a child session working on one goal for another Corvid session. Nobody can answer questions: do the work with " +
-        "the tools you have and answer with the result." +
-        (plan.OutputSchema is { } schema ? " Answer with only a JSON object that meets this schema: " + schema.GetRawText() : "");
+        "the tools you have and answer with the result.";
+
+    internal const string ChildSchemaPrompt = " Answer with only a JSON object that meets this schema: ";
+
+    private static string ChildPrompt(ChildPlan plan) =>
+        ChildSystemPrompt + (plan.OutputSchema is { } schema ? ChildSchemaPrompt + schema.GetRawText() : "");
 
     /// <summary>
     /// The child's slots: those the mix names, each checked and bound at subagent priority with its ladder and fallbacks, and

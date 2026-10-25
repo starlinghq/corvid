@@ -259,6 +259,48 @@ public sealed class ChildSessionTests
         Assert.Empty(Events(runtime, tainted.Id).OfType<ChildSpawned>());
     }
 
+    /// <summary>Finds "Ada" and, as the real extractor did on the e2e pass, the words "child session" as people.</summary>
+    private sealed class EagerPersonExtractor : IExtractor
+    {
+        public Task<ExtractionResult> ExtractAsync(ExtractionRequest request, CancellationToken cancellationToken = default)
+        {
+            var spans = new List<ExtractedSpan>();
+            foreach (var name in new[] { "Ada", "child session" })
+                for (var at = request.Text.IndexOf(name, StringComparison.Ordinal); at >= 0; at = request.Text.IndexOf(name, at + 1, StringComparison.Ordinal))
+                    spans.Add(new ExtractedSpan("person", name, at, at + name.Length, 0.99f));
+            return Task.FromResult(new ExtractionResult(request.Labels.Contains("person") ? [.. spans] : []));
+        }
+    }
+
+    [Fact]
+    public async Task A_gated_child_model_gets_the_child_prompt_as_written_and_the_goal_redacted()
+    {
+        var cloud = new FakeGenerator(Reply.Say("""{"to":"her"}"""));
+        var models = new FakeModels(new FakeGenerator(Reply.Say("noted")));
+        models.Provider
+            .Add("fake-cloud", [ModelSlots.Generator], () => cloud, privacy: PrivacyClass.Cloud)
+            .Add("fake-pii", [ModelSlots.Extractor], () => new EagerPersonExtractor(), context: 512, tools: ToolCallSupport.None);
+        await using var host = Host(models, new() { ["Corvid:Models:Slots:extractor:Model"] = "fake-pii" });
+        await using var runtime = await host.StartAsync();
+        var parent = runtime.OpenSession();
+
+        var result = await runtime.RunChildAsync(parent.Id, new ChildRequest("write to Ada")
+        {
+            Mix = ModelMix.Parse("""{"generator":"fake-cloud"}"""),
+            OutputSchema = JsonDocument.Parse("""{"type":"object","properties":{"to":{"type":"string","description":"Ada"}}}""").RootElement,
+        }, Ct);
+
+        var sent = Assert.Single(cloud.Calls);
+        var system = string.Join("\n", sent.Where(message => message.Role == Microsoft.Extensions.AI.ChatRole.System).Select(message => message.Text));
+        // Corvid's own words reach the model as written; the schema after them is the model's and is still read.
+        Assert.Contains(CorvidRuntime.ChildSystemPrompt + CorvidRuntime.ChildSchemaPrompt, system, StringComparison.Ordinal);
+        Assert.DoesNotContain("Ada", system, StringComparison.Ordinal);
+        var user = sent.Last(message => message.Role == Microsoft.Extensions.AI.ChatRole.User).Text;
+        Assert.DoesNotContain("Ada", user, StringComparison.Ordinal);
+        Assert.Contains("<PERSON_", user, StringComparison.Ordinal);
+        Assert.Equal(ChildStatuses.Answered, result.Status);
+    }
+
     [Fact]
     public async Task A_mix_runs_the_child_on_its_models_and_the_allowlist_bounds_it()
     {

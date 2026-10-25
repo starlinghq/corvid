@@ -174,7 +174,7 @@ public sealed class ModelComposer : IDisposable
                     ? Raw(ModelSlots.Extractor, _catalogue.Find(settings.Model!)).Service as IExtractor
                     : null;
                 // A5: Corvid's own system prompts (the turn's configured one, the degraded decider's, titles, recaps, skill and
-                // lesson learning) are not the person's text: never scanned nor rewritten in a system message.
+                // lesson learning, a child session's) are not the person's text: never scanned nor rewritten in a system message.
                 var prompt = _options.Turn.SystemPrompt is { Length: > 0 } configured ? configured : Kernel.Turns.TurnOptions.DefaultSystemPrompt;
                 return _egress = new PrivacyEgress(extractor, new PrivacyEgressOptions
                 {
@@ -183,6 +183,7 @@ public sealed class ModelComposer : IDisposable
                     [
                         prompt, Fabric.DegradedDecider.SystemPrompt, Sessions.SessionTitler.TitlePrompt, Sessions.SessionTitler.RecapPrompt,
                         Skills.SkillLearner.SystemPrompt, Kernel.Lessons.LessonLearner.SystemPrompt,
+                        CorvidRuntime.ChildSystemPrompt, CorvidRuntime.ChildSchemaPrompt,
                     ],
                 });
             }
