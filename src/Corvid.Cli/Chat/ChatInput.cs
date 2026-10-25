@@ -14,8 +14,8 @@ public interface IChatInput
     ValueTask<string?> ReadLineAsync(bool fresh = false, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// A5, while a turn runs: the next line typed that <paramref name="accepts"/> takes (a <c>/model</c> command, which the turn
-    /// takes at its next step), or null at the end of input. A line it does not take is kept for the next ordinary read, as
+    /// A5, while a turn runs: the next line typed that <paramref name="accepts"/> takes (a command that runs beside the turn:
+    /// <c>/model</c>, which the turn takes at its next step, or <c>/fork</c>, G-15), or null at the end of input. A line it does not take is kept for the next ordinary read, as
     /// before; a <paramref name="fresh"/>-style read waiting at the same time (an approval prompt) gets every line first, so
     /// an approval answer is never taken for a command. Cancelled when the turn ends.
     /// </summary>
@@ -28,13 +28,14 @@ public interface IChatInput
 /// cancelled (a deadline, Ctrl-C, a turn's end) without leaving a blocked <see cref="Console.ReadLine"/> that would swallow
 /// the next line.
 /// </summary>
-internal sealed class ConsoleChatInput : IChatInput
+internal sealed class ConsoleChatInput(Func<string?>? readLine = null, bool? echoes = null) : IChatInput
 {
+    private readonly Func<string?> _readLine = readLine ?? Console.ReadLine;
     private readonly LineRouter _router = new();
     private readonly Lock _gate = new();
     private Task? _reader;
 
-    public bool Echoes => !Console.IsInputRedirected;
+    public bool Echoes => echoes ?? !Console.IsInputRedirected;
 
     public ValueTask<string?> ReadLineAsync(bool fresh = false, CancellationToken cancellationToken = default)
     {
@@ -56,7 +57,7 @@ internal sealed class ConsoleChatInput : IChatInput
 
     private void Read()
     {
-        while (Console.ReadLine() is { } line)
+        while (_readLine() is { } line)
             _router.Deliver(line);
         _router.Complete();
     }

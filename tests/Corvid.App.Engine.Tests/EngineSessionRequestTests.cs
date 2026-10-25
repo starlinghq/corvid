@@ -86,6 +86,46 @@ public sealed class EngineSessionRequestTests
     }
 
     [Fact]
+    public async Task AForkWhileATurnRunsIsTakenAtItsLastStepAndTheTurnGoesOn()
+    {
+        // G-15: Fork… (and an aside) while a turn runs: the fork does not wait for the turn.
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var generator = new FakeGenerator(Reply.Call("list_notes"), Reply.Say(Answer))
+        {
+            Hold = (step, _) =>
+            {
+                if (step != 1)
+                    return null;
+                reached.TrySetResult();
+                return release.Task;
+            },
+        };
+        await using var fixture = await EngineFixture.StartAsync(new FakeModels(generator));
+        var id = fixture.Runtime.OpenSession(surface: "app").Id;
+        using var service = fixture.Sessions();
+        var waiter = new SessionWaiter();
+        using var subscription = await service.OpenAsync(id, waiter.Add, Ct);
+        await service.SendAsync(id, "what are my notes?", Ct);
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+        var fork = await service.ForkAsync(id, null, Ct).WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+        Assert.True(fixture.Runtime.IsTurnRunning(id));
+        using (var opened = await service.OpenAsync(fork, _ => { }, Ct))
+        {
+            var view = SessionFold.Replay(fork, opened.History);
+            Assert.Contains(view.Transcript, entry => entry is UserEntry { Text: "what are my notes?" });
+            Assert.Contains(view.Transcript, entry => entry is ToolEntry { Tool: "list_notes" });
+            Assert.DoesNotContain(view.Transcript, entry => entry is AnswerEntry);
+            Assert.Equal((id, 1), (view.ForkOf, view.ForkTurn));
+        }
+        release.SetResult();
+        await service.IdleAsync();
+        Assert.Contains(waiter.Updates.OfType<AgentMessageChunk>(), chunk => chunk.Text.Contains("notes", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task AForkAtAMessageHoldsWhatCameBeforeItAndAForkAtTheHeadHoldsEverything()
     {
         await using var fixture = await EngineFixture.StartAsync(NotesTurn());

@@ -1,4 +1,5 @@
 using Corvid.Cli.Chat;
+using Corvid.Host.Commands;
 using Corvid.Host.Sessions;
 using Corvid.Host.Tests;
 
@@ -7,6 +8,10 @@ namespace Corvid.Cli.Tests;
 /// <summary>A5: <c>/model</c> typed while a turn runs, the input router that keeps approval answers apart, and the switch notices.</summary>
 public sealed class ChatModelSwitchTests
 {
+    private static readonly SlashCommandRegistry Commands = CoreCommands.Register(new SlashCommandRegistry());
+
+    private static bool TakesMidTurn(string line) => ChatRenderer.TakesMidTurn(Commands, line);
+
     [Fact]
     public async Task ModelTypedDuringATurnSwitchesItAtItsNextStep()
     {
@@ -39,7 +44,7 @@ public sealed class ChatModelSwitchTests
     public async Task ALineForAnOpenPromptIsNeverTakenForACommand()
     {
         var router = new LineRouter();
-        var watched = router.WatchAsync(ChatRenderer.TakesMidTurn, TestContext.Current.CancellationToken);
+        var watched = router.WatchAsync(TakesMidTurn, TestContext.Current.CancellationToken);
         // An approval prompt opens while the turn's input is watched: the next line is its answer, even a /model line.
         var answer = router.ReadAsync(fresh: true, TestContext.Current.CancellationToken);
         router.Deliver("/model 2");
@@ -59,7 +64,7 @@ public sealed class ChatModelSwitchTests
     {
         var router = new LineRouter();
         using var turn = new CancellationTokenSource();
-        var watched = router.WatchAsync(ChatRenderer.TakesMidTurn, turn.Token);
+        var watched = router.WatchAsync(TakesMidTurn, turn.Token);
         await turn.CancelAsync();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await watched);
         router.Deliver("/model 2");
@@ -67,7 +72,7 @@ public sealed class ChatModelSwitchTests
         Assert.Equal("/model 2", await router.ReadAsync(fresh: false, TestContext.Current.CancellationToken));
         router.Complete();
         Assert.Null(await router.ReadAsync(fresh: false, TestContext.Current.CancellationToken));
-        Assert.Null(await router.WatchAsync(ChatRenderer.TakesMidTurn, TestContext.Current.CancellationToken));
+        Assert.Null(await router.WatchAsync(TakesMidTurn, TestContext.Current.CancellationToken));
     }
 
     [Theory]
@@ -76,7 +81,9 @@ public sealed class ChatModelSwitchTests
     [InlineData("/status", false)]
     [InlineData("model 2", false)]
     [InlineData("/modelx", false)]
-    public void OnlyModelIsTakenMidTurn(string line, bool taken) => Assert.Equal(taken, ChatRenderer.TakesMidTurn(line));
+    [InlineData("/fork", true)]
+    [InlineData("/agents", false)]
+    public void OnlyCommandsThatRunBesideATurnAreTakenMidTurn(string line, bool taken) => Assert.Equal(taken, TakesMidTurn(line));
 
     [Fact]
     public void SlotsThatMoveOnTheirOwnAreSaidAndThePersonsOwnSwitchIsNot()

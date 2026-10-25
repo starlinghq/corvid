@@ -20,6 +20,43 @@ public static class SessionFork
 {
     private const int Page = 256;
 
+    /// <summary>
+    /// G-15, for a source no actor here runs (another process drives it): the latest position, at most
+    /// <paramref name="throughSequence"/> (the head when null), where every call issued by then has its result and no
+    /// approval waits. Weaker than a running turn's own step boundary: it can fall between two calls of one round that run
+    /// one at a time. Null when no position qualifies (the log is empty).
+    /// </summary>
+    public static long? LastRestingPoint(IEventLog log, string source, long? throughSequence = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(log);
+        ArgumentException.ThrowIfNullOrWhiteSpace(source);
+        var head = log.GetHead(source, cancellationToken);
+        var through = Math.Min(throughSequence ?? head, head);
+        var calls = new HashSet<string>(StringComparer.Ordinal);
+        var approvals = new HashSet<string>(StringComparer.Ordinal);
+        long? resting = null;
+        for (var after = 0L; after < through;)
+        {
+            var page = log.Read(source, after, through, Page, cancellationToken);
+            if (page.Count == 0)
+                break;
+            foreach (var item in page)
+            {
+                switch (item.Payload)
+                {
+                    case ToolCallIssued call: calls.Add(call.CallId); break;
+                    case ToolResult result: calls.Remove(result.CallId); break;
+                    case ApprovalRequested requested: approvals.Add(requested.ApprovalId); break;
+                    case ApprovalResolved resolved: approvals.Remove(resolved.ApprovalId); break;
+                }
+                if (calls.Count == 0 && approvals.Count == 0)
+                    resting = item.Sequence;
+            }
+            after = page[^1].Sequence;
+        }
+        return resting;
+    }
+
     /// <summary>Copies <paramref name="source"/> through <paramref name="throughSequence"/> (its head when null) into <paramref name="target"/>.</summary>
     /// <returns>The position copied, which is the fork's head.</returns>
     /// <exception cref="SessionForkException">The position is outside the log, leaves a call or an approval open, or the target is not empty.</exception>

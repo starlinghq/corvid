@@ -190,7 +190,7 @@ work: K-n from tui.md §9, G-n from §9 here.
 | Image paste and screenshots as chips, shown inline | stakes | | K-8 |
 | Queue while a turn runs: `Enter` queues, chips above the composer, reorder, remove, take back into the editor | stakes | the actor already reads during a turn | |
 | Steer now: `Ctrl+Enter` delivers at the next step checkpoint, visible to the fabric before the generator | Corvid | | K-3 |
-| Aside (`Ctrl+;`): a side question answered in a scratch fork of the session at its head, never appended to the main log; "bring this in" sends the answer as a message | stakes (Claude Code's `/btw` and side chat) | `ForkSessionAsync` between turns today; during a running turn the fork waits for the turn to end | G-15 for mid-turn |
+| Aside (`Ctrl+;`): a side question answered in a scratch fork of the session at its head, never appended to the main log; "bring this in" sends the answer as a message | stakes (Claude Code's `/btw` and side chat) | `ForkSessionAsync`; during a running turn it forks at the turn's last completed step without waiting (G-15, A5) | |
 | Token estimate of the draft against the context gauge | nice | | K-5 |
 | Saved prompts and templates with placeholders | nice (the local front ends) | `ui.db` | G-7 |
 | Voice push-to-talk | later (plan D-7) | | |
@@ -464,7 +464,7 @@ into the editor.
 
 **F7 An aside.** `Ctrl+;` opens a panel beside the transcript. The question runs in a scratch fork at the session's
 head, so it sees the context and writes nothing back. "Bring this in" sends the answer as a message; closing the panel
-discards the fork. Mid-turn asides wait on G-15.
+discards the fork. Mid-turn, the fork is taken at the running turn's last completed step (G-15, built in A5).
 
 **F8 Escalation and the privacy gate.** A step's `difficulty` answer sends the step to the cloud slot. The row says
 "escalated to claude: step budget", and the gauge shows the cloud window. The user clicks "what left the machine" and
@@ -626,7 +626,7 @@ structured questions, rule removal, images, titles and `SessionUpdates`. New:
 | G-12 | a single-driver lock per session and read-only tailing from another process | sessions open in a terminal |
 | G-13 | job create and edit through a host API with schedule preview | the Jobs form |
 | G-14 | gateway and scheduler hosting with a status API in-process | the Gateway page in the app |
-| G-15 | forking at a step boundary while a turn runs | asides mid-turn |
+| G-15 | forking at a step boundary while a turn runs (built in A5: `CorvidRuntime.ForkAsync`, `/fork`, Fork…, ACP `session/fork`) | asides mid-turn |
 | V-n | a read-only catalogue and status call from Vault (names, hosts, policy summary, audit counts) | the Secrets page |
 
 ## 10. Phasing

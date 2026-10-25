@@ -28,7 +28,7 @@ public static class CoreCommands
         return registry
             .Add(new SlashCommand("help", "List the commands.", "", Help))
             .Add(new SlashCommand("model", "Pick a model: lists a slot's models numbered, or switches one for this session.",
-                ModelUsage, ModelAsync) { Aliases = ["models"] })
+                ModelUsage, ModelAsync) { Aliases = ["models"], DuringTurn = true })
             .Add(new SlashCommand("status", "Slots with their device, queue depth and median latency; the session's state.", "", Status))
             .Add(new SlashCommand("goal", "Show, set or clear the standing goal.", "[text | clear]", Goal))
             .Add(new SlashCommand("approvals", "Pending approvals and the remembered approval rules.", "", Approvals))
@@ -53,6 +53,8 @@ public static class CoreCommands
             .Add(new SlashCommand("recap", "A few lines on what happened in this session since its last recap, by the local generator.", "",
                 SessionCommands.RecapAsync))
             .Add(new SlashCommand("pin", "Keep this session at the top of the app's rail and of /sessions.", "[off]", SessionCommands.Pin))
+            .Add(new SlashCommand("fork", "Fork this session into a new one; during a turn, at its last completed step.", ForkCommand.Usage,
+                ForkCommand.RunAsync) { DuringTurn = true })
             .Add(new SlashCommand("exit", "Leave the session.", "", Exit) { Aliases = ["quit"] });
     }
 

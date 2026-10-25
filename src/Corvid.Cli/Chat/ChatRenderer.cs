@@ -310,14 +310,12 @@ internal sealed class ChatRenderer : ITurnObserver
                 " [grey](Enter keeps it)[/] › ");
     }
 
-    /// <summary>A5: the lines a running turn can take as they are typed: <c>/model</c> (the turn takes the switch at its next step).</summary>
-    public static bool TakesMidTurn(string line)
-    {
-        if (!SlashCommandRegistry.IsCommand(line))
-            return false;
-        var name = line.TrimStart()[1..].Split(' ', 2, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
-        return name is "model" or "models";
-    }
+    /// <summary>
+    /// A5: the lines a running turn can take as they are typed: a command that runs beside the turn
+    /// (<see cref="SlashCommand.DuringTurn"/>): <c>/model</c>, which the turn takes at its next step, and <c>/fork</c> (G-15).
+    /// </summary>
+    public static bool TakesMidTurn(SlashCommandRegistry commands, string line) =>
+        SlashCommandRegistry.IsCommand(line) && commands.TryGet(SlashCommandRegistry.Parse(line).Name, out var command) && command.DuringTurn;
 
     /// <summary>
     /// A5: the notice for a slot that moved on its own (escalation, a fallback, the privacy gate, back at the turn's end); null

@@ -136,13 +136,14 @@ internal static class ChatCommand
                     renderer.Echo(line);
                 return line;
             }
-            // A5: while a turn runs, the lines a turn can take now (/model) are read and run at once; anything else typed then
-            // waits for the turn's end as before, and an approval prompt open meanwhile gets every line first.
+            // A5: while a turn runs, the commands that run beside it (SlashCommand.DuringTurn: /model, which the turn takes at its
+            // next step, and /fork, G-15) are read and run at once; anything else typed then waits for the turn's end as before,
+            // and an approval prompt open meanwhile gets every line first.
             async Task WatchTurnAsync(CancellationToken turnEnded)
             {
                 try
                 {
-                    while (await context.Input.ReadDuringTurnAsync(ChatRenderer.TakesMidTurn, turnEnded).ConfigureAwait(false) is { } command)
+                    while (await context.Input.ReadDuringTurnAsync(line => ChatRenderer.TakesMidTurn(commands, line), turnEnded).ConfigureAwait(false) is { } command)
                     {
                         if (!context.Input.Echoes)
                             renderer.Echo(command);
@@ -342,7 +343,6 @@ internal static class ChatCommand
         }
     }
 
-    // ui.db is a convenience: a file another process holds too long, or a read-only data directory, never stops the chat.
     /// <summary>A5: the parent of a child session (whose id starts <c>child-</c> and whose log starts with <c>ChildOf</c>), else null.</summary>
     internal static string? ChildParent(CorvidRuntime runtime, string sessionId) =>
         sessionId.StartsWith(ChildSessions.Surface + "-", StringComparison.Ordinal)
@@ -350,6 +350,7 @@ internal static class ChatCommand
             ? parent.ParentId
             : null;
 
+    // ui.db is a convenience: a file another process holds too long, or a read-only data directory, never stops the chat.
     private static void Shared(Action action) => Shared<object?>(() =>
     {
         action();

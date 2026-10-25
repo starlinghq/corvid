@@ -398,8 +398,8 @@ internal sealed partial class AcpAgent : IJsonRpcHandler, IAsyncDisposable
 
     private void SendCommands(string sessionId) =>
         _context.Update(sessionId, new AvailableCommandsUpdate([.. _commands.Commands
-            // Leaving is the editor's business.
-            .Where(command => command.Name is not ("exit" or "quit"))
+            // Leaving is the editor's business; forking is session/fork's (G-15), which opens the fork for the editor.
+            .Where(command => command.Name is not ("exit" or "quit" or "fork"))
             // A5: /agents and /delegate run when typed; the editor's list keeps its recorded set (they are the chat's and the app's).
             .Where(command => command.Name is not ("agents" or "delegate"))
             .Select(command => new AvailableCommand(command.Name, command.Summary)

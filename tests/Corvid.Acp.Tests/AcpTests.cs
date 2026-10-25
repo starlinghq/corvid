@@ -340,6 +340,42 @@ public sealed class AcpTests
     }
 
     [Fact]
+    public async Task ForkWhilePromptRunsCopiesThroughTheLastStepWithoutWaiting()
+    {
+        // G-15: session/fork while a session/prompt is in flight comes back at once, at the turn's last completed step.
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var generator = new FakeGenerator(Reply.Call("list_notes"), Reply.Say("You have two notes."))
+        {
+            Hold = (step, _) =>
+            {
+                if (step != 1)
+                    return null;
+                reached.TrySetResult();
+                return release.Task;
+            },
+        };
+        await using var client = AcpClient.Start(TestHost.Create(new FakeModels(generator)));
+        await client.RequestAsync("initialize", Initialize());
+        var session = await client.NewSessionAsync();
+        var prompt = await client.BeginAsync("session/prompt", Prompt(session, "list my notes"));
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        var runtime = await client.Runtime;
+        Assert.True(runtime.TryGetSession(session, out var source));
+        var boundary = source.Runner.StepBoundary;
+
+        var forked = await client.RequestAsync("session/fork", new { sessionId = session, cwd = client.Workspace });
+
+        var fork = forked["result"]!["sessionId"]!.GetValue<string>();
+        Assert.True(runtime.IsTurnRunning(session));
+        Assert.Equal(boundary, runtime.Log.GetHead(fork, TestContext.Current.CancellationToken));
+        release.SetResult();
+        var answered = await client.ResponseAsync(prompt);
+        Assert.Equal("end_turn", answered["result"]!["stopReason"]!.GetValue<string>());
+        Assert.Equal(boundary, runtime.Log.GetHead(fork, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task ListShowsTheUsersConversations()
     {
         var models = new FakeModels(new FakeGenerator(Reply.Say("Hi.")));
