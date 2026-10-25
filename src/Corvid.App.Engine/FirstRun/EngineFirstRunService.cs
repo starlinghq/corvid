@@ -49,6 +49,20 @@ public sealed class EngineFirstRunService : IFirstRunService, IDisposable
         _ = engine.Runtime.ContinueWith(_ => Raise(), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
+    /// <summary>Starts the runtime when nothing configured is missing now; a failure is written to the log, never lost.</summary>
+    private async Task StartAgainAsync()
+    {
+        try
+        {
+            await _engine.StartAgainAsync().ConfigureAwait(false);
+            Raise();
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            Console.Error.WriteLine("corvid app: the runtime could not start: " + exception.Message);
+        }
+    }
+
     /// <summary>The runtime started once the downloads were in: the engine line says so.</summary>
     private void OnStarted(Corvid.Host.Composition.CorvidRuntime runtime) => Raise();
 
@@ -78,6 +92,10 @@ public sealed class EngineFirstRunService : IFirstRunService, IDisposable
 
     public Task<DoctorReport> RunChecksAsync(CancellationToken cancellationToken = default) => Task.Run(async () =>
     {
+        // A model fetched in a terminal (the fix's `corvid model download …`, then Run again) lets the runtime start now; it
+        // loads on the pool, and the engine line follows it.
+        if (!_engine.MissingModels.IsEmpty)
+            _ = StartAgainAsync();
         // As the next start would read the configuration: the setup's own writes count, which the host's start-up copy misses.
         var configuration = _writer.NextStart();
         var services = _engine.Services;

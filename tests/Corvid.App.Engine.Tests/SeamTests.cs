@@ -181,6 +181,26 @@ public sealed class SeamTests
     }
 
     [Fact]
+    public async Task AModelFetchedInATerminalStartsTheRuntimeAtFirstRunsRunAgain()
+    {
+        var models = new FakeModels(generatorReady: false);
+        await using var host = EngineHosts.Create(models);
+        await using var engine = await AppEngine.StartAsync(host.Host, ownsHost: false, cancellationToken: TestContext.Current.CancellationToken);
+        using var firstRun = new FirstRun.EngineFirstRunService(engine, new InlineDispatcher(), host.Root, _ => null);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        engine.Started += _ => started.TrySetResult();
+        Assert.StartsWith("not started", firstRun.EngineStatus, StringComparison.Ordinal);
+
+        // `corvid model download fake-gen` in a terminal, then Run again.
+        await models.Provider.DownloadAsync("fake-gen", cancellationToken: TestContext.Current.CancellationToken);
+        await firstRun.RunChecksAsync(TestContext.Current.CancellationToken);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
+
+        Assert.Equal("in-process", firstRun.EngineStatus);
+        await engine.RuntimeAsync();
+    }
+
+    [Fact]
     public async Task AnEngineThatStartsItsRuntimeInTheBackgroundReportsEachStage()
     {
         await using var host = EngineHosts.Create();
