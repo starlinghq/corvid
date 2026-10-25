@@ -93,15 +93,16 @@ internal static class ForkCommand
                     break;
             }
         }
-        // Nothing of the fork runs here: let go of it, so `corvid chat --session` or the app can drive it. A fork with model
-        // choices stays open here instead: a session's choices live in the process that made them (the log records them,
-        // but a session opened again starts on the configured models).
-        var chose = fork.Models.Any(model => model.Status == SwitchStatus.Switched);
-        var released = !chose && await runtime.ReleaseDriverAsync(id).ConfigureAwait(false);
+        // Nothing of the fork runs here: let go of it, so `corvid chat --session` or the app can drive it. Its model choices
+        // are in its log and come back when another process opens it (A5), except a cloud one, which is chosen again there
+        // through the privacy gate; a fork with a cloud choice stays open here, where it was chosen.
+        var cloud = fork.Models.Any(model => model.Status is SwitchStatus.Switched or SwitchStatus.Unchanged
+            && model.To?.Privacy == PrivacyClass.Cloud);
+        var released = !cloud && await runtime.ReleaseDriverAsync(id).ConfigureAwait(false);
         lines.Add(released
             ? $"Continue it with corvid chat --session {id}, or open it in the app."
-            : chose
-                ? $"It stays open in this process with its models, which live where they were chosen; opened by another process after this one leaves (corvid chat --session {id}), it starts on the configured models."
+            : cloud
+                ? $"It stays open in this process with its cloud model; opened by another process after this one leaves (corvid chat --session {id}), its cloud choice is chosen again there through the privacy gate."
                 : $"It is open in this process; continue it with corvid chat --session {id} once this one leaves.");
         return refused
             ? new CommandOutput { Lines = [.. lines], Tone = OutputTone.Warning }

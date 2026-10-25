@@ -260,7 +260,7 @@ public sealed class ForkDuringTurnTests
     }
 
     [Fact]
-    public async Task Slash_fork_forks_and_lets_go_of_the_fork_unless_it_carries_model_choices()
+    public async Task Slash_fork_forks_and_lets_go_of_the_fork_which_keeps_its_local_model_choices()
     {
         await using var host = TestHost.Create(new FakeModels(new FakeGenerator(Reply.Say("noted"))));
         await using var runtime = await host.StartAsync();
@@ -281,8 +281,12 @@ public sealed class ForkDuringTurnTests
         Assert.Equal(runtime.Log.GetHead(session.Id, Ct), runtime.Log.GetHead(plainId, Ct));
         Assert.Contains(picked.Lines, line => line == "generator: fake-gen-large@cpu for the fork's session.");
         var pickedId = System.Text.RegularExpressions.Regex.Match(picked.Lines[0], @"Forked into (\S+) through").Groups[1].Value;
-        Assert.True(runtime.TryGetSession(pickedId, out var kept));
+        // A5: a local choice is in the fork's log and comes back when it is opened again, so the fork is let go of too.
+        Assert.False(runtime.TryGetSession(pickedId, out _));
+        Assert.Contains(picked.Lines, line => line.StartsWith("Continue it with corvid chat --session", StringComparison.Ordinal));
+        var kept = runtime.OpenSession(pickedId, "test");
         Assert.Equal("fake-gen-large@cpu", kept.Slots.Current(ModelSlots.Generator).Profile.Id);
+        Assert.True(kept.Slots.HasSessionChoice(ModelSlots.Generator));
         Assert.Equal(Corvid.Host.Commands.OutputTone.Error, bad.Tone);
     }
 
