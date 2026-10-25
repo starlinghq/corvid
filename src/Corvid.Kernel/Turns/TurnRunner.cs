@@ -47,6 +47,9 @@ public sealed class TurnRunner
     /// <summary>The reason on a <see cref="TurnResult.Escalations"/> entry when the egress gate kept the turn local.</summary>
     public const string PrivacyRetreat = "privacy";
 
+    /// <summary>The tool a <see cref="ShellLine"/> runs through (A4): the built-in <c>shell</c>.</summary>
+    public const string ShellTool = "shell";
+
     private const string NudgeBudget = "The step budget for this turn is used up. Answer the user now with what you have. Do not call tools.";
 
     private static readonly JsonWriterOptions WriterOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
@@ -329,9 +332,13 @@ public sealed class TurnRunner
         private readonly List<string> _compactions = [];
         // The turn's own UserMessage: compaction during the turn never summarizes it.
         private long _turnStart;
+        // A4: a `!!` line's turn, whose call and result are logged local-only.
+        private bool _localOnly;
 
         public async Task<TurnResult> RunAsync(CancellationToken cancellationToken)
         {
+            if (envelope.Shell is { } shell)
+                return await RunShellAsync(shell, cancellationToken).ConfigureAwait(false);
             // §10.3: only the user's own message clears taint; anyone else's text is outside content.
             runner.Tainted = envelope.Origin != EnvelopeOrigin.User;
             // C-025: the session records its project before the message, when it has none yet or another one.
@@ -385,6 +392,38 @@ public sealed class TurnRunner
             if (offered is null && Acted(verdicts, "intent", out var route) && route == "answer_directly")
                 offered = [];
             return await LoopAsync(offered ?? _shortlist, cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// A4: the composer's <c>!</c> line (docs/plan/tui.md §4.1). The line is logged as the user's message, then its command
+        /// runs as one <c>shell</c> call the user made, through the same path as a model's call: the approval pipeline (its
+        /// rules, the session's mode and the prompt), the before and after checkpoints, the sandbox, and the result in the log.
+        /// No decider question and no generator call: the output is in the conversation for the next message (unless
+        /// <see cref="ShellLine.LocalOnly"/>), and the turn's answer is null. The taint is left as it was: no generator reads
+        /// this turn, and a command the user typed vouches for nothing the context already holds.
+        /// </summary>
+        private async Task<TurnResult> RunShellAsync(ShellLine shell, CancellationToken cancellationToken)
+        {
+            // Someone else's text never becomes a command: a guest, a forwarded message or a webhook.
+            if (envelope.Origin != EnvelopeOrigin.User || envelope.Guest is not null)
+                return Result(TurnStatus.Failed, "Only the session's own user can run a shell line.");
+            _localOnly = shell.LocalOnly;
+            _turnStart = runner.Append(new UserMessage(envelope.Text, shell.LocalOnly ? true : null)).Sequence;
+            var function = _services.Tools.GetFunctions(_options.SecretNames).FirstOrDefault(candidate => candidate.Name == ShellTool);
+            if (function?.GetService(typeof(ToolDescriptor)) is not ToolDescriptor descriptor)
+                return Result(TurnStatus.Failed, "The shell tool is off (Corvid:Tools:Builtin), so the line was not run.");
+            var arguments = JsonValues.Object(new Dictionary<string, object?> { ["command"] = shell.Command });
+            var issued = runner.Snapshot().IssuedCallIds;
+            var callId = "user-shell";
+            for (var n = 2; issued.Contains(callId); n++)
+                callId = $"user-shell-{n}";
+            _steps = 1;
+            _toolCalls = 1;
+            // Always through the pipeline: the shell runs only with an approval for exactly this command, and the pipeline
+            // allows without asking where a rule or the session's mode does.
+            await ExecuteAsync(new ValidCall(callId, new Offered(function, descriptor), arguments, Ask: true, []), cancellationToken)
+                .ConfigureAwait(false);
+            return Result(TurnStatus.Answered, null);
         }
 
         private async Task<TurnResult> LoopAsync(ImmutableArray<Offered> offered, CancellationToken cancellationToken)
@@ -1083,7 +1122,8 @@ public sealed class TurnRunner
             {
                 lock (_gate)
                 {
-                    runner.Append(new ToolCallIssued(call.CallId, call.Tool.Function.Name, call.Arguments, _steps, call.Tool.Descriptor.Risk.ReadOnly));
+                    runner.Append(new ToolCallIssued(call.CallId, call.Tool.Function.Name, call.Arguments, _steps, call.Tool.Descriptor.Risk.ReadOnly,
+                        _localOnly ? true : null));
                     _open.Add(call.CallId);
                 }
             }
@@ -1109,7 +1149,7 @@ public sealed class TurnRunner
         {
             lock (_gate)
             {
-                runner.Append(new ToolResult(callId, result, isError));
+                runner.Append(new ToolResult(callId, result, isError, _localOnly ? true : null));
                 _open.Remove(callId);
                 if (lastToolResult is not null)
                     _lastToolResult = lastToolResult;
@@ -1359,6 +1399,8 @@ public sealed class TurnRunner
             {
                 switch (entry.Content)
                 {
+                    // A4: a `!!` line is the user's alone, as in the prompt.
+                    case UserMessage { LocalOnly: true } or ToolCallIssued { LocalOnly: true } or ToolResult { LocalOnly: true }: break;
                     case UserMessage user: lines.Add("user: " + Short(user.Text)); break;
                     case AssistantMessage assistant: lines.Add("assistant: " + Short(assistant.Text)); break;
                     case ToolCallIssued call:

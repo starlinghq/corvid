@@ -337,6 +337,9 @@ public sealed class ContextCompactor
         var at = string.Create(CultureInfo.InvariantCulture, $"[{entry.FromSequence}] ");
         switch (entry.Content)
         {
+            // A4: a `!!` line's message, call and output stay out of the summary as they stay out of the prompt.
+            case UserMessage { LocalOnly: true } or ToolCallIssued { LocalOnly: true } or ToolResult { LocalOnly: true }:
+                return null;
             case UserMessage user:
                 return at + "user: " + user.Text;
             case AssistantMessage assistant:

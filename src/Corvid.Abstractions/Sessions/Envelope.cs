@@ -31,6 +31,23 @@ public sealed record Envelope(string SessionId, string Surface, string Text, Env
     /// session's own user, whose turns get the whole toolset.
     /// </summary>
     public GuestScope? Guest { get; init; }
+
+    /// <summary>
+    /// Set for the composer's <c>!</c> line (A4, docs/plan/tui.md §4.1): the turn runs this command through the shell tool,
+    /// the approval pipeline, the sandbox and the checkpoints, as a call the user made, and asks the generator nothing. Only
+    /// the session's own user may send one. <see cref="Text"/> is the line as typed, which the log keeps as the message.
+    /// </summary>
+    public ShellLine? Shell { get; init; }
+}
+
+/// <summary>A shell command the user typed after <c>!</c> (or <c>!!</c>, <see cref="LocalOnly"/>).</summary>
+/// <param name="LocalOnly">
+/// <c>!!</c>: the output stays with the user. The message, the call and its result are logged marked local-only, and the
+/// prompt, compaction, the decider's recent events and the episodic index leave them out.
+/// </param>
+public sealed record ShellLine(string Command, bool LocalOnly = false)
+{
+    public string Command { get; } = !string.IsNullOrWhiteSpace(Command) ? Command : throw new ArgumentException("A shell line needs a command.", nameof(Command));
 }
 
 /// <summary>

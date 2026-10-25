@@ -88,6 +88,11 @@ internal static class Samples
         new McpToolAccepted("notes", "save", "ef56", Flagged: true),
         new McpToolHeld("notes", "send", "injection", "ab78", PinnedHash: "ab78", Detail: "d-9"),
         new McpPinsForgotten("notes", 3),
+        new UserMessage("!!cat notes.md", LocalOnly: true),
+        new ToolCallIssued("user-shell", "shell", Json("""{"command":"cat notes.md"}"""), 1, false, LocalOnly: true),
+        new ToolResult("user-shell", Json("""{"exit_code":0}"""), LocalOnly: true),
+        new SessionTitled("Move the dentist reminder", TitleSources.Generated),
+        new SessionRecapped("You moved the reminder to Friday.", 0, 4, RecapSources.Requested),
     ];
 
     public static EventData[] Data(params SessionEvent[] events) => events.Select(EventData.Create).ToArray();
