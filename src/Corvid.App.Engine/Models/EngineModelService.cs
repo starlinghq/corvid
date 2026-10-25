@@ -512,6 +512,10 @@ public sealed class EngineModelService : IModelService, IDisposable
             Console.Error.WriteLine($"corvid app: downloading {name} failed: {failure}");
         if (Volatile.Read(ref _disposed) != 0)
             return;
+        // The runtime could not start for want of models (First run): with this one in, it may start now, so Sessions works
+        // without restarting the app. It loads on the pool; the status bar and the rail follow it.
+        if (failure is null && !_engine.MissingModels.IsEmpty)
+            _ = StartEngineAsync();
         try
         {
             await RefreshAsync(CancellationToken.None).ConfigureAwait(false);
@@ -525,6 +529,20 @@ public sealed class EngineModelService : IModelService, IDisposable
                 _problem = $"{(failure is null ? $"{name} downloaded" : $"Downloading {name} ended")}, but the models could not be read again, " +
                     $"so this list may be out of date: {exception.Message}";
             Republish();
+        }
+    }
+
+    /// <summary>Starts the runtime once nothing configured is missing; a start that fails again is written to the log, never lost.</summary>
+    private async Task StartEngineAsync()
+    {
+        try
+        {
+            if (await _engine.StartAgainAsync().ConfigureAwait(false))
+                Republish();
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            Console.Error.WriteLine($"corvid app: the runtime could not start after the downloads: {exception.Message}");
         }
     }
 

@@ -141,6 +141,17 @@ public interface ISessionService
     event EventHandler<SessionSummary>? SessionChanged;
 
     /// <summary>
+    /// The whole list may differ from the last <see cref="ListAsync"/>: the engine started after the window opened (First
+    /// run's downloads finished), so a list that failed then can be read now. Raised on the UI thread. Added in A4 as a
+    /// default member that is never raised (the demo lists at once).
+    /// </summary>
+    event EventHandler? ListChanged
+    {
+        add { }
+        remove { }
+    }
+
+    /// <summary>
     /// Opens a session: its history, then each later update through <paramref name="onUpdate"/> on the UI thread, in
     /// order, until the subscription is disposed.
     /// </summary>

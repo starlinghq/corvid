@@ -145,6 +145,42 @@ public sealed class SeamTests
     }
 
     [Fact]
+    public async Task OnceFirstRunsDownloadsAreInTheRuntimeStartsAndSessionsWorkWithoutARestart()
+    {
+        var models = new FakeModels(generatorReady: false);
+        await using var host = EngineHosts.Create(models);
+        await using var engine = await AppEngine.StartAsync(host.Host, ownsHost: false, cancellationToken: TestContext.Current.CancellationToken);
+        var dispatcher = new InlineDispatcher();
+        using var composition = new AppComposition(Engine with { Page = Area.FirstRun }, dispatcher, ManualTimeProvider.Demo(),
+            new EngineAppServices(engine, host.Root, _ => null));
+        Assert.NotEmpty(composition.SessionHub.StartError);
+        // Still missing: nothing starts, and the reason stays.
+        Assert.False(await engine.StartAgainAsync());
+        Assert.Contains("fake-gen", engine.StartFailure, StringComparison.Ordinal);
+        var listed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        composition.SessionHub.Listed += (_, _) => listed.TrySetResult();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        engine.Started += _ => started.TrySetResult();
+
+        // The Models step downloads the generator; the runtime starts from it, without restarting the app.
+        await composition.ModelService.LoadAsync(TestContext.Current.CancellationToken);
+        await composition.ModelService.DownloadAsync(["fake-gen"], TestContext.Current.CancellationToken);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
+        await listed.Task.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
+
+        Assert.Null(engine.StartFailure);
+        Assert.Empty(engine.MissingModels);
+        Assert.Equal("", composition.SessionHub.StartError);
+        Assert.Equal("in-process", composition.StatusBar.Engine);
+        Assert.True(await engine.StartAgainAsync());
+        // Sessions work: a new session takes a message and answers it.
+        var id = await composition.SessionService.CreateAsync(TestContext.Current.CancellationToken);
+        await composition.SessionService.SendAsync(id, "hello", TestContext.Current.CancellationToken);
+        await ((Sessions.EngineSessionService)composition.SessionService).IdleAsync();
+        Assert.Contains(await composition.SessionService.ListAsync(TestContext.Current.CancellationToken), summary => summary.Id == id && summary.Turns == 1);
+    }
+
+    [Fact]
     public async Task AnEngineThatStartsItsRuntimeInTheBackgroundReportsEachStage()
     {
         await using var host = EngineHosts.Create();

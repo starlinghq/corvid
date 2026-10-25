@@ -45,8 +45,12 @@ public sealed class EngineFirstRunService : IFirstRunService, IDisposable
         _environment = environment ?? Environment.GetEnvironmentVariable;
         _writer = engine.Services.GetRequiredService<CorvidConfigWriter>();
         engine.Progress += OnProgress;
+        engine.Started += OnStarted;
         _ = engine.Runtime.ContinueWith(_ => Raise(), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
+
+    /// <summary>The runtime started once the downloads were in: the engine line says so.</summary>
+    private void OnStarted(Corvid.Host.Composition.CorvidRuntime runtime) => Raise();
 
     public event EventHandler? EngineStatusChanged;
 
@@ -201,6 +205,7 @@ public sealed class EngineFirstRunService : IFirstRunService, IDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
         _engine.Progress -= OnProgress;
+        _engine.Started -= OnStarted;
     }
 
     private void OnProgress(Corvid.Host.Composition.StartupStep step) => Raise();

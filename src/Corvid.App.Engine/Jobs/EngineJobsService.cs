@@ -61,7 +61,15 @@ public sealed class EngineJobsService : IJobsService, IDisposable
         _engine = engine;
         _time = time;
         _changed = new ChangeSignal(dispatcher, () => Changed?.Invoke(this, EventArgs.Empty));
+        _engine.Started += OnEngineStarted;
         _work.Track(SubscribeAsync());
+    }
+
+    /// <summary>A runtime that could not start at first is up (First run's downloads): hear it, and the page reads it again.</summary>
+    private void OnEngineStarted(CorvidRuntime runtime)
+    {
+        _work.Track(SubscribeAsync());
+        _changed.Raise();
     }
 
     public event EventHandler? Changed;
@@ -223,6 +231,7 @@ public sealed class EngineJobsService : IJobsService, IDisposable
 
     public void Dispose()
     {
+        _engine.Started -= OnEngineStarted;
         Action? unsubscribe;
         lock (_gate)
         {
@@ -251,7 +260,8 @@ public sealed class EngineJobsService : IJobsService, IDisposable
         void OnCompleted(ScheduledJob job, JobRun run) => _changed.Raise();
         lock (_gate)
         {
-            if (_disposed)
+            // Disposed, or subscribed already (a second start never reaches here with the first runtime up).
+            if (_disposed || _unsubscribe is not null)
                 return;
             store.Changed += OnStoreChanged;
             runtime.JobCompleted += OnCompleted;

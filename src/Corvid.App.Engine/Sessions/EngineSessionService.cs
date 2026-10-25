@@ -76,10 +76,27 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         _engine = engine;
         _dispatcher = dispatcher;
         _time = time;
+        _engine.Started += OnEngineStarted;
         _ = WatchJobsAsync();
     }
 
     public event EventHandler<SessionSummary>? SessionChanged;
+
+    /// <summary>Raised once a runtime that could not start at first (models missing) is up: the window lists its sessions.</summary>
+    public event EventHandler? ListChanged;
+
+    /// <summary>The runtime started after the window opened (First run's downloads): the scheduler's runs are heard, and the list read again.</summary>
+    private void OnEngineStarted(CorvidRuntime runtime)
+    {
+        if (_disposed)
+            return;
+        _ = WatchJobsAsync();
+        _dispatcher.Post(() =>
+        {
+            if (!_disposed)
+                ListChanged?.Invoke(this, EventArgs.Empty);
+        });
+    }
 
     /// <summary>The turns and summary refreshes in flight, for a test or a shutdown that waits for them; a turn the queue starts counts.</summary>
     public async Task IdleAsync()
@@ -391,6 +408,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     public void Dispose()
     {
         _disposed = true;
+        _engine.Started -= OnEngineStarted;
         UnwatchJobs();
         foreach (var channel in _channels.Values)
         {

@@ -42,8 +42,19 @@ public sealed class SessionHub : IDisposable
         _shell = shell;
         _statusBar = statusBar;
         _service.SessionChanged += OnSessionChanged;
+        _service.ListChanged += OnListChanged;
         _shell.PropertyChanged += OnShellChanged;
         _statusBar.ModeRequested += OnModeRequested;
+    }
+
+    /// <summary>
+    /// The engine started after the window opened: the list that failed at start-up (or was empty) is read again, and the
+    /// session the rail shows stays selected when it is still listed.
+    /// </summary>
+    private void OnListChanged(object? sender, EventArgs e)
+    {
+        if (!_disposed)
+            _ = StartAsync(_shell.CurrentSession?.Id, null);
     }
 
     public ISessionService Service => _service;
@@ -85,6 +96,12 @@ public sealed class SessionHub : IDisposable
             return;
         }
 
+        // Listed after all (the engine started later): the start-up failure no longer holds.
+        if (StartError.Length > 0)
+        {
+            StartError = "";
+            _statusBar.Tags = [.. _statusBar.Tags.Where(tag => tag.Text != "sessions unavailable")];
+        }
         foreach (var summary in summaries)
             _summaries[summary.Id] = summary;
         RebuildRail();
@@ -171,6 +188,7 @@ public sealed class SessionHub : IDisposable
             return;
         _disposed = true;
         _service.SessionChanged -= OnSessionChanged;
+        _service.ListChanged -= OnListChanged;
         _shell.PropertyChanged -= OnShellChanged;
         _statusBar.ModeRequested -= OnModeRequested;
         _ticker?.Dispose();
