@@ -53,6 +53,48 @@ public sealed class GatewayTests
         Assert.Equal("before", rig.Bar.Gateway);
     }
 
+    /// <summary>A service with one snapshot, for where the gateway runs (G-14).</summary>
+    private sealed class FixedGateway(GatewayHost host) : IGatewayService
+    {
+        public event EventHandler? Changed { add { } remove { } }
+
+        public Task<GatewaySnapshot> LoadAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new GatewaySnapshot(host, [new GatewayAdapter("telegram", AdapterState.Unknown)], [], [], [], [], []));
+
+        public Task<PairedUser> PairAsync(string requestId, PairingRole role, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task IgnoreAsync(string requestId, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task RevokeAsync(string userId, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<PairedUser> SetAllowlistAsync(string userId, IReadOnlyList<string> tools, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+    }
+
+    private static GatewayViewModel Showing(GatewayHost host)
+    {
+        var time = ManualTimeProvider.Demo();
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar);
+        shell.Navigate(Area.Gateway);
+        return new GatewayViewModel(new FixedGateway(host), shell, bar, time);
+    }
+
+    [Fact]
+    public void ThePageSaysWhichProcessHostsTheGatewayOrWhyNoneDoes()
+    {
+        using var elsewhere = Showing(new GatewayHost(false, "corvid gateway (pid 4127)", ManualTimeProvider.Demo().GetUtcNow().AddMinutes(-5)));
+        Assert.Equal("elsewhere", elsewhere.HostTag);
+        Assert.StartsWith("corvid gateway (pid 4127) hosts the gateway since ", Text(elsewhere.HostText), StringComparison.Ordinal);
+        Assert.StartsWith("hosted by corvid gateway (pid 4127) · ", Text(elsewhere.Subtitle), StringComparison.Ordinal);
+
+        // G-14: nobody hosts it, and the page says why rather than naming a holder.
+        using var nowhere = Showing(new GatewayHost(false, "", null) { Reason = "No gateway adapter is enabled." });
+        Assert.Equal("off", nowhere.HostTag);
+        Assert.StartsWith("No process hosts the gateway: No gateway adapter is enabled.", Text(nowhere.HostText), StringComparison.Ordinal);
+        Assert.StartsWith("not running · ", Text(nowhere.Subtitle), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task PairingAsAGuestGivesNoToolsAndAnswersTheBoardsItem()
     {
