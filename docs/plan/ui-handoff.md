@@ -19,6 +19,7 @@ pull request starlinghq/corvid#71.
 | A1 the seven other mocked screens: Review and Rewind, Board, Models and First run, Memory, Audit | done, verified on the running app by an independent verifier in two rounds (§1.2) | branch `a1/screens` |
 | A2 the pages without mockups (Skills, Jobs, MCP, Gateway, Safety, Secrets, Settings), the palette, the rest of the keys, the phone screens, an accessibility pass | done, verified on the running app in three rounds, PR review fixed (§1.3) | PR #76, branch `a2/screens` |
 | A3 `Corvid.App.Engine`: the real runtime behind the services | done behind `--engine`, verified end to end in three rounds (§1.4) | branch `a3/engine` |
+| A4 the gaps A3 left: the running turn, records, egress, hosting, parity; the engine becomes the default | integrated (§1.5) | branch `a4/gaps-int` |
 
 The build ran as a workflow in a cloud container: one agent per step, each building, launching the app on a virtual
 display, screenshotting it and comparing it with the mockup renders, then an independent verifier. It was stopped during
@@ -203,7 +204,8 @@ Secrets), an integrator that added the Board and prompt history over the merged 
 independent verifier with fix rounds (round 1 found one major defect, round 2 one major and three minor; round 3
 passed with five minor ones).
 
-- **`--engine`** runs the app on the real runtime; `--demo` stays the default. `AppComposition` takes an `IAppServices`
+- **`--engine`** runs the app on the real runtime; `--demo` stayed the default until A4, which made the engine the
+  default (§1.5). `AppComposition` takes an `IAppServices`
   (`DemoAppServices`, `EngineAppServices`, or `UnavailableAppServices`, which refuses each area by name). The demo's
   Review and Rewind no longer cast the session service.
 - **K-10** is in `Corvid.Host/Sessions`: `SessionStreamUpdate`, `SessionUpdateReporter` (Acp's `TurnReporter` logic
@@ -227,12 +229,12 @@ to schema 3 (one way: an older binary refuses it) so an edited draft applies onl
 against; First run starts from the configured approval mode and cloud posture and writes only what the person changes;
 Safety searches the 50 most recent sessions.
 
-Refused on the engine, each with its message on the page: the egress ledger (G-9), hosting the gateway in the app
-(G-14) and the per-person guest allowlist, rename (G-6), steering (K-3), clarifying questions (K-6), the output tail
-(K-2), turn progress, app preferences beyond the window (G-7, ui.db), memory consolidation (plan §9.5), opening a
-terminal or the Vault helper (U-6), and the Vault policy and daily counts (V-n).
+Refused on the engine at the end of A3, each with its message on the page: the egress ledger (G-9), hosting the gateway
+in the app (G-14) and the per-person guest allowlist, rename (G-6), steering (K-3), clarifying questions (K-6), the output
+tail (K-2), turn progress, app preferences beyond the window (G-7, ui.db), memory consolidation (plan §9.5), opening a
+terminal or the Vault helper (U-6), and the Vault policy and daily counts (V-n). A4 built all but the last three (§1.5).
 
-Left:
+Left at the end of A3 (A4 closed every item here except those §1.5 still lists):
 
 - The `#` (stage a memory) and `!` (shell) composer modes are advertised but built nowhere; the engine sends them as text.
 - Replay differs from live: no generator or decisions per replayed turn, an interrupted turn or one cut by a rollback
@@ -254,7 +256,56 @@ Left:
   as "another process is writing".
 - Not walked on the engine: F8, F10, F12, F14's switch and download, F15, F16, F17 with a Vault.
 
-### What the running app shows today
+### 1.5 The gaps A3 left (A4)
+
+Five groups in parallel worktrees, merged one at a time by an integrator (`a4/gaps-int`), building and running every
+test project after each merge:
+
+- **The running turn (`a4/turn`).** K-3: Ctrl+Enter steers the running turn; the kernel takes a steer at its next step
+  checkpoint (`UserSteered`, a user message that starts no turn), and one the turn ends without taking goes to the head of
+  the queue. K-6: `ask_user` ends a turn Clarifying with a question (`ClarificationAsked`); the queue holds until the
+  person answers, the rail shows it waiting, and an answer is sent as their words (never read as a `!` or `#` line).
+  K-2: a running call's output tail (shell, web_fetch), bounded, scrubbed and throttled. Turn progress: the step on the
+  turn and the rail. `corvid chat` shows the step and a running call's last line, and numbers a question's choices; it
+  has no steer (it reads no input while a turn runs).
+- **Records (`a4/records`).** G-6: generated titles (local generator only), rename, recaps on request and after an
+  absence (`SessionTitled`, `SessionRecapped`), shared by the app, `corvid chat` (`/sessions`, `/rename`, `/recap`, `/pin`)
+  and ACP's `session/list`. G-7: `ui.db` for pins, drafts, review points and the app's preferences. The composer's `!`,
+  `!!` and `#` lines, parsed once by the host's `ComposerLine` for the CLI and the app.
+- **Egress (`a4/egress`).** G-9: the egress ledger (`egress.db` beside `events.db`, `EgressRecorded` in the session log),
+  on the Audit page and in `corvid egress`. G-2: why a call that asked nobody ran or was refused (`ApprovalAssessed`), on
+  its card, live and on replay.
+- **Hosting (`a4/hosting`).** G-12: one driver per session across processes (a lock under the data directory); a session
+  another process drives is followed read-only, its turns tailed from the log. G-14: the app hosts the gateway under the
+  same one-lock rule as `corvid gateway`, with a per-person guest allowlist (`gateway.db` schema 2 on the first one) and
+  `corvid gateway pair tools`; the Jobs page takes the scheduler over when its holder exits.
+- **Parity (`a4/parity`).** Replay carries each turn's generator, the checkpoints' decisions, taint and compaction
+  markers; an interrupted turn replays as interrupted. The approval mode, approval deadline, steps and output tokens
+  apply live from Settings. First run and Models start the runtime after their downloads without a restart. The A3
+  layout items with engine-length text, a read-only config directory said as such, the rule-write stall, and the round-3
+  minors (Send disabled with no session; a new session's title follows its first message).
+- **The engine is the default.** The app opens on the engine with no arguments (First run when models are missing);
+  `--demo` opts into the demo, and `--engine` is still accepted (it says the default). The browser head runs the demo.
+  Mockup comparisons and the harness pass `--demo` explicitly.
+
+Six new event types (`user_steered`, `clarification_asked`, `session_titled`, `session_recapped`, `approval_assessed`,
+`egress_recorded`): a binary older than A4 cannot read a log that holds them, the same one-way step earlier event
+additions took.
+
+Still refused on the engine, each with its message: memory consolidation (plan §9.5), opening a terminal or the Vault
+helper (U-6), the Vault policy, role, budget and daily counts (V-n), media memory (plan §9.4) and images in prompts (K-8).
+
+Left:
+
+- A question that blocks mid-turn (a question router beside the approval router); ACP has no tail or question
+  notifications; `corvid chat` shows `ask_user`'s call in its panel.
+- A steer is reported wherever the reporter next reads the log, not at a fixed place relative to the call that finished.
+- The Board's "Take over" stays disabled even when the lock is free; whether held sessions belong in the rail; the app
+  keeps the driver lock of a session it no longer views.
+- A replayed message is read as the user's even when a guest or a job wrote it (the log does not say whose it was), so a
+  replay can show the taint cleared where the live turn kept it.
+
+
 
 The shell matches `Main.png` outside the conversation: rail, badges, sessions with their dots and times, status bar,
 mode control, dock tab strip. It also matches in dark, and at 1024, 820 and 390 px wide, where the phone layout and its
@@ -278,6 +329,9 @@ dotnet --version                      # 10.0.401 or a later 10.0.4xx (global.jso
 dotnet build Corvid.slnx -c Release   # restores Uno.Sdk 6.7.30 from NuGet; no workload needed
 dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll --demo
 dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll --demo --scene approval --theme dark --page sessions
+# The engine is the default: with no --demo the app runs on this machine's Corvid home (corvid.json, models, event log).
+# Point HOME, CORVID_CONFIG and the XDG directories at a temporary home to try it without touching yours.
+dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll
 dotnet test --project tests/Corvid.App.Core.Tests/Corvid.App.Core.Tests.csproj -c Release
 dotnet run --project tools/Corvid.Architecture -c Release --no-build -- .
 ```
