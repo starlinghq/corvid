@@ -186,6 +186,20 @@ public sealed class TranslatorTests
         Assert.Single(writes.Translate(Gate(T0.AddSeconds(3))));
         Assert.Equal(TimeSpan.FromSeconds(3), Assert.IsType<TurnEnded>(Assert.Single(writes.EndReplay())).Elapsed);
 
+        // Text first, then a memory_add call: its gate is the turn's.
+        var adds = new SessionUpdateTranslator(Workspace);
+        adds.Translate(new PromptSent("remember my editor", 1) { At = T0 });
+        adds.Translate(new AnswerChunk("I'll note that.") { At = T0.AddSeconds(1) });
+        adds.Translate(new ToolCallStarted("c1", "memory_add", ToolCallKinds.Other, ToolCallState.Completed) { Tool = "memory_add", At = T0.AddSeconds(2) });
+        Assert.Single(adds.Translate(Gate(T0.AddSeconds(4))));
+
+        // A ! line's turn is its call: a # line after it is no more its own than after an answer.
+        var shell = new SessionUpdateTranslator(Workspace);
+        shell.Translate(new PromptSent("!echo x", 1) { At = T0 });
+        shell.Translate(new ToolCallStarted(Corvid.Kernel.Turns.TurnRunner.UserShellCall, "shell", ToolCallKinds.Execute, ToolCallState.Completed) { Tool = "shell", At = T0 });
+        Assert.Empty(shell.Translate(Gate(T0.AddSeconds(30))));
+        Assert.Equal(TimeSpan.Zero, Assert.IsType<TurnEnded>(Assert.Single(shell.EndReplay())).Elapsed);
+
         // Before any turn, a # line's gate waits for no prompt.
         var first = new SessionUpdateTranslator(Workspace);
         Assert.Empty(first.Translate(Gate(T0)));

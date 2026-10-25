@@ -43,8 +43,10 @@ public sealed class SessionUpdateTranslator(string workspace)
     // is the latest, so the answer that repeats it is not shown twice.
     private string? _openQuestion;
     private string? _questionText;
-    // A4V2-4: the turn's remember checkpoint chose to write, so the memory gate asked after its answer is the turn's.
+    // A4V2-4: the turn's remember checkpoint chose to write, so the memory gate asked after its answer is the turn's; and
+    // whether the turn's latest output is answer text (a call after it, such as memory_add, asks the gate in the turn).
     private bool _turnRemembers;
+    private bool _answerLast;
 
     /// <summary>The generator a turn opened from here on starts on ("fake-gen"); empty when unknown (a replay).</summary>
     public string Model { get; set; } = "";
@@ -116,6 +118,7 @@ public sealed class SessionUpdateTranslator(string workspace)
                 Turn++;
                 TurnOpen = true;
                 _answered = false;
+                _answerLast = false;
                 _turnStarted = at;
                 _turnTokens = 0;
                 _turnStarts.Add(prompt.Sequence);
@@ -137,6 +140,7 @@ public sealed class SessionUpdateTranslator(string workspace)
                 break;
             case AnswerChunk chunk:
                 _answered |= chunk.Text.Length > 0;
+                _answerLast |= chunk.Text.Length > 0;
                 // K-6: a clarifying turn's answer is its question, which the question's block shows: not twice.
                 if (_questionText is { } asked && string.Equals(chunk.Text.Trim(), asked, StringComparison.Ordinal))
                     break;
@@ -183,7 +187,9 @@ public sealed class SessionUpdateTranslator(string workspace)
                 break;
             case ToolCallStarted started:
                 // A4: a ! line's turn is its shell call (TurnRunner's user-shell ids); it has no answer, and needs none.
-                _answered |= started.CallId.StartsWith(Corvid.Kernel.Turns.TurnRunner.UserShellCall, StringComparison.Ordinal);
+                var userShell = started.CallId.StartsWith(Corvid.Kernel.Turns.TurnRunner.UserShellCall, StringComparison.Ordinal);
+                _answered |= userShell;
+                _answerLast = userShell;
                 output.Add(new ToolCall(started.CallId, started.Tool ?? started.Title, Kind(started.Kind, started.Tool), Status(started.Status))
                 {
                     At = at,
@@ -230,7 +236,7 @@ public sealed class SessionUpdateTranslator(string workspace)
                 outside = true;
                 break;
             case DecisionsMade made:
-                _turnRemembers |= TurnOpen && made.Decisions.Questions.Any(question => question is { Question: Remember, Action: StartMemoryWrite });
+                _turnRemembers |= TurnOpen && made.Decisions.Questions.Any(question => question is { Question: Remember, Action: StartMemoryWrite, Acted: true });
                 var decided = new CheckpointDecided(made.Decisions.Checkpoint, made.Decisions.Decider,
                     [.. made.Decisions.Questions.Select(question => new DecisionAnswer(question.Question, question.Confidence, question.Action, question.Acted))])
                 {
@@ -275,13 +281,14 @@ public sealed class SessionUpdateTranslator(string workspace)
     private const string StartMemoryWrite = "start_memory_write";
 
     /// <summary>
-    /// A run of decisions that only asks the memory gate (<c>memory_op</c>), outside a turn or after its answer when the
-    /// turn's own remember checkpoint did not write: a <c>#</c> line's (A4V2-4). One a turn's <c>memory_add</c> call asks
-    /// comes before its answer, and one its remember checkpoint asks follows a remember that chose to write.
+    /// A run of decisions that only asks the memory gate (<c>memory_op</c>), outside a turn or after its answer (answer text
+    /// with no call since) when the turn's own remember checkpoint did not write: a <c>#</c> line's (A4V2-4). One a turn's
+    /// <c>memory_add</c> call asks follows that call, and one its remember checkpoint asks follows a remember that acted.
+    /// A lesson is gated later, in the background, outside the turn live as well.
     /// </summary>
     private bool OutsideTurn(CheckpointDecisions decisions) =>
         !decisions.Questions.IsDefaultOrEmpty && decisions.Questions.All(question => question.Question == MemoryOp)
-        && (!TurnOpen || (_answered && !_turnRemembers));
+        && (!TurnOpen || (_answerLast && !_turnRemembers));
 
     /// <summary>The question in a few words for the attention tray: its first line, cut to a short title.</summary>
     internal static string QuestionTitle(string text)
