@@ -20,8 +20,8 @@ namespace Corvid.App.Engine.Board;
 /// paired) leaves the tray at the page's next change, and an answer given here (a code ignored) reaches the page.
 /// <para>
 /// A session's approvals and questions are not listed here: the Board reads them from the session summaries
-/// (<see cref="Core.Sessions.SessionSummary.PendingApprovals"/>, which the engine's session service keeps live), and
-/// adds them before these. Questions come with K-6.
+/// (<see cref="Core.Sessions.SessionSummary.PendingApprovals"/> and <see cref="Core.Sessions.SessionSummary.PendingQuestions"/>,
+/// which the engine's session service keeps live and reads from the log), and adds them before these.
 /// </para>
 /// <para>
 /// <see cref="AttentionChanged"/> follows the areas' <c>Changed</c> events and this service's own answers, posted to the UI

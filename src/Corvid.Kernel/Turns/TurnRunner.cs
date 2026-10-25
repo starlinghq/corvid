@@ -187,18 +187,35 @@ public sealed class TurnRunner
     /// once it is taken, or false when it was not (no turn running, or the turn ended before another checkpoint), so the
     /// surface can send it as an ordinary message instead; it is never dropped silently. Thread-safe. A steer does not
     /// clear taint: it joins a context that may already hold outside content (plan §10.3).
+    /// <para>
+    /// <paramref name="withdraw"/> takes the steer back while it still waits (the person removed it): the task then completes
+    /// false. Once a checkpoint has begun taking it, it can no longer be withdrawn and completes true.
+    /// </para>
     /// </summary>
-    public Task<bool> SteerAsync(string text)
+    public Task<bool> SteerAsync(string text, CancellationToken withdraw = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(text);
+        PendingSteer steer;
         lock (_steerGate)
         {
-            if (_steers is null)
+            if (_steers is null || withdraw.IsCancellationRequested)
                 return Task.FromResult(false);
-            var steer = new PendingSteer(text.Trim(), new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously));
+            steer = new PendingSteer(text.Trim(), new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously));
             _steers.Add(steer);
-            return steer.Taken.Task;
         }
+        if (withdraw.CanBeCanceled)
+        {
+            var registration = withdraw.Register(() =>
+            {
+                lock (_steerGate)
+                    if (_steers?.Remove(steer) != true)
+                        return;
+                steer.Taken.TrySetResult(false);
+            });
+            _ = steer.Taken.Task.ContinueWith(_ => registration.Dispose(), CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+        return steer.Taken.Task;
     }
 
     /// <summary>Whether a turn is taking steers now (between its start and its end). A snapshot.</summary>

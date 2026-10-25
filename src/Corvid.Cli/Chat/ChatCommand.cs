@@ -3,6 +3,7 @@ using Corvid.Host.Commands;
 using Corvid.Host.Composition;
 using Corvid.Kernel.Jobs;
 using Corvid.Kernel.Sessions;
+using Corvid.Kernel.Turns;
 using Corvid.Models;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -91,6 +92,8 @@ internal static class ChatCommand
             {
                 // A line typed at a pick prompt that is not a pick is handled as if typed at the ordinary prompt.
                 string? next = null;
+                // K-6: the question the last turn ended on; the next message answers it, a number picking one of its choices.
+                ClarifyingQuestion? question = null;
                 while (true)
                 {
                     string? line;
@@ -135,6 +138,8 @@ internal static class ChatCommand
                         continue;
                     }
 
+                    line = ChatRenderer.Answer(question, line);
+                    question = null;
                     renderer.BeginTurn();
                     var turn = session.SendAsync(line, cancellationToken);
                     Volatile.Write(ref running, turn);
@@ -148,6 +153,7 @@ internal static class ChatCommand
                         break;
                     }
                     renderer.EndTurn(delivery);
+                    question = delivery.Result?.Question;
                 }
             }
             finally

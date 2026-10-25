@@ -122,7 +122,8 @@ public sealed class SessionActor : IAsyncDisposable
     /// ended first; the caller then sends it as an ordinary message, so it is never lost. It does not wait for queued messages
     /// and is not one: the actor's queue and backpressure are untouched.
     /// </summary>
-    public Task<bool> SteerAsync(string text) => _runner.SteerAsync(text);
+    /// <param name="withdraw">Takes the steer back while it still waits (<see cref="TurnRunner.SteerAsync"/>).</param>
+    public Task<bool> SteerAsync(string text, CancellationToken withdraw = default) => _runner.SteerAsync(text, withdraw);
 
     /// <summary>Test seam: runs in <see cref="CancelTurn"/> between cancelling the running turn and posting the command.</summary>
     internal Action? CancelSignalled { get; set; }

@@ -17,6 +17,12 @@ namespace Corvid.App.Engine.Sessions;
 /// What the log does not record stays unset rather than guessed: the generator a past turn ran on, its tokens, the
 /// outcome beyond "answered" (a replayed turn without an answer is marked failed, saying the log has none).
 /// </para>
+/// <para>
+/// A steer (K-3) is a <see cref="UserMessage"/> marked <see cref="UserMessage.Steered"/> inside the turn that took it. A
+/// clarifying question (K-6) stays open until the person's next message, which answers it
+/// (<see cref="QuestionAnswered"/> just before that message): live or replayed alike, nothing else closes it. A step (turn
+/// progress) is a <see cref="TurnProgress"/>; a running call's tail (K-2) a <see cref="ToolCallUpdate.Tail"/>.
+/// </para>
 /// </summary>
 public sealed class SessionUpdateTranslator(string workspace)
 {
@@ -28,6 +34,8 @@ public sealed class SessionUpdateTranslator(string workspace)
     // The log position of each turn's prompt, in turn order, for a compaction's range in turns.
     private readonly List<long> _turnStarts = [];
     private long _turnTokens;
+    // K-6: the question the latest clarifying turn ended on, until the next message answers it.
+    private string? _openQuestion;
 
     /// <summary>The generator a turn opened from here on starts on ("fake-gen"); empty when unknown (a replay).</summary>
     public string Model { get; set; } = "";
@@ -46,6 +54,9 @@ public sealed class SessionUpdateTranslator(string workspace)
             turn++;
         return turn;
     }
+
+    /// <summary>The open clarifying question's id (K-6): asked, and no message since. Null when none is open.</summary>
+    public string? OpenQuestion => _openQuestion;
 
     /// <summary>The latest turn's number (0 before the first).</summary>
     public int Turn { get; private set; }
@@ -86,6 +97,12 @@ public sealed class SessionUpdateTranslator(string workspace)
                 _turnStarted = at;
                 _turnTokens = 0;
                 _turnStarts.Add(prompt.Sequence);
+                // K-6: the person's next message is their answer to the open question; nothing else answers it.
+                if (_openQuestion is { } open)
+                {
+                    _openQuestion = null;
+                    output.Add(new QuestionAnswered(open, prompt.Text) { At = at });
+                }
                 output.Add(new UserMessage(prompt.Text) { Position = prompt.Sequence, At = at });
                 output.Add(new TurnStarted(Turn, Model) { At = at, MaxSteps = MaxSteps });
                 output.AddRange(_early);
@@ -94,6 +111,24 @@ public sealed class SessionUpdateTranslator(string workspace)
             case AnswerChunk chunk:
                 _answered |= chunk.Text.Length > 0;
                 output.Add(new AgentMessageChunk(chunk.Text) { At = at });
+                break;
+            // K-3: a steer the running turn took, in that turn.
+            case SteerSent steer:
+                output.Add(new UserMessage(steer.Text) { Position = steer.Sequence, Steered = true, At = at });
+                break;
+            // K-6: the question the turn ended on; it stays open past the turn's end, until the next message.
+            case QuestionRaised question:
+                _openQuestion = question.QuestionId;
+                output.Add(new QuestionAsked(question.QuestionId, question.Text)
+                {
+                    At = at,
+                    Title = QuestionTitle(question.Text),
+                    Options = question.Options.IsDefault ? [] : question.Options,
+                });
+                break;
+            // Turn progress: the step a response with tool calls began, with the turn's budget when known.
+            case TurnStepped stepped when TurnOpen:
+                output.Add(new TurnProgress(stepped.Step) { At = at, MaxSteps = stepped.MaxSteps ?? MaxSteps });
                 break;
             case ThoughtChunk thought:
                 output.Add(new AgentThoughtChunk(thought.Text) { At = at });
@@ -141,6 +176,8 @@ public sealed class SessionUpdateTranslator(string workspace)
                     Diffs = [.. changed.Diffs.Select(diff => new FileEdit(RelativePath(diff.Path), diff.OldText, diff.NewText))],
                     Locations = Relative(changed.Locations),
                     Verdict = changed.Approval is { } approval ? Verdict(approval) : null,
+                    // K-2: the running call's last lines, replacing the previous tail.
+                    Tail = changed.Tail,
                 });
                 break;
             case HostPlan plan:
@@ -166,6 +203,14 @@ public sealed class SessionUpdateTranslator(string workspace)
         if (at > _last)
             _last = at;
         return output;
+    }
+
+    /// <summary>The question in a few words for the attention tray: its first line, cut to a short title.</summary>
+    internal static string QuestionTitle(string text)
+    {
+        var line = text.ReplaceLineEndings("\n").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault() ?? "";
+        return line.Length > 60 ? line[..59].TrimEnd() + "…" : line;
     }
 
     /// <summary>Ends the live turn with its delivery's outcome; nothing when no turn is open (its message never arrived).</summary>

@@ -669,7 +669,8 @@ public sealed class CorvidSession
     /// K-3, steer now: the person's message for the running turn, taken at its next step checkpoint. True once taken; false
     /// when no turn was running or it ended first, and the caller sends the text as an ordinary message instead.
     /// </summary>
-    public Task<bool> SteerAsync(string text) => Actor.SteerAsync(text);
+    /// <param name="withdraw">Takes the steer back while it still waits (the person removed it from the queue).</param>
+    public Task<bool> SteerAsync(string text, CancellationToken withdraw = default) => Actor.SteerAsync(text, withdraw);
 
     public SessionSnapshot Snapshot() => SessionProjection.Load(_runtime.Log, Id);
 
