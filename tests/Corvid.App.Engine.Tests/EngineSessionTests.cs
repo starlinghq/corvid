@@ -199,6 +199,22 @@ public sealed class EngineSessionTests
     }
 
     [Fact]
+    public async Task TheHermesImportsStagingSessionIsNotListedAsAConversation()
+    {
+        await using var fixture = await EngineFixture.StartAsync(NotesTurn());
+        var (id, _) = await RunTurnAsync(fixture);
+        // What staging the import's facts writes to the log, in the session Memory stages them from.
+        fixture.Runtime.Log.Append(Memory.EngineMemoryService.ImportSession, 0,
+            [Corvid.Abstractions.Events.EventData.Create(new Corvid.Abstractions.Events.MemoryWritten("m-1", "stage"))], TestContext.Current.CancellationToken);
+        using var service = fixture.Sessions();
+
+        var sessions = await service.ListAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains(sessions, session => session.Id == id);
+        Assert.DoesNotContain(sessions, session => session.Id == Memory.EngineMemoryService.ImportSession);
+    }
+
+    [Fact]
     public async Task AnUnknownSessionCannotBeOpenedAndUnbuiltRequestsSayWhatBringsThem()
     {
         await using var fixture = await EngineFixture.StartAsync();
@@ -209,6 +225,8 @@ public sealed class EngineSessionTests
         var steer = await Assert.ThrowsAsync<ServiceUnavailableException>(() =>
             service.SteerAsync("cli-nowhere", "now", TestContext.Current.CancellationToken));
         Assert.StartsWith("Steering comes with K-3:", steer.Message, StringComparison.Ordinal);
+        // So the turn strip does not offer it.
+        Assert.False(((ISessionService)service).CanSteer);
         var question = await Assert.ThrowsAsync<ServiceUnavailableException>(() =>
             service.AnswerQuestionAsync("cli-nowhere", "q-1", "yes", TestContext.Current.CancellationToken));
         Assert.StartsWith("Clarifying questions come with K-6:", question.Message, StringComparison.Ordinal);

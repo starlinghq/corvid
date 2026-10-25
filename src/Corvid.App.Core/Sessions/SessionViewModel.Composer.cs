@@ -59,6 +59,12 @@ public sealed partial class SessionViewModel
         new(" interrupts", false),
     ];
 
+    /// <summary>The running hint where the service cannot steer (<see cref="ISessionService.CanSteer"/>): Enter queues.</summary>
+    private static readonly IReadOnlyList<HintPart> RunningHintWithoutSteering =
+    [
+        new("↵", true), new(" queues behind the turn · ", false), new("Esc", true), new(" interrupts", false),
+    ];
+
     private static readonly IReadOnlyList<HintPart> ApprovalHint =
     [
         new("Your draft is kept. ", false), new("↵", true), new(" focuses the card, a second ", false), new("↵", true),
@@ -138,7 +144,10 @@ public sealed partial class SessionViewModel
     /// </summary>
     public RelayCommand SubmitCommand { get; private set; } = null!;
 
-    /// <summary>Ctrl+Enter: delivered at the next step checkpoint while a turn runs (K-3); sent like Enter otherwise.</summary>
+    /// <summary>
+    /// Ctrl+Enter: delivered at the next step checkpoint while a turn runs (K-3); sent like Enter otherwise, and where the
+    /// service cannot steer (<see cref="ISessionService.CanSteer"/>).
+    /// </summary>
     public RelayCommand SteerCommand { get; private set; } = null!;
 
     /// <summary>Esc while a turn runs: interrupts it, keeping the work so far; the queue goes next.</summary>
@@ -195,7 +204,8 @@ public sealed partial class SessionViewModel
 
     private void Steer()
     {
-        if (!_state.Running || _currentApproval is not null)
+        // Without steering here, Ctrl+Enter queues as Enter does rather than asking for what the engine refuses.
+        if (!_state.Running || _currentApproval is not null || !_service.CanSteer)
         {
             Submit();
             return;
@@ -304,7 +314,9 @@ public sealed partial class SessionViewModel
     {
         TurnStripText = StripText(withTime: true);
         TurnStripStatus = StripText(withTime: false);
-        var hint = _currentApproval is not null ? ApprovalHint : _state.Running ? RunningHint : [];
+        var hint = _currentApproval is not null ? ApprovalHint
+            : _state.Running ? _service.CanSteer ? RunningHint : RunningHintWithoutSteering
+            : [];
         if (!ReferenceEquals(hint, _hint))
         {
             Hint = hint;

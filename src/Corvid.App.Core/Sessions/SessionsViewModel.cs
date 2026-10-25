@@ -38,6 +38,7 @@ public sealed class SessionsViewModel : AreaViewModel
         _selectedPanel.IsSelected = true;
         OpenRewindCommand = new RelayCommand(() => _shell.Navigate(Area.Rewind));
         NewSessionCommand = new RelayCommand(() => _hub?.StartNew(), () => CanCreateSession);
+        SendCommand = new RelayCommand(() => _session?.SubmitCommand.Execute(null), () => _session?.SubmitCommand.CanExecute(null) == true);
         if (_hub is not null)
         {
             _hub.CurrentChanged += (_, _) => Follow(_hub.Current);
@@ -69,6 +70,12 @@ public sealed class SessionsViewModel : AreaViewModel
 
     /// <summary>Starts an empty session in the window's workspace and opens it (Ctrl+N does the same).</summary>
     public RelayCommand NewSessionCommand { get; }
+
+    /// <summary>
+    /// The composer's Send buttons: the selected session's <see cref="SessionViewModel.SubmitCommand"/>, and disabled while no
+    /// session is open (a button bound to the session's own command has none to disable it then).
+    /// </summary>
+    public RelayCommand SendCommand { get; }
 
     /// <summary>What the page says while no session is open.</summary>
     public string EmptyText => CanCreateSession
@@ -130,14 +137,23 @@ public sealed class SessionsViewModel : AreaViewModel
         if (ReferenceEquals(session, _session))
             return;
         if (_session is not null)
+        {
             _session.PropertyChanged -= OnSessionChanged;
+            _session.SubmitCommand.CanExecuteChanged -= OnSubmitChanged;
+        }
         _session = session;
         if (_session is not null)
+        {
             _session.PropertyChanged += OnSessionChanged;
+            _session.SubmitCommand.CanExecuteChanged += OnSubmitChanged;
+        }
         UpdateBadges();
         OnPropertyChanged(nameof(Session));
         OnPropertyChanged(nameof(HasSession));
+        SendCommand.NotifyCanExecuteChanged();
     }
+
+    private void OnSubmitChanged(object? sender, EventArgs e) => SendCommand.NotifyCanExecuteChanged();
 
     private void OnSessionChanged(object? sender, PropertyChangedEventArgs e)
     {

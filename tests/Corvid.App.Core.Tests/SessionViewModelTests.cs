@@ -87,6 +87,26 @@ public sealed class SessionViewModelTests
     }
 
     [Fact]
+    public async Task WithoutSteeringTheStripOffersNoCtrlEnterAndCtrlEnterQueues()
+    {
+        var time = ManualTimeProvider.Demo();
+        using var demo = new DemoSessionService(new InlineDispatcher(), time, DemoScene.Main);
+        var service = new AuditViewModelTests.CapturingSessionService(demo) { Steers = false };
+        var session = new SessionViewModel(Main, service, new InlineDispatcher(), time);
+        await session.OpenAsync(TestContext.Current.CancellationToken);
+        Assert.True(session.IsRunning);
+
+        Assert.Equal("↵ queues behind the turn · Esc interrupts", string.Concat(session.Hint.Select(part => part.Text)));
+        Assert.Equal([true, false, true, false], session.Hint.Select(part => part.IsKey));
+        session.Draft = "only in ci.yml";
+        session.SteerCommand.Execute(null);
+
+        // Queued behind the turn, as Enter does; nothing asked of the steering the service refuses.
+        Assert.Empty(service.Steered);
+        Assert.Contains(session.Queue, chip => chip is { Text: "only in ci.yml", IsSteer: false });
+    }
+
+    [Fact]
     public async Task TheTurnStripComposerStatusAndPanelsAreMainPngs()
     {
         var (session, _, _) = await Open(Main);

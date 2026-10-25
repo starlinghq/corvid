@@ -31,6 +31,42 @@ public sealed class EngineNewSessionTests
     }
 
     [Fact]
+    public async Task ANewSessionsRailEntryTakesItsFirstMessageAsTheTurnStarts()
+    {
+        await using var fixture = await EngineFixture.StartAsync(new FakeModels(new FakeGenerator(Reply.Say("Hello."))));
+        using var service = fixture.Sessions();
+        var id = await service.CreateAsync(Ct);
+        await service.IdleAsync();
+        using var subscription = await service.OpenAsync(id, _ => { }, Ct);
+        var changed = new List<SessionSummary>();
+        service.SessionChanged += (_, summary) =>
+        {
+            lock (changed)
+                changed.Add(summary);
+        };
+        var posting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var go = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        service.Pause = async point =>
+        {
+            if (point != "post")
+                return;
+            posting.TrySetResult();
+            await go.Task;
+        };
+
+        var sending = service.SendAsync(id, "hello there", Ct);
+        await posting.Task.WaitAsync(Ct);
+
+        // The message is not in the log yet, but the rail already names the session by it.
+        lock (changed)
+            Assert.Contains(changed, summary => summary.Id == id && summary.Title == "hello there");
+        Assert.Contains(await service.ListAsync(Ct), summary => summary is { Title: "hello there", Turns: 0 } && summary.Id == id);
+        go.TrySetResult();
+        await sending;
+        await service.IdleAsync();
+    }
+
+    [Fact]
     public async Task TheHubListsTheNewSessionAtOnceAndOpensIt()
     {
         await using var fixture = await EngineFixture.StartAsync(new FakeModels(new FakeGenerator(Reply.Say("Hello."))));

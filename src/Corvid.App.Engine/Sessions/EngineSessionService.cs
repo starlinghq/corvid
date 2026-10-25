@@ -257,6 +257,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         return taken?.Text;
     }
 
+    /// <summary>Steering comes with K-3: the turn strip leaves Ctrl+Enter out, and it queues like Enter.</summary>
+    public bool CanSteer => false;
+
     public Task SteerAsync(string sessionId, string text, CancellationToken cancellationToken = default) =>
         Task.FromException(new ServiceUnavailableException(
             "Steering comes with K-3: a running turn cannot take a message at its next step checkpoint yet. Press Enter to queue it behind the turn."));
@@ -968,6 +971,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         (string CallId, string Tool, string? Target)? tool = running && channel.OpenCalls.Count > 0 ? channel.OpenCalls[^1] : null;
         return logged with
         {
+            // A session with no message in the log yet ("New session", or its id) is titled by the first message the window
+            // sent, while that message's turn has not begun or still runs.
+            Title = logged.Turns == 0 && view.Title is { Length: > 0 } title ? title : logged.Title,
             State = waiting ? SessionState.Waiting : running ? SessionState.Running : logged.State,
             LastActivity = view.LastActivity > logged.LastActivity ? view.LastActivity : logged.LastActivity,
             StepStarted = running ? view.ActivitySince : null,
@@ -1077,8 +1083,11 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         return end > 0 ? id[..end] : "cli";
     }
 
-    /// <summary>The conversations a person had, not the stores' own sessions (MCP pins, the gateway's delivery ledger).</summary>
-    private static bool IsConversation(string id) => id is not (McpSessions.Pins or GatewaySessions.Ledger);
+    /// <summary>
+    /// The conversations a person had, not the stores' own sessions (MCP pins, the gateway's delivery ledger, the session
+    /// Memory's Hermes import stages its facts from).
+    /// </summary>
+    private static bool IsConversation(string id) => id is not (McpSessions.Pins or GatewaySessions.Ledger or Memory.EngineMemoryService.ImportSession);
 
     // ---- Helpers ----
 
