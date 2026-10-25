@@ -176,8 +176,9 @@ public sealed record ApprovalOptions
 /// deny, then ask the user with a deadline and record <c>ApprovalRequested</c> and <c>ApprovalResolved</c>.
 /// </summary>
 /// <remarks>
-/// Only prompts are recorded as approval events; automatic runs and denials that asked nobody are the caller's to record
-/// with the tool result. The <c>risk</c> question is a <c>Decision</c> event appended by the fabric, and the user's answer
+/// A prompt is recorded as <c>ApprovalRequested</c> and <c>ApprovalResolved</c>; a tool call's automatic run or a denial
+/// that asked nobody as one <c>ApprovalAssessed</c> (G-2), with the rule, mode and <c>risk</c> answer that decided it. The
+/// call's result is the caller's to record. The <c>risk</c> question is a <c>Decision</c> event appended by the fabric, and the user's answer
 /// is recorded as its outcome, which is the calibration data the degraded tier exists to collect.
 /// </remarks>
 public sealed class ApprovalPipeline
@@ -216,7 +217,25 @@ public sealed class ApprovalPipeline
 
     public ApprovalEnvironment Environment { get; }
 
-    public ApprovalOptions Options { get; }
+    public ApprovalOptions Options { get => Volatile.Read(ref _options); private init => _options = value; }
+
+    private ApprovalOptions _options = ApprovalOptions.Default;
+
+    /// <summary>
+    /// Changes how long an unanswered prompt waits before it is denied, from the next prompt on (a prompt already waiting keeps
+    /// its deadline): Settings applies <c>Corvid:Approvals:TimeoutSeconds</c> to a running runtime this way.
+    /// </summary>
+    public void SetTimeout(TimeSpan timeout)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
+        ApprovalOptions current, next;
+        do
+        {
+            current = Volatile.Read(ref _options);
+            next = current with { Timeout = timeout };
+        }
+        while (!ReferenceEquals(Interlocked.CompareExchange(ref _options, next, current), current));
+    }
 
     public ImmutableArray<ApprovalRule> SessionRules(string sessionId) =>
         _session.TryGetValue(sessionId, out var rules) ? rules : [];
@@ -339,19 +358,26 @@ public sealed class ApprovalPipeline
         switch (assessment.Outcome)
         {
             case ApprovalOutcome.Auto:
-                return new(true, assessment.Rule is null ? ApprovalResolution.Automatic : ApprovalResolution.RuleAllowed, assessment, null, null);
+                var allowed = assessment.Rule is null ? ApprovalResolution.Automatic : ApprovalResolution.RuleAllowed;
+                Assessed(context, assessment, allowed);
+                return new(true, allowed, assessment, null, null);
             case ApprovalOutcome.Deny:
-                return new(false, assessment.Hardline ? ApprovalResolution.Hardline : ApprovalResolution.RuleDenied, assessment, null, null);
+                var denied = assessment.Hardline ? ApprovalResolution.Hardline : ApprovalResolution.RuleDenied;
+                Assessed(context, assessment, denied);
+                return new(false, denied, assessment, null, null);
         }
 
         if (_prompter is null || !context.Interactive)
         {
             RecordOutcome(context, assessment, "no_approver");
+            Assessed(context, assessment, ApprovalResolution.NoApprover);
             return new(false, ApprovalResolution.NoApprover, assessment, null, null);
         }
 
         var approvalId = Guid.NewGuid().ToString("N");
-        var deadline = _time.GetUtcNow() + Options.Timeout;
+        // Read once: a deadline changed while this prompt waits (SetTimeout) applies from the next prompt.
+        var wait = Options.Timeout;
+        var deadline = _time.GetUtcNow() + wait;
         Append(context.SessionId, new ApprovalRequested(approvalId,
             ActionDocuments.Json(assessment.Analysis, context.Tainted, context.Reversible), assessment.Summary, context.CallId), cancellationToken);
 
@@ -365,12 +391,12 @@ public sealed class ApprovalPipeline
         {
             try
             {
-                answer = await _prompter.AskAsync(prompt, timeout.Token).AsTask().WaitAsync(Options.Timeout, _time, cancellationToken);
+                answer = await _prompter.AskAsync(prompt, timeout.Token).AsTask().WaitAsync(wait, _time, cancellationToken);
             }
             catch (TimeoutException)
             {
                 await timeout.CancelAsync();
-                return Resolve(context, assessment, approvalId, ApprovalResolution.TimedOut, "timeout: unanswered after " + Options.Timeout);
+                return Resolve(context, assessment, approvalId, ApprovalResolution.TimedOut, "timeout: unanswered after " + wait);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -498,6 +524,50 @@ public sealed class ApprovalPipeline
             _ => "approval_failed",
         });
         return new ApprovalResult(approved, resolution, assessment, approvalId, null);
+    }
+
+    /// <summary>
+    /// Records why a tool call ran, or was refused, without asking anyone (G-2): an <see cref="ApprovalAssessed"/> event with
+    /// the resolution, the mode, the reasons, the rule that decided and the <c>risk</c> answer, so a surface can say "ran
+    /// unasked in smart mode, risk 1 (0.93)" live and on replay. Only for a tool call (a job's pre-run script has none).
+    /// </summary>
+    private void Assessed(ApprovalContext context, ApprovalAssessment assessment, ApprovalResolution resolution)
+    {
+        if (context.CallId is not { } callId)
+            return;
+        var rule = assessment.Rule;
+        var scope = rule is null ? null : SessionRules(context.SessionId).Contains(rule) ? "session" : "always";
+        var analysis = assessment.Analysis;
+        Append(context.SessionId, new ApprovalAssessed(callId, resolution switch
+            {
+                ApprovalResolution.RuleAllowed => ApprovalResolutions.RuleAllowed,
+                ApprovalResolution.RuleDenied => ApprovalResolutions.RuleDenied,
+                ApprovalResolution.Hardline => ApprovalResolutions.Hardline,
+                ApprovalResolution.NoApprover => ApprovalResolutions.NoApprover,
+                _ => ApprovalResolutions.Automatic,
+            },
+            context.Mode.ToString().ToLowerInvariant(),
+            [.. assessment.Reasons.Select(reason => new AssessmentReason(reason.Code, reason.Detail))],
+            rule?.Describe(), scope, Risk(assessment.Risk), [.. WireNames.Effects(analysis.Effects)], Contained(analysis)),
+            CancellationToken.None);
+    }
+
+    /// <summary>The <c>risk</c> decision as an assessment records it; its level and confidence only when a decider answered.</summary>
+    private AssessedRisk? Risk(FabricVerdict? risk)
+    {
+        if (risk is null)
+            return null;
+        var options = _fabric.Policy.Catalogue["risk"].Options;
+        var index = -1;
+        for (var i = 0; i < options.Length && risk.Verdict.Option is { } option; i++)
+            if (options[i].Name == option)
+                index = i;
+        return new AssessedRisk(risk.DecisionId, risk.Verdict.Action,
+            Level: index >= 0 && !risk.Skipped ? index : null,
+            Option: risk.Skipped ? null : risk.Verdict.Option,
+            Confidence: risk.Skipped ? null : risk.Answer?.Confidence,
+            Calibrated: risk.Skipped ? null : risk.Answer?.Calibrated,
+            Decider: risk.Decider);
     }
 
     private void RecordOutcome(ApprovalContext context, ApprovalAssessment assessment, string outcome)
@@ -636,14 +706,17 @@ public sealed class ApprovalPipeline
     private static bool SmartEligible(ActionAnalysis analysis, ProposedAction action)
     {
         var destructive = action is ToolAction { Tool.Risk.Destructive: true };
-        var contained = analysis.Targets.All(target => target.Kind != TargetKind.Path
-            || target.Location == PathLocation.Inside
-            || target.Location == PathLocation.WorkspaceRoot && target.Access is not TargetAccess.Delete);
+        var contained = Contained(analysis);
         var effects = analysis.Effects;
         return contained && !destructive
             && !effects.HasFlag(ActionEffects.Network) && !effects.HasFlag(ActionEffects.Elevated)
             && !effects.HasFlag(ActionEffects.System);
     }
+
+    /// <summary>Every path the action touches is in the workspace, and none is a delete at its root.</summary>
+    private static bool Contained(ActionAnalysis analysis) => analysis.Targets.All(target => target.Kind != TargetKind.Path
+        || target.Location == PathLocation.Inside
+        || target.Location == PathLocation.WorkspaceRoot && target.Access is not TargetAccess.Delete);
 
     /// <summary>Reasons that make an action ask whatever its score, mode or remembered rules (and offer only "once").</summary>
     private ImmutableArray<ApprovalReason> Forced(ActionAnalysis analysis, ProposedAction action, ApprovalContext context)

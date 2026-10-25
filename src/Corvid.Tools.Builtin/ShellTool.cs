@@ -119,13 +119,15 @@ public sealed class SandboxedShell
     /// (<see cref="ShellEgress.MayRoute"/>); otherwise none, reported as withheld. The proxy is opened with the turn's
     /// taint, so Vault's own tainted rules apply too, and closed when the command ends.
     /// </summary>
+    /// <param name="output">K-2: told the command's output as it arrives (<see cref="SandboxCommand.Output"/>).</param>
     /// <exception cref="SandboxRefusedException">The sandbox could not be set up, or the route was due and Vault could not
     /// open it; nothing ran. There is no fallback to the host network or to running offline.</exception>
-    public async Task<ShellRun> RunAsync(string command, ShellEgress egress, CancellationToken cancellationToken = default)
+    public async Task<ShellRun> RunAsync(string command, ShellEgress egress, CancellationToken cancellationToken = default,
+        Action<string>? output = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
         ArgumentNullException.ThrowIfNull(egress);
-        var shellCommand = new SandboxCommand(Options.ShellPath, "-c", command);
+        var shellCommand = new SandboxCommand(Options.ShellPath, "-c", command) { Output = output };
         if (!Options.Network)
             return new ShellRun(await SandboxedAsync(Policy, shellCommand, cancellationToken).ConfigureAwait(false), null);
 
@@ -223,8 +225,9 @@ public sealed partial class ShellTool(SandboxedShell shell)
         if (context.Approval is not ApprovalResult { Allowed: true, Assessment.Analysis: { Kind: "shell" } analysis } || analysis.Text != command)
             throw new InvalidOperationException("The shell runs a command only after the approval pipeline has allowed exactly that command line.");
 
-        var run = await _shell.RunAsync(command, new ShellEgress(context.SessionId, context.Tainted, (ApprovalResult)context.Approval), cancellationToken)
-            .ConfigureAwait(false);
+        // K-2: the command's output reaches a watching surface as it runs; the result below is unchanged.
+        var run = await _shell.RunAsync(command, new ShellEgress(context.SessionId, context.Tainted, (ApprovalResult)context.Approval), cancellationToken,
+            context.Output).ConfigureAwait(false);
         // HTTPS through Vault's proxy can bring anything back, and the shell is not a [Network] tool: the turn loop taints the
         // session only because the result says so (plan §10.3). A withheld or network-off command reached nothing outside.
         if (run.Network == ShellTelemetry.RouteVault)

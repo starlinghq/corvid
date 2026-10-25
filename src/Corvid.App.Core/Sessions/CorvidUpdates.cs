@@ -163,7 +163,7 @@ public sealed record SessionRewound(int Turn, RewindScope Scope, string Reason) 
 
     /// <summary>
     /// With <see cref="FromCallId"/>: what the kept turn's header says when nothing of its answer is left, as a replay of the
-    /// log marks such a turn failed. Null leaves the header as it was.
+    /// log marks such a turn interrupted. Null leaves the header as it was.
     /// </summary>
     public string? UnansweredError { get; init; }
 
@@ -199,6 +199,12 @@ public sealed record EngineStatus : SessionUpdate
 {
     public GeneratorStatus? Generator { get; init; }
 
+    /// <summary>
+    /// The generator the session's next turn starts on ("qwen3.5-0.8b"), when the engine knows no more of it than the name:
+    /// the status bar's model before a turn runs. <see cref="Generator"/> wins when both are set.
+    /// </summary>
+    public string? Model { get; init; }
+
     /// <summary>The decider tier ("Kev-0.8B, calibrated"; "degraded tier").</summary>
     public string? Decider { get; init; }
 
@@ -218,7 +224,8 @@ public sealed record EngineStatus : SessionUpdate
 
 /// <summary>
 /// A clarifying question (<c>_corvid/question</c>): options as buttons and a free-text answer, pinned until answered.
-/// Needs K-6: a structured question for <c>Clarifying</c> turns rather than one inferred from the status.
+/// K-6: the log's <c>ClarificationAsked</c>, the structured question a <c>Clarifying</c> turn ended on (the decider's
+/// clarify, or the generator's <c>ask_user</c> with its options). Nothing answers it but the person's next message.
 /// </summary>
 public sealed record QuestionAsked(string QuestionId, string Text) : SessionUpdate
 {
@@ -277,6 +284,8 @@ public enum NoticeKind
     Decider,
     /// <summary>The approval mode changed (the confirmation row).</summary>
     Mode,
+    /// <summary>A recap the local generator wrote (G-6): the text is its heading, the detail its lines.</summary>
+    Recap,
 }
 
 /// <summary>

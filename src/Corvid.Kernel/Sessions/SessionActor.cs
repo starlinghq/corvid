@@ -73,6 +73,14 @@ public sealed class SessionActor : IAsyncDisposable
     /// </summary>
     public bool TurnRunning => Volatile.Read(ref _turnCancellation) is not null;
 
+    /// <summary>
+    /// Nothing of the session is running or waiting here: no turn, no queued message, no exclusive work (a restore). A
+    /// snapshot, for a surface deciding whether it may let go of the session.
+    /// </summary>
+    public bool IsIdle => !TurnRunning && _capacity.CurrentCount == _options.MaxPendingMessages && Volatile.Read(ref _exclusiveWork) == 0;
+
+    private int _exclusiveWork;
+
     /// <summary>Queues a message. Waits while the session already holds <see cref="SessionActorOptions.MaxPendingMessages"/>.</summary>
     public async ValueTask SubmitAsync(Envelope envelope, CancellationToken cancellationToken = default)
     {
@@ -116,6 +124,15 @@ public sealed class SessionActor : IAsyncDisposable
         _commands.Writer.TryWrite(new CancelRunning(target));
     }
 
+    /// <summary>
+    /// K-3, steer now: a message from the user for the running turn, taken at its next step checkpoint
+    /// (<see cref="TurnRunner.SteerAsync"/>). Completes true when the turn took it, false when no turn was running or the turn
+    /// ended first; the caller then sends it as an ordinary message, so it is never lost. It does not wait for queued messages
+    /// and is not one: the actor's queue and backpressure are untouched.
+    /// </summary>
+    /// <param name="withdraw">Takes the steer back while it still waits (<see cref="TurnRunner.SteerAsync"/>).</param>
+    public Task<bool> SteerAsync(string text, CancellationToken withdraw = default) => _runner.SteerAsync(text, withdraw);
+
     /// <summary>Test seam: runs in <see cref="CancelTurn"/> between cancelling the running turn and posting the command.</summary>
     internal Action? CancelSignalled { get; set; }
 
@@ -140,11 +157,25 @@ public sealed class SessionActor : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(work);
         var command = new Exclusive(async token => await work(token).ConfigureAwait(false), cancellationToken);
+        Interlocked.Increment(ref _exclusiveWork);
         if (!_commands.Writer.TryWrite(command))
+        {
+            Interlocked.Decrement(ref _exclusiveWork);
             throw new ObjectDisposedException(nameof(SessionActor));
+        }
         return Typed();
 
-        async Task<T> Typed() => (T)(await command.Completion.Task.ConfigureAwait(false))!;
+        async Task<T> Typed()
+        {
+            try
+            {
+                return (T)(await command.Completion.Task.ConfigureAwait(false))!;
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _exclusiveWork);
+            }
+        }
     }
 
     /// <summary>Completes when every queued message has been answered.</summary>

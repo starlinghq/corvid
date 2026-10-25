@@ -2,6 +2,7 @@ using Corvid.Abstractions.Extraction;
 using Corvid.Abstractions.Fabric;
 using Corvid.Abstractions.Tokens;
 using Corvid.Fabric;
+using Corvid.Host.Audit;
 using Corvid.Host.Configuration;
 using Corvid.Host.Models;
 using Corvid.Host.Telemetry;
@@ -51,7 +52,14 @@ public sealed class ModelComposer : IDisposable
         _devices = devices;
         _metrics = metrics;
         _feed = feed;
+        Ledger = new EgressLedger(CorvidPaths.EgressDatabase(options)) { Retention = options.Privacy.Ledger.Retention() };
     }
+
+    /// <summary>
+    /// The egress ledger (G-9) every gated binding records its requests in; its <see cref="EgressLedger.Log"/> is set once the
+    /// runtime has opened the event log (no session sends anything before that).
+    /// </summary>
+    public EgressLedger Ledger { get; }
 
     /// <summary>Told each model load as it begins and ends, while set (by <see cref="CorvidRuntimeFactory"/> during a start).</summary>
     public IProgress<StartupStep>? Progress { get; set; }
@@ -289,8 +297,10 @@ public sealed class ModelComposer : IDisposable
         }
     }
 
-    private IChatClient Gate(IChatClient chat, ModelProfile profile) =>
-        PolicyFor(profile) is null ? new ModelRequestScopeChatClient(chat) : new PrivacyEgressChatClient(chat, profile, Egress);
+    // A remote profile's placement is its endpoint's authority (RemoteModelProvider), which is where the requests go.
+    private IChatClient Gate(IChatClient chat, ModelProfile profile, string slot) =>
+        PolicyFor(profile) is null ? new ModelRequestScopeChatClient(chat) : new PrivacyEgressChatClient(chat, profile, Egress,
+            Ledger.For(slot, profile.Placement, _remoteByProfile.GetValueOrDefault(profile.Id)?.Secret));
 
     private object Wrap(string slot, ModelBinding raw, DevicePriority priority, TurnFeed? stream)
     {
@@ -299,7 +309,7 @@ public sealed class ModelComposer : IDisposable
         var latency = _metrics.For(slot, profile.Id);
         return raw.Service switch
         {
-            IChatClient chat => new InstrumentedChatClient(Gate(device is null ? chat : chat.Schedule(device, priority), profile), profile, slot,
+            IChatClient chat => new InstrumentedChatClient(Gate(device is null ? chat : chat.Schedule(device, priority), profile, slot), profile, slot,
                 latency, stream),
             IEmbeddingGenerator<string, Embedding<float>> embedder =>
                 new InstrumentedEmbeddingGenerator(device is null ? embedder : embedder.Schedule(device, priority), latency),

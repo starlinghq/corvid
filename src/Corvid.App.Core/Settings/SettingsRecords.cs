@@ -33,6 +33,9 @@ public enum SettingApplies
 
     /// <summary>Read when the host starts (models, devices, the listener, paths): after a restart.</summary>
     Restart,
+
+    /// <summary>In sessions opened from now on; a session already open keeps what it was opened with (A4, the engine's step budget).</summary>
+    NewSessions,
 }
 
 /// <summary>Where a setting lives.</summary>

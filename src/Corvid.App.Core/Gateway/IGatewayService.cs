@@ -3,8 +3,8 @@ namespace Corvid.App.Core.Gateway;
 /// <summary>
 /// The Gateway area's seam to the engine (docs/plan/ui.md §4.10, F16, G-14): the channel adapters and their state, pairing
 /// requests approved here as guest or owner (never from a chat), paired users with their guest tool allowlists and revoke,
-/// deliveries waiting, and per-chat overrides. The demo implements it now; <c>Corvid.App.Engine</c> will over the gateway
-/// it hosts or the status API of the process that does.
+/// deliveries waiting, and per-chat overrides. The demo implements it; <c>Corvid.App.Engine</c> does over the gateway it
+/// hosts, or the lock's note of the process that does (the host's status API).
 /// </summary>
 public interface IGatewayService
 {

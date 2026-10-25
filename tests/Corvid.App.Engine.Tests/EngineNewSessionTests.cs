@@ -31,6 +31,42 @@ public sealed class EngineNewSessionTests
     }
 
     [Fact]
+    public async Task ANewSessionsRailEntryTakesItsFirstMessageAsTheTurnStarts()
+    {
+        await using var fixture = await EngineFixture.StartAsync(new FakeModels(new FakeGenerator(Reply.Say("Hello."))));
+        using var service = fixture.Sessions();
+        var id = await service.CreateAsync(Ct);
+        await service.IdleAsync();
+        using var subscription = await service.OpenAsync(id, _ => { }, Ct);
+        var changed = new List<SessionSummary>();
+        service.SessionChanged += (_, summary) =>
+        {
+            lock (changed)
+                changed.Add(summary);
+        };
+        var posting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var go = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        service.Pause = async point =>
+        {
+            if (point != "post")
+                return;
+            posting.TrySetResult();
+            await go.Task;
+        };
+
+        var sending = service.SendAsync(id, "hello there", Ct);
+        await posting.Task.WaitAsync(Ct);
+
+        // The message is not in the log yet, but the rail already names the session by it.
+        lock (changed)
+            Assert.Contains(changed, summary => summary.Id == id && summary.Title == "hello there");
+        Assert.Contains(await service.ListAsync(Ct), summary => summary is { Title: "hello there", Turns: 0 } && summary.Id == id);
+        go.TrySetResult();
+        await sending;
+        await service.IdleAsync();
+    }
+
+    [Fact]
     public async Task TheHubListsTheNewSessionAtOnceAndOpensIt()
     {
         await using var fixture = await EngineFixture.StartAsync(new FakeModels(new FakeGenerator(Reply.Say("Hello."))));
@@ -53,6 +89,36 @@ public sealed class EngineNewSessionTests
         // The service's own summary of it, when it reaches the UI thread, keeps it listed and open.
         ui.RunAll();
         Assert.Equal((id, "New session"), (shell.CurrentSession?.Id, shell.CurrentSession?.Title));
+    }
+
+    /// <summary>
+    /// A4V2-2: Ctrl+N's new session asks for the composer once the page has drawn it, and a page that attaches later (one
+    /// opened from the Board) still finds the request waiting, so typing goes into the composer rather than the page's keys.
+    /// </summary>
+    [Fact]
+    public async Task ANewSessionAsksForTheComposerAfterThePageHasDrawnIt()
+    {
+        await using var fixture = await EngineFixture.StartAsync(new FakeModels(new FakeGenerator(Reply.Say("Hello."))));
+        using var service = fixture.Sessions(new UiQueue());
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar);
+        var ui = new UiQueue();
+        using var hub = new SessionHub(service, ui, fixture.Time, shell, bar);
+        await hub.StartAsync(null, null, Ct);
+
+        var id = await hub.CreateAsync(Ct);
+        var session = hub.Current!;
+        var asked = new List<SessionFocusTarget>();
+        session.FocusRequested += (_, target) => asked.Add(target);
+        Assert.Empty(asked);
+
+        ui.RunAll();
+
+        Assert.Equal([SessionFocusTarget.Composer], asked);
+        // No page took it here: the next page to attach does, once.
+        Assert.True(session.TakeComposerFocusRequest());
+        Assert.False(session.TakeComposerFocusRequest());
+        Assert.Equal(id, session.SessionId);
     }
 
     /// <summary>A UI thread that is elsewhere: posts from any thread queue until the test runs them.</summary>

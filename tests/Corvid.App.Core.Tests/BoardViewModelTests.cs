@@ -488,6 +488,19 @@ public sealed class BoardViewModelTests
     }
 
     [Fact]
+    public void AnIdleCardsRelativeTimeMovesOnWithTheClock()
+    {
+        // A4V3-4: an idle card (one whose holder exited among them) kept the time it last read.
+        var rig = Start(DemoScene.Main);
+        var card = Card(rig, "cli-77b0");
+        Assert.Equal("last activity 1 h ago", Text(card.StateDetail));
+
+        rig.Time.Advance(TimeSpan.FromHours(2));
+
+        Assert.Equal("last activity 3 h ago", Text(card.StateDetail));
+    }
+
+    [Fact]
     public void TheTimeOnTheStepFollowsTheClock()
     {
         var rig = Start(DemoScene.Main);

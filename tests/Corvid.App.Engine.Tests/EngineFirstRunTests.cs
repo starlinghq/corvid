@@ -153,7 +153,11 @@ public sealed class EngineFirstRunTests : IDisposable
         using var service = Service(fixture);
         var path = Path.Combine(fixture.Host.Root, "corvid.json");
         // Nothing configured: the setup's choices are written as chosen, with no "configured now" to change from.
-        Assert.Equal(CurrentSetup.None, await service.CurrentAsync(Token));
+        var none = await service.CurrentAsync(Token);
+        Assert.Null(none.Mode);
+        Assert.Null(none.Posture);
+        // The test host's own settings place the workspace over corvid.json, as --set does; nothing overrides the mode or posture.
+        Assert.Equal((null, null, Path.Combine(fixture.Host.Root, "work")), (none.ModeOverride, none.PostureOverride, none.WorkspaceOverride));
         const string configured = """
             {
               // chosen with care
@@ -162,7 +166,8 @@ public sealed class EngineFirstRunTests : IDisposable
             """;
         await File.WriteAllTextAsync(path, configured, Token);
 
-        Assert.Equal(new CurrentSetup(ApprovalMode.Manual, "local only"), await service.CurrentAsync(Token));
+        var current = await service.CurrentAsync(Token);
+        Assert.Equal((ApprovalMode.Manual, "local only"), (current.Mode, current.Posture));
         var bar = new StatusBarViewModel();
         var shell = new ShellViewModel(bar);
         shell.Navigate(Area.FirstRun);
@@ -177,6 +182,26 @@ public sealed class EngineFirstRunTests : IDisposable
         var json = JsonNode.Parse(file, documentOptions: new System.Text.Json.JsonDocumentOptions { CommentHandling = System.Text.Json.JsonCommentHandling.Skip })!;
         Assert.Equal("Manual", (string?)json["Corvid"]!["Approvals"]!["Mode"]);
         Assert.Equal("Refuse", (string?)json["Corvid"]!["Privacy"]!["Cloud"]);
+    }
+
+    [Fact]
+    public async Task AChoiceThisRunsEnvironmentOverridesIsWrittenAndThePageSaysTheOverrideWins()
+    {
+        await using var fixture = await EngineFixture.StartAsync(null, new Dictionary<string, string?> { ["Corvid:Approvals:Mode"] = "Manual" });
+        using var service = Service(fixture);
+
+        var current = await service.CurrentAsync(Token);
+
+        Assert.Equal(("Manual", (string?)null), (current.ModeOverride, current.PostureOverride));
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar);
+        shell.Navigate(Area.FirstRun);
+        var firstRun = new FirstRunViewModel(service, new Corvid.App.Core.Models.DemoModelService(new InlineDispatcher(), fixture.Time,
+            Corvid.App.Core.Models.DemoModelScene.FirstRun), shell, bar, isSetup: true);
+        await WaitForAsync(firstRun, () => firstRun.Mode == ApprovalMode.Manual && firstRun.WorkspaceNote.Count > 0);
+        Assert.Contains("This run's environment or --set sets the approval mode to Manual", firstRun.ModeChange, StringComparison.Ordinal);
+        Assert.Equal("", firstRun.PostureChange);
+        Assert.Contains("sets the workspace to", string.Concat(firstRun.WorkspaceNote.Select(run => run.Text)), StringComparison.Ordinal);
     }
 
     [Fact]

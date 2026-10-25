@@ -31,15 +31,30 @@ public sealed class SessionUpdateReporter : ITurnObserver
     private readonly Dictionary<string, ToolResult> _results = new(StringComparer.Ordinal);
     private readonly Dictionary<string, CheckpointTaken> _before = new(StringComparer.Ordinal);
     private readonly Dictionary<string, CheckpointTaken> _after = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ApprovalAssessed> _assessed = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _asked = new(StringComparer.Ordinal);
     private readonly List<SessionStreamUpdate> _fromLog = [];
+    // K-2: each running call's latest tail not yet reported, the calls with a report queued, and the calls that finished.
+    private readonly Dictionary<string, (string Tool, string Tail)> _tails = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _tailDue = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _finished = new(StringComparer.Ordinal);
     private Task _chain = Task.CompletedTask;
     private long _read;
+    private readonly Func<bool>? _tainted;
+    // The chain's own: the taint last reported, and what the step being run says brought it in.
+    private bool? _taintReported;
+    private string? _taintSource;
 
     /// <param name="head">The log position the turn starts from: only later events are the turn's.</param>
     /// <param name="emit">Called with each update, one at a time and in order, on a pool thread.</param>
     /// <param name="log">Told why a report could not be built (a checkpoint the store cannot read); it never fails the turn.</param>
+    /// <param name="tainted">
+    /// The session's taint, for a surface that shows it: read as each report is queued, so in order with the turn rather than
+    /// when the chain gets to it, and reported as <see cref="TaintNoted"/> after the update it came with when it changed. A
+    /// call's result that brought outside content in names it as the source.
+    /// </param>
     public SessionUpdateReporter(CorvidRuntime runtime, string sessionId, ToolPresentation tools, long head, Action<SessionStreamUpdate> emit,
-        Action<string>? log = null, TimeProvider? time = null)
+        Action<string>? log = null, TimeProvider? time = null, Func<bool>? tainted = null)
     {
         ArgumentNullException.ThrowIfNull(runtime);
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
@@ -52,6 +67,7 @@ public sealed class SessionUpdateReporter : ITurnObserver
         _emit = emit;
         _log = log;
         _time = time ?? TimeProvider.System;
+        _tainted = tainted;
     }
 
     /// <summary>Text the generator streamed in its latest call; the delivered answer is compared with it, so nothing is sent twice.</summary>
@@ -90,9 +106,15 @@ public sealed class SessionUpdateReporter : ITurnObserver
 
     public void ToolFinished(string callId, string tool, string outcome, TimeSpan elapsed) => Then(async () =>
     {
+        // A tail still queued for the call is stale now: the finished call brings its result.
+        lock (_gate)
+        {
+            _finished.Add(callId);
+            _tails.Remove(callId);
+        }
         Announce(callId, tool, approval: false);
-        var (call, result, before, after) = ReadNew(() => (_calls.GetValueOrDefault(callId), _results.GetValueOrDefault(callId),
-            _before.GetValueOrDefault(callId), _after.GetValueOrDefault(callId)));
+        var (call, result, before, after, assessed, asked) = ReadNew(() => (_calls.GetValueOrDefault(callId), _results.GetValueOrDefault(callId),
+            _before.GetValueOrDefault(callId), _after.GetValueOrDefault(callId), _assessed.GetValueOrDefault(callId), _asked.Contains(callId)));
         FlushLog();
         IReadOnlyList<FileDiff> diffs = [];
         if (before is not null && after is { Paths: { Length: > 0 } paths })
@@ -110,8 +132,59 @@ public sealed class SessionUpdateReporter : ITurnObserver
             Locations = _tools.Locations(call?.Arguments),
             Diffs = [.. diffs],
             Elapsed = elapsed,
+            Assessment = assessed,
+            // A read-only call that was asked (a network read in a tainted turn) is the prompter's to close.
+            ReadOnly = asked ? null : call?.ReadOnly,
+            CheckpointBefore = before?.CheckpointId,
         });
+        // The kernel taints the session as the call's result comes in, before the call ends: this call brought it in.
+        _taintSource = $"{tool} {ToolPresentation.Target(call?.Arguments)}".Trim();
     });
+
+    /// <summary>
+    /// The turn began a step: <see cref="TurnStepped"/>, after what the log holds so far (the steers the step checkpoint took
+    /// before it, the previous step's calls).
+    /// </summary>
+    public void Progress(int step, int maxSteps) => Then(() =>
+    {
+        CatchUp();
+        Emit(new TurnStepped(step, maxSteps));
+    });
+
+    /// <summary>
+    /// K-2: a running call's tail, as <see cref="ToolCallChanged"/> with <see cref="ToolCallChanged.Tail"/> (the call announced
+    /// first). Tails that arrive while one is queued replace it, so a chatty command adds at most one queued report per call
+    /// and the surface sees the latest; none after the call finished.
+    /// </summary>
+    public void ToolOutput(string callId, string tool, string tail)
+    {
+        lock (_gate)
+        {
+            if (_finished.Contains(callId))
+                return;
+            _tails[callId] = (tool, tail);
+            if (!_tailDue.Add(callId))
+                return;
+        }
+        Then(() =>
+        {
+            (string Tool, string Tail) latest;
+            lock (_gate)
+            {
+                _tailDue.Remove(callId);
+                if (_finished.Contains(callId) || !_tails.Remove(callId, out latest))
+                    return;
+            }
+            Announce(callId, latest.Tool, approval: false);
+            Emit(new ToolCallChanged(callId)
+            {
+                Tool = latest.Tool,
+                Kind = _tools.Kind(latest.Tool),
+                Status = ToolCallState.InProgress,
+                Tail = latest.Tail,
+            });
+        });
+    }
 
     public void Decided(CheckpointDecisions decisions) => Then(() =>
     {
@@ -200,6 +273,10 @@ public sealed class SessionUpdateReporter : ITurnObserver
     private void Then(Func<Task> step)
     {
         lock (_gate)
+        {
+            // Read now, as the feed calls in: the chain may run this step after the turn has moved on (a busy machine), and the
+            // session's taint then would be a later call's, or the next message's.
+            var tainted = _tainted?.Invoke();
             _chain = _chain.ContinueWith(async _ =>
             {
                 try
@@ -211,7 +288,29 @@ public sealed class SessionUpdateReporter : ITurnObserver
                     // A report that cannot be built (a checkpoint the store cannot read) must not fail the turn.
                     _log?.Invoke(exception.Message);
                 }
+                try
+                {
+                    NoteTaint(tainted);
+                }
+                catch (Exception exception) when (exception is not OutOfMemoryException)
+                {
+                    _log?.Invoke(exception.Message);
+                }
             }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
+        }
+    }
+
+    /// <summary>After a step: the taint read when it was queued, reported when it changed, with the source the step named.</summary>
+    private void NoteTaint(bool? tainted)
+    {
+        if (tainted is not { } now || now == _taintReported)
+            return;
+        // The source is the last call that finished, kept until a taint is reported: the session can turn tainted just after
+        // that call's step was queued, so the taint is read with the next step (the answer's text), which names no call.
+        var source = _taintSource;
+        _taintSource = null;
+        _taintReported = now;
+        Emit(new TaintNoted(now, now ? source : null));
     }
 
     private T ReadNew<T>(Func<T> pick)
@@ -229,7 +328,17 @@ public sealed class SessionUpdateReporter : ITurnObserver
                     switch (item.Payload)
                     {
                         case UserMessage user:
-                            _fromLog.Add(new PromptSent(user.Text, item.Sequence) { At = item.RecordedAt });
+                            _fromLog.Add(new PromptSent(user.Text, item.Sequence) { At = item.RecordedAt, From = user.From });
+                            break;
+                        // K-3: a steer the step checkpoint took; K-6: the question a clarifying turn ended on.
+                        case UserSteered steer:
+                            _fromLog.Add(new SteerSent(steer.Text, item.Sequence) { At = item.RecordedAt });
+                            break;
+                        case ClarificationAsked question:
+                            _fromLog.Add(new QuestionRaised(question.QuestionId, question.Text, question.Options.IsDefault ? [] : question.Options)
+                            {
+                                At = item.RecordedAt,
+                            });
                             break;
                         case TodosSet todos:
                             _fromLog.Add(new PlanChanged(todos.Items) { At = item.RecordedAt });
@@ -239,6 +348,12 @@ public sealed class SessionUpdateReporter : ITurnObserver
                             break;
                         case ToolResult result:
                             _results[result.CallId] = result;
+                            break;
+                        case ApprovalAssessed assessed:
+                            _assessed[assessed.CallId] = assessed;
+                            break;
+                        case ApprovalRequested { CallId: { } askedFor }:
+                            _asked.Add(askedFor);
                             break;
                         case CheckpointTaken taken:
                             if (taken is { CallId: { } before, Kind: CheckpointKinds.Before })

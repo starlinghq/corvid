@@ -64,7 +64,7 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
         SetGoalCommand = new RelayCommand<string>(goal => Run(() => _service.SetGoalAsync(SessionId, goal)), _ => !IsReadOnly);
         ClearGoalCommand = new RelayCommand(() => Run(() => _service.SetGoalAsync(SessionId, null)), () => !IsReadOnly && HasGoal);
         CompactCommand = new RelayCommand<string>(focus => Run(() => _service.CompactAsync(SessionId, string.IsNullOrWhiteSpace(focus) ? null : focus.Trim())), _ => !IsReadOnly && !IsRunning);
-        RenameCommand = new RelayCommand<string>(title => Run(() => _service.RenameAsync(SessionId, title.Trim())), title => !string.IsNullOrWhiteSpace(title));
+        RenameCommand = new RelayCommand<string>(title => Run(() => _service.RenameAsync(SessionId, title.Trim())), title => !IsReadOnly && !string.IsNullOrWhiteSpace(title));
         ForkCommand = new RelayCommand<UserMessageBlock>(block => Fork(block.Position), block => block is not null);
         SetModeCommand = new RelayCommand<ApprovalMode>(mode => Run(() => _service.SetApprovalModeAsync(SessionId, mode)), _ => !IsReadOnly);
         InitializeComposer();
@@ -73,8 +73,26 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
 
     public string SessionId { get; }
 
-    /// <summary>Asks the page to put the caret in the composer (a prompt from the history was put there).</summary>
-    public void RequestComposerFocus() => FocusRequested?.Invoke(this, SessionFocusTarget.Composer);
+    /// <summary>
+    /// Asks the page to put the caret in the composer (a prompt from the history was put there, a new session opened). The
+    /// request is kept until a page takes it (<see cref="TakeComposerFocusRequest"/>), so one made before the page that shows
+    /// the session has loaded is taken when it attaches.
+    /// </summary>
+    public void RequestComposerFocus()
+    {
+        _composerFocusWanted = true;
+        FocusRequested?.Invoke(this, SessionFocusTarget.Composer);
+    }
+
+    /// <summary>Whether a composer focus request waits for a page to take it; true once, then false until the next request.</summary>
+    public bool TakeComposerFocusRequest()
+    {
+        var wanted = _composerFocusWanted;
+        _composerFocusWanted = false;
+        return wanted;
+    }
+
+    private bool _composerFocusWanted;
 
     /// <summary>The fold's current state, for tests and for views that need a raw value.</summary>
     public SessionView State => _state;
@@ -231,6 +249,8 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
         {
             _loading = false;
         }
+        // G-7: the draft kept in ui.db, once the history shows.
+        await LoadDraftAsync().ConfigureAwait(true);
     }
 
     public void Dispose()
@@ -238,6 +258,7 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
         if (_disposed)
             return;
         _disposed = true;
+        DisposeRecords();
         _subscription?.Dispose();
         _ticker?.Dispose();
         _ticker = null;
@@ -304,6 +325,8 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
             OnPropertyChanged(nameof(ReadOnlyNote));
             SetGoalCommand.NotifyCanExecuteChanged();
             SetModeCommand.NotifyCanExecuteChanged();
+            RenameCommand.NotifyCanExecuteChanged();
+            _recapCommand?.NotifyCanExecuteChanged();
         }
 
         if (previous.Approvals.Count != _state.Approvals.Count)
@@ -448,8 +471,8 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
 
     internal void Interrupt() => Run(() => _service.InterruptAsync(SessionId));
 
-    internal void AnswerQuestion(string questionId, string answer) =>
-        Run(() => _service.AnswerQuestionAsync(SessionId, questionId, answer));
+    internal void AnswerQuestion(string questionId, string answer, Action? failed = null) =>
+        Run(() => _service.AnswerQuestionAsync(SessionId, questionId, answer), failed);
 
     internal void AnswerApproval(ApprovalCardBlock card, ApprovalAnswer answer) =>
         Run(() => _service.AnswerApprovalAsync(SessionId, card.ApprovalId, answer), card.AnswerFailed);
@@ -461,11 +484,13 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
     });
 
     /// <summary>Runs a request; a refusal shows in <see cref="Error"/> rather than escaping into the UI loop.</summary>
-    private async void Run(Func<Task> request, Action? failed = null)
+    /// <param name="clearError">False for a request the person did not make (keeping the draft): the last refusal stays shown.</param>
+    private async void Run(Func<Task> request, Action? failed = null, bool clearError = true)
     {
         try
         {
-            Error = "";
+            if (clearError)
+                Error = "";
             await request().ConfigureAwait(true);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)

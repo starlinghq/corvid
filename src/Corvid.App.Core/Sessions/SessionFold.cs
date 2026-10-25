@@ -123,6 +123,7 @@ public static class SessionFold
         {
             Turn = state.Turn + 1,
             Position = message.Position,
+            From = message.From,
         };
         return Add(Advance(state), prompt);
     }
@@ -141,7 +142,8 @@ public static class SessionFold
         var header = new TurnHeaderEntry(id, started.Turn, started.At)
         {
             Turn = started.Turn,
-            Models = [started.Model],
+            // A turn that runs no generator (a ! line) names none, live and replayed alike.
+            Models = started.Model is { Length: > 0 } model ? [model] : [],
             MaxSteps = started.MaxSteps,
         };
         return Advance(state) with
@@ -155,7 +157,7 @@ public static class SessionFold
             ActivitySince = started.At,
             Step = null,
             MaxSteps = started.MaxSteps,
-            Model = started.Model,
+            Model = started.Model is { Length: > 0 } ? started.Model : state.Model,
         };
     }
 
@@ -566,7 +568,8 @@ public static class SessionFold
     /// <summary>
     /// A rollback to before a call inside <paramref name="turn"/>: the turn keeps its prompt and what came before the call,
     /// and the call's card and everything after it in the turn leave, as a replay of the log shows it. When nothing of the
-    /// turn's answer is left, its header reads <paramref name="unanswered"/> (when given) as a failed turn, as the replay's does.
+    /// turn's answer is left, its header reads <paramref name="unanswered"/> (when given) as an interrupted turn, as the
+    /// replay's does: the rollback cut it short.
     /// </summary>
     private static ImmutableList<TranscriptEntry> KeepTurnBefore(ImmutableList<TranscriptEntry> transcript, int turn, string callId, string? unanswered)
     {
@@ -583,7 +586,7 @@ public static class SessionFold
         var header = kept.FindIndex(entry => entry.Turn == turn && entry is TurnHeaderEntry { Running: false });
         return header < 0
             ? kept
-            : kept.SetItem(header, (TurnHeaderEntry)kept[header] with { Outcome = TurnOutcome.Failed, Error = unanswered });
+            : kept.SetItem(header, (TurnHeaderEntry)kept[header] with { Outcome = TurnOutcome.Cancelled, Error = unanswered });
     }
 
     /// <summary>
@@ -662,7 +665,7 @@ public static class SessionFold
     {
         Generator = engine.Generator is { } generator ? generator with { Model = SafeText.Clean(generator.Model), Device = SafeText.Clean(generator.Device) } : state.Generator,
         // Engine strings reach the header and status bar: cleaned once here (a branch name may hold bidi marks).
-        Model = Cleaned(engine.Generator?.Model) ?? state.Model,
+        Model = Cleaned(engine.Generator?.Model) ?? Cleaned(engine.Model) ?? state.Model,
         Decider = Cleaned(engine.Decider) ?? state.Decider,
         Scheduler = Cleaned(engine.Scheduler) ?? state.Scheduler,
         Workspace = Cleaned(engine.Workspace) ?? state.Workspace,
@@ -673,6 +676,13 @@ public static class SessionFold
 
     private static SessionView OnQuestion(SessionView state, QuestionAsked question)
     {
+        // A clarifying turn's answer is its question (K-6): the block shows the words, so the turn's answer that says the
+        // same goes, whichever came first.
+        var turn = CurrentTurn(state);
+        var said = state.Transcript.FindLastIndex(entry => entry is AnswerEntry answer && answer.Turn == turn
+            && string.Equals(answer.Text.Trim(), question.Text.Trim(), StringComparison.Ordinal));
+        if (said >= 0)
+            state = state with { Transcript = state.Transcript.RemoveAt(said) };
         var id = QuestionId(question.QuestionId);
         var index = IndexOf(state.Transcript, id);
         if (index >= 0 && state.Transcript[index] is QuestionEntry entry)

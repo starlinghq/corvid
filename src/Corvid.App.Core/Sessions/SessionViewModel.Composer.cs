@@ -47,8 +47,8 @@ public sealed record HintPart(string Text, bool IsKey);
 
 public sealed partial class SessionViewModel
 {
-    /// <summary>The composer's placeholder, as the mockup prints it.</summary>
-    public const string ComposerPlaceholder = "Ask Corvid…   / commands   @ files   ! shell   # memory";
+    /// <summary>The composer's placeholder, as the mockup prints it, with the escape that sends a line starting with # or ! as text (A4).</summary>
+    public const string ComposerPlaceholder = "Ask Corvid…   / commands   @ files   ! shell   # memory   \\# as text";
 
     /// <summary>The placeholder where the service has no <c>!</c> or <c>#</c> mode (<see cref="ISessionService.HasComposerModes"/>).</summary>
     public const string ComposerPlaceholderWithoutModes = "Ask Corvid…   / commands   @ files";
@@ -57,6 +57,12 @@ public sealed partial class SessionViewModel
     [
         new("Ctrl", true), new(" ", false), new("↵", true), new(" steers at the next checkpoint · ", false), new("Esc", true),
         new(" interrupts", false),
+    ];
+
+    /// <summary>The running hint where the service cannot steer (<see cref="ISessionService.CanSteer"/>): Enter queues.</summary>
+    private static readonly IReadOnlyList<HintPart> RunningHintWithoutSteering =
+    [
+        new("↵", true), new(" queues behind the turn · ", false), new("Esc", true), new(" interrupts", false),
     ];
 
     private static readonly IReadOnlyList<HintPart> ApprovalHint =
@@ -82,6 +88,7 @@ public sealed partial class SessionViewModel
             OnPropertyChanged(nameof(DraftNote));
             OnPropertyChanged(nameof(TokenEstimate));
             RefreshComposerCommands();
+            DraftChanged();
         }
     }
 
@@ -138,7 +145,10 @@ public sealed partial class SessionViewModel
     /// </summary>
     public RelayCommand SubmitCommand { get; private set; } = null!;
 
-    /// <summary>Ctrl+Enter: delivered at the next step checkpoint while a turn runs (K-3); sent like Enter otherwise.</summary>
+    /// <summary>
+    /// Ctrl+Enter: delivered at the next step checkpoint while a turn runs (K-3); sent like Enter otherwise, and where the
+    /// service cannot steer (<see cref="ISessionService.CanSteer"/>).
+    /// </summary>
     public RelayCommand SteerCommand { get; private set; } = null!;
 
     /// <summary>Esc while a turn runs: interrupts it, keeping the work so far; the queue goes next.</summary>
@@ -177,25 +187,24 @@ public sealed partial class SessionViewModel
         var text = _draft.Trim();
         if (text.Length == 0)
             return;
-        if (_pendingQuestion is { IsOpen: true, AllowsFreeText: true } question)
-        {
-            Draft = "";
-            AnswerQuestion(question.QuestionId, text);
-            return;
-        }
-
         Draft = "";
+        // A slash command runs as itself even with a question open: it is never the answer.
         if (IsCommandLine(text))
-            Run(() => _service.RunCommandAsync(SessionId, text), () => Draft = text);
+            Run(() => _service.RunCommandAsync(SessionId, text), () => GiveBack(text));
+        else if (_pendingQuestion is { IsOpen: true, AllowsFreeText: true } question)
+            // A refusal (answered from another view meanwhile, or a ! line the service will not take as an answer) gives the
+            // text back to the composer.
+            AnswerQuestion(question.QuestionId, text, () => GiveBack(text));
         else if (_state.Running)
-            Run(() => _service.QueueAsync(SessionId, text), () => Draft = text);
+            Run(() => _service.QueueAsync(SessionId, text), () => GiveBack(text));
         else
-            Run(() => _service.SendAsync(SessionId, text), () => Draft = text);
+            Run(() => _service.SendAsync(SessionId, text), () => GiveBack(text));
     }
 
     private void Steer()
     {
-        if (!_state.Running || _currentApproval is not null)
+        // Without steering here, Ctrl+Enter queues as Enter does rather than asking for what the engine refuses.
+        if (!_state.Running || _currentApproval is not null || !_service.CanSteer)
         {
             Submit();
             return;
@@ -205,8 +214,14 @@ public sealed partial class SessionViewModel
         if (text.Length == 0)
             return;
         Draft = "";
-        Run(() => _service.SteerAsync(SessionId, text), () => Draft = text);
+        Run(() => _service.SteerAsync(SessionId, text), () => GiveBack(text));
     }
+
+    /// <summary>
+    /// A refused message back in the composer (A4 verification): as it was when the composer is still empty; otherwise the
+    /// person typed on meanwhile, and it goes before what they typed, on its own line, so neither is lost.
+    /// </summary>
+    private void GiveBack(string text) => Draft = _draft.Length == 0 ? text : $"{text}\n{_draft}";
 
     private void TakeBackLast()
     {
@@ -238,6 +253,7 @@ public sealed partial class SessionViewModel
         OnPropertyChanged(nameof(DraftNote));
         OnPropertyChanged(nameof(TokenEstimate));
         StashDraftCommand.NotifyCanExecuteChanged();
+        DraftChanged();
     }
 
     /// <summary>Whether a draft waits put aside (Ctrl+S); there is room for one.</summary>
@@ -250,6 +266,7 @@ public sealed partial class SessionViewModel
         OnPropertyChanged(nameof(DraftNote));
         OnPropertyChanged(nameof(TokenEstimate));
         StashDraftCommand.NotifyCanExecuteChanged();
+        DraftChanged();
     }
 
     /// <summary>
@@ -304,7 +321,9 @@ public sealed partial class SessionViewModel
     {
         TurnStripText = StripText(withTime: true);
         TurnStripStatus = StripText(withTime: false);
-        var hint = _currentApproval is not null ? ApprovalHint : _state.Running ? RunningHint : [];
+        var hint = _currentApproval is not null ? ApprovalHint
+            : _state.Running ? _service.CanSteer ? RunningHint : RunningHintWithoutSteering
+            : [];
         if (!ReferenceEquals(hint, _hint))
         {
             Hint = hint;

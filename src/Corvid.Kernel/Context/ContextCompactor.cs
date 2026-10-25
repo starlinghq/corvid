@@ -332,13 +332,21 @@ public sealed class ContextCompactor
     internal static string FocusLine(string? focus) =>
         focus is null ? "" : "The user asked this summary to keep, in full: " + focus + "\n";
 
-    private static string? Line(TranscriptEntry entry, Dictionary<string, string> names, IReadOnlyDictionary<string, ResultView> views)
+    internal static string? Line(TranscriptEntry entry, Dictionary<string, string> names, IReadOnlyDictionary<string, ResultView> views)
     {
         var at = string.Create(CultureInfo.InvariantCulture, $"[{entry.FromSequence}] ");
         switch (entry.Content)
         {
+            // A4: a `!!` line's message, call and output stay out of the summary as they stay out of the prompt.
+            case UserMessage { LocalOnly: true } or ToolCallIssued { LocalOnly: true } or ToolResult { LocalOnly: true }:
+                return null;
+            // A gateway guest's message stays outside content in the summary, quoted as theirs (A4 verification).
+            case UserMessage { From: { } guest } user:
+                return at + PromptRenderer.Quoted(guest, user.Text);
             case UserMessage user:
                 return at + "user: " + user.Text;
+            case UserSteered steer:
+                return at + "user (during the turn): " + steer.Text;
             case AssistantMessage assistant:
                 return at + "assistant: " + assistant.Text;
             case ToolCallIssued call:

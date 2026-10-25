@@ -87,6 +87,26 @@ public sealed class SessionViewModelTests
     }
 
     [Fact]
+    public async Task WithoutSteeringTheStripOffersNoCtrlEnterAndCtrlEnterQueues()
+    {
+        var time = ManualTimeProvider.Demo();
+        using var demo = new DemoSessionService(new InlineDispatcher(), time, DemoScene.Main);
+        var service = new AuditViewModelTests.CapturingSessionService(demo) { Steers = false };
+        var session = new SessionViewModel(Main, service, new InlineDispatcher(), time);
+        await session.OpenAsync(TestContext.Current.CancellationToken);
+        Assert.True(session.IsRunning);
+
+        Assert.Equal("↵ queues behind the turn · Esc interrupts", string.Concat(session.Hint.Select(part => part.Text)));
+        Assert.Equal([true, false, true, false], session.Hint.Select(part => part.IsKey));
+        session.Draft = "only in ci.yml";
+        session.SteerCommand.Execute(null);
+
+        // Queued behind the turn, as Enter does; nothing asked of the steering the service refuses.
+        Assert.Empty(service.Steered);
+        Assert.Contains(session.Queue, chip => chip is { Text: "only in ci.yml", IsSteer: false });
+    }
+
+    [Fact]
     public async Task TheTurnStripComposerStatusAndPanelsAreMainPngs()
     {
         var (session, _, _) = await Open(Main);
@@ -100,7 +120,7 @@ public sealed class SessionViewModelTests
         Assert.Equal(["queued|also check the retry count"], session.Queue.Select(chip => $"{chip.Label}|{chip.Text}"));
         Assert.Equal("Ctrl ↵ steers at the next checkpoint · Esc interrupts", string.Concat(session.Hint.Select(part => part.Text)));
         Assert.Equal([true, false, true, false, true, false], session.Hint.Select(part => part.IsKey));
-        Assert.Equal("Ask Corvid…   / commands   @ files   ! shell   # memory", session.Placeholder);
+        Assert.Equal("Ask Corvid…   / commands   @ files   ! shell   # memory   \\# as text", session.Placeholder);
 
         Assert.Equal("claude (escalated) · cuda:0 · q0 · 410 ms", session.StatusGenerator);
         Assert.Equal(("Kev-0.8B, calibrated", "38%", ApprovalMode.Smart), (session.StatusDecider, session.StatusContext, session.Mode));
@@ -156,6 +176,30 @@ public sealed class SessionViewModelTests
         Assert.Equal(["pre-execute · 14:04:12|Kev-0.8B · 240 ms", "step · 14:04:08|Kev-0.8B · 231 ms", "ingress · 14:03:41|Kev-0.8B · 258 ms"],
             session.DecisionGroups.Take(3).Select(group => $"{group.Header}|{group.Detail}"));
         Assert.Equal(("risk → 3, ask", "0.86 · acted", true), (session.DecisionGroups[0].Rows[1].Label, session.DecisionGroups[0].Rows[1].Value, session.DecisionGroups[0].Rows[1].IsAsk));
+    }
+
+    [Fact]
+    public async Task CtrlEnterWhileACardIsOpenKeepsTheDraftAndSteersNothing()
+    {
+        var time = ManualTimeProvider.Demo();
+        using var demo = new DemoSessionService(new InlineDispatcher(), time, DemoScene.Approval);
+        var service = new AuditViewModelTests.CapturingSessionService(demo);
+        var session = new SessionViewModel(Main, service, new InlineDispatcher(), time);
+        await session.OpenAsync(TestContext.Current.CancellationToken);
+        var focus = new List<SessionFocusTarget>();
+        session.FocusRequested += (_, target) => focus.Add(target);
+        Assert.True(session.IsRunning);
+        var card = session.CurrentApproval!;
+
+        session.Draft = "keep the launcher untouched";
+        session.SteerCommand.Execute(null);
+
+        // A4V2-1: the card waits, so Ctrl+Enter only points at it; the words stay in the composer, nothing is steered or queued.
+        Assert.Equal("keep the launcher untouched", session.Draft);
+        Assert.Empty(service.Steered);
+        Assert.Empty(session.Queue);
+        Assert.True(card.IsFocused);
+        Assert.Equal([SessionFocusTarget.Approval], focus);
     }
 
     [Fact]

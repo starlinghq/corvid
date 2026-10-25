@@ -53,7 +53,16 @@ internal sealed class FakeGenerator(params Func<IReadOnlyList<ChatMessage>, Chat
         var response = step < script.Length ? script[step](list) : Reply.Text("Done.");
         response.Usage = new UsageDetails { InputTokenCount = 42, OutputTokenCount = 7 };
         response.ModelId = "fake-gen";
-        return Task.FromResult(response);
+        return Hold?.Invoke(step, cancellationToken) is { } hold ? HeldAsync(hold, response) : Task.FromResult(response);
+    }
+
+    /// <summary>Called with each script step's index (from 0) and the call's token; a task it returns is awaited before the answer.</summary>
+    public Func<int, CancellationToken, Task?>? Hold { get; set; }
+
+    private static async Task<ChatResponse> HeldAsync(Task hold, ChatResponse response)
+    {
+        await hold;
+        return response;
     }
 
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> messages,
@@ -312,6 +321,9 @@ internal sealed class FakeModels
         // The fake scripts would be consumed by tools and jobs they do not expect; tests that want them turn them on.
         ["Corvid:Tools:Builtin"] = "false",
         ["Corvid:Scheduler:Enabled"] = "false",
+        // G-6: titles and recaps would take the generator's script too; tests of them turn them on.
+        ["Corvid:Sessions:Titles"] = "false",
+        ["Corvid:Sessions:RecapAfterMinutes"] = "0",
     };
 
     /// <summary>Replaces the model providers (Starling by default) with these fakes and registers the note tools.</summary>

@@ -2,11 +2,13 @@ namespace Corvid.App.Core.Tests;
 
 /// <summary>
 /// A clock the test moves: <see cref="Advance"/> fires every timer that falls due on the way, in time order, on the
-/// calling thread. With <c>InlineDispatcher</c>, a scripted turn runs to the same point every time.
+/// calling thread. With <c>InlineDispatcher</c>, a scripted turn runs to the same point every time. Timers may be made,
+/// changed and disposed from other threads (the engine's background work) while the test advances the clock.
 /// </summary>
 internal sealed class ManualTimeProvider : TimeProvider
 {
     private readonly List<ManualTimer> _timers = [];
+    private readonly Lock _gate = new();
     private readonly TimeZoneInfo _zone;
     private DateTimeOffset _now;
     private long _sequence;
@@ -28,12 +30,20 @@ internal sealed class ManualTimeProvider : TimeProvider
     public override TimeZoneInfo LocalTimeZone => _zone;
 
     /// <summary>Timers that will still fire.</summary>
-    public int ActiveTimers => _timers.Count(timer => timer.Active);
+    public int ActiveTimers
+    {
+        get
+        {
+            lock (_gate)
+                return _timers.Count(timer => timer.Active);
+        }
+    }
 
     public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
     {
         var timer = new ManualTimer(this, callback, state);
-        _timers.Add(timer);
+        lock (_gate)
+            _timers.Add(timer);
         timer.Change(dueTime, period);
         return timer;
     }
@@ -43,12 +53,16 @@ internal sealed class ManualTimeProvider : TimeProvider
         var target = _now + by;
         while (true)
         {
-            var next = _timers.Where(timer => timer.Active && timer.Due <= target)
-                .OrderBy(timer => timer.Due).ThenBy(timer => timer.Order).FirstOrDefault();
+            ManualTimer? next;
+            lock (_gate)
+            {
+                next = _timers.Where(timer => timer.Active && timer.Due <= target)
+                    .OrderBy(timer => timer.Due).ThenBy(timer => timer.Order).FirstOrDefault();
+                if (next is not null && next.Due > _now)
+                    _now = next.Due;
+            }
             if (next is null)
                 break;
-            if (next.Due > _now)
-                _now = next.Due;
             next.Fire();
         }
 
@@ -69,29 +83,35 @@ internal sealed class ManualTimeProvider : TimeProvider
 
         public bool Change(TimeSpan dueTime, TimeSpan period)
         {
-            if (dueTime == Timeout.InfiniteTimeSpan)
+            lock (provider._gate)
             {
-                Active = false;
+                if (dueTime == Timeout.InfiniteTimeSpan)
+                {
+                    Active = false;
+                    return true;
+                }
+
+                Due = provider._now + dueTime;
+                _period = period;
+                Order = ++provider._sequence;
+                Active = true;
                 return true;
             }
-
-            Due = provider._now + dueTime;
-            _period = period;
-            Order = ++provider._sequence;
-            Active = true;
-            return true;
         }
 
         public void Fire()
         {
-            if (_period > TimeSpan.Zero && _period != Timeout.InfiniteTimeSpan)
+            lock (provider._gate)
             {
-                Due += _period;
-                Order = ++provider._sequence;
-            }
-            else
-            {
-                Active = false;
+                if (_period > TimeSpan.Zero && _period != Timeout.InfiniteTimeSpan)
+                {
+                    Due += _period;
+                    Order = ++provider._sequence;
+                }
+                else
+                {
+                    Active = false;
+                }
             }
 
             callback(state);
@@ -99,8 +119,11 @@ internal sealed class ManualTimeProvider : TimeProvider
 
         public void Dispose()
         {
-            Active = false;
-            provider._timers.Remove(this);
+            lock (provider._gate)
+            {
+                Active = false;
+                provider._timers.Remove(this);
+            }
         }
 
         public ValueTask DisposeAsync()

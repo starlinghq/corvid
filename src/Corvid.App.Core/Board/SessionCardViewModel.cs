@@ -136,6 +136,14 @@ public sealed class SessionCardViewModel : BoardTile
         Refresh();
     }
 
+    /// <summary>A new summary, read at <paramref name="now"/>.</summary>
+    public void Tick(DateTimeOffset now, SessionSummary summary)
+    {
+        ArgumentNullException.ThrowIfNull(summary);
+        _now = now;
+        Update(summary);
+    }
+
     private void Refresh()
     {
         Title = BoardText.Title(_summary, _zone);

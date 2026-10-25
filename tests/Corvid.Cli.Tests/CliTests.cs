@@ -1,6 +1,8 @@
 using System.Text.Json.Nodes;
 using Corvid.Cli.Chat;
 using Corvid.Host.Tests;
+using Corvid.Kernel.Sessions;
+using Corvid.Kernel.Turns;
 using Corvid.Mcp;
 using Microsoft.Extensions.DependencyInjection;
 using Spectre.Console.Testing;
@@ -201,6 +203,27 @@ public sealed class ChatTests
     }
 
     [Fact]
+    public async Task ASessionAnotherProcessDrivesIsNotResumedHere()
+    {
+        using var run = new CliRun();
+        await run.RunAsync(["chat"], "first message", "/exit");
+        var id = System.Text.RegularExpressions.Regex.Match(run.Output, "session (cli-[0-9a-f-]+)").Groups[1].Value;
+        Assert.NotEmpty(id);
+        // G-12: another process (the app, another terminal) holds the session's driver lock.
+        using (var held = Corvid.Host.Composition.ProcessLock.TryAcquire(Path.Combine(run.Root, "data", "drivers", id + ".lock")))
+        {
+            Assert.NotNull(held);
+            Assert.Equal(ExitCodes.Failure, await run.RunAsync(["--session", id], "never sent", "/exit"));
+            Assert.Contains($"Session {id} is driven by", run.Output, StringComparison.Ordinal);
+            Assert.Contains($"(pid {Environment.ProcessId})", run.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("Resumed:", run.Output, StringComparison.Ordinal);
+        }
+        // Once it lets go, the terminal resumes it.
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["--session", id], "/exit"));
+        Assert.Contains("Resumed: 2 entries", run.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task UnknownCommandsAreReportedAndTheChatGoesOn()
     {
         using var run = new CliRun();
@@ -360,6 +383,36 @@ public sealed class GatewayCommandTests
         Assert.Equal(ExitCodes.Success, await run.RunAsync(["gateway", "pair", "revoke", "telegram", "42"]));
         Assert.Empty(store.Users());
         Assert.Equal(ExitCodes.Usage, await run.RunAsync(["gateway", "frobnicate"]));
+    }
+
+    [Fact]
+    public async Task AGuestGetsTheirOwnToolsFromTheMachine()
+    {
+        using var run = new CliRun();
+        var store = new Corvid.Gateway.PairingStore(Path.Combine(run.Root, "data", "gateway.db"));
+        store.Approve(store.Request("telegram", "42", "ada", "42").Request!.Code, Corvid.Gateway.SenderRole.Guest);
+        store.Approve(store.Request("telegram", "7", "me", "7").Request!.Code, Corvid.Gateway.SenderRole.Owner);
+
+        // G-14: the same allowlist the app's Gateway page sets, checked the same way.
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["gateway", "pair", "tools", "telegram", "42", "list_notes", "web_fetch"]));
+        Assert.Equal(["list_notes", "web_fetch"], store.GuestTools("telegram", "42"));
+        // The first per-guest allowlist moves gateway.db to schema 2, one way: the CLI says so (once).
+        Assert.Contains("upgraded to schema 2", run.Output, StringComparison.Ordinal);
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["gateway", "pair"]));
+        Assert.Contains("list_notes, web_fetch (their own)", run.Output, StringComparison.Ordinal);
+        Assert.Equal(ExitCodes.Usage, await run.RunAsync(["gateway", "pair", "tools", "telegram", "42", "cron_create"]));
+        Assert.Contains("'cron_create' cannot be a guest tool", run.Output, StringComparison.Ordinal);
+        Assert.Equal(ExitCodes.Failure, await run.RunAsync(["gateway", "pair", "tools", "telegram", "7", "list_notes"]));
+        Assert.Equal(ExitCodes.Usage, await run.RunAsync(["gateway", "pair", "tools", "telegram", "42"]));
+        Assert.Equal(["list_notes", "web_fetch"], store.GuestTools("telegram", "42"));
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["gateway", "pair", "tools", "telegram", "42", "--adapter"]));
+        Assert.Null(store.GuestTools("telegram", "42"));
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(run.Output, "upgraded to schema 2"));
+        // L9: an empty allowlist of their own (no tool, whatever the adapter's GuestTools say).
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["gateway", "pair", "tools", "telegram", "42", "--none"]));
+        Assert.Equal([], store.GuestTools("telegram", "42"));
+        Assert.Contains("may use no tool", run.Output, StringComparison.Ordinal);
+        Assert.Equal(ExitCodes.Usage, await run.RunAsync(["gateway", "pair", "tools", "telegram", "42", "--none", "list_notes"]));
     }
 
     [Fact]
@@ -584,6 +637,95 @@ public sealed class RendererTests
         Assert.Contains("succeeded · 12 ms", console.Output, StringComparison.Ordinal);
         Assert.Contains("failed · 1.5 s", console.Output, StringComparison.Ordinal);
         Assert.Contains("Done.", console.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheLivePanelShowsTheStepAndARunningCallsLastLineCleanedForTheTerminal()
+    {
+        var console = new TestConsole().Interactive();
+        console.Profile.Width = 200;
+        var renderer = new ChatRenderer(console, live: true);
+        renderer.BeginTurn();
+        renderer.Progress(2, 8);
+        renderer.ToolStarted("c1", "shell", approval: false);
+        // K-2: untrusted output; an escape sequence must not reach the terminal.
+        renderer.ToolOutput("c1", "shell", "Building…\n\u001b[31mPassed 11   Failed 1\u001b[0m\n");
+        renderer.Text("Still running.");
+
+        Assert.Contains("step 2 of 8", console.Output, StringComparison.Ordinal);
+        Assert.Contains("Passed 11   Failed 1", console.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("\u001b[31m", console.Output, StringComparison.Ordinal);
+        Assert.Equal("[31mPassed 11   Failed 1[0m", ChatRenderer.LastLine("Building…\n\u001b[31mPassed 11   Failed 1\u001b[0m\n\n"));
+    }
+
+    /// <summary>
+    /// A4V2-6: a call that may ask starts as running (the approval box says when it does wait), and a ! line the sandbox
+    /// could not run says failed, in its status line and its footer, where one that was denied says not run.
+    /// </summary>
+    [Fact]
+    public void AShellLineThatMayAskStartsRunningAndOneThatFailedSaysSo()
+    {
+        var console = new TestConsole();
+        var renderer = new ChatRenderer(console, live: false);
+        renderer.BeginTurn();
+        renderer.ToolStarted("user-shell", "shell", approval: true);
+        Assert.Equal("failed", renderer.ShellResult("{\"error\":\"tool failed\"}", null, localOnly: false, ToolErrorKinds.ToolFailed));
+        var result = new TurnResult(TurnStatus.Answered, null, 1, 1, false, "reply", [], []);
+        renderer.EndTurn(new Delivery(new Corvid.Abstractions.Sessions.Envelope("cli-1", "cli", "!echo hi", Corvid.Abstractions.Sessions.EnvelopeOrigin.User), result), "failed");
+
+        Assert.Contains("shell running", console.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("awaiting approval", console.Output, StringComparison.Ordinal);
+        Assert.Contains("failed · the output is in the conversation", console.Output, StringComparison.Ordinal);
+        Assert.Contains("· failed · 1 step(s)", console.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("answered", console.Output, StringComparison.Ordinal);
+
+        var denied = new TestConsole();
+        Assert.Equal("not run", new ChatRenderer(denied, live: false).ShellResult("denied", null, localOnly: false, ToolErrorKinds.NotRun));
+        Assert.Contains("not run · ", denied.Output, StringComparison.Ordinal);
+        Assert.Null(new ChatRenderer(new TestConsole(), live: false).ShellResult("hi", 0, localOnly: false));
+    }
+
+    [Fact]
+    public void AClarifyingQuestionsChoicesAreListedAndANumberPicksOne()
+    {
+        var console = new TestConsole();
+        var renderer = new ChatRenderer(console, live: false);
+        var question = new ClarifyingQuestion("q-1", "Which version?", ["0.2.0", "0.2.0-rc1"]);
+        var result = new TurnResult(TurnStatus.Clarifying, "Which version?", 0, 1, false, "reply", [], []) { Question = question };
+        renderer.BeginTurn();
+        renderer.EndTurn(new Delivery(new Corvid.Abstractions.Sessions.Envelope("cli-1", "cli", "tag it", Corvid.Abstractions.Sessions.EnvelopeOrigin.User), result));
+
+        Assert.Contains("Which version?", console.Output, StringComparison.Ordinal);
+        Assert.Contains("1 0.2.0 · 2 0.2.0-rc1", console.Output, StringComparison.Ordinal);
+        // K-6: a number picks the choice as offered; anything else is the answer as typed.
+        Assert.Equal("0.2.0-rc1", ChatRenderer.Answer(question, " 2 "));
+        Assert.Equal("3", ChatRenderer.Answer(question, "3"));
+        Assert.Equal("rc1 please", ChatRenderer.Answer(question, "rc1 please"));
+        Assert.Equal("1", ChatRenderer.Answer(null, "1"));
+    }
+
+    [Fact]
+    public void AChoiceWithHiddenCharactersShowsThemAndIsSentOnlyAsItsVisibleText()
+    {
+        var console = new TestConsole();
+        var renderer = new ChatRenderer(console, live: false);
+        // The model wrote the choices: tag characters after "Blue" spell "also", a bidirectional override sits in the second,
+        // a variation selector rides on the third, and the fourth is only a zero-width space.
+        var question = new ClarifyingQuestion("q-1", "Which colour?",
+            ["Blue\U000E0061\U000E006C\U000E0073\U000E006F", "Green‮ecaf", "Red\U000E0100", "​"]);
+        var result = new TurnResult(TurnStatus.Clarifying, "Which colour?", 0, 1, false, "reply", [], []) { Question = question };
+        renderer.BeginTurn();
+        renderer.EndTurn(new Delivery(new Corvid.Abstractions.Sessions.Envelope("cli-1", "cli", "pick", Corvid.Abstractions.Sessions.EnvelopeOrigin.User), result));
+
+        // Shown as codes, not dropped: the person sees the choice holds more than its words.
+        var shown = console.Output.Replace("\n", "", StringComparison.Ordinal);
+        Assert.Contains("1 Blue\\uE0061\\uE006C\\uE0073\\uE006F · 2 Green\\u202Eecaf · 3 Red\\uE0100 · 4 \\u200B", shown, StringComparison.Ordinal);
+        Assert.DoesNotContain("\U000E0061", console.Output, StringComparison.Ordinal);
+        // A number sends only what a reader sees; a choice with nothing visible is the line as typed.
+        Assert.Equal("Blue", ChatRenderer.Answer(question, "1"));
+        Assert.Equal("Greenecaf", ChatRenderer.Answer(question, "2"));
+        Assert.Equal("Red", ChatRenderer.Answer(question, "3"));
+        Assert.Equal("4", ChatRenderer.Answer(question, "4"));
     }
 
     [Fact]

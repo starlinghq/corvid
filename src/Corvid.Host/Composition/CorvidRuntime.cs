@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Globalization;
 using Corvid.Abstractions.Events;
+using Corvid.Abstractions.IO;
 using Corvid.Abstractions.Sessions;
 using Corvid.Abstractions.Tokens;
 using Corvid.Approvals;
@@ -9,6 +10,8 @@ using Corvid.Fabric;
 using Corvid.Gateway;
 using Corvid.Host.Configuration;
 using Corvid.Host.Models;
+using Corvid.Host.Sessions;
+using Corvid.Host.State;
 using Corvid.Host.Telemetry;
 using Corvid.Kernel.Checkpoints;
 using Corvid.Kernel.Context;
@@ -47,7 +50,7 @@ public sealed record MemoryServices(
 /// configuration. Surfaces open sessions on it and post messages; every session shares the process-wide services and has its
 /// own slots and turn runner.
 /// </summary>
-public sealed class CorvidRuntime : IAsyncDisposable
+public sealed partial class CorvidRuntime : IAsyncDisposable
 {
     private readonly ConcurrentDictionary<string, CorvidSession> _sessions = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<Delivery>> _waiting = new(StringComparer.Ordinal);
@@ -62,9 +65,13 @@ public sealed class CorvidRuntime : IAsyncDisposable
     private readonly ToolShortlist _skillShortlist = new(new ShortlistOptions(Size: 3));
     private readonly Lock _maintenanceGate = new();
     private readonly CancellationTokenSource _lifetime = new();
+    // Cancels the titles being written when a surface leaves before they are done (MaintenanceIdleAsync with a bound).
+    private readonly CancellationTokenSource _titling = new();
     private Task _maintenance = Task.CompletedTask;
-    private FileStream? _schedulerLock;
+    private ProcessLock? _schedulerLock;
     private Task? _scheduler;
+    // Stops this process's scheduler without stopping the runtime (the app's Stop hosting); linked to _lifetime.
+    private CancellationTokenSource? _schedulerStop;
     private JobScheduler? _jobScheduler;
     // Starting the scheduler (C-041: again on a session open after losing the lock) and disposal's lock release, one at a time.
     private readonly Lock _schedulerGate = new();
@@ -76,7 +83,8 @@ public sealed class CorvidRuntime : IAsyncDisposable
     internal CorvidRuntime(CorvidOptions options, ModelCatalogue catalogue, ModelComposer composer, DeviceSchedulers devices,
         ModelMetrics metrics, TurnFeed feed, SqliteEventLog log, ModelSlotRegistry registry, DecisionFabric fabric,
         ApprovalPipeline approvals, ApprovalRouter prompters, ToolRegistry tools, MemoryServices? memory, ITokenCounter? counter,
-        BuiltinServices builtin, CheckpointService? checkpoints = null, SkillServices? skills = null, McpClients? mcp = null)
+        BuiltinServices builtin, CheckpointService? checkpoints = null, SkillServices? skills = null, McpClients? mcp = null,
+        bool hostScheduler = true)
     {
         Mcp = mcp;
         Checkpoints = checkpoints;
@@ -84,6 +92,8 @@ public sealed class CorvidRuntime : IAsyncDisposable
         Options = options;
         Catalogue = catalogue;
         _composer = composer;
+        // L10: the ledger reports from inside a model call; never onto the terminal, which a turn is drawing.
+        composer.Ledger.Failed = Report;
         Devices = devices;
         Metrics = metrics;
         Feed = feed;
@@ -97,13 +107,24 @@ public sealed class CorvidRuntime : IAsyncDisposable
         Counter = counter;
         Builtin = builtin;
         _swap = memory is null ? null : new EmbedderSwapJob(memory.Vectors);
-        Sessions = new SessionHost(CreateActor);
+        Sessions = new SessionHost(CreateActor, new SessionHostOptions
+        {
+            // A message whose session cannot be routed (its driver lock went to another process after a release, M2) fails
+            // its send with why, rather than leaving the sender waiting.
+            RoutingFailed = (envelope, exception) =>
+            {
+                if (envelope.MessageId is { } id && _waiting.TryRemove(id, out var waiter))
+                    waiter.TrySetException(exception);
+            },
+        });
         if (memory is not null && registry.TryGet(ModelSlots.TextEmbedder, out var embedder)
             && memory.Vectors.State.Active != embedder.Default.Profile.Id)
             // The configured embedder changed since the store was written (or the store is new): §4.3's swap, in the background.
             _swap!.Start(embedder.Default.Profile.Id);
-        if (options.Scheduler.Enabled)
+        if (options.Scheduler.Enabled && hostScheduler)
             TryStartScheduler();
+        else if (options.Scheduler.Enabled)
+            SchedulerState = SchedulerNotHosted;
         // The learning loop (plan §11): queued opportunities are drafted and replay-tested in the background.
         if (Skills.Learner is { } learner)
             _learning = Task.Run(() => learner.RunAsync(_lifetime.Token));
@@ -124,6 +145,55 @@ public sealed class CorvidRuntime : IAsyncDisposable
     public SkillServices Skills { get; }
 
     public CorvidOptions Options { get; }
+
+    /// <summary>
+    /// The settings a running runtime takes without a restart (A4), by configuration key, with when each applies: the
+    /// default approval mode for sessions opened from now on, the approval deadline from the next prompt, the step budget
+    /// and output tokens per step for sessions opened from now on. Everything else in corvid.json is read once, at start.
+    /// </summary>
+    public static IReadOnlyDictionary<string, LiveSetting> LiveSettings { get; } = new Dictionary<string, LiveSetting>(StringComparer.OrdinalIgnoreCase)
+    {
+        [$"{CorvidOptions.Section}:Approvals:Mode"] = LiveSetting.NewSessions,
+        [$"{CorvidOptions.Section}:Approvals:TimeoutSeconds"] = LiveSetting.Now,
+        [$"{CorvidOptions.Section}:Turn:MaxSteps"] = LiveSetting.NewSessions,
+        [$"{CorvidOptions.Section}:Turn:MaxOutputTokens"] = LiveSetting.NewSessions,
+    };
+
+    /// <summary>
+    /// Takes the <see cref="LiveSettings"/> from <paramref name="next"/> (the configuration as the next start would read it,
+    /// after a surface wrote corvid.json) and returns the keys whose value changed here. A session already open keeps the
+    /// approval mode and step budget it was opened with; the approval deadline applies to the next prompt of every session.
+    /// </summary>
+    public ImmutableArray<string> ApplyLiveSettings(CorvidOptions next)
+    {
+        ArgumentNullException.ThrowIfNull(next);
+        var applied = ImmutableArray.CreateBuilder<string>();
+        lock (Options)
+        {
+            if (next.Approvals.Mode != Options.Approvals.Mode)
+            {
+                Options.Approvals.Mode = next.Approvals.Mode;
+                applied.Add($"{CorvidOptions.Section}:Approvals:Mode");
+            }
+            if (next.Approvals.TimeoutSeconds != Options.Approvals.TimeoutSeconds && next.Approvals.TimeoutSeconds > 0)
+            {
+                Options.Approvals.TimeoutSeconds = next.Approvals.TimeoutSeconds;
+                Approvals.SetTimeout(TimeSpan.FromSeconds(next.Approvals.TimeoutSeconds));
+                applied.Add($"{CorvidOptions.Section}:Approvals:TimeoutSeconds");
+            }
+            if (next.Turn.MaxSteps != Options.Turn.MaxSteps)
+            {
+                Options.Turn.MaxSteps = next.Turn.MaxSteps;
+                applied.Add($"{CorvidOptions.Section}:Turn:MaxSteps");
+            }
+            if (next.Turn.MaxOutputTokens != Options.Turn.MaxOutputTokens)
+            {
+                Options.Turn.MaxOutputTokens = next.Turn.MaxOutputTokens;
+                applied.Add($"{CorvidOptions.Section}:Turn:MaxOutputTokens");
+            }
+        }
+        return applied.ToImmutable();
+    }
 
     public ModelCatalogue Catalogue { get; }
 
@@ -184,6 +254,9 @@ public sealed class CorvidRuntime : IAsyncDisposable
     /// <summary>The privacy egress gate (plan §10.4) every gated binding and every session's switches share.</summary>
     public PrivacyEgress Egress => _composer.Egress;
 
+    /// <summary>The egress ledger (G-9): every request the gate decided on, with the request as sent kept beside the log.</summary>
+    public Audit.EgressLedger EgressLedger => _composer.Ledger;
+
     /// <summary>
     /// Whether this process runs due jobs, and if not, why. "run by another corvid process" can become "running in this
     /// process" when a session opens after that process exited (C-041, <see cref="OpenSession"/>).
@@ -192,6 +265,30 @@ public sealed class CorvidRuntime : IAsyncDisposable
 
     // The state of a runtime that lost jobs.db.lock to another process; the only one a session open retries (C-041).
     private const string SchedulerElsewhere = "run by another corvid process";
+
+    /// <summary>
+    /// The state of a runtime that does not host the scheduler (the windowed app until it is asked to, U-8): it neither runs
+    /// due jobs nor takes the scheduler over; <see cref="StartScheduler"/> makes it try.
+    /// </summary>
+    public const string SchedulerNotHosted = "off (not hosted by this process)";
+
+    /// <summary>The scheduler's lock beside the job store: whichever process holds it runs the jobs (U-8).</summary>
+    public string SchedulerLockPath => Builtin.Jobs.Path + ".lock";
+
+    /// <summary>
+    /// Who runs the scheduler and since when (G-14's status): this process since it took the lock, or the process whose
+    /// note is beside the lock; null when nobody does, or the holder left no note.
+    /// </summary>
+    public LockHolder? SchedulerHolder
+    {
+        get
+        {
+            lock (_schedulerGate)
+                if (_schedulerLock is { } held)
+                    return held.Holder;
+            return Options.Scheduler.Enabled && ProcessLock.Probe(SchedulerLockPath) is { State: LockState.HeldElsewhere } probe ? probe.Holder : null;
+        }
+    }
 
     /// <summary>
     /// Raised after each scheduled run is recorded; a surface can say so (delivery to chats is C-020's). The scheduler
@@ -210,6 +307,108 @@ public sealed class CorvidRuntime : IAsyncDisposable
     /// <summary>How many completed runs <see cref="JobCompleted"/> keeps to replay to a handler added later.</summary>
     public const int JobCompletedReplay = 32;
 
+    /// <summary>
+    /// Session titles and recaps (G-6): generated after a session's first exchange (K-9) on the local generator, renamed by
+    /// <see cref="Rename"/>, recapped by <see cref="RecapAsync"/>. Without one set at start, nothing is generated.
+    /// </summary>
+    public SessionTitler Titles
+    {
+        get => LazyInitializer.EnsureInitialized(ref _titles, () => new SessionTitler(Log, null, unavailable: "titles were not set up"));
+        init => _titles = value;
+    }
+
+    private SessionTitler? _titles;
+
+    /// <summary><c>ui.db</c> (G-7): drafts, pins, review points, when sessions were last seen and the app's preferences.</summary>
+    public UiStateStore UiState
+    {
+        get => LazyInitializer.EnsureInitialized(ref _uiState, () => new UiStateStore(UiStateStore.PathFor(Options)));
+        init => _uiState = value;
+    }
+
+    private UiStateStore? _uiState;
+
+    // Sessions known to hold a title, so a turn after the first does not read the log to find out again.
+    private readonly ConcurrentDictionary<string, byte> _titled = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// A session's title changed (G-6): the local generator wrote one after the first exchange, or someone renamed it here.
+    /// Raised on the thread that wrote it (a pool thread for a generated one); handlers must be thread-safe.
+    /// </summary>
+    public event Action<string, SessionTitled>? TitleChanged;
+
+    /// <summary>A recap was written here (G-6). Raised on the thread that wrote it; handlers must be thread-safe.</summary>
+    public event Action<string, SessionRecapped>? Recapped;
+
+    /// <summary>
+    /// Something in the background went wrong that a person should hear of without it stopping anything (the egress ledger
+    /// could not record a request, or prune its store). Raised from any thread, often inside a model call: a surface shows it
+    /// its own way (the CLI as a notice, the app in its log), never by writing to the terminal from the handler's thread
+    /// outside its renderer. With nobody listening it is a trace line. The latest few are kept in <see cref="Notices"/>.
+    /// </summary>
+    public event Action<string>? Notice;
+
+    /// <summary>The latest background notices (<see cref="Notice"/>), oldest first, at most 20.</summary>
+    public IReadOnlyList<string> Notices
+    {
+        get
+        {
+            lock (_notices)
+                return [.. _notices];
+        }
+    }
+
+    private readonly Queue<string> _notices = new();
+
+    private void Report(string reason)
+    {
+        var line = "egress ledger: " + reason;
+        lock (_notices)
+        {
+            _notices.Enqueue(line);
+            while (_notices.Count > 20)
+                _notices.Dequeue();
+        }
+        if (Notice is { } notice)
+            notice(line);
+        else
+            System.Diagnostics.Trace.WriteLine("corvid: " + line);
+    }
+
+    /// <summary>Renames a session (G-6): a <c>SessionTitled</c> by the user in the log, then <see cref="TitleChanged"/>.</summary>
+    /// <exception cref="ArgumentException">The title is blank.</exception>
+    /// <exception cref="SessionHeldException">Another process drives the session (G-12); nothing was written.</exception>
+    public SessionTitled Rename(string sessionId, string title)
+    {
+        SessionTitled titled;
+        using (var guard = GuardWrite(sessionId))
+            titled = Titles.Rename(sessionId, title, guard.Check);
+        _titled[sessionId] = 0;
+        TitleChanged?.Invoke(sessionId, titled);
+        return titled;
+    }
+
+    /// <summary>
+    /// A recap of the session's events since its last one, written by the local generator and logged (G-6), then
+    /// <see cref="Recapped"/>; null when nothing happened since.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">No local generator, or it failed.</exception>
+    /// <exception cref="SessionHeldException">
+    /// Another process drives the session (G-12), checked before the recap is generated and again before it is written;
+    /// nothing was written.
+    /// </exception>
+    public async Task<SessionRecapped?> RecapAsync(string sessionId, string source = RecapSources.Requested, CancellationToken cancellationToken = default)
+    {
+        SessionRecapped? recap;
+        // The check before generating only looks (the generator takes seconds, and the lock would keep a terminal out);
+        // the write takes the lock (L7).
+        using (var guard = GuardWrite(sessionId, probes: 1))
+            recap = await Titles.RecapAsync(sessionId, source, guard.Check, cancellationToken).ConfigureAwait(false);
+        if (recap is not null)
+            Recapped?.Invoke(sessionId, recap);
+        return recap;
+    }
+
     internal ITokenCounter? Counter { get; }
 
     /// <summary>
@@ -217,9 +416,11 @@ public sealed class CorvidRuntime : IAsyncDisposable
     /// scheduler, or takes it over when the process that held it has exited (C-041, <c>WakeScheduler</c>).
     /// </summary>
     /// <param name="settings">How the session's turns run; applied when this process first opens the session.</param>
+    /// <exception cref="SessionHeldException">Another process drives the session (G-12); nothing was opened.</exception>
     public CorvidSession OpenSession(string? sessionId = null, string surface = "cli", SessionSettings? settings = null)
     {
         var id = sessionId ?? NewSessionId(surface);
+        TakeDriver(id);
         if (settings is not null)
             _settings.TryAdd(id, settings);
         Sessions.GetOrCreate(id);
@@ -312,6 +513,22 @@ public sealed class CorvidRuntime : IAsyncDisposable
             return _maintenance;
     }
 
+    /// <summary>
+    /// Waits at most <paramref name="bound"/> for background work (a surface leaving: <c>corvid chat</c>'s exit). When it is
+    /// not done by then, the titles being written are cancelled, so leaving is never held by the generator; a session left
+    /// untitled is queued again after its next answered exchange. True when the work finished in time.
+    /// </summary>
+    public async Task<bool> MaintenanceIdleAsync(TimeSpan bound)
+    {
+        var idle = MaintenanceIdleAsync();
+        // A timeout, like the work's own failure, is not the caller's: suppressed.
+        await idle.WaitAsync(bound).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        if (idle.IsCompleted)
+            return true;
+        await _titling.CancelAsync().ConfigureAwait(false);
+        return false;
+    }
+
     public async ValueTask DisposeAsync()
     {
         await _lifetime.CancelAsync().ConfigureAwait(false);
@@ -325,8 +542,13 @@ public sealed class CorvidRuntime : IAsyncDisposable
         if (_lessonLearning is not null)
             await _lessonLearning.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         lock (_schedulerGate)
+        {
             _schedulerLock?.Dispose();
+            _schedulerStop?.Dispose();
+        }
         await Sessions.DisposeAsync().ConfigureAwait(false);
+        // After the sessions, so no turn of theirs is still writing when another process may take one over (G-12).
+        ReleaseDrivers();
         // After the sessions, so no turn is still calling a server; this stops every server process.
         if (Mcp is not null)
             await Mcp.DisposeAsync().ConfigureAwait(false);
@@ -339,6 +561,7 @@ public sealed class CorvidRuntime : IAsyncDisposable
         _composer.Dispose();
         Devices.Dispose();
         _lifetime.Dispose();
+        _titling.Dispose();
     }
 
     internal static string NewSessionId(string surface) =>
@@ -355,14 +578,15 @@ public sealed class CorvidRuntime : IAsyncDisposable
     /// turns finish (the gateway) keeps each chat's order without waiting for answers.
     /// </summary>
     internal async Task<Task<Delivery>> PostAsync(CorvidSession session, string text, EnvelopeOrigin origin, GuestScope? guest,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, ShellLine? shell = null)
     {
         var messageId = Guid.NewGuid().ToString("N");
         var waiter = new TaskCompletionSource<Delivery>(TaskCreationOptions.RunContinuationsAsynchronously);
         _waiting[messageId] = waiter;
         try
         {
-            await Sessions.PostAsync(new Envelope(session.Id, session.Surface, text, origin, messageId) { Guest = guest }, cancellationToken).ConfigureAwait(false);
+            await Sessions.PostAsync(new Envelope(session.Id, session.Surface, text, origin, messageId) { Guest = guest, Shell = shell },
+                cancellationToken).ConfigureAwait(false);
         }
         catch
         {
@@ -382,13 +606,20 @@ public sealed class CorvidRuntime : IAsyncDisposable
 
     private SessionActor CreateActor(string sessionId)
     {
+        // G-12: every actor runs under the session's driver lock, also one made again for a message posted while the session
+        // was being let go of (ReleaseDriverAsync): idempotent when OpenSession already took it.
+        TakeDriver(sessionId);
         var slots = NewSlots(sessionId);
         var settings = _settings.TryGetValue(sessionId, out var chosen) ? chosen : SessionSettings.Default;
         var runner = new TurnRunner(sessionId, Services(slots, settings.Interactive, settings.Tools ? Tools : new ToolRegistry(), settings));
         var actor = new SessionActor(runner, slots, new Sink(this), new SessionActorOptions { EmbedderSwap = _swap });
-        _sessions[sessionId] = new CorvidSession(this, sessionId, slots, runner, actor);
+        _sessions[sessionId] = new CorvidSession(this, sessionId, slots, runner, actor) { Interactive = settings.Interactive };
         return actor;
     }
+
+    /// <summary>The built-in tools' examples and the kernel's <c>ask_user</c>'s (K-6), for the shortlist.</summary>
+    private static readonly IReadOnlyDictionary<string, ImmutableArray<string>> ToolExamples =
+        new Dictionary<string, ImmutableArray<string>>(BuiltinTools.Examples, StringComparer.Ordinal) { [AskUserTool.ToolName] = AskUserTool.Examples };
 
     /// <summary>One session's turn services over the shared ones. Scheduled runs are not interactive: nobody can be asked.</summary>
     private TurnServices Services(SessionModelSlots slots, bool interactive, ToolRegistry? tools = null, SessionSettings? session = null)
@@ -417,6 +648,8 @@ public sealed class CorvidRuntime : IAsyncDisposable
             Project = Memory?.Lessons is null ? null : Project,
             LessonLearning = interactive ? Memory?.LessonLearner : null,
             SkillShortlist = _skillShortlist,
+            // Turn progress and K-2's running tails, to whichever surface watches the session.
+            Listener = Feed.Listener,
             Options = new TurnOptions
             {
                 SystemPrompt = prompt,
@@ -431,7 +664,7 @@ public sealed class CorvidRuntime : IAsyncDisposable
                 ApprovalMode = Options.Approvals.Mode,
                 Interactive = interactive,
                 // C-005 has no examples file; C-012 wrote the built-in tools' examples by hand.
-                ToolExamples = BuiltinTools.Examples,
+                ToolExamples = ToolExamples,
             },
         };
     }
@@ -442,7 +675,7 @@ public sealed class CorvidRuntime : IAsyncDisposable
     /// gateway or ACP process takes the scheduler over once the chat that held it has exited, and its first pass runs what
     /// became due meanwhile (missed ticks collapse into one run, as in C-012). Nothing happens after disposal starts.
     /// </summary>
-    internal void WakeScheduler()
+    public void WakeScheduler()
     {
         if (!Options.Scheduler.Enabled)
             return;
@@ -470,21 +703,72 @@ public sealed class CorvidRuntime : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Hosts the scheduler in this process from now on (the app's Start hosting, U-8): takes its lock and runs due jobs, or,
+    /// while another process holds the lock, waits to take it over (<see cref="WakeScheduler"/> retries). True when it runs
+    /// here now. Off with <c>Corvid:Scheduler:Enabled</c> false.
+    /// </summary>
+    public bool StartScheduler()
+    {
+        if (!Options.Scheduler.Enabled)
+            return false;
+        lock (_schedulerGate)
+        {
+            if (_scheduler is null && !_lifetime.IsCancellationRequested)
+                StartSchedulerLocked();
+            return _jobScheduler is not null;
+        }
+    }
+
+    /// <summary>
+    /// Stops hosting the scheduler (the app's Stop hosting): the scheduler stops (a run in progress is cancelled and marked
+    /// so), its lock is released for another process, and this runtime takes it over no more until <see cref="StartScheduler"/>.
+    /// </summary>
+    public async Task StopSchedulerAsync()
+    {
+        Task? running;
+        CancellationTokenSource? stop;
+        lock (_schedulerGate)
+        {
+            (running, stop) = (_scheduler, _schedulerStop);
+            if (stop is not null)
+                stop.Cancel();
+        }
+        if (running is not null)
+            await running.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        lock (_schedulerGate)
+        {
+            // Only what this call stopped: a Start that ran meanwhile keeps its own.
+            if (ReferenceEquals(_schedulerStop, stop))
+            {
+                _schedulerLock?.Dispose();
+                _schedulerLock = null;
+                _scheduler = null;
+                _jobScheduler = null;
+                _schedulerStop = null;
+                stop?.Dispose();
+            }
+            if (Options.Scheduler.Enabled && _scheduler is null)
+                SchedulerState = SchedulerNotHosted;
+        }
+    }
+
     private void StartSchedulerLocked()
     {
         try
         {
-            _schedulerLock = new FileStream(Builtin.Jobs.Path + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            _schedulerLock = ProcessLock.TryAcquire(SchedulerLockPath, attempts: 3);
         }
-        catch (IOException)
+        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
         {
-            SchedulerState = SchedulerElsewhere;
+            // An unwritable lock file (a read-only directory, a full disk) should not stop the chat; the jobs simply wait
+            // for a process that can run them. Not "run by another process": nobody holds it.
+            SchedulerState = "off: " + FileLocks.Unopenable(SchedulerLockPath, exception);
             return;
         }
-        catch (UnauthorizedAccessException exception)
+        if (_schedulerLock is null)
         {
-            // An unwritable lock file should not stop the chat; the jobs simply wait for a process that can run them.
-            SchedulerState = "off: " + exception.Message;
+            SchedulerState = SchedulerElsewhere;
             return;
         }
         var scripts = new SandboxedScriptRunner(Builtin.Shell, Approvals, Options.Approvals.Mode);
@@ -501,7 +785,9 @@ public sealed class CorvidRuntime : IAsyncDisposable
         };
         SchedulerState = "running in this process";
         _jobScheduler = scheduler;
-        var lifetime = _lifetime.Token;
+        _schedulerStop?.Dispose();
+        _schedulerStop = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        var lifetime = _schedulerStop.Token;
         _scheduler = Task.Run(() => scheduler.RunAsync(lifetime));
     }
 
@@ -543,6 +829,12 @@ public sealed class CorvidRuntime : IAsyncDisposable
         // Queued before the sender hears back, so MaintenanceIdleAsync after SendAsync always covers this turn.
         if (Memory is { } memory)
             QueueCatchUp(memory, delivery.Request.SessionId);
+        // K-9: after an answered exchange, a session without a title gets one from the local generator, in the background.
+        // Not for sessions nobody looks at as a conversation here (an HTTP client's, non-interactive): each would cost a call.
+        if (delivery.Result is { Status: TurnStatus.Answered, Text: not null } && Titles is { Unavailable: null, Options.Generate: true }
+            && !_titled.ContainsKey(delivery.Request.SessionId)
+            && TryGetSession(delivery.Request.SessionId, out var answered) && answered.Interactive)
+            QueueTitle(delivery.Request.SessionId);
         if (delivery.Request.MessageId is { } id && _waiting.TryRemove(id, out var waiter))
             waiter.TrySetResult(delivery);
     }
@@ -559,6 +851,35 @@ public sealed class CorvidRuntime : IAsyncDisposable
                     var added = memory.Episodes.CatchUp(Log, sessionId);
                     if (added.Count > 0)
                         await memory.Vectors.EmbedAsync([.. added.Select(episode => (episode.ItemId, episode.Text))]).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is not OutOfMemoryException)
+                {
+                }
+            }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
+    }
+
+    // On the maintenance chain, so MaintenanceIdleAsync (the CLI before it exits) waits for the title. A title is a
+    // convenience: a failure leaves the session titled by its first message.
+    private void QueueTitle(string sessionId)
+    {
+        var (end, leaving) = (_lifetime.Token, _titling.Token);
+        lock (_maintenanceGate)
+            _maintenance = _maintenance.ContinueWith(async _ =>
+            {
+                try
+                {
+                    using var titling = CancellationTokenSource.CreateLinkedTokenSource(end, leaving);
+                    var lifetime = titling.Token;
+                    if (SessionProjection.Load(Log, sessionId, cancellationToken: lifetime).Title is not null)
+                    {
+                        _titled[sessionId] = 0;
+                        return;
+                    }
+                    if (await Titles.TitleAsync(sessionId, lifetime).ConfigureAwait(false) is { } titled)
+                    {
+                        _titled[sessionId] = 0;
+                        TitleChanged?.Invoke(sessionId, titled);
+                    }
                 }
                 catch (Exception exception) when (exception is not OutOfMemoryException)
                 {
@@ -618,6 +939,9 @@ public sealed class CorvidSession
 
     public string Surface { get; internal set; } = "cli";
 
+    /// <summary>Someone can answer its approvals (<see cref="SessionSettings.Interactive"/>); an HTTP client's session cannot.</summary>
+    public bool Interactive { get; internal init; } = true;
+
     public SessionModelSlots Slots { get; }
 
     public SessionActor Actor { get; }
@@ -660,8 +984,45 @@ public sealed class CorvidSession
         return _runtime.PostAsync(this, text, EnvelopeOrigin.External, guest, cancellationToken);
     }
 
+    /// <summary>
+    /// The composer's <c>!</c> line (A4): queues a turn that runs <paramref name="shell"/>'s command as the user's own
+    /// <c>shell</c> call (approvals, sandbox, checkpoints) and asks the generator nothing; <paramref name="line"/> is the line
+    /// as typed, which the log keeps as the message. Returns once queued, with a task for its delivery.
+    /// </summary>
+    public Task<Task<Delivery>> PostShellAsync(string line, ShellLine shell, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(line);
+        ArgumentNullException.ThrowIfNull(shell);
+        return _runtime.PostAsync(this, line, EnvelopeOrigin.User, null, cancellationToken, shell);
+    }
+
+    /// <summary>
+    /// The composer's <c>#</c> line (A4): <paramref name="text"/> through memory's gated write path, as the user's request.
+    /// Without a calibrated decider it is staged for <c>/memory pending</c>; in a tainted session it is staged whatever the
+    /// decider says (plan §10.3); a credential is refused and stored nowhere.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Memory is off, or there is no extractor to write with.</exception>
+    public Task<MemoryWriteResult> RememberAsync(string text, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(text);
+        if (_runtime.Memory?.Writer is not { } writer)
+            throw new InvalidOperationException(_runtime.Memory is null
+                ? "Memory is off (Corvid:Memory:Enabled), so nothing was staged."
+                : "Memory writes need the extractor slot; bind one to stage and review writes.");
+        var generator = Slots.TryCurrent(ModelSlots.Generator, out var binding) ? binding.Profile.Id : "unknown";
+        return writer.WriteAsync(new MemoryWriteRequest(Id, text.Trim(), Surface: Surface, Generator: generator, Tainted: Tainted),
+            cancellationToken);
+    }
+
     /// <summary>Cancels the running turn (Ctrl-C, <c>/cancel</c>).</summary>
     public void Cancel() => Actor.CancelTurn();
+
+    /// <summary>
+    /// K-3, steer now: the person's message for the running turn, taken at its next step checkpoint. True once taken; false
+    /// when no turn was running or it ended first, and the caller sends the text as an ordinary message instead.
+    /// </summary>
+    /// <param name="withdraw">Takes the steer back while it still waits (the person removed it from the queue).</param>
+    public Task<bool> SteerAsync(string text, CancellationToken withdraw = default) => Actor.SteerAsync(text, withdraw);
 
     public SessionSnapshot Snapshot() => SessionProjection.Load(_runtime.Log, Id);
 

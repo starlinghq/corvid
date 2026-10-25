@@ -92,6 +92,13 @@
 
       <!-- The tags go here, each its own item (StatusBarView.xaml.cs): "tainted" never gives way, the others last of all. -->
 
+      <!-- U-8: whenever this app hosts the gateway or the scheduler for the machine, on every page; it never gives way. -->
+      <StackPanel Orientation="Horizontal" Spacing="3.37" VerticalAlignment="Center"
+                  Visibility="{x:Bind infra:Ui.VisibleIfText(Shell.StatusBar.Hosting), Mode=OneWay}"
+                  ToolTipService.ToolTip="This app hosts these for the machine; the Gateway and Jobs pages stop it">
+        <TextBlock Text="hosting" FontWeight="Medium" Foreground="{ThemeResource CorvidAmber}" TextWrapping="NoWrap" />
+        <TextBlock Text="{x:Bind Shell.StatusBar.Hosting, Mode=OneWay}" TextWrapping="NoWrap" />
+      </StackPanel>
       <StackPanel Orientation="Horizontal" Spacing="3.37" VerticalAlignment="Center"
                   local:FitRowPanel.GiveWay="2" Visibility="{x:Bind infra:Ui.VisibleIfText(Shell.StatusBar.Scheduler), Mode=OneWay}">
         <TextBlock Text="scheduler" FontWeight="Medium" Foreground="{ThemeResource CorvidText}" TextWrapping="NoWrap" />

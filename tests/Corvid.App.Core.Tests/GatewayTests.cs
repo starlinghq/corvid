@@ -53,6 +53,88 @@ public sealed class GatewayTests
         Assert.Equal("before", rig.Bar.Gateway);
     }
 
+    /// <summary>A service with one snapshot, for where the gateway runs (G-14).</summary>
+    private sealed class FixedGateway(GatewayHost host) : IGatewayService
+    {
+        public event EventHandler? Changed { add { } remove { } }
+
+        public Task<GatewaySnapshot> LoadAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new GatewaySnapshot(host, [new GatewayAdapter("telegram", AdapterState.Unknown)], [], [], [], [], []));
+
+        public Task<PairedUser> PairAsync(string requestId, PairingRole role, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task IgnoreAsync(string requestId, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task RevokeAsync(string userId, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<PairedUser> SetAllowlistAsync(string userId, IReadOnlyList<string> tools, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+    }
+
+    /// <summary>A store another process changes (<c>corvid gateway pair tools</c> in a terminal): no change is announced.</summary>
+    private sealed class QuietGateway : IGatewayService
+    {
+        public IReadOnlyList<string> Tools { get; set; } = [];
+
+        public event EventHandler? Changed { add { } remove { } }
+
+        public Task<GatewaySnapshot> LoadAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new GatewaySnapshot(new GatewayHost(true, "", null), [new GatewayAdapter("telegram", AdapterState.Down)], [],
+                [new PairedUser("telegram:424242", "telegram", "Alex", PairingRole.Guest, ManualTimeProvider.Demo().GetUtcNow()) { Allowlist = Tools }],
+                [], [], ["list_files", "read_file"]));
+
+        public Task<PairedUser> PairAsync(string requestId, PairingRole role, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task IgnoreAsync(string requestId, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task RevokeAsync(string userId, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<PairedUser> SetAllowlistAsync(string userId, IReadOnlyList<string> tools, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+    }
+
+    [Fact]
+    public void ComingBackToThePageReadsTheStoreAgainSoATerminalsChangeShows()
+    {
+        var time = ManualTimeProvider.Demo();
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar);
+        shell.Navigate(Area.Gateway);
+        var service = new QuietGateway();
+        using var gateway = new GatewayViewModel(service, shell, bar, time);
+        Assert.Equal("none: it can only talk", Assert.Single(gateway.Users).ToolsText);
+
+        shell.Navigate(Area.Board);
+        service.Tools = ["list_files", "read_file"];
+        shell.Navigate(Area.Gateway);
+
+        Assert.Equal("list_files, read_file", Assert.Single(gateway.Users).ToolsText);
+    }
+
+    private static GatewayViewModel Showing(GatewayHost host)
+    {
+        var time = ManualTimeProvider.Demo();
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar);
+        shell.Navigate(Area.Gateway);
+        return new GatewayViewModel(new FixedGateway(host), shell, bar, time);
+    }
+
+    [Fact]
+    public void ThePageSaysWhichProcessHostsTheGatewayOrWhyNoneDoes()
+    {
+        using var elsewhere = Showing(new GatewayHost(false, "corvid gateway (pid 4127)", ManualTimeProvider.Demo().GetUtcNow().AddMinutes(-5)));
+        Assert.Equal("elsewhere", elsewhere.HostTag);
+        Assert.StartsWith("corvid gateway (pid 4127) hosts the gateway since ", Text(elsewhere.HostText), StringComparison.Ordinal);
+        Assert.StartsWith("hosted by corvid gateway (pid 4127) · ", Text(elsewhere.Subtitle), StringComparison.Ordinal);
+
+        // G-14: nobody hosts it, and the page says why rather than naming a holder.
+        using var nowhere = Showing(new GatewayHost(false, "", null) { Reason = "No gateway adapter is enabled." });
+        Assert.Equal("off", nowhere.HostTag);
+        Assert.StartsWith("No process hosts the gateway: No gateway adapter is enabled.", Text(nowhere.HostText), StringComparison.Ordinal);
+        Assert.StartsWith("not running · ", Text(nowhere.Subtitle), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task PairingAsAGuestGivesNoToolsAndAnswersTheBoardsItem()
     {
@@ -317,7 +399,7 @@ public sealed class GatewayTests
     [Fact]
     public void TheCompositionBuildsGatewayOnTheDemoAndDisposesIt()
     {
-        Assert.True(AppOptions.TryParse(["--page", "gateway"], out var options, out var error), error);
+        Assert.True(AppOptions.TryParse(["--demo", "--page", "gateway"], out var options, out var error), error);
         using var composition = new AppComposition(options, new InlineDispatcher(), ManualTimeProvider.DemoLocal());
 
         Assert.Single(composition.Gateway.Requests);
@@ -327,7 +409,7 @@ public sealed class GatewayTests
     [Fact]
     public async Task TheBellFollowsAPairingAnsweredHereBeforeTheBoardExists()
     {
-        Assert.True(AppOptions.TryParse(["--page", "gateway"], out var options, out var error), error);
+        Assert.True(AppOptions.TryParse(["--demo", "--page", "gateway"], out var options, out var error), error);
         using var composition = new AppComposition(options, new InlineDispatcher(), ManualTimeProvider.DemoLocal());
         var gateway = composition.Gateway;
         var areaItems = (await composition.BoardService.ListAttentionAsync(TestContext.Current.CancellationToken)).Count;

@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Corvid.App.Core;
 using Corvid.App.Core.Models;
 using Corvid.App.Core.Mvvm;
+using Corvid.Host.Audit;
 using Corvid.Host.Composition;
 using Corvid.Host.Configuration;
 using Corvid.Host.Diagnostics;
@@ -75,6 +76,25 @@ public sealed class EngineModelService : IModelService, IDisposable
         // Until the first load: nothing known, which the pages show as "checking" rather than as Vault's absence.
         _base = _snapshot = new ModelsSnapshot(_writer.Path, false, [], [], new CloudPrivacy("", false, false, 0, 0, 0),
             new DeciderStatus("", "", DeciderTier.Degraded, "", "", "", ""), [], [], "") { IsLoaded = false };
+        _engine.Started += OnEngineStarted;
+    }
+
+    /// <summary>The runtime started after the window opened (a model fetched since): the list reads the cache and the slots again.</summary>
+    private void OnEngineStarted(Corvid.Host.Composition.CorvidRuntime runtime)
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+            return;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await RefreshAsync(_lifetime.Token).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                Console.Error.WriteLine($"corvid app: the models could not be read again after the start: {exception.Message}");
+            }
+        });
     }
 
     public event EventHandler? Changed;
@@ -363,9 +383,12 @@ public sealed class EngineModelService : IModelService, IDisposable
             if (_disposed != 0)
                 return;
             _disposed = 1;
-            background = [.. _background];
         }
+        // Under the list's own lock, which Track adds and removes under: a copy taken while a task finishes would hold a null.
+        lock (_background)
+            background = [.. _background];
 
+        _engine.Started -= OnEngineStarted;
         _lifetime.Cancel();
         _http.Dispose();
         // The pump stops at its next report; whatever it was fetching keeps its partial file for a later resume.
@@ -512,6 +535,10 @@ public sealed class EngineModelService : IModelService, IDisposable
             Console.Error.WriteLine($"corvid app: downloading {name} failed: {failure}");
         if (Volatile.Read(ref _disposed) != 0)
             return;
+        // The runtime could not start for want of models (First run): with this one in, it may start now, so Sessions works
+        // without restarting the app. It loads on the pool; the status bar and the rail follow it.
+        if (failure is null && !_engine.MissingModels.IsEmpty)
+            _ = StartEngineAsync();
         try
         {
             await RefreshAsync(CancellationToken.None).ConfigureAwait(false);
@@ -525,6 +552,20 @@ public sealed class EngineModelService : IModelService, IDisposable
                 _problem = $"{(failure is null ? $"{name} downloaded" : $"Downloading {name} ended")}, but the models could not be read again, " +
                     $"so this list may be out of date: {exception.Message}";
             Republish();
+        }
+    }
+
+    /// <summary>Starts the runtime once nothing configured is missing; a start that fails again is written to the log, never lost.</summary>
+    private async Task StartEngineAsync()
+    {
+        try
+        {
+            if (await _engine.StartAgainAsync().ConfigureAwait(false))
+                Republish();
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            Console.Error.WriteLine($"corvid app: the runtime could not start after the downloads: {exception.Message}");
         }
     }
 
@@ -633,14 +674,35 @@ public sealed class EngineModelService : IModelService, IDisposable
             validated,
             [.. ModelSlots.All.Select(slot => Slot(slot, slots.GetValueOrDefault(slot), runtime, session))],
             catalogue,
-            new CloudPrivacy(options.Privacy.Cloud.ToString().ToLowerInvariant(), ExtractorBound(runtime, slots, availability), vaultPresent, 0, 0, 0)
-            {
-                TodayUnknown = "not counted here yet: the egress ledger's counts come with Audit (G-9)",
-            },
+            Privacy(options, ExtractorBound(runtime, slots, availability), vaultPresent),
             Decider(options, slots, availability, runtime),
             Gpus(gpuChecks),
             Placements(options),
             $"{options.Devices.CpuThreads} {(options.Devices.CpuThreads == 1 ? "thread" : "threads")} for models on the CPU (Corvid:Devices:CpuThreads)");
+    }
+
+    /// <summary>
+    /// The privacy panel: the posture, and today's counts from the egress ledger (G-9), read from its file so they show while
+    /// the models load. "Today" is the clock's local day. A ledger that cannot be read says so in place of the counts.
+    /// </summary>
+    private CloudPrivacy Privacy(CorvidOptions options, bool extractorBound, bool vaultPresent)
+    {
+        var posture = options.Privacy.Cloud.ToString().ToLowerInvariant();
+        var now = _time.GetUtcNow();
+        var local = TimeZoneInfo.ConvertTime(now, _time.LocalTimeZone);
+        var midnight = new DateTimeOffset(local.Date, local.Offset);
+        try
+        {
+            var counts = new EgressLedger(CorvidPaths.EgressDatabase(options)).Count(midnight);
+            return new CloudPrivacy(posture, extractorBound, vaultPresent, counts.Requests, counts.RedactedValues, counts.Refused);
+        }
+        catch (Exception exception) when (exception is not (OutOfMemoryException or OperationCanceledException))
+        {
+            return new CloudPrivacy(posture, extractorBound, vaultPresent, 0, 0, 0)
+            {
+                TodayUnknown = "the egress ledger could not be read: " + exception.Message,
+            };
+        }
     }
 
     private ModelSlot Slot(string slot, SlotSettings? settings, CorvidRuntime? runtime, CorvidSession? session)

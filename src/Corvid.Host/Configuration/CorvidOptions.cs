@@ -55,6 +55,39 @@ public sealed class CorvidOptions
 
     /// <summary>Detection rules over the session event log (C-023), inline at pre_execute and by <c>corvid scan</c>.</summary>
     public DetectionSettings Detections { get; set; } = new();
+
+    /// <summary>Session titles and recaps (G-6).</summary>
+    public SessionsSettings Sessions { get; set; } = new();
+
+    /// <summary>The windowed app's own choices (U-8); the CLI's commands ignore them.</summary>
+    public AppSettings App { get; set; } = new();
+}
+
+/// <summary>
+/// What the windowed app hosts when it is the engine (U-8). Both are off by default: hosting the gateway connects every
+/// enabled adapter with its Vault token, and hosting the scheduler runs scheduled jobs with their tools, so the person turns
+/// each on (here, or Start hosting on the Gateway and Jobs pages). The one-lock rule still decides which process runs them.
+/// </summary>
+public sealed class AppSettings
+{
+    /// <summary>The app hosts the gateway: connects the enabled adapters with their Vault tokens while it is open.</summary>
+    public bool HostGateway { get; set; }
+
+    /// <summary>The app hosts the scheduler: runs due jobs, with their tools, while it is open (<c>Corvid:Scheduler:Enabled</c> permitting).</summary>
+    public bool HostScheduler { get; set; }
+}
+
+/// <summary>Session titles and recaps (G-6, extending K-9), written by the local generator only.</summary>
+public sealed class SessionsSettings
+{
+    /// <summary>Title a session with the local generator after its first exchange. Renames work either way.</summary>
+    public bool Titles { get; set; } = true;
+
+    /// <summary>
+    /// Minutes a person must have been away from a session before resuming it shows a recap of what happened (the CLI's
+    /// <c>--session</c>, the app opening it); 0 turns recaps on return off. <c>/recap</c> works either way.
+    /// </summary>
+    public int RecapAfterMinutes { get; set; } = 60;
 }
 
 public sealed class DetectionSettings
@@ -576,6 +609,27 @@ public sealed class PrivacySettings
 
     /// <summary>Minimum span confidence; lower is stricter.</summary>
     public float Threshold { get; set; } = EgressPolicy.Default.Threshold;
+
+    /// <summary>How long the egress ledger (G-9, <c>egress.db</c>) keeps the requests it recorded.</summary>
+    public EgressLedgerSettings Ledger { get; set; } = new();
+}
+
+/// <summary>
+/// The egress ledger's retention (<c>Corvid:Privacy:Ledger</c>): requests older than <see cref="RetainDays"/> are pruned,
+/// then the oldest until the text kept is at most <see cref="MaxMegabytes"/>, then the message bodies no request still
+/// uses. Pruned when a process first records into the store and at most daily after, and by <c>corvid egress prune</c>.
+/// </summary>
+public sealed class EgressLedgerSettings
+{
+    /// <summary>Days a request is kept; 0 keeps requests whatever their age.</summary>
+    public int RetainDays { get; set; } = 90;
+
+    /// <summary>The most message text kept, in MB (1 MB = 1,048,576 bytes); 0 sets no size cap.</summary>
+    public int MaxMegabytes { get; set; } = 256;
+
+    /// <summary>The retention these settings describe.</summary>
+    public Audit.EgressRetention Retention() => new(RetainDays > 0 ? TimeSpan.FromDays(RetainDays) : null,
+        MaxMegabytes > 0 ? MaxMegabytes * 1024L * 1024 : null);
 }
 
 /// <summary>One model's egress policy; anything left unset comes from <see cref="PrivacySettings"/>.</summary>

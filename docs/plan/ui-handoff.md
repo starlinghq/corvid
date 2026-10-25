@@ -18,7 +18,8 @@ pull request starlinghq/corvid#71.
 | A0 verify loop | done: one independent verifier, one fix round (§1.1) | `60e90fd` |
 | A1 the seven other mocked screens: Review and Rewind, Board, Models and First run, Memory, Audit | done, verified on the running app by an independent verifier in two rounds (§1.2) | branch `a1/screens` |
 | A2 the pages without mockups (Skills, Jobs, MCP, Gateway, Safety, Secrets, Settings), the palette, the rest of the keys, the phone screens, an accessibility pass | done, verified on the running app in three rounds, PR review fixed (§1.3) | PR #76, branch `a2/screens` |
-| A3 `Corvid.App.Engine`: the real runtime behind the services | done behind `--engine`, verified end to end in three rounds (§1.4) | branch `a3/engine` |
+| A3 `Corvid.App.Engine`: the real runtime behind the services | done behind `--engine`, verified end to end in three rounds, PR review fixed (§1.4) | PR #77 |
+| A4 the gaps A3 left: the running turn, records, egress, hosting, parity; the engine becomes the default | done, verified end to end in three rounds (§1.5) | branch `a4/engine` |
 
 The build ran as a workflow in a cloud container: one agent per step, each building, launching the app on a virtual
 display, screenshotting it and comparing it with the mockup renders, then an independent verifier. It was stopped during
@@ -203,7 +204,8 @@ Secrets), an integrator that added the Board and prompt history over the merged 
 independent verifier with fix rounds (round 1 found one major defect, round 2 one major and three minor; round 3
 passed with five minor ones).
 
-- **`--engine`** runs the app on the real runtime; `--demo` stays the default. `AppComposition` takes an `IAppServices`
+- **`--engine`** runs the app on the real runtime; `--demo` stayed the default until A4, which made the engine the
+  default (§1.5). `AppComposition` takes an `IAppServices`
   (`DemoAppServices`, `EngineAppServices`, or `UnavailableAppServices`, which refuses each area by name). The demo's
   Review and Rewind no longer cast the session service.
 - **K-10** is in `Corvid.Host/Sessions`: `SessionStreamUpdate`, `SessionUpdateReporter` (Acp's `TurnReporter` logic
@@ -227,12 +229,12 @@ to schema 3 (one way: an older binary refuses it) so an edited draft applies onl
 against; First run starts from the configured approval mode and cloud posture and writes only what the person changes;
 Safety searches the 50 most recent sessions.
 
-Refused on the engine, each with its message on the page: the egress ledger (G-9), hosting the gateway in the app
-(G-14) and the per-person guest allowlist, rename (G-6), steering (K-3), clarifying questions (K-6), the output tail
-(K-2), turn progress, app preferences beyond the window (G-7, ui.db), memory consolidation (plan §9.5), opening a
-terminal or the Vault helper (U-6), and the Vault policy and daily counts (V-n).
+Refused on the engine at the end of A3, each with its message on the page: the egress ledger (G-9), hosting the gateway
+in the app (G-14) and the per-person guest allowlist, rename (G-6), steering (K-3), clarifying questions (K-6), the output
+tail (K-2), turn progress, app preferences beyond the window (G-7, ui.db), memory consolidation (plan §9.5), opening a
+terminal or the Vault helper (U-6), and the Vault policy and daily counts (V-n). A4 built all but the last three (§1.5).
 
-Left:
+Left at the end of A3 (A4 closed every item here except those §1.5 still lists):
 
 - The `#` (stage a memory) and `!` (shell) composer modes are advertised but built nowhere; the engine sends them as text.
 - Replay differs from live: no generator or decisions per replayed turn, an interrupted turn or one cut by a rollback
@@ -254,7 +256,124 @@ Left:
   as "another process is writing".
 - Not walked on the engine: F8, F10, F12, F14's switch and download, F15, F16, F17 with a Vault.
 
+### 1.5 The gaps A3 left (A4)
+
+Five groups in parallel worktrees, merged one at a time by an integrator (`a4/gaps-int`), building and running every
+test project after each merge:
+
+- **The running turn (`a4/turn`).** K-3: Ctrl+Enter steers the running turn; the kernel takes a steer at its next step
+  checkpoint (`UserSteered`, a user message that starts no turn), and one the turn ends without taking goes to the head of
+  the queue. K-6: `ask_user` ends a turn Clarifying with a question (`ClarificationAsked`); the queue holds until the
+  person answers, the rail shows it waiting, and an answer is sent as their words (a `#` line typed then stages its fact and the question stays open; a `!` line is
+  refused until the question is answered, in the app, the engine and `corvid chat`).
+  K-2: a running call's output tail (shell, web_fetch), bounded, scrubbed and throttled. Turn progress: the step on the
+  turn and the rail. `corvid chat` shows the step and a running call's last line, and numbers a question's choices; it
+  has no steer (it reads no input while a turn runs).
+- **Records (`a4/records`).** G-6: generated titles (local generator only), rename, recaps on request and after an
+  absence (`SessionTitled`, `SessionRecapped`), shared by the app, `corvid chat` (`/sessions`, `/rename`, `/recap`, `/pin`)
+  and ACP's `session/list`. G-7: `ui.db` for pins, drafts, review points and the app's preferences. The composer's `!`,
+  `!!` and `#` lines, parsed once by the host's `ComposerLine` for the CLI and the app.
+- **Egress (`a4/egress`).** G-9: the egress ledger (`egress.db` beside `events.db`, `EgressRecorded` in the session log),
+  on the Audit page and in `corvid egress`. The store keeps requests for `Corvid:Privacy:Ledger:RetainDays` (90 by
+  default; 0 keeps any age) and at most `MaxMegabytes` of message text (256; 0 for no cap): requests past either go, then
+  the message bodies no request still uses, when a process first records into it and at most daily after (the store
+  records the last prune), and at once with `corvid egress prune`, which also compacts the file. G-2: why a call that asked nobody ran or was refused (`ApprovalAssessed`), on
+  its card, live and on replay.
+- **Hosting (`a4/hosting`).** G-12: one driver per session across processes (a lock under the data directory); a session
+  another process drives is followed read-only, its turns tailed from the log. G-14: the app hosts the gateway under the
+  same one-lock rule as `corvid gateway`, with a per-person guest allowlist (`gateway.db` schema 2 on the first one) and
+  `corvid gateway pair tools`; the Jobs page takes the scheduler over when its holder exits.
+  After the A4 review (security M1, the user's decision) hosting is opt-in: the app hosts neither the gateway nor the
+  scheduler unless `Corvid:App:HostGateway` or `Corvid:App:HostScheduler` is on (Settings › Hosting) or Start hosting on
+  the Gateway or Jobs page was answered (it asks once, naming what hosting does: the enabled adapters connect with their
+  Vault tokens; scheduled jobs run with their tools; it is remembered through the config writer). Stop hosting stops it
+  and releases the lock. While asked for and held elsewhere, the engine's own timer (`AppEngine.TakeOverInterval`, 10 s)
+  takes it over once the holder exits, with no page open (review M3). The status bar's "hosting" item, and the Gateway
+  and Jobs status lines, say whenever this app hosts either.
+- **Parity (`a4/parity`).** Replay carries each turn's generator, the checkpoints' decisions, taint and compaction
+  markers; an interrupted turn replays as interrupted. The approval mode, approval deadline, steps and output tokens
+  apply live from Settings. First run and Models start the runtime after their downloads without a restart. The A3
+  layout items with engine-length text, a read-only config directory said as such, the rule-write stall, and the round-3
+  minors (Send disabled with no session; a new session's title follows its first message).
+- **The engine is the default.** The app opens on the engine with no arguments (First run when models are missing);
+  `--demo` opts into the demo, and `--engine` is still accepted (it says the default). The browser head runs the demo.
+  Mockup comparisons and the harness pass `--demo` explicitly.
+
+Six new event types (`user_steered`, `clarification_asked`, `session_titled`, `session_recapped`, `approval_assessed`,
+`egress_recorded`): a binary older than A4 cannot read a log that holds them, the same one-way step earlier event
+additions took.
+
+Still refused on the engine, each with its message: memory consolidation (plan §9.5), opening a terminal or the Vault
+helper (U-6), the Vault policy, role, budget and daily counts (V-n), media memory (plan §9.4) and images in prompts (K-8).
+
+Left:
+
+- A question that blocks mid-turn (a question router beside the approval router); ACP has no tail or question
+  notifications; `corvid chat` shows `ask_user`'s call in its panel.
+- A steer is reported wherever the reporter next reads the log, not at a fixed place relative to the call that finished.
+- The Board's "Take over" stays disabled even when the lock is free; whether held sessions belong in the rail. (Since the
+  A4 review the app lets go of a session's driver lock once it stops viewing it and nothing of it runs or waits there,
+  and after a Rewind restore or a Review revert it opened: `CorvidRuntime.ReleaseDriverAsync`.)
+- A job's message is still read as the user's on replay (the log does not say a tainted job wrote it), so a replay can
+  show the taint cleared where the live turn kept it. A gateway guest's is not: since the A4 review `UserMessage.From`
+  names the guest, the prompt quotes it as outside content, and it never answers the owner's open question.
+- The lock files under `drivers/` are never removed (deleting a lock file another process may have just opened would let
+  two processes hold "the" lock); they are empty and one per session ever driven.
+
+The A4 end-to-end pass (engine by default, a scripted generator, Qwen3.5-0.8B for titles) fixed: sessions another
+process starts reaching the rail and the Board without a restart (the log is read every 3 s), a replayed call's time,
+Audit's session titles, a refusal's reason staying shown after its draft is kept, the Gateway page reading the store on
+each visit (a terminal's `pair approve`, `revoke`, `tools`), and titles and recaps with the local generator (it refuses
+sampling without a seed). Still open from that pass:
+
+- Token use is not in the log, so a replayed turn has no "0.2k tokens" and the context gauge is empty until the next turn.
+- A session's first opening after the app starts can land mid-transcript, with "Jump to bottom".
+- Text typed in the composer before a new session has opened (Ctrl+N while the runtime starts) is lost.
+- `Sandbox:LauncherPath` naming the real `corvid-sandbox` breaks every shell call: Corvid's state protection denies the
+  launcher's own path, and its stage 2 re-executes itself inside bubblewrap ("execvp ... Permission denied"). The app's
+  build output also has no `corvid-sandbox` beside it, so without the setting doctor fails it.
+- `Privacy:LocalServer: Redact` (and Cloud) redaction is far too eager with GLiNER2: JSON keys, "status", "details" and
+  the system prompt's words are replaced, so a redacted model sees mangled prompts and tool results.
+- A gateway adapter needs Vault for its token, so nothing in a temporary home can deliver a message; pairing, tools and
+  revoke were exercised through a seeded pairing code and the CLI.
+- With the 0.8B generator a title can be the answer's first sentence rather than eight words.
+
+The independent verifier ran three rounds: round 1 found a blocker (hidden characters in `ask_user`'s options reaching
+the answer sent) and a major defect, round 2 one major and seven minor, all fixed but one; round 3 passed with four
+minor ones.
+
+The PR review (four agents, one on security) found no high defect. Its fixes, beside the hosting decision above:
+
+- The lost steer was the approval card taking focus: letters typed after Enter went to the card and a space pressed its
+  focused "Allow once", approving a call by accident. Space no longer answers a card, a letter returns focus to the
+  composer with the typed text, and Ctrl+Enter on a card returns to the composer; Enter and 1–5 still answer.
+- A refused answer goes back to the composer; a `!` turn takes no steer; a steer taken as the decider says done gets
+  one more step; the kernel renames a model call id that starts with `user-shell`, and the CLI reports only its own
+  `!` line's result; the output tail is published outside its lock and scrubbed before it is cut.
+- The composer's `#` is a mode only before a space, and `!` only before a space or a command word, so `#123`,
+  `#include` and `!important:` are messages; `\#` and `\!` send the line as text (the placeholder says so, which
+  departs from `Main.png`'s wording). The egress ledger keeps 90 days and 256 MB by default (`Corvid:Privacy:Ledger`,
+  `corvid egress prune`); drafts are saved in order; `corvid chat` waits at most 3 s for a title at exit; `--scene`
+  implies `--demo`; `ui.db` is 0600 and the data directory 0700 when Corvid creates them.
+- A guest's message is logged with its sender (`UserMessage.From`), quoted as outside content in the prompt, and only
+  the owner's message closes an open question in a gateway chat; `/sessions` answers only in direct chats. The session
+  list is scanned only when the log changed; Rewind, Review and closing a view release the driver lock; lock I/O errors
+  are reported as such.
+
+An independent check of those fixes found a guest's words losing their label once compacted; that and its lows are
+fixed: a guest stays quoted as theirs in compaction, skill learning, titles, recaps and the decider's recent events
+(never a title source), quoting turns every line break into a quoted line and shows format characters, an approval card
+ignores repeated keys and, for 750 ms after it takes focus, Enter and digits, Stop hosting cannot race a page load, a
+driver lock is not released while a message is being routed or the session is viewed, and every store creates the
+data directory 0700.
+
+Left from the review: lock files under the data directory's `drivers/` are not removed (deleting one another process
+just opened would split the lock); a guest's own allowlist replaces the adapter's rather than narrowing it (the page
+says so); a few App.Engine tests time out now and then when the machine's CPU is saturated.
+
 ### What the running app shows today
+
+
 
 The shell matches `Main.png` outside the conversation: rail, badges, sessions with their dots and times, status bar,
 mode control, dock tab strip. It also matches in dark, and at 1024, 820 and 390 px wide, where the phone layout and its
@@ -278,6 +397,9 @@ dotnet --version                      # 10.0.401 or a later 10.0.4xx (global.jso
 dotnet build Corvid.slnx -c Release   # restores Uno.Sdk 6.7.30 from NuGet; no workload needed
 dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll --demo
 dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll --demo --scene approval --theme dark --page sessions
+# The engine is the default: with no --demo the app runs on this machine's Corvid home (corvid.json, models, event log).
+# Point HOME, CORVID_CONFIG and the XDG directories at a temporary home to try it without touching yours.
+dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll
 dotnet test --project tests/Corvid.App.Core.Tests/Corvid.App.Core.Tests.csproj -c Release
 dotnet run --project tools/Corvid.Architecture -c Release --no-build -- .
 ```

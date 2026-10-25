@@ -1,7 +1,10 @@
 using System.Collections.Immutable;
 using Corvid.App.Core.Sessions;
 using Corvid.Host.Sessions;
+using Corvid.Host.Telemetry;
 using HostPlan = Corvid.Host.Sessions.PlanChanged;
+using ApprovalAssessed = Corvid.Abstractions.Events.ApprovalAssessed;
+using ApprovalResolutions = Corvid.Abstractions.Events.ApprovalResolutions;
 
 namespace Corvid.App.Engine.Sessions;
 
@@ -14,8 +17,16 @@ namespace Corvid.App.Engine.Sessions;
 /// Turns: the stream has no turn marks, so a user's message opens one (<see cref="UserMessage"/> then
 /// <see cref="TurnStarted"/>, the order <see cref="SessionFold"/> expects); a live turn is closed by
 /// <see cref="EndTurn"/> with its delivery's outcome, a replayed one by the next message or <see cref="EndReplay"/>.
-/// What the log does not record stays unset rather than guessed: the generator a past turn ran on, its tokens, the
-/// outcome beyond "answered" (a replayed turn without an answer is marked failed, saying the log has none).
+/// A replayed turn names the generator its first decision saw (<see cref="PromptSent.Generator"/>) and carries its
+/// decisions, taint rows and compaction markers as the live one did. What the log does not record stays unset rather than
+/// guessed: a past turn's tokens, and the outcome beyond "answered" (a replayed turn without an answer was interrupted, cut
+/// by a rollback or stopped with its process, and ends as interrupted, as the live turn did).
+/// </para>
+/// <para>
+/// A steer (K-3) is a <see cref="UserMessage"/> marked <see cref="UserMessage.Steered"/> inside the turn that took it. A
+/// clarifying question (K-6) stays open until the person's next message, which answers it
+/// (<see cref="QuestionAnswered"/> just before that message): live or replayed alike, nothing else closes it. A step (turn
+/// progress) is a <see cref="TurnProgress"/>; a running call's tail (K-2) a <see cref="ToolCallUpdate.Tail"/>.
 /// </para>
 /// </summary>
 public sealed class SessionUpdateTranslator(string workspace)
@@ -28,9 +39,23 @@ public sealed class SessionUpdateTranslator(string workspace)
     // The log position of each turn's prompt, in turn order, for a compaction's range in turns.
     private readonly List<long> _turnStarts = [];
     private long _turnTokens;
+    // K-6: the question the latest clarifying turn ended on, until the next message answers it; and its text while its turn
+    // is the latest, so the answer that repeats it is not shown twice.
+    private string? _openQuestion;
+    private string? _questionText;
+    // A4V2-4: the turn's remember checkpoint chose to write, so the memory gate asked after its answer is the turn's; and
+    // whether the turn's latest output is answer text (a call after it, such as memory_add, asks the gate in the turn).
+    private bool _turnRemembers;
+    private bool _answerLast;
 
     /// <summary>The generator a turn opened from here on starts on ("fake-gen"); empty when unknown (a replay).</summary>
     public string Model { get; set; } = "";
+
+    /// <summary>
+    /// The next turn opened is a <c>!</c> line's (A4V2-5): it runs its command and no generator, so its header names none,
+    /// as its replay (whose log has no decision to name one) does. Taken by that turn's prompt.
+    /// </summary>
+    public bool ShellLine { get; set; }
 
     /// <summary>The step budget a turn opened from here on has (<c>Corvid:Turn:MaxSteps</c>); null when unknown (a replay).</summary>
     public int? MaxSteps { get; set; }
@@ -46,6 +71,9 @@ public sealed class SessionUpdateTranslator(string workspace)
             turn++;
         return turn;
     }
+
+    /// <summary>The open clarifying question's id (K-6): asked, and no message since. Null when none is open.</summary>
+    public string? OpenQuestion => _openQuestion;
 
     /// <summary>The latest turn's number (0 before the first).</summary>
     public int Turn { get; private set; }
@@ -66,14 +94,21 @@ public sealed class SessionUpdateTranslator(string workspace)
             _turnStarts.RemoveRange(Turn, _turnStarts.Count - Turn);
     }
 
-    /// <summary>What a replayed turn without an answer ends with.</summary>
-    public const string NoAnswer = "The log holds no answer for this turn.";
+    /// <summary>
+    /// What a turn the window interrupted ends with, and a replayed turn without an answer: the log records no end for an
+    /// interrupted turn, one a rollback cut or one whose process stopped, and each of them reads as interrupted.
+    /// </summary>
+    public const string Interrupted = "interrupted";
+
+    /// <summary>The taint so far (<see cref="TaintNoted"/>, replayed or live), for a replay to reconcile with the session's own.</summary>
+    public bool Tainted { get; private set; }
 
     public IReadOnlyList<SessionUpdate> Translate(SessionStreamUpdate update)
     {
         ArgumentNullException.ThrowIfNull(update);
         var output = new List<SessionUpdate>(2);
         var at = update.At;
+        var outside = false;
         switch (update)
         {
             case PromptSent prompt:
@@ -83,17 +118,54 @@ public sealed class SessionUpdateTranslator(string workspace)
                 Turn++;
                 TurnOpen = true;
                 _answered = false;
+                _answerLast = false;
                 _turnStarted = at;
                 _turnTokens = 0;
                 _turnStarts.Add(prompt.Sequence);
-                output.Add(new UserMessage(prompt.Text) { Position = prompt.Sequence, At = at });
-                output.Add(new TurnStarted(Turn, Model) { At = at, MaxSteps = MaxSteps });
+                _questionText = null;
+                _turnRemembers = false;
+                var generator = prompt.Generator ?? (ShellLine ? "" : Model);
+                ShellLine = false;
+                // K-6: the person's next message is their answer to the open question; nothing else answers it, a guest's
+                // message in a gateway chat included (security M2: shown as the guest's, the question stays open).
+                if (_openQuestion is { } open && prompt.From is null)
+                {
+                    _openQuestion = null;
+                    output.Add(new QuestionAnswered(open, prompt.Text) { At = at });
+                }
+                output.Add(new UserMessage(prompt.Text) { Position = prompt.Sequence, At = at, From = prompt.From });
+                // A replayed turn names the generator its first decision saw; a live one starts on the slot's.
+                output.Add(new TurnStarted(Turn, generator) { At = at, MaxSteps = MaxSteps });
                 output.AddRange(_early);
                 _early.Clear();
                 break;
             case AnswerChunk chunk:
                 _answered |= chunk.Text.Length > 0;
+                _answerLast |= chunk.Text.Length > 0;
+                // K-6: a clarifying turn's answer is its question, which the question's block shows: not twice.
+                if (_questionText is { } asked && string.Equals(chunk.Text.Trim(), asked, StringComparison.Ordinal))
+                    break;
                 output.Add(new AgentMessageChunk(chunk.Text) { At = at });
+                break;
+            // K-3: a steer the running turn took, in that turn.
+            case SteerSent steer:
+                output.Add(new UserMessage(steer.Text) { Position = steer.Sequence, Steered = true, At = at });
+                break;
+            // K-6: the question the turn ended on; it stays open past the turn's end, until the next message.
+            case QuestionRaised question:
+                _openQuestion = question.QuestionId;
+                _questionText = question.Text.Trim();
+                output.Add(new QuestionAsked(question.QuestionId, question.Text)
+                {
+                    At = at,
+                    // A short title for the tray when the question is longer than one; a one-line question is its own.
+                    Title = QuestionTitle(question.Text) is var title && title != question.Text.Trim() ? title : null,
+                    Options = question.Options.IsDefault ? [] : question.Options,
+                });
+                break;
+            // Turn progress: the step a response with tool calls began, with the turn's budget when known.
+            case TurnStepped stepped when TurnOpen:
+                output.Add(new TurnProgress(stepped.Step) { At = at, MaxSteps = stepped.MaxSteps ?? MaxSteps });
                 break;
             case ThoughtChunk thought:
                 output.Add(new AgentThoughtChunk(thought.Text) { At = at });
@@ -110,7 +182,15 @@ public sealed class SessionUpdateTranslator(string workspace)
                     ContextWindow = ContextWindow,
                 });
                 break;
+            // K-6: ask_user's call is the question's: its block shows it, so no tool card does.
+            case ToolCallStarted { Tool: Corvid.Kernel.Turns.AskUserTool.ToolName }:
+            case ToolCallChanged { Tool: Corvid.Kernel.Turns.AskUserTool.ToolName }:
+                break;
             case ToolCallStarted started:
+                // A4: a ! line's turn is its shell call (TurnRunner's user-shell ids); it has no answer, and needs none.
+                var userShell = started.CallId.StartsWith(Corvid.Kernel.Turns.TurnRunner.UserShellCall, StringComparison.Ordinal);
+                _answered |= userShell;
+                _answerLast = userShell;
                 output.Add(new ToolCall(started.CallId, started.Tool ?? started.Title, Kind(started.Kind, started.Tool), Status(started.Status))
                 {
                     At = at,
@@ -140,7 +220,9 @@ public sealed class SessionUpdateTranslator(string workspace)
                     Elapsed = changed.Elapsed,
                     Diffs = [.. changed.Diffs.Select(diff => new FileEdit(RelativePath(diff.Path), diff.OldText, diff.NewText))],
                     Locations = Relative(changed.Locations),
-                    Verdict = changed.Approval is { } approval ? Verdict(approval) : null,
+                    Verdict = Verdict(changed),
+                    // K-2: the running call's last lines, replacing the previous tail.
+                    Tail = changed.Tail,
                 });
                 break;
             case HostPlan plan:
@@ -149,7 +231,13 @@ public sealed class SessionUpdateTranslator(string workspace)
                     At = at,
                 });
                 break;
+            // A4V2-4: the memory gate asked for a # line, which logs no message: it belongs to no turn. Live it shows only as
+            // the line's notice, so a replay neither lists it in the turn before nor runs that turn's time on to it.
+            case DecisionsMade made when OutsideTurn(made.Decisions):
+                outside = true;
+                break;
             case DecisionsMade made:
+                _turnRemembers |= TurnOpen && made.Decisions.Questions.Any(question => question is { Question: Remember, Action: StartMemoryWrite, Acted: true });
                 var decided = new CheckpointDecided(made.Decisions.Checkpoint, made.Decisions.Decider,
                     [.. made.Decisions.Questions.Select(question => new DecisionAnswer(question.Question, question.Confidence, question.Action, question.Acted))])
                 {
@@ -161,11 +249,54 @@ public sealed class SessionUpdateTranslator(string workspace)
                 else
                     _early.Add(decided);
                 break;
+            case TaintNoted taint:
+                Tainted = taint.Tainted;
+                output.Add(new TaintChanged(taint.Tainted) { At = at, Source = taint.Source });
+                break;
+            case CompactionLogged logged:
+                var summary = logged.Compaction.Summary;
+                output.Add(new CompactionUpdate(Math.Max(1, TurnAt(logged.Compaction.FromSequence)), Math.Max(1, TurnAt(logged.Compaction.ThroughSequence)))
+                {
+                    At = at,
+                    Goal = summary.Goal,
+                    Constraints = summary.Constraints.IsDefault ? [] : summary.Constraints,
+                    Decisions = summary.Decisions.IsDefault ? [] : summary.Decisions,
+                    Files = summary.Files.IsDefault ? [] : summary.Files,
+                    OpenQuestions = summary.OpenQuestions.IsDefault ? [] : summary.OpenQuestions,
+                    NextStep = summary.NextStep,
+                    Summarizer = logged.Compaction.Summarizer,
+                    Focus = logged.Compaction.Focus,
+                    Expanded = logged.Expanded,
+                });
+                break;
             // CheckpointLogged: Rewind's timeline reads the ledger itself (A3 history); the transcript shows no row for it.
         }
-        if (at > _last)
+        // A compaction comes between turns, and so does a # line's memory gate: their time is not the replayed turn's end.
+        if (at > _last && update is not CompactionLogged && !outside)
             _last = at;
         return output;
+    }
+
+    private const string MemoryOp = "memory_op";
+    private const string Remember = "remember";
+    private const string StartMemoryWrite = "start_memory_write";
+
+    /// <summary>
+    /// A run of decisions that only asks the memory gate (<c>memory_op</c>), outside a turn or after its answer (answer text
+    /// with no call since) when the turn's own remember checkpoint did not write: a <c>#</c> line's (A4V2-4). One a turn's
+    /// <c>memory_add</c> call asks follows that call, and one its remember checkpoint asks follows a remember that acted.
+    /// A lesson is gated later, in the background, outside the turn live as well.
+    /// </summary>
+    private bool OutsideTurn(CheckpointDecisions decisions) =>
+        !decisions.Questions.IsDefaultOrEmpty && decisions.Questions.All(question => question.Question == MemoryOp)
+        && (!TurnOpen || (_answerLast && !_turnRemembers));
+
+    /// <summary>The question in a few words for the attention tray: its first line, cut to a short title.</summary>
+    internal static string QuestionTitle(string text)
+    {
+        var line = text.ReplaceLineEndings("\n").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault() ?? "";
+        return line.Length > 60 ? line[..59].TrimEnd() + "…" : line;
     }
 
     /// <summary>Ends the live turn with its delivery's outcome; nothing when no turn is open (its message never arrived).</summary>
@@ -184,14 +315,15 @@ public sealed class SessionUpdateTranslator(string workspace)
     private List<SessionUpdate> Close(TurnOutcome? outcome, DateTimeOffset at, TimeSpan? elapsed, string? error)
     {
         TurnOpen = false;
-        var known = outcome ?? (_answered ? TurnOutcome.Answered : TurnOutcome.Failed);
+        // A replayed turn the log holds no answer for did not finish: interrupted, as the live one ended.
+        var known = outcome ?? (_answered ? TurnOutcome.Answered : TurnOutcome.Cancelled);
         return
         [
             new TurnEnded(Turn, known)
             {
                 At = at,
                 Elapsed = elapsed ?? (at > _turnStarted ? at - _turnStarted : TimeSpan.Zero),
-                Error = error ?? (outcome is null && !_answered ? NoAnswer : null),
+                Error = error ?? (outcome is null && !_answered ? Interrupted : null),
                 // Live only (K-5): a replay knows no usage.
                 Tokens = _turnTokens > 0 ? (int)Math.Min(int.MaxValue, _turnTokens) : null,
             },
@@ -244,6 +376,75 @@ public sealed class SessionUpdateTranslator(string workspace)
             Detail = kind == VerdictKind.Denied ? approval.Note : null,
         };
     }
+
+    /// <summary>
+    /// A finished call's verdict: an asked call's answer (replay; live, the card's prompter closed it), else why it ran or
+    /// was refused unasked (G-2: the pipeline's assessment), else "read-only" for a tool that declared itself so; null when
+    /// none of these is known, which leaves the card's verdict as it was.
+    /// </summary>
+    internal static CallVerdict? Verdict(ToolCallChanged changed) => changed switch
+    {
+        { Approval: { } approval } => Verdict(approval) with { CheckpointId = approval.Approved ? changed.CheckpointBefore : null },
+        { Assessment: { } assessed } => Verdict(assessed, changed.CheckpointBefore),
+        { ReadOnly: true } => new CallVerdict(VerdictKind.ReadOnly),
+        _ => null,
+    };
+
+    /// <summary>
+    /// The pipeline's assessment of a call that asked nobody, in the card's terms: the rule that allowed or refused it (with
+    /// its scope), the mode and the <c>risk</c> level that let it run ("in workspace, no network"), the hardline rule or
+    /// the missing approver that refused it, and the checkpoint taken before it.
+    /// </summary>
+    internal static CallVerdict Verdict(ApprovalAssessed assessed, string? checkpoint)
+    {
+        var kind = assessed.Resolution switch
+        {
+            ApprovalResolutions.RuleAllowed => assessed.RuleScope == "always" ? VerdictKind.AlwaysRule : VerdictKind.SessionRule,
+            ApprovalResolutions.RuleDenied => VerdictKind.RuleDenied,
+            ApprovalResolutions.Hardline => VerdictKind.Hardline,
+            ApprovalResolutions.NoApprover => VerdictKind.NoApprover,
+            _ when assessed.Reasons.Any(reason => reason.Code == "read_only") => VerdictKind.ReadOnly,
+            _ => VerdictKind.Mode,
+        };
+        var allowed = kind is VerdictKind.Mode or VerdictKind.SessionRule or VerdictKind.AlwaysRule or VerdictKind.ReadOnly;
+        return new CallVerdict(kind)
+        {
+            Rule = assessed.Rule,
+            Mode = kind == VerdictKind.Mode ? Mode(assessed.Mode) : null,
+            RiskLevel = allowed ? assessed.Risk?.Level : null,
+            RiskConfidence = allowed ? assessed.Risk?.Confidence : null,
+            CheckpointId = allowed ? checkpoint : null,
+            Detail = kind switch
+            {
+                VerdictKind.Mode => Scope(assessed),
+                // The reasons that refused it; for a remembered denial, the rule says which.
+                VerdictKind.Hardline or VerdictKind.NoApprover => string.Join("; ", assessed.Reasons.Select(reason => reason.Detail)),
+                VerdictKind.RuleDenied => assessed.Rule ?? string.Join("; ", assessed.Reasons.Select(reason => reason.Detail)),
+                _ => null,
+            },
+        };
+    }
+
+    /// <summary>What a call that ran unasked does, as the card says it: "in workspace, no network".</summary>
+    private static string? Scope(ApprovalAssessed assessed)
+    {
+        var parts = new List<string>();
+        if (assessed.Contained is { } contained)
+            parts.Add(contained ? "in workspace" : "reaches outside the workspace");
+        if (assessed.Effects is { } effects)
+            parts.Add(effects.Contains("network") ? "network" : "no network");
+        if (assessed.Risk is { Calibrated: false, Decider: var decider })
+            parts.Add($"the risk answer was not calibrated ({decider ?? "degraded tier"})");
+        return parts.Count == 0 ? null : string.Join(", ", parts);
+    }
+
+    private static Corvid.App.Core.Shell.ApprovalMode? Mode(string mode) => mode switch
+    {
+        "manual" => Corvid.App.Core.Shell.ApprovalMode.Manual,
+        "smart" => Corvid.App.Core.Shell.ApprovalMode.Smart,
+        "permissive" => Corvid.App.Core.Shell.ApprovalMode.Permissive,
+        _ => null,
+    };
 
     /// <summary>The span's outcome; a replayed call has only its status, which says succeeded or failed.</summary>
     private static ToolOutcome? Outcome(string? outcome, ToolCallState? status) => outcome switch

@@ -88,6 +88,38 @@ public sealed class MemoryViewModelTests
 
     private static int RailBadge(ShellViewModel shell) => shell.NavItems.Single(item => item.Area == Area.Memory).Badge;
 
+    /// <summary>
+    /// A4V2-3: the store changed outside the page (a # line staged a fact). Elsewhere the page reads it again at once and the
+    /// rail's badge follows; while the page shows, what it shows stays until the person leaves it.
+    /// </summary>
+    [Fact]
+    public async Task AWriteOutsideThePageIsReadAgainAndTheBadgeFollows()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (memory, service, shell, _) = await Create(Area.Board);
+        Assert.Equal(2, RailBadge(shell));
+        var entries = await service.DryRunImportAsync(ct);
+        await service.ImportForReviewAsync([entries.First(entry => !entry.Refused).Id], ct);
+        Assert.Equal(2, RailBadge(shell));
+
+        memory.StoreChanged();
+        await Task.Yield();
+
+        Assert.Equal(3, RailBadge(shell));
+        Assert.Equal(2, memory.StagedFacts.Count);
+
+        // While the page shows, a review in progress keeps what it shows; leaving the page reads the store again.
+        shell.Navigate(Area.Memory);
+        await service.ImportForReviewAsync([entries.Where(entry => !entry.Refused).Skip(1).First().Id], ct);
+        memory.StoreChanged();
+        await Task.Yield();
+        Assert.Equal(2, memory.StagedFacts.Count);
+        shell.Navigate(Area.Board);
+        await Task.Yield();
+        Assert.Equal(3, memory.StagedFacts.Count);
+        Assert.Equal(4, RailBadge(shell));
+    }
+
     [Fact]
     public async Task ThePageDrawsTheMockupsQueueAndPanels()
     {
@@ -335,7 +367,7 @@ public sealed class MemoryViewModelTests
     [Fact]
     public async Task TheCompositionCreatesTheMemoryPageOnTheDemo()
     {
-        Assert.True(AppOptions.TryParse(["--page", "memory"], out var options, out var error), error);
+        Assert.True(AppOptions.TryParse(["--demo", "--page", "memory"], out var options, out var error), error);
         var composition = new AppComposition(options, new InlineDispatcher());
         await composition.Memory.Loaded;
 

@@ -9,8 +9,45 @@ public sealed class RewindTests
 {
     private static AppComposition Compose(params string[] args)
     {
-        Assert.True(AppOptions.TryParse(args, out var options, out var error), error);
+        Assert.True(AppOptions.TryParse(["--demo", .. args], out var options, out var error), error);
         return new AppComposition(options, new InlineDispatcher());
+    }
+
+    /// <summary>A ledger with no entries whose last restore was refused before any file was looked at.</summary>
+    private sealed class RefusedRewind(RestoreOutcome last) : IRewindService
+    {
+        public event EventHandler<string>? TimelineChanged { add { } remove { } }
+
+        public Task<RewindTimeline> GetTimelineAsync(string sessionId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new RewindTimeline(sessionId) { LastRestore = last });
+
+        public Task<RestorePlan> PlanAsync(string sessionId, string checkpointId, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<RestorePreviewFile>> PreviewAsync(string sessionId, string checkpointId, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<RestoreOutcome> RestoreAsync(string sessionId, string checkpointId, RewindScope scope, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+    }
+
+    [Fact]
+    public void ARestoreRefusedBeforeAnyFileSaysWhy()
+    {
+        var time = ManualTimeProvider.Demo();
+        var shell = new Shell.ShellViewModel(new Shell.StatusBarViewModel());
+        var item = shell.CreateSession("cli-busy", "busy", Shell.SessionState.Idle, "1 m");
+        shell.SetSessions([new Shell.SessionGroup("Recent", [item])]);
+        shell.SelectSession(item);
+        // G-12: another process drives the session, so nothing was restored; the reason is the panel's line.
+        var rewind = new RewindViewModel(new RefusedRewind(new RestoreOutcome("rollback to before cp-1", time.GetUtcNow(), RewindScope.FilesAndConversation)
+        {
+            Refused = true,
+            Detail = "Session cli-busy is driven by corvid chat (pid 7) since 2026-10-24 14:00 UTC; only that process can post to it, change it or restore it until it exits. Nothing was changed.",
+        }), shell, time);
+
+        Assert.True(rewind.LastRestoreRefused);
+        Assert.StartsWith("Session cli-busy is driven by corvid chat (pid 7)", rewind.LastRestoreSummary, StringComparison.Ordinal);
     }
 
     [Fact]

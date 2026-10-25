@@ -13,12 +13,13 @@ using Corvid.App.Core.Safety;
 using Corvid.App.Core.Secrets;
 using Corvid.App.Core.Sessions;
 using Corvid.App.Core.Settings;
+using Corvid.App.Core.Shell;
 using Corvid.App.Core.Skills;
 
 namespace Corvid.App.Core.Composition;
 
 /// <summary>
-/// Demo mode's services (<c>--demo</c>, the default): the mockups' scenario on the composition's frozen clock, in memory.
+/// Demo mode's services (<c>--demo</c>; the browser head's only mode): the mockups' scenario on the composition's frozen clock, in memory.
 /// Review and Rewind work over the demo sessions themselves, so this keeps the <see cref="DemoSessionService"/> it made
 /// for them rather than the composition casting its session service.
 /// </summary>
@@ -61,6 +62,9 @@ public sealed class DemoAppServices : IAppServices
     public ISettingsService CreateSettingsService(AppComposition app) => new DemoSettingsService();
 
     public IPromptHistory CreatePromptHistory(AppComposition app) => new DemoPromptHistory(app.Time);
+
+    /// <summary>The demo hosts nothing: its Gateway and Jobs pages show the mockups' host lines without the controls.</summary>
+    public IHostingService CreateHostingService(AppComposition app) => new NoHostingService("The demo does not host the gateway or the scheduler.");
 
     private DemoSessionService DemoSessions() =>
         _sessions ?? throw new InvalidOperationException("The demo's Review and Rewind work over the demo sessions, which the composition makes first.");

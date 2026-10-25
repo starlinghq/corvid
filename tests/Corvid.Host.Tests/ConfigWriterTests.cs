@@ -453,6 +453,33 @@ public sealed class ConfigWriterTests
         Assert.True(writer.Apply(ConfigEdit.Set("Corvid:Approvals:Mode", "Manual")).Written);
     }
 
+    /// <summary>A3 leftover: a read-only configuration directory refuses at once and says so, rather than reading as another writer.</summary>
+    [Fact]
+    public async Task AReadOnlyConfigurationDirectoryIsReportedAsSuch()
+    {
+        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
+            return; // a read-only directory is a Unix mode here, and root writes through it
+        await using var host = TestHost.Create();
+        var writer = Writer(host);
+        writer.LockTimeout = TimeSpan.FromMinutes(5);
+        Assert.True(writer.Apply(ConfigEdit.Set(Summarizer, "fake-gen")).Written);
+        var lockPath = Path.Combine(host.Root, ".corvid.json.lock");
+        System.IO.File.Delete(lockPath);
+        var mode = System.IO.File.GetUnixFileMode(host.Root);
+        System.IO.File.SetUnixFileMode(host.Root, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try
+        {
+            var refused = writer.Apply(ConfigEdit.Set("Corvid:Approvals:Mode", "Manual"));
+            Assert.False(refused.Written);
+            Assert.Contains("is read-only to Corvid", refused.FailureText, StringComparison.Ordinal);
+            Assert.DoesNotContain("Another Corvid process", refused.FailureText, StringComparison.Ordinal);
+        }
+        finally
+        {
+            System.IO.File.SetUnixFileMode(host.Root, mode);
+        }
+    }
+
     /// <summary>A3 review L6: a file changed by something that takes no lock (an editor) after it was read is not overwritten.</summary>
     [Fact]
     public async Task AFileChangedDuringTheEditIsNotOverwritten()

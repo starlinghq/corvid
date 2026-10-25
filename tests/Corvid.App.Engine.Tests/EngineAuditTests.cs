@@ -6,6 +6,7 @@ using Corvid.App.Core.Composition;
 using Corvid.App.Engine.Audit;
 using Corvid.Host.Configuration;
 using Corvid.Host.Tests;
+using Corvid.Models.Privacy;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
@@ -50,6 +51,23 @@ public sealed class EngineAuditTests
         Assert.Empty(await audit.ListDetectionsAsync(null, Ct));
         Assert.False(File.Exists(path));
         await Assert.ThrowsAsync<InvalidOperationException>(() => audit.ScanAsync(null, "high", Ct));
+    }
+
+    [Fact]
+    public async Task ASessionIsListedUnderItsTitleAsTheRailListsItAndItsLatestRenameWins()
+    {
+        await using var fixture = await EngineFixture.StartAsync();
+        Append(fixture, "cli-named", new UserMessage("please count slowly"), new AssistantMessage("1, 2, 3."),
+            new SessionTitled("Counting slowly", TitleSources.Generated));
+        Append(fixture, "cli-renamed", new UserMessage("tag the release"), new SessionTitled("Release", TitleSources.Generated),
+            new SessionTitled("Release 0.2", TitleSources.User));
+        Append(fixture, "cli-untitled", new UserMessage("what is in notes.md?"));
+
+        var titles = (await Audit(fixture).ListSessionsAsync(Ct)).ToDictionary(session => session.Id, session => session.Title);
+
+        Assert.Equal("Counting slowly", titles["cli-named"]);
+        Assert.Equal("Release 0.2", titles["cli-renamed"]);
+        Assert.Equal("what is in notes.md?", titles["cli-untitled"]);
     }
 
     [Fact]
@@ -178,21 +196,62 @@ public sealed class EngineAuditTests
     }
 
     [Fact]
-    public async Task TheEgressLedgerIsRefusedWithItsWorkItemAndThePageStillShowsTheLog()
+    public async Task WithNoEgressStoreNothingLeftAndTheStoreIsNotCreated()
     {
         await using var fixture = await EngineFixture.StartAsync();
         var (notes, _) = Seed(fixture);
         var audit = Audit(fixture);
 
-        var refused = await Assert.ThrowsAsync<ServiceUnavailableException>(() => audit.ListEgressAsync(notes, Ct));
-        Assert.Contains("G-9", refused.Message, StringComparison.Ordinal);
-
+        Assert.Empty(await audit.ListEgressAsync(notes, Ct));
+        Assert.Empty(await audit.ListEgressAsync(null, Ct));
+        Assert.False(File.Exists(fixture.Runtime.EgressLedger.Path));
         var page = new AuditViewModel(audit, fixture.Time);
         await page.Loaded;
         Assert.False(page.HasError);
-        Assert.NotEmpty(page.Rows);
-        Assert.Contains("G-9", page.NoSelectionText, StringComparison.Ordinal);
-        Assert.DoesNotContain("Nothing in this log left the machine", page.NoSelectionText, StringComparison.Ordinal);
+        Assert.Contains("Nothing in this log left the machine", page.NoSelectionText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TheEgressLedgerListsWhatLeftWithItsTextAsSentAndItsRowOpensIt()
+    {
+        await using var fixture = await EngineFixture.StartAsync();
+        var (notes, _) = Seed(fixture);
+        await EgressFakes.SendAsync(fixture.Runtime.EgressLedger, notes, "Write to Alice Smith about the notes.");
+        await EgressFakes.SendAsync(fixture.Runtime.EgressLedger, notes, "Tell Alice Smith.", EgressAction.Refuse);
+        var audit = Audit(fixture);
+
+        var request = Assert.Single(await audit.ListEgressAsync(notes, Ct));
+
+        Assert.Equal((1, "claude", EgressFakes.Cloud.Id, 1, 1, 1), (request.Number, request.Slot, request.Model, request.Turn, request.Step, request.Redacted));
+        Assert.Equal(("anthropic.key", "api.anthropic.com", notes), (request.Secret, request.Host, request.SessionId));
+        Assert.Equal("[user] Write to <PERSON_1> about the notes.", request.Full);
+        Assert.Equal(request.Full, request.Excerpt);
+        Assert.Equal(System.Text.Encoding.UTF8.GetByteCount(request.Full), request.Bytes);
+        Assert.Equal("1 person value", AuditText.Plain(request.RedactedSummary));
+        Assert.Equal(request.Redacted, AuditText.CountRedactions(request.Full));
+
+        // Its row in the log is the egress_recorded event, which opens it; the refused one opens nothing.
+        var events = await audit.ReadEventsAsync(notes, Ct);
+        var sent = Assert.Single(events, item => item.EgressRequest is not null);
+        Assert.Equal((request.Sequence, "egress_recorded", AuditEventGroup.ModelSwitches, (int?)1), (sent.Sequence, sent.Type, sent.Group, sent.EgressRequest));
+        Assert.StartsWith("sent to claude@anthropic (api.anthropic.com) · 1 value redacted", AuditText.Plain(sent.Summary), StringComparison.Ordinal);
+        var refused = Assert.Single(events, item => item.Type == "egress_recorded" && item.EgressRequest is null);
+        Assert.StartsWith("refused before it left: claude@anthropic", AuditText.Plain(refused.Summary), StringComparison.Ordinal);
+
+        // The whole log numbers its rows its own way; the request follows it.
+        var whole = Assert.Single(await audit.ListEgressAsync(null, Ct));
+        Assert.Equal(whole.Sequence, (await audit.ReadEventsAsync(null, Ct)).Single(item => item.EgressRequest == 1).Sequence);
+
+        // The page opens on the latest request: the gate's count and the text agree, and the route names the secret.
+        var page = new AuditViewModel(audit, fixture.Time);
+        await page.Loaded;
+        Assert.Equal(notes, page.SessionId);
+        var view = Assert.IsType<EgressView>(page.Egress);
+        Assert.False(view.HasRedactionMismatch);
+        Assert.Equal("via Vault anthropic.key, api.anthropic.com", AuditText.Plain(view.Route));
+        Assert.DoesNotContain("tokens", view.Sent, StringComparison.Ordinal);
+        Assert.Contains(view.Lines.SelectMany(line => line.Segments), segment => segment is { IsRedaction: true, Text: "<PERSON_1>" });
+        Assert.Contains("One request left the machine", page.NoSelectionText, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -206,5 +265,16 @@ public sealed class EngineAuditTests
         Assert.True(row.Json.Length < text.Length);
         Assert.Contains("more characters", row.Json, StringComparison.Ordinal);
         Assert.EndsWith("…", AuditText.Plain(row.Summary), StringComparison.Ordinal);
+    }
+
+    /// <summary>A4V2-7: a steer's row says what the person said, as a message's does.</summary>
+    [Fact]
+    public void ASteersRowSaysWhatWasSaid()
+    {
+        var stored = new StoredEvent("app-1", 45, Guid.NewGuid(), DateTimeOffset.UnixEpoch, new UserSteered("steer text two"));
+
+        var row = EngineAuditService.Describe(stored, 45, ImmutableDictionary<string, ToolCallIssued>.Empty);
+
+        Assert.Equal("user (steer): steer text two", AuditText.Plain(row.Summary));
     }
 }

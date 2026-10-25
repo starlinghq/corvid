@@ -344,6 +344,11 @@
       <TextBlock Style="{StaticResource TailLine}" local:AuditRuns.Line="{x:Bind}" />
     </DataTemplate>
 
+    <!-- The raw event's lines wrap: the engine's events hold long strings (a tool's whole result), which a narrow panel cut. -->
+    <DataTemplate x:Key="RawLineTemplate" x:DataType="audit:AuditLine">
+      <TextBlock Style="{StaticResource TailLine}" TextWrapping="Wrap" local:AuditRuns.Line="{x:Bind}" />
+    </DataTemplate>
+
     <!-- A .kv row: the label, then the value's spans. -->
     <DataTemplate x:Key="FieldTemplate" x:DataType="audit:AuditField">
       <controls:WrapRowPanel Spacing="8" LineSpacing="8">
@@ -636,9 +641,9 @@
                   <TextBlock Grid.Column="1" Text="JSON, as stored" FontSize="12.5" FontWeight="SemiBold" Foreground="{ThemeResource CorvidText2}" />
                 </Grid>
                 <Border Background="{ThemeResource CorvidCodeBg}" CornerRadius="6">
-                  <ScrollViewer MaxHeight="320" HorizontalScrollBarVisibility="Auto" HorizontalScrollMode="Auto" VerticalScrollBarVisibility="Auto"
+                  <ScrollViewer MaxHeight="320" HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled" VerticalScrollBarVisibility="Auto"
                                 AutomationProperties.Name="The raw event">
-                    <ItemsControl ItemsSource="{x:Bind ViewModel.Detail.Lines, Mode=OneWay, FallbackValue={x:Null}}" ItemTemplate="{StaticResource TailLineTemplate}"
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.Detail.Lines, Mode=OneWay, FallbackValue={x:Null}}" ItemTemplate="{StaticResource RawLineTemplate}"
                                   IsTabStop="False" Padding="10,8" />
                   </ScrollViewer>
                 </Border>

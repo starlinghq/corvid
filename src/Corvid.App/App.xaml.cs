@@ -7,7 +7,8 @@ namespace Corvid.App;
 
 /// <summary>
 /// The application: one window titled "Corvid" holding the shell, built from the options the command line gave and the
-/// services the head chose (the demo's by default; the in-process engine's from the desktop head with <c>--engine</c>).
+/// services the head chose (the in-process engine's from the desktop head by default; the demo's with <c>--demo</c> and in the
+/// browser head).
 /// Inter is made the default text font before any text is laid out, so every page draws the mockups' type without naming it.
 /// </summary>
 public partial class App : Application

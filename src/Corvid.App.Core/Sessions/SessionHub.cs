@@ -42,8 +42,19 @@ public sealed class SessionHub : IDisposable
         _shell = shell;
         _statusBar = statusBar;
         _service.SessionChanged += OnSessionChanged;
+        _service.ListChanged += OnListChanged;
         _shell.PropertyChanged += OnShellChanged;
         _statusBar.ModeRequested += OnModeRequested;
+    }
+
+    /// <summary>
+    /// The engine started after the window opened: the list that failed at start-up (or was empty) is read again, and the
+    /// session the rail shows stays selected when it is still listed.
+    /// </summary>
+    private void OnListChanged(object? sender, EventArgs e)
+    {
+        if (!_disposed)
+            _ = StartAsync(_shell.CurrentSession?.Id, null);
     }
 
     public ISessionService Service => _service;
@@ -85,8 +96,18 @@ public sealed class SessionHub : IDisposable
             return;
         }
 
+        // Listed after all (the engine started later): the start-up failure no longer holds.
+        if (StartError.Length > 0)
+        {
+            StartError = "";
+            _statusBar.Tags = [.. _statusBar.Tags.Where(tag => tag.Text != "sessions unavailable")];
+        }
         foreach (var summary in summaries)
+        {
             _summaries[summary.Id] = summary;
+            if (_open.TryGetValue(summary.Id, out var open))
+                open.SetPinned(summary.Pinned);
+        }
         RebuildRail();
         Listed?.Invoke(this, EventArgs.Empty);
         var chosen = select is not null ? _shell.FindSession(select) : null;
@@ -105,6 +126,7 @@ public sealed class SessionHub : IDisposable
         if (_open.TryGetValue(sessionId, out var session))
             return session;
         session = new SessionViewModel(sessionId, _service, _dispatcher, _time, _shell);
+        session.SetPinned(_summaries.TryGetValue(sessionId, out var summary) && summary.Pinned);
         _open[sessionId] = session;
         _ = OpenAsync(session);
         return session;
@@ -146,6 +168,10 @@ public sealed class SessionHub : IDisposable
             RebuildRail();
         }
         _shell.OpenSession(id);
+        // ui.md F2: a new session is for typing in. After the page has drawn it: a page that is loading takes the request
+        // when it attaches.
+        var opened = Get(id);
+        _dispatcher.Post(opened.RequestComposerFocus);
         return id;
     }
 
@@ -169,8 +195,12 @@ public sealed class SessionHub : IDisposable
     {
         if (_disposed)
             return;
+        // The window closes on the session it shows: seen until now.
+        if (_current is not null)
+            Viewed(_current.SessionId, viewing: false);
         _disposed = true;
         _service.SessionChanged -= OnSessionChanged;
+        _service.ListChanged -= OnListChanged;
         _shell.PropertyChanged -= OnShellChanged;
         _statusBar.ModeRequested -= OnModeRequested;
         _ticker?.Dispose();
@@ -209,13 +239,36 @@ public sealed class SessionHub : IDisposable
         if (ReferenceEquals(next, _current))
             return;
         if (_current is not null)
+        {
             _current.PropertyChanged -= OnCurrentChanged;
+            Viewed(_current.SessionId, viewing: false);
+        }
         _current = next;
+        if (_current is not null)
+            Viewed(_current.SessionId, viewing: true);
         if (_current is not null)
             _current.PropertyChanged += OnCurrentChanged;
         UpdateWorkspace();
         ApplyStatus();
         CurrentChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// Tells the service the person is looking at a session, or stopped (G-6, G-7: when it was last seen, a recap on
+    /// return). A failure shows as a status bar tag.
+    /// </summary>
+    private async void Viewed(string sessionId, bool viewing)
+    {
+        try
+        {
+            await _service.ViewedAsync(sessionId, viewing).ConfigureAwait(true);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            if (!_disposed)
+                _statusBar.Tags = [.. _statusBar.Tags, new StatusTag("not recorded", Tone.Amber,
+                    $"When this session was last seen could not be recorded: {SafeText.Clean(exception.Message)}")];
+        }
     }
 
     private void OnCurrentChanged(object? sender, PropertyChangedEventArgs e)
@@ -271,6 +324,8 @@ public sealed class SessionHub : IDisposable
     {
         var known = _summaries.TryGetValue(summary.Id, out var previous);
         _summaries[summary.Id] = summary;
+        if (_open.TryGetValue(summary.Id, out var open))
+            open.SetPinned(summary.Pinned);
         if (!known || previous!.Pinned != summary.Pinned || previous.ReadOnly != summary.ReadOnly || InRail(previous) != InRail(summary))
             RebuildRail();
         else if (_shell.FindSession(summary.Id) is { } item)
@@ -281,9 +336,11 @@ public sealed class SessionHub : IDisposable
 
     /// <summary>
     /// The rail lists the sessions this window drives (pinned, then the rest by latest activity) and job runs; one another
-    /// process drives is on the Board as a read-only live view.
+    /// process drives is on the Board as a read-only live view, and stays in the rail while it is the session shown (G-12:
+    /// another process took it while it was open here, and the page follows it read-only rather than losing it).
     /// </summary>
-    private static bool InRail(SessionSummary summary) => !summary.ReadOnly || summary.Job is not null;
+    private bool InRail(SessionSummary summary) =>
+        !summary.ReadOnly || summary.Job is not null || summary.Id == _shell.CurrentSession?.Id;
 
     private void RebuildRail()
     {

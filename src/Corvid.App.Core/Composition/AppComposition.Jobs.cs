@@ -14,5 +14,5 @@ public sealed partial class AppComposition
     public IJobsService JobsService => _jobsService ??= Services.CreateJobsService(this);
 
     /// <summary>The Jobs area: scheduled jobs, their runs, and the scheduler.</summary>
-    public JobsViewModel Jobs => _jobs ??= new JobsViewModel(JobsService, Shell, StatusBar, Time);
+    public JobsViewModel Jobs => _jobs ??= new JobsViewModel(JobsService, Shell, StatusBar, Time, HostingService);
 }

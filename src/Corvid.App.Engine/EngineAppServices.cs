@@ -70,13 +70,24 @@ public sealed partial class EngineAppServices(AppEngine engine, string home, Fun
                 Show("in-process · starting: " + step.Description);
         }
 
+        // Until the window closes: a runtime that could not start for want of models starts again once they are in.
+        void OnStarted(Corvid.Host.Composition.CorvidRuntime runtime)
+        {
+            if (!_disposed)
+                Show("in-process");
+        }
+
         Engine.Progress += OnProgress;
-        Track(new Unsubscribe(() => Engine.Progress -= OnProgress));
+        Engine.Started += OnStarted;
+        Track(new Unsubscribe(() =>
+        {
+            Engine.Progress -= OnProgress;
+            Engine.Started -= OnStarted;
+        }));
         if (Engine.CurrentStep is { } current)
             Show("in-process · starting: " + current.Description);
         _ = Engine.Runtime.ContinueWith(started =>
         {
-            Engine.Progress -= OnProgress;
             // A start that failed is the hub's and First run's to explain (their notices and status); this line only follows a
             // start, and not once the window has let go of its services.
             if (started.IsCompletedSuccessfully && !_disposed)

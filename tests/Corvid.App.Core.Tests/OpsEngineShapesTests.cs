@@ -36,6 +36,44 @@ public sealed class OpsEngineShapesTests
     }
 
     [Fact]
+    public void StartingHostingRefreshesTheSchedulerLineAtOnce()
+    {
+        // U-8: Start hosting changes where the scheduler runs; the page says so without waiting for a store change.
+        var time = ManualTimeProvider.Demo();
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar);
+        shell.Navigate(Area.Jobs);
+        var service = new Jobs(new SchedulerStatus(SchedulerHost.Off, "This app does not host the scheduler (Corvid:App:HostScheduler is off)"));
+        var hosting = new Hosting();
+        using var jobs = new JobsViewModel(service, shell, bar, time, hosting);
+        Assert.Equal("off here", jobs.SchedulerTag);
+        Assert.True(jobs.Hosting.ShowStart);
+
+        service.Scheduler = new SchedulerStatus(SchedulerHost.Here, "this app", time.GetUtcNow());
+        hosting.Turn(on: true);
+
+        Assert.Equal("running here", jobs.SchedulerTag);
+        Assert.True(jobs.Hosting.ShowStop);
+    }
+
+    private sealed class Hosting : IHostingService
+    {
+        public string? Unavailable => null;
+
+        public HostingState State { get; private set; } = HostingState.None;
+
+        public Task<string> SetAsync(HostedPart part, bool on, CancellationToken cancellationToken) => Task.FromResult("");
+
+        public event EventHandler? Changed;
+
+        public void Turn(bool on)
+        {
+            State = new HostingState(false, false, on, on);
+            Changed?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    [Fact]
     public async Task AJobCreatedOnAnEngineIsSelectedWhenItsChangeArrivesAfterTheCreateReturns()
     {
         var time = ManualTimeProvider.Demo();
@@ -113,7 +151,9 @@ public sealed class OpsEngineShapesTests
     {
         public event EventHandler? Changed { add { } remove { } }
 
-        public Task<JobsSnapshot> LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new JobsSnapshot(scheduler, [], ["kept"]));
+        public SchedulerStatus Scheduler { get; set; } = scheduler;
+
+        public Task<JobsSnapshot> LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new JobsSnapshot(Scheduler, [], ["kept"]));
 
         public Task<IReadOnlyList<JobRunRecord>> RunsAsync(string jobId, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<JobRunRecord>>([]);
 

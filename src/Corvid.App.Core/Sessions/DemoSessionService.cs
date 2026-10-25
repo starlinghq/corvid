@@ -237,6 +237,21 @@ public sealed partial class DemoSessionService : ISessionService, IDisposable
         return Task.CompletedTask;
     }
 
+    /// <summary>The demo pins in memory: the rail moves the session, and nothing is written (the engine keeps pins in ui.db).</summary>
+    public bool CanPin => true;
+
+    public Task SetPinnedAsync(string sessionId, bool pinned, CancellationToken cancellationToken = default)
+    {
+        var session = Get(sessionId);
+        if (session.Base.Pinned == pinned)
+            return Task.CompletedTask;
+        session.Base = session.Base with { Pinned = pinned };
+        var summary = Summary(session);
+        session.LastSummary = summary;
+        SessionChanged?.Invoke(this, summary);
+        return Task.CompletedTask;
+    }
+
     /// <summary>The session's state as the fold sees it (tests).</summary>
     internal SessionView StateOf(string sessionId) => Get(sessionId).State;
 
@@ -423,7 +438,7 @@ public sealed partial class DemoSessionService : ISessionService, IDisposable
         public string Id { get; } = id;
 
         /// <summary>What the scenario says about the session beyond its updates: workspace, surface, pin, job.</summary>
-        public SessionSummary Base { get; init; } = new(id, id);
+        public SessionSummary Base { get; set; } = new(id, id);
 
         public List<SessionUpdate> History { get; } = [];
 

@@ -67,12 +67,14 @@ public enum VerdictKind
     TimedOut,
     /// <summary>The turn was cancelled while the prompt was open.</summary>
     Cancelled,
+    /// <summary>It needed an approval and nobody could answer (a scheduled run): denied without asking.</summary>
+    NoApprover,
 }
 
 /// <summary>
 /// The approval verdict a card carries, so a side-effecting call says why it ran even when nobody was asked ("ran under
 /// a session rule: `dotnet test` in workspace (approval a-31, turn 10) · risk 1 (0.93) · checkpoint c-44 taken before the
-/// call"). For calls that ran unasked this needs G-2: the pipeline's assessment on the stream. Text in backticks is
+/// call"). For a call that ran unasked it comes from the pipeline's assessment on the stream (G-2). Text in backticks is
 /// drawn as code.
 /// </summary>
 public sealed record CallVerdict(VerdictKind Kind)
@@ -116,7 +118,7 @@ public sealed record ToolCall(string CallId, string Tool, ToolKind Kind, ToolCal
     /// <summary>Files it names, as workspace paths.</summary>
     public ImmutableArray<string> Locations { get; init; } = [];
 
-    /// <summary>Why it may run (G-2 when nobody was asked).</summary>
+    /// <summary>Why it may run (the pipeline's assessment, G-2, when nobody was asked).</summary>
     public CallVerdict? Verdict { get; init; }
 }
 
@@ -134,8 +136,9 @@ public sealed record ToolCallUpdate(string CallId) : SessionUpdate
     public string? Summary { get; init; }
 
     /// <summary>
-    /// The last lines of output while the call runs, replacing the previous tail. Needs K-2: a bounded tail of
-    /// <c>shell</c> and <c>web_fetch</c> output streamed while the call runs.
+    /// The last lines of output while the call runs, replacing the previous tail (K-2: the shell's output and web_fetch's
+    /// progress, bounded and credential-scrubbed by the kernel, reported at most a few times a second). Live only: the
+    /// log keeps the result, not the tail. Untrusted text.
     /// </summary>
     public string? Tail { get; init; }
 

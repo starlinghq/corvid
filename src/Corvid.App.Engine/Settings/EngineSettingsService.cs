@@ -1,7 +1,12 @@
+using System.Collections.Immutable;
 using System.Text.Json.Nodes;
 using Corvid.App.Core;
 using Corvid.App.Core.Settings;
+using Corvid.App.Core.Shell;
+using Corvid.Host.Composition;
 using Corvid.Host.Configuration;
+using Corvid.Host.State;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Corvid.App.Engine.Settings;
@@ -9,32 +14,45 @@ namespace Corvid.App.Engine.Settings;
 /// <summary>
 /// Settings over the real <c>corvid.json</c> (docs/plan/ui.md F24): the typed page and the raw editor read the file as it
 /// is now and write it through the host's <see cref="CorvidConfigWriter"/>, which validates the result as the next start
-/// would read it and replaces the file only when that passes. The runtime reads <c>corvid.json</c> once, at start, so every
-/// change to the file applies after a restart, and every <c>corvid.json</c> setting is tagged so. Values the environment or
-/// <c>--set</c> give this run are shown as set for this run. The app's own preferences (density, notifications, layout) are
-/// kept for this window only, since <c>ui.db</c> comes with G-7.
+/// would read it and replaces the file only when that passes. The runtime reads <c>corvid.json</c> once, at start, except
+/// for the settings it takes live (<see cref="CorvidRuntime.LiveSettings"/>): the default approval mode, the approval
+/// deadline, and the steps and output tokens per turn, which a save applies to the running runtime at once (the deadline
+/// from the next prompt, the rest in sessions opened from then on). Every other <c>corvid.json</c> setting is tagged as
+/// applying after a restart. Values the environment or <c>--set</c> give this run are shown as set for this run. The app's
+/// own preferences (density, notifications, layout) are kept in <c>ui.db</c> (G-7), beside the event log, so they last
+/// across restarts; the window applies the layout ones when it starts.
 /// </summary>
 public sealed class EngineSettingsService : ISettingsService
 {
     private const string Skeleton = "{\n  \"Corvid\": {\n  }\n}\n";
 
+    private readonly AppEngine _engine;
     private readonly CorvidConfigWriter _writer;
-    private readonly Dictionary<string, string> _app = new(StringComparer.Ordinal);
-    private readonly Lock _gate = new();
+    private readonly UiStateStore _ui;
+    private readonly TimeProvider _time;
 
-    public EngineSettingsService(AppEngine engine)
+    public EngineSettingsService(AppEngine engine, TimeProvider? time = null)
     {
         ArgumentNullException.ThrowIfNull(engine);
+        _engine = engine;
         _writer = engine.Services.GetRequiredService<CorvidConfigWriter>();
-        foreach (var definition in Definitions.Where(definition => definition.Store == SettingStore.App))
-            _app[definition.Key] = definition.Default;
+        _ui = engine.Services.GetRequiredService<UiStateStore>();
+        _time = time ?? TimeProvider.System;
     }
 
-    /// <summary>The catalogue's settings; every <c>corvid.json</c> one applies after a restart, since the runtime never reloads the file.</summary>
+    /// <summary>Where the app's own preferences are kept: ui.db, shared with the CLI and kept across restarts (G-7).</summary>
+    public string PreferencesNote => "saved in ui.db · kept across restarts";
+
+    /// <summary>
+    /// The catalogue's settings: a <c>corvid.json</c> one the runtime takes live applies as <see cref="CorvidRuntime.LiveSettings"/>
+    /// says, every other one after a restart, since the runtime reads the file once.
+    /// </summary>
     public IReadOnlyList<SettingDefinition> Definitions { get; } =
     [
-        .. SettingsCatalogue.Definitions.Select(definition =>
-            definition.Store == SettingStore.CorvidJson ? definition with { Applies = SettingApplies.Restart } : definition),
+        .. SettingsCatalogue.Definitions.Select(definition => definition.Store != SettingStore.CorvidJson || HostingKeys.Contains(definition.FullKey) ? definition
+            : CorvidRuntime.LiveSettings.TryGetValue(definition.FullKey, out var live)
+                ? definition with { Applies = live == LiveSetting.Now ? SettingApplies.Now : SettingApplies.NewSessions }
+                : definition with { Applies = SettingApplies.Restart }),
     ];
 
     public Task<SettingsSnapshot> LoadAsync(CancellationToken cancellationToken = default) => Task.Run(() =>
@@ -107,11 +125,10 @@ public sealed class EngineSettingsService : ISettingsService
                     return Refused([.. result.Failures.Select(failure => new SettingProblem(KeyOf(failure), SafeText.Clean(failure)))]);
             }
 
-            lock (_gate)
-            {
-                foreach (var definition in app)
-                    _app[definition.Key] = values[definition.Key].Trim();
-            }
+            // G-7: written in one transaction, so another process reads all of them or none.
+            if (app.Count > 0)
+                _ui.SetPreferences(app.ToDictionary(definition => definition.Key, definition => values[definition.Key].Trim(), StringComparer.Ordinal),
+                    _time.GetUtcNow());
 
             return Saved(result, app.Count > 0);
         }, cancellationToken);
@@ -141,14 +158,12 @@ public sealed class EngineSettingsService : ISettingsService
     {
         var corvid = root is null ? null : SettingsJson.Corvid(root);
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
-        lock (_gate)
+        var app = _ui.Preferences();
+        foreach (var definition in Definitions)
         {
-            foreach (var definition in Definitions)
-            {
-                values[definition.Key] = definition.Store == SettingStore.App
-                    ? _app.GetValueOrDefault(definition.Key, definition.Default)
-                    : SettingsJson.Read(corvid, definition) ?? definition.Default;
-            }
+            values[definition.Key] = definition.Store == SettingStore.App
+                ? app.GetValueOrDefault(definition.Key, definition.Default)
+                : SettingsJson.Read(corvid, definition) ?? definition.Default;
         }
 
         return values;
@@ -163,6 +178,40 @@ public sealed class EngineSettingsService : ISettingsService
             .Select(definition => definition.Key)
             .FirstOrDefault();
 
+    /// <summary>
+    /// The live settings from the file as the next start reads it, applied to the running runtime: the keys that changed
+    /// there. None while the runtime is not up (it reads the file when it starts).
+    /// </summary>
+    private ImmutableArray<string> ApplyLive(ImmutableArray<string> changed)
+    {
+        if (!_engine.Runtime.IsCompletedSuccessfully)
+            return [];
+        var next = _writer.NextStart().GetSection(CorvidOptions.Section).Get<CorvidOptions>() ?? new CorvidOptions();
+        var applied = _engine.Runtime.Result.ApplyLiveSettings(next);
+        // U-8: the app's hosting follows its two settings at once (Start or Stop hosting, as on the Gateway and Jobs pages),
+        // only when this save changed one: saving another key must not stop hosting that an environment override or a Start
+        // on the Gateway or Jobs page turned on (A4 verification).
+        foreach (var (part, on, key) in new[]
+                 {
+                     (HostedPart.Gateway, next.App.HostGateway, HostingKeys[0]),
+                     (HostedPart.Scheduler, next.App.HostScheduler, HostingKeys[1]),
+                 })
+        {
+            if (!changed.Contains(key, StringComparer.OrdinalIgnoreCase)
+                || (part == HostedPart.Gateway ? _engine.HostsGateway : _engine.HostsScheduler) == on)
+                continue;
+            // On the pool already (SaveAsync's work): stopping waits for the gateway's answers in flight, as Stop hosting does.
+            _engine.SetHostingAsync(part, on).GetAwaiter().GetResult();
+            applied = applied.Add(key);
+        }
+        return applied;
+    }
+
+    private bool IsOn(SettingDefinition definition) => definition.FullKey == HostingKeys[0] ? _engine.HostsGateway : _engine.HostsScheduler;
+
+    /// <summary>The app's hosting settings (U-8), which the engine applies itself rather than the runtime.</summary>
+    private static readonly string[] HostingKeys = ["Corvid:App:HostGateway", "Corvid:App:HostScheduler"];
+
     private static SettingsWrite Refused(IReadOnlyList<SettingProblem> problems)
     {
         var head = problems.Count == 1 ? "Not saved: the validator found a problem." : $"Not saved: the validator found {problems.Count} problems.";
@@ -176,8 +225,11 @@ public sealed class EngineSettingsService : ISettingsService
         var restart = new List<string>();
         if (result is not null)
         {
+            // What the running runtime takes at once; the rest applies after a restart.
+            var live = result.RestartKeys.IsEmpty ? [] : ApplyLive(result.RestartKeys);
             var changed = Definitions.Where(definition => definition.Store == SettingStore.CorvidJson
-                && result.RestartKeys.Contains(definition.FullKey, StringComparer.OrdinalIgnoreCase)).ToList();
+                && result.RestartKeys.Contains(definition.FullKey, StringComparer.OrdinalIgnoreCase)
+                && !live.Contains(definition.FullKey, StringComparer.OrdinalIgnoreCase)).ToList();
             restart.AddRange(changed.Select(definition => definition.Key));
             if (result.RestartKeys.IsEmpty)
             {
@@ -186,7 +238,17 @@ public sealed class EngineSettingsService : ISettingsService
             else
             {
                 parts.Add($"Written to {SafeText.Clean(result.Path)}.");
-                parts.Add("Corvid reads corvid.json when it starts, so the change applies after a restart.");
+                var now = Definitions.Where(definition => live.Contains(definition.FullKey, StringComparer.OrdinalIgnoreCase)).ToList();
+                if (now.Count > 0)
+                    parts.Add("Applied now: " + string.Join(", ", now.Select(definition => HostingKeys.Contains(definition.FullKey)
+                        ? $"{definition.Label.ToLowerInvariant()} ({(IsOn(definition) ? "started" : "stopped")})"
+                        : definition.Applies == SettingApplies.Now
+                        ? $"{definition.Label.ToLowerInvariant()} (from the next prompt)"
+                        : $"{definition.Label.ToLowerInvariant()} (in sessions opened from now on)")) + ".");
+                if (changed.Count > 0)
+                    parts.Add(now.Count > 0
+                        ? $"Corvid reads the rest of corvid.json when it starts, so {string.Join(", ", changed.Select(definition => definition.Label.ToLowerInvariant()))} applies after a restart."
+                        : "Corvid reads corvid.json when it starts, so the change applies after a restart.");
             }
 
             var shadowed = result.ShadowedKeys.Select(key => SafeText.Clean(key)).ToList();
@@ -195,7 +257,7 @@ public sealed class EngineSettingsService : ISettingsService
         }
 
         if (app)
-            parts.Add("App preferences are kept for this window only: saving them comes with ui.db (G-7).");
+            parts.Add("App preferences saved in ui.db.");
         if (parts.Count == 0)
             parts.Add("Nothing changed.");
         return new SettingsWrite(true, string.Join(" ", parts), [], restart);

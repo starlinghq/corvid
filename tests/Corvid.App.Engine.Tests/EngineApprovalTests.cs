@@ -183,6 +183,40 @@ public sealed class EngineApprovalTests
     }
 
     [Fact]
+    public async Task ACallThatRanUnaskedSaysWhyLiveAndWhenReopened()
+    {
+        // Turn 1's call is approved for the session; turn 2's runs under that rule, unasked; turn 3 only reads.
+        var models = AddNote(Reply.Call("add_note", """{"text":"water plants"}"""), Reply.Say("Added again."), Reply.Call("list_notes"), Reply.Say("Two notes."));
+        await using var fixture = await EngineFixture.StartAsync(models);
+        var id = fixture.Runtime.OpenSession(surface: "app").Id;
+        using var service = fixture.Sessions();
+        var waiter = new SessionWaiter();
+        using var subscription = await service.OpenAsync(id, waiter.Add, Ct);
+
+        await service.SendAsync(id, "add a note: water plants", Ct);
+        var request = await waiter.WaitAsync<ApprovalRequested>();
+        await service.AnswerApprovalAsync(id, request.ApprovalId, new ApprovalAnswer(ApprovalChoice.Session), Ct);
+        await waiter.WaitAsync<TurnEnded>(ended => ended.Turn == 1);
+        await service.SendAsync(id, "add it again", Ct);
+        await waiter.WaitAsync<TurnEnded>(ended => ended.Turn == 2);
+        await service.SendAsync(id, "list my notes", Ct);
+        await waiter.WaitAsync<TurnEnded>(ended => ended.Turn == 3);
+        await service.IdleAsync();
+
+        Assert.Single(waiter.Updates.OfType<ApprovalRequested>());
+        static List<string> Verdicts(SessionView view) =>
+            [.. view.Transcript.OfType<ToolEntry>().Select(tool => $"{tool.Tool} {tool.Verdict?.Kind} {tool.Verdict?.Rule}")];
+        var shown = Verdicts(SessionFold.Replay(id, [.. subscription.History, .. waiter.Updates]));
+        Assert.Equal(["add_note ApprovedSession `add_note`", "add_note SessionRule `add_note`", "list_notes ReadOnly "], shown);
+
+        using var fresh = fixture.Sessions();
+        using var reopened = await fresh.OpenAsync(id, _ => { }, Ct);
+        var replayed = Verdicts(SessionFold.Replay(id, reopened.History));
+        // The log keeps the answer's scope, not the rule's words, for an asked call; the unasked ones replay as they ran.
+        Assert.Equal(["add_note ApprovedSession ", "add_note SessionRule `add_note`", "list_notes ReadOnly "], replayed);
+    }
+
+    [Fact]
     public async Task InterruptingAWaitingTurnCancelsItsPromptAndTheQueueGoesNext()
     {
         var models = AddNote(Reply.Say("The queued one."));
@@ -383,6 +417,46 @@ public sealed class EngineApprovalTests
         await service.IdleAsync();
         Assert.False(waiter.Updates.OfType<TaintChanged>().Last().Tainted);
         Assert.False(SessionFold.Replay(id, [.. subscription.History, .. waiter.Updates]).Tainted);
+    }
+
+    /// <summary>
+    /// The turn's report runs behind the turn on a busy machine: here it is held at the prompt until the fetch's result is in.
+    /// The taint still shows once, after the call that brought it in and naming it, not on the call's start as the session's
+    /// taint read late used to.
+    /// </summary>
+    [Fact]
+    public async Task A_report_running_behind_the_turn_still_shows_the_taint_on_the_call_that_brought_it_in()
+    {
+        var fetched = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var generator = new FakeGenerator(Reply.Call("web_fetch", """{"url":"http://seed.example/page"}"""), messages =>
+        {
+            // The next request after the call: the kernel tainted the session as its result came in.
+            fetched.TrySetResult();
+            return Reply.Text("The page says hello.");
+        });
+        await using var engine = await CustomEngine.StartAsync(new FakeModels(generator), new Dictionary<string, string?> { ["Corvid:Tools:Builtin"] = "true" },
+            services => services.AddSingleton(new WebFetchTransport(new PageHandler())));
+        var id = engine.Runtime.OpenSession(surface: "app").Id;
+        using var service = engine.Sessions();
+        var waiter = new SessionWaiter();
+        var held = 0;
+        using var subscription = await service.OpenAsync(id, update =>
+        {
+            // On the report's chain: nothing after the prompt is reported until the turn has fetched the page.
+            if (update is UserMessage && Interlocked.Exchange(ref held, 1) == 0)
+                Assert.True(fetched.Task.Wait(TimeSpan.FromSeconds(60), Ct), "the turn never fetched the page");
+            waiter.Add(update);
+        }, Ct);
+
+        await service.SendAsync(id, "fetch the page and report what it says", Ct);
+        await waiter.WaitAsync<TurnEnded>();
+        await service.IdleAsync();
+
+        var updates = waiter.Updates;
+        var tainted = Assert.Single(updates.OfType<TaintChanged>());
+        Assert.Equal((true, "web_fetch http://seed.example/page"), (tainted.Tainted, tainted.Source));
+        var finished = updates.ToList().FindIndex(update => update is ToolCallUpdate { Status: ToolCallStatus.Completed });
+        Assert.InRange(updates.ToList().IndexOf(tainted), finished + 1, updates.Count - 1);
     }
 
     private sealed class PageHandler : HttpMessageHandler

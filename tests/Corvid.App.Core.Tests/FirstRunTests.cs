@@ -251,7 +251,7 @@ public sealed class FirstRunTests
     [Fact]
     public void OpenedAsTheDoctorItIsTheChecksWithoutTheSetup()
     {
-        Assert.True(AppOptions.TryParse(["--page", "models"], out var options, out var error), error);
+        Assert.True(AppOptions.TryParse(["--demo", "--page", "models"], out var options, out var error), error);
         using var composition = new AppComposition(options, new InlineDispatcher(), ManualTimeProvider.DemoLocal());
 
         composition.Shell.OpenDoctorCommand.Execute(null);
@@ -268,7 +268,7 @@ public sealed class FirstRunTests
     [Fact]
     public void OpeningTheWindowOnTheFirstRunIsTheSetup()
     {
-        Assert.True(AppOptions.TryParse(["--page", "first-run"], out var options, out var error), error);
+        Assert.True(AppOptions.TryParse(["--demo", "--page", "first-run"], out var options, out var error), error);
         using var composition = new AppComposition(options, new InlineDispatcher(), ManualTimeProvider.DemoLocal());
 
         Assert.True(composition.FirstRun.IsSetup);

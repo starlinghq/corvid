@@ -225,7 +225,10 @@ public sealed class JobsServiceTests
         await using (var fixture = await OpsFixture.StartAsync(SchedulerOn))
         {
             using var service = new EngineJobsService(fixture.Engine, new InlineDispatcher(), fixture.Time);
-            Assert.Equal(new SchedulerStatus(SchedulerHost.Here, "this app"), (await service.LoadAsync(Token)).Scheduler);
+            var here = (await service.LoadAsync(Token)).Scheduler;
+            Assert.Equal((SchedulerHost.Here, "this app"), (here.Host, here.Holder));
+            // G-14: since it took the lock.
+            Assert.Equal(fixture.Runtime.SchedulerHolder!.Since, here.Since);
         }
 
         // Another process holds jobs.db.lock: this app's runtime leaves the scheduler to it.

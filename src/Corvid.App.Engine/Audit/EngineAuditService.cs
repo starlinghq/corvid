@@ -30,7 +30,12 @@ namespace Corvid.App.Engine.Audit;
 /// <para>
 /// Scans run the host's <see cref="LogScan"/> (the same as <c>corvid scan</c>); the last one per session lives in this
 /// process. Traces are written by the host's <see cref="TraceExport"/> to <c>traces/</c> under the data directory, owner
-/// only, never over an existing file. The egress ledger is refused (G-9): the log records no request as it was sent.
+/// only, never over an existing file.
+/// </para>
+/// <para>
+/// The egress ledger (G-9) is the host's <see cref="EgressLedger"/>, read from its file like the log (never created here):
+/// each request that left the machine, with its text as the gate sent it, reassembled on demand from what the ledger kept.
+/// Its <c>egress_recorded</c> event in the session's log is the row that opens it, and places it in a turn and a step.
 /// </para>
 /// </summary>
 public sealed class EngineAuditService : IAuditService
@@ -38,14 +43,13 @@ public sealed class EngineAuditService : IAuditService
     /// <summary>The most events one view lists, newest first.</summary>
     public const int MaxEvents = 5000;
 
+    /// <summary>The most egress requests one view lists, newest first.</summary>
+    public const int MaxEgress = 500;
+
     /// <summary>The longest raw event shown; the trace export has it whole.</summary>
     public const int MaxJsonChars = 32 * 1024;
 
     private const int TextPreview = 160;
-
-    /// <summary>The page's notice for the egress ledger, which needs the gate's record of each request (G-9).</summary>
-    public const string EgressRefusal = "The egress ledger comes with G-9: Corvid's log does not record a cloud request as it was sent, " +
-        "so the window cannot list or re-render one yet.";
 
     private readonly AppEngine _engine;
     private readonly TimeProvider _time;
@@ -78,15 +82,18 @@ public sealed class EngineAuditService : IAuditService
         var sessions = new List<(AuditSession Session, DateTimeOffset Last)>();
         foreach (var id in log.ListSessions(cancellationToken))
         {
-            string? title = null;
+            string? title = null, named = null;
             var last = default(DateTimeOffset);
             foreach (var stored in SessionProjection.ReadRange(log, id, 0, log.GetHead(id, cancellationToken), cancellationToken))
             {
                 last = stored.RecordedAt;
-                if (title is null && stored.Payload is LoggedUserMessage user)
+                if (title is null && stored.Payload is LoggedUserMessage { LocalOnly: not true } user)
                     title = Line(user.Text, 80);
+                // G-6: the session's title (generated, or the person's rename) is what every list shows, the rail's included.
+                else if (stored.Payload is SessionTitled titled)
+                    named = SessionCatalogue.Line(titled.Title);
             }
-            sessions.Add((new AuditSession(id, title ?? StoreTitle(id)), last));
+            sessions.Add((new AuditSession(id, named ?? title ?? StoreTitle(id)), last));
         }
         return (IReadOnlyList<AuditSession>)[.. sessions.OrderByDescending(item => item.Last).Select(item => item.Session)];
     }, cancellationToken);
@@ -95,20 +102,118 @@ public sealed class EngineAuditService : IAuditService
     {
         if (Open() is not { } log)
             return (IReadOnlyList<AuditEvent>)[];
+        // The egress_recorded rows open their request: linked by the ledger's number.
+        var numbers = Ledger().List(sessionId, MaxEvents, cancellationToken).ToDictionary(entry => entry.RequestId, entry => entry.Number, StringComparer.Ordinal);
+        AuditEvent Linked(AuditEvent row, StoredEvent stored) =>
+            stored.Payload is EgressRecorded { Outcome: not EgressOutcomes.Refused } recorded && numbers.TryGetValue(recorded.RequestId, out var number)
+                ? row with { EgressRequest = (int)number }
+                : row;
         if (sessionId is not null)
         {
             var events = Session(log, sessionId, cancellationToken);
             var calls = Calls(events);
             return (IReadOnlyList<AuditEvent>)[.. events.OrderByDescending(item => item.Sequence).Take(MaxEvents)
-                .Select(item => Describe(item, item.Sequence, calls))];
+                .Select(item => Linked(Describe(item, item.Sequence, calls), item))];
         }
         var whole = Whole(log, cancellationToken);
         return (IReadOnlyList<AuditEvent>)[.. whole.Ordered.Reverse().Take(MaxEvents)
-            .Select(item => Describe(item.Event, item.Number, whole.Calls[item.Event.SessionId]))];
+            .Select(item => Linked(Describe(item.Event, item.Number, whole.Calls[item.Event.SessionId]), item.Event))];
     }, cancellationToken);
 
-    public Task<IReadOnlyList<EgressRequest>> ListEgressAsync(string? sessionId, CancellationToken cancellationToken) =>
-        Task.FromException<IReadOnlyList<EgressRequest>>(new ServiceUnavailableException(EgressRefusal));
+    /// <summary>
+    /// The requests that left the machine, newest first (a refused one sent nothing, so it is not listed): each with its text
+    /// as sent, reassembled from the ledger, and its place in the log (the <c>egress_recorded</c> event's number, the turn
+    /// it was sent in and its step among that turn's requests to the same slot).
+    /// </summary>
+    public Task<IReadOnlyList<EgressRequest>> ListEgressAsync(string? sessionId, CancellationToken cancellationToken) => Task.Run(() =>
+    {
+        var settings = Options();
+        var ledger = Ledger(settings);
+        var entries = ledger.List(sessionId, MaxEgress, cancellationToken).Where(entry => entry.Left).ToList();
+        if (entries.Count == 0)
+            return (IReadOnlyList<EgressRequest>)[];
+        var placed = new Dictionary<string, EgressPlace>(StringComparer.Ordinal);
+        if (Open() is { } log)
+        {
+            if (sessionId is null)
+            {
+                var whole = Whole(log, cancellationToken);
+                placed = Place(whole.Ordered.Select(item => item.Event), stored => whole.Numbers[(stored.SessionId, stored.Sequence)]);
+            }
+            else if (log.GetHead(sessionId, cancellationToken) > 0)
+                placed = Place(Session(log, sessionId, cancellationToken), stored => stored.Sequence);
+        }
+        return (IReadOnlyList<EgressRequest>)[.. entries.Select(entry => Request(entry, placed.GetValueOrDefault(entry.RequestId), ledger, settings))];
+    }, cancellationToken);
+
+    /// <summary>Where a request sits in the log: its event's number, its turn and its step.</summary>
+    private sealed record EgressPlace(long Sequence, int Turn, int Step, string? Unkept);
+
+    /// <summary>
+    /// Each request's place: a session's turns start at its user messages, and a turn's requests to one slot are its steps
+    /// (the first generator call is step 1).
+    /// </summary>
+    private static Dictionary<string, EgressPlace> Place(IEnumerable<StoredEvent> events, Func<StoredEvent, long> number)
+    {
+        var placed = new Dictionary<string, EgressPlace>(StringComparer.Ordinal);
+        foreach (var session in events.GroupBy(item => item.SessionId, StringComparer.Ordinal))
+        {
+            var turn = 0;
+            var steps = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var item in session.OrderBy(item => item.Sequence))
+            {
+                switch (item.Payload)
+                {
+                    case LoggedUserMessage:
+                        turn++;
+                        steps.Clear();
+                        break;
+                    case EgressRecorded recorded when recorded.Outcome != EgressOutcomes.Refused:
+                        var slot = recorded.Slot ?? "";
+                        var step = steps[slot] = steps.GetValueOrDefault(slot) + 1;
+                        placed[recorded.RequestId] = new EgressPlace(number(item), turn, step, recorded.Unkept);
+                        break;
+                }
+            }
+        }
+        return placed;
+    }
+
+    /// <summary>
+    /// One ledger entry as the page shows it. The text is what the ledger kept, reassembled; its excerpt and size are taken
+    /// from it, never given separately. A request whose text could not be kept says so in its place.
+    /// </summary>
+    private static EgressRequest Request(EgressEntry entry, EgressPlace? place, EgressLedger ledger, CorvidOptions settings)
+    {
+        var full = entry.Kept ? ledger.Render(entry.RequestId) : null;
+        full ??= "[not kept] The request as sent was not kept" + (place?.Unkept is { } why ? ": " + why : ".");
+        // A remote model's profile is "<name>@<provider>"; the transcript calls it by its name, the provider by its model.
+        var name = entry.Model.Split('@')[0];
+        var model = settings.Models.Remote.TryGetValue(name, out var remote) && remote.Model is { Length: > 0 } configured ? configured : entry.Model;
+        return new EgressRequest((int)entry.Number, place?.Sequence ?? 0, entry.SessionId ?? "", entry.At, model)
+        {
+            Slot = name,
+            Turn = place?.Turn ?? 0,
+            Step = place?.Step ?? 0,
+            Secret = entry.Secret ?? "",
+            Host = entry.Host ?? "",
+            Bytes = EgressRendering.Size(full),
+            Redacted = entry.Placeholders,
+            RedactedSummary = [new AuditSpan(Redactions(entry))],
+            Excerpt = EgressRendering.Excerpt(full),
+            Full = full,
+        };
+    }
+
+    /// <summary>"1 email value, 2 person values" for a redacted request; the gate's own words otherwise ("no PII found").</summary>
+    internal static string Redactions(EgressEntry entry) =>
+        entry.Outcome == EgressOutcomes.Redacted && !entry.Labels.IsEmpty
+            ? string.Join(", ", entry.Labels.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                .Select(pair => string.Create(CultureInfo.InvariantCulture, $"{pair.Value} {pair.Key} value{(pair.Value == 1 ? "" : "s")}")))
+            : entry.Reason;
+
+    /// <summary>The egress ledger, read from its file; never created here.</summary>
+    private EgressLedger Ledger(CorvidOptions? settings = null) => new(CorvidPaths.EgressDatabase(settings ?? Options()));
 
     public Task<IReadOnlyList<DetectionMatch>> ListDetectionsAsync(string? sessionId, CancellationToken cancellationToken) => Task.Run(() =>
     {
@@ -319,6 +424,10 @@ public sealed class EngineAuditService : IAuditService
             case LoggedUserMessage user:
                 summary = [P("user: "), P(Line(user.Text, TextPreview))];
                 break;
+            // K-3: the person's words, taken by the running turn at a checkpoint (A4V2-7).
+            case UserSteered steer:
+                summary = [P("user (steer): "), P(Line(steer.Text, TextPreview))];
+                break;
             case AssistantMessage answer:
                 summary = [P("answer: "), P(Line(answer.Text, TextPreview))];
                 break;
@@ -400,6 +509,23 @@ public sealed class EngineAuditService : IAuditService
             case ProjectBound bound:
                 summary = [P("bound to project "), M(bound.ProjectId[..Math.Min(12, bound.ProjectId.Length)]), P(" from its " + bound.Source)];
                 break;
+            case EgressRecorded egress:
+                tool = egress.Slot;
+                var sentTo = egress.Host is { } host ? $" ({host})" : "";
+                summary = egress.Outcome switch
+                {
+                    EgressOutcomes.Refused => [P("refused before it left: "), M(egress.Model), P(sentTo + " · "), P(Line(egress.Reason, TextPreview))],
+                    EgressOutcomes.Redacted => [P("sent to "), M(egress.Model), P(sentTo + string.Create(CultureInfo.InvariantCulture,
+                        $" · {egress.Placeholders} {(egress.Placeholders == 1 ? "value" : "values")} redacted · {AuditText.Size(egress.Bytes)}"))],
+                    _ => [P("sent to "), M(egress.Model), P(sentTo + " · " + AuditText.Size(egress.Bytes) + " · "), P(Line(egress.Reason, TextPreview))],
+                };
+                break;
+            case ApprovalAssessed assessed:
+                var allowed = assessed.Resolution is ApprovalResolutions.Automatic or ApprovalResolutions.RuleAllowed;
+                summary = [P(allowed ? "ran unasked: " : "refused unasked: "), M(assessed.Resolution), P($" in {assessed.Mode} mode"),
+                    .. assessed.Rule is { } rule ? new[] { P(" · rule "), P(Line(rule, TextPreview)) } : [],
+                    .. assessed.Risk is { Level: { } level } ? new[] { P(string.Create(CultureInfo.InvariantCulture, $" · risk {level}")) } : []];
+                break;
             default:
                 summary = [M(type)];
                 break;
@@ -418,9 +544,10 @@ public sealed class EngineAuditService : IAuditService
     private static AuditEventGroup Group(SessionEvent payload) => payload switch
     {
         ToolCallIssued or ToolResult or McpToolHeld or McpToolAccepted or McpPinsForgotten => AuditEventGroup.Tools,
-        ApprovalRequested or ApprovalResolved => AuditEventGroup.Approvals,
+        ApprovalRequested or ApprovalResolved or ApprovalAssessed => AuditEventGroup.Approvals,
         Decision or DecisionOutcomeRecorded => AuditEventGroup.Decisions,
-        ModelSwitched => AuditEventGroup.ModelSwitches,
+        // A request that left for a model sits with the model switches, as an escalation's request does in Audit.png.
+        ModelSwitched or EgressRecorded => AuditEventGroup.ModelSwitches,
         DetectionMatched => AuditEventGroup.Detections,
         CheckpointTaken or SessionRewound => AuditEventGroup.Checkpoints,
         MemoryWritten or SkillChanged or ProjectBound => AuditEventGroup.MemoryAndSkills,

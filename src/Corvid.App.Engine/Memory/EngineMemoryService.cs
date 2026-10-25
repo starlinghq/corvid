@@ -2,6 +2,8 @@ using System.Collections.Immutable;
 using Corvid.App.Core;
 using Corvid.App.Core.Composition;
 using Corvid.App.Core.Memory;
+using Corvid.App.Core.Mvvm;
+using Corvid.App.Engine.Ops;
 using Corvid.Host.Composition;
 using Corvid.Host.Configuration;
 using Corvid.Host.Knowledge;
@@ -26,7 +28,7 @@ namespace Corvid.App.Engine.Memory;
 /// (plan §9.5) is not built.
 /// </para>
 /// </summary>
-public sealed class EngineMemoryService : IMemoryService
+public sealed class EngineMemoryService : IMemoryService, IDisposable
 {
     /// <summary>The session an import's staged entries are recorded in (the window has no current session for them).</summary>
     public const string ImportSession = "app:memory-import";
@@ -43,16 +45,41 @@ public sealed class EngineMemoryService : IMemoryService
     private readonly AppEngine _engine;
     private readonly TimeProvider _time;
     private readonly Func<HermesHomeLocation> _hermes;
+    private readonly ChangeSignal? _changed;
 
     /// <param name="hermes">Finds the Hermes home the import reads; the user's (<see cref="HermesHome.Resolve"/>) by default.</param>
-    public EngineMemoryService(AppEngine engine, TimeProvider time, Func<HermesHomeLocation>? hermes = null)
+    /// <param name="dispatcher">
+    /// The UI thread <see cref="Changed"/> is raised on; without one it is never raised (a service used off the window).
+    /// </param>
+    public EngineMemoryService(AppEngine engine, TimeProvider time, Func<HermesHomeLocation>? hermes = null, IDispatcher? dispatcher = null)
     {
         ArgumentNullException.ThrowIfNull(engine);
         ArgumentNullException.ThrowIfNull(time);
         _engine = engine;
         _time = time;
         _hermes = hermes ?? (() => HermesHome.Resolve(CorvidPaths.Home));
+        if (dispatcher is not null)
+        {
+            _changed = new ChangeSignal(dispatcher, () => Changed?.Invoke(this, EventArgs.Empty));
+            _engine.MemoryChanged += OnMemoryChanged;
+        }
     }
+
+    /// <summary>
+    /// What this process staged or wrote outside the page (<see cref="AppEngine.MemoryChanged"/>), posted to the UI thread and
+    /// coalesced. A write another process makes is seen at the page's next load.
+    /// </summary>
+    public event EventHandler? Changed;
+
+    public void Dispose()
+    {
+        if (_changed is null)
+            return;
+        _engine.MemoryChanged -= OnMemoryChanged;
+        _changed.Dispose();
+    }
+
+    private void OnMemoryChanged() => _changed?.Raise();
 
     /// <summary>The status bar's engine line on the Memory page, once the runtime is up; null before (or when it failed).</summary>
     public static MemoryEngineStatus? Status(AppEngine engine)

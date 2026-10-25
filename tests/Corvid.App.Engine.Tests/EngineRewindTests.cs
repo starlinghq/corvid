@@ -7,6 +7,7 @@ using Corvid.App.Engine.History;
 using Corvid.App.Engine.Rewind;
 using Corvid.App.Engine.Sessions;
 using Corvid.Host.Tests;
+using Microsoft.Extensions.DependencyInjection;
 using RestoreStatus = Corvid.Kernel.Checkpoints.RestoreStatus;
 using AppScope = Corvid.App.Core.Sessions.RewindScope;
 
@@ -197,6 +198,9 @@ public sealed class EngineRewindTests
         Assert.Contains(view.Transcript, entry => entry is Corvid.App.Core.Sessions.UserEntry { Text: "make notes", Turn: 2 });
         Assert.DoesNotContain(view.Transcript, entry => entry is Corvid.App.Core.Sessions.ToolEntry { CallId: "call-2" });
         Assert.DoesNotContain(view.Transcript, entry => entry.Turn >= 3);
+        // The rollback cut turn 2 before its answer: it reads interrupted, not failed, live and replayed alike.
+        var cut = Assert.Single(view.Transcript.OfType<Corvid.App.Core.Sessions.TurnHeaderEntry>(), header => header.Number == 2);
+        Assert.Equal((Corvid.App.Core.Sessions.TurnOutcome.Cancelled, "interrupted"), (cut.Outcome, cut.Error));
         Assert.Equal(await ReplayedAsync(fixture, id), Shown(view));
 
         // The next prompt is numbered as the replay numbers it, and the two still agree after it.
@@ -343,9 +347,12 @@ public sealed class EngineRewindTests
         Assert.True(outcome.Refused);
         Assert.Contains("has no record of what the call changed", outcome.Detail, StringComparison.Ordinal);
         Assert.Equal(Corvids, fixture.Read("story.txt"));
-        // The restore opened it; with no turn running, nothing in the timeline is pending.
-        Assert.True(fixture.Runtime.TryGetSession(id, out _));
+        // M2: the restore opened it and let go of it after, so a terminal can drive it again; nothing in the timeline is pending.
+        Assert.False(fixture.Runtime.TryGetSession(id, out _));
+        Assert.Equal(Corvid.Host.Composition.LockState.Free, fixture.Runtime.Driver(id).State);
         Assert.DoesNotContain((await rewind.GetTimelineAsync(id, Ct)).Entries, entry => entry.Kind == LedgerEntryKind.Pending);
+        await using var terminal = await fixture.Host.Services.GetRequiredService<Corvid.Host.Composition.CorvidRuntimeFactory>().StartAsync(Ct);
+        terminal.OpenSession(id);
     }
 
     /// <summary>A3 review L8: a plan worked out while a turn runs says so; the same plan after the turn does not.</summary>

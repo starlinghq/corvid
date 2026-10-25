@@ -36,6 +36,12 @@ public sealed record SessionSnapshot(
     /// <summary>The project the session last bound (C-025, <c>ProjectBound</c>), or null.</summary>
     public string? ProjectId { get; init; }
 
+    /// <summary>The latest <c>SessionTitled</c> (G-6): the generated title or the user's rename; null when there is none.</summary>
+    public SessionTitled? Title { get; init; }
+
+    /// <summary>The latest <c>SessionRecapped</c> (G-6), or null.</summary>
+    public SessionRecapped? Recap { get; init; }
+
     /// <summary>Whether the event at <paramref name="sequence"/> is still part of the conversation.</summary>
     public bool IsVisible(long sequence) => !Hidden.Any(range => range.Contains(sequence));
 }
@@ -98,6 +104,8 @@ public static class SessionProjection
         var history = new List<StoredEvent>();
         string? goal = null;
         string? project = null;
+        SessionTitled? title = null;
+        SessionRecapped? recap = null;
         var todos = ImmutableArray<TodoItem>.Empty;
         var approvals = ImmutableDictionary.CreateBuilder<string, ApprovalRequested>(StringComparer.Ordinal);
         var profiles = ImmutableDictionary.CreateBuilder<string, JsonElement>(StringComparer.Ordinal);
@@ -126,6 +134,8 @@ public static class SessionProjection
             {
                 case GoalSet value: goal = value.Goal; break;
                 case ProjectBound value: project = value.ProjectId; break;
+                case SessionTitled value: title = value; break;
+                case SessionRecapped value: recap = value; break;
                 case TodosSet value: todos = value.Items; break;
                 case ApprovalRequested value: approvals[value.ApprovalId] = value; break;
                 case ApprovalResolved value:
@@ -213,7 +223,7 @@ public static class SessionProjection
                     transcript.Add(new(range.FromSequence, range.ThroughSequence, range));
                 continue;
             }
-            if (item.Payload is UserMessage or AssistantMessage or ToolCallIssued or ToolResult)
+            if (item.Payload is UserMessage or UserSteered or AssistantMessage or ToolCallIssued or ToolResult)
                 transcript.Add(new(item.Sequence, item.Sequence, item.Payload));
         }
 
@@ -224,6 +234,8 @@ public static class SessionProjection
             IssuedCallIds = calls.Keys.ToImmutableHashSet(StringComparer.Ordinal),
             CheckpointEvents = recorded.ToImmutable(),
             ProjectId = project,
+            Title = title,
+            Recap = recap,
         };
     }
 

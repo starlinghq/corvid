@@ -76,6 +76,12 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue) : IValidate
             errors.Add("Corvid:Approvals:TimeoutSeconds must be between 1 and 86400.");
         if (options.Turn.MaxSteps is < 1 or > 64)
             errors.Add("Corvid:Turn:MaxSteps must be between 1 and 64.");
+        if (options.Privacy.Ledger.RetainDays is < 0 or > 36_500)
+            errors.Add("Corvid:Privacy:Ledger:RetainDays must be between 0 (any age) and 36500.");
+        if (options.Privacy.Ledger.MaxMegabytes is < 0 or > 1_048_576)
+            errors.Add("Corvid:Privacy:Ledger:MaxMegabytes must be between 0 (no cap) and 1048576.");
+        if (options.Sessions.RecapAfterMinutes is < 0 or > 10_080)
+            errors.Add("Corvid:Sessions:RecapAfterMinutes must be between 0 (off) and 10080 (a week).");
         if (options.Turn.MaxOutputTokens is < 16 or > 65_536)
             errors.Add("Corvid:Turn:MaxOutputTokens must be between 16 and 65536.");
         if (options.Telemetry.OtlpEndpoint is { Length: > 0 } endpoint
@@ -163,16 +169,8 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue) : IValidate
             // too refuses a tool whose risk metadata declares SideEffects.Memory (the turn loop never offers one to a guest);
             // here, the shape, and that an MCP tool names a configured server (its tools are listed only once it runs).
             foreach (var tool in adapter.GuestTools)
-            {
-                if (string.IsNullOrWhiteSpace(tool) || !tool.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-'))
-                    errors.Add($"{key}:GuestTools: '{tool}' is not a tool name (letters, digits, '_' and '-').");
-                // A job's run is a turn of its own with the whole toolset (no guest scope), and reports back to the chat: a
-                // guest's job would read for the guest what the guest's own turn may not.
-                else if (tool == "cron_create")
-                    errors.Add($"{key}:GuestTools: 'cron_create' cannot be a guest tool: a scheduled job runs with every tool and reports to the chat.");
-                else if (Composition.CorvidGateway.McpServerOf(tool) is { } server && !servers.Contains(server))
-                    errors.Add($"{key}:GuestTools: '{tool}' names MCP server '{server}', which is not configured under Corvid:Mcp:Servers.");
-            }
+                if (Composition.CorvidGateway.GuestToolShapeProblem(tool, servers) is { } problem)
+                    errors.Add($"{key}:GuestTools: {problem}");
             foreach (var (chat, settings) in adapter.Chats)
             {
                 foreach (var (slot, model) in settings?.Slots ?? [])

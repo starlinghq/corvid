@@ -241,20 +241,7 @@ public static class McpCommands
     }
 
     /// <summary>Hidden characters made visible, so a change that adds one shows in the diff.</summary>
-    private static string? Visible(string? text)
-    {
-        if (text is null)
-            return null;
-        var builder = new System.Text.StringBuilder(text.Length);
-        foreach (var c in text)
-        {
-            if (char.IsControl(c) && c is not ('\n' or '\t') || char.GetUnicodeCategory(c) == System.Globalization.UnicodeCategory.Format)
-                builder.Append(System.Globalization.CultureInfo.InvariantCulture, $"\\u{(int)c:X4}");
-            else
-                builder.Append(c);
-        }
-        return builder.ToString();
-    }
+    private static string? Visible(string? text) => text is null ? null : TerminalText.Visible(text);
 
     private static string[] Split(string? json) => json is null ? ["(none)"] : json.Split('\n');
 

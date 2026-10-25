@@ -40,6 +40,14 @@ public static class SettingsCatalogue
         new("Detections:Enforce", "Devices and tools", "Enforce detections", "A matched detection forces an ask; off, it is recorded only.", SettingKind.Toggle, SettingApplies.Restart, "true"),
         new("Checkpoints:MaxFiles", "Devices and tools", "Checkpoint file limit", "The most files a checkpoint snapshots.", SettingKind.Number, SettingApplies.Restart, "50000"),
 
+        // U-8: what the app hosts for the machine, off by default; the Gateway and Jobs pages' Start hosting sets them too.
+        new("App:HostGateway", "Hosting", "Host the gateway in this app",
+            "Connects every enabled adapter (Telegram, Discord, Slack) with its token from the Vault while the app is open, under the one-lock rule; their chats run turns here.",
+            SettingKind.Toggle, SettingApplies.Now, "false"),
+        new("App:HostScheduler", "Hosting", "Host the scheduler in this app",
+            "Runs scheduled jobs, each with its tools, while the app is open, under the one-lock rule (Corvid:Scheduler:Enabled permitting).",
+            SettingKind.Toggle, SettingApplies.Now, "false"),
+
         new("Serve:Url", "Serve and telemetry", "corvid serve address", "Where corvid serve listens; anything but loopback needs a token.", SettingKind.Url, SettingApplies.Restart, "http://127.0.0.1:8411"),
         new("Serve:TokenSecret", "Serve and telemetry", "Token secret", "The Vault secret remote callers must present (its name, never the token).", SettingKind.Text, SettingApplies.Restart, ""),
         new("Telemetry:OtlpEndpoint", "Serve and telemetry", "OTLP endpoint", "Where traces and metrics go; empty sends none.", SettingKind.Url, SettingApplies.Restart, ""),

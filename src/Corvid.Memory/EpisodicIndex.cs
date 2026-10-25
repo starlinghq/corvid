@@ -182,6 +182,8 @@ internal static class EpisodeText
 {
     public static (string Kind, string Text)? Of(SessionEvent payload) => payload switch
     {
+        // A4: a `!!` line's message, call and output are the user's alone; recall would hand them to the model later.
+        UserMessage { LocalOnly: true } or ToolCallIssued { LocalOnly: true } or ToolResult { LocalOnly: true } => null,
         UserMessage message => Entry("user_message", message.Text),
         AssistantMessage message => Entry("assistant_message", message.Text),
         ToolCallIssued call => Entry("tool_call_issued", $"{call.ToolName} {Json(call.Arguments)}"),

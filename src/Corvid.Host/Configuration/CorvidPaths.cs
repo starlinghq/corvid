@@ -24,12 +24,25 @@ public static class CorvidPaths
     public static string DataDirectory(CorvidOptions options) =>
         options.DataDirectory is { Length: > 0 } directory ? ExpandHome(directory) : DefaultDataDirectory;
 
+    /// <summary>
+    /// Creates <paramref name="directory"/> owner only (0700) when it does not exist yet: the data directory holds the event
+    /// log, memory and the egress store, which nobody else on the machine should list or read. Its parents are created as
+    /// usual, and an existing directory keeps the mode its owner gave it.
+    /// </summary>
+    public static void CreatePrivateDirectory(string directory) => Corvid.Abstractions.IO.PrivateDirectory.Create(directory);
+
     public static string Workspace(CorvidOptions options) =>
         options.Workspace is { Length: > 0 } workspace ? ExpandHome(workspace) : Directory.GetCurrentDirectory();
 
     public static string EventLog(CorvidOptions options) => Path.Combine(DataDirectory(options), "events.db");
 
     public static string MemoryDatabase(CorvidOptions options) => Path.Combine(DataDirectory(options), "memory.db");
+
+    /// <summary>
+    /// The egress ledger's store (G-9): each request to a gated model as it was sent, after redaction, kept beside the log so
+    /// the log's own events stay small. Owner-only; created at the first gated request.
+    /// </summary>
+    public static string EgressDatabase(CorvidOptions options) => Path.Combine(DataDirectory(options), "egress.db");
 
     /// <summary>The durable job store (C-012), its own SQLite file because jobs change.</summary>
     public static string JobStore(CorvidOptions options) => Path.Combine(DataDirectory(options), "jobs.db");
@@ -50,6 +63,12 @@ public static class CorvidPaths
     /// may write, never in the user's configuration.
     /// </summary>
     public static string McpPins(CorvidOptions options) => Path.Combine(DataDirectory(options), "mcp-pins.json");
+
+    /// <summary>
+    /// The sessions' driver locks (G-12): one lock file per session a process has opened to drive, with the note saying
+    /// which process. Beside the event log they guard.
+    /// </summary>
+    public static string SessionDrivers(CorvidOptions options) => Path.Combine(DataDirectory(options), "drivers");
 
     /// <summary>The skill loop's queue, staged drafts, usage and eval results.</summary>
     public static string SkillsDatabase(CorvidOptions options) => Path.Combine(DataDirectory(options), "skills.db");

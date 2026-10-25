@@ -19,7 +19,7 @@ public sealed class AuditViewModelTests
     [Fact]
     public async Task TheStatusBarIsAuditPngs()
     {
-        Assert.True(AppOptions.TryParse(["--page", "audit"], out var options, out var error), error);
+        Assert.True(AppOptions.TryParse(["--demo", "--page", "audit"], out var options, out var error), error);
         var composition = new AppComposition(options, new InlineDispatcher());
         await composition.Audit.Loaded;
         var bar = composition.StatusBar;
@@ -225,7 +225,7 @@ public sealed class AuditViewModelTests
     [Fact]
     public async Task ATranscriptDetectionOpensAuditFilteredToItsEvents()
     {
-        Assert.True(AppOptions.TryParse([], out var options, out var error), error);
+        Assert.True(AppOptions.TryParse(["--demo"], out var options, out var error), error);
         var composition = new AppComposition(options, new InlineDispatcher());
         var time = ManualTimeProvider.Demo();
         var service = new CapturingSessionService(new DemoSessionService(new InlineDispatcher(), time, DemoScene.Main));
@@ -261,6 +261,13 @@ public sealed class AuditViewModelTests
 
         public void Deliver(SessionUpdate update) => _onUpdate?.Invoke(update);
 
+        /// <summary>Whether steering reaches a turn here; false stands for an engine without K-3.</summary>
+        public bool Steers { get; init; } = true;
+
+        public List<string> Steered { get; } = [];
+
+        bool ISessionService.CanSteer => Steers;
+
         public Task<ISessionSubscription> OpenAsync(string sessionId, Action<SessionUpdate> onUpdate, CancellationToken cancellationToken = default)
         {
             _onUpdate = onUpdate;
@@ -273,7 +280,11 @@ public sealed class AuditViewModelTests
         public Task RemoveQueuedAsync(string sessionId, string queuedId, CancellationToken cancellationToken = default) => inner.RemoveQueuedAsync(sessionId, queuedId, cancellationToken);
         public Task MoveQueuedAsync(string sessionId, string queuedId, int index, CancellationToken cancellationToken = default) => inner.MoveQueuedAsync(sessionId, queuedId, index, cancellationToken);
         public Task<string?> TakeBackQueuedAsync(string sessionId, string queuedId, CancellationToken cancellationToken = default) => inner.TakeBackQueuedAsync(sessionId, queuedId, cancellationToken);
-        public Task SteerAsync(string sessionId, string text, CancellationToken cancellationToken = default) => inner.SteerAsync(sessionId, text, cancellationToken);
+        public Task SteerAsync(string sessionId, string text, CancellationToken cancellationToken = default)
+        {
+            Steered.Add(text);
+            return inner.SteerAsync(sessionId, text, cancellationToken);
+        }
         public Task InterruptAsync(string sessionId, CancellationToken cancellationToken = default) => inner.InterruptAsync(sessionId, cancellationToken);
         public Task AnswerApprovalAsync(string sessionId, string approvalId, ApprovalAnswer answer, CancellationToken cancellationToken = default) => inner.AnswerApprovalAsync(sessionId, approvalId, answer, cancellationToken);
         public Task AnswerQuestionAsync(string sessionId, string questionId, string answer, CancellationToken cancellationToken = default) => inner.AnswerQuestionAsync(sessionId, questionId, answer, cancellationToken);

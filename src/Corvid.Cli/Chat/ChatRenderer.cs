@@ -37,7 +37,9 @@ internal sealed class ChatRenderer : ITurnObserver
         _live = live ?? (console.Profile.Capabilities.Interactive && console.Profile.Capabilities.Ansi);
     }
 
-    private sealed record ToolRow(string CallId, string Tool, bool Approval, long Started, string? Outcome = null, TimeSpan Elapsed = default)
+    /// <param name="Tail">K-2: the running call's last line of output, cleaned for the terminal.</param>
+    private sealed record ToolRow(string CallId, string Tool, long Started, string? Outcome = null, TimeSpan Elapsed = default,
+        string? Tail = null)
     {
         public bool Running => Outcome is null;
     }
@@ -49,6 +51,7 @@ internal sealed class ChatRenderer : ITurnObserver
             _console.Write(new Rule($"[bold]corvid[/] [grey]· {Markup.Escape(generator)} · {tools} tool(s) · session {Markup.Escape(session)}[/]")
                 .LeftJustified().RuleStyle("grey"));
             _console.MarkupLine("[grey]/help lists commands · /model picks a model · Ctrl-C cancels a turn · /exit leaves[/]");
+            _console.MarkupLine(@"[grey]! cmd runs a shell command · # fact stages a memory · \! or \# at the start sends the line as a message[/]");
         }
     }
 
@@ -74,6 +77,7 @@ internal sealed class ChatRenderer : ITurnObserver
         {
             _generation.Clear();
             _tools = [];
+            Volatile.Write(ref _stepBox, null);
             _textOpen = false;
         }
     }
@@ -109,11 +113,13 @@ internal sealed class ChatRenderer : ITurnObserver
         lock (_gate)
         {
             EndText();
-            _tools = _tools.Add(new ToolRow(callId, tool, approval, Stopwatch.GetTimestamp()));
+            // A call that may ask (approval) is checked first and often runs unasked (smart mode, a ! line that only reads):
+            // only the approval box, when one opens, says it waits on the person (A4V2-6).
+            _tools = _tools.Add(new ToolRow(callId, tool, Stopwatch.GetTimestamp()));
             if (_live)
                 StartPanel();
             else
-                _console.MarkupLine($"  [yellow]⏺[/] {Markup.Escape(tool)} [grey]{(approval ? "awaiting approval" : "running")}[/]");
+                _console.MarkupLine($"  [yellow]⏺[/] {Markup.Escape(tool)} [grey]running[/]");
         }
     }
 
@@ -125,11 +131,33 @@ internal sealed class ChatRenderer : ITurnObserver
             if (row is not null)
                 _tools = _tools.Replace(row, row with { Outcome = outcome, Elapsed = elapsed });
             else
-                _tools = _tools.Add(new ToolRow(callId, tool, false, Stopwatch.GetTimestamp(), outcome, elapsed));
+                _tools = _tools.Add(new ToolRow(callId, tool, Stopwatch.GetTimestamp(), outcome, elapsed));
             if (!_live)
                 _console.MarkupLine($"  {Mark(outcome)} {Markup.Escape(tool)} [grey]{Markup.Escape(Describe(outcome))} · {Duration(elapsed)}[/]");
             else if (_tools.All(item => !item.Running))
                 StopPanel();
+        }
+    }
+
+    /// <summary>Turn progress: the live panel's header says the step ("step 2 of 8").</summary>
+    public void Progress(int step, int maxSteps)
+    {
+        Volatile.Write(ref _stepBox, new StepBox(step, maxSteps));
+    }
+
+    /// <summary>
+    /// K-2: a running call's output. The live panel shows its last line under the call; without a live panel nothing is
+    /// printed (the scrollback gets the result, not every line twice).
+    /// </summary>
+    public void ToolOutput(string callId, string tool, string tail)
+    {
+        if (!_live)
+            return;
+        lock (_gate)
+        {
+            var row = _tools.FirstOrDefault(item => item.CallId == callId && item.Running);
+            if (row is not null)
+                _tools = _tools.Replace(row, row with { Tail = LastLine(tail) });
         }
     }
 
@@ -149,7 +177,8 @@ internal sealed class ChatRenderer : ITurnObserver
 
     // ---- the end of a turn ----
 
-    public void EndTurn(Delivery delivery)
+    /// <param name="status">What the footer leads with instead of the turn's status: a <c>!</c> line's own (<see cref="ShellResult"/>).</param>
+    public void EndTurn(Delivery delivery, string? status = null)
     {
         lock (_gate)
         {
@@ -169,8 +198,55 @@ internal sealed class ChatRenderer : ITurnObserver
                 _console.Write(new Text(text, result.Status == TurnStatus.Failed ? new Style(Color.Red) : Style.Plain));
                 _console.WriteLine();
             }
-            _console.MarkupLine($"[grey]{Markup.Escape(Footer(result))}[/]");
+            // K-6: a clarifying question's choices, answered on the next line by number or in words.
+            if (result.Question is { Options.IsDefaultOrEmpty: false } question)
+                _console.MarkupLine("[blue]?[/] " + string.Join(" · ", question.Options.Select((option, i) =>
+                    $"[green]{i + 1}[/] {Markup.Escape(TerminalText.Choice(option))}")) + " [grey](a number picks it, or answer in your words)[/]");
+            _console.MarkupLine($"[grey]{Markup.Escape(Footer(result, status))}[/]");
         }
+    }
+
+    /// <summary>
+    /// K-6: the line typed after a clarifying question with choices: a choice's number becomes that choice's visible text
+    /// (<see cref="TerminalText.ChosenAnswer"/>: the model wrote it, and hidden characters in it, shown as codes above,
+    /// are never sent as the person's words); anything else, or a choice with nothing visible, is the answer as typed.
+    /// </summary>
+    public static string Answer(ClarifyingQuestion? question, string line) =>
+        question is { Options.IsDefaultOrEmpty: false } asked
+        && int.TryParse(line.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var pick) && pick >= 1 && pick <= asked.Options.Length
+        && TerminalText.ChosenAnswer(asked.Options[pick - 1]) is { Length: > 0 } visible
+            ? visible
+            : line;
+
+    /// <summary>The most lines of a <c>!</c> line's output shown; the rest is in the log.</summary>
+    public const int ShellLines = 200;
+
+    /// <summary>
+    /// A <c>!</c> line's output (A4): standard output and error as the sandbox returned them, without control characters,
+    /// its last <see cref="ShellLines"/> lines, then the exit code and where the output went. A line that never ran (denied)
+    /// says "not run", one the sandbox could not run says "failed" (A4V2-6); that word is returned for the turn's footer,
+    /// null when the command ran.
+    /// </summary>
+    /// <param name="error">The failed call's error kind (<see cref="Corvid.Host.Sessions.ComposerLine.LastShellResult"/>); null when it ran.</param>
+    public string? ShellResult(string? output, int? exitCode, bool localOnly, string? error = null)
+    {
+        var status = error is null ? null : error == ToolErrorKinds.NotRun ? "not run" : "failed";
+        lock (_gate)
+        {
+            StopPanel();
+            EndText();
+            if (output is { Length: > 0 })
+            {
+                var lines = Host.Sessions.SessionCatalogue.Visible(output).TrimEnd('\n').Split('\n');
+                if (lines.Length > ShellLines)
+                    _console.MarkupLine($"[grey]… {lines.Length - ShellLines} earlier line(s) are in the session's log[/]");
+                foreach (var line in lines.TakeLast(ShellLines))
+                    _console.Write(new Text(line + "\n"));
+            }
+            var exit = exitCode is { } code ? $"exit {code.ToString(CultureInfo.InvariantCulture)}" : status ?? "not run";
+            _console.MarkupLine($"[grey]{Markup.Escape(exit)} · {(localOnly ? "the output stays here (!!): the model never sees it" : "the output is in the conversation for your next message")}[/]");
+        }
+        return status;
     }
 
     public void Cancelled()
@@ -312,18 +388,44 @@ internal sealed class ChatRenderer : ITurnObserver
         _panelStop = null;
     }
 
-    private static IRenderable BuildPanel(ImmutableList<ToolRow> tools)
+    private IRenderable BuildPanel(ImmutableList<ToolRow> tools)
     {
         var table = new Table().Border(TableBorder.None).HideHeaders().AddColumn("").AddColumn("").AddColumn("");
         foreach (var tool in tools)
+        {
             table.AddRow(
                 new Markup(tool.Running ? "[yellow]⏺[/]" : Mark(tool.Outcome!)),
                 new Text(tool.Tool),
                 new Markup($"[grey]{Markup.Escape(tool.Running
-                    ? (tool.Approval ? "awaiting approval · " : "running · ") + Duration(Stopwatch.GetElapsedTime(tool.Started))
+                    ? "running · " + Duration(Stopwatch.GetElapsedTime(tool.Started))
                     : Describe(tool.Outcome!) + " · " + Duration(tool.Elapsed))}[/]"));
-        return new Panel(table).Header("[grey] tools [/]").BorderColor(Color.Grey);
+            // K-2: the running call's last line, dim, under it.
+            if (tool.Running && tool.Tail is { Length: > 0 } tail)
+                table.AddRow(new Text(""), new Text(""), new Text(tail, new Style(Color.Grey)));
+        }
+        // Read without the lock, like the rows: a snapshot of a value type.
+        var header = Volatile.Read(ref _stepBox) is { } step
+            ? string.Create(CultureInfo.InvariantCulture, $"[grey] tools · step {step.Step} of {step.MaxSteps} [/]")
+            : "[grey] tools [/]";
+        return new Panel(table).Header(header).BorderColor(Color.Grey);
     }
+
+    // Turn progress: the step the turn is on and its budget, for the panel's header; boxed so the panel thread reads it whole.
+    private StepBox? _stepBox;
+
+    private sealed record StepBox(int Step, int MaxSteps);
+
+    /// <summary>A tail's last non-empty line for one terminal row: control and format characters dropped, at most 100 characters.</summary>
+    internal static string LastLine(string tail)
+    {
+        var line = tail.Split('\n').LastOrDefault(item => item.Trim().Length > 0) ?? "";
+        line = Clean(line).Trim();
+        return line.Length > 100 ? line[..99] + "…" : line;
+    }
+
+    /// <summary>Untrusted text for the terminal: control characters (an escape sequence's ESC among them) and format characters dropped.</summary>
+    private static string Clean(string text) =>
+        string.Concat(text.Where(c => !char.IsControl(c) && char.GetUnicodeCategory(c) != UnicodeCategory.Format));
 
     private static string Mark(string outcome) => outcome == "succeeded" ? "[green]✓[/]" : outcome == "denied" ? "[yellow]⊘[/]" : "[red]✗[/]";
 
@@ -333,9 +435,9 @@ internal sealed class ChatRenderer : ITurnObserver
 
     private static string Normalize(string text) => text.Trim().ReplaceLineEndings("\n");
 
-    private static string Footer(TurnResult result)
+    private static string Footer(TurnResult result, string? status = null)
     {
-        var parts = new List<string> { TurnRunner.StatusName(result.Status).Replace('_', ' ') };
+        var parts = new List<string> { status ?? TurnRunner.StatusName(result.Status).Replace('_', ' ') };
         if (result.Steps > 0)
             parts.Add($"{result.Steps} step(s), {result.ToolCalls} tool call(s)");
         parts.AddRange(result.Escalations.Select(escalation => escalation.EndsWith(": " + TurnRunner.PrivacyRetreat, StringComparison.Ordinal)

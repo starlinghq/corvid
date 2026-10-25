@@ -129,7 +129,9 @@ public sealed class UserMessageBlock : TranscriptBlock
     {
         var user = (UserEntry)entry;
         var clock = SessionText.Clock(user.At, context.Zone);
-        Who = user.Steered ? $"you · steer · {clock}" : $"you · {clock}";
+        // Security M2: a gateway guest's message is named as theirs, never "you".
+        Who = user.From is { } from ? $"{SafeText.Clean(from)} · outside content · {clock}"
+            : user.Steered ? $"you · steer · {clock}" : $"you · {clock}";
         Text = SafeText.Clean(user.Text);
         IsSteer = user.Steered;
         Position = user.Position;
@@ -240,7 +242,10 @@ public sealed class DecisionsBlock : TranscriptBlock
         IsSummary = decisions.Summary;
         Chips = [.. decisions.Group.Answers.Select(DecisionChip.From)];
         var checkpoint = SessionText.Checkpoint(decisions.Group.Checkpoint);
-        AutomationName = $"{char.ToUpperInvariant(checkpoint[0])}{checkpoint[1..]} checkpoint, {decisions.Group.Decider}";
+        // An unnamed checkpoint (a feed that lost the span's tag) is still a row, not a failure to draw the session.
+        AutomationName = checkpoint.Length == 0
+            ? $"Checkpoint, {decisions.Group.Decider}"
+            : $"{char.ToUpperInvariant(checkpoint[0])}{checkpoint[1..]} checkpoint, {decisions.Group.Decider}";
     }
 }
 
@@ -482,6 +487,7 @@ public sealed class NoticeBlock : TranscriptBlock
             NoticeKind.Decider => (IconKind.Warning, Tone.Amber, ""),
             NoticeKind.Warning => (IconKind.Warning, Tone.Amber, ""),
             NoticeKind.Mode => (IconKind.Shield, Tone.Grey, ""),
+            NoticeKind.Recap => (IconKind.Sparkle, Tone.Violet, ""),
             _ => (IconKind.None, Tone.Grey, ""),
         };
         OnPropertyChanged(string.Empty);
@@ -701,7 +707,7 @@ public sealed class QuestionBlock : TranscriptBlock
 
     public string QuestionId { get; private set; } = "";
 
-    /// <summary>"which version number?"; the question itself when it has no title.</summary>
+    /// <summary>"which version number?"; "Question" when it has no title (the question shows below it).</summary>
     public string Title { get; private set; } = "";
 
     public string Text { get; private set; } = "";
@@ -723,11 +729,19 @@ public sealed class QuestionBlock : TranscriptBlock
         if (QuestionId != asked.QuestionId || Options.Count != asked.Options.Length)
         {
             QuestionId = asked.QuestionId;
-            Options = [.. asked.Options.Select(option => new QuestionOption(SafeText.Clean(option),
-                new RelayCommand(() => _context.Session.AnswerQuestion(asked.QuestionId, option), () => IsOpen)))];
+            // The model wrote the options, and a click sends one as the person's own message: its label shows every hidden
+            // character (SafeText.Reveal) rather than dropping it, and what is sent is only the text a reader sees
+            // (SafeText.Clean), so nothing the person did not see reaches the generator as their words. An option that is
+            // all hidden characters cannot be chosen; the composer answers it.
+            Options = [.. asked.Options.Select(option =>
+            {
+                var visible = SafeText.Clean(option).Trim();
+                return new QuestionOption(SafeText.Reveal(option),
+                    new RelayCommand(() => _context.Session.AnswerQuestion(asked.QuestionId, visible), () => IsOpen && visible.Length > 0));
+            })];
         }
 
-        Title = SafeText.Clean(asked.Title ?? asked.Text);
+        Title = SafeText.Clean(asked.Title ?? "Question");
         Text = SafeText.Clean(asked.Text);
         AllowsFreeText = asked.AllowsFreeText;
         IsOpen = question.Answer is null;

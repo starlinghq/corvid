@@ -430,6 +430,17 @@ public sealed class ShellViewModel : ObservableObject
     /// </summary>
     private bool SessionRowShows => _area is Area.Sessions or Area.Review or Area.Rewind;
 
+    /// <summary>
+    /// The layout preferences the window starts with (Settings › Layout, kept in ui.db, G-7): the rail or the dock hidden
+    /// until <c>Ctrl+Shift+B</c> or <c>Ctrl+B</c> shows it.
+    /// </summary>
+    public void ApplyStartLayout(bool railHidden, bool dockHidden)
+    {
+        _railOpen = !railHidden;
+        _dockOpen = !dockHidden;
+        RaiseLayout();
+    }
+
     private void RaiseLayout()
     {
         OnPropertyChanged(nameof(ShowRail));

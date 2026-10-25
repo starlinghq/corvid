@@ -26,9 +26,15 @@ namespace Corvid.App.Engine.Jobs;
 /// the pool, never on the UI thread.
 /// </para>
 /// <para>
-/// What the engine does not have: a job records no delivery target of its own (a job made in a gateway chat reports to that
-/// chat, any other keeps its result in the run's session), so the only destination offered is <see cref="KeptInSession"/>;
-/// and runs record no tool-call count.
+/// G-14: the scheduler's status says since when, and who holds it when another process does (the lock's note); a load
+/// that finds that process gone takes the scheduler over (<see cref="CorvidRuntime.WakeScheduler"/>), and while another
+/// process runs it the store is looked at every <see cref="ElsewhereInterval"/>, so its runs show without a reload.
+/// </para>
+/// <para>
+/// Job runs report back: a job made here keeps its result in the run's session (<see cref="KeptInSession"/>), or reports to
+/// an enabled adapter's home chat (<c>Corvid:Gateway:Adapters:&lt;name&gt;:HomeChat</c>) through the delivery ledger, which
+/// whichever gateway runs (this app's, G-14) sends. A job records no delivery target of its own, so such a job is made as a
+/// gateway chat's job is (its origin is that chat's session). Runs record no tool-call count.
 /// </para>
 /// </summary>
 public sealed class EngineJobsService : IJobsService, IDisposable
@@ -52,6 +58,12 @@ public sealed class EngineJobsService : IJobsService, IDisposable
     private readonly Lock _gate = new();
     private Action? _unsubscribe;
     private bool _disposed;
+    private ITimer? _elsewhere;
+    private string? _seen;
+    private int _looking;
+
+    /// <summary>How often the store is looked at while another process runs the scheduler (its runs raise nothing here).</summary>
+    public static readonly TimeSpan ElsewhereInterval = TimeSpan.FromSeconds(10);
 
     public EngineJobsService(AppEngine engine, IDispatcher dispatcher, TimeProvider time)
     {
@@ -61,7 +73,15 @@ public sealed class EngineJobsService : IJobsService, IDisposable
         _engine = engine;
         _time = time;
         _changed = new ChangeSignal(dispatcher, () => Changed?.Invoke(this, EventArgs.Empty));
+        _engine.Started += OnEngineStarted;
         _work.Track(SubscribeAsync());
+    }
+
+    /// <summary>A runtime that could not start at first is up (First run's downloads): hear it, and the page reads it again.</summary>
+    private void OnEngineStarted(CorvidRuntime runtime)
+    {
+        _work.Track(SubscribeAsync());
+        _changed.Raise();
     }
 
     public event EventHandler? Changed;
@@ -73,17 +93,22 @@ public sealed class EngineJobsService : IJobsService, IDisposable
     {
         var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
         var store = runtime.Builtin.Jobs;
-        var state = runtime.SchedulerState;
-        return await Task.Run(() =>
+        var snapshot = await Task.Run(() =>
         {
+            // The process that held the scheduler has exited: this app takes it over (C-041's retry, as a session open does).
+            if (runtime.SchedulerState == ElsewhereState)
+                runtime.WakeScheduler();
+            var state = runtime.SchedulerState;
             var jobs = store.List(includeFinished: true)
                 .Where(job => job.State != KernelJobState.Removed)
                 .OrderByDescending(job => job.CreatedAt)
                 .Take(MaxJobs)
                 .Select(job => Record(job, store.Runs(job.JobId, 1) is [var last] ? last : null))
                 .ToList();
-            return new JobsSnapshot(Scheduler(state), jobs, [KeptInSession]);
+            return new JobsSnapshot(Scheduler(state, runtime.SchedulerHolder), jobs, [KeptInSession, .. HomeChats(runtime.Options).Keys]);
         }, cancellationToken).ConfigureAwait(false);
+        Watch(runtime, snapshot);
+        return snapshot;
     }
 
     public async Task<IReadOnlyList<JobRunRecord>> RunsAsync(string jobId, CancellationToken cancellationToken)
@@ -143,9 +168,10 @@ public sealed class EngineJobsService : IJobsService, IDisposable
         if ((draft.Script?.Length ?? 0) > MaxScriptLength)
             throw new InvalidOperationException(
                 $"The script is {draft.Script!.Length} characters; a job's script may be at most {MaxScriptLength}. Save it as a file and run that.");
-        if (draft.Deliver.Length > 0 && draft.Deliver != KeptInSession)
+        string? origin = null;
+        if (draft.Deliver.Length > 0 && draft.Deliver != KeptInSession && !HomeChats(runtime.Options).TryGetValue(draft.Deliver, out origin))
             throw new InvalidOperationException(
-                $"A job made here keeps its result in the run's session: the engine records no delivery target for a job (only one made in a gateway chat reports to that chat), so {SafeText.Reveal(draft.Deliver)} cannot be chosen.");
+                $"A job made here keeps its result in the run's session or reports to an enabled adapter's home chat (Corvid:Gateway:Adapters:<name>:HomeChat); {SafeText.Reveal(draft.Deliver)} is neither.");
 
         var created = await Task.Run(() =>
         {
@@ -155,8 +181,9 @@ public sealed class EngineJobsService : IJobsService, IDisposable
                 throw new InvalidOperationException($"There is already a job named {name}.");
             try
             {
+                // A job reporting to a chat is made as that chat's job is: the run's result is queued for it in the delivery ledger.
                 return store.Add(new NewJob(name, draft.NoAgent ? "" : draft.Prompt, draft.Schedule,
-                    string.IsNullOrWhiteSpace(draft.Script) ? null : draft.Script.Trim(), draft.NoAgent));
+                    string.IsNullOrWhiteSpace(draft.Script) ? null : draft.Script.Trim(), draft.NoAgent, OriginSession: origin));
             }
             catch (Exception exception) when (exception is FormatException or ArgumentException)
             {
@@ -223,15 +250,88 @@ public sealed class EngineJobsService : IJobsService, IDisposable
 
     public void Dispose()
     {
+        _engine.Started -= OnEngineStarted;
         Action? unsubscribe;
+        ITimer? elsewhere;
         lock (_gate)
         {
             _disposed = true;
             (unsubscribe, _unsubscribe) = (_unsubscribe, null);
+            (elsewhere, _elsewhere) = (_elsewhere, null);
         }
         unsubscribe?.Invoke();
+        elsewhere?.Dispose();
         _changed.Dispose();
     }
+
+    /// <summary>
+    /// The destinations a job made here may report to besides its session: each enabled adapter's home chat, by the label the
+    /// form shows ("the telegram home chat (-100123)"), to the gateway session a chat's own job has as its origin.
+    /// </summary>
+    internal static Dictionary<string, string> HomeChats(Corvid.Host.Configuration.CorvidOptions options) =>
+        options.Gateway.Adapters
+            .Where(pair => pair.Value is { Enabled: true, HomeChat.Length: > 0 } && !pair.Key.Contains(':', StringComparison.Ordinal))
+            .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(pair => $"the {pair.Key.ToLowerInvariant()} home chat ({pair.Value.HomeChat})",
+                pair => GatewaySessions.For(pair.Key.ToLowerInvariant(), pair.Value.HomeChat!), StringComparer.Ordinal);
+
+    /// <summary>
+    /// While another process runs the scheduler, looks at the store every <see cref="ElsewhereInterval"/> and raises
+    /// <see cref="Changed"/> when its jobs, their latest runs or the scheduler's holder differ, taking the scheduler over
+    /// once that process has exited; stops once this app runs it or it is off.
+    /// </summary>
+    private void Watch(CorvidRuntime runtime, JobsSnapshot snapshot)
+    {
+        var elsewhere = snapshot.Scheduler.Host == SchedulerHost.Elsewhere;
+        ITimer? stop = null;
+        lock (_gate)
+        {
+            if (_disposed)
+                return;
+            _seen = Fingerprint(snapshot.Jobs) + "\n" + snapshot.Scheduler;
+            if (elsewhere && _elsewhere is null)
+                _elsewhere = _time.CreateTimer(_ => Look(runtime), null, ElsewhereInterval, ElsewhereInterval);
+            else if (!elsewhere)
+                (stop, _elsewhere) = (_elsewhere, null);
+        }
+        stop?.Dispose();
+    }
+
+    private void Look(CorvidRuntime runtime)
+    {
+        if (Interlocked.Exchange(ref _looking, 1) != 0)
+            return;
+        _work.Track(Task.Run(() =>
+        {
+            try
+            {
+                var store = runtime.Builtin.Jobs;
+                // The holder exited: take the scheduler over now, as a load would, rather than at the next session open.
+                if (runtime.SchedulerState == ElsewhereState)
+                    runtime.WakeScheduler();
+                var now = Fingerprint([.. store.List(includeFinished: true).Where(job => job.State != KernelJobState.Removed)
+                    .OrderByDescending(job => job.CreatedAt).Take(MaxJobs).Select(job => Record(job, store.Runs(job.JobId, 1) is [var last] ? last : null))])
+                    + "\n" + Scheduler(runtime.SchedulerState, runtime.SchedulerHolder);
+                var changed = false;
+                lock (_gate)
+                {
+                    if (!_disposed && now != _seen)
+                        (_seen, changed) = (now, true);
+                }
+                if (changed)
+                    _changed.Raise();
+            }
+            finally
+            {
+                Volatile.Write(ref _looking, 0);
+            }
+        }));
+    }
+
+    /// <summary>What a reload would show differently: each job's state and next run, and its latest run's status.</summary>
+    private static string Fingerprint(IReadOnlyList<JobRecord> jobs) =>
+        string.Join('\n', jobs.Select(job => string.Join('|', job.Id, job.State, job.NextRun?.UtcTicks, job.LastRun?.RunId, job.LastRun?.Status,
+            job.LastRun?.FinishedAt?.UtcTicks)));
 
     /// <summary>Once the runtime is up: hear the store's changes and the scheduler's runs until disposed.</summary>
     private async Task SubscribeAsync()
@@ -251,7 +351,8 @@ public sealed class EngineJobsService : IJobsService, IDisposable
         void OnCompleted(ScheduledJob job, JobRun run) => _changed.Raise();
         lock (_gate)
         {
-            if (_disposed)
+            // Disposed, or subscribed already (a second start never reaches here with the first runtime up).
+            if (_disposed || _unsubscribe is not null)
                 return;
             store.Changed += OnStoreChanged;
             runtime.JobCompleted += OnCompleted;
@@ -263,6 +364,9 @@ public sealed class EngineJobsService : IJobsService, IDisposable
         }
     }
 
+    /// <summary>The runtime's state while another process holds the scheduler's lock.</summary>
+    private const string ElsewhereState = "run by another corvid process";
+
     private static ScheduledJob Find(JobStore store, string jobId) =>
         store.Get(jobId) ?? throw new InvalidOperationException($"There is no job {SafeText.Reveal(jobId)}.");
 
@@ -273,10 +377,16 @@ public sealed class EngineJobsService : IJobsService, IDisposable
     /// The runtime's scheduler state as the page's three: running in this process, held by another (whose lock keeps it),
     /// or off here (disabled in the configuration, or the lock file could not be written), with the reason.
     /// </summary>
-    internal static SchedulerStatus Scheduler(string state) => state switch
+    internal static SchedulerStatus Scheduler(string state, LockHolder? holder = null) => state switch
     {
-        "running in this process" => new SchedulerStatus(SchedulerHost.Here, "this app"),
-        "run by another corvid process" => new SchedulerStatus(SchedulerHost.Elsewhere, "another corvid process (it holds jobs.db.lock)"),
+        "running in this process" => new SchedulerStatus(SchedulerHost.Here, "this app", holder?.Since),
+        ElsewhereState => new SchedulerStatus(SchedulerHost.Elsewhere, (holder?.ToString() ?? "another corvid process") + " (it holds jobs.db.lock)",
+            holder?.Since),
+        // U-8: the app does not host the scheduler; who does, if anyone, is the lock's.
+        CorvidRuntime.SchedulerNotHosted when holder is not null => new SchedulerStatus(SchedulerHost.Elsewhere,
+            holder + " (it holds jobs.db.lock)", holder.Since),
+        CorvidRuntime.SchedulerNotHosted => new SchedulerStatus(SchedulerHost.Off,
+            "This app does not host the scheduler (Corvid:App:HostScheduler is off), and no other process holds jobs.db.lock"),
         _ when state.StartsWith("off: ", StringComparison.Ordinal) =>
             new SchedulerStatus(SchedulerHost.Off, "This app cannot run the scheduler: " + state["off: ".Length..]),
         _ => new SchedulerStatus(SchedulerHost.Off, "This app does not run the scheduler: Corvid:Scheduler:Enabled is off"),
@@ -291,7 +401,9 @@ public sealed class EngineJobsService : IJobsService, IDisposable
         NoAgent = job.NoAgent,
         CreatedTainted = job.CreatedTainted,
         Deliver = GatewaySessions.TryParse(job.OriginSession, out var adapter, out var chat) ? $"the {adapter} chat {chat}" : KeptInSession,
-        CreatedBy = (job.OriginSession is { Length: > 0 } origin ? origin + " through cron_create" : "outside a session (this app or /cron)")
+        CreatedBy = (job.OriginSession is { Length: > 0 } origin
+                ? GatewaySessions.TryParse(origin, out _, out _) ? origin + " (through cron_create there, or here to report there)" : origin + " through cron_create"
+                : "outside a session (this app or /cron)")
             + ", on " + job.CreatedAt.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
         NextRun = job.NextRunAt,
         LastRun = last is null ? null : Run(last),

@@ -51,7 +51,7 @@ public sealed class EngineSessionViewTests
     }
 
     [Fact]
-    public async Task AnUnbuiltRequestShowsItsReasonOnThePage()
+    public async Task ARenameHeadsThePageAndARefusedLineShowsItsReasonAndKeepsTheDraft()
     {
         await using var fixture = await EngineFixture.StartAsync();
         var id = fixture.Runtime.OpenSession(surface: "app").Id;
@@ -62,6 +62,11 @@ public sealed class EngineSessionViewTests
         view.RenameCommand.Execute("a better title");
         await service.IdleAsync();
 
-        Assert.StartsWith("Renaming comes with G-6:", view.Error, StringComparison.Ordinal);
+        Assert.Equal(("a better title", ""), (view.Title, view.Error));
+        view.Draft = "#";
+        view.SubmitCommand.Execute(null);
+        await service.IdleAsync();
+        Assert.StartsWith("Type the fact to remember after #", view.Error, StringComparison.Ordinal);
+        Assert.Equal("#", view.Draft);
     }
 }

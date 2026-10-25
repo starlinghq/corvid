@@ -15,6 +15,10 @@ comes next: [`docs/plan/ui-handoff.md`](../../docs/plan/ui-handoff.md); the rule
 
 ```sh
 dotnet build src/Corvid.App/Corvid.App.csproj -c Release
+# The engine (the default) over this machine's Corvid home; set HOME, CORVID_CONFIG and the XDG directories to try a
+# temporary one:
+dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll
+# The demo, as the mockups draw it:
 dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll --demo
 # or, building as it goes:
 dotnet run --project src/Corvid.App -c Release -- --demo --page models --theme dark
@@ -39,26 +43,45 @@ is desktop-only until attached mode (G-1).
 
 | Option | Effect |
 | --- | --- |
-| `--demo` | Demo services and the scripted scenario, with the clock frozen at 2026-10-24 14:05 local so every relative time and screenshot is stable. The default. |
-| `--engine` | Corvid's engine in-process (`Corvid.App.Engine`, desktop head only), over the same `corvid.json`, models and event log as the CLI; `CORVID_CONFIG` and `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR` move them (a test home sets them all, and `Corvid:Models:Cache`, to temporary directories). The host starts and the model cache is checked before the window opens; the models load in the background. With models missing it opens First run. Every area runs on the engine; a member the engine cannot honour yet refuses with the work item that brings it ("comes with G-3: …", shown as a red notice or a disabled action). Not with `--demo`. |
+| `--engine` | The default (the option only says so): Corvid's engine in-process (it hosts the gateway and the scheduler only when asked: `Corvid:App:HostGateway`, `Corvid:App:HostScheduler`, or Start hosting on the Gateway and Jobs pages; U-8) (`Corvid.App.Engine`, desktop head only), over the same `corvid.json`, models and event log as the CLI; `CORVID_CONFIG` and `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR` move them (a test home sets them all, and `Corvid:Models:Cache`, to temporary directories). The host starts and the model cache is checked before the window opens; the models load in the background. With models missing it opens First run. Every area runs on the engine; a member the engine cannot honour yet refuses with the work item that brings it ("comes with U-6: …", shown as a red notice or a disabled action). Not with `--demo`. |
+| `--demo` | Demo services and the scripted scenario instead of the engine, with the clock frozen at 2026-10-24 14:05 local so every relative time and screenshot is stable. Every mockup comparison and screenshot of a mocked screen passes it; the browser head runs only the demo. |
 | `--theme light\|dark\|system` | The theme to start in; `system` by default. Settings switches it at run time. |
 | `--page <area>` | The area to open: `sessions`, `board`, `review`, `rewind`, `memory`, `skills`, `jobs`, `models`, `safety`, `mcp`, `gateway`, `secrets`, `audit`, `settings`, `first-run` (any case; `=` works too: `--page=models`). |
 | `--session <id>` | The session to select and open, such as `cli-9f2e`; with `--page`, it is selected and the page shows. |
-| `--scene main\|approval` | The demo scenario's moment: `main` (turn 12 running, as Main.png; the default) or `approval` (turn 13 waiting on approval a-32, as Approval.png). |
+| `--scene main\|approval` | The demo scenario's moment: `main` (turn 12 running, as Main.png; the default) or `approval` (turn 13 waiting on approval a-32, as Approval.png). It implies `--demo` (a scene never opens the engine on this machine's home) and is refused with `--engine`. |
 | `--help` | The usage. A wrong argument prints the usage and exits with 2. |
 
 `CORVID_APP_RENDERER=software` draws with Skia on the CPU instead of OpenGL (see the harness check below).
 
 On the engine, a session opened from the log (`--session`, the rail after a restart) is replayed (K-10) and folds to
 what the live turn showed for what the log records: messages, calls with their results and diffs, plans, checkpoints,
-and each asked call's approval answer (approved once, for the session or always; denied, with the reason the person
-gave). It does not show what the log does not keep: the generator and tokens of a past turn, its decisions, how a turn
-ended beyond "answered" (an interrupted turn reads "the log holds no answer"), the session's taint, a call's elapsed
+each asked call's approval answer (approved once, for the session or always; denied, with the reason the person
+gave), and since A4 each turn's generator, the checkpoints' decisions, where outside content tainted the session and
+where the person's next message cleared it, compaction markers, steers, clarifying questions, each turn's steps and why a
+call that asked nobody ran (G-2). A turn the log holds no answer for replays as interrupted. It does not show what the log
+does not keep: a past turn's tokens, a running call's output tail, a call's elapsed
 time, the rule text a session or always answer wrote, a call refused without a prompt (the hardline list, a remembered
 denial, no approver) as "denied" rather than "failed", and the reason for denials logged before `approval_resolved`
-carried it (`note`). The composer's `!` shell and `#` memory lines are not built (docs/plan/tui.md §4.1), so the
-placeholder leaves them out: a one-line message starting with either is refused with a notice and stays in the composer;
-text of more than one line (pasted notes under a Markdown heading) and a Markdown image are sent. A rollback from Rewind
+carried it (`note`). The composer's mode lines (A4, docs/plan/tui.md §4.1) are read by the host's `ComposerLine`, as
+`corvid chat` reads them: `# fact` is staged at once through memory's gated write path (a "Staged for review" notice
+with a review link; it starts no turn and the model never sees it), `!command` is a turn of its own that runs the command
+as the person's `shell` call through the approval card, the sandbox and the checkpoints with no generator call (its output
+is in the conversation for the next message), and `!!command` does the same with the message, call and output kept out
+of every later prompt, compaction, the decider's recent events and the episodic index (the log keeps them). Only a
+one-line message is a mode line: text of more than one line (pasted notes under a Markdown heading) and a Markdown image
+are sent; a mark with nothing after it is refused with what to type, and the draft stays. A mark is a mode only before
+a space (`#`) or a space or a command word (`!`, `!!`: letters, digits and `_ . ~ / + -` up to a space), so `#123 is
+failing again`, `#include <stdio.h> not found` and `!important: keep the API stable` are sent as messages; `\#` or `\!`
+at the start sends any such line as a message, without the backslash.
+
+Titles, recaps, pins and drafts (A4, G-6 and G-7): a session's title is its rename, else the one the local generator
+wrote after its first exchange (never a cloud generator), else its first message; the header's ••• menu renames it, pins
+it to the rail and asks for a recap, and the CLI's `/rename`, `/pin`, `/recap` and `/sessions` do the same over the same
+log and `ui.db`. Drafts (with the one put aside by `Ctrl+S`) are written to `ui.db` once the composer has been still for
+0.75 s and come back after a restart; the CLI shows the app's draft when it resumes the session. Opening a session the
+person last saw over an hour ago (`Corvid:Sessions:RecapAfterMinutes`) recaps what happened meanwhile ("While you were
+away"). Settings › Appearance, Notifications and Layout are kept in `ui.db`; the window applies the layout ones (rail or
+dock hidden, Focus, Board) when it starts. A rollback from Rewind
 to before a call keeps that call's turn and its message, as the kernel does (it goes back to just before the call): the
 call and what came after it in the turn leave, and so do the later turns, and the open transcript then reads as a replay
 of the log would.
@@ -74,7 +97,10 @@ and Skills' `Ctrl+F`, Models' `Alt+P`) wins while that area shows; a new page ke
 page: `Enter` sends (queued while a turn runs), `Shift+Enter` breaks the line, `Ctrl+Enter` steers, `Esc` interrupts
 (in the composer also while an approval card waits, closing it as cancelled), `Esc Esc` on an idle empty composer opens Rewind, `Up` takes the last queued message back, `Shift+Tab` cycles the
 approval mode, `Ctrl+S` puts the draft aside; on an open approval card the first `Enter` focuses it, then `1` to `5`
-answer and the arrows move; `Ctrl+1` to `Ctrl+7` pick dock tabs; `Ctrl+O`, `Ctrl+T` and `Ctrl+Shift+D` expand the latest
+answer and the arrows move (`Space` answers nothing, typing a letter goes back to the composer with it, and `Ctrl+Enter`
+on the card goes back to the composer: it never answers a card; a held `Enter`'s repeats answer nothing, and for ¾ s after
+`Enter` moves focus to the card, or after a key it swallowed, `Enter` answers nothing and a digit goes back to the
+composer as typing, while an arrow or `Tab` arms the card at once); `Ctrl+1` to `Ctrl+7` pick dock tabs; `Ctrl+O`, `Ctrl+T` and `Ctrl+Shift+D` expand the latest
 output, the thoughts and every checkpoint's chips. On Models: `Alt+P` opens the generator's Switch… picker, `Alt+Left`
 and `Alt+Right` move a focused escalation-ladder step (or drag it by its grip), and `Esc` closes a picker or the
 placement editor. `Ctrl+Shift+C` opens Review from anywhere; on Review `Up` and `Down` move through the file list. On

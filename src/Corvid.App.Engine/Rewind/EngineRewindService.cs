@@ -189,15 +189,42 @@ public sealed class EngineRewindService : IRewindService, IDisposable
     public async Task<RestoreOutcome> RestoreAsync(string sessionId, string checkpointId, AppScope scope, CancellationToken cancellationToken = default)
     {
         var (ledger, entry, runtime) = await FindAsync(sessionId, checkpointId, cancellationToken).ConfigureAwait(false);
-        // The restore runs on the session's actor, so it opens the session (no turn of it can start meanwhile).
-        var session = runtime.TryGetSession(sessionId, out var open) ? open : runtime.OpenSession(sessionId, EngineSessionService.Surface);
         var label = $"rollback to before {checkpointId}";
+        // The restore runs on the session's actor, so it opens the session (no turn of it can start meanwhile). G-12: a session
+        // another process drives is that process's to restore; nothing is changed from here.
+        CorvidSession session;
+        // M2: a session this restore opens is let go of once it is done, so a terminal can drive it again.
+        var opened = false;
+        try
+        {
+            opened = !runtime.TryGetSession(sessionId, out var open);
+            session = opened ? runtime.OpenSession(sessionId, EngineSessionService.Surface) : open;
+        }
+        catch (SessionHeldException exception)
+        {
+            var refused = new RestoreOutcome(label, _time.GetUtcNow(), scope) { Refused = true, Detail = exception.Message + " Nothing was changed." };
+            // Shown as the last restore, as any refusal is, until the log has a later one.
+            _unrecorded[sessionId] = (refused, await Task.Run(() => runtime.Log.GetHead(sessionId, CancellationToken.None), CancellationToken.None)
+                .ConfigureAwait(false));
+            return refused;
+        }
         // The kernel rolls back to just before the call (its position minus one): the call's turn keeps its prompt, and only
         // the turns after it leave whole, as the plan says.
-        var plan = session.PlanRollbackTo(checkpointId) ?? throw Missing(sessionId, checkpointId);
-        var firstGone = ledger.TurnAt(plan.Position) + 1;
-        var partial = ledger.TurnAt(entry.CallSequence) == firstGone - 1;
-        var result = await session.RollbackToAsync(checkpointId, Scope(scope), null, cancellationToken).ConfigureAwait(false);
+        RestoreResult? result;
+        int firstGone;
+        bool partial;
+        try
+        {
+            var plan = session.PlanRollbackTo(checkpointId) ?? throw Missing(sessionId, checkpointId);
+            firstGone = ledger.TurnAt(plan.Position) + 1;
+            partial = ledger.TurnAt(entry.CallSequence) == firstGone - 1;
+            result = await session.RollbackToAsync(checkpointId, Scope(scope), null, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (opened)
+                await _signals.ReleaseAfterRestoreAsync(runtime, sessionId).ConfigureAwait(false);
+        }
         var at = _time.GetUtcNow();
         RestoreOutcome outcome = result is null
             ? new RestoreOutcome(label, at, scope) { Refused = true, Detail = $"{checkpointId} is no longer in the ledger. Nothing was changed." }
@@ -221,7 +248,7 @@ public sealed class EngineRewindService : IRewindService, IDisposable
             _signals.Rewound(sessionId, new AppRewound(firstGone, scope, "rollback")
             {
                 FromCallId = partial ? entry.CallId : null,
-                UnansweredError = partial ? SessionUpdateTranslator.NoAnswer : null,
+                UnansweredError = partial ? SessionUpdateTranslator.Interrupted : null,
                 Restored = outcome.Restored,
                 Merged = outcome.Merged,
                 Conflicts = outcome.Conflicts,

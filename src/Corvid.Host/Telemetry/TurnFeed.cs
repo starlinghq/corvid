@@ -30,6 +30,15 @@ public interface ITurnObserver
     void ToolFinished(string callId, string tool, string outcome, TimeSpan elapsed) { }
 
     void Decided(CheckpointDecisions decisions) { }
+
+    /// <summary>The turn began step <paramref name="step"/> of at most <paramref name="maxSteps"/> (a generator response with tool calls).</summary>
+    void Progress(int step, int maxSteps) { }
+
+    /// <summary>
+    /// K-2: a running call's output so far as its last lines (bounded and credential-scrubbed by the kernel), replacing the
+    /// previous tail. Untrusted text: clean it before showing it.
+    /// </summary>
+    void ToolOutput(string callId, string tool, string tail) { }
 }
 
 public sealed record QuestionDecision(string Question, double Confidence, string Action, bool Acted);
@@ -86,6 +95,19 @@ public sealed class TurnFeed : IDisposable
     }
 
     public void Dispose() => _listener.Dispose();
+
+    /// <summary>The kernel's turn listener over this feed: steps and running calls' tails reach the session's observers.</summary>
+    internal Corvid.Kernel.Turns.ITurnListener Listener => _turnListener ??= new FeedListener(this);
+
+    private Corvid.Kernel.Turns.ITurnListener? _turnListener;
+
+    private sealed class FeedListener(TurnFeed feed) : Corvid.Kernel.Turns.ITurnListener
+    {
+        public void StepStarted(string sessionId, int step, int maxSteps) => feed.Publish(sessionId, observer => observer.Progress(step, maxSteps));
+
+        public void ToolOutput(string sessionId, string callId, string tool, string tail) =>
+            feed.Publish(sessionId, observer => observer.ToolOutput(callId, tool, tail));
+    }
 
     private void Started(Activity activity)
     {

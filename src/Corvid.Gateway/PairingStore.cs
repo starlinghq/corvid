@@ -30,11 +30,17 @@ public sealed record PairingTicket(PairingRequest? Request, bool Notify);
 /// it on the machine (<c>corvid gateway pair approve CODE</c>), never from a chat, so holding a chat account is not enough to
 /// become the owner. Codes are random, bound to the sender who asked, few per adapter, and expire; a sender is told their
 /// code at most once per <see cref="RemindAfter"/>. Allowlists in configuration need no pairing. Also kept here: adapters'
-/// polling cursors and the delivery ledger's low-water mark.
+/// polling cursors and the delivery ledger's low-water mark, and each paired guest's own tool allowlist (G-14).
+/// <para>
+/// Schema 2 adds the guests' allowlists. A store moves to it only when the first allowlist is written, one way: a corvid
+/// from before then refuses the file rather than run with the adapter's tools for a guest the owner narrowed.
+/// </para>
 /// </summary>
 public sealed class PairingStore
 {
     private const int SchemaVersion = 1;
+    // Schema 2: the guest_tools table, added by the first SetGuestTools.
+    private const int GuestToolsVersion = 2;
     // No 0/O, 1/I/L: codes are read off a phone and typed into a terminal.
     private const string Alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 
@@ -47,7 +53,8 @@ public sealed class PairingStore
         if (path == ":memory:")
             throw new ArgumentException("The pairing store requires an on-disk database.", nameof(path));
         Path = System.IO.Path.GetFullPath(path);
-        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
+        // A4 verification: on a fresh home this store can be the first to make the data directory: owner only.
+        Corvid.Abstractions.IO.PrivateDirectory.CreateFor(Path);
         _time = time ?? TimeProvider.System;
         _connectionString = new SqliteConnectionStringBuilder
         {
@@ -68,7 +75,7 @@ public sealed class PairingStore
         command.Transaction = transaction;
         command.CommandText = "PRAGMA user_version;";
         var version = Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
-        if (version is not (0 or SchemaVersion))
+        if (version is not (0 or SchemaVersion or GuestToolsVersion))
             throw new InvalidDataException($"Unsupported gateway database schema version {version}.");
         if (version == 0)
         {
@@ -230,6 +237,8 @@ public sealed class PairingStore
         command.Parameters.AddWithValue("$name", (object?)name ?? DBNull.Value);
         command.Parameters.AddWithValue("$role", RoleName(role));
         command.ExecuteNonQuery();
+        // A new pairing starts from the adapter's tools, whatever an earlier pairing of theirs was given.
+        ForgetGuestTools(command);
         transaction.Commit();
         return new PairedUser(adapter, user, name, role, now);
     }
@@ -250,15 +259,99 @@ public sealed class PairingStore
         return command.ExecuteNonQuery() > 0;
     }
 
-    /// <summary>Removes a pairing (configuration allowlists are not affected). Returns whether one existed.</summary>
+    /// <summary>Removes a pairing and its own allowlist (configuration allowlists are not affected). Returns whether one existed.</summary>
     public bool Revoke(string adapter, string userId)
     {
         using var connection = Open();
+        using var transaction = connection.BeginTransaction(deferred: false);
         using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = "DELETE FROM users WHERE adapter = $adapter AND user_id = $user;";
         command.Parameters.AddWithValue("$adapter", adapter);
         command.Parameters.AddWithValue("$user", userId);
-        return command.ExecuteNonQuery() > 0;
+        var removed = command.ExecuteNonQuery() > 0;
+        ForgetGuestTools(command);
+        transaction.Commit();
+        return removed;
+    }
+
+    /// <summary>
+    /// A paired guest's own tool allowlist (G-14), by exact name; null when none was set, and their adapter's
+    /// <see cref="AdapterOptions.GuestTools"/> apply.
+    /// </summary>
+    public IReadOnlyList<string>? GuestTools(string adapter, string userId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(adapter);
+        ArgumentException.ThrowIfNullOrWhiteSpace(userId);
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        if (!HasGuestTools(command))
+            return null;
+        command.CommandText = "SELECT tools FROM guest_tools WHERE adapter = $adapter AND user_id = $user;";
+        command.Parameters.AddWithValue("$adapter", adapter);
+        command.Parameters.AddWithValue("$user", userId);
+        return command.ExecuteScalar() is string tools ? [.. tools.Split('\n', StringSplitOptions.RemoveEmptyEntries)] : null;
+    }
+
+    /// <summary>
+    /// Sets a paired guest's own allowlist, replacing their adapter's for them alone; null goes back to the adapter's. The
+    /// caller checks the names against the tools a guest may have. Returns false when they are not a paired guest.
+    /// </summary>
+    public bool SetGuestTools(string adapter, string userId, IReadOnlyCollection<string>? tools)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(adapter);
+        ArgumentException.ThrowIfNullOrWhiteSpace(userId);
+        if (tools?.FirstOrDefault(tool => string.IsNullOrWhiteSpace(tool) || tool.Contains('\n', StringComparison.Ordinal)) is { } bad)
+            throw new ArgumentException($"'{bad}' is not a tool name.", nameof(tools));
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction(deferred: false);
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT role FROM users WHERE adapter = $adapter AND user_id = $user;";
+        command.Parameters.AddWithValue("$adapter", adapter);
+        command.Parameters.AddWithValue("$user", userId);
+        if (command.ExecuteScalar() is not "guest")
+            return false;
+        if (tools is null)
+        {
+            ForgetGuestTools(command);
+            transaction.Commit();
+            return true;
+        }
+        var upgrading = !HasGuestTools(command);
+        if (upgrading)
+        {
+            command.CommandText = GuestToolsSchema;
+            command.ExecuteNonQuery();
+        }
+        command.CommandText = "INSERT INTO guest_tools (adapter, user_id, tools) VALUES ($adapter, $user, $tools) " +
+            "ON CONFLICT (adapter, user_id) DO UPDATE SET tools = excluded.tools;";
+        command.Parameters.AddWithValue("$tools", string.Join('\n', tools.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)));
+        command.ExecuteNonQuery();
+        transaction.Commit();
+        UpgradedSchema |= upgrading;
+        return true;
+    }
+
+    /// <summary>
+    /// This store moved <c>gateway.db</c> to schema 2 (the first per-guest allowlist): one way, as a corvid older than A4
+    /// refuses a schema it does not know. A surface says so.
+    /// </summary>
+    public bool UpgradedSchema { get; private set; }
+
+    private static bool HasGuestTools(SqliteCommand command)
+    {
+        command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'guest_tools';";
+        return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture) > 0;
+    }
+
+    /// <summary>Drops the user's own allowlist, if the store has any; the command carries <c>$adapter</c> and <c>$user</c>.</summary>
+    private static void ForgetGuestTools(SqliteCommand command)
+    {
+        if (!HasGuestTools(command))
+            return;
+        command.CommandText = "DELETE FROM guest_tools WHERE adapter = $adapter AND user_id = $user;";
+        command.ExecuteNonQuery();
     }
 
     public string? GetState(string key)
@@ -349,5 +442,16 @@ public sealed class PairingStore
         );
 
         PRAGMA user_version = 1;
+        """;
+
+    private const string GuestToolsSchema = """
+        CREATE TABLE guest_tools (
+            adapter TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            tools TEXT NOT NULL,
+            PRIMARY KEY (adapter, user_id)
+        );
+
+        PRAGMA user_version = 2;
         """;
 }

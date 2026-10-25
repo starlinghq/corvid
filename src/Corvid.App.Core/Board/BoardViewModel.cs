@@ -32,6 +32,11 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
 {
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(1);
 
+    /// <summary>The tick while no session runs or waits: an idle card's "last activity 5 m ago" moves on in minutes.</summary>
+    internal static readonly TimeSpan IdleTickInterval = TimeSpan.FromSeconds(15);
+
+    private TimeSpan _tickEvery;
+
     private const string Unavailable = "Starting sessions and opening workspaces come with the engine (Corvid.App.Engine).";
 
     private const string NotifyUnavailable = "Native notifications while the window is unfocused come with the engine (Corvid.App.Engine).";
@@ -246,7 +251,8 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
     {
         if (_cards.TryGetValue(summary.Id, out var card))
         {
-            card.Update(summary);
+            // A4V3-4: the summary's times are read against now, not the clock the card last saw (an idle card's last tick).
+            card.Tick(_time.GetUtcNow(), summary);
         }
         else
         {
@@ -408,11 +414,16 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
             foreach (var option in question.Options)
             {
                 var questionId = question.QuestionId;
-                // One click sends the option as the answer, so its label shows every hidden character (SafeText.Reveal);
-                // the answer sent is the option as the session gave it.
+                // One click sends the option as the person's own message, so its label shows every hidden character
+                // (SafeText.Reveal), and the answer sent is only the text a reader sees (SafeText.Clean): a hidden
+                // instruction in a model-written option never reaches the generator as the person's words. An option that
+                // is all hidden characters gets no button; "Answer…" opens the session to answer in words.
+                var visible = SafeText.Clean(option).Trim();
+                if (visible.Length == 0)
+                    continue;
                 var shown = SafeText.Reveal(option);
                 buttons.Add(new AttentionButton(shown, AttentionActionStyle.Default, $"Answer \"{shown}\"",
-                    new RelayCommand(() => _ = AnswerAsync(summary.Id, questionId, option))));
+                    new RelayCommand(() => _ = AnswerAsync(summary.Id, questionId, visible))));
             }
         }
 
@@ -569,18 +580,21 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
                 new MarkdownRun(", or open a workspace. Each workspace runs its own engine until workspace-per-session lands (G-4)."),
             ];
 
-    /// <summary>The 1 s tick moves countdowns and times on while the Board shows and a session runs or waits.</summary>
+    /// <summary>
+    /// The tick moves countdowns and times on while the Board shows: every second while a session runs or waits, every
+    /// <see cref="IdleTickInterval"/> otherwise, so an idle card's relative time never stands still (A4V3-4: one whose
+    /// holder exited stayed at the time it was last driven).
+    /// </summary>
     private void UpdateTicker()
     {
-        var needed = !_disposed && _shell.CurrentArea == Area.Board
-            && _cards.Values.Any(card => card.Summary.State is SessionState.Running or SessionState.Waiting);
-        if (needed && _ticker is null)
-            _ticker = _time.CreateTimer(_ => _dispatcher.Post(Tick), null, TickInterval, TickInterval);
-        else if (!needed && _ticker is not null)
-        {
-            _ticker.Dispose();
-            _ticker = null;
-        }
+        var every = _disposed || _shell.CurrentArea != Area.Board || _cards.Count == 0 ? TimeSpan.Zero
+            : _cards.Values.Any(card => card.Summary.State is SessionState.Running or SessionState.Waiting) ? TickInterval
+            : IdleTickInterval;
+        if (every == _tickEvery && (_ticker is not null) == (every != TimeSpan.Zero))
+            return;
+        _ticker?.Dispose();
+        _ticker = every == TimeSpan.Zero ? null : _time.CreateTimer(_ => _dispatcher.Post(Tick), null, every, every);
+        _tickEvery = every;
     }
 
     private void Tick()
@@ -589,10 +603,7 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
             return;
         var now = _time.GetUtcNow();
         foreach (var card in _cards.Values)
-        {
-            if (card.Summary.State is SessionState.Running or SessionState.Waiting)
-                card.Tick(now);
-        }
+            card.Tick(now);
 
         RebuildAttention();
     }

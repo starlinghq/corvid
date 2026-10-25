@@ -20,7 +20,38 @@ public abstract record SessionStreamUpdate
 
 /// <summary>The user's message (ACP <c>user_message_chunk</c>, whole), from its <c>UserMessage</c> event.</summary>
 /// <param name="Sequence">The event's position in the log: a fork point.</param>
-public sealed record PromptSent(string Text, long Sequence) : SessionStreamUpdate;
+public sealed record PromptSent(string Text, long Sequence) : SessionStreamUpdate
+{
+    /// <summary>
+    /// The generator the turn ran on, as its first decision's TurnState names it ("qwen3.5-0.8b"): replay only, with
+    /// <see cref="ReplayOptions.Generators"/>; null live (the surface knows its slot) and when the log has no decision for it.
+    /// </summary>
+    public string? Generator { get; init; }
+
+    /// <summary>Who wrote it when it is not the session's own user (a gateway guest, security M2); null for the user's own.</summary>
+    public string? From { get; init; }
+}
+
+/// <summary>
+/// A message the person steered into a running turn (K-3), from its <c>UserSteered</c> event: part of the turn it was taken
+/// by, not the start of one.
+/// </summary>
+/// <param name="Sequence">The event's position in the log.</param>
+public sealed record SteerSent(string Text, long Sequence) : SessionStreamUpdate;
+
+/// <summary>
+/// The clarifying question a turn ended on (K-6), from its <c>ClarificationAsked</c> event (after the answer that carries
+/// the same text). Model text: untrusted. The person's next message answers it.
+/// </summary>
+/// <param name="Options">Answers to pick from; empty for free text.</param>
+public sealed record QuestionRaised(string QuestionId, string Text, ImmutableArray<string> Options) : SessionStreamUpdate;
+
+/// <summary>
+/// The running turn began a step (a generator response with tool calls), live from the turn loop; on replay from the step
+/// its calls record, with no budget.
+/// </summary>
+/// <param name="MaxSteps">The turn's step budget; null on replay.</param>
+public sealed record TurnStepped(int Step, int? MaxSteps) : SessionStreamUpdate;
 
 /// <summary>Answer text (ACP <c>agent_message_chunk</c>): a streamed delta live, the whole message on replay.</summary>
 public sealed record AnswerChunk(string Text) : SessionStreamUpdate;
@@ -95,6 +126,12 @@ public sealed record ToolCallChanged(string CallId) : SessionStreamUpdate
     /// <summary>What it changed, from the write ledger's checkpoints around it (C-014).</summary>
     public ImmutableArray<FileDiff> Diffs { get; init; } = [];
 
+    /// <summary>
+    /// K-2, live only: the running call's output so far as its last lines, replacing the previous tail (bounded and
+    /// credential-scrubbed by the kernel; untrusted). An update with a tail carries nothing else but the call's state.
+    /// </summary>
+    public string? Tail { get; init; }
+
     public TimeSpan? Elapsed { get; init; }
 
     /// <summary>
@@ -102,6 +139,23 @@ public sealed record ToolCallChanged(string CallId) : SessionStreamUpdate
     /// null when nobody was asked. Live, the surface's own prompter knows the answer.
     /// </summary>
     public CallApproval? Approval { get; init; }
+
+    /// <summary>
+    /// Why the call ran, or was refused, without anyone being asked (G-2): the approval pipeline's assessment as the log
+    /// records it, live and on replay (with <see cref="ReplayOptions.Approvals"/>); null when someone was asked or the call
+    /// never reached the pipeline (a tool that declares itself read-only: see <see cref="ReadOnly"/>).
+    /// </summary>
+    public ApprovalAssessed? Assessment { get; init; }
+
+    /// <summary>
+    /// The tool declared itself read-only when it was called (<c>ToolCallIssued.ReadOnly</c>): with no
+    /// <see cref="Assessment"/> and no <see cref="Approval"/>, it ran unasked because it only reads. Null when unknown, and
+    /// for a call that was asked all the same (a network read in a tainted turn).
+    /// </summary>
+    public bool? ReadOnly { get; init; }
+
+    /// <summary>The write ledger's checkpoint taken before the call, which makes what it changed reversible (C-014).</summary>
+    public string? CheckpointBefore { get; init; }
 }
 
 /// <summary>A call's approval prompt and its answer as the log records them (<c>ApprovalRequested</c>, <c>ApprovalResolved</c>).</summary>
@@ -121,8 +175,33 @@ public sealed record CallApproval(string ApprovalId, bool Approved, string Reaso
 /// <summary>The model's task list, replaced whole (ACP <c>plan</c>), from a <c>TodosSet</c> event.</summary>
 public sealed record PlanChanged(ImmutableArray<TodoItem> Items) : SessionStreamUpdate;
 
-/// <summary>A checkpoint's decisions, from the feed (live only: the log has each answer but not its checkpoint).</summary>
+/// <summary>
+/// A checkpoint's decisions: live from the feed; on replay (<see cref="ReplayOptions.Decisions"/>) from the
+/// <c>Decision</c> events one checkpoint appended together, its name read from the catalogue's questions.
+/// </summary>
 public sealed record DecisionsMade(CheckpointDecisions Decisions) : SessionStreamUpdate;
+
+/// <summary>
+/// Outside content entered the conversation, or the user's next message cleared it (plan §10.3). In a replay
+/// (<see cref="ReplayOptions.Taint"/>), from a network tool's result in the log and the next user message; the log does not
+/// record taint from an untrusted description or a hub skill, so a replay shows the network reads only. Live, from a
+/// <see cref="SessionUpdateReporter"/> given the session's taint, which it reads in order with the turn (the first report
+/// says the taint the turn starts with).
+/// </summary>
+/// <param name="Source">What brought it in: the tool and what it read ("web_fetch https://example.org").</param>
+public sealed record TaintNoted(bool Tainted, string? Source) : SessionStreamUpdate;
+
+/// <summary>
+/// A compaction recorded in the log (<c>Compacted</c>), replay only (<see cref="ReplayOptions.Compactions"/>): live, the
+/// surface that compacted reports its own result. The replay shows the conversation expanded, so the marker heads its
+/// record over the range it summarized.
+/// </summary>
+/// <param name="Sequence">The event's position; <see cref="Compacted.FromSequence"/> and <c>ThroughSequence</c> the range.</param>
+public sealed record CompactionLogged(Compacted Compaction, long Sequence) : SessionStreamUpdate
+{
+    /// <summary>A later <c>CompactionExpanded</c> shows the range expanded again.</summary>
+    public bool Expanded { get; init; }
+}
 
 /// <summary>A write-ledger checkpoint was recorded (<c>CheckpointTaken</c>), for a rewind timeline.</summary>
 public sealed record CheckpointLogged(CheckpointTaken Checkpoint, long Sequence) : SessionStreamUpdate;

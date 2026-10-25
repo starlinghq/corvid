@@ -159,6 +159,53 @@ public sealed class EngineSessionRaceTests
     }
 
     [Fact]
+    public async Task AnInterruptPendingWhenAnotherSurfacePostsBeforeTheWindowDoesNotCancelThatTurn()
+    {
+        using var firstEntered = new ManualResetEventSlim();
+        using var firstGo = new ManualResetEventSlim();
+        var generator = new FakeGenerator(
+            // Another surface's first turn holds the actor while the window reads its head and posts.
+            _ =>
+            {
+                firstEntered.Set();
+                Assert.True(firstGo.Wait(TimeSpan.FromSeconds(60)));
+                return Reply.Text("The first answer.");
+            },
+            // The other surface's second message, posted after the window read its head and before it posted.
+            Reply.Say("The second answer."),
+            Reply.Say("The window's answer."));
+        await using var fixture = await EngineFixture.StartAsync(new FakeModels(generator));
+        var session = fixture.Runtime.OpenSession(surface: "app");
+        var id = session.Id;
+        using var service = fixture.Sessions();
+        var waiter = new SessionWaiter();
+        using var subscription = await service.OpenAsync(id, waiter.Add, Ct);
+        var first = session.SendAsync("the other surface's first message", Ct);
+        Assert.True(firstEntered.Wait(TimeSpan.FromSeconds(60), Ct));
+        Task<Corvid.Kernel.Sessions.Delivery>? second = null;
+        service.Pause = async point =>
+        {
+            if (point == "post" && second is null)
+                second = await session.PostAsync("the other surface's second message", Corvid.Abstractions.Sessions.EnvelopeOrigin.User, Ct);
+        };
+
+        await service.SendAsync(id, "the window's message", Ct);
+        await service.InterruptAsync(id, Ct);
+        firstGo.Set();
+
+        Assert.Equal(Corvid.Kernel.Turns.TurnStatus.Answered, (await first.WaitAsync(TimeSpan.FromSeconds(60), Ct)).Result?.Status);
+        // The other surface's second turn began while the window's interrupt waited for the window's own: it runs to its answer.
+        Assert.NotNull(second);
+        Assert.Equal(Corvid.Kernel.Turns.TurnStatus.Answered, (await second.WaitAsync(TimeSpan.FromSeconds(60), Ct)).Result?.Status);
+        await waiter.WaitAsync<UserMessage>(message => message.Text == "the window's message");
+        var ended = await waiter.WaitAsync<TurnEnded>(turn => turn.Outcome == TurnOutcome.Cancelled);
+        await service.IdleAsync();
+
+        // The window's turn is the one cancelled.
+        Assert.Equal("interrupted", ended.Error);
+    }
+
+    [Fact]
     public async Task ASecondAnswerThatLosesTheRaceChangesNothingOfTheFirsts()
     {
         var models = AddNote(Reply.Say("Never sent."));
@@ -297,6 +344,22 @@ public sealed class EngineSessionRaceTests
         using var reopened = await service.OpenAsync(id, _ => { }, Ct);
         Assert.Equal(["hello", "again"], reopened.History.OfType<UserMessage>().Select(message => message.Text));
         Assert.Equal(2, reopened.History.OfType<TurnEnded>().Count());
+    }
+
+    [Fact]
+    public void AnAnsweredTurnTheActorStillCountsRunningIsReplayedEnded()
+    {
+        // The flake in AChannelNobodyWatchesIsLetGoAndTheNextOpenReplaysTheLog: the actor delivers a turn before it marks it
+        // finished, so a window opening in between found the session's turn running and left the answered turn open.
+        Corvid.Host.Sessions.SessionStreamUpdate[] answered = [new Corvid.Host.Sessions.PromptSent("hello", 1), new Corvid.Host.Sessions.AnswerChunk("Hello.")];
+        Corvid.Host.Sessions.SessionStreamUpdate[] working = [new Corvid.Host.Sessions.PromptSent("hello", 1)];
+
+        Assert.False(Corvid.App.Engine.Sessions.EngineSessionService.ReplayEndsRunning(false, runningHere: true, elsewhere: false, answered));
+        Assert.True(Corvid.App.Engine.Sessions.EngineSessionService.ReplayEndsRunning(false, runningHere: true, elsewhere: false, working));
+        Assert.True(Corvid.App.Engine.Sessions.EngineSessionService.ReplayEndsRunning(true, runningHere: true, elsewhere: false, answered));
+        Assert.True(Corvid.App.Engine.Sessions.EngineSessionService.ReplayEndsRunning(false, runningHere: false, elsewhere: true, working));
+        Assert.False(Corvid.App.Engine.Sessions.EngineSessionService.ReplayEndsRunning(false, runningHere: false, elsewhere: true, answered));
+        Assert.False(Corvid.App.Engine.Sessions.EngineSessionService.ReplayEndsRunning(false, runningHere: false, elsewhere: false, working));
     }
 
     [Fact]

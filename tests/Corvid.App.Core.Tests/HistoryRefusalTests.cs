@@ -15,7 +15,7 @@ public sealed class HistoryRefusalTests
 {
     private static AppComposition Compose(params string[] args)
     {
-        Assert.True(AppOptions.TryParse(args, out var options, out var error), error);
+        Assert.True(AppOptions.TryParse(["--demo", .. args], out var options, out var error), error);
         return new AppComposition(options, new InlineDispatcher());
     }
 
@@ -94,7 +94,7 @@ public sealed class HistoryRefusalTests
 
         Assert.False(audit.HasError);
         Assert.NotEmpty(audit.Rows);
-        Assert.Equal("Select an event to read it as stored. The egress ledger comes with G-9.", audit.NoSelectionText);
+        Assert.Equal("Select an event to read it as stored. The egress ledger could not be read.", audit.NoSelectionText);
     }
 
     [Fact]
@@ -126,7 +126,7 @@ public sealed class HistoryRefusalTests
             Task.FromException<string>(new ServiceUnavailableException("No editor is configured: set $VISUAL."));
     }
 
-    /// <summary>The demo's log with its egress ledger refused, as the engine refuses it until G-9.</summary>
+    /// <summary>The demo's log with its egress ledger unavailable, as a ledger that cannot be read is.</summary>
     private sealed class NoEgress(IAuditService inner) : IAuditService
     {
         public Task<AuditLogInfo> GetLogAsync(CancellationToken cancellationToken) => inner.GetLogAsync(cancellationToken);
@@ -137,7 +137,7 @@ public sealed class HistoryRefusalTests
             inner.ReadEventsAsync(sessionId, cancellationToken);
 
         public Task<IReadOnlyList<EgressRequest>> ListEgressAsync(string? sessionId, CancellationToken cancellationToken) =>
-            Task.FromException<IReadOnlyList<EgressRequest>>(new ServiceUnavailableException("The egress ledger comes with G-9."));
+            Task.FromException<IReadOnlyList<EgressRequest>>(new ServiceUnavailableException("The egress ledger could not be read."));
 
         public Task<IReadOnlyList<DetectionMatch>> ListDetectionsAsync(string? sessionId, CancellationToken cancellationToken) =>
             inner.ListDetectionsAsync(sessionId, cancellationToken);

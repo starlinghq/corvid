@@ -101,6 +101,18 @@ public sealed record TurnOptions
     /// </summary>
     public string? PinnedSkill { get; init; }
 
+    /// <summary>
+    /// K-2: the most of a running call's output (the shell's, web_fetch's) a surface is shown at once: the last lines of the
+    /// last characters, replacing the previous tail. The result the model reads is the tool's own, capped by the tool.
+    /// </summary>
+    public int OutputTailChars { get; init; } = 2_000;
+
+    /// <summary>K-2: lines in a running call's tail.</summary>
+    public int OutputTailLines { get; init; } = 12;
+
+    /// <summary>K-2: a running call's tail is reported at most this often; output between reports joins the next one.</summary>
+    public TimeSpan OutputTailInterval { get; init; } = TimeSpan.FromMilliseconds(150);
+
     public TurnOptions Validate()
     {
         ArgumentNullException.ThrowIfNull(Compaction);
@@ -112,6 +124,9 @@ public sealed record TurnOptions
         ArgumentOutOfRangeException.ThrowIfNegative(KeepRecentResults);
         ArgumentOutOfRangeException.ThrowIfNegative(MaxClearQuestions);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(RecentEvents);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(OutputTailChars);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(OutputTailLines);
+        ArgumentOutOfRangeException.ThrowIfLessThan(OutputTailInterval, TimeSpan.Zero);
         return this;
     }
 }
@@ -171,7 +186,38 @@ public sealed class TurnServices
     public TurnOptions Options { get; init; } = TurnOptions.Default;
 
     public TimeProvider Time { get; init; } = TimeProvider.System;
+
+    /// <summary>
+    /// Told what a running turn does that the log and the spans do not carry while it happens: each step as it starts
+    /// (turn progress) and the bounded tail of a running call's output (K-2). Null tells nobody, and tools get no output sink.
+    /// </summary>
+    public ITurnListener? Listener { get; init; }
 }
+
+/// <summary>
+/// What a surface hears from the turn loop beyond the log and the spans (turn progress, K-2). Called on the turn's threads,
+/// a running call's output from the tool's own; an implementation must be quick and must not throw (a throw is swallowed).
+/// </summary>
+public interface ITurnListener
+{
+    /// <summary>A generator response with tool calls began step <paramref name="step"/> of at most <paramref name="maxSteps"/>.</summary>
+    void StepStarted(string sessionId, int step, int maxSteps) { }
+
+    /// <summary>
+    /// A running call's output so far, as its last lines (bounded by <see cref="TurnOptions.OutputTailChars"/> and
+    /// <see cref="TurnOptions.OutputTailLines"/>, credentials scrubbed as the log scrubs results), replacing the previous
+    /// tail. Untrusted: whatever the command or the page printed.
+    /// </summary>
+    void ToolOutput(string sessionId, string callId, string tool, string tail) { }
+}
+
+/// <summary>
+/// The clarifying question a <see cref="TurnStatus.Clarifying"/> turn ended on (K-6), as the log's <c>ClarificationAsked</c>
+/// records it. Nothing answers it but the person, with their next message.
+/// </summary>
+/// <param name="Id">Unique in the session.</param>
+/// <param name="Options">Answers offered as choices (the <c>ask_user</c> tool's); empty for a free-text question.</param>
+public sealed record ClarifyingQuestion(string Id, string Text, ImmutableArray<string> Options);
 
 public enum TurnStatus
 {
@@ -220,4 +266,10 @@ public sealed record TurnResult(
 
     /// <summary>True when <c>lesson_opportunity</c> queued this turn for a lesson draft (C-025).</summary>
     public bool LessonQueued { get; init; }
+
+    /// <summary>The structured question, when the turn is <see cref="TurnStatus.Clarifying"/> (K-6).</summary>
+    public ClarifyingQuestion? Question { get; init; }
+
+    /// <summary>Messages the user steered into the turn (K-3) that it took, in order.</summary>
+    public int Steers { get; init; }
 }

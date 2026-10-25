@@ -50,10 +50,54 @@ public sealed class SessionHost : IAsyncDisposable
     }
 
     /// <summary>Posts an envelope; waits while the channel is full.</summary>
-    public ValueTask PostAsync(Envelope envelope, CancellationToken cancellationToken = default)
+    public async ValueTask PostAsync(Envelope envelope, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(envelope);
-        return _ingress.Writer.WriteAsync(envelope, cancellationToken);
+        Routing(envelope.SessionId, +1);
+        try
+        {
+            await _ingress.Writer.WriteAsync(envelope, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            Routing(envelope.SessionId, -1);
+            throw;
+        }
+    }
+
+    // Envelopes posted for a session and not yet in its actor's queue (A4 verification): a session is never let go of
+    // while one is on its way, so the router never hands one to an actor being disposed.
+    private readonly Dictionary<string, int> _routing = new(StringComparer.Ordinal);
+    private readonly Lock _routingGate = new();
+
+    private void Routing(string sessionId, int change)
+    {
+        lock (_routingGate)
+        {
+            var count = _routing.GetValueOrDefault(sessionId) + change;
+            if (count > 0)
+                _routing[sessionId] = count;
+            else
+                _routing.Remove(sessionId);
+        }
+    }
+
+    /// <summary>
+    /// Forgets a session's actor only when no envelope for it is on its way through the ingress and <paramref name="idle"/>
+    /// holds for its actor, atomically with posting: an envelope posted after it is routed to a new actor, built from the
+    /// log (A4 verification). The caller disposes the actor. True when it was forgotten (or there was none).
+    /// </summary>
+    public bool TryRemoveIdle(string sessionId, Func<SessionActor, bool> idle, out SessionActor? actor)
+    {
+        ArgumentNullException.ThrowIfNull(idle);
+        lock (_routingGate)
+        {
+            actor = null;
+            if (_routing.ContainsKey(sessionId) || _actors.TryGetValue(sessionId, out var found) && !idle(found))
+                return false;
+            _actors.TryRemove(sessionId, out actor);
+            return true;
+        }
     }
 
     /// <summary>The session's actor, creating it if no envelope has arrived yet (for <c>/model</c> before the first message).</summary>
@@ -69,6 +113,17 @@ public sealed class SessionHost : IAsyncDisposable
     }
 
     public bool TryGet(string sessionId, out SessionActor actor) => _actors.TryGetValue(sessionId, out actor!);
+
+    /// <summary>
+    /// Forgets a session's actor (a surface let go of the session): the caller disposes it. A later envelope or
+    /// <see cref="GetOrCreate"/> builds a new one from the log.
+    /// </summary>
+    public bool TryRemove(string sessionId, out SessionActor? actor)
+    {
+        var removed = _actors.TryRemove(sessionId, out var found);
+        actor = found;
+        return removed;
+    }
 
     /// <summary>Cancels the session's running turn (the CLI's Ctrl-C, a gateway's /stop).</summary>
     public bool CancelTurn(string sessionId)
@@ -101,6 +156,10 @@ public sealed class SessionHost : IAsyncDisposable
             {
                 // One session's failure must not stop routing for every other session.
                 _routingFailed?.Invoke(envelope, exception);
+            }
+            finally
+            {
+                Routing(envelope.SessionId, -1);
             }
         }
     }

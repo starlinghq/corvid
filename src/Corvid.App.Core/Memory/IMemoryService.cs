@@ -10,6 +10,12 @@ public interface IMemoryService
     Task<MemorySnapshot> LoadAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// The store changed outside the Memory page (a <c>#</c> line staged a fact, a turn wrote): what the page, its badge and
+    /// the Board's tray show may be stale. Raised on the UI thread; a service that cannot tell never raises it.
+    /// </summary>
+    event EventHandler? Changed { add { } remove { } }
+
+    /// <summary>
     /// Writes a staged fact (G-8: correct then approve). <paramref name="text"/> is the statement as approved, corrected
     /// or not; <paramref name="targetFactId"/> is the existing fact an update or an invalidation closes.
     /// </summary>

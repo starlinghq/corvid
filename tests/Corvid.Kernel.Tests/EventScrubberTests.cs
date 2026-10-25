@@ -41,6 +41,23 @@ public sealed class EventScrubberTests : IDisposable
         Assert.DoesNotContain(Token, Persisted(scrubbed), StringComparison.Ordinal);
     }
 
+    /// <summary>A4 review security L3: an egress record's reason and why its text was not kept can quote what was sent.</summary>
+    [Fact]
+    public void An_egress_record_is_scrubbed_in_its_reason_and_unkept_and_kept_whole_otherwise()
+    {
+        var recorded = new EgressRecorded("r-1", "claude", EgressOutcomes.Redacted, ImmutableDictionary<string, int>.Empty.Add("credential", 1), 1, 120,
+            $"redacted a credential: {Token}", Tainted: true, Slot: "generator", Unkept: $"disk full writing {Token}");
+
+        var scrubbed = Assert.IsType<EgressRecorded>(EventScrubber.Scrub(recorded));
+
+        Assert.StartsWith("redacted a credential: " + Marker, scrubbed.Reason, StringComparison.Ordinal);
+        Assert.StartsWith("disk full writing " + Marker, scrubbed.Unkept, StringComparison.Ordinal);
+        Assert.Equal(recorded with { Reason = scrubbed.Reason, Unkept = scrubbed.Unkept }, scrubbed);
+        Assert.DoesNotContain(Token, Persisted(scrubbed), StringComparison.Ordinal);
+        var clean = recorded with { Reason = "no PII", Unkept = null };
+        Assert.Same(clean, EventScrubber.Scrub(clean));
+    }
+
     [Fact]
     public void A_tool_result_is_scrubbed_in_a_string_and_in_an_object()
     {
@@ -50,6 +67,23 @@ public sealed class EventScrubberTests : IDisposable
         Assert.StartsWith("GH_TOKEN=" + Marker, text.Result.GetString(), StringComparison.Ordinal);
         Assert.Equal("[REDACTED:labelled-value]", json.Result.GetProperty("password").GetString());
         Assert.True(json.IsError);
+    }
+
+    [Fact]
+    public void An_assessment_is_scrubbed_in_its_reasons_and_its_rule_and_kept_whole_otherwise()
+    {
+        var assessed = new ApprovalAssessed("c1", ApprovalResolutions.RuleDenied, "smart",
+            [new AssessmentReason("rule_denied", $"a remembered denial matches: curl -H 'Authorization: Bearer {Token}'")],
+            Rule: $"`curl` for {Token}", RuleScope: "always");
+
+        var scrubbed = Assert.IsType<ApprovalAssessed>(EventScrubber.Scrub(assessed));
+
+        Assert.DoesNotContain(Token, Persisted(scrubbed), StringComparison.Ordinal);
+        Assert.Contains(Marker, scrubbed.Reasons[0].Detail, StringComparison.Ordinal);
+        Assert.Contains(Marker, scrubbed.Rule, StringComparison.Ordinal);
+        Assert.Equal(("c1", "always"), (scrubbed.CallId, scrubbed.RuleScope));
+        var clean = new ApprovalAssessed("c2", ApprovalResolutions.Automatic, "smart", [new AssessmentReason("read_only", "reads only")]);
+        Assert.Same(clean, EventScrubber.Scrub(clean));
     }
 
     [Fact]

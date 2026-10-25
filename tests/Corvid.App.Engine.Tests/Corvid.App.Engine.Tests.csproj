@@ -15,5 +15,7 @@
     <Compile Include="../Corvid.Mcp.Tests/FakeMcpServer.cs" Link="FakeMcpServer.cs" />
     <Compile Include="../Corvid.Models.Remote.Tests/Infrastructure.cs" Link="FakeVault.cs" />
     <Compile Include="../Shared/ShortTemp.cs" Link="ShortTemp.cs" />
+    <!-- A4 hosting: the gateway tests' fake platform, so the hosted gateway (G-14) never reaches a real chat service. -->
+    <Compile Include="../Corvid.Gateway.Tests/Fakes.cs" Link="GatewayFakes.cs" />
   </ItemGroup>
 </Project>

@@ -18,7 +18,8 @@ public sealed class SqliteEventLog : IEventLog
         if (path == ":memory:")
             throw new ArgumentException("The event log requires an on-disk database.", nameof(path));
         path = Path.GetFullPath(path);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        // A4 verification: on a fresh home the log can be the first to make the data directory: owner only.
+        Corvid.Abstractions.IO.PrivateDirectory.CreateFor(path);
         connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = path,
@@ -177,6 +178,34 @@ public sealed class SqliteEventLog : IEventLog
         while (reader.Read())
             result.Add(reader.GetString(0));
         return result.AsReadOnly();
+    }
+
+    /// <summary>
+    /// A marker that changes whenever any session is appended to: the highest row id. The log is append-only (its triggers
+    /// refuse updates and deletes), so the marker only grows, and reading it is one look at the table's last row. A
+    /// surface that polls for other processes' writes checks it first and reads the sessions only when it moved.
+    /// </summary>
+    public long ChangeMarker(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COALESCE(MAX(rowid), 0) FROM events;";
+        return (long)command.ExecuteScalar()!;
+    }
+
+    /// <summary>Every session with at least one event and its head, in one query (the primary key's index).</summary>
+    public IReadOnlyDictionary<string, long> ListHeads(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT session_id, MAX(sequence) FROM events GROUP BY session_id;";
+        using var reader = command.ExecuteReader();
+        var heads = new Dictionary<string, long>(StringComparer.Ordinal);
+        while (reader.Read())
+            heads[reader.GetString(0)] = reader.GetInt64(1);
+        return heads;
     }
 
     /// <summary>

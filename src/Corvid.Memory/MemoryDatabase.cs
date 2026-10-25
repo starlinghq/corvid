@@ -20,7 +20,8 @@ public sealed class MemoryDatabase
         if (path == ":memory:")
             throw new ArgumentException("The memory store requires an on-disk database.", nameof(path));
         Path = System.IO.Path.GetFullPath(path);
-        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
+        // A4 verification: on a fresh home this store can be the first to make the data directory: owner only.
+        Corvid.Abstractions.IO.PrivateDirectory.CreateFor(Path);
         _connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = Path,

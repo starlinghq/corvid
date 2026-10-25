@@ -12,24 +12,24 @@ public sealed record AppOptions
         Usage: Corvid.App [--demo | --engine] [--theme light|dark|system] [--page <area>] [--session <id>]
                           [--scene main|approval]
 
-          --demo              demo services and the scripted scenario, with the clock frozen at 2026-10-24 14:05
-                              local (the default)
           --engine            Corvid's engine in-process, over the configuration, models and event log the CLI
-                              uses (corvid.json; CORVID_CONFIG and the XDG directories move them)
+                              uses (corvid.json; CORVID_CONFIG and the XDG directories move them): the default
+          --demo              demo services and the scripted scenario, with the clock frozen at 2026-10-24 14:05
+                              local, instead of the engine
           --theme <theme>     light, dark or system (the default)
           --page <area>       the area to open: sessions, board, review, rewind, memory, skills, jobs, models,
                               safety, mcp, gateway, secrets, audit, settings or first-run
           --session <id>      the session to open, such as cli-9f2e
           --scene <moment>    the demo scenario's moment to open at: main (turn 12 running, the default) or
-                              approval (turn 13 waiting on approval a-32)
+                              approval (turn 13 waiting on approval a-32); implies --demo
           --help              this text
         """;
 
     /// <summary>
-    /// Demo services and the scripted scenario, with the clock frozen: the default. False with <c>--engine</c>, which runs
-    /// the engine in-process (Corvid.App.Engine) on the system clock.
+    /// Demo services and the scripted scenario, with the clock frozen (<c>--demo</c>). False by default (and with
+    /// <c>--engine</c>, which says the default out loud): the engine runs in-process (Corvid.App.Engine) on the system clock.
     /// </summary>
-    public bool Demo { get; init; } = true;
+    public bool Demo { get; init; }
 
     public AppTheme Theme { get; init; } = AppTheme.System;
 
@@ -39,7 +39,7 @@ public sealed record AppOptions
     /// <summary>The session to select and open, by id.</summary>
     public string? Session { get; init; }
 
-    /// <summary>The demo scenario's moment to open at: Main.png's (the default) or Approval.png's.</summary>
+    /// <summary>The demo scenario's moment to open at: Main.png's (the default) or Approval.png's. Giving it implies <see cref="Demo"/>.</summary>
     public DemoScene Scene { get; init; } = DemoScene.Main;
 
     /// <summary>The caller asked for <see cref="Usage"/>; the app prints it and exits.</summary>
@@ -52,6 +52,7 @@ public sealed record AppOptions
         options = new AppOptions();
         error = "";
         bool? demo = null;
+        var sceneGiven = false;
         for (var i = 0; i < args.Count; i++)
         {
             // "--page models" and "--page=models" are the same.
@@ -127,11 +128,25 @@ public sealed record AppOptions
                     }
 
                     options = options with { Scene = moment };
+                    sceneGiven = true;
                     break;
                 default:
                     error = $"Unknown argument \"{args[i]}\".";
                     return false;
             }
+        }
+
+        // A scene is the demo's: --scene alone opens the demo (it never runs the engine on this machine's home), and with
+        // --engine it is refused.
+        if (sceneGiven)
+        {
+            if (demo == false)
+            {
+                error = "--scene is a moment of the demo, so it cannot be used with --engine.";
+                return false;
+            }
+
+            options = options with { Demo = true };
         }
 
         return true;

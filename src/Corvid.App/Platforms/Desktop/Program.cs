@@ -9,8 +9,8 @@ namespace Corvid.App;
 
 /// <summary>
 /// The desktop head: X11 and the framebuffer on Linux, Win32 on Windows, AppKit on macOS. The command line is read
-/// first, so a mistyped option prints the usage instead of opening a window. With <c>--engine</c> it is the only head that
-/// runs Corvid in-process: it starts the host and checks the model cache before the window opens (quick and offline), then
+/// first, so a mistyped option prints the usage instead of opening a window. It is the only head that runs Corvid in-process,
+/// which it does unless <c>--demo</c> asks for the demo: it starts the host and checks the model cache before the window opens (quick and offline), then
 /// loads the models in the background while the window paints; when models are missing it opens First run instead.
 /// </summary>
 internal static class Program

@@ -41,6 +41,8 @@ public sealed partial class SessionsPage : Page, IDockProvider
     // Made with the page: the frame raises Navigated, where the shell takes the dock, before OnNavigatedTo gives the page
     // its view model, so the dock gets the view model there.
     private readonly SessionsDock _dock = new();
+    // A4 verification: the Enter that focused a card, held or followed by a digit, never answers it.
+    private readonly CardKeyGate _cardKeys = new(TimeProvider.System);
     private readonly Storyboard _spinner;
     private AppComposition? _composition;
     private SessionViewModel? _session;
@@ -49,6 +51,8 @@ public sealed partial class SessionsPage : Page, IDockProvider
     private int _newCount;
     private DateTimeOffset _lastEscape;
     private bool _swallowLineBreak;
+    // Whether Ctrl is down as the page's own key events say (A4V2-1).
+    private bool _ctrlHeld;
     private bool _spinning;
 
     public SessionsPage()
@@ -56,6 +60,11 @@ public sealed partial class SessionsPage : Page, IDockProvider
         InitializeComponent();
         _spinner = Spinner();
         Composer.AddHandler(PreviewKeyDownEvent, new KeyEventHandler(OnComposerKeyDown), true);
+        // A4V2-1: Ctrl as the page's own key events see it, before the composer or a card reads Enter.
+        Root.AddHandler(PreviewKeyDownEvent, new KeyEventHandler((_, e) => TrackCtrl(e.Key, down: true)), true);
+        Root.AddHandler(PreviewKeyUpEvent, new KeyEventHandler((_, e) => TrackCtrl(e.Key, down: false)), true);
+        Root.LostFocus += (_, _) => _ctrlHeld = false;
+        Root.AddHandler(PreviewKeyDownEvent, new KeyEventHandler(OnCardPreviewKeyDown), true);
         Composer.BeforeTextChanging += OnComposerTextChanging;
         Root.KeyDown += OnRootKeyDown;
         for (var i = 0; i < 7; i++)
@@ -354,6 +363,9 @@ public sealed partial class SessionsPage : Page, IDockProvider
         UpdateJump();
         WatchApproval();
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, PositionAtLatest);
+        // A focus request made before this page showed the session (a new session opened from the Board).
+        if (_session.TakeComposerFocusRequest())
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, FocusComposer);
     }
 
     private void Detach()
@@ -435,13 +447,21 @@ public sealed partial class SessionsPage : Page, IDockProvider
     private void OnFocusRequested(object? sender, SessionFocusTarget target)
     {
         if (target == SessionFocusTarget.Composer)
-        {
-            Composer.Focus(FocusState.Programmatic);
-            // With the caret after the draft, so typing goes on from it (a prompt put back from the history).
-            Composer.SelectionStart = Composer.Text.Length;
-        }
+            FocusComposer();
         else
             FocusApproval();
+    }
+
+    /// <summary>
+    /// Puts the caret in the composer, after the draft so typing goes on from it (a prompt put back from the history). A
+    /// request the page could not take yet (it was not loaded) stays with the session and is taken when it attaches.
+    /// </summary>
+    private void FocusComposer()
+    {
+        if (!Composer.Focus(FocusState.Programmatic))
+            return;
+        _session?.TakeComposerFocusRequest();
+        Composer.SelectionStart = Composer.Text.Length;
     }
 
     /// <summary>Gives the keys to the open card's focused answer, bringing the card into view.</summary>
@@ -455,6 +475,7 @@ public sealed partial class SessionsPage : Page, IDockProvider
         var element = Transcript.GetOrCreateElement(index);
         element.UpdateLayout();
         FocusOption(element, card);
+        _cardKeys.Focused();
     }
 
     /// <summary>Focuses the card's focused answer and scrolls it into view: the answers, not the card's top, are what the keys act on.</summary>
@@ -505,7 +526,9 @@ public sealed partial class SessionsPage : Page, IDockProvider
     {
         if (_session is not { } session)
             return;
-        var ctrl = IsDown(VirtualKey.Control);
+        if (IsCtrlKey(e.Key))
+            return;
+        var ctrl = CtrlDown;
         var shift = IsDown(VirtualKey.Shift);
         switch (e.Key)
         {
@@ -539,6 +562,21 @@ public sealed partial class SessionsPage : Page, IDockProvider
                 return;
         }
     }
+
+    private static bool IsCtrlKey(VirtualKey key) => key is VirtualKey.Control or VirtualKey.LeftControl or VirtualKey.RightControl;
+
+    private void TrackCtrl(VirtualKey key, bool down)
+    {
+        if (IsCtrlKey(key))
+            _ctrlHeld = down;
+    }
+
+    /// <summary>
+    /// A4V2-1: Ctrl as the page's key events saw it (the same stream as the Enter being read, so in order), or the thread's
+    /// key state; Uno's KeyRoutedEventArgs has no public modifiers. Focus moving within or out of the page forgets it, so a
+    /// Ctrl released where the page never hears it does not stay held.
+    /// </summary>
+    private bool CtrlDown => _ctrlHeld || IsDown(VirtualKey.Control);
 
     /// <summary>
     /// The text box still types the line break of an Enter the page handled (its text input does not wait for the key
@@ -600,6 +638,66 @@ public sealed partial class SessionsPage : Page, IDockProvider
             e.Handled = true;
             Escape(session);
         }
+    }
+
+    /// <summary>
+    /// A4V2-1: keys on a focused approval card that are not its answers, read before its buttons see them. Typing (a letter)
+    /// goes back to the composer, since a person who types after Enter pointed at the card means the composer; Space never
+    /// presses an answer (a space in the words being typed approved the call); Ctrl+Enter is a steer, never an answer, so it
+    /// goes back to the composer too. Digits, the arrows and Enter answer as before; the card's reason field is left alone.
+    /// A4 verification: a repeated key-down never answers, and for a moment after the page moved focus to the card (the
+    /// Enter that sent) an Enter answers nothing and a digit goes back to the composer as typing (<see cref="CardKeyGate"/>);
+    /// an arrow or Tab arms the card at once.
+    /// </summary>
+    private void OnCardPreviewKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Handled || e.OriginalSource is TextBox || !InApprovalCard(e.OriginalSource as DependencyObject))
+            return;
+        var ctrl = CtrlDown;
+        if (e.Key == VirtualKey.Space || e.Key == VirtualKey.Enter && ctrl)
+        {
+            e.Handled = true;
+            if (e.Key == VirtualKey.Enter)
+                FocusComposerAtEnd();
+            return;
+        }
+        if (e.Key is VirtualKey.Left or VirtualKey.Right or VirtualKey.Up or VirtualKey.Down or VirtualKey.Tab)
+            _cardKeys.Arm();
+        var digit = e.Key is (>= VirtualKey.Number1 and <= VirtualKey.Number5) or (>= VirtualKey.NumberPad1 and <= VirtualKey.NumberPad5);
+        if ((e.Key == VirtualKey.Enter || digit) && !IsDown(VirtualKey.Menu))
+        {
+            var repeated = e.KeyStatus.WasKeyDown || e.KeyStatus.RepeatCount > 1;
+            switch (_cardKeys.Decide(digit, repeated))
+            {
+                case CardKey.Ignore:
+                    e.Handled = true;
+                    return;
+                case CardKey.ToComposer:
+                    // Handled so the card's own digit handler never answers; the digit's text reaches the composer, as a letter's does.
+                    e.Handled = true;
+                    FocusComposerAtEnd();
+                    return;
+            }
+        }
+        if (e.Key is >= VirtualKey.A and <= VirtualKey.Z && !ctrl && !IsDown(VirtualKey.Menu))
+            FocusComposerAtEnd();
+    }
+
+    private void FocusComposerAtEnd()
+    {
+        Composer.Focus(FocusState.Keyboard);
+        Composer.SelectionStart = Composer.Text.Length;
+    }
+
+    private static bool InApprovalCard(DependencyObject? element)
+    {
+        for (var node = element; node is not null; node = VisualTreeHelper.GetParent(node))
+        {
+            if (node is FrameworkElement { DataContext: ApprovalCardBlock })
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>Digits answer the focused card, the arrows move between its answers, Esc goes back to the composer.</summary>
@@ -798,6 +896,53 @@ public sealed partial class SessionsPage : Page, IDockProvider
     {
         if (((FrameworkElement)sender).DataContext is UserMessageBlock block)
             _session?.ForkCommand.Execute(block);
+    }
+
+    // ---- A4: rename, pin and recap from the header's menu ----
+
+    private void OnSessionMenuOpening(object? sender, object e)
+    {
+        RenameBox.Text = _session?.Title ?? "";
+        RenameBox.SelectAll();
+        PinButton.IsEnabled = _session?.CanPin == true;
+        // G-12: a read-only view writes nothing to the session's log, a recap or a title included.
+        RecapButton.IsEnabled = _session is { CanRecap: true, IsReadOnly: false };
+        RenameButton.IsEnabled = _session is { IsReadOnly: false };
+    }
+
+    private void OnRename(object sender, RoutedEventArgs e)
+    {
+        if (_session is { } session && session.RenameCommand.CanExecute(RenameBox.Text))
+        {
+            session.RenameCommand.Execute(RenameBox.Text);
+            SessionMenu.Hide();
+        }
+    }
+
+    private void OnRenameKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key != VirtualKey.Enter)
+            return;
+        e.Handled = true;
+        OnRename(sender, e);
+    }
+
+    private void OnTogglePin(object sender, RoutedEventArgs e)
+    {
+        if (_session is { } session && session.TogglePinCommand.CanExecute(null))
+        {
+            session.TogglePinCommand.Execute(null);
+            SessionMenu.Hide();
+        }
+    }
+
+    private void OnRecap(object sender, RoutedEventArgs e)
+    {
+        if (_session is { } session && session.RecapCommand.CanExecute(null))
+        {
+            session.RecapCommand.Execute(null);
+            SessionMenu.Hide();
+        }
     }
 
     private void OnCompact(object sender, RoutedEventArgs e)

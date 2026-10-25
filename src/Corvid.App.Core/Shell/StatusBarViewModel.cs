@@ -33,6 +33,7 @@ public sealed class StatusBarViewModel : ObservableObject
     private IReadOnlyList<StatusTag> _tags = [];
     private string _scheduler = "";
     private string _gateway = "";
+    private string _hosting = "";
     private string _branch = "";
     private string _sessionId = "";
     private string _trailing = "";
@@ -96,6 +97,12 @@ public sealed class StatusBarViewModel : ObservableObject
 
     /// <summary>The gateway's adapters ("telegram up · discord up · slack off"), on pages that show it.</summary>
     public string Gateway { get => _gateway; set => SetProperty(ref _gateway, value ?? ""); }
+
+    /// <summary>
+    /// What this app hosts for the machine (U-8), on every page while it hosts any: "gateway", "scheduler" or both; empty
+    /// when it hosts neither.
+    /// </summary>
+    public string Hosting { get => _hosting; set => SetProperty(ref _hosting, value ?? ""); }
 
     /// <summary>The workspace's git branch.</summary>
     public string Branch { get => _branch; set => SetProperty(ref _branch, value ?? ""); }

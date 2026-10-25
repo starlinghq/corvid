@@ -58,7 +58,7 @@ app and looking at it.
 | --- | --- |
 | `src/Corvid.App.Core` | net10.0, no Uno types: the update contract, the fold, view models, per-area services and DTOs, the demo services, the markdown and diff models. Tested headless. |
 | `src/Corvid.App` | the Uno.Sdk single project: `net10.0-desktop` always, `net10.0-browserwasm` on request. Pages, controls, theme, fonts, icons, keyboard. |
-| `src/Corvid.App.Engine` | the in-process services over `CorvidRuntime` (`--engine`, desktop head only), referencing `Corvid.Host` as `Corvid.Acp` does; one `EngineAppServices.<Area>.cs` and `<Area>/` folder per area. |
+| `src/Corvid.App.Engine` | the in-process services over `CorvidRuntime` (the default, desktop head only), referencing `Corvid.Host` as `Corvid.Acp` does; one `EngineAppServices.<Area>.cs` and `<Area>/` folder per area. |
 | `tests/Corvid.App.Core.Tests` | the core's tests. |
 
 - MVVM on hand-written `ObservableObject`, `RelayCommand` and `AsyncRelayCommand`; pages bind with `x:Bind`; the core
@@ -66,8 +66,9 @@ app and looking at it.
 - Areas: each rail destination owns `src/Corvid.App.Core/<Area>/`, `AppComposition.<Area>.cs` and
   `src/Corvid.App/Pages/<Area>Page.xaml`. Builders working on different areas never edit the same file; a change to a
   shared file is additive and called out.
-- Command line: `--demo` (the default) or `--engine`, `--theme light|dark|system`, `--page <area>`, `--session <id>`, `--scene main|approval`. Demo
-  mode freezes the clock at 2026-10-24 14:05 local so screenshots are stable.
+- Command line: the engine by default (`--engine` says so), `--demo` for the demo, `--theme light|dark|system`,
+  `--page <area>`, `--session <id>`, `--scene main|approval` (it implies `--demo`). Demo mode freezes the clock at 2026-10-24 14:05 local so
+  screenshots are stable; every mockup comparison passes `--demo`.
 - Theme brushes are named after `corvid.css`'s tokens (`CorvidBg` to `CorvidDelWord`, plus `CorvidOnAccent`) with the
   exact values; Inter for prose and JetBrains Mono for code, embedded with their OFL licences; the mockups' stroke icons
   through the one `Icon` control; no emoji.

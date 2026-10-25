@@ -178,6 +178,8 @@ public sealed class RewindViewModel : AreaViewModel
     public string LastRestoreSummary => LastRestore switch
     {
         null => "",
+        // Refused before any file was looked at (G-12: another process drives the session): its reason is all there is to say.
+        { Refused: true, Conflicts.IsEmpty: true, Detail: { Length: > 0 } detail } => SafeText.Clean(detail),
         { Refused: true } last => $"refused {last.Conflicts.Length} · nothing was restored or overwritten",
         var last => string.Create(CultureInfo.InvariantCulture,
             $"restored {last.Restored.Length} · merged {last.Merged.Length} · refused {last.Conflicts.Length} · restore checkpoint {last.CheckpointId}"),

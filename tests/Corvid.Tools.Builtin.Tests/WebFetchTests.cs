@@ -62,6 +62,22 @@ public sealed class WebFetchTests
     }
 
     [Fact]
+    public async Task A_fetch_reports_its_progress_as_lines_and_never_the_page()
+    {
+        var handler = new CannedHandler(request => request.RequestUri!.AbsolutePath == "/old"
+            ? CannedHandler.Redirect("/releases")
+            : CannedHandler.Page(Html));
+        using var web = new WebFetchTool(handler);
+        var lines = new List<string>();
+
+        await Invoke(web, "web_fetch", """{"url":"https://example.org/old"}""", new ToolCallContext(Session, "c-1") { Output = lines.Add });
+
+        // K-2: what a running card's tail shows; the page itself is only in the result the model reads.
+        Assert.Equal(["GET https://example.org/old\n", "GET https://example.org/releases\n", "200 text/html\n", "read\n"], lines);
+        Assert.DoesNotContain(lines, line => line.Contains("Corvid 0.1", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Redirects_are_followed_here_only_to_http_and_only_so_far()
     {
         var handler = new CannedHandler(request => request.RequestUri!.AbsolutePath switch

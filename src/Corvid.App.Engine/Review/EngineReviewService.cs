@@ -7,6 +7,7 @@ using Corvid.App.Core.Sessions;
 using Corvid.App.Engine.History;
 using Corvid.App.Engine.Sessions;
 using Corvid.Host.Composition;
+using Corvid.Host.State;
 using Corvid.Kernel.Checkpoints;
 using Corvid.Tools;
 using Corvid.Tools.Builtin;
@@ -22,7 +23,7 @@ namespace Corvid.App.Engine.Review;
 /// Comments go to the session as one message through the window's session service. One file goes back with
 /// <see cref="CorvidSession.RollbackToAsync"/>, files only and that path only (G-3), merging three ways as a restore does.
 /// <para>
-/// Review points live in this process only (G-7 keeps them in <c>ui.db</c>, which the host does not have yet). Open in
+/// Review points are kept in <c>ui.db</c> (G-7), beside the log, so "since last review" lasts across restarts. Open in
 /// editor runs <c>$VISUAL</c> or <c>$EDITOR</c> when one is set and is not a terminal editor, with an argument list and no
 /// shell; otherwise it is refused, saying how to set one.
 /// </para>
@@ -48,7 +49,6 @@ public sealed class EngineReviewService : IReviewService, IDisposable
     private readonly Func<string, string?> _environment;
     private readonly Func<ProcessStartInfo, Process?> _start;
     private readonly Lazy<Task<LedgerTexts>> _texts;
-    private readonly ConcurrentDictionary<string, (ReviewPoint Point, long Head)> _points = new(StringComparer.Ordinal);
     /// <summary>Files put back from here, by session: the checkpoint each went back to.</summary>
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, string>> _reverted = new(StringComparer.Ordinal);
 
@@ -79,7 +79,10 @@ public sealed class EngineReviewService : IReviewService, IDisposable
         return await Task.Run(async () =>
         {
             var ledger = SessionLedger.Load(runtime, sessionId, cancellationToken);
-            var point = _points.TryGetValue(sessionId, out var known) ? known : ((ReviewPoint, long)?)null;
+            // G-7: the point in ui.db, with the log head it was sent at.
+            var point = runtime.UiState.GetReviewPoint(sessionId) is { } kept
+                ? (new ReviewPoint(kept.Turn, kept.CommentsSent, kept.At), kept.Head)
+                : ((ReviewPoint, long)?)null;
             Func<KernelEntry, bool> inScope = scope switch
             {
                 ReviewScope.ThisTurn => entry => ledger.TurnAt(entry.CallSequence) == ledger.Turn,
@@ -141,7 +144,8 @@ public sealed class EngineReviewService : IReviewService, IDisposable
         await _sessions.SendAsync(sessionId, ReviewMessage.Compose(comments), cancellationToken).ConfigureAwait(true);
         var point = new ReviewPoint(ledger.Turn, comments.Count, _time.GetUtcNow());
         // What the ledger held when the comments went is reviewed; "since last review" is every call after it.
-        _points[sessionId] = (point, ledger.Head);
+        await Task.Run(() => runtime.UiState.SetReviewPoint(new UiReviewPoint(sessionId, point.Turn, point.CommentsSent, point.At, ledger.Head)),
+            cancellationToken).ConfigureAwait(true);
         return point;
     }
 
@@ -154,8 +158,29 @@ public sealed class EngineReviewService : IReviewService, IDisposable
         var texts = await _texts.Value.ConfigureAwait(false);
         if (!texts.Readable(path))
             return new FileRevertResult(path, checkpointId, false, true, "Corvid may not open it, so it cannot be put back from here");
-        var session = runtime.TryGetSession(sessionId, out var open) ? open : runtime.OpenSession(sessionId, EngineSessionService.Surface);
-        var result = await session.RollbackToAsync(checkpointId, RestoreScope.FilesOnly, [path], cancellationToken).ConfigureAwait(false);
+        CorvidSession session;
+        // M2: a session this revert opens is let go of once it is done, so a terminal can drive it again.
+        var opened = false;
+        try
+        {
+            opened = !runtime.TryGetSession(sessionId, out var open);
+            session = opened ? runtime.OpenSession(sessionId, EngineSessionService.Surface) : open;
+        }
+        catch (SessionHeldException exception)
+        {
+            // G-12: the session's driver in another process is the one to put files back; nothing is changed from here.
+            return new FileRevertResult(path, checkpointId, false, true, exception.Message.TrimEnd('.'));
+        }
+        RestoreResult? result;
+        try
+        {
+            result = await session.RollbackToAsync(checkpointId, RestoreScope.FilesOnly, [path], cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (opened)
+                await _signals.ReleaseAfterRestoreAsync(runtime, sessionId).ConfigureAwait(false);
+        }
         if (result is null)
             return new FileRevertResult(path, checkpointId, false, true, $"{checkpointId} is no longer in the ledger");
         if (result.Status == RestoreStatus.Refused)

@@ -140,19 +140,19 @@
                 <Grid>
                 <ScrollViewer x:Name="SlotsScroll" HorizontalScrollMode="Auto" HorizontalScrollBarVisibility="Auto" VerticalScrollMode="Disabled"
                               VerticalScrollBarVisibility="Disabled" SizeChanged="OnTableScrollSized" ViewChanged="OnTableScrolled">
-                  <StackPanel MinWidth="679" AutomationProperties.Name="Model slots">
+                  <StackPanel MinWidth="640" AutomationProperties.Name="Model slots">
                     <Grid>
                       <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="123" />
-                        <ColumnDefinition Width="133" />
-                        <ColumnDefinition Width="165" />
-                        <ColumnDefinition Width="118" />
+                        <ColumnDefinition Width="122" />
+                        <ColumnDefinition Width="112" />
+                        <ColumnDefinition Width="150" />
+                        <ColumnDefinition Width="110" />
                         <ColumnDefinition Width="*" />
                       </Grid.ColumnDefinitions>
                       <TextBlock Text="slot" Style="{StaticResource TableHead}" />
                       <TextBlock Grid.Column="1" Text="current" Style="{StaticResource TableHead}" />
-                      <TextBlock Grid.Column="2" Text="escalation and fallbacks" Style="{StaticResource TableHead}" />
-                      <TextBlock Grid.Column="3" Text="placement · p50" Style="{StaticResource TableHead}" />
+                      <TextBlock Grid.Column="2" Text="escalation and fallbacks" Style="{StaticResource TableHead}" TextWrapping="Wrap" />
+                      <TextBlock Grid.Column="3" Text="placement · p50" Style="{StaticResource TableHead}" TextWrapping="Wrap" />
                     </Grid>
                     <ItemsControl ItemsSource="{x:Bind ViewModel.Slots}" IsTabStop="False">
                       <ItemsControl.ItemTemplate>
@@ -160,10 +160,10 @@
                           <Border Style="{StaticResource TableRow}" AutomationProperties.Name="{x:Bind AutomationName, Mode=OneWay}">
                             <Grid>
                               <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="123" />
-                                <ColumnDefinition Width="133" />
-                                <ColumnDefinition Width="165" />
-                                <ColumnDefinition Width="118" />
+                                <ColumnDefinition Width="122" />
+                                <ColumnDefinition Width="112" />
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="110" />
                                 <ColumnDefinition Width="*" />
                               </Grid.ColumnDefinitions>
                               <TextBlock Margin="10,5.5,10,8.5" Text="{x:Bind Name}" Style="{StaticResource Cell}" FontWeight="SemiBold" />

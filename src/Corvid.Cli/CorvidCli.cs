@@ -1,6 +1,7 @@
 using System.Reflection;
 using Corvid.Cli.Chat;
 using Corvid.Host;
+using Corvid.Host.Composition;
 using Corvid.Host.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -54,7 +55,7 @@ public static class ExitCodes
 }
 
 /// <summary>
-/// <c>corvid</c> (plan §17 row 1.2): <c>chat</c>, <c>model</c>, <c>doctor</c>, <c>mcp</c>, <c>evals</c>, <c>acp</c>, <c>serve</c>, <c>gateway</c>, <c>traces</c> and <c>scan</c>, with typed configuration
+/// <c>corvid</c> (plan §17 row 1.2): <c>chat</c>, <c>model</c>, <c>doctor</c>, <c>mcp</c>, <c>evals</c>, <c>acp</c>, <c>serve</c>, <c>gateway</c>, <c>traces</c>, <c>scan</c> and <c>egress</c>, with typed configuration
 /// validated before anything runs.
 /// </summary>
 public static class CorvidCli
@@ -79,6 +80,7 @@ public static class CorvidCli
           gateway pair [list]        people waiting to pair, and who is paired
           gateway pair approve <code> --owner|--guest   pair the sender of a code as the owner, or as a guest (outside content)
           gateway pair revoke <adapter> <user>   remove a pairing
+          gateway pair tools <adapter> <user> <tool>... | --adapter   a guest's own tool allowlist, or the adapter's again
           evals <command> ...        calibration tooling (corvid-evals): calibrate, report, replay, export-decisions,
                                      export-trajectories; --log defaults to this user's event log
           traces export              the event log as Beacon-schema JSONL on stdout     [--session <id> | --all]
@@ -88,6 +90,9 @@ public static class CorvidCli
                                      loopback only unless Corvid:Serve:TokenSecret names a Vault secret
           scan                       the detection rules over the event log      [--session <id>] [--fail-on <severity>] [--json]
                                      exit 4 when a finding is at or above --fail-on (info, low, medium, high, critical)
+          egress [list]              the egress ledger: each request to a gated (cloud) model, newest first   [--session <id>] [--limit <n>]
+          egress show <n>            one request as it was sent, after redaction
+          egress prune               drop what Corvid:Privacy:Ledger no longer keeps (default 90 days, 256 MB) and compact the store
 
         options:
           --config <file>            the configuration file (default $XDG_CONFIG_HOME/corvid/corvid.json, or $CORVID_CONFIG)
@@ -123,6 +128,8 @@ public static class CorvidCli
             return ExitCodes.Success;
         }
 
+        // How this process names itself to another that finds a lock it holds (a session's driver, the scheduler; G-12, U-8).
+        ProcessLock.ProcessName = "corvid " + parsed.Command;
         var builder = CorvidHost.CreateBuilder(parsed.Overrides, parsed.ConfigFile);
         // Only `corvid gateway [run]` starts the gateway; its other verbs work on the stores alone.
         if (GatewayCommand.Runs(parsed))
@@ -142,6 +149,7 @@ public static class CorvidCli
                 "serve" => await ServeCommand.RunAsync(host, context, cancellationToken).ConfigureAwait(false),
                 "gateway" => await GatewayCommand.RunAsync(host, parsed, context, cancellationToken).ConfigureAwait(false),
                 "scan" => ScanCommand.Run(host, parsed, context, cancellationToken),
+                "egress" => EgressCommand.Run(host, parsed, context, cancellationToken),
                 "traces" => await TracesCommand.RunAsync(host, parsed, context, cancellationToken).ConfigureAwait(false),
                 _ => UnknownCommand(console, parsed.Command),
             };

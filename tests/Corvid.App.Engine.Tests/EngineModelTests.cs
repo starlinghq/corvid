@@ -76,7 +76,8 @@ public sealed class EngineModelTests
         try
         {
             Check(null, EventArgs.Empty);
-            await reached.Task.WaitAsync(TimeSpan.FromSeconds(30), Token);
+            // A guard, not a pace, as long as the suite's others: a download's end reads the models again on the pool.
+            await reached.Task.WaitAsync(TimeSpan.FromSeconds(60), Token);
             return service.Snapshot;
         }
         finally
@@ -124,8 +125,28 @@ public sealed class EngineModelTests
         Assert.False(snapshot.Privacy.VaultPresent);
         Assert.True(snapshot.Privacy.ExtractorBound);
         Assert.Equal("redact", snapshot.Privacy.Posture);
-        Assert.NotNull(snapshot.Privacy.TodayUnknown);
+        // Nothing has gone to a gated model: the ledger counts none, and has no file yet.
+        Assert.Null(snapshot.Privacy.TodayUnknown);
+        Assert.Equal((0, 0, 0), (snapshot.Privacy.RequestsToday, snapshot.Privacy.RedactedToday, snapshot.Privacy.RefusedToday));
         Assert.Contains("1 thread", snapshot.Cpu, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ThePrivacyPanelCountsTodaysRequestsFromTheEgressLedger()
+    {
+        await using var setup = await StartAsync();
+        var runtime = setup.Fixture.Runtime;
+        // Yesterday's request is not today's; today's left with one value redacted, and one was refused.
+        var yesterday = new Corvid.App.Core.Tests.ManualTimeProvider(setup.Fixture.Time.GetUtcNow().AddDays(-1), TimeZoneInfo.Utc);
+        await EgressFakes.SendAsync(new Corvid.Host.Audit.EgressLedger(runtime.EgressLedger.Path, yesterday), "cli-a", "Alice Smith, yesterday.");
+        var today = new Corvid.Host.Audit.EgressLedger(runtime.EgressLedger.Path, setup.Fixture.Time);
+        await EgressFakes.SendAsync(today, "cli-a", "Write to Alice Smith.");
+        await EgressFakes.SendAsync(today, "cli-a", "Tell Alice Smith.", Corvid.Models.Privacy.EgressAction.Refuse);
+
+        var snapshot = await setup.Service.LoadAsync(Token);
+
+        Assert.Null(snapshot.Privacy.TodayUnknown);
+        Assert.Equal((2, 1, 1), (snapshot.Privacy.RequestsToday, snapshot.Privacy.RedactedToday, snapshot.Privacy.RefusedToday));
     }
 
     [Fact]
