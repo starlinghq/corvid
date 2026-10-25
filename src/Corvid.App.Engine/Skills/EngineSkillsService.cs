@@ -180,6 +180,10 @@ public sealed class EngineSkillsService : ISkillsService
         var services = await SkillsAsync().ConfigureAwait(false);
         var store = services.Store!;
         var known = skills.Where(name => store.TryGet(name, out _)).Distinct(StringComparer.Ordinal).ToList();
+        // A name the store does not hold (archived, removed or renamed since the page loaded) is reported, not dropped.
+        if (skills.Where(name => !known.Contains(name, StringComparer.Ordinal)).Distinct(StringComparer.Ordinal).ToList() is { Count: > 0 } unknown)
+            throw new InvalidOperationException(
+                $"There is no skill named {string.Join(", ", unknown.Select(name => SafeText.Reveal(name)))} any more (archived or removed since the page loaded); nothing was archived. Refresh the library.");
         // All or nothing, as the page asked: a skill the curator may not move stops the lot before anything moves.
         foreach (var name in known)
         {

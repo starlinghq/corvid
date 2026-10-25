@@ -186,6 +186,8 @@ public sealed class SkillLearner : ISkillLearning
             return Fail("the scanner flagged the draft: " + string.Join("; ", findings.Select(finding => $"line {finding.Line} {finding.Rule}")), draft.Name);
         if (_store.TryGet(draft.Name, out var existing) && !existing.AgentOwned)
             return Fail($"a skill named {draft.Name} exists and is not agent-authored, so the learning loop leaves it alone", draft.Name);
+        // What the draft is made against: a review applies an edited draft only over this revision (or, for a new skill, none).
+        var stagedAgainst = await _store.RevisionOfAsync(draft.Name, cancellationToken).ConfigureAwait(false);
 
         // 3. The draft must pass its own test.
         var replay = await _replayer.ReplayAsync(_log, opportunity.SessionId, opportunity.FromSequence, opportunity.ThroughSequence, draft,
@@ -209,7 +211,7 @@ public sealed class SkillLearner : ISkillLearning
         var reason = opportunity.Tainted ? "the source turn held outside content, so the draft waits for review"
             : !verdict.Verdict.Acted ? verdict.Verdict.Reason
             : "task success was not confirmed by a calibrated decider, so the draft waits for review";
-        var pending = _database.Stage(draft.Name, draft.Text, opportunity.SessionId, verdict.DecisionId, reason, replay.Describe(), opportunity.Id);
+        var pending = _database.Stage(draft.Name, draft.Text, opportunity.SessionId, verdict.DecisionId, reason, replay.Describe(), opportunity.Id, stagedAgainst);
         return new LearningResult(opportunity.Id, LearningStatus.Staged, draft.Name, $"staged as {pending.Id} ({reason})", pending);
     }
 
@@ -271,6 +273,7 @@ public sealed class SkillLearner : ISkillLearning
     /// </summary>
     /// <exception cref="SkillFormatException">The edit is not a valid SKILL.md.</exception>
     /// <exception cref="ArgumentException">The draft is not waiting, the edit names another skill, or the scanner flags it.</exception>
+    /// <exception cref="SkillOwnershipException">The skill changed since the draft was staged (the draft stays waiting).</exception>
     public async Task<string?> ApproveAsync(string pendingId, string? sessionId, string? editedContent, CancellationToken cancellationToken)
     {
         var pending = _database.FindPending(pendingId) is { Status: PendingSkillStatus.Pending } found ? found
@@ -283,7 +286,8 @@ public sealed class SkillLearner : ISkillLearning
         if (SkillScanner.Scan(SkillDocument.FileName, editedContent) is { IsEmpty: false } findings)
             throw new ArgumentException("The scanner flagged the edit: " + string.Join("; ",
                 findings.Take(5).Select(finding => $"line {finding.Line} {finding.Rule}")) + ".", nameof(editedContent));
-        var revision = await _store.WriteUserSkillAsync(edited, sessionId ?? pending.SessionId,
+        // Only over what the draft was staged against: a skill the person or a hub changed since stays as it is.
+        var revision = await _store.WriteReviewedSkillAsync(edited, pending.BaseRevision, sessionId ?? pending.SessionId,
             "Add skill " + edited.Name + " (a draft the user edited and approved)", cancellationToken).ConfigureAwait(false);
         if (!_database.Resolve(pendingId, PendingSkillStatus.Approved))
             throw new InvalidOperationException($"'{pendingId}' was resolved meanwhile.");
