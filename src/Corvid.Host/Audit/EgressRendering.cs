@@ -100,11 +100,20 @@ public static partial class EgressRendering
         null => "null",
         string text => text,
         JsonElement { ValueKind: JsonValueKind.String } json => json.GetString()!,
-        JsonElement json => json.GetRawText(),
+        // Written again without the default escaping, so a placeholder reads <EMAIL_1>, never <EMAIL_1>.
+        JsonElement json => Relaxed(json),
         bool flag => flag ? "true" : "false",
         IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
         _ => value.ToString() ?? "",
     };
+
+    private static string Relaxed(JsonElement json)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream, WriterOptions))
+            json.WriteTo(writer);
+        return Encoding.UTF8.GetString(stream.ToArray());
+    }
 
     private static string Arguments(IDictionary<string, object?>? arguments)
     {

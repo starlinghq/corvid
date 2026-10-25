@@ -202,6 +202,12 @@ public sealed class EgressLedgerTests : IDisposable
 
         Assert.Equal("[tools offered] shell, read_file\n[tool_call c1 shell] {\"command\":\"ls -la\"}\n[tool_result c1]\na.txt\nb.txt", full);
         Assert.Equal(full, EgressRendering.Excerpt(full));
+        // A JSON result keeps a placeholder readable (and counted), however its text escaped it.
+        using var escaped = System.Text.Json.JsonDocument.Parse("""{"path":"<EMAIL_2>","args":{"to":"<PERSON_1>"}}""");
+        var result = EgressRendering.Blocks([new ChatMessage(ChatRole.Tool, [new FunctionResultContent("c2", escaped.RootElement.Clone()),
+            new FunctionCallContent("c3", "send", new Dictionary<string, object?> { ["to"] = escaped.RootElement.GetProperty("args").Clone() })])]);
+        Assert.Equal("[tool_result c2]\n{\"path\":\"<EMAIL_2>\",\"args\":{\"to\":\"<PERSON_1>\"}}\n[tool_call c3 send] {\"to\":{\"to\":\"<PERSON_1>\"}}", result[0]);
+        Assert.Equal(2, EgressRendering.Placeholders(result[0]));
         var many = string.Join('\n', Enumerable.Range(1, 30).Select(i => $"line {i}"));
         var excerpt = EgressRendering.Excerpt(many);
         Assert.Equal(17, excerpt.Split('\n').Length);
