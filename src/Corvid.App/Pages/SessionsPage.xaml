@@ -776,7 +776,11 @@
             </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
               <DataTemplate x:DataType="sessions:QuestionOption">
-                <controls:CorvidButton Content="{x:Bind Label}" Command="{x:Bind Choose}" Style="{StaticResource CorvidSmallButton}" />
+                <!-- The label reveals hidden characters (codes in brackets) and wraps, so a long one shows from its start. -->
+                <controls:CorvidButton Command="{x:Bind Choose}" Style="{StaticResource CorvidSmallButton}" HorizontalContentAlignment="Left"
+                                       Height="Auto" MinHeight="26" Padding="9,4" AutomationProperties.Name="{x:Bind Label}">
+                  <TextBlock Text="{x:Bind Label}" TextWrapping="Wrap" />
+                </controls:CorvidButton>
               </DataTemplate>
             </ItemsControl.ItemTemplate>
           </ItemsControl>
