@@ -192,7 +192,8 @@ public sealed class SessionUpdateTranslator(string workspace)
                 break;
             // CheckpointLogged: Rewind's timeline reads the ledger itself (A3 history); the transcript shows no row for it.
         }
-        if (at > _last)
+        // A compaction comes between turns: its time is not the replayed turn's end.
+        if (at > _last && update is not CompactionLogged)
             _last = at;
         return output;
     }

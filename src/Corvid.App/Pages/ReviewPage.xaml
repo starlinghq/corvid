@@ -170,15 +170,12 @@
                        Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.HasFiles), Mode=OneWay}" />
             <Border Padding="14,12" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,1,0,0">
               <StackPanel Spacing="8">
-                <Grid ColumnSpacing="8">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                  </Grid.ColumnDefinitions>
-                  <TextBlock Text="Checkpoints in range" FontSize="12.5" FontWeight="SemiBold" />
-                  <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.CheckpointRange, Mode=OneWay}" FontSize="12.5" FontWeight="SemiBold"
+                <!-- The range goes under the label when the engine's checkpoint ids leave no room beside it. -->
+                <controls:WrapRowPanel Spacing="8" LineSpacing="2" PushLastRight="True">
+                  <TextBlock Text="Checkpoints in range" FontSize="12.5" FontWeight="SemiBold" TextWrapping="NoWrap" />
+                  <TextBlock Text="{x:Bind ViewModel.CheckpointRange, Mode=OneWay}" FontSize="12.5" FontWeight="SemiBold" TextWrapping="Wrap"
                              Foreground="{ThemeResource CorvidText2}" />
-                </Grid>
+                </controls:WrapRowPanel>
                 <TextBlock Text="Every file here is restorable from its checkpoint; a restore merges three ways with your own edits."
                            Style="{StaticResource CorvidSmallText}" />
                 <controls:CorvidButton Content="Open Rewind" Style="{StaticResource CorvidSmallButton}" Foreground="{ThemeResource CorvidAccent}"

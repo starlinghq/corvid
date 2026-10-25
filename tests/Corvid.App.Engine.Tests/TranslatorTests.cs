@@ -71,7 +71,9 @@ public sealed class TranslatorTests
         var taint = Assert.IsType<TaintChanged>(Assert.Single(translator.Translate(new TaintNoted(true, "web_fetch https://example.org") { At = T0 })));
         var summary = new Corvid.Abstractions.Events.CompactionSummary("ship it", ["c"], ["d"], ["a.cs"], [], "next");
         var marker = Assert.IsType<CompactionUpdate>(Assert.Single(translator.Translate(
-            new CompactionLogged(new Corvid.Abstractions.Events.Compacted(1, 4, summary, Summarizer: "qwen", Focus: "the plan"), 6) { Expanded = true })));
+            new CompactionLogged(new Corvid.Abstractions.Events.Compacted(1, 4, summary, Summarizer: "qwen", Focus: "the plan"), 6) { Expanded = true, At = T0.AddMinutes(1) })));
+        // A compaction between turns is not the replayed turn's end.
+        Assert.Equal(TimeSpan.Zero, Assert.IsType<TurnEnded>(Assert.Single(translator.EndReplay())).Elapsed);
 
         Assert.Equal((true, "web_fetch https://example.org"), (taint.Tainted, taint.Source));
         Assert.True(translator.Tainted);
