@@ -482,6 +482,7 @@ public sealed class NoticeBlock : TranscriptBlock
             NoticeKind.Decider => (IconKind.Warning, Tone.Amber, ""),
             NoticeKind.Warning => (IconKind.Warning, Tone.Amber, ""),
             NoticeKind.Mode => (IconKind.Shield, Tone.Grey, ""),
+            NoticeKind.Recap => (IconKind.Sparkle, Tone.Violet, ""),
             _ => (IconKind.None, Tone.Grey, ""),
         };
         OnPropertyChanged(string.Empty);

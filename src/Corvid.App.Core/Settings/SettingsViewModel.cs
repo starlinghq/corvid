@@ -140,6 +140,9 @@ public sealed class SettingsViewModel : AreaViewModel
 
     public IReadOnlyList<SettingFieldViewModel> AppearanceFields { get => _appearance; private set => SetProperty(ref _appearance, value); }
 
+    /// <summary>The app preferences panels' note: where they are kept (ui.db on the engine, G-7; this run in the demo).</summary>
+    public string PreferencesNote => _service.PreferencesNote;
+
     public IReadOnlyList<SettingFieldViewModel> NotificationFields { get => _notifications; private set => SetProperty(ref _notifications, value); }
 
     public IReadOnlyList<SettingFieldViewModel> LayoutFields { get => _layout; private set => SetProperty(ref _layout, value); }

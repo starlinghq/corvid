@@ -83,6 +83,12 @@ public sealed record SessionSummary(string Id, string Title)
     public int Attention => (PendingApprovals > 0 ? 1 : 0) + PendingQuestions;
 }
 
+/// <summary>A session's composer as kept in <c>ui.db</c> (G-7): its text and the draft put aside with <c>Ctrl+S</c>.</summary>
+public sealed record SessionDraft(string Text, string? Stash = null)
+{
+    public bool IsEmpty => Text.Length == 0 && string.IsNullOrEmpty(Stash);
+}
+
 /// <summary>An answer to an approval prompt (docs/plan/ui.md §4.4).</summary>
 public enum ApprovalChoice
 {
@@ -194,6 +200,42 @@ public interface ISessionService
 
     /// <summary>Renames the session (G-6).</summary>
     Task RenameAsync(string sessionId, string title, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The draft kept for a session (G-7, <c>ui.db</c>), shared with the CLI and kept across restarts; null when none is
+    /// kept. Added in A4 as a default member: a service without <c>ui.db</c> keeps drafts in the window only.
+    /// </summary>
+    Task<SessionDraft?> LoadDraftAsync(string sessionId, CancellationToken cancellationToken = default) => Task.FromResult<SessionDraft?>(null);
+
+    /// <summary>Keeps a session's draft (G-7); an empty draft with nothing put aside forgets it. A no-op without <c>ui.db</c>.</summary>
+    Task SaveDraftAsync(string sessionId, SessionDraft draft, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    /// <summary>Whether <see cref="SetPinnedAsync"/> keeps pins (A4 default member: false).</summary>
+    bool CanPin => false;
+
+    /// <summary>
+    /// Pins or unpins a session (G-7): pinned sessions head the rail (and the CLI's <c>/sessions</c>); the change comes back
+    /// as a <see cref="SessionChanged"/> summary.
+    /// </summary>
+    Task SetPinnedAsync(string sessionId, bool pinned, CancellationToken cancellationToken = default) =>
+        Task.FromException(new Composition.ServiceUnavailableException("Pinning comes with ui.db (G-7), which the engine keeps."));
+
+    /// <summary>
+    /// The person started (<paramref name="viewing"/> true) or stopped looking at a session in the Sessions area (G-6, G-7):
+    /// the engine records when it was last seen in <c>ui.db</c>, and on a return after an absence has the local generator
+    /// recap what happened. Peeks (the Board's watch) do not count. A no-op by default (A4).
+    /// </summary>
+    Task ViewedAsync(string sessionId, bool viewing, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    /// <summary>Whether <see cref="RecapAsync"/> can write a recap (A4 default member: false).</summary>
+    bool CanRecap => false;
+
+    /// <summary>
+    /// Has the local generator recap the session's events since its last recap (G-6); the recap arrives as a
+    /// <see cref="Notice"/> of kind <see cref="NoticeKind.Recap"/>.
+    /// </summary>
+    Task RecapAsync(string sessionId, CancellationToken cancellationToken = default) =>
+        Task.FromException(new Composition.ServiceUnavailableException("Recaps come with the engine: its local generator writes them (G-6)."));
 
     /// <summary>
     /// Whether <see cref="CreateAsync"/> starts sessions here: the engine does, the demo's scripted scenario does not (its

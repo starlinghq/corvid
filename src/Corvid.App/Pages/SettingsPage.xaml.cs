@@ -31,9 +31,6 @@ public sealed partial class SettingsPage : Page
 
     public SettingsViewModel ViewModel { get; private set; } = null!;
 
-    /// <summary>The app's own preferences' note: kept for this run until ui.db keeps them.</summary>
-    public static string PreferencesNote => "kept for this run · the window follows them once ui.db keeps them (G-7)";
-
     public static string OnOff(bool on) => on ? "On" : "Off";
 
     public static string Prefixed(string prefix, string text) => prefix + text;

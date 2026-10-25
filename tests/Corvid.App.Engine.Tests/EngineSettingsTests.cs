@@ -163,18 +163,38 @@ public sealed class EngineSettingsTests
     }
 
     [Fact]
-    public async Task AppPreferencesAreKeptForThisWindowAndTheMessageSaysSo()
+    public async Task AppPreferencesAreSavedInUiDbAndLastBeyondTheWindow()
     {
         await using var fixture = await EngineFixture.StartAsync();
         var service = new EngineSettingsService(fixture.Engine);
 
-        var write = await service.SaveAsync(new Dictionary<string, string> { ["Density"] = "Compact" }, Token);
+        var write = await service.SaveAsync(new Dictionary<string, string> { ["Density"] = "Compact", ["RailCollapsed"] = "true" }, Token);
 
         Assert.True(write.Written);
-        Assert.Contains("G-7", write.Message, StringComparison.Ordinal);
+        Assert.Equal("App preferences saved in ui.db.", write.Message);
         Assert.Empty(write.RestartKeys);
-        Assert.Equal("Compact", (await service.LoadAsync(Token)).Values["Density"]);
+        // Another window (a restart) reads them from ui.db; corvid.json is untouched.
+        var next = new EngineSettingsService(fixture.Engine);
+        Assert.Equal(("Compact", "true"), ((await next.LoadAsync(Token)).Values["Density"], (await next.LoadAsync(Token)).Values["RailCollapsed"]));
+        Assert.Equal("Compact", fixture.Runtime.UiState.Preferences()["Density"]);
         Assert.False(File.Exists(FileOf(fixture)));
+        Assert.Equal("saved in ui.db · kept across restarts", ((Corvid.App.Core.Settings.ISettingsService)next).PreferencesNote);
+    }
+
+    [Fact]
+    public async Task TheWindowStartsWithTheLayoutTheyChose()
+    {
+        await using var fixture = await EngineFixture.StartAsync();
+        fixture.Runtime.UiState.SetPreferences(new Dictionary<string, string> { ["RailCollapsed"] = "true", ["StartLayout"] = "Board" },
+            DateTimeOffset.UtcNow);
+
+        using var composition = new AppComposition(new AppOptions { Demo = false }, new InlineDispatcher(), fixture.Time,
+            new EngineAppServices(fixture.Engine, fixture.Host.Root, _ => null));
+        await composition.PreferencesApplied;
+
+        Assert.Equal(Corvid.App.Core.Area.Board, composition.Shell.CurrentArea);
+        composition.Shell.Layout = Corvid.App.Core.Shell.ShellLayout.Wide;
+        Assert.False(composition.Shell.ShowRail);
     }
 
     [Fact]

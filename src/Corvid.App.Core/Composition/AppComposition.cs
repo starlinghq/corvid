@@ -53,6 +53,9 @@ public sealed partial class AppComposition : IDisposable
         _ = BoardService;
         _ = SkillsService; // counts the waiting drafts for the rail's Skills badge before the page is visited
         Shell.Navigate(options.Page ?? Area.Sessions);
+        // G-7: the layout the person chose, from ui.db.
+        if (!options.Demo && Services.GetType() != typeof(UnavailableAppServices))
+            PreferencesApplied = ApplyPreferencesAsync();
     }
 
     public AppOptions Options { get; }

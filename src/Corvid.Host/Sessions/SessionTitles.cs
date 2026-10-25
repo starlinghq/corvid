@@ -297,7 +297,8 @@ public sealed class SessionTitler
     /// has an answered exchange, something happened since its last recap, and the person last saw it (or, never having seen
     /// it here, it last changed) at least <see cref="SessionTitlerOptions.RecapAfter"/> ago.
     /// </summary>
-    public bool ShouldRecapOnReturn(SessionDescription session, DateTimeOffset? lastSeen)
+    /// <param name="now">The surface's clock; this titler's when null.</param>
+    public bool ShouldRecapOnReturn(SessionDescription session, DateTimeOffset? lastSeen, DateTimeOffset? now = null)
     {
         ArgumentNullException.ThrowIfNull(session);
         if (_generator is null || Options.RecapAfter <= TimeSpan.Zero || session.LastAnswer is null)
@@ -305,7 +306,7 @@ public sealed class SessionTitler
         if (session.Recap is { } recap && recap.ThroughSequence >= session.Head)
             return false;
         var since = lastSeen ?? session.LastActivity;
-        return _time.GetUtcNow() - since >= Options.RecapAfter;
+        return (now ?? _time.GetUtcNow()) - since >= Options.RecapAfter;
     }
 
     private StoredEvent? Append(string sessionId, SessionEvent payload, Func<SessionSnapshot, bool> still)

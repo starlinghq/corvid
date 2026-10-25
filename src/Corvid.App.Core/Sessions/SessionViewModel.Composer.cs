@@ -82,6 +82,7 @@ public sealed partial class SessionViewModel
             OnPropertyChanged(nameof(DraftNote));
             OnPropertyChanged(nameof(TokenEstimate));
             RefreshComposerCommands();
+            DraftChanged();
         }
     }
 
@@ -238,6 +239,7 @@ public sealed partial class SessionViewModel
         OnPropertyChanged(nameof(DraftNote));
         OnPropertyChanged(nameof(TokenEstimate));
         StashDraftCommand.NotifyCanExecuteChanged();
+        DraftChanged();
     }
 
     /// <summary>Whether a draft waits put aside (Ctrl+S); there is room for one.</summary>
@@ -250,6 +252,7 @@ public sealed partial class SessionViewModel
         OnPropertyChanged(nameof(DraftNote));
         OnPropertyChanged(nameof(TokenEstimate));
         StashDraftCommand.NotifyCanExecuteChanged();
+        DraftChanged();
     }
 
     /// <summary>

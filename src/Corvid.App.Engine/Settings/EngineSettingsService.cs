@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using Corvid.App.Core;
 using Corvid.App.Core.Settings;
 using Corvid.Host.Configuration;
+using Corvid.Host.State;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Corvid.App.Engine.Settings;
@@ -12,23 +13,27 @@ namespace Corvid.App.Engine.Settings;
 /// would read it and replaces the file only when that passes. The runtime reads <c>corvid.json</c> once, at start, so every
 /// change to the file applies after a restart, and every <c>corvid.json</c> setting is tagged so. Values the environment or
 /// <c>--set</c> give this run are shown as set for this run. The app's own preferences (density, notifications, layout) are
-/// kept for this window only, since <c>ui.db</c> comes with G-7.
+/// kept in <c>ui.db</c> (G-7), beside the event log, so they last across restarts; the window applies the layout ones when
+/// it starts.
 /// </summary>
 public sealed class EngineSettingsService : ISettingsService
 {
     private const string Skeleton = "{\n  \"Corvid\": {\n  }\n}\n";
 
     private readonly CorvidConfigWriter _writer;
-    private readonly Dictionary<string, string> _app = new(StringComparer.Ordinal);
-    private readonly Lock _gate = new();
+    private readonly UiStateStore _ui;
+    private readonly TimeProvider _time;
 
-    public EngineSettingsService(AppEngine engine)
+    public EngineSettingsService(AppEngine engine, TimeProvider? time = null)
     {
         ArgumentNullException.ThrowIfNull(engine);
         _writer = engine.Services.GetRequiredService<CorvidConfigWriter>();
-        foreach (var definition in Definitions.Where(definition => definition.Store == SettingStore.App))
-            _app[definition.Key] = definition.Default;
+        _ui = engine.Services.GetRequiredService<UiStateStore>();
+        _time = time ?? TimeProvider.System;
     }
+
+    /// <summary>Where the app's own preferences are kept: ui.db, shared with the CLI and kept across restarts (G-7).</summary>
+    public string PreferencesNote => "saved in ui.db · kept across restarts";
 
     /// <summary>The catalogue's settings; every <c>corvid.json</c> one applies after a restart, since the runtime never reloads the file.</summary>
     public IReadOnlyList<SettingDefinition> Definitions { get; } =
@@ -107,11 +112,10 @@ public sealed class EngineSettingsService : ISettingsService
                     return Refused([.. result.Failures.Select(failure => new SettingProblem(KeyOf(failure), SafeText.Clean(failure)))]);
             }
 
-            lock (_gate)
-            {
-                foreach (var definition in app)
-                    _app[definition.Key] = values[definition.Key].Trim();
-            }
+            // G-7: written in one transaction, so another process reads all of them or none.
+            if (app.Count > 0)
+                _ui.SetPreferences(app.ToDictionary(definition => definition.Key, definition => values[definition.Key].Trim(), StringComparer.Ordinal),
+                    _time.GetUtcNow());
 
             return Saved(result, app.Count > 0);
         }, cancellationToken);
@@ -141,14 +145,12 @@ public sealed class EngineSettingsService : ISettingsService
     {
         var corvid = root is null ? null : SettingsJson.Corvid(root);
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
-        lock (_gate)
+        var app = _ui.Preferences();
+        foreach (var definition in Definitions)
         {
-            foreach (var definition in Definitions)
-            {
-                values[definition.Key] = definition.Store == SettingStore.App
-                    ? _app.GetValueOrDefault(definition.Key, definition.Default)
-                    : SettingsJson.Read(corvid, definition) ?? definition.Default;
-            }
+            values[definition.Key] = definition.Store == SettingStore.App
+                ? app.GetValueOrDefault(definition.Key, definition.Default)
+                : SettingsJson.Read(corvid, definition) ?? definition.Default;
         }
 
         return values;
@@ -195,7 +197,7 @@ public sealed class EngineSettingsService : ISettingsService
         }
 
         if (app)
-            parts.Add("App preferences are kept for this window only: saving them comes with ui.db (G-7).");
+            parts.Add("App preferences saved in ui.db.");
         if (parts.Count == 0)
             parts.Add("Nothing changed.");
         return new SettingsWrite(true, string.Join(" ", parts), [], restart);

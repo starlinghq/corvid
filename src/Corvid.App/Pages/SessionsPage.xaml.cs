@@ -800,6 +800,52 @@ public sealed partial class SessionsPage : Page, IDockProvider
             _session?.ForkCommand.Execute(block);
     }
 
+    // ---- A4: rename, pin and recap from the header's menu ----
+
+    private void OnSessionMenuOpening(object? sender, object e)
+    {
+        RenameBox.Text = _session?.Title ?? "";
+        RenameBox.SelectAll();
+        PinButton.IsEnabled = _session?.CanPin == true;
+        RecapButton.IsEnabled = _session?.CanRecap == true;
+        RenameButton.IsEnabled = _session is { IsReadOnly: false };
+    }
+
+    private void OnRename(object sender, RoutedEventArgs e)
+    {
+        if (_session is { } session && session.RenameCommand.CanExecute(RenameBox.Text))
+        {
+            session.RenameCommand.Execute(RenameBox.Text);
+            SessionMenu.Hide();
+        }
+    }
+
+    private void OnRenameKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key != VirtualKey.Enter)
+            return;
+        e.Handled = true;
+        OnRename(sender, e);
+    }
+
+    private void OnTogglePin(object sender, RoutedEventArgs e)
+    {
+        if (_session is { } session && session.TogglePinCommand.CanExecute(null))
+        {
+            session.TogglePinCommand.Execute(null);
+            SessionMenu.Hide();
+        }
+    }
+
+    private void OnRecap(object sender, RoutedEventArgs e)
+    {
+        if (_session is { } session && session.RecapCommand.CanExecute(null))
+        {
+            session.RecapCommand.Execute(null);
+            SessionMenu.Hide();
+        }
+    }
+
     private void OnCompact(object sender, RoutedEventArgs e)
     {
         if (_session is { } session && session.CompactCommand.CanExecute(CompactFocus.Text))
