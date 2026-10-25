@@ -871,7 +871,7 @@
                                  ToolTipService.ToolTip="This session's child sessions: goal, tools, budget, models and answer">
             <controls:CorvidButton.Flyout>
               <Flyout x:Name="ChildrenFlyout" Placement="BottomEdgeAlignedLeft">
-                <StackPanel Spacing="8" Width="460">
+                <StackPanel Spacing="8" Width="410">
                   <TextBlock Text="Child sessions" FontWeight="SemiBold" />
                   <ItemsControl ItemsSource="{x:Bind ViewModel.Session.Children, Mode=OneWay}" IsTabStop="False">
                     <ItemsControl.ItemsPanel>

@@ -86,7 +86,7 @@ public static class AgentCommands
             lines.Add("output schema: " + (child.Finished?.OutputValid switch { true => "met", false => "not met", null => "not checked yet" }));
         if (child.Finished is { } finished)
         {
-            lines.Add($"used: {finished.Steps} steps, {finished.Tokens.ToString("N0", CultureInfo.InvariantCulture)} tokens");
+            lines.Add($"used: {finished.Steps} step{(finished.Steps == 1 ? "" : "s")}, {finished.Tokens.ToString("N0", CultureInfo.InvariantCulture)} tokens");
             if (finished.Text is { Length: > 0 } text)
                 lines.Add("answer: " + TerminalText.Visible(text));
         }
@@ -219,7 +219,7 @@ public static class AgentCommands
         ArgumentNullException.ThrowIfNull(finished);
         var what = finished.Status == ChildStatuses.Answered && finished.Text is { Length: > 0 } text ? ": " + Short(text, 200)
             : finished.Detail is { Length: > 0 } detail ? " (" + Short(detail, 200) + ")" : "";
-        return $"{finished.ChildId} {finished.Status.Replace('_', ' ')} after {finished.Steps} steps{what}";
+        return $"{finished.ChildId} {finished.Status.Replace('_', ' ')} after {finished.Steps} step{(finished.Steps == 1 ? "" : "s")}{what}";
     }
 
     /// <summary>A child's start as a chat line.</summary>

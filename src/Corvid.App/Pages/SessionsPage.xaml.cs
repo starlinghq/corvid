@@ -330,7 +330,11 @@ public sealed partial class SessionsPage : Page, IDockProvider
     private void OnViewModelChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(SessionsViewModel.Session))
+        {
+            // A5: opening a child (or the parent) from the header's list leaves that list behind.
+            ChildrenFlyout.Hide();
             Attach(ViewModel.Session);
+        }
     }
 
     private void Attach(SessionViewModel? session)

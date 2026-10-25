@@ -13,6 +13,20 @@ public sealed partial class SessionViewModel
 {
     private RelayCommand? _openParent;
 
+    /// <summary>
+    /// Opens another session by id, also one the rail does not list (a read-only child, its parent): the hub's
+    /// <see cref="SessionHub.Show"/>. Null opens only listed sessions.
+    /// </summary>
+    public Action<string>? ShowSession { get; init; }
+
+    private void OpenRelated(string sessionId)
+    {
+        if (ShowSession is { } show)
+            show(sessionId);
+        else
+            OpenOtherSession(sessionId);
+    }
+
     /// <summary>The session's children, oldest first.</summary>
     public ObservableCollection<ChildRowViewModel> Children { get; } = [];
 
@@ -39,7 +53,7 @@ public sealed partial class SessionViewModel
     public RelayCommand OpenParentCommand => _openParent ??= new RelayCommand(() =>
     {
         if (_state.ParentId is { } parent)
-            OpenOtherSession(parent);
+            OpenRelated(parent);
     }, () => _state.ParentId is not null);
 
     private void RaiseChildren(SessionView previous)
@@ -62,7 +76,7 @@ public sealed partial class SessionViewModel
                     Children[i].Update(children[i]);
                 continue;
             }
-            Children.Insert(i, new ChildRowViewModel(children[i], OpenOtherSession, id => _service.StopChildAsync(id)));
+            Children.Insert(i, new ChildRowViewModel(children[i], OpenRelated, id => _service.StopChildAsync(id)));
         }
         while (Children.Count > children.Count)
             Children.RemoveAt(Children.Count - 1);
