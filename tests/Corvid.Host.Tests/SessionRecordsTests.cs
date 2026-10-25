@@ -217,6 +217,18 @@ public sealed class SessionTitlerTests : IDisposable
     }
 
     [Fact]
+    public void A_list_reads_the_question_a_session_ended_on_until_a_message_answers_it()
+    {
+        var log = Log(new UserMessage("tag the release"), new AssistantMessage("0.2.0, or 0.2.0-rc1?"),
+            new ClarificationAsked("q-1", "0.2.0, or 0.2.0-rc1?", ["0.2.0", "0.2.0-rc1"]));
+
+        Assert.Equal("q-1", SessionCatalogue.Describe(log, "s", Ct)!.OpenQuestion?.QuestionId);
+
+        log.Append("s", log.GetHead("s", Ct), [EventData.Create(new UserMessage("0.2.0"))], Ct);
+        Assert.Null(SessionCatalogue.Describe(log, "s", Ct)!.OpenQuestion);
+    }
+
+    [Fact]
     public async Task A_rename_while_the_generator_writes_wins()
     {
         var log = Log(new UserMessage("hello"), new AssistantMessage("Hi."));

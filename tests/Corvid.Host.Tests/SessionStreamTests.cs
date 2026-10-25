@@ -393,4 +393,45 @@ public sealed class SessionStreamTests
         using var longer = System.Text.Json.JsonDocument.Parse($$"""{"path":"{{new string('a', 300)}}"}""");
         Assert.Equal(160, ToolPresentation.Title("read_file", longer.RootElement).Length);
     }
+
+    [Fact]
+    public async Task AReadAfterAPositionCarriesTheStepAndTaintItSkippedAndRepeatsNoQuestionOrDecision()
+    {
+        await using var host = TestHost.Create(FileWrite(), FileTools);
+        var runtime = await host.StartAsync();
+        await using var _ = runtime;
+        var session = runtime.OpenSession(surface: "test");
+        using var url = System.Text.Json.JsonDocument.Parse("""{"url":"https://example.org/page"}""");
+        using var result = System.Text.Json.JsonDocument.Parse("\"the page\"");
+        var ct = TestContext.Current.CancellationToken;
+        var start = runtime.Log.GetHead(session.Id, ct);
+        runtime.Log.Append(session.Id, start,
+        [
+            Event(new Corvid.Abstractions.Events.UserMessage("read the page")),
+            Event(new Corvid.Abstractions.Events.ToolCallIssued("c1", "web_fetch", url.RootElement.Clone(), 1)),
+            Event(new Corvid.Abstractions.Events.ToolResult("c1", result.RootElement.Clone())),
+        ], ct);
+        var first = runtime.Log.GetHead(session.Id, ct);
+        // The same step's second call (run after the first), then the answer and its question.
+        runtime.Log.Append(session.Id, first,
+        [
+            Event(new Corvid.Abstractions.Events.ToolCallIssued("c2", "web_fetch", url.RootElement.Clone(), 1)),
+            Event(new Corvid.Abstractions.Events.ToolResult("c2", result.RootElement.Clone())),
+            Event(new Corvid.Abstractions.Events.AssistantMessage("0.2.0, or 0.2.0-rc1?")),
+            Event(new Corvid.Abstractions.Events.ClarificationAsked("q-1", "0.2.0, or 0.2.0-rc1?", ["0.2.0", "0.2.0-rc1"])),
+        ], ct);
+        var second = runtime.Log.GetHead(session.Id, ct);
+        runtime.Log.Append(session.Id, second, [Event(new Corvid.Abstractions.Events.UserMessage("0.2.0"))], ct);
+        var tools = new ToolPresentation(runtime);
+
+        var tail = await SessionReplay.ReadAsync(runtime, session.Id, tools, ReplayOptions.Full with { After = first }, through: second, cancellationToken: ct);
+        var next = await SessionReplay.ReadAsync(runtime, session.Id, tools, ReplayOptions.Full with { After = second }, cancellationToken: ct);
+
+        // Step 1 and the taint were reported by the read before: the second call starts no step and taints nothing new.
+        Assert.Equal(["ToolCallStarted", "ToolCallChanged", "AnswerChunk", "QuestionRaised"],
+            tail.Updates.Where(update => update is not DecisionsMade).Select(update => update.GetType().Name));
+        // The next read has the answer, which clears the taint carried from before, and never the question again.
+        Assert.Equal(["PromptSent", "TaintNoted"], next.Updates.Select(update => update.GetType().Name));
+        Assert.False(next.Updates.OfType<TaintNoted>().Single().Tainted);
+    }
 }
