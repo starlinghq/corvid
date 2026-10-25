@@ -305,6 +305,24 @@ Left:
 - A replayed message is read as the user's even when a guest or a job wrote it (the log does not say whose it was), so a
   replay can show the taint cleared where the live turn kept it.
 
+The A4 end-to-end pass (engine by default, a scripted generator, Qwen3.5-0.8B for titles) fixed: sessions another
+process starts reaching the rail and the Board without a restart (the log is read every 3 s), a replayed call's time,
+Audit's session titles, a refusal's reason staying shown after its draft is kept, the Gateway page reading the store on
+each visit (a terminal's `pair approve`, `revoke`, `tools`), and titles and recaps with the local generator (it refuses
+sampling without a seed). Still open from that pass:
+
+- Token use is not in the log, so a replayed turn has no "0.2k tokens" and the context gauge is empty until the next turn.
+- A session's first opening after the app starts can land mid-transcript, with "Jump to bottom".
+- Text typed in the composer before a new session has opened (Ctrl+N while the runtime starts) is lost.
+- `Sandbox:LauncherPath` naming the real `corvid-sandbox` breaks every shell call: Corvid's state protection denies the
+  launcher's own path, and its stage 2 re-executes itself inside bubblewrap ("execvp ... Permission denied"). The app's
+  build output also has no `corvid-sandbox` beside it, so without the setting doctor fails it.
+- `Privacy:LocalServer: Redact` (and Cloud) redaction is far too eager with GLiNER2: JSON keys, "status", "details" and
+  the system prompt's words are replaced, so a redacted model sees mangled prompts and tool results.
+- A gateway adapter needs Vault for its token, so nothing in a temporary home can deliver a message; pairing, tools and
+  revoke were exercised through a seeded pairing code and the CLI.
+- With the 0.8B generator a title can be the answer's first sentence rather than eight words.
+
 
 
 The shell matches `Main.png` outside the conversation: rail, badges, sessions with their dots and times, status bar,
