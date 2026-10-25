@@ -158,6 +158,21 @@ public sealed class SessionDefaultTests : IDisposable
     }
 
     [Fact]
+    public async Task A_reset_of_a_choice_that_is_the_configured_default_is_logged()
+    {
+        var slots = Slots();
+        await slots.SetSessionDefaultAsync(Generator, _local, cancellationToken: Ct);
+
+        var cleared = await slots.ClearSessionDefaultAsync(Generator, Ct);
+
+        Assert.Equal((SwitchStatus.Unchanged, true), (cleared!.Status, cleared.SessionDefaultChanged));
+        Assert.False(slots.HasSessionChoice(Generator));
+        var reset = Switches().Last();
+        Assert.Equal(("de_escalation", (bool?)true), (reset.Reason, reset.Reset));
+        Assert.Equal(_local.Profile.Id, ModelProfile.FromSnapshot(reset.NewProfile).Id);
+    }
+
+    [Fact]
     public async Task A_reset_that_switches_back_says_it_was_a_reset()
     {
         var slots = Slots();

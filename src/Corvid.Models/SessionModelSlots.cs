@@ -308,7 +308,8 @@ public sealed class SessionModelSlots
             // Nothing configures the slot (a decider chosen on the degraded tier): it goes back to none.
             var target = TryConfiguration(slot, out var configured) ? configured.Default : null;
             var current = TryCurrent(slot, out var bound) ? bound : null;
-            if (IsPinned(slot) || !ReferenceEquals(current, chosen))
+            // In place when nothing moves: pinned, off the choice, or the choice is the configured default itself.
+            if (IsPinned(slot) || !ReferenceEquals(current, chosen) || ReferenceEquals(current, target))
             {
                 var profile = current?.Profile ?? ModelProfile.Unbound;
                 var sequence = AppendInPlace(slot, profile, SwitchReason.DeEscalation.ToWireName(), pinned: null, reset: true, cancellationToken);

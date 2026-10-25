@@ -216,6 +216,25 @@ public sealed class SessionModelTests
     }
 
     [Fact]
+    public async Task A_reset_of_a_choice_of_the_model_in_use_lasts_when_the_session_is_opened_again()
+    {
+        await using var host = TestHost.Create(new FakeModels());
+        string id;
+        await using (var first = await host.StartAsync())
+        {
+            var session = first.OpenSession();
+            id = session.Id;
+            await session.SetModelAsync(ModelSlots.Generator, "fake-gen", SwitchScope.Session, Ct);
+            // Nothing moves (the choice is the configured model), and the reset is logged all the same.
+            Assert.Equal(SwitchStatus.Unchanged, (await session.ClearModelChoiceAsync(ModelSlots.Generator, Ct))!.Status);
+        }
+
+        await using var second = await host.StartAsync();
+        Assert.False(second.OpenSession(id).Slots.HasSessionChoice(ModelSlots.Generator));
+        Assert.Empty(second.ModelChoices(id));
+    }
+
+    [Fact]
     public async Task An_unpin_lasts_when_the_session_is_opened_again_and_the_choice_stays()
     {
         await using var host = TestHost.Create(new FakeModels());
