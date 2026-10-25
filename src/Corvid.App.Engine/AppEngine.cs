@@ -78,6 +78,8 @@ public sealed class AppEngine : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(host);
+        // How this process names itself in the lock notes other processes read (a session's driver, the scheduler, the gateway).
+        ProcessLock.ProcessName = "the Corvid app";
         var lifetime = new CancellationTokenSource();
         try
         {

@@ -30,19 +30,19 @@ public sealed partial class EngineSessionService
         $"driven by {SessionHeldException.HolderText(holder)}; this window follows it and can send once that process exits";
 
     /// <summary>
-    /// Whether the other process's latest turn is still going: since its latest prompt, the log holds calls but not yet the
-    /// answer that ends a turn.
+    /// Whether these updates end the other process's turn: since the latest prompt or call they read, the log holds the
+    /// answer that ends a turn. A read with none (only events a replay does not show, such as decisions) ends nothing.
     /// </summary>
-    internal static bool Unanswered(IReadOnlyList<SessionStreamUpdate> updates)
+    internal static bool Answered(IReadOnlyList<SessionStreamUpdate> updates)
     {
         for (var index = updates.Count - 1; index >= 0; index--)
         {
             switch (updates[index])
             {
                 case AnswerChunk:
-                    return false;
-                case PromptSent or ToolCallStarted or ToolCallChanged:
                     return true;
+                case PromptSent or ToolCallStarted or ToolCallChanged:
+                    return false;
             }
         }
         return false;
@@ -107,7 +107,7 @@ public sealed partial class EngineSessionService
         {
             var history = await SessionReplay.ReadAsync(runtime, id, tools, TailOptions(tail.Head)).ConfigureAwait(false);
             tail.Head = history.Head;
-            var unanswered = Unanswered(history.Updates);
+            var answered = Answered(history.Updates);
             Publish(channel, translator =>
             {
                 // The window started a turn since the read: the session is becoming this process's, and its reporter
@@ -117,7 +117,7 @@ public sealed partial class EngineSessionService
                 var output = new List<SessionUpdate>();
                 foreach (var update in history.Updates)
                     output.AddRange(translator.Translate(update));
-                if (!unanswered)
+                if (answered)
                     output.AddRange(translator.EndReplay());
                 return output;
             });

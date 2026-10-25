@@ -737,7 +737,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 updates.Add(new DriverChanged(true) { Holder = summary.Holder, At = at });
             foreach (var update in history.Updates)
                 updates.AddRange(channel.Translator.Translate(update));
-            updates.AddRange(channel.Translator.EndReplay(running: channel.Running || (elsewhere && Unanswered(history.Updates))));
+            updates.AddRange(channel.Translator.EndReplay(running: channel.Running || (elsewhere && !history.Updates.IsEmpty && !Answered(history.Updates))));
             updates.Add(changes);
             // The rail's title (the first message, until K-9 titles and G-6 renames are events) heads the session too.
             if (summary.Turns > 0 && summary.Title != id)

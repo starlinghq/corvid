@@ -89,6 +89,65 @@ public sealed class EngineDriverTests
     }
 
     [Fact]
+    public async Task ATurnTheOtherProcessRunsEndsWithItsAnswerNotAtAReadThatShowsNothing()
+    {
+        await using var fixture = await EngineFixture.StartAsync();
+        await using var other = await OtherProcessAsync(fixture.Host);
+        other.OpenSession("cli-steps");
+        using var sessions = fixture.Sessions();
+        var waiter = new SessionWaiter();
+        void Append(params Abstractions.Events.SessionEvent[] events) =>
+            other.Log.Append("cli-steps", other.Log.GetHead("cli-steps", Ct), [.. events.Select(Abstractions.Events.EventData.Create)], Ct);
+        async Task LookAsync()
+        {
+            fixture.Time.Advance(EngineSessionService.TailInterval);
+            await sessions.IdleAsync();
+        }
+        Append(new Abstractions.Events.UserMessage("first"), new Abstractions.Events.AssistantMessage("One."));
+        using var subscription = await sessions.OpenAsync("cli-steps", waiter.Add, Ct);
+
+        // The other process's next turn, a step at a time: its prompt, an event no replay shows, then its answer.
+        Append(new Abstractions.Events.UserMessage("second"));
+        await LookAsync();
+        Append(new Abstractions.Events.GoalSet("tidy up"));
+        await LookAsync();
+        Assert.DoesNotContain(waiter.Updates, update => update is TurnEnded { Turn: 2 });
+        Append(new Abstractions.Events.AssistantMessage("Two."));
+        await LookAsync();
+
+        var ended = Assert.Single(waiter.Updates.OfType<TurnEnded>(), update => update.Turn == 2);
+        Assert.Equal(TurnOutcome.Answered, ended.Outcome);
+    }
+
+    [Fact]
+    public async Task TheSessionShownStaysInTheRailWhenAnotherProcessTakesIt()
+    {
+        await using var fixture = await EngineFixture.StartAsync(new FakeModels(new FakeGenerator(Reply.Say("One."))));
+        await using (var earlier = await OtherProcessAsync(fixture.Host))
+            await earlier.OpenSession("cli-shown").SendAsync("first", Ct);
+        var dispatcher = new Core.Mvvm.InlineDispatcher();
+        var bar = new Core.Shell.StatusBarViewModel();
+        var shell = new Core.Shell.ShellViewModel(bar);
+        using var sessions = fixture.Sessions(dispatcher);
+        using var hub = new SessionHub(sessions, dispatcher, fixture.Time, shell, bar);
+        await hub.StartAsync("cli-shown", null, Ct);
+        Assert.Equal("cli-shown", shell.CurrentSession?.Id);
+        var view = hub.Get("cli-shown");
+        // The channel the view shares, loaded (and followed) before the other process takes the session.
+        using var loaded = await sessions.OpenAsync("cli-shown", _ => { }, Ct);
+
+        await using var other = await OtherProcessAsync(fixture.Host);
+        other.OpenSession("cli-shown");
+        fixture.Time.Advance(EngineSessionService.TailInterval);
+        await sessions.IdleAsync();
+
+        // Read-only, and still the session shown: the rail keeps it rather than leaving the page with none.
+        Assert.True(view.IsReadOnly);
+        Assert.Equal("cli-shown", shell.CurrentSession?.Id);
+        Assert.Contains(shell.SessionGroups.SelectMany(group => group.Sessions), item => item.Id == "cli-shown");
+    }
+
+    [Fact]
     public async Task AMessageToASessionAnotherProcessJustTookIsRefusedAndTheViewTurnsReadOnly()
     {
         await using var fixture = await EngineFixture.StartAsync(new FakeModels(new FakeGenerator(Reply.Say("One."))));
