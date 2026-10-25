@@ -486,7 +486,14 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
     private void Fork(long? position) => Run(async () =>
     {
         var forked = await _service.ForkAsync(SessionId, position).ConfigureAwait(true);
-        _shell?.OpenSession(forked);
+        // The rail lists the fork once the service's summary arrives, which can come after this returns (a fork taken while
+        // a turn runs, G-15): until then it opens under an entry of its own, as a peeked session does, and the summary
+        // replaces it keeping the selection.
+        if (_shell is { } shell && !shell.OpenSession(forked))
+        {
+            shell.SelectSession(shell.CreateSession(forked, Title, SessionState.Idle, "now"));
+            shell.Navigate(Area.Sessions);
+        }
     });
 
     /// <summary>Runs a request; a refusal shows in <see cref="Error"/> rather than escaping into the UI loop.</summary>

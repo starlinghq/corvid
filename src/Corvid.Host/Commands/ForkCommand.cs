@@ -93,11 +93,16 @@ internal static class ForkCommand
                     break;
             }
         }
-        // Nothing of the fork runs here: let go of it, so `corvid chat --session` or the app can drive it.
-        var released = await runtime.ReleaseDriverAsync(id).ConfigureAwait(false);
+        // Nothing of the fork runs here: let go of it, so `corvid chat --session` or the app can drive it. A fork with model
+        // choices stays open here instead: a session's choices live in the process that made them (the log records them,
+        // but a session opened again starts on the configured models).
+        var chose = fork.Models.Any(model => model.Status == SwitchStatus.Switched);
+        var released = !chose && await runtime.ReleaseDriverAsync(id).ConfigureAwait(false);
         lines.Add(released
             ? $"Continue it with corvid chat --session {id}, or open it in the app."
-            : $"It is open in this process; continue it with corvid chat --session {id} once this one leaves.");
+            : chose
+                ? $"It stays open in this process with its models, which live where they were chosen; opened by another process after this one leaves (corvid chat --session {id}), it starts on the configured models."
+                : $"It is open in this process; continue it with corvid chat --session {id} once this one leaves.");
         return refused
             ? new CommandOutput { Lines = [.. lines], Tone = OutputTone.Warning }
             : new CommandOutput { Lines = [.. lines], Tone = OutputTone.Success };

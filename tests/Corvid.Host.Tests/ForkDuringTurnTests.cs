@@ -257,6 +257,33 @@ public sealed class ForkDuringTurnTests
     }
 
     [Fact]
+    public async Task Slash_fork_forks_and_lets_go_of_the_fork_unless_it_carries_model_choices()
+    {
+        await using var host = TestHost.Create(new FakeModels(new FakeGenerator(Reply.Say("noted"))));
+        await using var runtime = await host.StartAsync();
+        var commands = Corvid.Host.Commands.CoreCommands.Register(new Corvid.Host.Commands.SlashCommandRegistry());
+        var session = runtime.OpenSession(surface: "test");
+        await session.SendAsync("hello", Ct);
+        var context = new Corvid.Host.Commands.SlashCommandContext(runtime, session, commands);
+        Assert.True(commands.TryGet("fork", out var fork) && fork.DuringTurn);
+
+        var plain = await commands.ExecuteAsync("/fork", context, Ct);
+        var picked = await commands.ExecuteAsync("/fork generator=fake-gen-large", context, Ct);
+        var bad = await commands.ExecuteAsync("/fork sideways", context, Ct);
+
+        Assert.Equal(Corvid.Host.Commands.OutputTone.Success, plain.Tone);
+        var plainId = System.Text.RegularExpressions.Regex.Match(plain.Lines[0], @"Forked into (\S+) through").Groups[1].Value;
+        // Let go of, so another process can drive it.
+        Assert.False(runtime.TryGetSession(plainId, out _));
+        Assert.Equal(runtime.Log.GetHead(session.Id, Ct), runtime.Log.GetHead(plainId, Ct));
+        Assert.Contains(picked.Lines, line => line == "generator: fake-gen-large@cpu for the fork's session.");
+        var pickedId = System.Text.RegularExpressions.Regex.Match(picked.Lines[0], @"Forked into (\S+) through").Groups[1].Value;
+        Assert.True(runtime.TryGetSession(pickedId, out var kept));
+        Assert.Equal("fake-gen-large@cpu", kept.Slots.Current(ModelSlots.Generator).Profile.Id);
+        Assert.Equal(Corvid.Host.Commands.OutputTone.Error, bad.Tone);
+    }
+
+    [Fact]
     public async Task A_child_session_is_not_forked()
     {
         await using var host = TestHost.Create(new FakeModels(new FakeGenerator(Reply.Say("done"))));
