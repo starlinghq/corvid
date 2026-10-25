@@ -94,9 +94,13 @@ public sealed class EngineGatewayService : IGatewayService, IDisposable
         var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
         var gateway = await _engine.GatewayAsync().ConfigureAwait(false);
         // Another process ran it and has exited: this app takes it over (the one-lock rule decides, as at start).
-        if (gateway is { Status.Hosting: GatewayHosting.Elsewhere }
-            && ProcessLock.Probe(GatewayStatus.LockPath(runtime.Options), withoutNote: true).State == LockState.Free)
-            await gateway.StartAsync(cancellationToken).ConfigureAwait(false);
+        // Off the caller's thread (the UI's): the probe touches the lock file, and starting composes the gateway.
+        if (gateway is { Status.Hosting: GatewayHosting.Elsewhere })
+            await Task.Run(async () =>
+            {
+                if (ProcessLock.Probe(GatewayStatus.LockPath(runtime.Options), withoutNote: true).State == LockState.Free)
+                    await gateway.StartAsync(cancellationToken).ConfigureAwait(false);
+            }, cancellationToken).ConfigureAwait(false);
         return await Task.Run(() =>
         {
             var options = runtime.Options;
@@ -106,7 +110,7 @@ public sealed class EngineGatewayService : IGatewayService, IDisposable
             var requests = store?.Pending().Select(Request).ToList() ?? [];
             var users = Users(options, store);
             return new GatewaySnapshot(Host(status), Adapters(options, status), requests, users, Deliveries(runtime.Log, status),
-                Overrides(options), GuestTools(runtime.Tools.List()));
+                Overrides(options), GuestTools(options, runtime.Tools.List()));
         }, cancellationToken).ConfigureAwait(false);
     }
 
@@ -383,7 +387,11 @@ public sealed class EngineGatewayService : IGatewayService, IDisposable
     ];
 
     /// <summary>The tools a guest could be given: the registry's, less those that write memory (which a guest never gets).</summary>
-    private static List<string> GuestTools(IEnumerable<ToolDescriptor> registered) =>
-        [.. registered.Where(tool => !tool.Risk.SideEffects.HasFlag(SideEffects.Memory)).Select(tool => tool.Name).Distinct(StringComparer.Ordinal)
-            .Order(StringComparer.Ordinal)];
+    /// <remarks>Checked as a guest's allowlist is (<see cref="CorvidGateway.GuestAllowlistProblems"/>): no cron_create, whose job runs with every tool.</remarks>
+    private static List<string> GuestTools(CorvidOptions options, IEnumerable<ToolDescriptor> registered)
+    {
+        var tools = registered as IReadOnlyCollection<ToolDescriptor> ?? [.. registered];
+        return [.. tools.Select(tool => tool.Name).Distinct(StringComparer.Ordinal)
+            .Where(name => CorvidGateway.GuestAllowlistProblems([name], options, tools).Count == 0).Order(StringComparer.Ordinal)];
+    }
 }

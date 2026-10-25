@@ -62,6 +62,9 @@ public sealed class GatewayServiceTests
         Assert.Contains("no process runs the gateway", delivery.Why, StringComparison.Ordinal);
         Assert.Equal(new ChatOverride("telegram", "42", "terse", "generator: fake-gen"), Assert.Single(snapshot.Overrides));
         Assert.Contains("list_notes", snapshot.GuestTools);
+        // Offered only what a guest may be given: no memory writes, no cron_create.
+        Assert.DoesNotContain("cron_create", snapshot.GuestTools);
+        Assert.DoesNotContain(snapshot.GuestTools, tool => tool.StartsWith("memory_add", StringComparison.Ordinal));
     }
 
     [Fact]

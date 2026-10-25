@@ -49,7 +49,7 @@ internal static class ChatCommand
             {
                 // G-12: one driver per session. Another terminal or the app has it; this one may not post into it.
                 console.MarkupLine($"[red]{Markup.Escape(exception.Message)}[/]");
-                console.MarkupLine("[grey]The app shows it read-only and follows it as it grows; resume it here once that process exits.[/]");
+                console.MarkupLine("[grey]Resume it here once that process exits; meanwhile the windowed app can follow it read-only.[/]");
                 return ExitCodes.Failure;
             }
             var renderer = new ChatRenderer(console, verbose: arguments.Flag("--verbose"));
