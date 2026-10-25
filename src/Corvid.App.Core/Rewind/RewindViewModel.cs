@@ -354,7 +354,9 @@ public sealed class RewindViewModel : AreaViewModel
         if (plan is not null)
         {
             Options[0].Detail = $"the workspace and the transcript as they were at {plan.CheckpointId}";
-            Options[1].Detail = plan.TurnsLeaving > 0 ? $"keep the files, drop {ConversationRangeOf(plan)} from the context" : "keep the files; no turns leave";
+            Options[1].Detail = plan.TurnsLeaving > 0 ? $"keep the files, drop {ConversationRangeOf(plan)} from the context"
+                : plan.PartTurn is { } part ? string.Create(CultureInfo.InvariantCulture, $"keep the files, drop turn {part}'s call and what came after it from the context")
+                : "keep the files; no turns leave";
         }
 
         OnPropertyChanged(nameof(HasPlan));
