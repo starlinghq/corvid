@@ -50,6 +50,12 @@ public sealed class TurnRunner
     /// <summary>The tool a <see cref="ShellLine"/> runs through (A4): the built-in <c>shell</c>.</summary>
     public const string ShellTool = "shell";
 
+    /// <summary>
+    /// The call id of a <see cref="ShellLine"/>'s call (<c>user-shell</c>, then <c>user-shell-2</c>…): how surfaces tell the
+    /// person's own shell call from a model's.
+    /// </summary>
+    public const string UserShellCall = "user-shell";
+
     private const string NudgeBudget = "The step budget for this turn is used up. Answer the user now with what you have. Do not call tools.";
 
     private static readonly JsonWriterOptions WriterOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
@@ -414,9 +420,9 @@ public sealed class TurnRunner
                 return Result(TurnStatus.Failed, "The shell tool is off (Corvid:Tools:Builtin), so the line was not run.");
             var arguments = JsonValues.Object(new Dictionary<string, object?> { ["command"] = shell.Command });
             var issued = runner.Snapshot().IssuedCallIds;
-            var callId = "user-shell";
+            var callId = UserShellCall;
             for (var n = 2; issued.Contains(callId); n++)
-                callId = $"user-shell-{n}";
+                callId = $"{UserShellCall}-{n}";
             _steps = 1;
             _toolCalls = 1;
             // Always through the pipeline: the shell runs only with an approval for exactly this command, and the pipeline

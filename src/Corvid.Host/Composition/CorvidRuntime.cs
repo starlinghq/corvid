@@ -445,7 +445,7 @@ public sealed class CorvidRuntime : IAsyncDisposable
         var settings = _settings.TryGetValue(sessionId, out var chosen) ? chosen : SessionSettings.Default;
         var runner = new TurnRunner(sessionId, Services(slots, settings.Interactive, settings.Tools ? Tools : new ToolRegistry(), settings));
         var actor = new SessionActor(runner, slots, new Sink(this), new SessionActorOptions { EmbedderSwap = _swap });
-        _sessions[sessionId] = new CorvidSession(this, sessionId, slots, runner, actor);
+        _sessions[sessionId] = new CorvidSession(this, sessionId, slots, runner, actor) { Interactive = settings.Interactive };
         return actor;
     }
 
@@ -603,8 +603,10 @@ public sealed class CorvidRuntime : IAsyncDisposable
         if (Memory is { } memory)
             QueueCatchUp(memory, delivery.Request.SessionId);
         // K-9: after an answered exchange, a session without a title gets one from the local generator, in the background.
+        // Not for sessions nobody looks at as a conversation here (an HTTP client's, non-interactive): each would cost a call.
         if (delivery.Result is { Status: TurnStatus.Answered, Text: not null } && Titles is { Unavailable: null, Options.Generate: true }
-            && !_titled.ContainsKey(delivery.Request.SessionId))
+            && !_titled.ContainsKey(delivery.Request.SessionId)
+            && TryGetSession(delivery.Request.SessionId, out var answered) && answered.Interactive)
             QueueTitle(delivery.Request.SessionId);
         if (delivery.Request.MessageId is { } id && _waiting.TryRemove(id, out var waiter))
             waiter.TrySetResult(delivery);
@@ -707,6 +709,9 @@ public sealed class CorvidSession
     public string Id { get; }
 
     public string Surface { get; internal set; } = "cli";
+
+    /// <summary>Someone can answer its approvals (<see cref="SessionSettings.Interactive"/>); an HTTP client's session cannot.</summary>
+    public bool Interactive { get; internal init; } = true;
 
     public SessionModelSlots Slots { get; }
 

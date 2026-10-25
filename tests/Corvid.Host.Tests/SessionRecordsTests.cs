@@ -339,6 +339,22 @@ public sealed class SessionRecordsHostTests
     }
 
     [Fact]
+    public async Task A_session_nobody_answers_here_is_not_titled()
+    {
+        // An HTTP client's session (corvid serve): every exchange would otherwise cost a generator call nobody sees.
+        var generator = new FakeGenerator(Reply.Say("Hi."), Reply.Say("A title"));
+        await using var host = TestHost.Create(new FakeModels(generator), new Dictionary<string, string?> { ["Corvid:Sessions:Titles"] = "true" });
+        await using var runtime = await host.StartAsync();
+        var session = runtime.OpenSession(surface: "http", settings: new SessionSettings(Interactive: false));
+
+        await session.SendAsync("hello", TestContext.Current.CancellationToken);
+        await runtime.MaintenanceIdleAsync();
+
+        Assert.Single(generator.Calls);
+        Assert.Null(session.Snapshot().Title);
+    }
+
+    [Fact]
     public async Task Rename_sessions_and_pin_are_shared_through_the_log_and_ui_db()
     {
         await using var host = TestHost.Create();

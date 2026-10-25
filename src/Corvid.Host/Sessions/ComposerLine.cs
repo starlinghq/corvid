@@ -69,7 +69,7 @@ public abstract record ComposerLine
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         var result = snapshot.Transcript.Select(entry => entry.Content).OfType<Corvid.Abstractions.Events.ToolResult>()
-            .LastOrDefault(item => item.CallId.StartsWith("user-shell", StringComparison.Ordinal));
+            .LastOrDefault(item => item.CallId.StartsWith(Corvid.Kernel.Turns.TurnRunner.UserShellCall, StringComparison.Ordinal));
         if (result is null)
             return (null, null);
         var value = result.Result;

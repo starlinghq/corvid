@@ -235,7 +235,7 @@ public sealed class SessionTitler
         {
             // A ! line's message (the user's own shell call follows it) names a command, not what the session is about.
             if (transcript[i].Content is UserMessage { LocalOnly: not true } user && message is null
-                && !(i + 1 < transcript.Length && transcript[i + 1].Content is ToolCallIssued { CallId: var call } && call.StartsWith("user-shell", StringComparison.Ordinal)))
+                && !(i + 1 < transcript.Length && transcript[i + 1].Content is ToolCallIssued { CallId: var call } && call.StartsWith(Corvid.Kernel.Turns.TurnRunner.UserShellCall, StringComparison.Ordinal)))
                 message = user.Text;
             else if (transcript[i].Content is AssistantMessage assistant && message is not null)
             {
