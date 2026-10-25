@@ -162,6 +162,25 @@ public sealed class HostingTests
     }
 
     [Fact]
+    public async Task AGatewayLockNobodyCanOpenIsSaidSoNotRunElsewhere()
+    {
+        // L5, L8: an unopenable lock (here a directory where the lock file goes) is not another process; the host goes.
+        var adapter = new FakeAdapter();
+        await using var fixture = await OpsFixture.StartAsync(Settings(), Adapter(adapter));
+        var options = Options(fixture.Host);
+        Directory.CreateDirectory(GatewayStatus.LockPath(options));
+        await using var gateway = new HostedGateway(fixture.Runtime, fixture.Host.Services.GetRequiredService<SlashCommandRegistry>(), options,
+            [new GatewayAdapterRegistration("fake", () => adapter)]);
+
+        var status = await gateway.StartAsync(Token);
+
+        Assert.Equal(GatewayHosting.Off, status.Hosting);
+        Assert.StartsWith("The gateway cannot start:", status.Detail, StringComparison.Ordinal);
+        Assert.Null(gateway.Gateway);
+        Assert.Equal(0, adapter.Connects);
+    }
+
+    [Fact]
     public async Task WhileAnotherProcessHoldsTheSchedulerTheEnginesTimerTakesItOverWithoutAPageLoad()
     {
         // This runtime (the app's) lost the lock to another one (a terminal's) at start.

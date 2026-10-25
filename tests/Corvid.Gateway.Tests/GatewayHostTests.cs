@@ -408,7 +408,70 @@ public sealed class GatewayHostTests
         await fixture.StartAsync(GatewayFixture.Options(Fake), new FakeAdapter());
 
         var second = new GatewayHost([], fixture.Agent, fixture.Pairing, new DeliveryLedger(fixture.Log));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => second.StartAsync(TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<GatewayLockHeldException>(() => second.StartAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task AStartThatMeetsAStatusProbeTriesTheLockAgain()
+    {
+        // L4: `corvid gateway status` (or an app's Gateway page) holds the lock for an instant; a start that meets it waits
+        // it out rather than reporting another gateway.
+        await using var fixture = new GatewayFixture();
+        var probe = new FileStream(fixture.Pairing.Path + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        var tries = new List<int>();
+        var host = new GatewayHost([], fixture.Agent, fixture.Pairing, new DeliveryLedger(fixture.Log))
+        {
+            LockRetryDelay = (attempt, _) =>
+            {
+                tries.Add(attempt);
+                // The probe lets go before the second try.
+                probe.Dispose();
+                return Task.CompletedTask;
+            },
+        };
+        try
+        {
+            await host.StartAsync(TestContext.Current.CancellationToken);
+            Assert.Equal([1], tries);
+        }
+        finally
+        {
+            probe.Dispose();
+            await host.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task ALockHeldThroughEveryTryIsAnotherGateway()
+    {
+        await using var fixture = new GatewayFixture();
+        using var other = new FileStream(fixture.Pairing.Path + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        var tries = 0;
+        var host = new GatewayHost([], fixture.Agent, fixture.Pairing, new DeliveryLedger(fixture.Log))
+        {
+            LockRetryDelay = (_, _) =>
+            {
+                tries++;
+                return Task.CompletedTask;
+            },
+        };
+
+        await Assert.ThrowsAsync<GatewayLockHeldException>(() => host.StartAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(GatewayHost.LockAttempts - 1, tries);
+        await host.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task ALockFileThatCannotBeOpenedIsNotAnotherGateway()
+    {
+        // L5: a lock the file system refuses (here a directory where the file goes) is an error, not a holder.
+        await using var fixture = new GatewayFixture();
+        Directory.CreateDirectory(fixture.Pairing.Path + ".lock");
+        var host = new GatewayHost([], fixture.Agent, fixture.Pairing, new DeliveryLedger(fixture.Log));
+
+        var refused = await Assert.ThrowsAnyAsync<Exception>(() => host.StartAsync(TestContext.Current.CancellationToken));
+        Assert.True(refused is IOException or UnauthorizedAccessException, refused.GetType().Name);
+        await host.DisposeAsync();
     }
 
     private sealed class BrokenAdapter : IGatewayAdapter

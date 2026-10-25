@@ -332,7 +332,9 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     /// <exception cref="SessionHeldException">Another process drives the session (G-12); nothing was written.</exception>
     public SessionTitled Rename(string sessionId, string title)
     {
-        var titled = Titles.Rename(sessionId, title, () => RefuseIfHeld(sessionId));
+        SessionTitled titled;
+        using (var guard = GuardWrite(sessionId))
+            titled = Titles.Rename(sessionId, title, guard.Check);
         _titled[sessionId] = 0;
         TitleChanged?.Invoke(sessionId, titled);
         return titled;
@@ -349,7 +351,11 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     /// </exception>
     public async Task<SessionRecapped?> RecapAsync(string sessionId, string source = RecapSources.Requested, CancellationToken cancellationToken = default)
     {
-        var recap = await Titles.RecapAsync(sessionId, source, () => RefuseIfHeld(sessionId), cancellationToken).ConfigureAwait(false);
+        SessionRecapped? recap;
+        // The check before generating only looks (the generator takes seconds, and the lock would keep a terminal out);
+        // the write takes the lock (L7).
+        using (var guard = GuardWrite(sessionId, probes: 1))
+            recap = await Titles.RecapAsync(sessionId, source, guard.Check, cancellationToken).ConfigureAwait(false);
         if (recap is not null)
             Recapped?.Invoke(sessionId, recap);
         return recap;

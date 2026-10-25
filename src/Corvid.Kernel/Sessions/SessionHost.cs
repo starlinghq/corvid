@@ -70,6 +70,17 @@ public sealed class SessionHost : IAsyncDisposable
 
     public bool TryGet(string sessionId, out SessionActor actor) => _actors.TryGetValue(sessionId, out actor!);
 
+    /// <summary>
+    /// Forgets a session's actor (a surface let go of the session): the caller disposes it. A later envelope or
+    /// <see cref="GetOrCreate"/> builds a new one from the log.
+    /// </summary>
+    public bool TryRemove(string sessionId, out SessionActor? actor)
+    {
+        var removed = _actors.TryRemove(sessionId, out var found);
+        actor = found;
+        return removed;
+    }
+
     /// <summary>Cancels the session's running turn (the CLI's Ctrl-C, a gateway's /stop).</summary>
     public bool CancelTurn(string sessionId)
     {

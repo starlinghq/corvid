@@ -202,6 +202,142 @@ public sealed class DriverLockTests
     }
 
     [Fact]
+    public void ARefusalThatIsNoHolderIsNotHeld()
+    {
+        // L5: a lock file that cannot be opened for another reason (here a name too long for the file system) is an
+        // error the caller reports, never "another process holds it".
+        var path = Path.Combine(Path.GetDirectoryName(TempLock())!, new string('a', 300) + ".lock");
+        try
+        {
+            Assert.ThrowsAny<IOException>(() => ProcessLock.TryAcquire(path));
+        }
+        finally
+        {
+            Directory.Delete(Path.GetDirectoryName(path)!, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ADriverThatLeftNoNoteStillHoldsTheSession()
+    {
+        // L6: a holder that could not write its note (an older corvid, a note the disk refused) still holds the lock.
+        await using var host = TestHost.Create();
+        await using var runtime = await host.StartAsync();
+        var path = CorvidRuntime.DriverLockPath(runtime.Options, "cli-quiet");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        using (new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.False(File.Exists(ProcessLock.NotePath(path)));
+            Assert.Equal(LockState.HeldElsewhere, runtime.Driver("cli-quiet").State);
+            Assert.Throws<SessionHeldException>(() => runtime.OpenSession("cli-quiet"));
+        }
+        Assert.Equal(LockState.Free, runtime.Driver("cli-quiet").State);
+    }
+
+    [Fact]
+    public async Task ADataDirectoryWithNoRoomForTheLockRefusesToOpenTheSession()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        await using var host = TestHost.Create();
+        await using var runtime = await host.StartAsync();
+        var drivers = Path.GetDirectoryName(CorvidRuntime.DriverLockPath(runtime.Options, "cli-ro"))!;
+        Directory.CreateDirectory(drivers);
+        File.SetUnixFileMode(drivers, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try
+        {
+            // Root writes anyway: nothing to test there.
+            try
+            {
+                File.WriteAllText(Path.Combine(drivers, "probe"), "");
+                return;
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+
+            // L5: not posted to unguarded, and not said to be someone else's.
+            var refused = Assert.Throws<SessionLockUnavailableException>(() => runtime.OpenSession("cli-ro"));
+            Assert.Contains("read-only", refused.Message, StringComparison.Ordinal);
+            Assert.False(runtime.TryGetSession("cli-ro", out _));
+        }
+        finally
+        {
+            File.SetUnixFileMode(drivers, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    [Fact]
+    public async Task ARenameOrARecapsWriteHoldsTheDriverLockWhileItWrites()
+    {
+        // L7: the write itself holds the lock when nobody drives the session, so nobody opens it between check and append.
+        await using var host = TestHost.Create();
+        await using var window = await host.StartAsync();
+        var factory = host.Services.GetRequiredService<CorvidRuntimeFactory>();
+        await using var terminal = await factory.StartAsync(Token);
+
+        using (var recap = window.GuardWrite("cli-w", probes: 1))
+        {
+            recap.Check();
+            // The check before generating only looks.
+            Assert.Equal(LockState.Free, terminal.Driver("cli-w").State);
+            recap.Check();
+            Assert.Equal(LockState.HeldElsewhere, terminal.Driver("cli-w").State);
+            Assert.Throws<SessionHeldException>(() => terminal.OpenSession("cli-w"));
+        }
+        Assert.Equal(LockState.Free, terminal.Driver("cli-w").State);
+        Assert.Equal("Renamed", window.Rename("cli-w", "Renamed").Title);
+        Assert.Equal(LockState.Free, terminal.Driver("cli-w").State);
+        terminal.OpenSession("cli-w");
+        Assert.Throws<SessionHeldException>(() => window.Rename("cli-w", "Again"));
+    }
+
+    [Fact]
+    public async Task ADriverLetsGoOfAnIdleSessionAndAnotherProcessDrivesIt()
+    {
+        // M2: the app lets go of a session it opened for a restore, or stopped viewing, so `corvid chat --session` can drive it.
+        using var release = new ManualResetEventSlim();
+        using var entered = new ManualResetEventSlim();
+        var generator = new FakeGenerator(_ =>
+        {
+            entered.Set();
+            release.Wait(TimeSpan.FromSeconds(30));
+            return new ChatResponse(new ChatMessage(ChatRole.Assistant, "Done."));
+        });
+        await using var host = TestHost.Create(new FakeModels(generator));
+        await using var app = await host.StartAsync();
+        var factory = host.Services.GetRequiredService<CorvidRuntimeFactory>();
+        await using var terminal = await factory.StartAsync(Token);
+        var session = app.OpenSession("cli-busy");
+        Assert.False(await terminal.ReleaseDriverAsync("cli-busy"));
+
+        var turn = await session.PostAsync("hi", Abstractions.Sessions.EnvelopeOrigin.User, Token);
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(30), Token));
+        // A turn running: kept.
+        Assert.False(await app.ReleaseDriverAsync("cli-busy"));
+        Assert.Throws<SessionHeldException>(() => terminal.OpenSession("cli-busy"));
+        release.Set();
+        await turn.WaitAsync(Token);
+        await session.Actor.IdleAsync(Token);
+
+        Assert.True(await app.ReleaseDriverAsync("cli-busy"));
+
+        Assert.False(app.TryGetSession("cli-busy", out _));
+        Assert.Equal(LockState.Free, app.Driver("cli-busy").State);
+        var theirs = terminal.OpenSession("cli-busy");
+        Assert.Equal(LockState.HeldHere, terminal.Driver(theirs.Id).State);
+        Assert.Throws<SessionHeldException>(() => app.OpenSession("cli-busy"));
+    }
+
+    [Fact]
+    public void IdsThatDifferOnlyInCaseNeverShareALockFile()
+    {
+        var upper = CorvidRuntime.DriverFileName("Cli-A");
+        Assert.NotEqual(upper.ToLowerInvariant(), CorvidRuntime.DriverFileName("cli-a").ToLowerInvariant());
+        Assert.Equal(upper.ToLowerInvariant(), upper);
+    }
+
+    [Fact]
     public async Task NobodyHoldsTheSchedulerWhenItIsOff()
     {
         await using var host = TestHost.Create();

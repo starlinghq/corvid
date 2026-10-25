@@ -919,6 +919,20 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         }
         StopTail(channel);
         _channels.TryRemove(new KeyValuePair<string, Channel>(channel.SessionId, channel));
+        // M2 (A4 review): a session this window drove is let go of once nothing of it is open here, so a terminal's
+        // `corvid chat --session` can drive it; the next request here opens it again. Not a gateway chat's or another surface's,
+        // and not a new one with nothing in the log yet (it lives only in the runtime until its first message).
+        if (_engine.Runtime is { IsCompletedSuccessfully: true } started && started.Result.TryGetSession(channel.SessionId, out var session)
+            && session.Surface == Surface)
+        {
+            var runtime = started.Result;
+            var id = channel.SessionId;
+            Track(Task.Run(async () =>
+            {
+                if (runtime.Log.GetHead(id) > 0 && !_channels.ContainsKey(id))
+                    await runtime.ReleaseDriverAsync(id).ConfigureAwait(false);
+            }));
+        }
     }
 
     /// <summary>The channels this window holds, for a test of their release.</summary>

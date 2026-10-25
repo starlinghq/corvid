@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using Corvid.Abstractions.IO;
 
 namespace Corvid.Host.Composition;
 
@@ -73,6 +74,7 @@ public sealed class ProcessLock : IDisposable
     /// milliseconds apart, before it counts as held.
     /// </summary>
     /// <exception cref="UnauthorizedAccessException">The lock file cannot be written.</exception>
+    /// <exception cref="IOException">The lock file cannot be opened for another reason than a holder (a read-only or full file system).</exception>
     public static ProcessLock? TryAcquire(string path, TimeProvider? time = null, int attempts = 1)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -87,12 +89,13 @@ public sealed class ProcessLock : IDisposable
                 WriteNote(path, holder);
                 return new ProcessLock(path, stream, holder);
             }
-            catch (IOException) when (attempt < attempts)
+            catch (IOException exception) when (FileLocks.IsHeldElsewhere(exception) && attempt < attempts)
             {
                 Thread.Sleep(TimeSpan.FromMilliseconds(15 * attempt));
             }
-            catch (IOException)
+            catch (IOException exception) when (FileLocks.IsHeldElsewhere(exception))
             {
+                // Only a holder makes it "held"; any other refusal (EROFS, ENOSPC) is the caller's to report (L5).
                 return null;
             }
         }
@@ -120,9 +123,15 @@ public sealed class ProcessLock : IDisposable
         {
             return LockProbe.Free;
         }
-        catch (IOException)
+        catch (IOException exception) when (FileLocks.IsHeldElsewhere(exception))
         {
             return new LockProbe(LockState.HeldElsewhere, ReadNote(path));
+        }
+        catch (IOException)
+        {
+            // Not a holder (a read-only file system refuses the open itself): nobody can hold it from here, and the note,
+            // if any, says who wrote it last. Free only when it names nobody, so a crashed holder's note does not flap it.
+            return ReadNote(path) is { } noted ? new LockProbe(LockState.HeldElsewhere, noted) : LockProbe.Free;
         }
         catch (UnauthorizedAccessException)
         {
