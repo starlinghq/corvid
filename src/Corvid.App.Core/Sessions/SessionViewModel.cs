@@ -477,6 +477,12 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
     internal void AnswerApproval(ApprovalCardBlock card, ApprovalAnswer answer) =>
         Run(() => _service.AnswerApprovalAsync(SessionId, card.ApprovalId, answer), card.AnswerFailed);
 
+    /// <summary>
+    /// Fork… (G-15): a fork at the head, opened in the rail. While a turn runs it is taken at the turn's last completed step
+    /// without waiting, and the turn goes on here.
+    /// </summary>
+    internal void ForkAtHead() => Fork(null);
+
     private void Fork(long? position) => Run(async () =>
     {
         var forked = await _service.ForkAsync(SessionId, position).ConfigureAwait(true);

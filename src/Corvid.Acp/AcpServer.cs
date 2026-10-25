@@ -383,8 +383,8 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
 
     private void SendCommands(string sessionId) =>
         _context.Update(sessionId, new AvailableCommandsUpdate([.. _commands.Commands
-            // Leaving is the editor's business.
-            .Where(command => command.Name is not ("exit" or "quit"))
+            // Leaving is the editor's business; forking is session/fork's (G-15), which opens the fork for the editor.
+            .Where(command => command.Name is not ("exit" or "quit" or "fork"))
             .Select(command => new AvailableCommand(command.Name, command.Summary)
             {
                 Input = command.Usage.Contains(' ', StringComparison.Ordinal) ? new AvailableCommandInput(command.Usage) : null,

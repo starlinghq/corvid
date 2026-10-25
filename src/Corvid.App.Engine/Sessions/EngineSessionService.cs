@@ -354,7 +354,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     /// <summary>
     /// Forks the session into a new one. A position is a message's (the fork point "edit and resend" and "branch from here"
     /// pass): the fork holds everything before that message, so the message can be sent again, changed or not. Null forks
-    /// at the head, after the running turn when one runs.
+    /// at the head; while a turn runs, at its last completed step, without waiting for it (G-15).
     /// </summary>
     public async Task<string> ForkAsync(string sessionId, long? throughPosition, CancellationToken cancellationToken = default)
     {

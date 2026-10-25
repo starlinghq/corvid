@@ -386,6 +386,12 @@ public sealed class PaletteViewModel : ObservableObject
             {
                 Note = session.IsReadOnly ? "This session is read-only here." : "",
             });
+            // G-15: at the head; while a turn runs, at its last completed step, and the turn goes on here.
+            items.Add(new PaletteItem("Fork…", session.IsRunning ? $"{title} at its last completed step; the turn goes on" : $"A new session from {title} at its head",
+                Then(session.ForkAtHead), "Session", "", IconKind.Chat)
+            {
+                Keywords = "branch fork copy aside",
+            });
             items.Add(new PaletteItem("Expand the latest output", title, Then(() => { shell.Navigate(Area.Sessions); session.ExpandLatestOutputCommand.Execute(null); }), "Session", "Ctrl+O", IconKind.Terminal));
             items.Add(new PaletteItem("Show the thoughts", title, Then(() => { shell.Navigate(Area.Sessions); session.ToggleThoughtsCommand.Execute(null); }), "Session", "Ctrl+T", IconKind.Sparkle));
             foreach (var (slash, what) in new[] { ("/compact ", "Summarise older context, with a focus"), ("/model ", "Switch a slot's model"), ("/rollback ", "Roll back N turns"), ("/goal ", "Set the standing goal") })
@@ -447,7 +453,7 @@ public sealed class PaletteViewModel : ObservableObject
         var session = _host.CurrentSession();
         var note = session is null
             ? "An aside asks about the open session, so it opens with one: open a session first."
-            : $"An aside asks a side question in a scratch fork of {SafeText.Clean(session.Title)} at its head, and writes nothing back. It comes with the scratch fork (F7); during a running turn it waits on G-15.";
+            : $"An aside asks a side question in a scratch fork of {SafeText.Clean(session.Title)} at its head, and writes nothing back. It comes with the scratch fork (F7). Fork… already forks at the head, during a running turn too.";
         IReadOnlyList<PaletteItem> items = session is null
             ? [Go("Open Sessions", "Pick a session in the rail", Area.Sessions)]
             : [new PaletteItem("Put the question in the composer", "Ask it in the session itself for now",
