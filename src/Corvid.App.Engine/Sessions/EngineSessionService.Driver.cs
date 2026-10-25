@@ -20,6 +20,10 @@ public sealed partial class EngineSessionService
     public static readonly TimeSpan TailInterval = TimeSpan.FromSeconds(1);
 
     private readonly ConcurrentDictionary<Channel, Tail> _tails = new();
+    // Sessions listed as driven elsewhere, watched for their driver letting go, with the one timer that looks at them.
+    private readonly ConcurrentDictionary<string, byte> _held = new(StringComparer.Ordinal);
+    private ITimer? _heldTimer;
+    private int _lookingAtHeld;
 
     /// <summary>What a tail reads past <paramref name="after"/>: the open calls are the other process's, still running.</summary>
     private static ReplayOptions TailOptions(long after) =>
@@ -175,6 +179,40 @@ public sealed partial class EngineSessionService
     {
         foreach (var channel in _tails.Keys)
             StopTail(channel);
+        Interlocked.Exchange(ref _heldTimer, null)?.Dispose();
+    }
+
+    /// <summary>
+    /// A session listed as driven elsewhere, open in no view here (the Board's card, the rail): every
+    /// <see cref="TailInterval"/> its lock is tried, and its summary raised again once that process lets go, so the card
+    /// stops saying "held" without a reload. An open view follows it through its own tail.
+    /// </summary>
+    private void WatchHeld(CorvidRuntime runtime, string sessionId)
+    {
+        if (_disposed || !_held.TryAdd(sessionId, 0) || Volatile.Read(ref _heldTimer) is not null)
+            return;
+        var timer = _time.CreateTimer(_ => LookAtHeld(runtime), null, TailInterval, TailInterval);
+        if (Interlocked.CompareExchange(ref _heldTimer, timer, null) is not null || _disposed)
+            timer.Dispose();
+    }
+
+    private void LookAtHeld(CorvidRuntime runtime)
+    {
+        if (_disposed || _held.IsEmpty || Interlocked.Exchange(ref _lookingAtHeld, 1) != 0)
+            return;
+        Track(Task.Run(() =>
+        {
+            try
+            {
+                foreach (var id in _held.Keys)
+                    if (runtime.Driver(id).State != LockState.HeldElsewhere && _held.TryRemove(id, out _))
+                        Refresh(runtime, id);
+            }
+            finally
+            {
+                Volatile.Write(ref _lookingAtHeld, 0);
+            }
+        }));
     }
 
     /// <summary>How far a followed session has been read, and its timer.</summary>

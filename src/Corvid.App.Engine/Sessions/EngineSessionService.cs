@@ -1007,6 +1007,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         // G-12: another process drives it (a terminal's corvid chat, an editor over ACP): shown read-only, saying which.
         var driver = job.Name is null ? runtime.Driver(id) : null;
         var drivenElsewhere = driver is { State: Corvid.Host.Composition.LockState.HeldElsewhere };
+        if (drivenElsewhere)
+            WatchHeld(runtime, id);
         // A session this window made holding no message yet (a fork before the first one) is new, not its id.
         return new SessionSummary(id, Line(title) ?? (_created.ContainsKey(id) || _forks.ContainsKey(id) ? "New session" : id))
         {

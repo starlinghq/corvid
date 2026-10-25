@@ -68,6 +68,29 @@ public sealed class EngineDriverTests
     }
 
     [Fact]
+    public async Task AHeldSessionOpenInNoViewIsListedAgainWhenItsDriverLetsGo()
+    {
+        await using var fixture = await EngineFixture.StartAsync(new FakeModels(new FakeGenerator(Reply.Say("One."))));
+        var other = await OtherProcessAsync(fixture.Host);
+        await other.OpenSession("cli-listed").SendAsync("first", Ct);
+        using var sessions = fixture.Sessions();
+        var raised = new List<SessionSummary>();
+        sessions.SessionChanged += (_, summary) => raised.Add(summary);
+        Assert.True((await sessions.ListAsync(Ct)).Single(summary => summary.Id == "cli-listed").ReadOnly);
+
+        fixture.Time.Advance(EngineSessionService.TailInterval);
+        await sessions.IdleAsync();
+        Assert.Empty(raised);
+
+        // The terminal exits: the Board's card and the rail hear of it at the next look, with no view open.
+        await other.DisposeAsync();
+        fixture.Time.Advance(EngineSessionService.TailInterval);
+        await sessions.IdleAsync();
+        var listed = Assert.Single(raised);
+        Assert.Equal(("cli-listed", false), (listed.Id, listed.ReadOnly));
+    }
+
+    [Fact]
     public async Task ASessionAnotherProcessTakesWhileItIsOpenTurnsReadOnly()
     {
         await using var fixture = await EngineFixture.StartAsync(new FakeModels(new FakeGenerator(Reply.Say("One."), Reply.Say("Two."))));
