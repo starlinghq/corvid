@@ -104,11 +104,12 @@ public sealed class ProcessLock : IDisposable
     /// left over a free lock is stale). A lock this process holds must be asked of its own handle, not probed: the probe
     /// would find it held "elsewhere".
     /// </summary>
-    public static LockProbe Probe(string path)
+    /// <param name="withoutNote">Try the lock even when no note is beside it: a holder that writes none (an older corvid) still holds it.</param>
+    public static LockProbe Probe(string path, bool withoutNote = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         path = System.IO.Path.GetFullPath(path);
-        if (!File.Exists(NotePath(path)) || !File.Exists(path))
+        if ((!withoutNote && !File.Exists(NotePath(path))) || !File.Exists(path))
             return LockProbe.Free;
         try
         {
@@ -149,19 +150,25 @@ public sealed class ProcessLock : IDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
-        try
-        {
-            if (ReadNote(Path) is { } note && note.ProcessId == Holder.ProcessId && note.Since == Holder.Since)
-                File.Delete(NotePath(Path));
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            // A note left behind over a free lock reads as stale.
-        }
+        DeleteNote(Path, Holder);
         _stream.Dispose();
     }
 
-    private static void WriteNote(string path, LockHolder holder)
+    /// <summary>Deletes the note if it is still <paramref name="holder"/>'s; a note left behind over a free lock reads as stale.</summary>
+    internal static void DeleteNote(string path, LockHolder holder)
+    {
+        try
+        {
+            if (ReadNote(path) is { } note && note.ProcessId == holder.ProcessId && note.Since == holder.Since)
+                File.Delete(NotePath(path));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    /// <summary>Writes the note for a lock this process holds by other means (the gateway's, which <c>GatewayHost</c> takes).</summary>
+    internal static void WriteNote(string path, LockHolder holder)
     {
         try
         {

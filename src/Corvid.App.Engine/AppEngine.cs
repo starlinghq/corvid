@@ -1,6 +1,9 @@
 using System.Collections.Immutable;
 using Corvid.App.Core.Composition;
+using Corvid.Gateway;
+using Corvid.Host.Commands;
 using Corvid.Host.Composition;
+using Corvid.Host.Configuration;
 using Corvid.Host.Sessions;
 using Corvid.Host.Models;
 using Microsoft.Extensions.DependencyInjection;
@@ -21,11 +24,12 @@ public sealed class AppEngine : IAsyncDisposable
     private readonly bool _ownsHost;
     private readonly CancellationTokenSource _lifetime;
     private readonly Lazy<Task<ToolPresentation>> _tools;
+    private readonly Lazy<Task<HostedGateway?>> _gateway;
     private StartupStep? _step;
     private int _disposed;
 
     private AppEngine(IHost host, bool ownsHost, Task<CorvidRuntime> runtime, ImmutableArray<ModelAvailability> missing, string? failure,
-        CancellationTokenSource lifetime)
+        CancellationTokenSource lifetime, bool hostGateway)
     {
         _host = host;
         _ownsHost = ownsHost;
@@ -33,8 +37,16 @@ public sealed class AppEngine : IAsyncDisposable
         MissingModels = missing;
         StartFailure = failure;
         _lifetime = lifetime;
+        HostsGateway = hostGateway;
         _tools = new Lazy<Task<ToolPresentation>>(async () => new ToolPresentation(await RuntimeAsync().ConfigureAwait(false)));
+        _gateway = new Lazy<Task<HostedGateway?>>(HostGatewayAsync);
     }
+
+    /// <summary>
+    /// Whether this engine hosts the gateway (U-8, G-14): the app does when it is the engine, under the one-lock rule shared
+    /// with <c>corvid gateway</c>. Tests choose (<see cref="ForRuntime"/>), so no adapter starts unless a test asks.
+    /// </summary>
+    public bool HostsGateway { get; }
 
     /// <summary>The host's services: <c>CorvidConfigWriter</c>, <c>ModelCatalogue</c>, <c>Doctor</c>, the options.</summary>
     public IServiceProvider Services => _host.Services;
@@ -74,7 +86,7 @@ public sealed class AppEngine : IAsyncDisposable
         catch (OptionsValidationException exception)
         {
             var reason = "Corvid cannot start: the configuration is not valid. " + string.Join(" ", exception.Failures);
-            return new AppEngine(host, ownsHost, Task.FromException<CorvidRuntime>(new ServiceUnavailableException(reason)), [], reason, lifetime);
+            return new AppEngine(host, ownsHost, Task.FromException<CorvidRuntime>(new ServiceUnavailableException(reason)), [], reason, lifetime, false);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException && !cancellationToken.IsCancellationRequested)
         {
@@ -95,11 +107,11 @@ public sealed class AppEngine : IAsyncDisposable
         if (!missing.IsEmpty)
         {
             var reason = Describe(new ModelsUnavailableException(missing));
-            return new AppEngine(host, ownsHost, Task.FromException<CorvidRuntime>(new ModelsUnavailableException(missing)), missing, reason, lifetime);
+            return new AppEngine(host, ownsHost, Task.FromException<CorvidRuntime>(new ModelsUnavailableException(missing)), missing, reason, lifetime, false);
         }
 
         var started = new TaskCompletionSource<CorvidRuntime>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var engine = new AppEngine(host, ownsHost, started.Task, [], null, lifetime);
+        var engine = new AppEngine(host, ownsHost, started.Task, [], null, lifetime, hostGateway: true);
         // Loading reads the models from disk for seconds; the window must not wait on it. Its outcome is the Runtime task,
         // which every service and DisposeAsync awaits, so a failure is always observed.
         _ = Task.Run(async () =>
@@ -111,6 +123,8 @@ public sealed class AppEngine : IAsyncDisposable
                     engine.Report(step);
                     progress?.Report(step);
                 }), lifetime.Token).ConfigureAwait(false));
+                // G-14: the gateway starts with the runtime, not when its page is first opened.
+                _ = engine.GatewayAsync();
             }
             catch (Exception exception)
             {
@@ -128,15 +142,47 @@ public sealed class AppEngine : IAsyncDisposable
     private static AppEngine Failed(IHost host, bool ownsHost, CancellationTokenSource lifetime, Exception exception)
     {
         var reason = "Corvid cannot start: " + exception.Message;
-        return new AppEngine(host, ownsHost, Task.FromException<CorvidRuntime>(new ServiceUnavailableException(reason)), [], reason, lifetime);
+        return new AppEngine(host, ownsHost, Task.FromException<CorvidRuntime>(new ServiceUnavailableException(reason)), [], reason, lifetime, false);
     }
 
     /// <summary>An engine over a runtime already started (tests, and a head that starts the runtime itself).</summary>
-    public static AppEngine ForRuntime(IHost host, CorvidRuntime runtime, bool ownsHost = false)
+    /// <param name="hostGateway">Whether the engine hosts the gateway (<see cref="HostsGateway"/>), with the adapters registered in DI.</param>
+    public static AppEngine ForRuntime(IHost host, CorvidRuntime runtime, bool ownsHost = false, bool hostGateway = false)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(runtime);
-        return new AppEngine(host, ownsHost, Task.FromResult(runtime), [], null, new CancellationTokenSource());
+        return new AppEngine(host, ownsHost, Task.FromResult(runtime), [], null, new CancellationTokenSource(), hostGateway);
+    }
+
+    /// <summary>
+    /// The gateway this engine hosts, started on first use (G-14): null when the engine does not host one. Whether it runs
+    /// here, in another process, or not at all is its <see cref="HostedGateway.Status"/>; it never faults for those.
+    /// </summary>
+    /// <exception cref="ServiceUnavailableException">The runtime could not start.</exception>
+    public Task<HostedGateway?> GatewayAsync() => _gateway.Value;
+
+    private async Task<HostedGateway?> HostGatewayAsync()
+    {
+        if (!HostsGateway)
+            return null;
+        var runtime = await RuntimeAsync().ConfigureAwait(false);
+        var options = Services.GetRequiredService<IOptions<CorvidOptions>>().Value;
+        var gateway = new HostedGateway(runtime, Services.GetRequiredService<SlashCommandRegistry>(), options,
+            Services.GetServices<GatewayAdapterRegistration>());
+        try
+        {
+            await gateway.StartAsync(_lifetime.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Closing while it started: DisposeAsync stops it.
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            // Not the gateway's own refusals (those are its status): something broke; the page says so through the status.
+            Console.Error.WriteLine("corvid app: the gateway could not start: " + exception.Message);
+        }
+        return gateway;
     }
 
     /// <summary>The runtime once it is up.</summary>
@@ -178,6 +224,20 @@ public sealed class AppEngine : IAsyncDisposable
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
             // It never started; there is nothing to stop but the host.
+        }
+        if (runtime is not null && _gateway.IsValueCreated)
+        {
+            // Before the runtime: answers still being written reach the ledger while the sessions are there (as corvid gateway stops).
+            HostedGateway? gateway = null;
+            try
+            {
+                gateway = await _gateway.Value.ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+            }
+            if (gateway is not null)
+                await gateway.DisposeAsync().ConfigureAwait(false);
         }
         if (runtime is not null)
         {

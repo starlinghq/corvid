@@ -185,9 +185,12 @@ public sealed class GatewayViewModel : AreaViewModel, IDisposable
             $"persona {SafeText.Clean(chat.Persona)} · {SafeText.Clean(chat.Slot)}"))];
         GuestToolsNote = "A guest can use only the tools on its allowlist, chosen from: " + string.Join(", ", snapshot.GuestTools.Select(SafeText.Clean)) + ".";
         var hostSince = snapshot.Host.Since is { } at ? " since " + JobsText.When(at, now, zone) : "";
-        (HostTag, var host) = snapshot.Host.HostedHere
-            ? ("in this app", $"This app hosts the gateway{hostSince}: the adapters run here while it is open, and their messages reach the sessions it runs.")
-            : ("elsewhere", $"**{Spans.Escape(SafeText.Clean(snapshot.Host.Holder))}** hosts the gateway{hostSince}; this app shows its state and approves its pairings.");
+        (HostTag, var host) = snapshot.Host switch
+        {
+            { HostedHere: true } => ("in this app", $"This app hosts the gateway{hostSince}: the adapters run here while it is open, and their messages reach the sessions it runs."),
+            { Nowhere: true } => ("off", $"No process hosts the gateway: {Spans.Escape(SafeText.Clean(snapshot.Host.Reason))} Pairing requests already waiting can still be answered here."),
+            _ => ("elsewhere", $"**{Spans.Escape(SafeText.Clean(snapshot.Host.Holder))}** hosts the gateway{hostSince}; this app shows its state and approves its pairings."),
+        };
         HostText = Spans.Parse(host);
         Subtitle = Spans.Parse(SubtitleText(snapshot));
         if (_active)
@@ -251,7 +254,12 @@ public sealed class GatewayViewModel : AreaViewModel, IDisposable
 
     private static string SubtitleText(GatewaySnapshot snapshot)
     {
-        var where = snapshot.Host.HostedHere ? "hosted in this app" : $"hosted by {Spans.Escape(SafeText.Clean(snapshot.Host.Holder))}";
+        var where = snapshot.Host switch
+        {
+            { HostedHere: true } => "hosted in this app",
+            { Nowhere: true } => "not running",
+            _ => $"hosted by {Spans.Escape(SafeText.Clean(snapshot.Host.Holder))}",
+        };
         return $"{where} · {Spans.Escape(GatewayText.Summary(snapshot.Adapters))}";
     }
 

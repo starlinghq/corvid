@@ -51,24 +51,65 @@ public static class CorvidGateway
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(registered);
-        var known = new Dictionary<string, ToolDescriptor>(StringComparer.Ordinal);
-        foreach (var descriptor in registered)
-            known.TryAdd(descriptor.Name, descriptor);
+        var known = Known(registered);
         var problems = new List<string>();
         foreach (var (name, settings) in options.Gateway.Adapters.Where(pair => pair.Value is { Enabled: true }).OrderBy(pair => pair.Key, StringComparer.Ordinal))
             foreach (var tool in settings.GuestTools)
-            {
-                if (known.TryGetValue(tool, out var descriptor))
-                {
-                    if (descriptor.Risk.SideEffects.HasFlag(SideEffects.Memory))
-                        problems.Add($"Corvid:Gateway:Adapters:{name}:GuestTools: '{tool}' cannot be a guest tool: it writes memory, and a " +
-                            "guest does not write the owner's memory or answer its review queue.");
-                }
-                else if (McpServerOf(tool) is null)
-                    problems.Add($"Corvid:Gateway:Adapters:{name}:GuestTools: no tool is named '{tool}'; the tools are " +
-                        $"{string.Join(", ", known.Keys.Order(StringComparer.Ordinal))}.");
-            }
+                if (GuestToolProblem(tool, known) is { } problem)
+                    problems.Add($"Corvid:Gateway:Adapters:{name}:GuestTools: {problem}");
         return problems;
+    }
+
+    /// <summary>
+    /// What is wrong with a guest tool's name before any registry is read (the configuration's check, and a guest's own
+    /// allowlist's): its shape; <c>cron_create</c>, since a job's run is a turn of its own with the whole toolset (no guest
+    /// scope) that reports back to the chat, so a guest's job would read for the guest what the guest's own turn may not; and
+    /// an MCP tool whose server is not configured. Null when it may be one.
+    /// </summary>
+    public static string? GuestToolShapeProblem(string tool, IReadOnlySet<string> mcpServers)
+    {
+        ArgumentNullException.ThrowIfNull(mcpServers);
+        if (string.IsNullOrWhiteSpace(tool) || !tool.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-'))
+            return $"'{tool}' is not a tool name (letters, digits, '_' and '-').";
+        if (tool == "cron_create")
+            return "'cron_create' cannot be a guest tool: a scheduled job runs with every tool and reports to the chat.";
+        if (McpServerOf(tool) is { } server && !mcpServers.Contains(server))
+            return $"'{tool}' names MCP server '{server}', which is not configured under Corvid:Mcp:Servers.";
+        return null;
+    }
+
+    /// <summary>
+    /// One guest's own allowlist (G-14), checked as an adapter's is (<see cref="GuestToolShapeProblem"/>, then
+    /// <see cref="GuestToolProblems"/>'s registry check when the registry is known): each refused name with why. The app's
+    /// Gateway page and <c>corvid gateway pair tools</c> both check through this before writing; the CLI's verb works on the
+    /// stores alone, without a runtime, so it passes no registry and a name the registry lacks is refused when it is used.
+    /// </summary>
+    public static IReadOnlyList<string> GuestAllowlistProblems(IEnumerable<string> tools, CorvidOptions options, IEnumerable<ToolDescriptor>? registered)
+    {
+        ArgumentNullException.ThrowIfNull(tools);
+        ArgumentNullException.ThrowIfNull(options);
+        var servers = options.Mcp.Servers.Keys.ToHashSet(StringComparer.Ordinal);
+        var known = registered is null ? null : Known(registered);
+        return [.. tools.Select(tool => GuestToolShapeProblem(tool, servers) ?? (known is null ? null : GuestToolProblem(tool, known))).OfType<string>()];
+    }
+
+    private static Dictionary<string, ToolDescriptor> Known(IEnumerable<ToolDescriptor> registered)
+    {
+        var known = new Dictionary<string, ToolDescriptor>(StringComparer.Ordinal);
+        foreach (var descriptor in registered)
+            known.TryAdd(descriptor.Name, descriptor);
+        return known;
+    }
+
+    private static string? GuestToolProblem(string tool, Dictionary<string, ToolDescriptor> known)
+    {
+        if (known.TryGetValue(tool, out var descriptor))
+            return descriptor.Risk.SideEffects.HasFlag(SideEffects.Memory)
+                ? $"'{tool}' cannot be a guest tool: it writes memory, and a guest does not write the owner's memory or answer its review queue."
+                : null;
+        return McpServerOf(tool) is null
+            ? $"no tool is named '{tool}'; the tools are {string.Join(", ", known.Keys.Order(StringComparer.Ordinal))}."
+            : null;
     }
 
     public static GatewayOptions OptionsFor(CorvidOptions options)
@@ -250,19 +291,27 @@ public sealed class GatewayService(CorvidRuntimeFactory factory, IOptions<Corvid
         }
         await using (runtime.ConfigureAwait(false))
         {
-            GatewayHost gateway;
-            try
+            // The same hosting the windowed app uses (G-14): one process holds gateway.db.lock and leaves a note saying so.
+            var hosted = new HostedGateway(runtime, commands, options.Value, registrations) { Notice = message => Notice?.Invoke(message) };
+            await using (hosted.ConfigureAwait(false))
             {
-                gateway = CorvidGateway.Create(runtime, commands, options.Value, registrations, message => Notice?.Invoke(message));
-                await gateway.StartAsync(stoppingToken).ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                _started.TrySetException(exception);
-                return;
-            }
-            await using (gateway.ConfigureAwait(false))
-            {
+                GatewayStatus status;
+                try
+                {
+                    status = await hosted.StartAsync(stoppingToken).ConfigureAwait(false);
+                }
+                catch (Exception exception)
+                {
+                    _started.TrySetException(exception);
+                    return;
+                }
+                if (status.Hosting != GatewayHosting.Here || hosted.Gateway is not { } gateway)
+                {
+                    _started.TrySetException(new InvalidOperationException(status.Hosting == GatewayHosting.Elsewhere
+                        ? "Another corvid gateway is running against this data directory: " + status.Detail
+                        : status.Detail));
+                    return;
+                }
                 _started.TrySetResult((runtime, gateway));
                 try
                 {
@@ -272,7 +321,7 @@ public sealed class GatewayService(CorvidRuntimeFactory factory, IOptions<Corvid
                 {
                 }
                 // Answers still being written reach the ledger (and are sent) before the runtime goes.
-                await gateway.StopAsync().ConfigureAwait(false);
+                await hosted.StopAsync().ConfigureAwait(false);
             }
             await runtime.MaintenanceIdleAsync().ConfigureAwait(false);
         }

@@ -16,7 +16,8 @@ namespace Corvid.Cli;
 /// </summary>
 internal static class GatewayCommand
 {
-    public const string UsageText = "usage: corvid gateway [run] | status | pair [list] | pair approve <code> --owner|--guest | pair revoke <adapter> <user>";
+    public const string UsageText = "usage: corvid gateway [run] | status | pair [list] | pair approve <code> --owner|--guest | pair revoke <adapter> <user> " +
+        "| pair tools <adapter> <user> <tool>... | pair tools <adapter> <user> --adapter";
 
     /// <summary>Whether this command line runs the gateway (and so loads models and needs the hosted service).</summary>
     public static bool Runs(CliArguments arguments) => arguments.Command == "gateway" && arguments.Positional() is [] or ["run"];
@@ -33,6 +34,7 @@ internal static class GatewayCommand
             ["pair"] or ["pair", "list"] => ListPairing(console, options),
             ["pair", "approve", var code] => Approve(console, options, code, arguments.Flag("--owner"), arguments.Flag("--guest")),
             ["pair", "revoke", var adapter, var user] => Revoke(console, options, adapter, user),
+            ["pair", "tools", var adapter, var user, .. var tools] => Tools(console, options, adapter, user, tools, arguments.Flag("--adapter")),
             _ => Usage(console),
         };
     }
@@ -107,7 +109,11 @@ internal static class GatewayCommand
             console.Write(table);
 
         var store = new PairingStore(CorvidPaths.GatewayDatabase(options));
-        console.MarkupLine(Running(store) ? "[green]A gateway is running.[/]" : "[grey]No gateway is running.[/]");
+        // The host's status API (G-14), which the windowed app reads too: who holds gateway.db.lock, from its note.
+        var hosting = GatewayStatus.Probe(options);
+        console.MarkupLine(hosting.Hosting == GatewayHosting.Elsewhere
+            ? $"[green]A gateway is running:[/] {Markup.Escape(hosting.Detail)}"
+            : "[grey]No gateway is running.[/]");
         var ledger = new DeliveryLedger(new SqliteEventLog(CorvidPaths.EventLog(options)));
         ledger.Catch(long.TryParse(store.GetState(GatewayHost.LowWaterKey), NumberStyles.None, CultureInfo.InvariantCulture, out var mark) ? mark : 0);
         var open = ledger.Pending;
@@ -115,20 +121,6 @@ internal static class GatewayCommand
             Markup.Escape(string.Join(", ", open.GroupBy(pending => pending.Delivery.Adapter).Select(group => $"{group.Key} {group.Count()}"))));
         console.MarkupLine($"{store.Users().Count} paired, {store.Pending().Count} waiting for approval (corvid gateway pair).");
         return ExitCodes.Success;
-    }
-
-    // The gateway holds a lock beside gateway.db while it runs.
-    private static bool Running(PairingStore store)
-    {
-        try
-        {
-            using var probe = new FileStream(store.Path + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-            return false;
-        }
-        catch (IOException)
-        {
-            return true;
-        }
     }
 
     private static int ListPairing(IAnsiConsole console, CorvidOptions options)
@@ -149,10 +141,10 @@ internal static class GatewayCommand
         var users = store.Users();
         if (users.Count > 0)
         {
-            var table = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).AddColumns("adapter", "user", "name", "role", "paired");
+            var table = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).AddColumns("adapter", "user", "name", "role", "paired", "tools");
             foreach (var user in users)
-                table.AddRow(user.Adapter, user.UserId, user.Name ?? "", user.Role.ToString().ToLowerInvariant(),
-                    user.PairedAt.ToString("u", CultureInfo.InvariantCulture));
+                table.AddRow(Markup.Escape(user.Adapter), Markup.Escape(user.UserId), Markup.Escape(user.Name ?? ""), user.Role.ToString().ToLowerInvariant(),
+                    user.PairedAt.ToString("u", CultureInfo.InvariantCulture), Markup.Escape(ToolsOf(options, store, user)));
             console.Write(table);
         }
         return ExitCodes.Success;
@@ -176,6 +168,47 @@ internal static class GatewayCommand
         }
         console.MarkupLine($"[green]Paired[/] {Markup.Escape(user.Adapter)} user {Markup.Escape(user.UserId)}" +
             (user.Name is { } name ? $" ({Markup.Escape(name)})" : "") + $" as {(guest ? "a guest: their messages are treated as outside content" : "the owner")}.");
+        return ExitCodes.Success;
+    }
+
+    /// <summary>A paired user's tools: every tool for an owner; a guest's own allowlist (G-14), or their adapter's.</summary>
+    private static string ToolsOf(CorvidOptions options, PairingStore store, PairedUser user)
+    {
+        if (user.Role == SenderRole.Owner)
+            return "all";
+        if (store.GuestTools(user.Adapter, user.UserId) is { } own)
+            return own.Count == 0 ? "none (their own)" : string.Join(", ", own) + " (their own)";
+        var shared = options.Gateway.Adapters.FirstOrDefault(pair => pair.Key.Equals(user.Adapter, StringComparison.OrdinalIgnoreCase)).Value?.GuestTools ?? [];
+        return (shared.Count == 0 ? "none" : string.Join(", ", shared)) + " (the adapter's)";
+    }
+
+    /// <summary>
+    /// <c>pair tools</c> (G-14): a paired guest's own allowlist, replacing their adapter's <c>GuestTools</c> for them alone;
+    /// <c>--adapter</c> gives them the adapter's again. Checked as the Gateway page checks it; a running gateway reads it at
+    /// the guest's next message.
+    /// </summary>
+    private static int Tools(IAnsiConsole console, CorvidOptions options, string adapter, string user, string[] tools, bool shared)
+    {
+        if (shared == tools.Length > 0)
+        {
+            console.MarkupLine("[red]Name the tools this guest may use, or --adapter to give them the adapter's GuestTools again.[/]");
+            return ExitCodes.Usage;
+        }
+        if (CorvidGateway.GuestAllowlistProblems(tools, options, registered: null) is { Count: > 0 } problems)
+        {
+            foreach (var problem in problems)
+                console.MarkupLine($"[red]{Markup.Escape(problem)}[/]");
+            return ExitCodes.Usage;
+        }
+        var store = new PairingStore(CorvidPaths.GatewayDatabase(options));
+        if (!store.SetGuestTools(adapter.ToLowerInvariant(), user, shared ? null : tools))
+        {
+            console.MarkupLine($"[red]{Markup.Escape(adapter)} user {Markup.Escape(user)} is not a paired guest[/] (`corvid gateway pair` lists who is).");
+            return ExitCodes.Failure;
+        }
+        console.MarkupLine(shared
+            ? $"{Markup.Escape(adapter)} user {Markup.Escape(user)} has the adapter's guest tools again."
+            : $"{Markup.Escape(adapter)} user {Markup.Escape(user)} may use {Markup.Escape(string.Join(", ", tools))}, and no other tool.");
         return ExitCodes.Success;
     }
 

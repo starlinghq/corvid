@@ -8,8 +8,8 @@ public enum AdapterState
     Down,
     Off,
     /// <summary>
-    /// Enabled, but run by a gateway in another process or none: this app does not host the gateway (G-14), so it cannot
-    /// see whether the adapter is connected.
+    /// Enabled, but run by a gateway in another process, or by none: only the process that hosts the gateway (G-14) sees
+    /// whether the adapter is connected.
     /// </summary>
     Unknown,
 }
@@ -55,8 +55,18 @@ public sealed record PendingDelivery(string Id, string What, string To, DateTime
 /// <summary>A per-chat override: the persona and the generator slot that chat gets.</summary>
 public sealed record ChatOverride(string Adapter, string Chat, string Persona, string Slot);
 
-/// <summary>Where the gateway runs (U-8): in this app, in another process, or nowhere.</summary>
-public sealed record GatewayHost(bool HostedHere, string Holder, DateTimeOffset? Since);
+/// <summary>
+/// Where the gateway runs (U-8): in this app, in another process (<paramref name="Holder"/> names it, "corvid gateway (pid
+/// 4127)"), or nowhere (<paramref name="Holder"/> empty, with the <see cref="Reason"/>).
+/// </summary>
+public sealed record GatewayHost(bool HostedHere, string Holder, DateTimeOffset? Since)
+{
+    /// <summary>Why no process hosts it ("No gateway adapter is enabled…"); empty when one does.</summary>
+    public string Reason { get; init; } = "";
+
+    /// <summary>No process hosts the gateway.</summary>
+    public bool Nowhere => !HostedHere && Holder.Length == 0;
+}
 
 public sealed record GatewaySnapshot(
     GatewayHost Host,

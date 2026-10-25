@@ -80,6 +80,7 @@ public static class CorvidCli
           gateway pair [list]        people waiting to pair, and who is paired
           gateway pair approve <code> --owner|--guest   pair the sender of a code as the owner, or as a guest (outside content)
           gateway pair revoke <adapter> <user>   remove a pairing
+          gateway pair tools <adapter> <user> <tool>... | --adapter   a guest's own tool allowlist, or the adapter's again
           evals <command> ...        calibration tooling (corvid-evals): calibrate, report, replay, export-decisions,
                                      export-trajectories; --log defaults to this user's event log
           traces export              the event log as Beacon-schema JSONL on stdout     [--session <id> | --all]

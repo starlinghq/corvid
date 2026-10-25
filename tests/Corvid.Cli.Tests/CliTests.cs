@@ -384,6 +384,28 @@ public sealed class GatewayCommandTests
     }
 
     [Fact]
+    public async Task AGuestGetsTheirOwnToolsFromTheMachine()
+    {
+        using var run = new CliRun();
+        var store = new Corvid.Gateway.PairingStore(Path.Combine(run.Root, "data", "gateway.db"));
+        store.Approve(store.Request("telegram", "42", "ada", "42").Request!.Code, Corvid.Gateway.SenderRole.Guest);
+        store.Approve(store.Request("telegram", "7", "me", "7").Request!.Code, Corvid.Gateway.SenderRole.Owner);
+
+        // G-14: the same allowlist the app's Gateway page sets, checked the same way.
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["gateway", "pair", "tools", "telegram", "42", "list_notes", "web_fetch"]));
+        Assert.Equal(["list_notes", "web_fetch"], store.GuestTools("telegram", "42"));
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["gateway", "pair"]));
+        Assert.Contains("list_notes, web_fetch (their own)", run.Output, StringComparison.Ordinal);
+        Assert.Equal(ExitCodes.Usage, await run.RunAsync(["gateway", "pair", "tools", "telegram", "42", "cron_create"]));
+        Assert.Contains("'cron_create' cannot be a guest tool", run.Output, StringComparison.Ordinal);
+        Assert.Equal(ExitCodes.Failure, await run.RunAsync(["gateway", "pair", "tools", "telegram", "7", "list_notes"]));
+        Assert.Equal(ExitCodes.Usage, await run.RunAsync(["gateway", "pair", "tools", "telegram", "42"]));
+        Assert.Equal(["list_notes", "web_fetch"], store.GuestTools("telegram", "42"));
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["gateway", "pair", "tools", "telegram", "42", "--adapter"]));
+        Assert.Null(store.GuestTools("telegram", "42"));
+    }
+
+    [Fact]
     public async Task RunningWithoutAnEnabledAdapterSaysWhatToConfigure()
     {
         using var run = new CliRun();

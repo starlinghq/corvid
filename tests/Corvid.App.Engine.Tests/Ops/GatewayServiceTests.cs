@@ -10,7 +10,10 @@ using GatewayHost = Corvid.App.Core.Gateway.GatewayHost;
 
 namespace Corvid.App.Engine.Tests.Ops;
 
-/// <summary>The Gateway page over the pairing store, the delivery ledger and the configuration (C-020); hosting is G-14's.</summary>
+/// <summary>
+/// The Gateway page over the pairing store, the delivery ledger and the configuration (C-020), on an engine that hosts no
+/// gateway (it reads the lock as another process would); hosting itself (G-14) is <see cref="GatewayHostingTests"/>.
+/// </summary>
 public sealed class GatewayServiceTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
@@ -27,7 +30,7 @@ public sealed class GatewayServiceTests
     private static PairingStore Pairing(OpsFixture fixture) => new(Path.Combine(fixture.Host.Root, "data", "gateway.db"));
 
     [Fact]
-    public async Task TheStoresAndTheConfigurationLoadAndTheGatewayIsNotHostedHere()
+    public async Task TheStoresAndTheConfigurationLoadAndNoProcessHostsTheGateway()
     {
         await using var fixture = await OpsFixture.StartAsync(Telegram);
         var pairing = Pairing(fixture);
@@ -41,12 +44,13 @@ public sealed class GatewayServiceTests
 
         var snapshot = await service.LoadAsync(Token);
 
-        Assert.Equal(new GatewayHost(false, EngineGatewayService.Holder, null), snapshot.Host);
+        Assert.Equal(new GatewayHost(false, "", null) { Reason = "No gateway is running." }, snapshot.Host);
+        Assert.True(snapshot.Host.Nowhere);
         Assert.Equal(["discord", "slack", "telegram"], snapshot.Adapters.Select(adapter => adapter.Name));
         var telegram = snapshot.Adapters.Single(adapter => adapter.Name == "telegram");
         Assert.Equal(AdapterState.Unknown, telegram.State);
         Assert.Contains("telegram.bot-token", telegram.Detail, StringComparison.Ordinal);
-        Assert.Contains("G-14", telegram.Detail, StringComparison.Ordinal);
+        Assert.Contains("no process runs the gateway", telegram.Detail, StringComparison.Ordinal);
         Assert.Equal(AdapterState.Off, snapshot.Adapters.Single(adapter => adapter.Name == "slack").State);
         var request = Assert.Single(snapshot.Requests);
         Assert.Equal((dana.Code, "telegram", "dana (1001)", PairingStore.Display(dana.Code), "direct message"),
@@ -55,7 +59,7 @@ public sealed class GatewayServiceTests
         Assert.Equal(("telegram:7", PairingRole.Owner, "kestrel (7)"), (owner.Id, owner.Role, owner.Handle));
         var delivery = Assert.Single(snapshot.Deliveries);
         Assert.Equal(("d-open", "job from job:job-1:run-1", "Telegram chat 42"), (delivery.Id, delivery.What, delivery.To));
-        Assert.Contains("G-14", delivery.Why, StringComparison.Ordinal);
+        Assert.Contains("no process runs the gateway", delivery.Why, StringComparison.Ordinal);
         Assert.Equal(new ChatOverride("telegram", "42", "terse", "generator: fake-gen"), Assert.Single(snapshot.Overrides));
         Assert.Contains("list_notes", snapshot.GuestTools);
     }
@@ -70,13 +74,14 @@ public sealed class GatewayServiceTests
         using var service = new EngineGatewayService(fixture.Engine, new InlineDispatcher(), fixture.Time);
         var reads = new ReadRecorder(fixture.Runtime.Log);
 
-        Assert.Equal(["d-1", "d-2"], service.Deliveries(reads).Select(delivery => delivery.Id));
+        var off = new Corvid.Host.Composition.GatewayStatus(Corvid.Host.Composition.GatewayHosting.Off, "No gateway is running.");
+        Assert.Equal(["d-1", "d-2"], service.Deliveries(reads, off).Select(delivery => delivery.Id));
         var through = service.LedgerThrough;
         Assert.True(through > 0);
         ledger.Resolve("d-1", DeliveryStatus.Delivered);
         ledger.Queue(new DeliveryQueued("d-3", "telegram", "42", "third", "reply"));
 
-        Assert.Equal(["d-2", "d-3"], service.Deliveries(reads).Select(delivery => delivery.Id));
+        Assert.Equal(["d-2", "d-3"], service.Deliveries(reads, off).Select(delivery => delivery.Id));
         // The first load read from the start; the second only past where the first stopped.
         Assert.Equal([0L, through], reads.After);
     }
@@ -153,7 +158,7 @@ public sealed class GatewayServiceTests
     }
 
     [Fact]
-    public async Task RevokingKeepsTheLastOwnerAndTheAllowlistIsPerAdapterSoItIsNotEditedForOneGuest()
+    public async Task RevokingKeepsTheLastOwnerAndAGuestGetsTheirOwnAllowlist()
     {
         await using var fixture = await OpsFixture.StartAsync(Telegram);
         var pairing = Pairing(fixture);
@@ -163,9 +168,17 @@ public sealed class GatewayServiceTests
 
         Assert.Equal("That is the only owner; pair another owner before revoking this one.",
             (await Assert.ThrowsAsync<InvalidOperationException>(() => service.RevokeAsync("telegram:7", Token))).Message);
-        var allowlist = await Assert.ThrowsAsync<InvalidOperationException>(() => service.SetAllowlistAsync("telegram:8", ["list_notes", "add_note"], Token));
-        Assert.StartsWith("The engine keeps one guest allowlist per adapter, not per person: Corvid:Gateway:Adapters:telegram:GuestTools", allowlist.Message,
-            StringComparison.Ordinal);
+        // A guest starts with the adapter's tools; the page gives them their own (G-14), which the gateway reads at their next message.
+        Assert.Equal(["list_notes"], (await service.LoadAsync(Token)).Users.Single(user => user.Id == "telegram:8").Allowlist);
+        var widened = await service.SetAllowlistAsync("telegram:8", ["list_notes", "add_note"], Token);
+        Assert.Equal(["add_note", "list_notes"], widened.Allowlist);
+        Assert.Equal(["add_note", "list_notes"], pairing.GuestTools("telegram", "8"));
+        Assert.Equal(["add_note", "list_notes"], (await service.LoadAsync(Token)).Users.Single(user => user.Id == "telegram:8").Allowlist);
+        Assert.Empty((await service.SetAllowlistAsync("telegram:8", [], Token)).Allowlist);
+        // Refused, and nothing changed: a tool that writes memory, cron_create, a name that is no tool, a hidden character.
+        foreach (var refused in new[] { "memory_add", "cron_create", "no_such_tool", "list\u200B_notes" })
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.SetAllowlistAsync("telegram:8", ["list_notes", refused], Token));
+        Assert.Empty(pairing.GuestTools("telegram", "8")!);
         Assert.Equal("An owner has every tool; the allowlist is for guests.",
             (await Assert.ThrowsAsync<InvalidOperationException>(() => service.SetAllowlistAsync("telegram:7", [], Token))).Message);
 
