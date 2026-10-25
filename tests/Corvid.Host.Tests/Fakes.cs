@@ -367,7 +367,22 @@ internal sealed class TestHost : IAsyncDisposable
     {
         await Host.StopAsync(CancellationToken.None);
         Host.Dispose();
-        if (Directory.Exists(Root))
-            Directory.Delete(Root, recursive: true);
+        // Background work the test started (a skills commit, a job run, the log's last write) can still be finishing
+        // under Root: a cleanup that races it is retried rather than failing a test that passed.
+        for (var attempt = 1; Directory.Exists(Root); attempt++)
+        {
+            try
+            {
+                Directory.Delete(Root, recursive: true);
+            }
+            catch (IOException) when (attempt < 5)
+            {
+                await Task.Delay(100 * attempt, CancellationToken.None);
+            }
+            catch (IOException)
+            {
+                return;
+            }
+        }
     }
 }

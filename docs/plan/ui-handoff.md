@@ -219,6 +219,14 @@ passed with five minor ones).
   kev-0.8b, gliner2 and embeddinggemma on the CPU, read from the Starling cache). F1, F2, F3, F4, F5, F6, F9, F11, F13,
   F18, F21, F23 and F24 work on the engine; the WebAssembly head now builds.
 
+The PR review (four agents, one of them on security) found one high defect, approvals.json rewritten whole by each
+process so the CLI and the app lost or resurrected each other's rules, and eleven medium ones; three fix agents fixed
+them all. What changed with them: approvals.json and corvid.json are edited under a file lock shared across processes
+(the rules re-read on change; corvid.json edited in place, keeping comments, its mode and a symlink); `skills.db` moves
+to schema 3 (one way: an older binary refuses it) so an edited draft applies only over the revision it was staged
+against; First run starts from the configured approval mode and cloud posture and writes only what the person changes;
+Safety searches the 50 most recent sessions.
+
 Refused on the engine, each with its message on the page: the egress ledger (G-9), hosting the gateway in the app
 (G-14) and the per-person guest allowlist, rename (G-6), steering (K-3), clarifying questions (K-6), the output tail
 (K-2), turn progress, app preferences beyond the window (G-7, ui.db), memory consolidation (plan §9.5), opening a
@@ -234,10 +242,11 @@ Left:
 - Layout with engine-length text: Models' slots table at 1440, Rewind's checkpoint ids, Audit's raw JSON, Review's
   "Checkpoint" label.
 - Memory's Reject loses its reason's focus; the Hermes import's staging session shows in the rail.
-- A job run's session opens writable, not read-only; Rewind and Review can write to a session another process drives
-  (G-12).
-- The round-3 minors: the turn strip offers steering the engine refuses; the raw settings editor validates on the UI
-  thread; a new session's rail entry stays "New session" while its first turn runs; Send looks enabled with no session.
+- Rewind's restore and Review's revert can write to a session another process drives (G-12). Job runs are read-only.
+- The round-3 minors: the turn strip offers steering the engine refuses; a new session's rail entry stays "New
+  session" while its first turn runs; Send looks enabled with no session.
+- A preview taken while a turn runs is labelled as such rather than drafted on the actor; a call that crashed with no
+  record of its changes still cannot be rolled back past (the kernel refuses it, now with its own reason).
 - Not walked on the engine: F8, F10, F12, F14's switch and download, F15, F16, F17 with a Vault.
 
 ### What the running app shows today
