@@ -177,6 +177,12 @@ public sealed partial class CorvidRuntime
         {
             throw new ChildRefusedException($"The configured mix \"{TerminalText.Visible(request.MixName!)}\" is malformed: {exception.Message}");
         }
+        // Security M1 (A5 review): the decider judges the child's approvals and checkpoints, so the agent never picks it nor
+        // turns its escalation off. A child's decider is its parent's, unless the person (/delegate, the app) or a configured
+        // Corvid:Agents:Mixes entry names another.
+        if (request.By == ChildSessions.ByAgent && request.Mix is { } asked && asked.Slots.ContainsKey(ModelSlots.Decider))
+            throw new ChildRefusedException("A child's decider is this session's: the agent cannot choose it or turn its escalation off. " +
+                "Leave the decider out of the mix (the person can choose one with /delegate, or name a mix configured in Corvid:Agents:Mixes).");
         mix = mix.With(request.Mix ?? ModelMix.Empty);
         var tainted = parent.Tainted;
         var (configurations, slots, resolved) = await ResolveMixAsync(parent, mix, goal, tainted, preview, cancellationToken).ConfigureAwait(false);
@@ -216,6 +222,8 @@ public sealed partial class CorvidRuntime
             _childCounts[plan.ParentId] = running + 1;
         }
         var id = NewSessionId(ChildSessions.Surface);
+        CorvidSession child;
+        ChildStarted started;
         try
         {
             JsonElement? mix = plan.Mix is { } resolved ? Json(resolved.ToString()) : null;
@@ -224,17 +232,55 @@ public sealed partial class CorvidRuntime
             var sequence = AppendTo(plan.ParentId, spawned);
             _childPlans[id] = plan;
             _prompters.SetParent(id, plan.ParentId);
-            var child = OpenChild(id, new SessionSettings(Interactive: parent.Interactive));
+            child = OpenChild(id, new SessionSettings(Interactive: parent.Interactive));
             // Its usage from the start, so StopChild finds a child that is listed but not run yet; its run then stops at once.
             _childUsage[id] = new ChildUsage(plan.Budget.MaxTokens, child.Cancel);
-            ChildChanged?.Invoke(plan.ParentId, new ChildStarted(spawned, sequence) { At = DateTimeOffset.UtcNow });
-            return child;
+            started = new ChildStarted(spawned, sequence) { At = DateTimeOffset.UtcNow };
         }
         catch
         {
             ForgetChild(id, plan.ParentId);
             throw;
         }
+        // M1 (A5 review): outside the try, so a surface's handler that throws never undoes an opened child.
+        RaiseChildChanged(plan.ParentId, started);
+        return child;
+    }
+
+    /// <summary>
+    /// Raises <see cref="ChildChanged"/>; a handler that throws is reported as a notice (<see cref="Notice"/>) and never
+    /// reaches the child's run or the call's other children.
+    /// </summary>
+    private void RaiseChildChanged(string parentId, SessionStreamUpdate update)
+    {
+        if (ChildChanged is not { } handlers)
+            return;
+        foreach (var handler in handlers.GetInvocationList().Cast<Action<string, SessionStreamUpdate>>())
+        {
+            try
+            {
+                handler(parentId, update);
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                ReportChild($"a surface failed to hear of a child of {TerminalText.Visible(parentId)}: {exception.Message}");
+            }
+        }
+    }
+
+    private void ReportChild(string reason)
+    {
+        var line = "child sessions: " + reason;
+        lock (_notices)
+        {
+            _notices.Enqueue(line);
+            while (_notices.Count > 20)
+                _notices.Dequeue();
+        }
+        if (Notice is { } notice)
+            notice(line);
+        else
+            System.Diagnostics.Trace.WriteLine("corvid: " + line);
     }
 
     /// <summary>A5: plans, opens and runs a child (<see cref="PlanChildAsync"/>, <see cref="OpenChildSession"/>, then the run).</summary>
@@ -262,7 +308,7 @@ public sealed partial class CorvidRuntime
         var usage = _childUsage.GetOrAdd(child.Id, _ => new ChildUsage(plan.Budget.MaxTokens, child.Cancel));
         using var watch = Feed.Subscribe(child.Id, usage);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(plan.Budget.MaxSeconds), ChildClock);
-        using var timedOut = timeout.Token.Register(() =>
+        var timedOut = timeout.Token.Register(() =>
         {
             usage.TimedOut = true;
             usage.Stop();
@@ -271,62 +317,150 @@ public sealed partial class CorvidRuntime
         using var cancelled = cancellationToken.Register(usage.Stop);
         Delivery? delivery = null;
         Exception? failure = null;
+        var abandoned = false;
         var message = plan.Goal;
         var earlierSteps = 0;
-        for (var attempt = 0; ; attempt++)
+        try
         {
-            // Stopped while it waited to run (StopChild on a listed child): it never starts.
-            if (attempt == 0 && usage.Stopping)
+            for (var attempt = 0; ; attempt++)
+            {
+                // Stopped while it waited to run (StopChild on a listed child): it never starts.
+                if (attempt == 0 && usage.Stopping)
+                    break;
+                try
+                {
+                    // A tainted child stays tainted: Corvid's repair line is posted as outside content too, never as the person.
+                    var origin = plan.Tainted || child.Tainted ? EnvelopeOrigin.External : EnvelopeOrigin.User;
+                    var posted = await child.PostAsync(message, origin, CancellationToken.None).ConfigureAwait(false);
+                    (delivery, abandoned) = await DeliveryOrStopAsync(posted, usage).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is not OutOfMemoryException)
+                {
+                    failure = exception;
+                }
+                // Plan §14, "validated on return": an answer outside the schema gets one repair turn within the same budget.
+                // The repair turn gets only what the first left of the step budget (TurnRunner.StepLimit), so the whole run stays
+                // within the steps the person approved; with none left there is no repair and the answer is invalid output.
+                if (attempt == 0 && failure is null && !abandoned && plan.OutputSchema is { } schema && !usage.OverBudget && !usage.TimedOut
+                    && !cancellationToken.IsCancellationRequested && !usage.Stopping
+                    && delivery?.Result is { Status: TurnStatus.Answered } first && first.Steps < plan.Budget.MaxSteps
+                    && OutputSchema.Validate(schema, first.Text, out _) is { Count: > 0 } errors)
+                {
+                    earlierSteps = first.Steps;
+                    child.Runner.StepLimit = plan.Budget.MaxSteps - first.Steps;
+                    message = RepairMessage(errors);
+                    continue;
+                }
                 break;
-            try
-            {
-                // A tainted child stays tainted: Corvid's repair line is posted as outside content too, never as the person.
-                var origin = plan.Tainted || child.Tainted ? EnvelopeOrigin.External : EnvelopeOrigin.User;
-                var posted = await child.PostAsync(message, origin, CancellationToken.None).ConfigureAwait(false);
-                delivery = await posted.ConfigureAwait(false);
             }
-            catch (Exception exception) when (exception is not OutOfMemoryException)
-            {
-                failure = exception;
-            }
-            // Plan §14, "validated on return": an answer outside the schema gets one repair turn within the same budget.
-            // The repair turn gets only what the first left of the step budget (TurnRunner.StepLimit), so the whole run stays
-            // within the steps the person approved; with none left there is no repair and the answer is invalid output.
-            if (attempt == 0 && failure is null && plan.OutputSchema is { } schema && !usage.OverBudget && !usage.TimedOut
-                && !cancellationToken.IsCancellationRequested && !usage.Stopping
-                && delivery?.Result is { Status: TurnStatus.Answered } first && first.Steps < plan.Budget.MaxSteps
-                && OutputSchema.Validate(schema, first.Text, out _) is { Count: > 0 } errors)
-            {
-                earlierSteps = first.Steps;
-                child.Runner.StepLimit = plan.Budget.MaxSteps - first.Steps;
-                message = RepairMessage(errors);
-                continue;
-            }
-            break;
         }
+        finally
+        {
+            // L2 (A5 review): the wall-time budget ends with the delivery, so an answer that came in time stays answered.
+            timedOut.Dispose();
+        }
+        ChildDelivered?.Invoke(child.Id);
 
         var result = Finish(child, plan, delivery, failure, usage, cancellationToken.IsCancellationRequested || (delivery is null && failure is null && usage.Stopping));
         if (earlierSteps > 0)
             result = result with { Steps = result.Steps + earlierSteps };
         if (_stoppedChildren.TryRemove(child.Id, out _) && result.Status == ChildStatuses.Cancelled)
             result = result with { Detail = "stopped by the person" };
+        if (abandoned)
+            result = result with { Detail = Join(result.Detail, "its turn had not stopped; it is let go of once it does") };
+        // L3 (A5 review): a provider that reports no usage is counted with the token counter's estimate, and the result says so.
+        if (usage.Estimated)
+            result = result with { TokensEstimated = true, Detail = Join(result.Detail, "tokens estimated: the model reported no usage") };
+        ChildEnded? ended = null;
         try
         {
             var finished = new ChildFinished(child.Id, result.Status, result.Steps, result.Tokens, result.Tainted,
                 result.Text is { Length: > MaxChildTextChars } whole ? whole[..MaxChildTextChars] + "…" : result.Text, result.Detail,
                 plan.OutputSchema is null ? null : result.Status != ChildStatuses.InvalidOutput && result.Output is not null);
             var sequence = AppendTo(plan.ParentId, finished);
-            ChildChanged?.Invoke(plan.ParentId, new ChildEnded(finished, sequence) { At = DateTimeOffset.UtcNow });
+            ended = new ChildEnded(finished, sequence) { At = DateTimeOffset.UtcNow };
         }
         finally
         {
             ForgetChild(child.Id, plan.ParentId);
-            // The delivery comes before the actor marks the turn finished: let it settle, then let the child go.
-            await child.Actor.IdleAsync().WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
-            await ReleaseDriverAsync(child.Id).ConfigureAwait(false);
+            await LetGoAsync(child, abandoned).ConfigureAwait(false);
         }
+        // M1 (A5 review): a handler that throws never fails the call or loses the other children's results.
+        RaiseChildChanged(plan.ParentId, ended!);
         return result;
+
+        static string Join(string? detail, string note) => detail is { Length: > 0 } ? detail + "; " + note : note;
     }
+
+    /// <summary>
+    /// M2 (A5 review): how long a stopped child's turn (stopped by the person, the parent, its budget or its time) is waited for
+    /// before its run ends without it: a tool that ignores cancellation must not hold the parent's call. Tests shorten it.
+    /// </summary>
+    internal TimeSpan ChildStopGrace { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>How long a finished child's actor is waited for to settle before its release is left to run when it does.</summary>
+    internal TimeSpan ChildSettle { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>A test hook: a child's delivery is in (or was given up on), before its result is made.</summary>
+    internal Action<string>? ChildDelivered { get; set; }
+
+    // M2 (A5 review): children whose turn outlived their run, let go of once their actor is idle; awaited at the runtime's end.
+    private readonly ConcurrentDictionary<string, Task> _childReleases = new(StringComparer.Ordinal);
+
+    /// <summary>The child's delivery, or null and true when a stop came and its turn did not end within <see cref="ChildStopGrace"/>.</summary>
+    private async Task<(Delivery? Delivery, bool Abandoned)> DeliveryOrStopAsync(Task<Delivery> posted, ChildUsage usage)
+    {
+        if (await Task.WhenAny(posted, usage.Stopped).ConfigureAwait(false) != posted)
+        {
+            try
+            {
+                await posted.WaitAsync(ChildStopGrace, ChildClock).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                return (null, true);
+            }
+        }
+        return (await posted.ConfigureAwait(false), false);
+    }
+
+    /// <summary>
+    /// Lets a finished child go (its driver lock and actor): at once when its actor settles within <see cref="ChildSettle"/>,
+    /// else (or when its turn was given up on) once it goes idle, tracked so the runtime's end waits for it.
+    /// </summary>
+    private async Task LetGoAsync(CorvidSession child, bool abandoned)
+    {
+        // The delivery comes before the actor marks the turn finished: let it settle, then let the child go.
+        var idle = child.Actor.IdleAsync(_lifetime.Token);
+        if (!abandoned)
+            await idle.WaitAsync(ChildSettle).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        if (idle.IsCompletedSuccessfully && await ReleaseDriverAsync(child.Id).ConfigureAwait(false))
+            return;
+        if (_lifetime.IsCancellationRequested)
+            return;
+        var release = ReleaseWhenIdleAsync(child.Id, idle);
+        _childReleases[child.Id] = release;
+        _ = release.ContinueWith(_ => _childReleases.TryRemove(KeyValuePair.Create(child.Id, release)), CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
+
+    private async Task ReleaseWhenIdleAsync(string childId, Task idle)
+    {
+        await Task.Yield();
+        // Idle again after each try: a release refused while the actor was still busy tries once more when it settles.
+        for (var tries = 0; tries < 8 && !_lifetime.IsCancellationRequested; tries++)
+        {
+            await idle.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+            if (!idle.IsCompletedSuccessfully || await ReleaseDriverAsync(childId).ConfigureAwait(false))
+                return;
+            if (!TryGetSession(childId, out var session))
+                return;
+            idle = session.Actor.IdleAsync(_lifetime.Token);
+        }
+    }
+
+    /// <summary>The children's releases still waiting on their actors (tests read it).</summary>
+    internal Task ChildReleasesIdleAsync() => Task.WhenAll(_childReleases.Values.ToArray());
 
     private static ChildResult Finish(CorvidSession child, ChildPlan plan, Delivery? delivery, Exception? failure, ChildUsage usage,
         bool parentCancelled)
@@ -337,7 +471,8 @@ public sealed partial class CorvidRuntime
         if (usage.OverBudget)
             return new(child.Id, ChildStatuses.TokenBudgetExhausted, turn?.Text, null, steps, usage.Tokens, tainted,
                 $"used {usage.Tokens} tokens of {plan.Budget.MaxTokens}");
-        if (usage.TimedOut)
+        // L2 (A5 review): an answer that came before the timer fired is the child's answer, not a time-out.
+        if (usage.TimedOut && turn?.Status != TurnStatus.Answered)
             return new(child.Id, ChildStatuses.TimedOut, turn?.Text, null, steps, usage.Tokens, tainted, $"ran past {plan.Budget.MaxSeconds} s");
         if (turn is null)
             return parentCancelled
@@ -372,10 +507,43 @@ public sealed partial class CorvidRuntime
         return new(child.Id, status, turn.Text, null, steps, usage.Tokens, tainted, detail);
     }
 
+    /// <summary>
+    /// H1 (A5 review): lets go of a child opened by a call that then failed before running it: <c>ChildFinished</c> (cancelled)
+    /// on the parent, its place, plan, usage, prompter route, driver lock and actor, and the surfaces told. Never throws.
+    /// </summary>
+    private async Task AbandonChildAsync(CorvidSession child, string why)
+    {
+        var plan = child.Child!;
+        ChildEnded? ended = null;
+        try
+        {
+            var finished = new ChildFinished(child.Id, ChildStatuses.Cancelled, 0, 0, plan.Tainted, null, why, null);
+            ended = new ChildEnded(finished, AppendTo(plan.ParentId, finished)) { At = DateTimeOffset.UtcNow };
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            ReportChild($"could not log the end of {child.Id}: {exception.Message}");
+        }
+        _stoppedChildren.TryRemove(child.Id, out _);
+        ForgetChild(child.Id, plan.ParentId);
+        try
+        {
+            await LetGoAsync(child, abandoned: false).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            ReportChild($"could not let go of {child.Id}: {exception.Message}");
+        }
+        if (ended is not null)
+            RaiseChildChanged(plan.ParentId, ended);
+    }
+
     private void ForgetChild(string childId, string parentId)
     {
         _childPlans.TryRemove(childId, out _);
         _childUsage.TryRemove(childId, out _);
+        // A stop that raced the child's end (StopChild between its check and its write) leaves nothing behind.
+        _stoppedChildren.TryRemove(childId, out _);
         _prompters.Forget(childId);
         lock (_childGate)
         {
@@ -502,11 +670,23 @@ public sealed partial class CorvidRuntime
                 continue;
             var current = parent.Slots.SessionDefault(slot);
             var configuration = parent.Slots.TryConfiguration(slot, out var found) ? found : new SlotConfiguration(slot, current, [], []);
+            // Security L4 (A5 review): Corvid:Agents:Models narrows every model a child is given, the inherited ones too. The
+            // decider is the parent's own judge of the child (security M1), not a model the child works on, so it is not checked.
+            ImmutableArray<ModelBinding> escalation = configuration.Escalation, fallbacks = configuration.Fallbacks;
+            if (slot != ModelSlots.Decider && Options.Agents.Models.Count > 0)
+            {
+                var inheritedName = _composer.NameOf(current) ?? current.Profile.Id;
+                if (!AllowedForChildren(inheritedName))
+                    throw new ChildRefusedException($"The child would run the {slot} on the parent's {TerminalText.Visible(inheritedName)}, which is not in " +
+                        $"Corvid:Agents:Models; name an allowed model for the {slot} in the mix, or add it to Corvid:Agents:Models.");
+                escalation = [.. escalation.Where(step => AllowedForChildren(_composer.NameOf(step) ?? step.Profile.Id))];
+                fallbacks = [.. fallbacks.Where(step => AllowedForChildren(_composer.NameOf(step) ?? step.Profile.Id))];
+            }
             if (!preview)
-                configurations[slot] = new SlotConfiguration(slot, Rebind(slot, current), [.. configuration.Escalation.Select(step => Rebind(slot, step))],
-                [.. configuration.Fallbacks.Select(step => Rebind(slot, step))]);
+                configurations[slot] = new SlotConfiguration(slot, Rebind(slot, current), [.. escalation.Select(step => Rebind(slot, step))],
+                [.. fallbacks.Select(step => Rebind(slot, step))]);
             view.Add(new ChildSlot(slot, _composer.NameOf(current) ?? current.Profile.Id, current.Profile.Privacy,
-                [.. configuration.Escalation.Select(step => _composer.NameOf(step) ?? step.Profile.Id)], !configuration.Escalation.IsEmpty));
+                [.. escalation.Select(step => _composer.NameOf(step) ?? step.Profile.Id)], !escalation.IsEmpty));
         }
         return (configurations, view.ToImmutable(), resolved.Count == 0 ? ModelMix.Empty : ModelMix.Create(resolved));
 
@@ -563,8 +743,9 @@ public sealed partial class CorvidRuntime
     }
 
     // A binding of the parent's at subagent priority (its catalogue name rebound); the decider and bindings made elsewhere as they are.
+    // H1 (A5 review): a binding that fails to load refuses the child, as a mix's own does (BindChild), and is never an escape.
     private ModelBinding Rebind(string slot, ModelBinding binding) =>
-        slot != ModelSlots.Decider && _composer.NameOf(binding) is { } name ? _composer.Bind(slot, name, DevicePriority.Subagent) : binding;
+        slot != ModelSlots.Decider && _composer.NameOf(binding) is { } name ? BindChild(slot, name) : binding;
 
     // The egress gate (plan §10.4) on what the child would send first, its goal, with the parent's taint: null when it would go.
     private async Task<string?> GateRefusalAsync(ModelProfile profile, string goal, bool tainted, CancellationToken cancellationToken)
@@ -589,12 +770,23 @@ public sealed partial class CorvidRuntime
 
         private int _stop;
 
+        private readonly TaskCompletionSource _stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         /// <summary>Cancels the child's turn now and again at its next sign of life, for a stop that came before it started.</summary>
         public void Stop()
         {
             Interlocked.Exchange(ref _stop, 1);
             cancel();
+            _stopped.TrySetResult();
         }
+
+        /// <summary>Completes once a stop is asked for (the person, the parent, the budget or the clock).</summary>
+        public Task Stopped => _stopped.Task;
+
+        private int _estimated;
+
+        /// <summary>Some of <see cref="Tokens"/> is the token counter's estimate: a provider reported no usage.</summary>
+        public bool Estimated => Volatile.Read(ref _estimated) == 1;
 
         public bool Stopping => Volatile.Read(ref _stop) == 1;
 
@@ -611,6 +803,12 @@ public sealed partial class CorvidRuntime
         public void Progress(int step, int maxSteps) => Again();
 
         public void ToolStarted(string callId, string tool, bool approval) => Again();
+
+        public void UsageEstimated(long inputTokens, long outputTokens)
+        {
+            Volatile.Write(ref _estimated, 1);
+            Usage(inputTokens, outputTokens);
+        }
 
         public void Usage(long? inputTokens, long? outputTokens)
         {

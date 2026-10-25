@@ -226,6 +226,18 @@ public sealed class DelegateTaskTool : ToolFunction
         return await _runner(tasks, context, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// The mix the agent may pass: every slot but the decider. Security M1 (A5 review): a child's decider is its parent's
+    /// unless the person or a configured mix names another, so the host refuses an agent's decider entry.
+    /// </summary>
+    private static JsonNode AgentMix()
+    {
+        var mix = JsonNode.Parse(ModelMix.Schema)!.AsObject();
+        mix["properties"]!.AsObject().Remove(ModelSlots.Decider);
+        mix["description"] = "Which model serves each slot of the child session; slots left out keep the parent's. The decider is always this session's.";
+        return mix;
+    }
+
     private static string BuildSchema()
     {
         JsonObject Child() => new()
@@ -238,7 +250,7 @@ public sealed class DelegateTaskTool : ToolFunction
                 ["description"] = "The tools the child may use, by name; only tools this session has. Leave out for none.",
             },
             ["toolset"] = new JsonObject { ["type"] = "string", ["description"] = "A named toolset to add: read_only, or a configured one." },
-            ["mix"] = JsonNode.Parse(ModelMix.Schema),
+            ["mix"] = AgentMix(),
             ["mix_name"] = new JsonObject { ["type"] = "string", ["description"] = "A configured model mix by name (Corvid:Agents:Mixes)." },
             ["max_steps"] = new JsonObject { ["type"] = "integer", ["description"] = "The most generator steps it may take." },
             ["max_tokens"] = new JsonObject { ["type"] = "integer", ["description"] = "The most tokens it may use." },
