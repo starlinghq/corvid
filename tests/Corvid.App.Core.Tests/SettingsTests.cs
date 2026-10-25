@@ -17,7 +17,7 @@ public sealed class SettingsTests
     {
         var shell = new ShellViewModel(new StatusBarViewModel());
         var keys = new KeyMap();
-        var settings = new SettingsViewModel(shell, service ?? new DemoSettingsService(), keys);
+        var settings = new SettingsViewModel(shell, service ?? new DemoSettingsService(), keys, jsonDebounce: TimeSpan.Zero);
         await settings.LoadAsync(TestContext.Current.CancellationToken);
         return (settings, shell, keys);
     }
@@ -161,6 +161,7 @@ public sealed class SettingsTests
         var json = settings.JsonText.Replace("\"~/src/corvid\"", $"\"~/src/corvid{Override}\"", StringComparison.Ordinal);
 
         settings.JsonText = json;
+        await settings.JsonChecked;
 
         Assert.False(settings.CanApplyJson);
         Assert.Contains(settings.JsonProblems, problem => problem.Contains("holds hidden characters: \"Workspace\": \"~/src/corvid⟨U+202E⟩\"", StringComparison.Ordinal));
@@ -179,6 +180,7 @@ public sealed class SettingsTests
 
         // The editor's setter runs on every keystroke; JsonNode used to throw ArgumentException out of it here.
         settings.JsonText = json;
+        await settings.JsonChecked;
 
         Assert.Equal("corvid.json has a duplicate key \"Workspace\" at line 4: an object names each key once (ignoring case). Remove or rename one.",
             Assert.Single(settings.JsonProblems));
@@ -188,10 +190,12 @@ public sealed class SettingsTests
 
         // The engine's configuration reads keys ignoring case, so "workspace" repeats "Workspace" too.
         settings.JsonText = "{ \"Corvid\": { \"Turn\": { \"MaxSteps\": 5, \"maxsteps\": 6 } } }";
+        await settings.JsonChecked;
         Assert.Contains("duplicate key \"maxsteps\" at line 1", Assert.Single(settings.JsonProblems), StringComparison.Ordinal);
 
         // The same name in two objects is not a repeat.
         settings.JsonText = "{ \"Corvid\": { \"Mcp\": { \"Servers\": { \"a\": { \"Command\": \"x\" }, \"b\": { \"Command\": \"y\" } } } } }";
+        await settings.JsonChecked;
         Assert.Empty(settings.JsonProblems);
     }
 
@@ -207,6 +211,7 @@ public sealed class SettingsTests
         Assert.False(SafeText.HasHidden(json));
 
         settings.JsonText = json;
+        await settings.JsonChecked;
 
         Assert.Contains(settings.JsonProblems, problem => problem.StartsWith("Corvid:Mcp:Servers:notes:Command holds hidden characters written as an escape: notes⟨U+202E⟩-mcp", StringComparison.Ordinal));
         Assert.False(settings.CanApplyJson);
@@ -214,6 +219,7 @@ public sealed class SettingsTests
 
         // A property name is checked as well as a value.
         settings.JsonText = $"{{ \"Corvid\": {{ \"Gateway\": {{ \"Adapters\": {{ \"tele{escape}gram\": {{ \"Enabled\": true }} }} }} }} }}";
+        await settings.JsonChecked;
         Assert.Contains(settings.JsonProblems, problem => problem.StartsWith("Corvid:Gateway:Adapters:tele⟨U+202E⟩gram holds hidden characters", StringComparison.Ordinal));
     }
 
@@ -224,6 +230,7 @@ public sealed class SettingsTests
         var edited = settings.JsonText.Replace("\"CpuThreads\": 4", "\"CpuThreads\": 6", StringComparison.Ordinal);
         Assert.NotEqual(settings.JsonText, edited);
         settings.JsonText = edited;
+        await settings.JsonChecked;
         Field(settings, "Turn:MaxSteps").Value = "7";
 
         await settings.SaveCommand.ExecuteAsync();
@@ -245,15 +252,18 @@ public sealed class SettingsTests
         var (settings, _, _) = await Open();
 
         settings.JsonText = "{ \"Corvid\": { \"Turn\": { \"MaxSteps\": 8 } ";
+        await settings.JsonChecked;
         Assert.False(settings.CanApplyJson);
         Assert.StartsWith("corvid.json does not parse at line 1", Assert.Single(settings.JsonProblems), StringComparison.Ordinal);
 
         settings.JsonText = "{ \"Corvid\": { \"Turn\": { \"MaxSteps\": 99 } } }";
+        await settings.JsonChecked;
         Assert.Equal("Corvid:Turn:MaxSteps must be between 1 and 64.", Assert.Single(settings.JsonProblems));
         Assert.False(settings.CanApplyJson);
 
         // A text box hands back carriage returns; they are line breaks, not hidden characters.
         settings.JsonText = "{\r  // a comment\r  \"Corvid\": { \"Devices\": { \"CpuThreads\": 12 }, \"Turn\": { \"MaxSteps\": 5, }, }\r}";
+        await settings.JsonChecked;
         Assert.Empty(settings.JsonProblems);
         Assert.True(settings.CanApplyJson);
         Assert.Equal("Valid · not saved", settings.JsonStatus);
@@ -370,6 +380,72 @@ public sealed class SettingsTests
             await settings.LoadAsync(TestContext.Current.CancellationToken);
             return settings.Groups.SelectMany(group => group.Fields).ToDictionary(field => field.Definition.Key, field => field.Value);
         }
+    }
+
+    /// <summary>
+    /// A3 review L7: the raw editor's check runs off the caller's thread (typing never waits for it), and when an older
+    /// text's check ends after a newer one's, the newer one's problems are the ones shown.
+    /// </summary>
+    [Fact]
+    public async Task TheRawEditorChecksOffTheTypingThreadAndTheNewestTextWins()
+    {
+        var service = new GatedSettingsService();
+        var (settings, _, _) = await Open(service);
+        const string tooMany = "{ \"Corvid\": { \"Turn\": { \"MaxSteps\": 99 } } }";
+        const string five = "{ \"Corvid\": { \"Turn\": { \"MaxSteps\": 5 } } }";
+        service.Hold = tooMany;
+
+        // Typing returns while the check of what was typed is still held in the service.
+        await Task.Run(() => settings.JsonText = tooMany, TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        var older = settings.JsonChecked;
+        await service.Entered.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        Assert.True(settings.IsJsonChecking);
+        Assert.Equal("Checking…", settings.JsonStatus);
+        Assert.False(settings.CanApplyJson);
+
+        settings.JsonText = five;
+        await settings.JsonChecked;
+        Assert.Empty(settings.JsonProblems);
+        Assert.Equal("Valid · not saved", settings.JsonStatus);
+
+        service.Release.Set();
+        await older.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        Assert.Empty(settings.JsonProblems);
+        Assert.Equal("Valid · not saved", settings.JsonStatus);
+        Assert.True(settings.CanApplyJson);
+    }
+
+    /// <summary>The demo's service, whose check of one text waits to be let go.</summary>
+    private sealed class GatedSettingsService : ISettingsService
+    {
+        private readonly DemoSettingsService _demo = new();
+
+        public string? Hold { get; set; }
+
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public ManualResetEventSlim Release { get; } = new();
+
+        public IReadOnlyList<SettingDefinition> Definitions => _demo.Definitions;
+
+        public Task<SettingsSnapshot> LoadAsync(CancellationToken cancellationToken = default) => _demo.LoadAsync(cancellationToken);
+
+        public IReadOnlyList<SettingProblem> Validate(IReadOnlyDictionary<string, string> values) => _demo.Validate(values);
+
+        public SettingsParse Parse(string json)
+        {
+            if (json == Hold)
+            {
+                Entered.TrySetResult();
+                Release.Wait(TimeSpan.FromSeconds(30));
+            }
+            return _demo.Parse(json);
+        }
+
+        public Task<SettingsWrite> SaveAsync(IReadOnlyDictionary<string, string> values, CancellationToken cancellationToken = default) =>
+            _demo.SaveAsync(values, cancellationToken);
+
+        public Task<SettingsWrite> SaveJsonAsync(string json, CancellationToken cancellationToken = default) => _demo.SaveJsonAsync(json, cancellationToken);
     }
 
     private sealed class FailingSettingsService : ISettingsService
