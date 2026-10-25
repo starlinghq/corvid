@@ -105,4 +105,19 @@ public sealed class EngineModelSwitchTests
         Assert.Equal("fake-gen-large", Assert.IsType<EngineStatus>(closed.History.Last(update => update is EngineStatus)).Model);
         Assert.Equal("fake-gen-large@cpu", fixture.Runtime.OpenSession(id, "app").Slots.Current(ModelSlots.Generator).Profile.Id);
     }
+
+    [Fact]
+    public void A_reset_before_the_answer_reads_as_a_reset_and_the_turns_end_as_its_end()
+    {
+        var translator = new Corvid.App.Engine.Sessions.SessionUpdateTranslator(Path.GetTempPath()) { Model = "fake-gen-large" };
+        translator.Translate(new Corvid.Host.Sessions.PromptSent("hi", 1));
+        var reset = translator.Translate(new Corvid.Host.Sessions.ModelChanged(ModelSlots.Generator, "fake-gen-large@cpu", "fake-gen@cpu", "de_escalation", 2));
+        Assert.Equal("this session's choice was reset to the default", reset.OfType<ModelSwitched>().Single().Reason);
+        translator.Translate(new Corvid.Host.Sessions.ModelChanged(ModelSlots.Generator, "fake-gen@cpu", "fake-gen-large@cpu", "escalation", 3));
+        translator.Translate(new Corvid.Host.Sessions.AnswerChunk("hello"));
+        var end = translator.Translate(new Corvid.Host.Sessions.ModelChanged(ModelSlots.Generator, "fake-gen-large@cpu", "fake-gen@cpu", "de_escalation", 4));
+        Assert.Equal("the turn ended", end.OfType<ModelSwitched>().Single().Reason);
+        // A switch the log and the live event both bring is shown once.
+        Assert.Empty(translator.Translate(new Corvid.Host.Sessions.ModelChanged(ModelSlots.Generator, "fake-gen-large@cpu", "fake-gen@cpu", "de_escalation", 4)));
+    }
 }

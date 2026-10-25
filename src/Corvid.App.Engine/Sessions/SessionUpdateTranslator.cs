@@ -357,6 +357,8 @@ public sealed class SessionUpdateTranslator(string workspace)
             "escalation" => (ModelSwitchKind.Escalated, "escalated"),
             "fallback" => (ModelSwitchKind.FellBack, "the model failed"),
             "privacy" => (ModelSwitchKind.KeptLocal, "the privacy gate kept it local"),
+            // A de-escalation is the turn's end; one before the turn answered (or a forgotten choice, live) is a reset.
+            "de_escalation" when change.SessionDefault || (TurnOpen && !_answered) => (ModelSwitchKind.Returned, "this session's choice was reset to the default"),
             "de_escalation" => (ModelSwitchKind.Returned, "the turn ended"),
             "user" => (ModelSwitchKind.Switched, "for this turn" + next),
             _ => (ModelSwitchKind.Switched, "for this session" + next),
