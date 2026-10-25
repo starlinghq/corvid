@@ -189,9 +189,18 @@ public sealed class EngineRewindService : IRewindService, IDisposable
     public async Task<RestoreOutcome> RestoreAsync(string sessionId, string checkpointId, AppScope scope, CancellationToken cancellationToken = default)
     {
         var (ledger, entry, runtime) = await FindAsync(sessionId, checkpointId, cancellationToken).ConfigureAwait(false);
-        // The restore runs on the session's actor, so it opens the session (no turn of it can start meanwhile).
-        var session = runtime.TryGetSession(sessionId, out var open) ? open : runtime.OpenSession(sessionId, EngineSessionService.Surface);
         var label = $"rollback to before {checkpointId}";
+        // The restore runs on the session's actor, so it opens the session (no turn of it can start meanwhile). G-12: a session
+        // another process drives is that process's to restore; nothing is changed from here.
+        CorvidSession session;
+        try
+        {
+            session = runtime.TryGetSession(sessionId, out var open) ? open : runtime.OpenSession(sessionId, EngineSessionService.Surface);
+        }
+        catch (SessionHeldException exception)
+        {
+            return new RestoreOutcome(label, _time.GetUtcNow(), scope) { Refused = true, Detail = exception.Message + " Nothing was changed." };
+        }
         // The kernel rolls back to just before the call (its position minus one): the call's turn keeps its prompt, and only
         // the turns after it leave whole, as the plan says.
         var plan = session.PlanRollbackTo(checkpointId) ?? throw Missing(sessionId, checkpointId);

@@ -154,7 +154,16 @@ public sealed class EngineReviewService : IReviewService, IDisposable
         var texts = await _texts.Value.ConfigureAwait(false);
         if (!texts.Readable(path))
             return new FileRevertResult(path, checkpointId, false, true, "Corvid may not open it, so it cannot be put back from here");
-        var session = runtime.TryGetSession(sessionId, out var open) ? open : runtime.OpenSession(sessionId, EngineSessionService.Surface);
+        CorvidSession session;
+        try
+        {
+            session = runtime.TryGetSession(sessionId, out var open) ? open : runtime.OpenSession(sessionId, EngineSessionService.Surface);
+        }
+        catch (SessionHeldException exception)
+        {
+            // G-12: the session's driver in another process is the one to put files back; nothing is changed from here.
+            return new FileRevertResult(path, checkpointId, false, true, exception.Message.TrimEnd('.'));
+        }
         var result = await session.RollbackToAsync(checkpointId, RestoreScope.FilesOnly, [path], cancellationToken).ConfigureAwait(false);
         if (result is null)
             return new FileRevertResult(path, checkpointId, false, true, $"{checkpointId} is no longer in the ledger");

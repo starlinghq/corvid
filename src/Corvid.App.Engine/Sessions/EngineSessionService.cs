@@ -389,6 +389,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     {
         _disposed = true;
         UnwatchJobs();
+        StopTails();
         foreach (var channel in _channels.Values)
         {
             PendingApproval[] open;
@@ -715,7 +716,11 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             throw new KeyNotFoundException($"There is no session '{id}' in Corvid's log.");
         // A call with no result is cancelled only when no turn of the session is running: one opened mid-turn (a job
         // run from the Board, another surface's turn) is still working on it.
-        var options = runtime.IsTurnRunning(id) ? ReplayOptions.Full with { UnfinishedCalls = false } : ReplayOptions.Full;
+        // G-12: a session another process drives is followed read-only; its open calls are that process's, still running.
+        var driven = IsJobRun(id) ? Corvid.Host.Composition.LockState.Free : runtime.Driver(id).State;
+        var elsewhere = driven == Corvid.Host.Composition.LockState.HeldElsewhere;
+        var options = elsewhere ? TailOptions(0)
+            : runtime.IsTurnRunning(id) ? ReplayOptions.Full with { UnfinishedCalls = false } : ReplayOptions.Full;
         var history = await SessionReplay.ReadAsync(runtime, id, tools, options).ConfigureAwait(false);
         var goal = Corvid.Kernel.Events.SessionProjection.Load(runtime.Log, id).Goal;
         var summary = Summarize(runtime, id) ?? Empty(runtime, id, _time.GetUtcNow());
@@ -732,7 +737,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 updates.Add(new DriverChanged(true) { Holder = summary.Holder, At = at });
             foreach (var update in history.Updates)
                 updates.AddRange(channel.Translator.Translate(update));
-            updates.AddRange(channel.Translator.EndReplay(running: channel.Running));
+            updates.AddRange(channel.Translator.EndReplay(running: channel.Running || (elsewhere && Unanswered(history.Updates))));
             updates.Add(changes);
             // The rail's title (the first message, until K-9 titles and G-6 renames are events) heads the session too.
             if (summary.Turns > 0 && summary.Title != id)
@@ -749,6 +754,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 updates.Add(new TaintChanged(true) { At = at });
             updates.Add(new AvailableCommandsUpdate(commands) { At = at });
             channel.ReadOnly = summary.ReadOnly;
+            channel.Holder = summary.Holder;
             foreach (var update in updates)
                 Keep(channel, update);
             channel.LogSummary = summary;
@@ -760,6 +766,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 foreach (var update in translate(channel.Translator))
                     Keep(channel, update);
         }
+        // G-12: follow what another process appends to a session this one does not drive, and who drives it.
+        if (!IsJobRun(id) && driven != Corvid.Host.Composition.LockState.HeldHere)
+            StartTail(runtime, tools, channel, history.Head);
     }
 
     /// <summary>
@@ -856,6 +865,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 return;
             channel.Closed = true;
         }
+        StopTail(channel);
         _channels.TryRemove(new KeyValuePair<string, Channel>(channel.SessionId, channel));
     }
 
@@ -994,12 +1004,15 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         }
         var open = runtime.TryGetSession(id, out var session);
         var job = IsJobRun(id) ? JobOf(runtime, id) : default;
+        // G-12: another process drives it (a terminal's corvid chat, an editor over ACP): shown read-only, saying which.
+        var driver = job.Name is null ? runtime.Driver(id) : null;
+        var drivenElsewhere = driver is { State: Corvid.Host.Composition.LockState.HeldElsewhere };
         // A session this window made holding no message yet (a fork before the first one) is new, not its id.
         return new SessionSummary(id, Line(title) ?? (_created.ContainsKey(id) || _forks.ContainsKey(id) ? "New session" : id))
         {
             // A job's run is the scheduler's: read-only here, as the demo's run is, and listed as the job's.
-            ReadOnly = job.Name is not null,
-            Holder = job.Name is not null ? JobHolder : null,
+            ReadOnly = job.Name is not null || drivenElsewhere,
+            Holder = job.Name is not null ? JobHolder : drivenElsewhere ? DriverHolder(driver!.Holder) : null,
             Job = job.Name,
             Schedule = job.Schedule,
             RunAt = job.Name is not null ? job.RunAt ?? last : null,
@@ -1072,11 +1085,24 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     /// The session's handle in the runtime, opened for this window when no surface has it open yet. Opening one writes to
     /// the log: call it off the UI thread (<see cref="SessionAsync"/>).
     /// </summary>
-    private static CorvidSession Session(CorvidRuntime runtime, string sessionId) =>
-        runtime.TryGetSession(sessionId, out var session) ? session : runtime.OpenSession(sessionId, Surface);
+    private CorvidSession Session(CorvidRuntime runtime, string sessionId)
+    {
+        if (runtime.TryGetSession(sessionId, out var session))
+            return session;
+        try
+        {
+            return runtime.OpenSession(sessionId, Surface);
+        }
+        catch (Corvid.Host.Composition.SessionHeldException exception)
+        {
+            // G-12: another process took it since it was loaded: the view turns read-only and follows it.
+            Held(sessionId, exception);
+            throw;
+        }
+    }
 
     /// <summary><see cref="Session"/> on the pool: the request methods are called on the UI thread.</summary>
-    private static Task<CorvidSession> SessionAsync(CorvidRuntime runtime, string sessionId, CancellationToken cancellationToken) =>
+    private Task<CorvidSession> SessionAsync(CorvidRuntime runtime, string sessionId, CancellationToken cancellationToken) =>
         runtime.TryGetSession(sessionId, out var session)
             ? Task.FromResult(session)
             : Task.Run(() => Session(runtime, sessionId), cancellationToken);
@@ -1092,10 +1118,11 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     private static void Writable(Channel channel)
     {
         bool readOnly;
+        string? holder;
         lock (channel.Gate)
-            readOnly = channel.ReadOnly;
+            (readOnly, holder) = (channel.ReadOnly, channel.Holder);
         if (readOnly || IsJobRun(channel.SessionId))
-            throw new InvalidOperationException($"Session {channel.SessionId} is read-only here: {JobHolder}.");
+            throw new InvalidOperationException($"Session {channel.SessionId} is read-only here: {(IsJobRun(channel.SessionId) ? JobHolder : holder ?? JobHolder)}.");
     }
 
     /// <summary>What drives a job's run, for its read-only note.</summary>
@@ -1148,8 +1175,11 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         /// <summary>Dropped while idle: no request uses it again, a fresh one replays the log.</summary>
         public bool Closed { get; set; }
 
-        /// <summary>A job's run, which the window shows and sends nothing into.</summary>
+        /// <summary>A job's run, or a session another process drives (G-12): the window shows it and sends nothing into it.</summary>
         public bool ReadOnly { get; set; }
+
+        /// <summary>What drives it while <see cref="ReadOnly"/>, for the refusal.</summary>
+        public string? Holder { get; set; }
 
         /// <summary>The running turn's open calls in the order they came, for the summary's activity.</summary>
         public List<(string CallId, string Tool, string? Target)> OpenCalls { get; } = [];
