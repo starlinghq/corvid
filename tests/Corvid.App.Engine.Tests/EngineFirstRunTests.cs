@@ -142,6 +142,41 @@ public sealed class EngineFirstRunTests : IDisposable
         Assert.Equal("Redact", (string?)file["Corvid"]!["Privacy"]!["Cloud"]);
     }
 
+    /// <summary>
+    /// A3 security review M1: the first run opened on a configured machine (a model went missing) starts on the configured
+    /// Manual and Refuse, and finishing it untouched leaves both in corvid.json, with the file's comments.
+    /// </summary>
+    [Fact]
+    public async Task FinishingTheSetupUntouchedKeepsTheConfiguredModeAndPosture()
+    {
+        await using var fixture = await EngineFixture.StartAsync();
+        using var service = Service(fixture);
+        var path = Path.Combine(fixture.Host.Root, "corvid.json");
+        const string configured = """
+            {
+              // chosen with care
+              "Corvid": { "Approvals": { "Mode": "Manual" }, "Privacy": { "Cloud": "Refuse" } }
+            }
+            """;
+        await File.WriteAllTextAsync(path, configured, Token);
+
+        Assert.Equal(new CurrentSetup(ApprovalMode.Manual, "local only"), await service.CurrentAsync(Token));
+        var bar = new StatusBarViewModel();
+        var shell = new ShellViewModel(bar);
+        shell.Navigate(Area.FirstRun);
+        var firstRun = new FirstRunViewModel(service, new Corvid.App.Core.Models.DemoModelService(new InlineDispatcher(), fixture.Time,
+            Corvid.App.Core.Models.DemoModelScene.FirstRun), shell, bar, isSetup: true);
+        await firstRun.SkipSetupCommand.ExecuteAsync();
+
+        Assert.Null(firstRun.SkipSetupCommand.Error);
+        Assert.Equal(ApprovalMode.Manual, firstRun.Mode);
+        var file = await File.ReadAllTextAsync(path, Token);
+        Assert.Contains("// chosen with care", file, StringComparison.Ordinal);
+        var json = JsonNode.Parse(file, documentOptions: new System.Text.Json.JsonDocumentOptions { CommentHandling = System.Text.Json.JsonCommentHandling.Skip })!;
+        Assert.Equal("Manual", (string?)json["Corvid"]!["Approvals"]!["Mode"]);
+        Assert.Equal("Refuse", (string?)json["Corvid"]!["Privacy"]!["Cloud"]);
+    }
+
     [Fact]
     public async Task AChoiceTheValidatorRefusesIsNotSavedAndSaysWhy()
     {

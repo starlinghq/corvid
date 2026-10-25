@@ -142,19 +142,44 @@ public sealed class EngineFirstRunService : IFirstRunService, IDisposable
         return Task.Run(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var edits = new List<ConfigEdit>
+            // Only what the person changed: a null mode or posture leaves the configured one (Manual, Refuse) as it is.
+            var edits = new List<ConfigEdit>();
+            if (choices.Mode is { } mode)
+                edits.Add(ConfigEdit.Set("Corvid:Approvals:Mode", mode.ToString()));
+            if (choices.Posture is { } posture)
             {
-                ConfigEdit.Set("Corvid:Approvals:Mode", choices.Mode.ToString()),
                 // "local only" never asks a cloud model: the egress gate refuses every cloud request.
-                ConfigEdit.Set("Corvid:Privacy:Cloud", string.Equals(choices.Posture, "local only", StringComparison.Ordinal) ? "Refuse" : "Redact"),
-            };
+                edits.Add(ConfigEdit.Set("Corvid:Privacy:Cloud", posture switch
+                {
+                    "local only" => "Refuse",
+                    "send" => "Send",
+                    _ => "Redact",
+                }));
+            }
             if (choices.Workspace.Trim() is { Length: > 0 } workspace)
                 edits.Add(ConfigEdit.Set("Corvid:Workspace", workspace));
+            if (edits.Count == 0)
+                return;
             var result = _writer.Apply(edits);
             if (!result.Written)
                 throw new InvalidOperationException($"Nothing was saved to {result.Path}: {result.FailureText}");
         }, cancellationToken);
     }
+
+    /// <summary>The mode and posture the next start would run with (the built-in defaults where the file says nothing).</summary>
+    public Task<CurrentSetup> CurrentAsync(CancellationToken cancellationToken = default) => Task.Run(() =>
+    {
+        var options = Options(_writer.NextStart());
+        Corvid.App.Core.Shell.ApprovalMode? mode = Enum.TryParse<Corvid.App.Core.Shell.ApprovalMode>(options.Approvals.Mode.ToString(), out var parsed) ? parsed : null;
+        var posture = options.Privacy.Cloud.ToString() switch
+        {
+            "Refuse" => "local only",
+            "Send" => "send",
+            "Redact" => "redact",
+            _ => null,
+        };
+        return new CurrentSetup(mode, posture);
+    }, cancellationToken);
 
     public void Dispose()
     {

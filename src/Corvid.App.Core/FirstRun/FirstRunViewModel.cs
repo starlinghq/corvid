@@ -217,8 +217,14 @@ public sealed class FirstRunViewModel : AreaViewModel
     private bool _workspaceTyped;
     private IReadOnlyList<TextRun> _workspaceNote = [];
     private bool _choosingWorkspace;
+    // The built-in defaults until the configuration's own mode and posture arrive (CurrentAsync), unless the person chose first.
     private ApprovalMode _mode = ApprovalMode.Smart;
     private string _posture = "redact";
+    private CurrentSetup _current = CurrentSetup.None;
+    private bool _modeChosen;
+    private bool _postureChosen;
+    private bool _currentUnknown;
+    private readonly Task _currentLoad;
     private IReadOnlyList<TextRun> _hermes = [];
     private bool _hasHermes;
     private IReadOnlyList<TextRun> _notice = [];
@@ -245,14 +251,14 @@ public sealed class FirstRunViewModel : AreaViewModel
         Downloads.Started += (_, _) => Say("Downloading. The rest of the setup does not wait for it.");
         Modes =
         [
-            new(ApprovalMode.Manual, "Manual", " · every side effect asks", SetMode),
-            new(ApprovalMode.Smart, "Smart", " · runs unasked only when Kev rates it low risk and it stays in the workspace, with no network, elevation or destructive tool", SetMode),
-            new(ApprovalMode.Permissive, "Permissive", " · follows the fabric: calibrated levels 0 to 1 run, 2 to 4 ask", SetMode),
+            new(ApprovalMode.Manual, "Manual", " · every side effect asks", ChooseMode),
+            new(ApprovalMode.Smart, "Smart", " · runs unasked only when Kev rates it low risk and it stays in the workspace, with no network, elevation or destructive tool", ChooseMode),
+            new(ApprovalMode.Permissive, "Permissive", " · follows the fabric: calibrated levels 0 to 1 run, 2 to 4 ask", ChooseMode),
         ];
         Postures =
         [
-            new("redact", "Redact: PII and credential values are replaced before a request leaves", new RelayCommand(() => Posture = "redact")),
-            new("local only", "Local only: cloud models are never asked", new RelayCommand(() => Posture = "local only")),
+            new("redact", "Redact: PII and credential values are replaced before a request leaves", new RelayCommand(() => ChoosePosture("redact"))),
+            new("local only", "Local only: cloud models are never asked", new RelayCommand(() => ChoosePosture("local only"))),
         ];
 
         RunAgainCommand = new AsyncRelayCommand(RunChecksAsync);
@@ -279,6 +285,7 @@ public sealed class FirstRunViewModel : AreaViewModel
         SetMode(_mode);
         Posture = _posture;
         RefreshModels();
+        _currentLoad = LoadCurrentAsync();
         _ = LoadAsync();
         UpdateActive();
     }
@@ -369,13 +376,27 @@ public sealed class FirstRunViewModel : AreaViewModel
 
     public ApprovalMode Mode => _mode;
 
-    /// <summary>The cloud privacy posture: "redact" (the default) or "local only".</summary>
+    /// <summary>
+    /// "Manual → Smart" when the mode chosen differs from the one configured now: finishing the setup writes it. Empty when
+    /// the configured mode stays (it is then not written at all).
+    /// </summary>
+    public string ModeChange => _current.Mode is { } configured && configured != _mode
+        ? $"Configured now: {configured}. Finishing the setup changes it: {configured} → {_mode}."
+        : "";
+
+    /// <summary>"Local only → Redact" when the posture chosen differs from the one configured now; empty when it stays.</summary>
+    public string PostureChange => _current.Posture is { } configured && !string.Equals(configured, _posture, StringComparison.Ordinal)
+        ? $"Configured now: {PostureName(configured)}. Finishing the setup changes it: {PostureName(configured)} → {PostureName(_posture)}."
+        : "";
+
+    /// <summary>The cloud privacy posture: "redact" (the default), "local only", or "send" when the configuration sends unredacted.</summary>
     public string Posture
     {
         get => _posture;
         set
         {
             SetProperty(ref _posture, value ?? "redact");
+            OnPropertyChanged(nameof(PostureChange));
             foreach (var posture in Postures)
                 posture.IsSelected = posture.Label == _posture;
         }
@@ -457,7 +478,14 @@ public sealed class FirstRunViewModel : AreaViewModel
 
     private async Task FinishAsync(CancellationToken cancellationToken)
     {
-        await _service.SaveAsync(new SetupChoices(_workspace, _mode, _posture), cancellationToken).ConfigureAwait(true);
+        // Only what differs from the configuration now is written: a setup opened on a configured machine (a model went
+        // missing) leaves a Manual mode or a Refuse posture as it was unless the person changed it here. When the
+        // configured values could not be read, only what the person chose is written.
+        await _currentLoad.ConfigureAwait(true);
+        ApprovalMode? mode = _currentUnknown ? (_modeChosen ? _mode : null) : _current.Mode == _mode ? null : _mode;
+        string? posture = _currentUnknown ? (_postureChosen ? _posture : null)
+            : string.Equals(_current.Posture, _posture, StringComparison.Ordinal) ? null : _posture;
+        await _service.SaveAsync(new SetupChoices(_workspace, mode, posture), cancellationToken).ConfigureAwait(true);
         // The app now runs with what it has; the Models badge says how many default models are still missing (F23).
         _shell.SetBadge(Area.Models, _models.Snapshot.Catalogue.Count(model => model.InDefaultSet && model.IsMissing));
         // F1 ends on an empty session, not on whichever session the rail lists first, and the status bar keeps what the
@@ -487,6 +515,7 @@ public sealed class FirstRunViewModel : AreaViewModel
 
     private async Task LoadAsync()
     {
+        await _currentLoad.ConfigureAwait(true);
         var models = LoadModelsAsync();
         await LoadChecksAsync().ConfigureAwait(true);
         await models.ConfigureAwait(true);
@@ -568,12 +597,55 @@ public sealed class FirstRunViewModel : AreaViewModel
             Fail($"The clipboard did not take `{shown}`: select it in the fix and copy it by hand.");
     }
 
+    /// <summary>The mode and posture configured now: the setup starts on them, so finishing it changes nothing it was not asked to.</summary>
+    private async Task LoadCurrentAsync()
+    {
+        try
+        {
+            _current = await _service.CurrentAsync().ConfigureAwait(true) ?? CurrentSetup.None;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            _currentUnknown = true;
+            Fail($"The configured approval mode and cloud privacy could not be read, so finishing writes only a mode or posture you pick: {Spans.Escape(exception.Message)}");
+            return;
+        }
+
+        if (_current.Mode is { } mode && !_modeChosen)
+            SetMode(mode);
+        if (_current.Posture is { } posture && !_postureChosen)
+            Posture = posture;
+        OnPropertyChanged(nameof(ModeChange));
+        OnPropertyChanged(nameof(PostureChange));
+    }
+
+    private void ChooseMode(ApprovalMode mode)
+    {
+        _modeChosen = true;
+        SetMode(mode);
+    }
+
+    private void ChoosePosture(string posture)
+    {
+        _postureChosen = true;
+        Posture = posture;
+    }
+
+    private static string PostureName(string posture) => posture switch
+    {
+        "redact" => "Redact",
+        "local only" => "Local only",
+        "send" => "Send (unredacted)",
+        _ => posture,
+    };
+
     private void SetMode(ApprovalMode mode)
     {
         _mode = mode;
         foreach (var option in Modes)
             option.IsSelected = option.Mode == mode;
         OnPropertyChanged(nameof(Mode));
+        OnPropertyChanged(nameof(ModeChange));
     }
 
     private void Say(string message)

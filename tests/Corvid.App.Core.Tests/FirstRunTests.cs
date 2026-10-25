@@ -313,9 +313,54 @@ public sealed class FirstRunTests
         Assert.Equal("in-process", bar.Engine);
     }
 
+    /// <summary>
+    /// A3 security review M1: a setup opened on a configured machine (a model went missing) starts on the configured mode
+    /// and posture, writes neither unless the person changes it, and says "Manual → Smart" before a change is saved.
+    /// </summary>
+    [Fact]
+    public void ASetupOverAConfiguredMachineWritesOnlyWhatThePersonChanged()
+    {
+        static (FirstRunViewModel FirstRun, ReportingFirstRun Service, ShellViewModel Shell) Open()
+        {
+            var bar = new StatusBarViewModel();
+            var shell = new ShellViewModel(bar);
+            shell.Navigate(Area.FirstRun);
+            var service = new ReportingFirstRun { Current = new CurrentSetup(ApprovalMode.Manual, "local only") };
+            var models = new DemoModelService(new InlineDispatcher(), ManualTimeProvider.Demo(), DemoModelScene.FirstRun);
+            return (new FirstRunViewModel(service, models, shell, bar, isSetup: true), service, shell);
+        }
+
+        var (untouched, service, shell) = Open();
+        Assert.Equal(ApprovalMode.Manual, untouched.Mode);
+        Assert.True(untouched.Modes[0].IsSelected);
+        Assert.Equal("local only", untouched.Posture);
+        Assert.True(untouched.Postures[1].IsSelected);
+        Assert.Equal("", untouched.ModeChange);
+        Assert.Equal("", untouched.PostureChange);
+        untouched.SkipSetupCommand.Execute(null);
+        Assert.Equal(Area.Sessions, shell.CurrentArea);
+        Assert.Equal(new SetupChoices("~/src/corvid", null, null), service.Saved);
+
+        var (changed, changedService, _) = Open();
+        changed.Modes[1].Choose.Execute(null);
+        Assert.Equal("Configured now: Manual. Finishing the setup changes it: Manual → Smart.", changed.ModeChange);
+        changed.Postures[0].Choose.Execute(null);
+        Assert.Equal("Configured now: Local only. Finishing the setup changes it: Local only → Redact.", changed.PostureChange);
+        changed.Postures[1].Choose.Execute(null);
+        Assert.Equal("", changed.PostureChange);
+        changed.SkipSetupCommand.Execute(null);
+        Assert.Equal(new SetupChoices("~/src/corvid", ApprovalMode.Smart, null), changedService.Saved);
+    }
+
     private sealed class ReportingFirstRun : IFirstRunService
     {
         private readonly DemoFirstRunService _demo = new(freshMachine: true);
+
+        public CurrentSetup Current { get; init; } = CurrentSetup.None;
+
+        public SetupChoices? Saved => _demo.Saved;
+
+        public Task<CurrentSetup> CurrentAsync(CancellationToken cancellationToken = default) => Task.FromResult(Current);
 
         public string? EngineStatus { get; set; }
 
