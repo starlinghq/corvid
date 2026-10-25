@@ -272,7 +272,10 @@ public sealed class GatewayHost : IAsyncDisposable
     internal static string GuestName(InboundMessage message)
     {
         var name = $"{message.Adapter} guest " + (message.SenderName is { Length: > 0 } shown ? $"{shown} ({message.SenderId})" : message.SenderId);
-        name = new string([.. name.Where(c => !char.IsControl(c) && c is not ('\u2028' or '\u2029'))]);
+        // Format characters (bidirectional overrides, zero-width ones) go too (A4 verification); the prompt's label also
+        // shows brackets as parentheses (PromptRenderer.SenderName).
+        name = new string([.. name.Where(c => !char.IsControl(c) && c is not ('\u2028' or '\u2029')
+            && char.GetUnicodeCategory(c) != System.Globalization.UnicodeCategory.Format)]);
         return name.Length <= 100 ? name : name[..100] + "…";
     }
 

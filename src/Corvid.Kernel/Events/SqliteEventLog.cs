@@ -18,7 +18,8 @@ public sealed class SqliteEventLog : IEventLog
         if (path == ":memory:")
             throw new ArgumentException("The event log requires an on-disk database.", nameof(path));
         path = Path.GetFullPath(path);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        // A4 verification: on a fresh home the log can be the first to make the data directory: owner only.
+        Corvid.Abstractions.IO.PrivateDirectory.CreateFor(path);
         connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = path,

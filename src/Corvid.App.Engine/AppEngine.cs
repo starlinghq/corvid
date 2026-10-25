@@ -416,10 +416,7 @@ public sealed class AppEngine : IAsyncDisposable
             return;
         try
         {
-            // Only a gateway another process held: one off for its own reason (no adapter enabled) waits for Start or Settings.
-            if (HostsGateway && await GatewayAsync().ConfigureAwait(false) is { Status.Hosting: GatewayHosting.Elsewhere } gateway
-                && ProcessLock.Probe(GatewayStatus.LockPath(runtime.Options), withoutNote: true).State == LockState.Free)
-                await StartGatewayAsync(gateway).ConfigureAwait(false);
+            await TakeOverGatewayHeldAsync(runtime).ConfigureAwait(false);
             // The runtime retries only a lock it lost to another process (C-041).
             if (HostsScheduler)
                 runtime.WakeScheduler();
@@ -431,6 +428,45 @@ public sealed class AppEngine : IAsyncDisposable
         if (HostingState != before)
             HostingChanged?.Invoke();
     });
+
+    /// <summary>
+    /// The Gateway page's load (G-14): asked to host it and another process ran it and has exited, this app takes it over
+    /// now, as the timer would within its interval. Under the same hosting lock as Start, Stop and the timer, rechecking
+    /// that hosting is still asked for once it holds it, so a Stop answered while the page loaded is never undone (A4
+    /// verification). Off the caller's thread: the probe touches the lock file, and starting composes the gateway.
+    /// </summary>
+    internal Task TakeOverGatewayAsync(CancellationToken cancellationToken) => Task.Run(async () =>
+    {
+        var runtime = await RuntimeAsync().ConfigureAwait(false);
+        if (!HostsGateway || await GatewayAsync().ConfigureAwait(false) is not { Status.Hosting: GatewayHosting.Elsewhere })
+            return;
+        if (BeforeGatewayTakeOver is { } hook)
+            await hook().ConfigureAwait(false);
+        var before = HostingState;
+        await _hosting.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await TakeOverGatewayHeldAsync(runtime).ConfigureAwait(false);
+        }
+        finally
+        {
+            _hosting.Release();
+        }
+        if (HostingState != before)
+            HostingChanged?.Invoke();
+    }, cancellationToken);
+
+    /// <summary>Runs after the page's load decided to take the gateway over and before it takes the hosting lock (tests).</summary>
+    internal Func<Task>? BeforeGatewayTakeOver { get; set; }
+
+    // Holding _hosting. Only a gateway another process held: one off for its own reason (no adapter enabled) waits for
+    // Start or Settings; and only while hosting is still asked for.
+    private async Task TakeOverGatewayHeldAsync(CorvidRuntime runtime)
+    {
+        if (HostsGateway && await GatewayAsync().ConfigureAwait(false) is { Status.Hosting: GatewayHosting.Elsewhere } gateway
+            && ProcessLock.Probe(GatewayStatus.LockPath(runtime.Options), withoutNote: true).State == LockState.Free)
+            await StartGatewayAsync(gateway).ConfigureAwait(false);
+    }
 
     /// <summary>The last take-over the timer started, finished (tests).</summary>
     internal Task TakeOverIdleAsync() => Volatile.Read(ref _lastTakeOver);

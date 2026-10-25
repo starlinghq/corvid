@@ -278,6 +278,50 @@ public sealed class EgressLedgerTests : IDisposable
     }
 
     [Fact]
+    public async Task One_conversation_over_the_size_cap_keeps_its_newest_request()
+    {
+        // A4 verification: a cap smaller than one request's messages emptied the ledger.
+        _ledger.Retention = new EgressRetention(null, null);
+        var client = Client();
+        await client.GetResponseAsync(First(), Session("s1"), Token);
+        await client.GetResponseAsync(Second(), Session("s1"), Token);
+        await _ledger.Pruning;
+
+        _ledger.Retention = new EgressRetention(null, 1);
+        var pruned = _ledger.Prune();
+
+        Assert.Equal(1, pruned.Requests);
+        var kept = Assert.Single(_ledger.List(cancellationToken: Token));
+        Assert.NotNull(_ledger.Render(kept.RequestId));
+        Assert.Empty(_failures);
+    }
+
+    [Fact]
+    public async Task A_ledger_in_use_is_pruned_and_said_not_compacted()
+    {
+        // A4 verification: VACUUM while another process writes (the app recording) failed busy and crashed `corvid egress prune`.
+        _ledger.Retention = new EgressRetention(null, null);
+        var client = Client();
+        await client.GetResponseAsync(First(), Session("s1"), Token);
+        await client.GetResponseAsync(Other(), Session("s2"), Token);
+        await _ledger.Pruning;
+        using var writer = new SqliteConnection($"Data Source={_ledger.Path};Pooling=False");
+        writer.Open();
+        SqliteTransaction? writing = null;
+        // Another connection takes the write lock after the prune's deletes and before it compacts.
+        _ledger.BeforeVacuum = () => writing = writer.BeginTransaction(deferred: false);
+
+        _ledger.Retention = new EgressRetention(null, 1);
+        var pruned = _ledger.Prune(vacuum: true);
+
+        Assert.Equal(1, pruned.Requests);
+        Assert.True(pruned.NotCompacted);
+        writing!.Rollback();
+        writing.Dispose();
+        Assert.Single(_ledger.List(cancellationToken: Token));
+    }
+
+    [Fact]
     public void Prune_on_no_store_creates_none()
     {
         Assert.Equal(new EgressPruned(0, 0), _ledger.Prune());

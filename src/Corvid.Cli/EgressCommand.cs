@@ -101,12 +101,23 @@ internal static class EgressCommand
     // M2: what Corvid:Privacy:Ledger no longer keeps, now rather than at the next daily prune, and the file compacted.
     private static int Prune(IAnsiConsole console, EgressLedger ledger, EgressLedgerSettings settings)
     {
-        var pruned = ledger.Prune(vacuum: true);
+        EgressPruned pruned;
+        try
+        {
+            pruned = ledger.Prune(vacuum: true);
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException exception) when (exception.SqliteErrorCode is 5 or 6)
+        {
+            // Busy past the store's wait even for the prune itself: nothing changed.
+            return Fail(console, "The ledger is in use; nothing was pruned. Run it again when no Corvid process is recording.", ExitCodes.Failure);
+        }
         var kept = (settings.RetainDays > 0 ? $"{settings.RetainDays} days" : "any age") + ", "
             + (settings.MaxMegabytes > 0 ? $"at most {settings.MaxMegabytes} MB" : "no size cap");
         console.MarkupLine(string.Create(CultureInfo.InvariantCulture,
             $"Pruned {pruned.Requests} {(pruned.Requests == 1 ? "request" : "requests")} and {pruned.Messages} unused {(pruned.Messages == 1 ? "message" : "messages")} ")
             + Markup.Escape($"(Corvid:Privacy:Ledger keeps {kept})."));
+        if (pruned.NotCompacted)
+            console.MarkupLine("[yellow]The ledger is in use; pruned, not compacted.[/] Run it again when no Corvid process is recording.");
         return ExitCodes.Success;
     }
 

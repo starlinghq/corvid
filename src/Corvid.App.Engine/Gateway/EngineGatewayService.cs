@@ -113,14 +113,8 @@ public sealed class EngineGatewayService : IGatewayService, IDisposable
         var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
         var gateway = await _engine.GatewayAsync().ConfigureAwait(false);
         // Asked to host it (U-8) and another process ran it and has exited: this app takes it over now (the one-lock rule
-        // decides, as at start), as the engine's own timer would within its interval. Never when the app is not asked to.
-        // Off the caller's thread (the UI's): the probe touches the lock file, and starting composes the gateway.
-        if (_engine.HostsGateway && gateway is { Status.Hosting: GatewayHosting.Elsewhere })
-            await Task.Run(async () =>
-            {
-                if (ProcessLock.Probe(GatewayStatus.LockPath(runtime.Options), withoutNote: true).State == LockState.Free)
-                    await gateway.StartAsync(cancellationToken).ConfigureAwait(false);
-            }, cancellationToken).ConfigureAwait(false);
+        // decides, as at start), under the engine's hosting lock so a Stop meanwhile wins. Never when the app is not asked to.
+        await _engine.TakeOverGatewayAsync(cancellationToken).ConfigureAwait(false);
         return await Task.Run(() =>
         {
             var options = runtime.Options;

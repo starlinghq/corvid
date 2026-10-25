@@ -203,6 +203,8 @@ public sealed partial class EngineSessionService
                 case ComposerLine.Empty empty:
                     throw new InvalidOperationException(empty.Message);
             }
+            // A \# or \! answer is sent without its backslash, as every other message is (A4 verification).
+            answer = ComposerLine.MessageText(answer);
         }
         // An option is the model's word, sent as it was offered: never read as a ! or # composer line.
         await EnqueueAsync(sessionId, answer, modeLines: false, cancellationToken).ConfigureAwait(false);

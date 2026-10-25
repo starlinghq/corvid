@@ -190,15 +190,15 @@ public sealed partial class SessionViewModel
         Draft = "";
         // A slash command runs as itself even with a question open: it is never the answer.
         if (IsCommandLine(text))
-            Run(() => _service.RunCommandAsync(SessionId, text), () => Draft = text);
+            Run(() => _service.RunCommandAsync(SessionId, text), () => GiveBack(text));
         else if (_pendingQuestion is { IsOpen: true, AllowsFreeText: true } question)
             // A refusal (answered from another view meanwhile, or a ! line the service will not take as an answer) gives the
             // text back to the composer.
-            AnswerQuestion(question.QuestionId, text, () => Draft = text);
+            AnswerQuestion(question.QuestionId, text, () => GiveBack(text));
         else if (_state.Running)
-            Run(() => _service.QueueAsync(SessionId, text), () => Draft = text);
+            Run(() => _service.QueueAsync(SessionId, text), () => GiveBack(text));
         else
-            Run(() => _service.SendAsync(SessionId, text), () => Draft = text);
+            Run(() => _service.SendAsync(SessionId, text), () => GiveBack(text));
     }
 
     private void Steer()
@@ -214,8 +214,14 @@ public sealed partial class SessionViewModel
         if (text.Length == 0)
             return;
         Draft = "";
-        Run(() => _service.SteerAsync(SessionId, text), () => Draft = text);
+        Run(() => _service.SteerAsync(SessionId, text), () => GiveBack(text));
     }
+
+    /// <summary>
+    /// A refused message back in the composer (A4 verification): as it was when the composer is still empty; otherwise the
+    /// person typed on meanwhile, and it goes before what they typed, on its own line, so neither is lost.
+    /// </summary>
+    private void GiveBack(string text) => Draft = _draft.Length == 0 ? text : $"{text}\n{_draft}";
 
     private void TakeBackLast()
     {

@@ -79,7 +79,8 @@ public sealed class ProcessLock : IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         path = System.IO.Path.GetFullPath(path);
-        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
+        // A4 verification: a lock can be the first to make the data directory (or drivers/ in it): owner only.
+        Corvid.Abstractions.IO.PrivateDirectory.CreateFor(path);
         for (var attempt = 1; ; attempt++)
         {
             try

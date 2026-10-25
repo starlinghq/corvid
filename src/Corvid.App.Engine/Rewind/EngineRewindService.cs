@@ -223,7 +223,7 @@ public sealed class EngineRewindService : IRewindService, IDisposable
         finally
         {
             if (opened)
-                await runtime.ReleaseDriverAsync(sessionId).ConfigureAwait(false);
+                await _signals.ReleaseAfterRestoreAsync(runtime, sessionId).ConfigureAwait(false);
         }
         var at = _time.GetUtcNow();
         RestoreOutcome outcome = result is null
