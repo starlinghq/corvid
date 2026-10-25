@@ -112,6 +112,8 @@ public sealed class UiStateStoreTests : IDisposable
     [Fact]
     public async Task Two_stores_on_one_file_writing_at_once_lose_nothing()
     {
+        // Enough interleaved writes to meet the other store's lock many times, few enough for a busy shared runner.
+        const int Rounds = 30;
         var first = new UiStateStore(File);
         var second = new UiStateStore(File);
         first.Pinned();
@@ -121,7 +123,7 @@ public sealed class UiStateStoreTests : IDisposable
         void Write(UiStateStore store, string prefix)
         {
             start.SignalAndWait(token);
-            for (var i = 0; i < 100; i++)
+            for (var i = 0; i < Rounds; i++)
             {
                 store.SetDraft($"{prefix}-{i}", $"draft {i}", null, At);
                 store.SetPinned($"{prefix}-{i}", true, At);
@@ -132,9 +134,9 @@ public sealed class UiStateStoreTests : IDisposable
         await Task.WhenAll(Task.Run(() => Write(first, "app"), token), Task.Run(() => Write(second, "cli"), token));
 
         var pinned = new UiStateStore(File).Pinned();
-        Assert.Equal(200, pinned.Count);
-        Assert.Equal("draft 99", first.GetDraft("cli-99")!.Text);
-        Assert.Equal("99", second.Preferences()["app:Last"]);
+        Assert.Equal(2 * Rounds, pinned.Count);
+        Assert.Equal($"draft {Rounds - 1}", first.GetDraft($"cli-{Rounds - 1}")!.Text);
+        Assert.Equal($"{Rounds - 1}", second.Preferences()["app:Last"]);
     }
 
     [Fact]

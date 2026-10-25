@@ -250,6 +250,11 @@ public sealed class UiStateStore
         try
         {
             connection.Open();
+            // In WAL mode NORMAL is still safe across a crash (only the last commits can be lost on power loss, never the
+            // file), and it keeps each write short, so another process's writer seldom waits on this one's sync.
+            using var sync = connection.CreateCommand();
+            sync.CommandText = "PRAGMA synchronous=NORMAL;";
+            sync.ExecuteNonQuery();
             return connection;
         }
         catch
