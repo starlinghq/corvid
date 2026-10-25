@@ -116,6 +116,48 @@ public sealed class ComposerLineTurnTests
     }
 
     [Fact]
+    public async Task A_shell_lines_turn_takes_no_steers_so_one_sent_while_its_command_waits_is_answered_at_once()
+    {
+        TurnRunner? runner = null;
+        Task<bool>? steer = null;
+        bool? takes = null;
+        var prompter = new FakePrompter((_, _) =>
+        {
+            // M2: no step checkpoint follows the user's command; a steer is handed back now, to be sent as a message.
+            takes = runner!.TakesSteers;
+            steer = runner.SteerAsync("and then build");
+            return Task.FromResult(ApprovalAnswer.Approve());
+        });
+        var (harness, _) = Harness(new FakeGenerator(), prompter);
+        using var __ = harness;
+        runner = harness.Runner();
+
+        await Line(harness, runner, "!rm -rf build");
+
+        Assert.False(takes);
+        Assert.True(steer!.IsCompleted);
+        Assert.False(await steer);
+        Assert.Empty(harness.Payloads().OfType<UserSteered>());
+    }
+
+    [Fact]
+    public async Task A_models_call_never_keeps_the_id_reserved_for_the_users_own_shell_line()
+    {
+        var generator = new FakeGenerator(Reply.Call("shell", """{"command":"ls"}""", callId: "user-shell"),
+            Reply.Call("shell", """{"command":"ls src"}""", callId: "USER-SHELL-2"), Reply.Say("Listed."));
+        var (harness, _) = Harness(generator, FakePrompter.Always(approve: true));
+        using var __ = harness;
+
+        await harness.RunAsync(harness.Runner(), "list the files with the shell");
+
+        var ids = harness.Payloads().OfType<ToolCallIssued>().Select(call => call.CallId).ToList();
+        Assert.NotEmpty(ids);
+        // Security L1: surfaces read an id starting user-shell as the person's own ! line.
+        Assert.All(ids, id => Assert.False(id.StartsWith(TurnRunner.UserShellCall, StringComparison.OrdinalIgnoreCase), id));
+        Assert.Equal("call-user-shell", ids[0]);
+    }
+
+    [Fact]
     public async Task Call_ids_stay_unique_across_shell_lines()
     {
         var (harness, _) = Harness(new FakeGenerator(), FakePrompter.Always(approve: true));

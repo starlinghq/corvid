@@ -164,6 +164,61 @@ public sealed class RunningTurnTests
     }
 
     [Fact]
+    public async Task A_steer_sent_while_an_approval_prompt_waits_is_taken_at_the_checkpoint_after_the_round()
+    {
+        TurnRunner? runner = null;
+        Task<bool>? steer = null;
+        var prompter = new FakePrompter((_, _) =>
+        {
+            // A4V2-1: typed while the card waits; the round has not finished, so nothing takes it yet.
+            steer = runner!.SteerAsync("send it to the staging hook too");
+            Assert.False(steer.IsCompleted);
+            return Task.FromResult(Approvals.ApprovalAnswer.Approve());
+        });
+        var generator = new FakeGenerator(Reply.Call("post_webhook", """{"url":"https://example.org/hook","body":"hi"}"""), Reply.Say("Posted."));
+        using var harness = new TurnHarness(generator, prompter: prompter, tools: registry => registry.Add(TestTool.PostWebhook()));
+        runner = harness.Runner();
+
+        var result = await harness.RunAsync(runner, "post hi to the webhook");
+
+        Assert.Single(prompter.Prompts);
+        Assert.True(await steer!);
+        Assert.Equal(1, result.Steers);
+        var payloads = harness.Payloads().Where(item => item is ToolCallIssued or ToolResult or UserSteered or AssistantMessage).ToList();
+        Assert.Collection(payloads,
+            item => Assert.Equal("post_webhook", Assert.IsType<ToolCallIssued>(item).ToolName),
+            item => Assert.False(Assert.IsType<ToolResult>(item).IsError),
+            item => Assert.Equal("send it to the staging hook too", Assert.IsType<UserSteered>(item).Text),
+            item => Assert.IsType<AssistantMessage>(item));
+    }
+
+    [Fact]
+    public async Task A_steer_taken_where_the_decider_says_done_keeps_the_tools_for_one_more_step()
+    {
+        TurnRunner? runner = null;
+        Task<bool>? steer = null;
+        var generator = new FakeGenerator(Reply.Call("check_weather"), Reply.Say("Sunny, and windy tomorrow."))
+        {
+            YesNo = FakeGenerator.YesTo("fully handled"),
+        };
+        using var harness = new TurnHarness(generator, tools: registry => registry.Add(Weather(_ =>
+        {
+            steer = runner!.SteerAsync("check tomorrow's wind too");
+            return Task.CompletedTask;
+        })));
+        runner = harness.Runner();
+
+        var result = await harness.RunAsync(runner, "what's the weather?");
+
+        Assert.True(await steer!);
+        Assert.Equal("stop", Assert.Single(harness.Decisions("done")).Action);
+        // L3: done acted on the round, but the steer asks for more: the next step still offers the tools.
+        Assert.Contains("check_weather", generator.Calls[1].ToolNames);
+        Assert.Contains(generator.Calls[1].Messages, message => message.Role == ChatRole.User && message.Text == "check tomorrow's wind too");
+        Assert.Equal(TurnStatus.Answered, result.Status);
+    }
+
+    [Fact]
     public async Task The_actor_hands_a_steer_to_its_running_turn()
     {
         SessionActor? actor = null;
@@ -357,6 +412,70 @@ public sealed class RunningTurnTests
         // ten characters of the redrawn line only.
         Assert.Single(published);
         Assert.Equal("ogress 20%", tail.Snapshot());
+    }
+
+    [Fact]
+    public async Task A_slow_surface_does_not_hold_the_tails_lock()
+    {
+        var clock = new TestClock();
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var published = new ConcurrentQueue<string>();
+        using var tail = new ToolOutputTail(clock, TimeSpan.FromMilliseconds(100), 2_000, 12, text =>
+        {
+            published.Enqueue(text);
+            entered.Set();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(60), Ct));
+        });
+
+        // The first write publishes at once, on the tool's thread, and the surface stalls in it.
+        var writer = Task.Run(() => tail.Write("first\n"), Ct);
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(60), Ct));
+        // L5: the buffer is free meanwhile: more output is taken and the tail can be read.
+        var other = Task.Run(() =>
+        {
+            tail.Write("second\n");
+            return tail.Snapshot();
+        }, Ct);
+        Assert.Equal("first\nsecond", await other.WaitAsync(TimeSpan.FromSeconds(60), Ct));
+        release.Set();
+        await writer.WaitAsync(TimeSpan.FromSeconds(60), Ct);
+        Assert.Equal(["first"], published);
+    }
+
+    [Fact]
+    public void A_credential_across_the_buffers_cut_never_shows_in_part()
+    {
+        var clock = new TestClock();
+        var published = new List<string>();
+        // Twice the shown size is buffered (120 characters); a JWT later in the line scrubs to far fewer characters, so
+        // what was buffered from the front of the line comes into the shown tail.
+        using var tail = new ToolOutputTail(clock, TimeSpan.FromMilliseconds(100), 60, 4, published.Add);
+        const string Jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJlLXZhbHVlLXNpZ25hdHVyZQ";
+
+        // One line, cut three characters in: the GitHub token loses its "ghp" and is no longer recognisable alone.
+        tail.Write("ab " + Token + " " + Jwt + " end");
+
+        var shown = tail.Snapshot();
+        Assert.DoesNotContain(Token[^12..^4], shown, StringComparison.Ordinal);
+        Assert.DoesNotContain(Token[^8..], shown, StringComparison.Ordinal);
+        Assert.DoesNotContain(Jwt, shown, StringComparison.Ordinal);
+        Assert.EndsWith(" end", shown, StringComparison.Ordinal);
+        Assert.All(published, text => Assert.DoesNotContain(Token[^12..^4], text, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Output_of_many_lines_is_cut_at_a_lines_start()
+    {
+        var clock = new TestClock();
+        using var tail = new ToolOutputTail(clock, TimeSpan.FromMilliseconds(100), 60, 4, _ => { });
+        const string Jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJlLXZhbHVlLXNpZ25hdHVyZQ";
+
+        tail.Write("ab " + Token + "\n" + Jwt + "\nshort\n");
+
+        var shown = tail.Snapshot();
+        Assert.DoesNotContain(Token[^12..^4], shown, StringComparison.Ordinal);
+        Assert.EndsWith("short", shown, StringComparison.Ordinal);
     }
 
     private sealed class Listener : ITurnListener
