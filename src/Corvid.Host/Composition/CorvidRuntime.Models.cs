@@ -65,4 +65,82 @@ public sealed partial class CorvidRuntime
             return new(write, Live: false, LiveDetail: TerminalText.Visible(exception.Message));
         }
     }
+
+    /// <summary>
+    /// A5: the person's "this session" choices in a session's log (<c>ModelSwitched</c> with the reason <c>session</c>, the
+    /// latest per slot; a de-escalation to another model after it is a reset, which forgets it), put back when the session is
+    /// opened again, so a choice lasts for the session across a restart, <c>corvid chat --session</c> or a fork. A model no
+    /// longer in the catalogue or not usable now is left out with a notice, and so is a cloud one: a cloud binding is chosen
+    /// again through the privacy gate, never brought back without it. Memory's embedder is left to its configuration.
+    /// </summary>
+    private void RestoreModelChoices(string sessionId, SessionModelSlots slots)
+    {
+        if (Log.GetHead(sessionId) == 0)
+            return;
+        var choices = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var item in Log.Read(sessionId))
+        {
+            if (item.Payload is not Corvid.Abstractions.Events.ModelSwitched switched || Profile(switched.NewProfile) is not { } to)
+                continue;
+            if (switched.Reason == SwitchReason.Session.ToWireName())
+                choices[switched.Slot] = to;
+            else if (switched.Reason == SwitchReason.DeEscalation.ToWireName() && choices.TryGetValue(switched.Slot, out var chosen) && chosen != to)
+                choices.Remove(switched.Slot);
+        }
+        foreach (var (slot, id) in choices)
+        {
+            if (slot == ModelSlots.TextEmbedder || !ModelSlots.All.Contains(slot, StringComparer.Ordinal))
+                continue;
+            var name = id.Split('@')[0];
+            if (!Catalogue.TryFind(name, out var model) || !model.Serves(slot))
+            {
+                RaiseNotice($"{sessionId}: its {slot} choice {TerminalText.Visible(name)} is not in the catalogue now, so it starts on the default.");
+                continue;
+            }
+            if (model.Profile.Privacy == PrivacyClass.Cloud)
+            {
+                RaiseNotice($"{sessionId}: its {slot} choice {TerminalText.Visible(model.Name)} is a cloud model; choose it again (/model) to send through the privacy gate.");
+                continue;
+            }
+            if (!Catalogue.Check(model.Name).IsReady)
+            {
+                RaiseNotice($"{sessionId}: its {slot} choice {TerminalText.Visible(model.Name)} is not usable now, so it starts on the default.");
+                continue;
+            }
+            try
+            {
+                slots.RestoreSessionDefault(slot, _composer.Bind(slot, model.Name, Corvid.Kernel.Scheduling.DevicePriority.Interactive));
+            }
+            catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or ModelUnavailableException or IOException)
+            {
+                RaiseNotice($"{sessionId}: its {slot} choice {TerminalText.Visible(model.Name)} could not load ({TerminalText.Visible(exception.Message)}), so it starts on the default.");
+            }
+        }
+
+        void RaiseNotice(string line)
+        {
+            lock (_notices)
+            {
+                _notices.Enqueue(line);
+                while (_notices.Count > 20)
+                    _notices.Dequeue();
+            }
+            if (Notice is { } notice)
+                notice(line);
+            else
+                System.Diagnostics.Trace.WriteLine("corvid: " + line);
+        }
+
+        static string? Profile(System.Text.Json.JsonElement snapshot)
+        {
+            try
+            {
+                return ModelProfile.FromSnapshot(snapshot).Id;
+            }
+            catch (InvalidDataException)
+            {
+                return null;
+            }
+        }
+    }
 }

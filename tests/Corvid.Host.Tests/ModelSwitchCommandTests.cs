@@ -112,6 +112,48 @@ public sealed class ModelSwitchCommandTests
     }
 
     [Fact]
+    public async Task AChoiceLastsWhenTheSessionIsOpenedAgainAndAResetIsForgottenToo()
+    {
+        await using var host = TestHost.Create();
+        string id;
+        await using (var first = await host.StartAsync())
+        {
+            var session = first.OpenSession();
+            id = session.Id;
+            var commands = host.Services.GetRequiredService<SlashCommandRegistry>();
+            Assert.Equal(OutputTone.Success, (await Run(first, session, commands, "/model 2")).Tone);
+            Assert.Equal("Hello from the larger model.", (await session.SendAsync("hi", TestContext.Current.CancellationToken)).Result!.Text);
+            Assert.Equal(OutputTone.Success, (await Run(first, session, commands, "/model decider fake-kev")).Tone);
+        }
+
+        // A new runtime over the same log: the person's choices are this session's still.
+        await using (var second = await host.Services.GetRequiredService<CorvidRuntimeFactory>().StartAsync(TestContext.Current.CancellationToken))
+        {
+            var session = second.OpenSession(id);
+            Assert.Equal("fake-gen-large@cpu", session.Slots.Current(ModelSlots.Generator).Profile.Id);
+            Assert.True(session.Slots.HasSessionChoice(ModelSlots.Generator));
+            Assert.Equal("fake-kev", second.Deciders.DeciderName(session.Slots)?.Split('@')[0]);
+            var small = host.Models.Generator.Calls.Count;
+            var large = host.Models.Larger.Calls.Count;
+            await session.SendAsync("again", TestContext.Current.CancellationToken);
+            Assert.Equal(small, host.Models.Generator.Calls.Count);
+            Assert.True(host.Models.Larger.Calls.Count > large);
+            // A turn's end returns to the choice, not to the registry's default.
+            Assert.Equal("fake-gen-large@cpu", session.Slots.Current(ModelSlots.Generator).Profile.Id);
+            var commands = host.Services.GetRequiredService<SlashCommandRegistry>();
+            Assert.Equal(OutputTone.Success, (await Run(second, session, commands, "/model reset generator")).Tone);
+        }
+
+        await using (var third = await host.Services.GetRequiredService<CorvidRuntimeFactory>().StartAsync(TestContext.Current.CancellationToken))
+        {
+            var session = third.OpenSession(id);
+            Assert.Equal("fake-gen@cpu", session.Slots.Current(ModelSlots.Generator).Profile.Id);
+            Assert.False(session.Slots.HasSessionChoice(ModelSlots.Generator));
+            Assert.True(session.Slots.HasSessionChoice(ModelSlots.Decider));
+        }
+    }
+
+    [Fact]
     public async Task TheSharedDefaultWriteRefusesWithoutWriting()
     {
         await using var host = TestHost.Create();
