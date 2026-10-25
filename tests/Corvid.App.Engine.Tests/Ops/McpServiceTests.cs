@@ -166,6 +166,8 @@ public sealed class McpServiceTests
         Assert.True(kept.KeptBlocked);
         Assert.False(fixture.Runtime.Tools.TryGet("fake__save", out _));
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.KeepBlockedAsync("fake", "fake__nothing", Token));
+        // Only the Corvid name the page's rows carry names a held tool, never the server's own.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.KeepBlockedAsync("fake", "save", Token));
 
         Assert.Equal(2, await service.ForgetAsync("fake", Token));
         Assert.Empty(fixture.Runtime.Mcp!.PinStore.Pins("fake"));

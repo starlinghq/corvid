@@ -61,6 +61,44 @@ public sealed class GatewayServiceTests
     }
 
     [Fact]
+    public async Task EachLoadReadsOnlyWhatTheLedgerGainedSinceTheLast()
+    {
+        await using var fixture = await OpsFixture.StartAsync(Telegram);
+        var ledger = new DeliveryLedger(fixture.Runtime.Log);
+        ledger.Queue(new DeliveryQueued("d-1", "telegram", "42", "first", "reply"));
+        ledger.Queue(new DeliveryQueued("d-2", "telegram", "42", "second", "reply"));
+        using var service = new EngineGatewayService(fixture.Engine, new InlineDispatcher(), fixture.Time);
+        var reads = new ReadRecorder(fixture.Runtime.Log);
+
+        Assert.Equal(["d-1", "d-2"], service.Deliveries(reads).Select(delivery => delivery.Id));
+        var through = service.LedgerThrough;
+        Assert.True(through > 0);
+        ledger.Resolve("d-1", DeliveryStatus.Delivered);
+        ledger.Queue(new DeliveryQueued("d-3", "telegram", "42", "third", "reply"));
+
+        Assert.Equal(["d-2", "d-3"], service.Deliveries(reads).Select(delivery => delivery.Id));
+        // The first load read from the start; the second only past where the first stopped.
+        Assert.Equal([0L, through], reads.After);
+    }
+
+    private sealed class ReadRecorder(IEventLog inner) : IEventLog
+    {
+        public List<long> After { get; } = [];
+
+        public long GetHead(string sessionId, CancellationToken cancellationToken = default) => inner.GetHead(sessionId, cancellationToken);
+
+        public IReadOnlyList<StoredEvent> Append(string sessionId, long expectedHead, IReadOnlyList<EventData> events,
+            CancellationToken cancellationToken = default) => inner.Append(sessionId, expectedHead, events, cancellationToken);
+
+        public IReadOnlyList<StoredEvent> Read(string sessionId, long afterSequence = 0, long throughSequence = long.MaxValue, int limit = 256,
+            CancellationToken cancellationToken = default)
+        {
+            After.Add(afterSequence);
+            return inner.Read(sessionId, afterSequence, throughSequence, limit, cancellationToken);
+        }
+    }
+
+    [Fact]
     public async Task WithoutAPairingStoreNothingWaitsAndNothingIsCreated()
     {
         await using var fixture = await OpsFixture.StartAsync();

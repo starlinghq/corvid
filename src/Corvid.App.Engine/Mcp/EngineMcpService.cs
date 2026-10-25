@@ -204,12 +204,15 @@ public sealed class EngineMcpService : IMcpService, IDisposable
         _changed.Raise();
     }
 
-    /// <summary>The held definition the page names by its Corvid name (<c>server__tool</c>), or by the server's own name.</summary>
+    /// <summary>
+    /// The held definition the page names by its Corvid name (<c>server__tool</c>), as the page's held rows carry it; the
+    /// server's own name is not taken, so one tool is never mistaken for another whose name reads the same.
+    /// </summary>
     private static EngineHeld FindHeld(CorvidRuntime runtime, string server, string tool)
     {
         var status = runtime.Mcp?.Status().FirstOrDefault(candidate => candidate.Name == server)
             ?? throw new InvalidOperationException($"There is no running MCP server named {SafeText.Reveal(server)}.");
-        return status.Held.FirstOrDefault(held => CorvidName(server, held.Tool) == tool || held.Tool == tool)
+        return status.Held.FirstOrDefault(held => CorvidName(server, held.Tool) == tool)
             ?? throw new InvalidOperationException($"{SafeText.Reveal(server)} has no held tool named {SafeText.Reveal(tool)}.");
     }
 

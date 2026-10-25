@@ -91,6 +91,7 @@ public sealed class SecretsServiceTests
         await using var vault = new FakeVault(_ => FakeVault.Json("{}"));
         vault.Catalogue.Add(new CatalogEntry("tg.other", "another bot", ["api.telegram.org"], []));
         vault.Catalogue.Add(new CatalogEntry("github.token", "GitHub API", ["api.github.com"], []));
+        vault.Catalogue.Add(new CatalogEntry("tg.model", "a model key on the bot's host", ["api.telegram.org"], ["model-provider"]));
         await using var fixture = await OpsFixture.StartAsync(Settings(vault.SocketPath));
         using var service = new EngineSecretsService(fixture.Engine, new InlineDispatcher(), fixture.Time);
         var changes = 0;
@@ -101,6 +102,9 @@ public sealed class SecretsServiceTests
         Assert.Equal("Vault has no secret named tg.missing.", (await Refused("gateway:telegram", "tg.missing")).Message);
         Assert.Equal("github.token is not bound to api.telegram.org; Vault would refuse to send it there.", (await Refused("gateway:telegram", "github.token")).Message);
         Assert.Equal("That name holds hidden characters; it is not bound.", (await Refused("gateway:telegram", "tg.\u200Bother")).Message);
+        // A secret in the model-provider toolset has that role: only a model slot may use it.
+        Assert.Equal("model-provider", (await service.LoadAsync(Token)).Secrets.Single(secret => secret.Name == "tg.model").Role);
+        Assert.Equal("tg.model has the model-provider role: only a model slot may use it.", (await Refused("gateway:telegram", "tg.model")).Message);
         Assert.Equal(0, changes);
         Assert.Equal("", fixture.ConfigText);
 

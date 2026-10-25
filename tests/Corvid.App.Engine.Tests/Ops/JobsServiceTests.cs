@@ -147,6 +147,11 @@ public sealed class JobsServiceTests
         Assert.Equal("Say what the job asks Corvid to do.", await Refused(new JobDraft("other", "daily at 9am", " ", null, false, "")));
         Assert.StartsWith("A job made here keeps its result in the run's session",
             await Refused(new JobDraft("other", "daily at 9am", "Do it.", null, false, "the Telegram home chat")), StringComparison.Ordinal);
+        var tooLong = new string('a', EngineJobsService.MaxPromptLength + 1);
+        Assert.StartsWith($"The prompt is {tooLong.Length} characters", await Refused(new JobDraft("other", "daily at 9am", tooLong, null, false, "")),
+            StringComparison.Ordinal);
+        Assert.StartsWith($"The script is {tooLong.Length} characters", await Refused(new JobDraft("other", "daily at 9am", "", tooLong, true, "")),
+            StringComparison.Ordinal);
         Assert.Single(fixture.Runtime.Builtin.Jobs.List());
 
         // A no-agent job keeps no prompt.

@@ -39,6 +39,12 @@ public sealed class EngineJobsService : IJobsService, IDisposable
     /// <summary>The most jobs a load lists; the page shows fewer and points at <c>/cron</c> for the rest.</summary>
     public const int MaxJobs = 200;
 
+    /// <summary>The longest prompt a job made here may have: it starts every run.</summary>
+    public const int MaxPromptLength = 16_000;
+
+    /// <summary>The longest pre-run script a job made here may have.</summary>
+    public const int MaxScriptLength = 16_000;
+
     private readonly AppEngine _engine;
     private readonly TimeProvider _time;
     private readonly ChangeSignal _changed;
@@ -131,12 +137,20 @@ public sealed class EngineJobsService : IJobsService, IDisposable
             throw new InvalidOperationException("A no-agent job runs only its script; give it one.");
         if (!draft.NoAgent && string.IsNullOrWhiteSpace(draft.Prompt))
             throw new InvalidOperationException("Say what the job asks Corvid to do.");
+        if (draft.Prompt.Length > MaxPromptLength)
+            throw new InvalidOperationException(
+                $"The prompt is {draft.Prompt.Length} characters; a job's prompt may be at most {MaxPromptLength}. Put the detail in a file the job reads.");
+        if ((draft.Script?.Length ?? 0) > MaxScriptLength)
+            throw new InvalidOperationException(
+                $"The script is {draft.Script!.Length} characters; a job's script may be at most {MaxScriptLength}. Save it as a file and run that.");
         if (draft.Deliver.Length > 0 && draft.Deliver != KeptInSession)
             throw new InvalidOperationException(
                 $"A job made here keeps its result in the run's session: the engine records no delivery target for a job (only one made in a gateway chat reports to that chat), so {SafeText.Reveal(draft.Deliver)} cannot be chosen.");
 
         var created = await Task.Run(() =>
         {
+            // A check, not a constraint: two creations racing here could both pass and make two jobs of one name. Names are
+            // labels (jobs are addressed by id), so that is untidy rather than wrong.
             if (store.List().Any(job => string.Equals(job.Name, name, StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidOperationException($"There is already a job named {name}.");
             try
