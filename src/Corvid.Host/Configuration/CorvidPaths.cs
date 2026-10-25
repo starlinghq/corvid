@@ -24,6 +24,24 @@ public static class CorvidPaths
     public static string DataDirectory(CorvidOptions options) =>
         options.DataDirectory is { Length: > 0 } directory ? ExpandHome(directory) : DefaultDataDirectory;
 
+    /// <summary>
+    /// Creates <paramref name="directory"/> owner only (0700) when it does not exist yet: the data directory holds the event
+    /// log, memory and the egress store, which nobody else on the machine should list or read. Its parents are created as
+    /// usual, and an existing directory keeps the mode its owner gave it.
+    /// </summary>
+    public static void CreatePrivateDirectory(string directory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        if (Directory.Exists(directory))
+            return;
+        if (Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory))) is { } parent)
+            Directory.CreateDirectory(parent);
+        if (OperatingSystem.IsWindows())
+            Directory.CreateDirectory(directory);
+        else
+            Directory.CreateDirectory(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    }
+
     public static string Workspace(CorvidOptions options) =>
         options.Workspace is { Length: > 0 } workspace ? ExpandHome(workspace) : Directory.GetCurrentDirectory();
 

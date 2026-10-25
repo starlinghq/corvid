@@ -592,6 +592,27 @@ public sealed class PrivacySettings
 
     /// <summary>Minimum span confidence; lower is stricter.</summary>
     public float Threshold { get; set; } = EgressPolicy.Default.Threshold;
+
+    /// <summary>How long the egress ledger (G-9, <c>egress.db</c>) keeps the requests it recorded.</summary>
+    public EgressLedgerSettings Ledger { get; set; } = new();
+}
+
+/// <summary>
+/// The egress ledger's retention (<c>Corvid:Privacy:Ledger</c>): requests older than <see cref="RetainDays"/> are pruned,
+/// then the oldest until the text kept is at most <see cref="MaxMegabytes"/>, then the message bodies no request still
+/// uses. Pruned when a process first records into the store and at most daily after, and by <c>corvid egress prune</c>.
+/// </summary>
+public sealed class EgressLedgerSettings
+{
+    /// <summary>Days a request is kept; 0 keeps requests whatever their age.</summary>
+    public int RetainDays { get; set; } = 90;
+
+    /// <summary>The most message text kept, in MB (1 MB = 1,048,576 bytes); 0 sets no size cap.</summary>
+    public int MaxMegabytes { get; set; } = 256;
+
+    /// <summary>The retention these settings describe.</summary>
+    public Audit.EgressRetention Retention() => new(RetainDays > 0 ? TimeSpan.FromDays(RetainDays) : null,
+        MaxMegabytes > 0 ? MaxMegabytes * 1024L * 1024 : null);
 }
 
 /// <summary>One model's egress policy; anything left unset comes from <see cref="PrivacySettings"/>.</summary>

@@ -92,6 +92,7 @@ public static class CorvidCli
                                      exit 4 when a finding is at or above --fail-on (info, low, medium, high, critical)
           egress [list]              the egress ledger: each request to a gated (cloud) model, newest first   [--session <id>] [--limit <n>]
           egress show <n>            one request as it was sent, after redaction
+          egress prune               drop what Corvid:Privacy:Ledger no longer keeps (default 90 days, 256 MB) and compact the store
 
         options:
           --config <file>            the configuration file (default $XDG_CONFIG_HOME/corvid/corvid.json, or $CORVID_CONFIG)

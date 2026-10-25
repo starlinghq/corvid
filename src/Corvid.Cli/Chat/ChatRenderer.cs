@@ -51,6 +51,7 @@ internal sealed class ChatRenderer : ITurnObserver
             _console.Write(new Rule($"[bold]corvid[/] [grey]· {Markup.Escape(generator)} · {tools} tool(s) · session {Markup.Escape(session)}[/]")
                 .LeftJustified().RuleStyle("grey"));
             _console.MarkupLine("[grey]/help lists commands · /model picks a model · Ctrl-C cancels a turn · /exit leaves[/]");
+            _console.MarkupLine(@"[grey]! cmd runs a shell command · # fact stages a memory · \! or \# at the start sends the line as a message[/]");
         }
     }
 

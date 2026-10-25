@@ -108,8 +108,9 @@ public sealed class UiStateStoreTests : IDisposable
         Assert.Equal(new UiSeen("cli-1", 30, At.AddMinutes(5)), cli.LastSeen("cli-1"));
     }
 
+    /// <summary>Two stores on one file in this process, as two processes would hold it (each its own connections).</summary>
     [Fact]
-    public async Task Two_processes_writing_at_once_lose_nothing()
+    public async Task Two_stores_on_one_file_writing_at_once_lose_nothing()
     {
         var first = new UiStateStore(File);
         var second = new UiStateStore(File);
@@ -158,6 +159,62 @@ public sealed class UiStateStoreTests : IDisposable
         var store = new UiStateStore(File);
         store.SetDraft("cli-1", new string('x', UiStateStore.MaxDraftLength + 10), null, At);
         Assert.Equal(UiStateStore.MaxDraftLength, store.GetDraft("cli-1")!.Text.Length);
+    }
+
+    [Fact]
+    public void A_draft_is_never_cut_between_the_halves_of_a_surrogate_pair()
+    {
+        var store = new UiStateStore(File);
+        // The emoji's high surrogate is the limit's last character.
+        store.SetDraft("cli-1", new string('x', UiStateStore.MaxDraftLength - 1) + "\U0001F600tail", null, At);
+        var kept = store.GetDraft("cli-1")!.Text;
+        Assert.Equal(UiStateStore.MaxDraftLength - 1, kept.Length);
+        Assert.False(char.IsHighSurrogate(kept[^1]));
+    }
+
+    [Fact]
+    public void A_draft_older_than_the_one_kept_is_ignored_whichever_order_the_saves_arrive_in()
+    {
+        var app = new UiStateStore(File);
+        var cli = new UiStateStore(File);
+
+        app.SetDraft("cli-1", "the newer draft", null, At.AddSeconds(2));
+        cli.SetDraft("cli-1", "the older draft", null, At.AddSeconds(1));
+        Assert.Equal("the newer draft", app.GetDraft("cli-1")!.Text);
+        // An older clear does not forget a newer draft either; a newer one does.
+        cli.SetDraft("cli-1", "", null, At.AddSeconds(1));
+        Assert.Equal("the newer draft", app.GetDraft("cli-1")!.Text);
+        cli.SetDraft("cli-1", "", null, At.AddSeconds(3));
+        Assert.Null(app.GetDraft("cli-1"));
+    }
+
+    [Fact]
+    public void A_ui_db_deleted_while_the_store_is_in_use_is_made_again()
+    {
+        var store = new UiStateStore(File);
+        store.SetPinned("cli-1", true, At);
+        // Deleted under the store's pooled connections, as a person clearing their state would.
+        foreach (var file in Directory.GetFiles(_root, "ui.db*"))
+            System.IO.File.Delete(file);
+
+        store.SetPinned("cli-2", true, At);
+
+        Assert.True(System.IO.File.Exists(File));
+        Assert.Equal(["cli-2"], new UiStateStore(File).Pinned());
+    }
+
+    [Fact]
+    public void Ui_db_is_owner_only_and_so_is_the_data_directory_it_makes()
+    {
+        var data = Path.Combine(_root, "data");
+        var store = new UiStateStore(Path.Combine(data, "ui.db"));
+
+        store.SetPinned("cli-1", true, At);
+
+        if (OperatingSystem.IsWindows())
+            return;
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, System.IO.File.GetUnixFileMode(store.Path));
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, System.IO.File.GetUnixFileMode(data));
     }
 }
 
@@ -311,6 +368,68 @@ public sealed class SessionTitlerTests : IDisposable
             .ShouldRecapOnReturn(session, null));
     }
 
+    /// <summary>A4 review L7: the recap itself, a title, an egress record or an assessment is nothing new to recap.</summary>
+    [Fact]
+    public async Task A_recap_on_return_is_not_due_again_for_records_written_after_it()
+    {
+        var log = Log(new UserMessage("deploy"), new AssistantMessage("Done."));
+        var clock = new StoppedClock(DateTimeOffset.UtcNow.AddHours(3));
+        var titler = new SessionTitler(log, new ScriptedChat(_ => "You deployed."), new SessionTitlerOptions { RecapAfter = TimeSpan.FromHours(1) }, time: clock);
+        Assert.NotNull(await titler.RecapAsync("s", RecapSources.Absence, Ct));
+        titler.Rename("s", "Deploy");
+        log.Append("s", log.GetHead("s", Ct),
+        [
+            EventData.Create(new EgressRecorded("r-1", "claude", EgressOutcomes.Sent, System.Collections.Immutable.ImmutableDictionary<string, int>.Empty, 0, 10, "no PII")),
+            EventData.Create(new ApprovalAssessed("c-1", ApprovalResolutions.Automatic, "smart", [])),
+        ], Ct);
+
+        var session = SessionCatalogue.Describe(log, "s", Ct)!;
+        Assert.Equal(2, session.LastNews);
+        Assert.False(titler.ShouldRecapOnReturn(session, lastSeen: null));
+
+        log.Append("s", log.GetHead("s", Ct), [EventData.Create(new UserMessage("and the docs"))], Ct);
+        Assert.True(titler.ShouldRecapOnReturn(SessionCatalogue.Describe(log, "s", Ct)!, lastSeen: null));
+    }
+
+    /// <summary>A4 review L9: a list reads each session once, then only what was appended since.</summary>
+    [Fact]
+    public void A_description_is_kept_by_head_and_continued_over_new_events()
+    {
+        var log = new CountingLog(Log(new UserMessage("plan the release"), new AssistantMessage("Planned.")));
+        var first = SessionCatalogue.Describe(log, "s", Ct)!;
+        var reads = log.Reads;
+
+        Assert.Same(first, SessionCatalogue.Describe(log, "s", Ct));
+        Assert.Equal(reads, log.Reads);
+
+        log.Append("s", log.GetHead("s", Ct), [EventData.Create(new UserMessage("tag it")), EventData.Create(new AssistantMessage("Tagged."))], Ct);
+        var next = SessionCatalogue.Describe(log, "s", Ct)!;
+
+        Assert.Equal((2, "Tagged.", "plan the release", 4L), (next.Turns, next.LastAnswer, next.FirstMessage, next.Head));
+        // Only the two new events were read.
+        Assert.Equal([2L], log.ReadsAfter.Skip(reads));
+    }
+
+    /// <summary>An event log that counts its reads and remembers where each started.</summary>
+    private sealed class CountingLog(IEventLog inner) : IEventLog
+    {
+        public List<long> ReadsAfter { get; } = [];
+
+        public int Reads => ReadsAfter.Count;
+
+        public IReadOnlyList<StoredEvent> Read(string sessionId, long afterSequence = 0, long throughSequence = long.MaxValue, int limit = 256,
+            CancellationToken cancellationToken = default)
+        {
+            ReadsAfter.Add(afterSequence);
+            return inner.Read(sessionId, afterSequence, throughSequence, limit, cancellationToken);
+        }
+
+        public IReadOnlyList<StoredEvent> Append(string sessionId, long expectedHead, IReadOnlyList<EventData> events,
+            CancellationToken cancellationToken = default) => inner.Append(sessionId, expectedHead, events, cancellationToken);
+
+        public long GetHead(string sessionId, CancellationToken cancellationToken = default) => inner.GetHead(sessionId, cancellationToken);
+    }
+
     [Theory]
     [InlineData("\"Fix the build.\"", "Fix the build")]
     [InlineData("**Release notes for v0.2**", "Release notes for v0.2")]
@@ -339,6 +458,34 @@ public sealed class ComposerLineTests
         Assert.Null(ComposerLine.Parse("![screenshot](a.png)"));
         Assert.Null(ComposerLine.Parse("why does ! mean not?"));
     }
+
+    [Theory]
+    [InlineData("#123 is failing again")]
+    [InlineData("#include <stdio.h> not found")]
+    [InlineData("#[derive(Debug)] fails")]
+    [InlineData("!important: keep the API stable")]
+    [InlineData("!!!")]
+    [InlineData("!= is the wrong operator")]
+    [InlineData(@"\# the release branch is main")]
+    [InlineData(@"\!git status")]
+    public void A_line_that_starts_with_a_mark_but_is_no_mode_is_a_message(string text) => Assert.Null(ComposerLine.Parse(text));
+
+    [Theory]
+    [InlineData("! ls -la", "ls -la", false)]
+    [InlineData("!./build.sh --fast", "./build.sh --fast", false)]
+    [InlineData("!~/bin/tidy", "~/bin/tidy", false)]
+    [InlineData("!!git log", "git log", true)]
+    public void A_mark_before_a_space_or_a_command_word_is_a_shell_line(string text, string command, bool local) =>
+        Assert.Equal(new ComposerLine.Shell(command, local), ComposerLine.Parse(text));
+
+    [Theory]
+    [InlineData(@"\# the release branch is main", "# the release branch is main")]
+    [InlineData(@"  \!git status ", "!git status")]
+    [InlineData(@"\!!", "!!")]
+    [InlineData("#123 is failing again", "#123 is failing again")]
+    [InlineData("plain \\# text", "plain \\# text")]
+    [InlineData("\\# Notes\n- one", "\\# Notes\n- one")]
+    public void An_escaped_line_is_sent_without_its_backslash(string text, string sent) => Assert.Equal(sent, ComposerLine.MessageText(text));
 }
 
 /// <summary>Titles, pins, recaps and the composer lines on a running host.</summary>
@@ -420,6 +567,78 @@ public sealed class SessionRecordsHostTests
         Assert.Equal(("Recap", "You planned the release."), (recap.Title, Assert.Single(recap.Lines)));
         Assert.Equal("You planned the release.", session.Snapshot().Recap!.Text);
         Assert.Equal("Recap (nothing new since)", (await Run(runtime, session, commands, "/recap")).Title);
+    }
+
+    /// <summary>A4 review L8: a ui.db the commands cannot use (here one from a newer Corvid) costs the pins, not the command.</summary>
+    [Fact]
+    public async Task Sessions_and_pin_carry_on_when_ui_db_is_from_a_newer_corvid()
+    {
+        await using var host = TestHost.Create();
+        await using var runtime = await host.StartAsync();
+        var commands = host.Services.GetRequiredService<SlashCommandRegistry>();
+        var session = runtime.OpenSession();
+        await session.SendAsync("plan the release", TestContext.Current.CancellationToken);
+        Directory.CreateDirectory(Path.GetDirectoryName(runtime.UiState.Path)!);
+        using (var connection = new SqliteConnection($"Data Source={runtime.UiState.Path};Pooling=False"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "PRAGMA user_version=9;";
+            command.ExecuteNonQuery();
+        }
+
+        var list = await Run(runtime, session, commands, "/sessions");
+        var pin = await Run(runtime, session, commands, "/pin");
+
+        Assert.Equal([session.Id], list.Table!.Rows.Select(row => row[1]));
+        Assert.Contains(list.Lines, line => line.StartsWith("Pins are not shown:", StringComparison.Ordinal));
+        Assert.Equal(OutputTone.Warning, pin.Tone);
+        Assert.Contains("ui.db cannot be written", pin.Lines[0], StringComparison.Ordinal);
+    }
+
+    /// <summary>A4 review L10: the ledger's problems reach the runtime's notices, which a surface shows its own way.</summary>
+    [Fact]
+    public async Task The_egress_ledgers_problems_are_runtime_notices()
+    {
+        await using var host = TestHost.Create();
+        await using var runtime = await host.StartAsync();
+        var heard = new List<string>();
+        runtime.Notice += heard.Add;
+
+        runtime.EgressLedger.Failed("the egress store could not be written: disk full");
+
+        Assert.Equal(["egress ledger: the egress store could not be written: disk full"], heard);
+        Assert.Equal(heard, runtime.Notices);
+    }
+
+    /// <summary>A4 review M4: leaving waits a bounded time for a title, then cancels it; nothing is written.</summary>
+    [Fact]
+    public async Task A_bounded_wait_cancels_a_title_still_being_written()
+    {
+        var asked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var generator = new FakeGenerator(Reply.Say("The boat is blue."), Reply.Say("Never written"))
+        {
+            // The title's call (the second step) waits until it is cancelled.
+            Hold = (step, token) =>
+            {
+                if (step != 1)
+                    return null;
+                asked.TrySetResult();
+                return Task.Delay(Timeout.Infinite, token);
+            },
+        };
+        await using var host = TestHost.Create(new FakeModels(generator), new Dictionary<string, string?> { ["Corvid:Sessions:Titles"] = "true" });
+        await using var runtime = await host.StartAsync();
+        var session = runtime.OpenSession();
+
+        await session.SendAsync("what colour is the boat?", TestContext.Current.CancellationToken);
+        await asked.Task.WaitAsync(TestContext.Current.CancellationToken);
+        var idle = await runtime.MaintenanceIdleAsync(TimeSpan.Zero);
+
+        Assert.False(idle);
+        // Cancelled, not waited for: the chain finishes without the gate ever opening.
+        await runtime.MaintenanceIdleAsync().WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Null(SessionCatalogue.Describe(runtime.Log, session.Id, TestContext.Current.CancellationToken)!.Titled);
     }
 
     [Fact]

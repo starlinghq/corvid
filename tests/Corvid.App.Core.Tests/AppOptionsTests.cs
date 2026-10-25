@@ -52,6 +52,18 @@ public sealed class AppOptionsTests
         Assert.Equal("--scene takes main or approval, not \"1\".", Fail("--scene", "1"));
     }
 
+    /// <summary>A4 review L5: a scene is the demo's, so it never runs the engine on this machine's home.</summary>
+    [Fact]
+    public void A_scene_implies_the_demo_and_is_refused_with_the_engine()
+    {
+        Assert.True(Parse("--scene", "approval").Demo);
+        Assert.True(Parse("--page", "safety", "--scene=main").Demo);
+        Assert.True(Parse("--demo", "--scene", "approval").Demo);
+        Assert.False(Parse("--page", "safety").Demo);
+        Assert.Equal("--scene is a moment of the demo, so it cannot be used with --engine.", Fail("--engine", "--scene", "approval"));
+        Assert.Equal("--scene is a moment of the demo, so it cannot be used with --engine.", Fail("--scene", "approval", "--engine"));
+    }
+
     [Theory]
     [InlineData(new[] { "--theme", "dark" }, AppTheme.Dark)]
     [InlineData(new[] { "--theme=light" }, AppTheme.Light)]

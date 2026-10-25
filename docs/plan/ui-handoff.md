@@ -273,7 +273,10 @@ test project after each merge:
   and ACP's `session/list`. G-7: `ui.db` for pins, drafts, review points and the app's preferences. The composer's `!`,
   `!!` and `#` lines, parsed once by the host's `ComposerLine` for the CLI and the app.
 - **Egress (`a4/egress`).** G-9: the egress ledger (`egress.db` beside `events.db`, `EgressRecorded` in the session log),
-  on the Audit page and in `corvid egress`. G-2: why a call that asked nobody ran or was refused (`ApprovalAssessed`), on
+  on the Audit page and in `corvid egress`. The store keeps requests for `Corvid:Privacy:Ledger:RetainDays` (90 by
+  default; 0 keeps any age) and at most `MaxMegabytes` of message text (256; 0 for no cap): requests past either go, then
+  the message bodies no request still uses, when a process first records into it and at most daily after (the store
+  records the last prune), and at once with `corvid egress prune`, which also compacts the file. G-2: why a call that asked nobody ran or was refused (`ApprovalAssessed`), on
   its card, live and on replay.
 - **Hosting (`a4/hosting`).** G-12: one driver per session across processes (a lock under the data directory); a session
   another process drives is followed read-only, its turns tailed from the log. G-14: the app hosts the gateway under the

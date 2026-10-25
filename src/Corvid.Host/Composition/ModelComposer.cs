@@ -52,7 +52,7 @@ public sealed class ModelComposer : IDisposable
         _devices = devices;
         _metrics = metrics;
         _feed = feed;
-        Ledger = new EgressLedger(CorvidPaths.EgressDatabase(options));
+        Ledger = new EgressLedger(CorvidPaths.EgressDatabase(options)) { Retention = options.Privacy.Ledger.Retention() };
     }
 
     /// <summary>

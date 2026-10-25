@@ -47,8 +47,8 @@ public sealed record HintPart(string Text, bool IsKey);
 
 public sealed partial class SessionViewModel
 {
-    /// <summary>The composer's placeholder, as the mockup prints it.</summary>
-    public const string ComposerPlaceholder = "Ask Corvid…   / commands   @ files   ! shell   # memory";
+    /// <summary>The composer's placeholder, as the mockup prints it, with the escape that sends a line starting with # or ! as text (A4).</summary>
+    public const string ComposerPlaceholder = "Ask Corvid…   / commands   @ files   ! shell   # memory   \\# as text";
 
     /// <summary>The placeholder where the service has no <c>!</c> or <c>#</c> mode (<see cref="ISessionService.HasComposerModes"/>).</summary>
     public const string ComposerPlaceholderWithoutModes = "Ask Corvid…   / commands   @ files";

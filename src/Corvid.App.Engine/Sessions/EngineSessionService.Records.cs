@@ -89,11 +89,38 @@ public sealed partial class EngineSessionService
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentNullException.ThrowIfNull(draft);
-        var save = Task.Run(() => Ui.SetDraft(sessionId, draft.Text, draft.Stash, _time.GetUtcNow()), cancellationToken);
+        // Stamped now, as the composer had it, and written after the session's earlier saves: a save the thread pool runs
+        // late never overwrites a newer one (ui.db also keeps only the newest stamp, against another process's saves).
+        var at = _time.GetUtcNow();
+        Task save;
+        lock (_draftSaves)
+        {
+            var previous = _draftSaves.GetValueOrDefault(sessionId, Task.CompletedTask);
+            save = previous.ContinueWith(async _ =>
+            {
+                if (BeforeDraftWrite is { } hook)
+                    await hook().ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                Ui.SetDraft(sessionId, draft.Text, draft.Stash, at);
+            }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
+            _draftSaves[sessionId] = save;
+        }
         // Waited for by IdleAsync, so a closing window's last draft is written.
         Track(save);
+        _ = save.ContinueWith(done =>
+        {
+            lock (_draftSaves)
+                if (_draftSaves.GetValueOrDefault(sessionId) == done)
+                    _draftSaves.Remove(sessionId);
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         return save;
     }
+
+    // The latest draft save of each session, which the next one runs after.
+    private readonly Dictionary<string, Task> _draftSaves = new(StringComparer.Ordinal);
+
+    /// <summary>A test's hook: runs before each draft save writes (M3's ordering test holds the first one).</summary>
+    internal Func<Task>? BeforeDraftWrite { get; set; }
 
     /// <summary>
     /// A recap of what happened since the last one (G-6), by the local generator; it arrives through the runtime's
@@ -242,17 +269,19 @@ public sealed partial class EngineSessionService
     }
 
     /// <summary>
-    /// Posts a turn's line: a <c>!</c> line runs its command as the user's shell call, anything else (and any
-    /// <paramref name="verbatim"/> text, such as a question's answer) is a message.
+    /// Posts a turn's line: a <c>!</c> line runs its command as the user's shell call, anything else is a message (a
+    /// <c>\#</c> or <c>\!</c> line without its backslash), and <paramref name="verbatim"/> text, such as a question's answer,
+    /// is sent as given.
     /// </summary>
     private static Task<Task<Delivery>> PostLineAsync(CorvidSession session, string text, bool verbatim, CancellationToken cancellationToken) =>
-        !verbatim && ComposerLine.Parse(text) is ComposerLine.Shell shell
-            ? session.PostShellAsync(text.Trim(), new ShellLine(shell.Command, shell.LocalOnly), cancellationToken)
-            : session.PostAsync(text, EnvelopeOrigin.User, cancellationToken);
+        verbatim ? session.PostAsync(text, EnvelopeOrigin.User, cancellationToken)
+            : ComposerLine.Parse(text) is ComposerLine.Shell shell
+                ? session.PostShellAsync(text.Trim(), new ShellLine(shell.Command, shell.LocalOnly), cancellationToken)
+                : session.PostAsync(ComposerLine.MessageText(text), EnvelopeOrigin.User, cancellationToken);
 
     /// <summary>The latest recap as the transcript's last row, when nothing has happened since it.</summary>
     private static Notice? RecapNotice(SessionDescription? session, DateTimeOffset at) =>
-        session?.Recap is { } recap && session.Head <= recap.ThroughSequence + 2 ? Recap(recap, at) : null;
+        session?.Recap is { } recap && session.LastNews <= recap.ThroughSequence ? Recap(recap, at) : null;
 
     private static Notice Recap(SessionRecapped recap, DateTimeOffset at) =>
         new(NoticeKind.Recap, recap.Source == RecapSources.Absence ? "While you were away" : "Recap") { Detail = recap.Text, At = at };
@@ -295,12 +324,17 @@ public sealed partial class EngineSessionService
                 Publish(channel, _ => [Recap(recap, default)]);
         }
 
+        // L10: background problems (the egress ledger) go to the app's log, not the model call's thread's stderr.
+        static void OnNotice(string line) => Log("corvid app: " + line);
+
         runtime.TitleChanged += OnTitle;
         runtime.Recapped += OnRecap;
+        runtime.Notice += OnNotice;
         _unwatchRecords = () =>
         {
             runtime.TitleChanged -= OnTitle;
             runtime.Recapped -= OnRecap;
+            runtime.Notice -= OnNotice;
         };
         if (_disposed)
             UnwatchRecords();

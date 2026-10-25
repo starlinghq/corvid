@@ -173,20 +173,26 @@ internal static class ApprovalCards
                 .Where(matched => matched.CallId == callId)
                 .Select(matched => Detection(log, sessionId, matched))
                 .ToImmutableArray();
-        return new LoggedFacts(reversible, tainted, detections, RiskLevel(events, prompt.ApprovalId));
+        return new LoggedFacts(reversible, tainted, detections, RiskLevel(events, prompt.ApprovalId, prompt.CallId));
     }
 
     /// <summary>
     /// The level of the <c>risk</c> decision logged just before the prompt's request (the pipeline asks it, then asks the
     /// person): its most probable option's place among the question's options. Null when no decider answered.
     /// </summary>
-    private static int? RiskLevel(IReadOnlyList<StoredEvent> events, string approvalId)
+    internal static int? RiskLevel(IReadOnlyList<StoredEvent> events, string approvalId, string? callId)
     {
         var at = events.Select((item, index) => (item, index)).LastOrDefault(pair => pair.item.Payload is LoggedRequest request && request.ApprovalId == approvalId);
         if (at.item is null)
             return null;
         for (var i = at.index - 1; i >= 0; i--)
         {
+            // Only this call's answer: every risk answer is followed by its call's request or assessment, so one past an
+            // earlier request, resolution or assessment (or before this call was issued) was another call's, and this prompt
+            // had none (manual mode asks none). Calls that ask nobody may run beside it, so their events are passed over.
+            if (events[i].Payload is LoggedRequest or Corvid.Abstractions.Events.ApprovalResolved or ApprovalAssessed
+                || events[i].Payload is ToolCallIssued issued && issued.CallId == callId)
+                return null;
             if (events[i].Payload is not Decision { QuestionId: "risk" } decision)
                 continue;
             if (decision.Probabilities.IsEmpty || decision.Question is not { Options: { IsDefaultOrEmpty: false } options })

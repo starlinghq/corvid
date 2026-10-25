@@ -21,6 +21,9 @@ namespace Corvid.Cli.Chat;
 /// </summary>
 internal static class ChatCommand
 {
+    // How long leaving waits for background work (a title being written) before cancelling it.
+    private static readonly TimeSpan ExitWait = TimeSpan.FromSeconds(3);
+
     public static async Task<int> RunAsync(IHost host, CliArguments arguments, CliContext context, CancellationToken cancellationToken)
     {
         var console = context.Console;
@@ -71,6 +74,9 @@ internal static class ChatCommand
             Shared(() => runtime.UiState.MarkSeen(session.Id, runtime.Log.GetHead(session.Id), DateTimeOffset.UtcNow));
             // After the banner: runs that finished since the runtime started are replayed here (C-039), then later ones live.
             runtime.JobCompleted += OnJob;
+            // Background problems (the egress ledger) as notices through the renderer, never written mid-panel by their thread.
+            void OnNotice(string line) => renderer.Notice($"[yellow]{Markup.Escape(line)}[/]");
+            runtime.Notice += OnNotice;
 
             using var leave = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             Task<Delivery>? running = null;
@@ -166,6 +172,9 @@ internal static class ChatCommand
                         renderer.Output(await RememberAsync(session, memory.Text, leave.Token).ConfigureAwait(false));
                         continue;
                     }
+                    // A \# or \! line is a message, sent without its backslash.
+                    if (mode is null)
+                        line = ComposerLine.MessageText(line);
                     line = ChatRenderer.Answer(question, line);
                     question = null;
 
@@ -197,10 +206,12 @@ internal static class ChatCommand
             {
                 context.Interrupts.Interrupted -= OnInterrupt;
                 runtime.JobCompleted -= OnJob;
+                runtime.Notice -= OnNotice;
             }
             console.MarkupLine($"[grey]Session {Markup.Escape(session.Id)} is in the log; resume it with `corvid chat --session {Markup.Escape(session.Id)}`.[/]");
-            // The title the local generator writes after the first exchange lands before the runtime goes.
-            await runtime.MaintenanceIdleAsync().ConfigureAwait(false);
+            // The title the local generator writes after the first exchange lands before the runtime goes, if it comes within
+            // a few seconds; otherwise the wait cancels it, and the next exchange queues it again.
+            await runtime.MaintenanceIdleAsync(ExitWait).ConfigureAwait(false);
             Shared(() => runtime.UiState.MarkSeen(session.Id, runtime.Log.GetHead(session.Id), DateTimeOffset.UtcNow));
         }
         return ExitCodes.Success;
@@ -274,8 +285,7 @@ internal static class ChatCommand
         {
             return read();
         }
-        catch (Exception exception) when (exception is System.Data.Common.DbException or IOException or UnauthorizedAccessException
-            or InvalidDataException)
+        catch (Exception exception) when (Corvid.Host.State.UiStateStore.IsUnavailable(exception))
         {
             return default;
         }

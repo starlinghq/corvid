@@ -18,7 +18,18 @@ internal static class SessionCommands
     public static ValueTask<CommandOutput> Sessions(SlashCommandContext context, SlashInvocation invocation, CancellationToken cancellationToken)
     {
         var runtime = context.Runtime;
-        var pinned = runtime.UiState.Pinned();
+        // ui.db is a convenience: unreadable (locked, read-only, from a newer Corvid), the list goes on without pins.
+        string? unpinned = null;
+        IReadOnlySet<string> pinned;
+        try
+        {
+            pinned = runtime.UiState.Pinned();
+        }
+        catch (Exception exception) when (State.UiStateStore.IsUnavailable(exception))
+        {
+            pinned = new HashSet<string>();
+            unpinned = "Pins are not shown: " + exception.Message;
+        }
         var sessions = runtime.Log.ListSessions(cancellationToken)
             .Where(IsConversation)
             .Select(id => SessionCatalogue.Describe(runtime.Log, id, cancellationToken))
@@ -36,6 +47,7 @@ internal static class SessionCommands
             [
                 (sessions.Count > shown.Count ? $"The {shown.Count} most recent of {sessions.Count}, pinned first. " : "Pinned first. ")
                     + "Resume one with corvid chat --session <id>; /rename titles this one, /pin keeps it at the top.",
+                .. unpinned is null ? Array.Empty<string>() : [unpinned],
             ],
             Table = CommandTable.Of(["", "session", "title", "turns", "last active"], shown.Select(session => new[]
             {
@@ -86,7 +98,14 @@ internal static class SessionCommands
         // A4V2-8: a session with nothing in the log is listed nowhere (/sessions, the app's rail), so a pin would keep nothing.
         if (!off && context.Runtime.Log.GetHead(context.Session.Id, cancellationToken) == 0)
             return ValueTask.FromResult(CommandOutput.Warning("Nothing to pin yet: this session has no messages. Send one, then /pin."));
-        context.Runtime.UiState.SetPinned(context.Session.Id, !off, DateTimeOffset.UtcNow);
+        try
+        {
+            context.Runtime.UiState.SetPinned(context.Session.Id, !off, DateTimeOffset.UtcNow);
+        }
+        catch (Exception exception) when (State.UiStateStore.IsUnavailable(exception))
+        {
+            return ValueTask.FromResult(CommandOutput.Warning((off ? "Not unpinned" : "Not pinned") + ": ui.db cannot be written (" + exception.Message + ")."));
+        }
         return ValueTask.FromResult(CommandOutput.Success(off
             ? "Unpinned."
             : "Pinned: the app keeps this session at the top of its rail, and /sessions lists it first. /pin off unpins it."));

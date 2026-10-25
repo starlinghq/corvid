@@ -67,7 +67,7 @@ app and looking at it.
   `src/Corvid.App/Pages/<Area>Page.xaml`. Builders working on different areas never edit the same file; a change to a
   shared file is additive and called out.
 - Command line: the engine by default (`--engine` says so), `--demo` for the demo, `--theme light|dark|system`,
-  `--page <area>`, `--session <id>`, `--scene main|approval`. Demo mode freezes the clock at 2026-10-24 14:05 local so
+  `--page <area>`, `--session <id>`, `--scene main|approval` (it implies `--demo`). Demo mode freezes the clock at 2026-10-24 14:05 local so
   screenshots are stable; every mockup comparison passes `--demo`.
 - Theme brushes are named after `corvid.css`'s tokens (`CorvidBg` to `CorvidDelWord`, plus `CorvidOnAccent`) with the
   exact values; Inter for prose and JetBrains Mono for code, embedded with their OFL licences; the mockups' stroke icons

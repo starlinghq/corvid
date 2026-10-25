@@ -16,7 +16,7 @@ namespace Corvid.Kernel.Events;
 /// Scrubbed: <see cref="ToolCallIssued.Arguments"/>, <see cref="ToolResult.Result"/>, <see cref="AssistantMessage.Text"/>,
 /// <see cref="ClarificationAsked"/>'s text and options, <see cref="ApprovalRequested.Action"/> and <see cref="ApprovalRequested.Reason"/>, <see cref="Decision.State"/> and
 /// <see cref="AskedQuestion.Instructions"/> (a pre_execute or memory_op question carries arguments and text), <see cref="ApprovalAssessed"/>'s reasons and rule,
-/// <see cref="SessionTitled.Title"/> and <see cref="SessionRecapped.Text"/>, and
+/// <see cref="SessionTitled.Title"/> and <see cref="SessionRecapped.Text"/>, <see cref="EgressRecorded.Reason"/> and <see cref="EgressRecorded.Unkept"/>, and
 /// <see cref="DeliveryQueued.Text"/>. Not scrubbed: <see cref="UserMessage"/> and <see cref="UserSteered"/> (what the user said is a recorded decision; a
 /// key the user hands over goes through Vault), and ids, sequences, revisions and paths. Only the egress rules run, never the
 /// encoded-blob rules, so commit SHAs and digests in shell output survive.
@@ -44,6 +44,8 @@ public static class EventScrubber
             SessionTitled titled when Text(titled.Title) is { } text => titled with { Title = text },
             SessionRecapped recap when Text(recap.Text) is { } text => recap with { Text = text },
             ApprovalAssessed assessed => Assessed(assessed),
+            // G-9: the gate's reason and why the store could not keep the request (an exception's message) can quote text.
+            EgressRecorded egress => Egress(egress),
             _ => payload,
         };
     }
@@ -61,6 +63,13 @@ public static class EventScrubber
         }).ToImmutableArray();
         var rule = assessed.Rule is { } words ? Text(words) : null;
         return !changed && rule is null ? assessed : assessed with { Reasons = reasons, Rule = rule ?? assessed.Rule };
+    }
+
+    private static EgressRecorded Egress(EgressRecorded egress)
+    {
+        var reason = Text(egress.Reason);
+        var unkept = Text(egress.Unkept);
+        return reason is null && unkept is null ? egress : egress with { Reason = reason ?? egress.Reason, Unkept = unkept ?? egress.Unkept };
     }
 
     private static ApprovalRequested Approval(ApprovalRequested approval)

@@ -28,6 +28,19 @@ public sealed record EgressEntry(long Number, string RequestId, string? SessionI
 public sealed record EgressCounts(int Requests, int RedactedValues, int Refused);
 
 /// <summary>
+/// How long the egress store keeps requests (<c>Corvid:Privacy:Ledger</c>): requests older than <see cref="MaxAge"/> go, then
+/// the oldest until the message text kept is at most <see cref="MaxBytes"/>; null keeps them all by that measure.
+/// </summary>
+public sealed record EgressRetention(TimeSpan? MaxAge, long? MaxBytes)
+{
+    /// <summary>90 days and 256 MB, the defaults of <c>Corvid:Privacy:Ledger</c>.</summary>
+    public static EgressRetention Default { get; } = new(TimeSpan.FromDays(90), 256L * 1024 * 1024);
+}
+
+/// <summary>What a prune removed: requests, and the message bodies no request still referenced.</summary>
+public sealed record EgressPruned(int Requests, int Messages);
+
+/// <summary>
 /// The egress ledger (G-9, docs/plan/ui.md §4.12, F8): every request the privacy egress gate decided on, for every gated
 /// binding (each cloud model by default). Each observation is kept in <c>egress.db</c> beside the log: the request as sent,
 /// after redaction, as <see cref="EgressRendering"/> renders it, stored message by message under the digest of its text, so
@@ -51,6 +64,13 @@ public sealed class EgressLedger
     private readonly TimeProvider _time;
     private readonly Lock _gate = new();
     private bool _created;
+    // When a prune is next due in this process, in UTC ticks (the store says when the last one ran, in any process), and
+    // whether one runs now.
+    private long _nextPrune;
+    private int _pruning;
+
+    /// <summary>How often the store is pruned while requests are recorded: at most daily, the first time on opening it.</summary>
+    public static readonly TimeSpan PruneInterval = TimeSpan.FromDays(1);
 
     public EgressLedger(string path, TimeProvider? time = null)
     {
@@ -65,8 +85,20 @@ public sealed class EgressLedger
     /// <summary>The event log the <see cref="EgressRecorded"/> events go to; set once the runtime has opened it.</summary>
     public IEventLog? Log { get; set; }
 
-    /// <summary>Told why a request could not be recorded in full; by default a line on standard error.</summary>
-    public Action<string> Failed { get; set; } = reason => Console.Error.WriteLine($"corvid: egress ledger: {reason}");
+    /// <summary>
+    /// Told why a request could not be recorded in full, or the store not pruned. Called inside the model call, so never a
+    /// write to the terminal: the runtime routes it to its notices (<c>CorvidRuntime.Notice</c>); by default a trace line.
+    /// </summary>
+    public Action<string> Failed { get; set; } = reason => System.Diagnostics.Trace.WriteLine($"corvid: egress ledger: {reason}");
+
+    /// <summary>
+    /// How long requests are kept: pruned when the store is first opened to record in a process and at most daily after
+    /// (<see cref="PruneInterval"/>), and by <c>corvid egress prune</c>.
+    /// </summary>
+    public EgressRetention Retention { get; set; } = EgressRetention.Default;
+
+    /// <summary>The prune running in the background, if any (tests wait for it).</summary>
+    internal Task Pruning { get; private set; } = Task.CompletedTask;
 
     /// <summary>The observer for one gated binding: what each of its requests is recorded with.</summary>
     /// <param name="slot">The slot the binding serves (<c>generator</c>, <c>summarizer</c>…).</param>
@@ -117,6 +149,7 @@ public sealed class EgressLedger
         {
             Write(requestId, sessionId, observation.Profile.Id, slot, outcome, observation.Placeholders, bytes, labels, decision.Reason,
                 observation.Context.Tainted, host, secret, observation.Sent is null ? null : blocks, tools);
+            SchedulePrune();
         }
         catch (Exception exception) when (exception is SqliteException or IOException or UnauthorizedAccessException or InvalidDataException)
         {
@@ -182,7 +215,8 @@ public sealed class EgressLedger
         command.Parameters.AddWithValue("$placeholders", placeholders);
         command.Parameters.AddWithValue("$bytes", bytes);
         command.Parameters.AddWithValue("$labels", JsonSerializer.Serialize(labels.ToDictionary(StringComparer.Ordinal), EgressJson.Default.DictionaryStringInt32));
-        command.Parameters.AddWithValue("$reason", reason);
+        // The gate's reason can quote what it matched: scrubbed as the log's copy is.
+        command.Parameters.AddWithValue("$reason", Corvid.Secrets.CredentialScrub.Scrub(reason, Corvid.Secrets.CredentialDetector.Egress).Text);
         command.Parameters.AddWithValue("$tainted", tainted ? 1 : 0);
         command.Parameters.AddWithValue("$host", (object?)host ?? DBNull.Value);
         command.Parameters.AddWithValue("$secret", (object?)secret ?? DBNull.Value);
@@ -190,6 +224,129 @@ public sealed class EgressLedger
         command.Parameters.AddWithValue("$tools", JsonSerializer.Serialize(tools.ToArray(), EgressJson.Default.StringArray));
         command.ExecuteNonQuery();
         transaction.Commit();
+    }
+
+    // ---- retention ----
+
+    // Off the model call: a prune deletes, and may take a while on a large store.
+    private void SchedulePrune()
+    {
+        if (_time.GetUtcNow().UtcTicks < Volatile.Read(ref _nextPrune) || Interlocked.CompareExchange(ref _pruning, 1, 0) != 0)
+            return;
+        Pruning = Task.Run(() =>
+        {
+            try
+            {
+                PruneIfDue();
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                Failed("the egress store could not be pruned: " + exception.Message);
+                Volatile.Write(ref _nextPrune, (_time.GetUtcNow() + PruneInterval).UtcTicks);
+            }
+            finally
+            {
+                Volatile.Write(ref _pruning, 0);
+            }
+        });
+    }
+
+    /// <summary>
+    /// Prunes when the last prune (by any process, as the store records) is a day old or more, or there was none; otherwise
+    /// notes when the next is due. True when it pruned.
+    /// </summary>
+    internal bool PruneIfDue()
+    {
+        var now = _time.GetUtcNow();
+        using var connection = Open(create: false);
+        if (connection is null)
+            return false;
+        if (LastPruned(connection) is { } last && now - last < PruneInterval)
+        {
+            Volatile.Write(ref _nextPrune, (last + PruneInterval).UtcTicks);
+            return false;
+        }
+        Prune(connection, now, vacuum: false);
+        Volatile.Write(ref _nextPrune, (now + PruneInterval).UtcTicks);
+        return true;
+    }
+
+    /// <summary>
+    /// Removes the requests <see cref="Retention"/> no longer keeps, then the message bodies no remaining request references
+    /// (<c>corvid egress prune</c>; recording does it daily). With <paramref name="vacuum"/> the file is compacted after, so
+    /// it shrinks on disk. Nothing to prune when there is no store (it is not created).
+    /// </summary>
+    public EgressPruned Prune(bool vacuum = false)
+    {
+        using var connection = Open(create: false);
+        return connection is null ? new EgressPruned(0, 0) : Prune(connection, _time.GetUtcNow(), vacuum);
+    }
+
+    private EgressPruned Prune(SqliteConnection connection, DateTimeOffset now, bool vacuum)
+    {
+        Execute(connection, MetaTable);
+        var requests = 0;
+        var messages = 0;
+        var retention = Retention;
+        if (retention.MaxAge is { } age)
+        {
+            requests += Execute(connection, "DELETE FROM requests WHERE recorded_at < $cutoff;",
+                ("$cutoff", (now - age).ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)));
+            messages += Unreferenced(connection);
+        }
+        if (retention.MaxBytes is { } max)
+        {
+            // The oldest tenth at a time: a conversation's shared prefix is freed only once all its requests have gone.
+            while (Scalar(connection, "SELECT COALESCE(SUM(LENGTH(CAST(body AS BLOB))), 0) FROM messages;") > max)
+            {
+                var count = Scalar(connection, "SELECT COUNT(*) FROM requests;");
+                if (count == 0)
+                    break;
+                requests += Execute(connection, "DELETE FROM requests WHERE number IN (SELECT number FROM requests ORDER BY number LIMIT $n);",
+                    ("$n", Math.Max(1, count / 10)));
+                messages += Unreferenced(connection);
+            }
+        }
+        Execute(connection, "INSERT INTO meta (key, value) VALUES ('pruned_at', $at) ON CONFLICT(key) DO UPDATE SET value=excluded.value;",
+            ("$at", now.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)));
+        if (vacuum && requests + messages > 0)
+            Execute(connection, "VACUUM;");
+        return new EgressPruned(requests, messages);
+    }
+
+    private const string MetaTable = "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);";
+
+    // Bodies no request's message list names any more.
+    private static int Unreferenced(SqliteConnection connection) => Execute(connection, """
+        DELETE FROM messages WHERE digest NOT IN
+            (SELECT value FROM requests, json_each(requests.messages) WHERE requests.messages IS NOT NULL);
+        """);
+
+    private static DateTimeOffset? LastPruned(SqliteConnection connection)
+    {
+        // A store an earlier A4 build made has no meta table yet.
+        Execute(connection, MetaTable);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT value FROM meta WHERE key='pruned_at';";
+        return command.ExecuteScalar() is string text
+            ? DateTimeOffset.Parse(text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+            : null;
+    }
+
+    private static int Execute(SqliteConnection connection, string sql, params (string Name, object Value)[] parameters)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        foreach (var (name, value) in parameters)
+            command.Parameters.AddWithValue(name, value);
+        return command.ExecuteNonQuery();
+    }
+
+    private static long Scalar(SqliteConnection connection, string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
 
     // ---- reading ----
@@ -337,7 +494,7 @@ public sealed class EgressLedger
         {
             if (_created && File.Exists(Path))
                 return;
-            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
+            Configuration.CorvidPaths.CreatePrivateDirectory(System.IO.Path.GetDirectoryName(Path)!);
             if (!File.Exists(Path))
             {
                 // Owner only before SQLite opens it: the store holds conversation content.
@@ -406,6 +563,10 @@ public sealed class EgressLedger
                     """;
                 command.ExecuteNonQuery();
             }
+            // When the store was last pruned, by any process: a table beside the schema, so a store made before it needs no
+            // new version, and an older Corvid still reads this one.
+            command.CommandText = MetaTable;
+            command.ExecuteNonQuery();
             transaction.Commit();
             _created = true;
         }

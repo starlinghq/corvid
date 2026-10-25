@@ -11,12 +11,13 @@ namespace Corvid.Cli;
 /// <summary>
 /// <c>corvid egress</c> (G-9): the egress ledger, every request the privacy egress gate decided on for a gated model (each
 /// cloud model by default), newest first; <c>corvid egress show &lt;n&gt;</c> prints one request as it was sent, after
-/// redaction, with the gate's placeholders where values were. Read-only: it never starts the runtime and never creates
+/// redaction, with the gate's placeholders where values were. <c>corvid egress prune</c> removes now what <c>Corvid:Privacy:Ledger</c> no longer keeps
+/// (recording prunes daily). The rest is read-only. It never starts the runtime and never creates
 /// the ledger. What the model or a tool wrote is printed with its hidden characters made visible.
 /// </summary>
 internal static class EgressCommand
 {
-    public const string UsageText = "usage: corvid egress [list] [--session <id>] [--limit <n>] | corvid egress show <n>";
+    public const string UsageText = "usage: corvid egress [list] [--session <id>] [--limit <n>] | corvid egress show <n> | corvid egress prune";
 
     public static int Run(IHost host, CliArguments arguments, CliContext context, CancellationToken cancellationToken)
     {
@@ -25,7 +26,8 @@ internal static class EgressCommand
         var known = new HashSet<string>(StringComparer.Ordinal) { "--session", "--limit" };
         if (arguments.Arguments.FirstOrDefault(argument => argument.StartsWith("--", StringComparison.Ordinal) && !known.Contains(argument)) is not null)
             return Fail(console, UsageText);
-        var ledger = new EgressLedger(CorvidPaths.EgressDatabase(ModelCommand.Options(host)));
+        var options = ModelCommand.Options(host);
+        var ledger = new EgressLedger(CorvidPaths.EgressDatabase(options)) { Retention = options.Privacy.Ledger.Retention() };
         switch (positional)
         {
             case [] or ["list"]:
@@ -37,6 +39,8 @@ internal static class EgressCommand
                 return List(console, ledger, arguments.Option("--session"), limit, cancellationToken);
             case ["show", var number] when !arguments.Flag("--session") && !arguments.Flag("--limit"):
                 return Show(console, ledger, number);
+            case ["prune"] when !arguments.Flag("--session") && !arguments.Flag("--limit"):
+                return Prune(console, ledger, options.Privacy.Ledger);
             default:
                 return Fail(console, UsageText);
         }
@@ -91,6 +95,18 @@ internal static class EgressCommand
         console.WriteLine();
         // Plain text, never markup: what the model and the tools wrote, hidden characters shown.
         console.WriteLine(TerminalText.Visible(full));
+        return ExitCodes.Success;
+    }
+
+    // M2: what Corvid:Privacy:Ledger no longer keeps, now rather than at the next daily prune, and the file compacted.
+    private static int Prune(IAnsiConsole console, EgressLedger ledger, EgressLedgerSettings settings)
+    {
+        var pruned = ledger.Prune(vacuum: true);
+        var kept = (settings.RetainDays > 0 ? $"{settings.RetainDays} days" : "any age") + ", "
+            + (settings.MaxMegabytes > 0 ? $"at most {settings.MaxMegabytes} MB" : "no size cap");
+        console.MarkupLine(string.Create(CultureInfo.InvariantCulture,
+            $"Pruned {pruned.Requests} {(pruned.Requests == 1 ? "request" : "requests")} and {pruned.Messages} unused {(pruned.Messages == 1 ? "message" : "messages")} ")
+            + Markup.Escape($"(Corvid:Privacy:Ledger keeps {kept})."));
         return ExitCodes.Success;
     }
 

@@ -74,7 +74,11 @@ public sealed class UiStateStore
             : null;
     }
 
-    /// <summary>Keeps a session's draft; an empty text with no stash forgets it.</summary>
+    /// <summary>
+    /// Keeps a session's draft as it was at <paramref name="at"/>, the moment the surface captured it; an empty text with no
+    /// stash forgets it. A write older than the one kept is ignored, so saves that reach the file out of order (two
+    /// processes, or a slow save overtaken by a later one) never put an older draft back.
+    /// </summary>
     public void SetDraft(string sessionId, string text, string? stash, DateTimeOffset at)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
@@ -85,18 +89,19 @@ public sealed class UiStateStore
         using var command = connection.CreateCommand();
         if (text.Length == 0 && stash is null)
         {
-            command.CommandText = "DELETE FROM drafts WHERE session_id=$session;";
+            command.CommandText = "DELETE FROM drafts WHERE session_id=$session AND updated_at <= $at;";
         }
         else
         {
             command.CommandText = """
                 INSERT INTO drafts (session_id, text, stash, updated_at) VALUES ($session, $text, $stash, $at)
-                ON CONFLICT(session_id) DO UPDATE SET text=excluded.text, stash=excluded.stash, updated_at=excluded.updated_at;
+                ON CONFLICT(session_id) DO UPDATE SET text=excluded.text, stash=excluded.stash, updated_at=excluded.updated_at
+                WHERE excluded.updated_at >= drafts.updated_at;
                 """;
             command.Parameters.AddWithValue("$text", text);
             command.Parameters.AddWithValue("$stash", (object?)stash ?? DBNull.Value);
-            command.Parameters.AddWithValue("$at", Stamp(at));
         }
+        command.Parameters.AddWithValue("$at", Stamp(at));
         command.Parameters.AddWithValue("$session", sessionId);
         command.ExecuteNonQuery();
     }
@@ -254,16 +259,34 @@ public sealed class UiStateStore
         }
     }
 
-    // Created on first use, so a surface that never touches ui.db never makes the file.
+    /// <summary>
+    /// Whether <paramref name="exception"/> is <c>ui.db</c> being unusable (locked too long by another process, a read-only
+    /// data directory, a file from a newer Corvid) rather than a bug: a surface carries on without the convenience.
+    /// </summary>
+    public static bool IsUnavailable(Exception exception) =>
+        exception is System.Data.Common.DbException or IOException or UnauthorizedAccessException or InvalidDataException;
+
+    // Created on first use, so a surface that never touches ui.db never makes the file; made again when it was deleted
+    // while this process ran (a person clearing their state).
     private void EnsureCreated()
     {
         lock (_gate)
         {
-            if (_ready)
+            if (_ready && File.Exists(Path))
                 return;
-            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
+            if (_ready)
+            {
+                // Pooled connections still hold the deleted file: a write through one would go nowhere anyone reads.
+                using var stale = new SqliteConnection(_connectionString);
+                SqliteConnection.ClearPool(stale);
+                _ready = false;
+            }
+            CorvidPaths.CreatePrivateDirectory(System.IO.Path.GetDirectoryName(Path)!);
+            CreateOwnerOnly(Path);
             using var connection = new SqliteConnection(_connectionString);
             connection.Open();
+            // Outside the transaction below: SQLite cannot change the journal mode inside one. Setting it twice (two
+            // processes creating the file at once) is harmless.
             using (var wal = connection.CreateCommand())
             {
                 wal.CommandText = "PRAGMA journal_mode=WAL;";
@@ -295,7 +318,34 @@ public sealed class UiStateStore
         }
     }
 
-    private static string? Cap(string? text) => text is { Length: > MaxDraftLength } ? text[..MaxDraftLength] : text;
+    // Owner only before SQLite opens it (SQLite gives its -wal and -shm files the same mode): drafts are the person's words.
+    private static void CreateOwnerOnly(string path)
+    {
+        if (File.Exists(path))
+            return;
+        var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.ReadWrite };
+        if (!OperatingSystem.IsWindows())
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        try
+        {
+            using (new FileStream(path, options))
+            {
+            }
+        }
+        catch (IOException) when (File.Exists(path))
+        {
+            // Another process made it first.
+        }
+    }
+
+    // Cut to the limit, never between the two halves of a surrogate pair.
+    private static string? Cap(string? text)
+    {
+        if (text is not { Length: > MaxDraftLength })
+            return text;
+        var length = char.IsHighSurrogate(text[MaxDraftLength - 1]) ? MaxDraftLength - 1 : MaxDraftLength;
+        return text[..length];
+    }
 
     // Round-trip UTC text: sorts as time, so MAX() in MarkSeen compares instants.
     private static string Stamp(DateTimeOffset at) => at.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'", CultureInfo.InvariantCulture);

@@ -120,7 +120,7 @@ public sealed class SessionViewModelTests
         Assert.Equal(["queued|also check the retry count"], session.Queue.Select(chip => $"{chip.Label}|{chip.Text}"));
         Assert.Equal("Ctrl ↵ steers at the next checkpoint · Esc interrupts", string.Concat(session.Hint.Select(part => part.Text)));
         Assert.Equal([true, false, true, false, true, false], session.Hint.Select(part => part.IsKey));
-        Assert.Equal("Ask Corvid…   / commands   @ files   ! shell   # memory", session.Placeholder);
+        Assert.Equal("Ask Corvid…   / commands   @ files   ! shell   # memory   \\# as text", session.Placeholder);
 
         Assert.Equal("claude (escalated) · cuda:0 · q0 · 410 ms", session.StatusGenerator);
         Assert.Equal(("Kev-0.8B, calibrated", "38%", ApprovalMode.Smart), (session.StatusDecider, session.StatusContext, session.Mode));
