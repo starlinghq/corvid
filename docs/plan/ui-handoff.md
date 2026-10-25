@@ -546,6 +546,15 @@ Left from it:
 - A per-session decider on another device than the shared one keeps the shared fabric's checkpoint reduction (C-030): the
   reduction is resolved once from the runtime's decider placement.
 
+The PR review (two agents and a security review) found one high defect: a multi-task `delegate_task` leaked the
+children it had opened when a later task's planning threw. Fixed with the rest; decisions taken in that round: an agent's
+mix may not name a child's decider (a child judges with its parent's decider unless the person or a configured
+`Corvid:Agents:Mixes` entry names one), a tainted child's answer gets the injection checkpoint and is labelled outside
+content, `Corvid:Agents:Models` covers inherited models in the slots a remote model can serve (generator, summarizer,
+vision), and the egress threshold is back to 0.4. Still open: a plain-word password in prose ("my wifi password is
+sunshinerainbow") reaches a cloud model when GLiNER2 labels nothing, since the credential detector's prose rule wants a
+digit or symbol (a `Corvid.Secrets` change).
+
 ### What the running app shows today
 
 
