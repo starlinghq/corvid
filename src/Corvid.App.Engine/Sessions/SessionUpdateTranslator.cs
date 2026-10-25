@@ -29,7 +29,7 @@ namespace Corvid.App.Engine.Sessions;
 /// progress) is a <see cref="TurnProgress"/>; a running call's tail (K-2) a <see cref="ToolCallUpdate.Tail"/>.
 /// </para>
 /// </summary>
-public sealed class SessionUpdateTranslator(string workspace)
+public sealed partial class SessionUpdateTranslator(string workspace)
 {
     private readonly string _workspace = Path.TrimEndingDirectorySeparator(Path.GetFullPath(workspace));
     private readonly List<SessionUpdate> _early = [];
@@ -283,6 +283,11 @@ public sealed class SessionUpdateTranslator(string workspace)
             // A5: a slot's model changed (live from this process, replayed from the log's ModelSwitched): its row and slot change.
             case ModelChanged change:
                 output.AddRange(Models(change, at));
+                break;
+            // A5: a child session started or ended (replayed with ReplayOptions.Children, live from runtime.ChildChanged).
+            case ChildStarted or ChildEnded:
+                outside = true;
+                output.AddRange(Child(update));
                 break;
             // CheckpointLogged: Rewind's timeline reads the ledger itself (A3 history); the transcript shows no row for it.
         }

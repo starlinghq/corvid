@@ -216,6 +216,10 @@ public sealed class CorvidRuntimeFactory(
                 if (memory?.Writer is { } writer)
                     toolRegistry.Add(new MemoryTools(writer, memory.Retriever));
             }
+            // A5 (plan §14): delegate_task starts child sessions through the runtime made below.
+            CorvidRuntime? created = null;
+            if (settings.Tools.Delegate && settings.Agents.MaxDepth > 0)
+                toolRegistry.Add(CorvidRuntime.CreateDelegateTool(() => created ?? throw new InvalidOperationException("The runtime has not started yet.")));
             var skills = skillsGuard.Refusal is { } refusal ? new SkillServices(null, null, null, null, refusal)
                 : StartupStep.Run(progress, "Opening skills", () => OpenSkills(settings, log));
             if (skills.Store is { } store)
@@ -251,7 +255,7 @@ public sealed class CorvidRuntimeFactory(
                 RecapAfter = TimeSpan.FromMinutes(settings.Sessions.RecapAfterMinutes),
             }, untitled);
 
-            return new CorvidRuntime(settings, catalogue, composer, devices, metrics, feed, log, registry, fabric, approvals, prompters,
+            created = new CorvidRuntime(settings, catalogue, composer, devices, metrics, feed, log, registry, fabric, approvals, prompters,
                 toolRegistry, memory, counter, builtin, checkpoints, skills, mcp, hostScheduler)
             {
                 UnavailableModels = [.. unavailable],
@@ -261,6 +265,7 @@ public sealed class CorvidRuntimeFactory(
                 // A5: the "default for new sessions" choice on surfaces that have only the runtime (/model --default).
                 ConfigWriter = configWriter,
             };
+            return created;
         }
         catch
         {

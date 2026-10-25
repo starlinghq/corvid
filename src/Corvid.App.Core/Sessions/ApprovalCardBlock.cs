@@ -392,6 +392,12 @@ public sealed class ApprovalCardBlock : TranscriptBlock
     /// <summary>"MCP server notes · trust: untrusted"; empty for other tools.</summary>
     public string McpText { get; private set; } = "";
 
+    /// <summary>
+    /// A5: a <c>delegate_task</c> spawn's children (goal, tools and what was left out, budget, model mix, approval mode), or
+    /// the child a child's prompt comes from, one per line; empty for other prompts.
+    /// </summary>
+    public string DelegationText { get; private set; } = "";
+
     /// <summary>"Next in the queue: `patch_file src/Corvid.Sandbox/BubblewrapSandbox.cs` (diff ready) · 2 of 2".</summary>
     public IReadOnlyList<MarkdownRun> NextText
     {
@@ -511,6 +517,8 @@ public sealed class ApprovalCardBlock : TranscriptBlock
         Detections = [.. request.Detections.Select(detection => new DetectionView($"detection: {SafeText.Clean(detection.RuleId)}",
             DetectionText.Detail(detection), SafeText.Clean(detection.Reason), DetectionText.Events(detection)))];
         McpText = request.Mcp is { } mcp ? $"MCP server {SafeText.Clean(mcp.Server)} · trust: {SafeText.Clean(mcp.Trust)}" : "";
+        // A5: the host's lines already show hidden characters as escapes; revealed again, nothing slips through.
+        DelegationText = string.Join("\n", request.Delegation.Select(line => SafeText.Reveal(line)));
 
         var options = new List<ApprovalOptionView>
         {

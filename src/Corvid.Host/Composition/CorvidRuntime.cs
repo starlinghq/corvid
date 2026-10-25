@@ -423,6 +423,9 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     public CorvidSession OpenSession(string? sessionId = null, string surface = "cli", SessionSettings? settings = null)
     {
         var id = sessionId ?? NewSessionId(surface);
+        // A5: a child session is opened only by its parent's run (OpenChildSession); opened again by id (an editor, the
+        // HTTP API, a terminal) it would be an ordinary session with the full toolset. Every surface shows it read-only.
+        RefuseChildSession(id);
         TakeDriver(id);
         if (settings is not null)
             _settings.TryAdd(id, settings);
@@ -535,6 +538,8 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await _lifetime.CancelAsync().ConfigureAwait(false);
+        // A5: children a person started (/delegate, the app) end cancelled and log it before their sessions go.
+        await StartedChildrenIdleAsync().ConfigureAwait(false);
         Task? scheduler;
         lock (_schedulerGate)
             scheduler = _scheduler;
@@ -636,7 +641,7 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
 
     /// <summary>The built-in tools' examples and the kernel's <c>ask_user</c>'s (K-6), for the shortlist.</summary>
     private static readonly IReadOnlyDictionary<string, ImmutableArray<string>> ToolExamples =
-        new Dictionary<string, ImmutableArray<string>>(BuiltinTools.Examples, StringComparer.Ordinal) { [AskUserTool.ToolName] = AskUserTool.Examples };
+        new Dictionary<string, ImmutableArray<string>>(BuiltinTools.Examples, StringComparer.Ordinal) { [AskUserTool.ToolName] = AskUserTool.Examples, [DelegateTaskTool.ToolName] = DelegateTaskTool.Examples };
 
     /// <summary>One session's turn services over the shared ones. Scheduled runs are not interactive: nobody can be asked.</summary>
     private TurnServices Services(SessionModelSlots slots, bool interactive, ToolRegistry? tools = null, SessionSettings? session = null,

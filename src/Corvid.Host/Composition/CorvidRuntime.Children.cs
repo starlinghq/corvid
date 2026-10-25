@@ -39,6 +39,9 @@ public sealed partial class CorvidRuntime
     public const int MaxChildTextChars = 4_000;
 
     private readonly ConcurrentDictionary<string, ChildPlan> _childPlans = new(StringComparer.Ordinal);
+    // A5 (/agents stop, the Board): children a person stopped, so their end says so.
+    private readonly ConcurrentDictionary<string, byte> _stoppedChildren = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ChildUsage> _childUsage = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _childCounts = new(StringComparer.Ordinal);
     private readonly Lock _childGate = new();
 
@@ -213,7 +216,7 @@ public sealed partial class CorvidRuntime
             var sequence = AppendTo(plan.ParentId, spawned);
             _childPlans[id] = plan;
             _prompters.SetParent(id, plan.ParentId);
-            var child = OpenSession(id, ChildSessions.Surface, new SessionSettings(Interactive: parent.Interactive));
+            var child = OpenChild(id, new SessionSettings(Interactive: parent.Interactive));
             ChildChanged?.Invoke(plan.ParentId, new ChildStarted(spawned, sequence) { At = DateTimeOffset.UtcNow });
             return child;
         }
@@ -246,28 +249,51 @@ public sealed partial class CorvidRuntime
         ArgumentNullException.ThrowIfNull(child);
         var plan = child.Child ?? throw new ArgumentException("The session is not a child session.", nameof(child));
         var usage = new ChildUsage(plan.Budget.MaxTokens, child.Cancel);
+        _childUsage[child.Id] = usage;
         using var watch = Feed.Subscribe(child.Id, usage);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(plan.Budget.MaxSeconds), ChildClock);
         using var timedOut = timeout.Token.Register(() =>
         {
             usage.TimedOut = true;
-            child.Cancel();
+            usage.Stop();
         });
-        using var cancelled = cancellationToken.Register(child.Cancel);
+        // A5: a stop asked for before the child's turn has started is repeated once it starts (ChildUsage), so none is missed.
+        using var cancelled = cancellationToken.Register(usage.Stop);
         Delivery? delivery = null;
         Exception? failure = null;
-        try
+        var message = plan.Goal;
+        var earlierSteps = 0;
+        for (var attempt = 0; ; attempt++)
         {
-            var posted = await child.PostAsync(plan.Goal, plan.Tainted ? EnvelopeOrigin.External : EnvelopeOrigin.User, CancellationToken.None)
-                .ConfigureAwait(false);
-            delivery = await posted.ConfigureAwait(false);
-        }
-        catch (Exception exception) when (exception is not OutOfMemoryException)
-        {
-            failure = exception;
+            try
+            {
+                // A tainted child stays tainted: Corvid's repair line is posted as outside content too, never as the person.
+                var origin = plan.Tainted || child.Tainted ? EnvelopeOrigin.External : EnvelopeOrigin.User;
+                var posted = await child.PostAsync(message, origin, CancellationToken.None).ConfigureAwait(false);
+                delivery = await posted.ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                failure = exception;
+            }
+            // Plan §14, "validated on return": an answer outside the schema gets one repair turn within the same budget.
+            if (attempt == 0 && failure is null && plan.OutputSchema is { } schema && !usage.OverBudget && !usage.TimedOut
+                && !cancellationToken.IsCancellationRequested && !usage.Stopping
+                && delivery?.Result is { Status: TurnStatus.Answered } first
+                && OutputSchema.Validate(schema, first.Text, out _) is { Count: > 0 } errors)
+            {
+                earlierSteps = first.Steps;
+                message = RepairMessage(errors);
+                continue;
+            }
+            break;
         }
 
         var result = Finish(child, plan, delivery, failure, usage, cancellationToken.IsCancellationRequested);
+        if (earlierSteps > 0)
+            result = result with { Steps = result.Steps + earlierSteps };
+        if (_stoppedChildren.TryRemove(child.Id, out _) && result.Status == ChildStatuses.Cancelled)
+            result = result with { Detail = "stopped by the person" };
         try
         {
             var finished = new ChildFinished(child.Id, result.Status, result.Steps, result.Tokens, result.Tainted,
@@ -333,6 +359,7 @@ public sealed partial class CorvidRuntime
     private void ForgetChild(string childId, string parentId)
     {
         _childPlans.TryRemove(childId, out _);
+        _childUsage.TryRemove(childId, out _);
         _prompters.Forget(childId);
         lock (_childGate)
         {
@@ -531,11 +558,37 @@ public sealed partial class CorvidRuntime
 
         public volatile bool TimedOut;
 
+        private int _stop;
+
+        /// <summary>Cancels the child's turn now and again at its next sign of life, for a stop that came before it started.</summary>
+        public void Stop()
+        {
+            Interlocked.Exchange(ref _stop, 1);
+            cancel();
+        }
+
+        public bool Stopping => Volatile.Read(ref _stop) == 1;
+
+        private void Again()
+        {
+            if (Stopping)
+                cancel();
+        }
+
+        public void GenerationStarted() => Again();
+
+        public void Decided(CheckpointDecisions decisions) => Again();
+
+        public void Progress(int step, int maxSteps) => Again();
+
+        public void ToolStarted(string callId, string tool, bool approval) => Again();
+
         public void Usage(long? inputTokens, long? outputTokens)
         {
             var total = Interlocked.Add(ref _tokens, (inputTokens ?? 0) + (outputTokens ?? 0));
             if (total > budget && Interlocked.Exchange(ref _over, 1) == 0)
                 cancel();
+            Again();
         }
     }
 }

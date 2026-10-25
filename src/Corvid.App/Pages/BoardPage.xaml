@@ -33,6 +33,7 @@
               <RowDefinition Height="Auto" />
               <RowDefinition Height="Auto" />
               <RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" />
               <RowDefinition Height="*" />
             </Grid.RowDefinitions>
             <TextBlock Text="{x:Bind Title, Mode=OneWay}" Style="{StaticResource CorvidBodyText}" FontWeight="SemiBold" TextWrapping="NoWrap"
@@ -50,8 +51,50 @@
             </Grid>
             <TextBlock Grid.Row="3" Text="{x:Bind Detail, Mode=OneWay}" Style="{StaticResource CorvidSmallText}"
                        Visibility="{x:Bind ui:Ui.VisibleIfText(Detail), Mode=OneWay}" />
+            <!-- A5 (§4.13, F18): the session's children as a tree under it: goal, status, tools, budget, models and answer. -->
+            <StackPanel Grid.Row="4" Spacing="6" Visibility="{x:Bind ui:Ui.VisibleIf(HasChildren), Mode=OneWay}">
+              <TextBlock Text="{x:Bind ChildrenHeader, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" FontWeight="SemiBold" />
+              <ItemsControl ItemsSource="{x:Bind Children}" IsTabStop="False">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <StackPanel Spacing="6" />
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="board:ChildRowViewModel">
+                    <Border BorderBrush="{ThemeResource CorvidLine}" BorderThickness="2,0,0,0" Padding="10,4,0,4" Margin="4,0,0,0"
+                            AutomationProperties.Name="{x:Bind AutomationName, Mode=OneWay}">
+                      <StackPanel Spacing="3">
+                        <Grid ColumnSpacing="8">
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                          </Grid.ColumnDefinitions>
+                          <local:ToneDot Tone="{x:Bind StatusTone, Mode=OneWay}" VerticalAlignment="Center" />
+                          <TextBlock Grid.Column="1" Text="{x:Bind Goal, Mode=OneWay}" FontSize="12.5" FontWeight="Medium" TextWrapping="NoWrap"
+                                     TextTrimming="CharacterEllipsis" VerticalAlignment="Center" ToolTipService.ToolTip="{x:Bind Goal, Mode=OneWay}" />
+                          <TextBlock Grid.Column="2" Text="{x:Bind Status, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" VerticalAlignment="Center" />
+                          <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="6">
+                            <controls:CorvidButton Content="Open" Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Foreground="{ThemeResource CorvidAccent}"
+                                                   Command="{x:Bind OpenCommand}" ToolTipService.ToolTip="Open the child read-only, with its parent linked" />
+                            <controls:CorvidButton Content="Stop" Style="{StaticResource CorvidSmallButton}" Variant="Ghost"
+                                                   Command="{x:Bind StopCommand}" Visibility="{x:Bind ui:Ui.VisibleIf(IsRunning), Mode=OneWay}"
+                                                   ToolTipService.ToolTip="Stop this child: its turn is cancelled and it ends cancelled" />
+                          </StackPanel>
+                        </Grid>
+                        <TextBlock Text="{x:Bind Details, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" TextWrapping="Wrap" />
+                        <TextBlock Text="{x:Bind Output, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" TextWrapping="Wrap" MaxLines="3"
+                                   TextTrimming="CharacterEllipsis" Visibility="{x:Bind ui:Ui.VisibleIf(HasOutput), Mode=OneWay}" />
+                      </StackPanel>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
             <!-- .foot: tags then buttons, 8 apart, at the card's bottom. -->
-            <controls:WrapRowPanel Grid.Row="4" Spacing="8" LineSpacing="8" VerticalAlignment="Bottom">
+            <controls:WrapRowPanel Grid.Row="5" Spacing="8" LineSpacing="8" VerticalAlignment="Bottom">
               <ItemsControl ItemsSource="{x:Bind Tags, Mode=OneWay}" IsTabStop="False" VerticalAlignment="Center">
                 <ItemsControl.ItemsPanel>
                   <ItemsPanelTemplate>

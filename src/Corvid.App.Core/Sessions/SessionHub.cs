@@ -125,7 +125,8 @@ public sealed class SessionHub : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         if (_open.TryGetValue(sessionId, out var session))
             return session;
-        session = new SessionViewModel(sessionId, _service, _dispatcher, _time, _shell);
+        // A5: a child or a parent the rail does not list (read-only) still opens, as the Board's peek does.
+        session = new SessionViewModel(sessionId, _service, _dispatcher, _time, _shell) { ShowSession = Show };
         session.SetPinned(_summaries.TryGetValue(sessionId, out var summary) && summary.Pinned);
         _open[sessionId] = session;
         _ = OpenAsync(session);

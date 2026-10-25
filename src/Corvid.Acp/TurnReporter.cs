@@ -96,6 +96,34 @@ internal sealed class TurnReporter : ITurnObserver
         _ => null,
     };
 
+    /// <summary>
+    /// A5: a child session as ACP shows it (ACP has no notion of subagents): a <c>tool_call</c> of its own, its id the
+    /// child's session id, when it starts, and a <c>tool_call_update</c> with its status and answer when it ends. Goals and
+    /// answers are model text, sent as text content as any tool result is.
+    /// </summary>
+    internal static SessionUpdate? Child(SessionStreamUpdate update) => update switch
+    {
+        ChildStarted started => new ToolCall(started.Child.ChildId, "Child session: " + Short(started.Child.Goal), ToolKinds.Other,
+            ToolStatuses.InProgress)
+        {
+            Content = [new ContentToolCallContent(new TextContent(Corvid.Host.Commands.AgentCommands.Started(started.Child)))],
+        },
+        ChildEnded ended => new ToolCallUpdate(ended.Child.ChildId)
+        {
+            Status = ended.Child.Status == ChildStatuses.Answered ? ToolStatuses.Completed : ToolStatuses.Failed,
+            Content = [new ContentToolCallContent(new TextContent(ended.Child.Text is { Length: > 0 } text && ended.Child.Status == ChildStatuses.Answered
+                ? text
+                : Corvid.Host.Commands.AgentCommands.Ended(ended.Child)))],
+        },
+        _ => null,
+    };
+
+    private static string Short(string text)
+    {
+        var line = text.ReplaceLineEndings(" ").Trim();
+        return line.Length > 80 ? line[..80] + "…" : line;
+    }
+
     internal static ToolCallLocation[]? Locations(ImmutableArray<string> paths) =>
         paths.IsDefaultOrEmpty ? null : [.. paths.Select(path => new ToolCallLocation(path))];
 

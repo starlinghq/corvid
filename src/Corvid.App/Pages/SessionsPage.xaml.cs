@@ -330,7 +330,11 @@ public sealed partial class SessionsPage : Page, IDockProvider
     private void OnViewModelChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(SessionsViewModel.Session))
+        {
+            // A5: opening a child (or the parent) from the header's list leaves that list behind.
+            ChildrenFlyout.Hide();
             Attach(ViewModel.Session);
+        }
     }
 
     private void Attach(SessionViewModel? session)
@@ -913,6 +917,10 @@ public sealed partial class SessionsPage : Page, IDockProvider
         // The room left of the actions, less the pill at its natural width.
         var room = HeaderGrid.ActualWidth - HeaderActions.ActualWidth - HeaderGrid.ColumnSpacing;
         var pill = ForkPill.Visibility == Visibility.Visible ? ForkPill.ActualWidth + TitleRow.Spacing : 0;
+        // A5: a child's parent link and a parent's children button keep their room too; the models pill gives way first.
+        foreach (var kept in new FrameworkElement[] { ParentLink, ChildrenButton })
+            if (kept.Visibility == Visibility.Visible)
+                pill += kept.ActualWidth + TitleRow.Spacing;
         // A5: the models pill gives way to the title: it shows only while the title keeps room for a few words beside it.
         if (ModelsPill.Visibility == Visibility.Visible)
         {

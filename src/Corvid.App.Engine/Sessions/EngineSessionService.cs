@@ -777,9 +777,10 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         var driven = IsJobRun(id) ? Corvid.Host.Composition.LockState.Free : runtime.Driver(id).State;
         var elsewhere = driven == Corvid.Host.Composition.LockState.HeldElsewhere;
         var runningHere = runtime.IsTurnRunning(id);
-        // A5: the log's model switches too, for their rows, the per-step model and the slots' state.
-        var options = elsewhere ? TailOptions(0)
-            : runningHere ? ReplayOptions.Full with { UnfinishedCalls = false, Models = true } : ReplayOptions.Full with { Models = true };
+        // A5: the log's model switches (their rows, the per-step model and the slots' state) and its children. A child runs in
+        // its parent's turn, here or not: its open calls are still running, as another process's are.
+        var options = elsewhere || IsChild(id) && runningHere ? TailOptions(0)
+            : (runningHere ? ReplayOptions.Full with { UnfinishedCalls = false } : ReplayOptions.Full) with { Models = true, Children = true };
         var history = await SessionReplay.ReadAsync(runtime, id, tools, options).ConfigureAwait(false);
         var goal = Corvid.Kernel.Events.SessionProjection.Load(runtime.Log, id).Goal;
         var summary = Summarize(runtime, id) ?? Empty(runtime, id, _time.GetUtcNow());
@@ -812,6 +813,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             // its approval mode, whether outside content is in its context, and the commands the composer offers.
             if (_forks.TryGetValue(id, out var fork))
                 updates.Add(new SessionForked(fork.From, fork.AtTurn) { At = at });
+            // A5: a child links its parent.
+            if (summary.ParentId is { } parentId)
+                updates.Add(new ChildOfSession(parentId, summary.Child?.Goal ?? "") { At = at });
             if (goal is not null)
                 updates.Add(new GoalChanged(goal) { At = at });
             updates.Add(new ApprovalModeChanged(mode) { At = at });
@@ -844,7 +848,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                     Keep(channel, update);
         }
         // G-12: follow what another process appends to a session this one does not drive, and who drives it.
-        if (!IsJobRun(id) && driven != Corvid.Host.Composition.LockState.HeldHere)
+        if (!IsJobRun(id) && (driven != Corvid.Host.Composition.LockState.HeldHere || IsChild(id)))
             StartTail(runtime, tools, channel, history.Head);
     }
 
@@ -1106,14 +1110,18 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         var drivenElsewhere = driver is { State: Corvid.Host.Composition.LockState.HeldElsewhere };
         if (drivenElsewhere)
             WatchHeld(runtime, id);
+        // A5: a child is its parent's record: read-only here, shown under its parent.
+        var child = ChildFacts(runtime, id);
         // A session this window made holding no message yet (a fork before the first one) is new, not its id.
         return new SessionSummary(id, title ?? (_created.ContainsKey(id) || _forks.ContainsKey(id) ? "New session" : id))
         {
+            Child = child?.Child,
+            ParentId = child?.ParentId,
             // G-7: pinned in ui.db, by this window or the CLI's /pin.
             Pinned = (pinned ?? Pins()).Contains(id),
             // A job's run is the scheduler's: read-only here, as the demo's run is, and listed as the job's.
-            ReadOnly = job.Name is not null || drivenElsewhere,
-            Holder = job.Name is not null ? JobHolder : drivenElsewhere ? DriverHolder(driver!.Holder) : null,
+            ReadOnly = job.Name is not null || drivenElsewhere || child is not null,
+            Holder = job.Name is not null ? JobHolder : child is { } of ? ChildHolder(of.ParentId) : drivenElsewhere ? DriverHolder(driver!.Holder) : null,
             Job = job.Name,
             Schedule = job.Schedule,
             RunAt = job.Name is not null ? job.RunAt ?? last : null,
@@ -1195,6 +1203,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     /// </summary>
     private CorvidSession Session(CorvidRuntime runtime, string sessionId)
     {
+        RefuseChild(sessionId);
         if (runtime.TryGetSession(sessionId, out var session))
             return session;
         try
@@ -1211,7 +1220,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
 
     /// <summary><see cref="Session"/> on the pool: the request methods are called on the UI thread.</summary>
     private Task<CorvidSession> SessionAsync(CorvidRuntime runtime, string sessionId, CancellationToken cancellationToken) =>
-        runtime.TryGetSession(sessionId, out var session)
+        !IsChild(sessionId) && runtime.TryGetSession(sessionId, out var session)
             ? Task.FromResult(session)
             : Task.Run(() => Session(runtime, sessionId), cancellationToken);
 

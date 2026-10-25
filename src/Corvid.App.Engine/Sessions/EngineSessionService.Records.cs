@@ -334,17 +334,22 @@ public sealed partial class EngineSessionService
                 Publish(channel, translator => ModelUpdates(translator, runtime, id, change, _time.GetUtcNow()));
         }
 
+        // A5: a child of a session started or ended (an agent's delegate_task, a person's /delegate).
+        void OnChild(string parentId, SessionStreamUpdate update) => OnChildChanged(runtime, parentId, update);
+
         runtime.TitleChanged += OnTitle;
         runtime.Recapped += OnRecap;
         // (A5: OnModel above, through ModelUpdates below.)
         runtime.Notice += OnNotice;
         runtime.ModelChanged += OnModel;
+        runtime.ChildChanged += OnChild;
         _unwatchRecords = () =>
         {
             runtime.TitleChanged -= OnTitle;
             runtime.Recapped -= OnRecap;
             runtime.Notice -= OnNotice;
             runtime.ModelChanged -= OnModel;
+            runtime.ChildChanged -= OnChild;
         };
         if (_disposed)
             UnwatchRecords();

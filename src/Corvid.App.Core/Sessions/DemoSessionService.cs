@@ -252,6 +252,12 @@ public sealed partial class DemoSessionService : ISessionService, IDisposable
         return Task.CompletedTask;
     }
 
+    /// <summary>Tests: tells the views of a summary the demo's sessions do not hold (a child session, A5).</summary>
+    internal void Announce(SessionSummary summary) => SessionChanged?.Invoke(this, summary);
+
+    /// <summary>Tests: an update for a session as the engine would send it live (a child's start, say).</summary>
+    internal void Push(string sessionId, SessionUpdate update) => Emit(Get(sessionId), update);
+
     /// <summary>The session's state as the fold sees it (tests).</summary>
     internal SessionView StateOf(string sessionId) => Get(sessionId).State;
 

@@ -261,13 +261,16 @@ internal sealed class ChatRenderer : ITurnObserver
 
     // ---- approvals and commands ----
 
-    public void ShowApproval(ApprovalPrompt prompt)
+    public void ShowApproval(ApprovalPrompt prompt, IReadOnlyList<string>? details = null)
     {
         lock (_gate)
         {
             StopPanel();
             EndText();
             var body = new List<IRenderable> { new Markup($"[bold]{Markup.Escape(prompt.Analysis.Text)}[/]") };
+            // A5: a spawn's children, or the child that asks (already shown with hidden characters escaped).
+            foreach (var line in details ?? [])
+                body.Add(new Markup($"[cyan]{Markup.Escape(line)}[/]"));
             foreach (var command in prompt.Analysis.Commands)
             {
                 var targets = command.Targets.IsDefaultOrEmpty ? "" : " → " + string.Join(", ", command.Targets.Select(target => target.Value));

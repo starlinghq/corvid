@@ -488,7 +488,13 @@ public sealed class TurnRunner
             if (!_skills.IsEmpty)
                 ingress.Add(SkillQuestion());
             ingress.AddRange(DescriptionQuestions());
-            var verdicts = await DecideAsync(Checkpoint.Ingress, ingress, cancellationToken).ConfigureAwait(false);
+            // A5 (plan §5.2's delegate row): would a child session do this better? Asked only where it could act: a
+            // calibrated decider, a generator with native tool calls, and delegate_task in the turn's tools.
+            var delegates = DelegationCondition();
+            if (delegates)
+                ingress.Add(Ask("delegate"));
+            var verdicts = await DecideAsync(Checkpoint.Ingress, ingress, cancellationToken,
+                delegates ? [FabricConditions.GeneratorSupportsDelegation] : []).ConfigureAwait(false);
             await LoadSkillAsync(verdicts, cancellationToken).ConfigureAwait(false);
 
             if (Acted(verdicts, "difficulty", out _) && _options.EscalationAllowed)
@@ -511,6 +517,10 @@ public sealed class TurnRunner
             var offered = OfferFrom(verdicts, "tool");
             if (offered is null && Acted(verdicts, "intent", out var route) && route == "answer_directly")
                 offered = [];
+            // A5: a confident delegate offers delegate_task beside whatever else the turn is offered.
+            if (delegates && Acted(verdicts, "delegate", out _) && _catalogue.TryGetValue(DelegateTaskTool.ToolName, out var delegation)
+                && !(offered ?? _shortlist).Any(tool => tool.Function.Name == DelegateTaskTool.ToolName))
+                offered = (offered ?? _shortlist).Add(delegation);
             return await LoopAsync(offered ?? _shortlist, cancellationToken).ConfigureAwait(false);
         }
 
@@ -1062,6 +1072,8 @@ public sealed class TurnRunner
                         Interactive = _options.Interactive,
                         Approval = approval,
                         Output = tail is null ? null : tail.Write,
+                        // A5: what the turn may be offered, the ceiling of a delegated child's toolset.
+                        OfferedTools = new HashSet<string>(_catalogue.Keys, StringComparer.Ordinal),
                     };
                     var arguments = context.AttachTo(JsonValues.ToArguments(call.Arguments));
                     var value = await call.Tool.Function.InvokeAsync(arguments, cancellationToken).ConfigureAwait(false);
@@ -1571,6 +1583,16 @@ public sealed class TurnRunner
         }
 
         /// <summary>What the generator may see after a <c>tool</c> verdict: one tool, none, or null for the shortlist (§5.3 rule 2).</summary>
+        /// <summary>
+        /// A5: <see cref="FabricConditions.GeneratorSupportsDelegation"/>. The turn has <c>delegate_task</c> (never a guest's or a
+        /// child's), the generator calls tools natively, and a calibrated decider would answer: the degraded tier's yes/no
+        /// would cost a generator call on every turn for a routing hint.
+        /// </summary>
+        private bool DelegationCondition() =>
+            _catalogue.ContainsKey(DelegateTaskTool.ToolName) && _options.AsksQuestions
+            && _services.Slots.Current(ModelSlots.Generator).Profile.ToolCalls == ToolCallSupport.Native
+            && _services.CurrentFabric().CalibratedDecider is not null;
+
         private ImmutableArray<Offered>? OfferFrom(CheckpointResult result, string key)
         {
             if (!Acted(result, key, out var pick) || pick is null)
@@ -1683,7 +1705,9 @@ public sealed class TurnRunner
                 if (function.GetService(typeof(ToolDescriptor)) is ToolDescriptor descriptor
                     // K-6: a turn nobody watches (a scheduled run) has nobody to ask.
                     && (_options.Interactive && _options.AsksQuestions || function is not AskUserTool)
-                    && (envelope.Guest is null || envelope.Guest.Allows(function.Name) && !descriptor.Risk.SideEffects.HasFlag(SideEffects.Memory)))
+                    && (envelope.Guest is null || envelope.Guest.Allows(function.Name) && !descriptor.Risk.SideEffects.HasFlag(SideEffects.Memory)
+                        // A5: a guest never starts child sessions, whatever its allowlist says.
+                        && function.Name != DelegateTaskTool.ToolName))
                     _catalogue[function.Name] = new Offered(function, descriptor);
             if (_catalogue.Count == 0 || !_services.Slots.TryCurrent(ModelSlots.TextEmbedder, out var binding)
                 || binding.Service is not IEmbeddingGenerator<string, Embedding<float>> embedder)
