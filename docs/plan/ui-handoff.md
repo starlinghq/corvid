@@ -247,6 +247,11 @@ Left:
   session" while its first turn runs; Send looks enabled with no session.
 - A preview taken while a turn runs is labelled as such rather than drafted on the actor; a call that crashed with no
   record of its changes still cannot be rolled back past (the kernel refuses it, now with its own reason).
+- From the fix verification (low): an interrupt pending when another surface posts between the window's head read
+  and its post can cancel that turn; First run writes a choice an environment variable or `--set` overrides without
+  saying so; a broken approvals.json now refuses side-effecting calls mid-run (it is re-read on change); a rule write
+  waiting on the CLI's lock holds every approval check for up to 10 s; a read-only config or approvals directory reads
+  as "another process is writing".
 - Not walked on the engine: F8, F10, F12, F14's switch and download, F15, F16, F17 with a Vault.
 
 ### What the running app shows today

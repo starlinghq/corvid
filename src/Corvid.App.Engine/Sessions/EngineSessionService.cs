@@ -713,7 +713,10 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         var open = runtime.TryGetSession(id, out var session);
         if (runtime.Log.GetHead(id) == 0 && !open)
             throw new KeyNotFoundException($"There is no session '{id}' in Corvid's log.");
-        var history = await SessionReplay.ReadAsync(runtime, id, tools, ReplayOptions.Full).ConfigureAwait(false);
+        // A call with no result is cancelled only when no turn of the session is running: one opened mid-turn (a job
+        // run from the Board, another surface's turn) is still working on it.
+        var options = runtime.IsTurnRunning(id) ? ReplayOptions.Full with { UnfinishedCalls = false } : ReplayOptions.Full;
+        var history = await SessionReplay.ReadAsync(runtime, id, tools, options).ConfigureAwait(false);
         var goal = Corvid.Kernel.Events.SessionProjection.Load(runtime.Log, id).Goal;
         var summary = Summarize(runtime, id) ?? Empty(runtime, id, _time.GetUtcNow());
         var commands = Commands();

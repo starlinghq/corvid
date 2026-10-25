@@ -27,6 +27,14 @@ public sealed class JsoncTextTests
     }
 
     [Fact]
+    public void ACommentBeforeTheCommaIsNotTakenForAMissingComma()
+    {
+        Assert.Equal("{ \"a\": 1 /* one */, \"b\": 2, \"c\": 3 }", JsoncText.Set("{ \"a\": 1 /* one */, \"b\": 2 }", ["c"], JsonValue.Create(3)));
+        Assert.Equal("{ \"b\": 2 }", JsoncText.Set("{ \"a\": 1 /* one */, \"b\": 2 }", ["a"], null));
+        Assert.Equal("{\n  \"a\": 1 // one\n  , \"b\": 2, \"c\": 3\n}", JsoncText.Set("{\n  \"a\": 1 // one\n  , \"b\": 2\n}", ["c"], JsonValue.Create(3)));
+    }
+
+    [Fact]
     public void AnEmptyObjectGetsItsFirstKeyOnALineOfItsOwn()
     {
         Assert.Equal("{\n  \"a\": true\n}", JsoncText.Set("{}", ["a"], JsonValue.Create(true)));

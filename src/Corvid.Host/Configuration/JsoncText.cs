@@ -221,10 +221,30 @@ internal static class JsoncText
         return position;
     }
 
-    /// <summary>The position after the comma that follows <paramref name="position"/> past whitespace; -1 when none does.</summary>
+    /// <summary>
+    /// The position after the comma that follows <paramref name="position"/> past whitespace and comments (<c>1 /* c */ ,</c>);
+    /// -1 when none does.
+    /// </summary>
     private static int AfterComma(byte[] bytes, int position)
     {
         var next = SkipBlanks(bytes, position);
+        while (next + 1 < bytes.Length && bytes[next] == (byte)'/' && bytes[next + 1] is (byte)'*' or (byte)'/')
+        {
+            if (bytes[next + 1] == (byte)'*')
+            {
+                var close = next + 2;
+                while (close + 1 < bytes.Length && !(bytes[close] == (byte)'*' && bytes[close + 1] == (byte)'/'))
+                    close++;
+                next = SkipBlanks(bytes, Math.Min(close + 2, bytes.Length));
+            }
+            else
+            {
+                while (next < bytes.Length && bytes[next] is not ((byte)'\n' or (byte)'\r'))
+                    next++;
+                next = SkipBlanks(bytes, next);
+            }
+        }
+
         return next < bytes.Length && bytes[next] == (byte)',' ? next + 1 : -1;
     }
 
