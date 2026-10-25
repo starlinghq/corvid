@@ -6,6 +6,8 @@ using Corvid.Host.Sessions;
 using Corvid.Host.Telemetry;
 using HostPlan = Corvid.Host.Sessions.PlanChanged;
 using TodoItem = Corvid.Abstractions.Events.TodoItem;
+using Assessed = Corvid.Abstractions.Events.ApprovalAssessed;
+using Resolutions = Corvid.Abstractions.Events.ApprovalResolutions;
 
 namespace Corvid.App.Engine.Tests;
 
@@ -171,5 +173,57 @@ public sealed class TranslatorTests
         Assert.Equal(text, chunk.Text);
         Assert.Equal(ImmutableArray<string>.Empty, Assert.IsType<ToolCall>(Assert.Single(translator.Translate(
             new ToolCallStarted("c4", "x", ToolCallKinds.Other, ToolCallState.Pending)))).Locations);
+    }
+
+    private static ToolCallChanged Finished(Assessed? assessed = null, bool? readOnly = null, string? checkpoint = null, CallApproval? approval = null) =>
+        new("c1") { Status = ToolCallState.Completed, Assessment = assessed, ReadOnly = readOnly, CheckpointBefore = checkpoint, Approval = approval };
+
+    [Fact]
+    public void ACallSmartModeRanUnaskedSaysTheModeTheRiskAndWhatItDoes()
+    {
+        var assessed = new Assessed("c1", Resolutions.Automatic, "smart", [new("risk", "approval_mode: level 1")],
+            Risk: new("d-1", "approval_mode", 1, "low", 0.93, true, "kev-0.8b"), Effects: ["write"], Contained: true);
+
+        var update = Assert.IsType<ToolCallUpdate>(Assert.Single(new SessionUpdateTranslator(Workspace).Translate(Finished(assessed, false, "c-44"))));
+
+        var verdict = update.Verdict!;
+        Assert.Equal((VerdictKind.Mode, (Corvid.App.Core.Shell.ApprovalMode?)Corvid.App.Core.Shell.ApprovalMode.Smart, (int?)1, (double?)0.93, "c-44", "in workspace, no network"),
+            (verdict.Kind, verdict.Mode, verdict.RiskLevel, verdict.RiskConfidence, verdict.CheckpointId, verdict.Detail));
+        // An uncalibrated answer says so.
+        var degraded = SessionUpdateTranslator.Verdict(Finished(assessed with { Risk = assessed.Risk! with { Calibrated = false, Decider = "degraded" } }))!;
+        Assert.Equal("in workspace, no network, the risk answer was not calibrated (degraded)", degraded.Detail);
+    }
+
+    [Fact]
+    public void RulesHardlineAndAMissingApproverAreNamedAsTheyDecided()
+    {
+        static Assessed Of(string resolution, string? rule = null, string? scope = null, params string[] reasons) =>
+            new("c1", resolution, "manual", [.. reasons.Select(reason => new Corvid.Abstractions.Events.AssessmentReason("code", reason))], rule, scope);
+        static CallVerdict Verdict(Assessed assessed) => SessionUpdateTranslator.Verdict(Finished(assessed, false, "c-9"))!;
+
+        var session = Verdict(Of(Resolutions.RuleAllowed, "`dotnet test` under /w", "session"));
+        Assert.Equal((VerdictKind.SessionRule, "`dotnet test` under /w", "c-9"), (session.Kind, session.Rule, session.CheckpointId));
+        Assert.Equal(VerdictKind.AlwaysRule, Verdict(Of(Resolutions.RuleAllowed, "`rm`", "always")).Kind);
+        var denied = Verdict(Of(Resolutions.RuleDenied, "`curl` for example.org", "always", "a remembered denial matches"));
+        Assert.Equal((VerdictKind.RuleDenied, "`curl` for example.org", (string?)null), (denied.Kind, denied.Detail, denied.CheckpointId));
+        var hardline = Verdict(Of(Resolutions.Hardline, null, null, "recursive delete outside the workspace"));
+        Assert.Equal((VerdictKind.Hardline, "recursive delete outside the workspace"), (hardline.Kind, hardline.Detail));
+        var nobody = Verdict(Of(Resolutions.NoApprover, null, null, "manual mode asks before every side effect"));
+        Assert.Equal(VerdictKind.NoApprover, nobody.Kind);
+        Assert.Equal(VerdictKind.ReadOnly, Verdict(new("c1", Resolutions.Automatic, "smart", [new("read_only", "reads only")])).Kind);
+    }
+
+    [Fact]
+    public void AReadOnlyToolAnAnsweredPromptAndNothingKnownEachKeepTheirVerdict()
+    {
+        Assert.Equal(VerdictKind.ReadOnly, SessionUpdateTranslator.Verdict(Finished(readOnly: true))!.Kind);
+        // Nothing known leaves the card's verdict (the live prompter's) as it was.
+        Assert.Null(SessionUpdateTranslator.Verdict(Finished(readOnly: false)));
+        Assert.Null(SessionUpdateTranslator.Verdict(Finished()));
+        var approved = SessionUpdateTranslator.Verdict(Finished(readOnly: true, checkpoint: "c-3",
+            approval: new CallApproval("a-1", true, "user: approved (session)") { Scope = "session" }))!;
+        Assert.Equal((VerdictKind.ApprovedSession, "c-3"), (approved.Kind, approved.CheckpointId));
+        var refused = SessionUpdateTranslator.Verdict(Finished(checkpoint: "c-3", approval: new CallApproval("a-1", false, "user: denied (once)")))!;
+        Assert.Equal((VerdictKind.Denied, (string?)null), (refused.Kind, refused.CheckpointId));
     }
 }

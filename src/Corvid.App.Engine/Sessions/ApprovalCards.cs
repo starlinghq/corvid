@@ -57,7 +57,9 @@ internal static class ApprovalCards
             At = at,
             CallId = callId,
             Commands = [.. analysis.Commands.Select(Command)],
-            Reasons = [.. prompt.Reasons.Select(reason => new AppReason(reason.Code, Label(reason.Code), reason.Detail))],
+            // The risk reason is labelled with the level the decider gave, when it gave one ("risk 2").
+            Reasons = [.. prompt.Reasons.Select(reason => new AppReason(reason.Code,
+                reason.Code == "risk" && logged.RiskLevel is { } level ? $"risk {level}" : Label(reason.Code), reason.Detail))],
             Offered = offered.IsEmpty ? [AppScope.Once] : offered,
             Unparsed = analysis.Unsupported,
             Reversible = logged.Reversible,
@@ -134,7 +136,8 @@ internal static class ApprovalCards
     };
 
     /// <summary>What the log holds beside a prompt: the pipeline appends its request (with the analysed action) just before asking.</summary>
-    internal sealed record LoggedFacts(bool? Reversible, bool Tainted, ImmutableArray<DetectionInfo> Detections)
+    /// <param name="RiskLevel">The level (0 to 4) of the <c>risk</c> answer that led to the prompt, when a decider gave one.</param>
+    internal sealed record LoggedFacts(bool? Reversible, bool Tainted, ImmutableArray<DetectionInfo> Detections, int? RiskLevel = null)
     {
         public static LoggedFacts None { get; } = new(null, false, []);
     }
@@ -170,7 +173,29 @@ internal static class ApprovalCards
                 .Where(matched => matched.CallId == callId)
                 .Select(matched => Detection(log, sessionId, matched))
                 .ToImmutableArray();
-        return new LoggedFacts(reversible, tainted, detections);
+        return new LoggedFacts(reversible, tainted, detections, RiskLevel(events, prompt.ApprovalId));
+    }
+
+    /// <summary>
+    /// The level of the <c>risk</c> decision logged just before the prompt's request (the pipeline asks it, then asks the
+    /// person): its most probable option's place among the question's options. Null when no decider answered.
+    /// </summary>
+    private static int? RiskLevel(IReadOnlyList<StoredEvent> events, string approvalId)
+    {
+        var at = events.Select((item, index) => (item, index)).LastOrDefault(pair => pair.item.Payload is LoggedRequest request && request.ApprovalId == approvalId);
+        if (at.item is null)
+            return null;
+        for (var i = at.index - 1; i >= 0; i--)
+        {
+            if (events[i].Payload is not Decision { QuestionId: "risk" } decision)
+                continue;
+            if (decision.Probabilities.IsEmpty || decision.Question is not { Options: { IsDefaultOrEmpty: false } options })
+                return null;
+            var best = decision.Probabilities.MaxBy(pair => pair.Value).Key;
+            var index = options.Select(option => option.Name).ToList().IndexOf(best);
+            return index >= 0 ? index : null;
+        }
+        return null;
     }
 
     public static DetectionInfo Detection(IEventLog log, string sessionId, LoggedDetection matched) =>

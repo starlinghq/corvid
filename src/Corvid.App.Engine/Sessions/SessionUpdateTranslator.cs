@@ -2,6 +2,8 @@ using System.Collections.Immutable;
 using Corvid.App.Core.Sessions;
 using Corvid.Host.Sessions;
 using HostPlan = Corvid.Host.Sessions.PlanChanged;
+using ApprovalAssessed = Corvid.Abstractions.Events.ApprovalAssessed;
+using ApprovalResolutions = Corvid.Abstractions.Events.ApprovalResolutions;
 
 namespace Corvid.App.Engine.Sessions;
 
@@ -140,7 +142,7 @@ public sealed class SessionUpdateTranslator(string workspace)
                     Elapsed = changed.Elapsed,
                     Diffs = [.. changed.Diffs.Select(diff => new FileEdit(RelativePath(diff.Path), diff.OldText, diff.NewText))],
                     Locations = Relative(changed.Locations),
-                    Verdict = changed.Approval is { } approval ? Verdict(approval) : null,
+                    Verdict = Verdict(changed),
                 });
                 break;
             case HostPlan plan:
@@ -244,6 +246,75 @@ public sealed class SessionUpdateTranslator(string workspace)
             Detail = kind == VerdictKind.Denied ? approval.Note : null,
         };
     }
+
+    /// <summary>
+    /// A finished call's verdict: an asked call's answer (replay; live, the card's prompter closed it), else why it ran or
+    /// was refused unasked (G-2: the pipeline's assessment), else "read-only" for a tool that declared itself so; null when
+    /// none of these is known, which leaves the card's verdict as it was.
+    /// </summary>
+    internal static CallVerdict? Verdict(ToolCallChanged changed) => changed switch
+    {
+        { Approval: { } approval } => Verdict(approval) with { CheckpointId = approval.Approved ? changed.CheckpointBefore : null },
+        { Assessment: { } assessed } => Verdict(assessed, changed.CheckpointBefore),
+        { ReadOnly: true } => new CallVerdict(VerdictKind.ReadOnly),
+        _ => null,
+    };
+
+    /// <summary>
+    /// The pipeline's assessment of a call that asked nobody, in the card's terms: the rule that allowed or refused it (with
+    /// its scope), the mode and the <c>risk</c> level that let it run ("in workspace, no network"), the hardline rule or
+    /// the missing approver that refused it, and the checkpoint taken before it.
+    /// </summary>
+    internal static CallVerdict Verdict(ApprovalAssessed assessed, string? checkpoint)
+    {
+        var kind = assessed.Resolution switch
+        {
+            ApprovalResolutions.RuleAllowed => assessed.RuleScope == "always" ? VerdictKind.AlwaysRule : VerdictKind.SessionRule,
+            ApprovalResolutions.RuleDenied => VerdictKind.RuleDenied,
+            ApprovalResolutions.Hardline => VerdictKind.Hardline,
+            ApprovalResolutions.NoApprover => VerdictKind.NoApprover,
+            _ when assessed.Reasons.Any(reason => reason.Code == "read_only") => VerdictKind.ReadOnly,
+            _ => VerdictKind.Mode,
+        };
+        var allowed = kind is VerdictKind.Mode or VerdictKind.SessionRule or VerdictKind.AlwaysRule or VerdictKind.ReadOnly;
+        return new CallVerdict(kind)
+        {
+            Rule = assessed.Rule,
+            Mode = kind == VerdictKind.Mode ? Mode(assessed.Mode) : null,
+            RiskLevel = allowed ? assessed.Risk?.Level : null,
+            RiskConfidence = allowed ? assessed.Risk?.Confidence : null,
+            CheckpointId = allowed ? checkpoint : null,
+            Detail = kind switch
+            {
+                VerdictKind.Mode => Scope(assessed),
+                // The reasons that refused it; for a remembered denial, the rule says which.
+                VerdictKind.Hardline or VerdictKind.NoApprover => string.Join("; ", assessed.Reasons.Select(reason => reason.Detail)),
+                VerdictKind.RuleDenied => assessed.Rule ?? string.Join("; ", assessed.Reasons.Select(reason => reason.Detail)),
+                _ => null,
+            },
+        };
+    }
+
+    /// <summary>What a call that ran unasked does, as the card says it: "in workspace, no network".</summary>
+    private static string? Scope(ApprovalAssessed assessed)
+    {
+        var parts = new List<string>();
+        if (assessed.Contained is { } contained)
+            parts.Add(contained ? "in workspace" : "reaches outside the workspace");
+        if (assessed.Effects is { } effects)
+            parts.Add(effects.Contains("network") ? "network" : "no network");
+        if (assessed.Risk is { Calibrated: false, Decider: var decider })
+            parts.Add($"the risk answer was not calibrated ({decider ?? "degraded tier"})");
+        return parts.Count == 0 ? null : string.Join(", ", parts);
+    }
+
+    private static Corvid.App.Core.Shell.ApprovalMode? Mode(string mode) => mode switch
+    {
+        "manual" => Corvid.App.Core.Shell.ApprovalMode.Manual,
+        "smart" => Corvid.App.Core.Shell.ApprovalMode.Smart,
+        "permissive" => Corvid.App.Core.Shell.ApprovalMode.Permissive,
+        _ => null,
+    };
 
     /// <summary>The span's outcome; a replayed call has only its status, which says succeeded or failed.</summary>
     private static ToolOutcome? Outcome(string? outcome, ToolCallState? status) => outcome switch

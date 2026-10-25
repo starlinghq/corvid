@@ -102,6 +102,23 @@ public sealed record ToolCallChanged(string CallId) : SessionStreamUpdate
     /// null when nobody was asked. Live, the surface's own prompter knows the answer.
     /// </summary>
     public CallApproval? Approval { get; init; }
+
+    /// <summary>
+    /// Why the call ran, or was refused, without anyone being asked (G-2): the approval pipeline's assessment as the log
+    /// records it, live and on replay (with <see cref="ReplayOptions.Approvals"/>); null when someone was asked or the call
+    /// never reached the pipeline (a tool that declares itself read-only: see <see cref="ReadOnly"/>).
+    /// </summary>
+    public ApprovalAssessed? Assessment { get; init; }
+
+    /// <summary>
+    /// The tool declared itself read-only when it was called (<c>ToolCallIssued.ReadOnly</c>): with no
+    /// <see cref="Assessment"/> and no <see cref="Approval"/>, it ran unasked because it only reads. Null when unknown, and
+    /// for a call that was asked all the same (a network read in a tainted turn).
+    /// </summary>
+    public bool? ReadOnly { get; init; }
+
+    /// <summary>The write ledger's checkpoint taken before the call, which makes what it changed reversible (C-014).</summary>
+    public string? CheckpointBefore { get; init; }
 }
 
 /// <summary>A call's approval prompt and its answer as the log records them (<c>ApprovalRequested</c>, <c>ApprovalResolved</c>).</summary>
