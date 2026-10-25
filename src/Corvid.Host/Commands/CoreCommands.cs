@@ -97,8 +97,9 @@ public static class CoreCommands
         if (arguments is ["unpin", var unpinned])
         {
             ModelSlots.ContractOf(unpinned);
-            context.Session.Slots.Unpin(unpinned);
-            return CommandOutput.Success($"{unpinned} is unpinned: escalation moves off it again, and it returns to this session's choice when the turn ends.");
+            await context.Session.Slots.UnpinAsync(unpinned, cancellationToken).ConfigureAwait(false);
+            // A pin only stops de-escalation (plan §6, C-006): escalation and fallback move a pinned slot too.
+            return CommandOutput.Success($"{unpinned} is unpinned: when a turn ends it returns to this session's choice again, wherever escalation took it.");
         }
 
         string slot, name;
@@ -248,7 +249,7 @@ public static class CoreCommands
         string[] lines = models.Count == 0 ? [$"No model can serve {slot}."]
             : slot == ModelSlots.Decider ? [$"decider: {SessionDecider(context)}.",
                 $"Switch this session's decider with {prefix} <number> or {prefix} <name>; add --default for new sessions instead. /model reset {slot} forgets this session's choice."]
-            : [$"Switch this session with {prefix} <number> or {prefix} <name> (it lasts until you change it); add --pin to keep it past escalation. " +
+            : [$"Switch this session with {prefix} <number> or {prefix} <name> (it lasts until you change it); add --pin to keep the slot where it is when a turn ends (escalation still moves it). " +
                 $"Add --default to make it the default for new sessions instead; /model reset {slot} forgets this session's choice."];
         return new CommandOutput
         {

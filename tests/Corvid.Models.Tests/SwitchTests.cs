@@ -398,7 +398,7 @@ public sealed class SwitchTests : IDisposable
         Assert.Empty(await slots.CompleteTurnAsync(Ct));
         Assert.Same(_server, slots.Current(Generator));
 
-        slots.Unpin(Generator);
+        Assert.True(await slots.UnpinAsync(Generator, Ct));
         Assert.Equal(SwitchStatus.Switched, Assert.Single(await slots.CompleteTurnAsync(Ct)).Status);
         Assert.Same(_local, slots.Current(Generator));
     }

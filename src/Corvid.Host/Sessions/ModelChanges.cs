@@ -27,7 +27,9 @@ public static class ModelChanges
         var to = Read(switched.NewProfile);
         return new ModelChanged(switched.Slot, Read(switched.OldProfile)?.Id ?? "unknown", to?.Id ?? "unknown", switched.Reason, sequence)
         {
-            SessionDefault = switched.Reason == SwitchReason.Session.ToWireName(),
+            // A5 review: a reset changes the session's default too (back to the configured one), as its live notice says.
+            SessionDefault = switched.Reason == SwitchReason.Session.ToWireName() || switched.Reset == true,
+            Pinned = switched.Pinned == true,
             Cloud = to?.Privacy == PrivacyClass.Cloud,
         };
     }

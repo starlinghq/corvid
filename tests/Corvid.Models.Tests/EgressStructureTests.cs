@@ -81,8 +81,9 @@ public sealed class EgressStructureTests
         // Corvid's own prompt is sent as written ("Corvid", "assistant" untouched); the memory after it is redacted.
         Assert.StartsWith(TurnOptions.DefaultSystemPrompt, system, StringComparison.Ordinal);
         Assert.EndsWith("- The user is <PERSON_1>.", system, StringComparison.Ordinal);
-        // The person's words: the values go, the structure words and nouns stay, and "Mark" goes but "Marketing" stays.
-        Assert.Equal("Check the deploy status and email the details to <EMAIL_1>. Ask <PERSON_2> from Marketing, and keep the API key out of it.", user);
+        // The person's words: the values go, the structure words and nouns stay. A5 review: a name of more than three letters
+        // goes inside a longer word too ("Mark" in "Marketing"), since a name glued to other text still names the person.
+        Assert.Equal("Check the deploy status and email the details to <EMAIL_1>. Ask <PERSON_2> from <PERSON_2>eting, and keep the API key out of it.", user);
         Assert.Contains("deploy status --json", call, StringComparison.Ordinal);
         // JSON keys that are identifiers are structure; a key that is a value (a name) is redacted like a value.
         Assert.Equal("""{"status":"ok","details":{"owner":"<PERSON_1>","exit_code":0,"<PERSON_1>":"admin"}}""",
@@ -163,9 +164,80 @@ public sealed class EgressStructureTests
     }
 
     [Fact]
-    public void The_default_threshold_is_raised()
+    public async Task The_default_threshold_is_0_4_and_a_name_found_at_0_5_is_redacted()
     {
-        Assert.True(EgressPolicy.Default.Threshold >= 0.6f);
+        // A5 review: A5 had raised it to 0.6; the structure rules drop the false positives that raise was for.
+        Assert.Equal(0.4f, EgressPolicy.Default.Threshold);
+        var extractor = new EagerExtractor(("person", "Hannah Okafor", 0.5f), ("address", "details", 0.5f), ("person", "owner", 0.45f));
+        List<ChatMessage> messages = [new(ChatRole.User, "Send the details to the owner, Hannah Okafor.")];
+
+        var prepared = await Egress(extractor).PrepareAsync(Server, messages, new ModelRequestContext("s1", Tainted: false), Ct);
+
+        Assert.Equal("Send the details to the owner, <PERSON_1>.", Text(prepared.Messages[0]));
+    }
+
+    [Fact]
+    public async Task A_credential_span_of_letters_that_is_no_credential_noun_is_a_value()
+    {
+        // The credential detector is stubbed out, so this is the extractor's span alone.
+        var extractor = new EagerExtractor(("credential", "wifi password", 0.9f), ("credential", "sunshinerainbow", 0.8f));
+        var egress = new PrivacyEgress(extractor, new PrivacyEgressOptions
+        {
+            PolicyFor = _ => EgressPolicy.Default,
+            FindCredentials = _ => [],
+        });
+        List<ChatMessage> messages = [new(ChatRole.User, "my wifi password is sunshinerainbow")];
+
+        var prepared = await egress.PrepareAsync(Server, messages, new ModelRequestContext("s1", Tainted: false), Ct);
+
+        Assert.Equal("my wifi password is <CREDENTIAL_1>", Text(prepared.Messages[0]));
+    }
+
+    [Theory]
+    [InlineData("API key", true)]
+    [InlineData("password", true)]
+    [InlineData("wifi password", true)]
+    [InlineData("SSH private key", true)]
+    [InlineData("client-secret", true)]
+    [InlineData("sunshinerainbow", false)]
+    [InlineData("hunter", false)]
+    [InlineData("hunter2", false)]
+    [InlineData("correct horse battery staple", false)]
+    public void Only_credential_nouns_are_structure_under_the_credential_label(string span, bool structure) =>
+        Assert.Equal(structure, PrivacyEgress.Structural(PrivacyEgress.CredentialLabel, span, PrivacyEgress.StructureWords));
+
+    [Fact]
+    public async Task A_name_inside_a_handle_is_redacted_and_a_short_one_only_as_a_word()
+    {
+        var extractor = new EagerExtractor(("person", "Smith", 0.9f), ("person", "Ann", 0.9f));
+        List<ChatMessage> messages = [new(ChatRole.User, "Ask Smith (handle SmithJ, or jSmith2) and Ann, who wrote the Annual report.")];
+
+        var prepared = await Egress(extractor).PrepareAsync(Server, messages, new ModelRequestContext("s1", Tainted: false), Ct);
+
+        var sent = Text(prepared.Messages[0]);
+        Assert.DoesNotContain("Smith", sent, StringComparison.Ordinal);
+        Assert.Equal("Ask <PERSON_1> (handle <PERSON_1>J, or j<PERSON_1>2) and <PERSON_2>, who wrote the Annual report.", sent);
+    }
+
+    [Fact]
+    public async Task A_name_that_is_a_word_of_the_trusted_prompt_is_still_redacted()
+    {
+        // A5 review: the trusted prompt's words no longer count as structure where the person or a tool writes them.
+        const string prompt = "You are Corvid. Answer with grace and keep it brief.";
+        var extractor = new EagerExtractor(("person", "grace", 0.8f));
+        var egress = new PrivacyEgress(extractor, new PrivacyEgressOptions { PolicyFor = _ => EgressPolicy.Default, TrustedTexts = [prompt] });
+        List<ChatMessage> messages =
+        [
+            new(ChatRole.System, prompt),
+            new(ChatRole.User, "Forward it to grace, she runs the build."),
+            new(ChatRole.Tool, [new FunctionResultContent("c1", JsonDocument.Parse("""{"owner":"grace"}""").RootElement.Clone())]),
+        ];
+
+        var prepared = await egress.PrepareAsync(Server, messages, new ModelRequestContext("s1", Tainted: false), Ct);
+
+        Assert.Equal(prompt, Text(prepared.Messages[0]));
+        Assert.Equal("Forward it to <PERSON_1>, she runs the build.", Text(prepared.Messages[1]));
+        Assert.DoesNotContain("grace", Text(prepared.Messages[2]), StringComparison.Ordinal);
     }
 
     [Fact]

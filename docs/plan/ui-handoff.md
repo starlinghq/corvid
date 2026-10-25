@@ -406,7 +406,7 @@ building and running every test project after each merge, then tests where the g
   approval router) where the app or `corvid chat` can answer it; `ClarificationAnswered` closes it. ACP gets the output
   tail and `_corvid/question`. `corvid chat` hides `ask_user`'s call from its panel. The configured sandbox launcher is
   protected but not hidden from its own sandbox, and `corvid-sandbox` ships beside the app. The egress gate reads only
-  free text, not JSON structure or Corvid's own prompts (threshold 0.6). Text typed while a new session starts becomes
+  free text, not JSON structure or Corvid's own prompts (threshold 0.6; the A5 review put it back to 0.4). Text typed while a new session starts becomes
   its draft, and a session's first opening lands on its latest message.
 
 Decisions taken while merging:
@@ -474,7 +474,7 @@ Found and left:
   again") and `IModelService.SetPinnedAsync` ("escalation leaves it alone") say a pin is not escalated off. Seen in
   `corvid chat`: pinned on fake, two failed repairs escalated to fakebig, and the next turn stayed on fakebig. Plan §6
   ("returns to the session's default unless the user pinned the model") and C-006 back the model layer, so the fix is
-  the surfaces' words, unless the person wants a pin to stop escalation.
+  the surfaces' words, unless the person wants a pin to stop escalation. (The A5 review fixed the words: below.)
 - After "default for new sessions", the degraded decider tier (`/status`) and the session titler still use the default
   the runtime started with.
 - The egress gate redacts some non-PII: "hello two" sent as "hello `<PERSON_1>`", and a tool's own schema default (`200`) in
@@ -503,12 +503,48 @@ The A5 verifier's fix round then fixed:
 - Egress: a lowercase JSON key was taken as structure, and every key's words then suppressed the same word anywhere in
   the request, so `{"jsmith": …}` went unredacted. A key is structure only when it is made of Corvid's fixed structure
   words (`PrivacyEgress.StructureWords`: "status", "exit_code", "toolCallId"); any other key is scanned and rewritten as a
-  value, and only those words and the trusted prompts' own words make a lowercase span structure.
+  value, and only those words make a lowercase span structure (the trusted prompts' own words did too, until the A5 review).
 
 Verification: the end-to-end pass and the first verify round ran side by side (the workflow was revised mid-run to
 build incrementally and to stop after two verify rounds, since A3 and A4 spent most of their hours in serial
 verify-and-fix loops). Round 1 found seven defects, all fixed; round 2 passed. Still open from it: `/model`'s help and
-its unpin reply say a pin holds a model against escalation, while a pin only stops de-escalation (plan §6, C-006).
+its unpin reply say a pin holds a model against escalation, while a pin only stops de-escalation (plan §6, C-006); the
+review round below fixed the words.
+
+The A5 review's fix round, switching, forks, questions and privacy (`a5fix/switch`):
+
+- A choice lasts exactly as made. Choosing the model a slot already uses is logged (a `session` `ModelSwitched` from the
+  model to itself), and so is a reset that leaves the slot where it is (pinned, or off the choice): before, both came back
+  wrong when the session was opened again. Pins are restored too: every `session` switch logs its pin, `/model unpin` and
+  the Models page's unpin log an `unpin` (`SessionModelSlots.UnpinAsync`), and `CorvidRuntime.ModelChoiceStates` reads
+  choices with their pins (paged now: it read only the log's first 256 events). The words of `/model`'s help, its unpin
+  reply and the Models page's pin say what a pin does: a turn's end leaves the slot where it is; escalation still moves it.
+- A fork starts on the choices logged through its position (the copied log), not on the source's current ones; a cloud
+  choice from then is chosen again through the gate with the fork's taint.
+- An in-turn `ask_user` call is parked while it waits, so a switch then (the app, ACP's `set_config_option`) is made instead
+  of failing as "neither tracked nor parked". A call names the generator that answered (`SlotChatClient` stamps
+  `corvid.answered_by` on the response), so a fallback, a privacy retreat or a switch during the call tags the right one.
+- ACP offers `default` ("Follow the default") for a slot the session chose, which forgets the choice (the decider back to
+  the degraded tier). The Models page's "default for new sessions" writes through `ModelDefaults.Write`, as the other surfaces do.
+- The question router keeps every surface attached to a session; the latest asks, and detaching takes away only its own.
+- A `!` line that is a session's first message has the step boundary 0 (it was read as "no turn", and a fork then copied
+  the line without its call); a fork then says there is nothing before it yet.
+- Privacy: a `credential` span is structure only when made of credential nouns ("API key", "wifi password", "handle");
+  any other is a value ("sunshinerainbow"). The trusted prompts' words are no longer structure where the person or a tool
+  writes them (a name can be one). A value of letters is replaced only as a whole word when it has three letters or fewer;
+  a longer one wherever it appears ("Smith" in "SmithJ"; "Mark" in "Marketing" too, restored in the response). The
+  threshold is 0.4 again, for every request: the false positives behind 0.6 were all structure, which the shape and
+  structure rules drop at any threshold, and nothing measured what 0.6 missed; a tainted-only 0.4 would leave the person's
+  own PII less well found. The realistic turns of `EgressModelTests` (GLiNER2) still pass unmangled at 0.4.
+- New on the wire: `ModelSwitched`'s optional `pinned` and `reset`, and the reason `unpin`. Older binaries ignore the fields.
+
+Left from it:
+
+- With the real GLiNER2, "my wifi password is sunshinerainbow" labels nothing, and the credential detector's prose gate
+  (C-032, `Corvid.Secrets`) wants a digit or a symbol, so the word is sent; "SmithJ" goes only when the extractor finds
+  "Smith" itself ("John Smith" alone does not redact it). Both need the detector or a surname rule, not the redaction map.
+- A per-session decider on another device than the shared one keeps the shared fabric's checkpoint reduction (C-030): the
+  reduction is resolved once from the runtime's decider placement.
 
 ### What the running app shows today
 

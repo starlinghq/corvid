@@ -193,9 +193,10 @@ public sealed partial class PrivacyEgress
     /// <paramref name="texts"/> lose the key that labels a value (<c>{"password": "..."}</c>).
     /// </param>
     /// <param name="vocabulary">
-    /// A5: the request's structural words (Corvid's built-in structure words, the lowercase words of the trusted system text):
-    /// a lowercase identifier-shaped span made only of them is the request's structure, not a value ("status", "details").
-    /// The request's own JSON keys are not among them: a key is data too (a result keyed by a username).
+    /// A5: the request's structural words, Corvid's fixed <see cref="StructureWords"/>: a lowercase identifier-shaped span
+    /// made only of them is the request's structure, not a value ("status", "details"). Neither the request's own JSON keys
+    /// (a key is data too: a result keyed by a username) nor, since A5's review, the trusted prompts' words are among them:
+    /// a prompt's word can be someone's name or handle where the person or a tool writes it.
     /// </param>
     private async Task<EgressScan> ScanAsync(IEnumerable<string> texts, IEnumerable<string> structured, EgressPolicy policy,
         CancellationToken cancellationToken, IReadOnlySet<string>? vocabulary = null)
@@ -255,12 +256,14 @@ public sealed partial class PrivacyEgress
     }
 
     /// <summary>
-    /// A5: spans GLiNER2 labels that are not values: a <c>credential</c> span of plain words is the noun ("API key",
-    /// "password"; values are the credential detector's), and a lowercase single word the request uses as structure.
+    /// A5: spans GLiNER2 labels that are not values: a <c>credential</c> span made only of credential nouns ("API key",
+    /// "password", "wifi password"; values are the credential detector's), and a lowercase single word the request uses as
+    /// structure. A5 review: any other credential span is a value, letters only or not ("sunshinerainbow" in "my wifi
+    /// password is sunshinerainbow").
     /// </summary>
     internal static bool Structural(string label, string value, IReadOnlySet<string>? vocabulary)
     {
-        if (string.Equals(label, CredentialLabel, StringComparison.OrdinalIgnoreCase) && value.All(c => char.IsLetter(c) || c is ' ' or '-'))
+        if (string.Equals(label, CredentialLabel, StringComparison.OrdinalIgnoreCase) && CredentialNoun(value))
             return true;
         // A value of a built-in label has its shape: an email has an @, a phone or account number has digits. GLiNER2 called
         // "status" an email in the A4 pass. A user-defined label has no known shape and is taken as found.
@@ -325,6 +328,33 @@ public sealed partial class PrivacyEgress
         "email", "emails", "phone", "address", "username", "login", "account", "first", "last", "full", "display", "city",
         "country", "zip", "company", "org", "team", "members", "member",
     }.ToFrozenSet(StringComparer.Ordinal);
+
+    /// <summary>
+    /// A5 review: whether a span names a kind of credential rather than holding one: every word (split at spaces, hyphens and
+    /// underscores, any case) is one of <see cref="CredentialWords"/>, and one of them is a head noun ("key", "password",
+    /// "token"…), so "API key" and "wifi password" are nouns and "sunshinerainbow" or "hunter2" are values.
+    /// </summary>
+    internal static bool CredentialNoun(string value)
+    {
+        var words = value.Split([' ', '-', '_'], StringSplitOptions.RemoveEmptyEntries);
+        return words.Length > 0 && words.All(CredentialWords.Contains) && words.Any(CredentialHeads.Contains);
+    }
+
+    private static readonly FrozenSet<string> CredentialHeads = new[]
+    {
+        "key", "keys", "password", "passwords", "passphrase", "passphrases", "passcode", "passcodes", "pin", "pins", "token",
+        "tokens", "secret", "secrets", "credential", "credentials", "apikey", "apikeys", "pwd", "passwd",
+        // Names of a login rather than secrets, which GLiNER2 also calls credentials ("his handle is SmithJ" in the A5 review).
+        "handle", "handles", "username", "usernames", "login", "logins",
+    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+
+    // The head nouns and the words that qualify them ("API key", "wifi password", "SSH private key", "client secret").
+    private static readonly FrozenSet<string> CredentialWords = CredentialHeads.Concat(
+    [
+        "api", "access", "auth", "authentication", "bearer", "client", "private", "public", "secret", "ssh", "gpg", "pgp", "wifi",
+        "wi", "fi", "login", "account", "admin", "root", "user", "app", "application", "refresh", "session", "personal", "master",
+        "recovery", "backup", "encryption", "signing", "deploy", "github", "aws", "my", "the", "your", "a", "an", "new", "old",
+    ]).ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
     private static readonly HashSet<string> RoleWords = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -441,7 +471,7 @@ public sealed partial class PrivacyEgress
             return new(new(EgressOutcome.Refused, action, $"the request holds {opaque.GetType().Name}, which the PII extractor cannot read",
                 ImmutableSortedDictionary<string, int>.Empty), messages, null);
 
-        var scan = await ScanAsync(ScannedTexts(messages), StructuredTexts(messages), policy, cancellationToken, Vocabulary(messages))
+        var scan = await ScanAsync(ScannedTexts(messages), StructuredTexts(messages), policy, cancellationToken, StructureWords)
             .ConfigureAwait(false);
         var decision = Decide(action, scan);
         if (decision.Outcome != EgressOutcome.Redacted)
@@ -617,19 +647,6 @@ public sealed partial class PrivacyEgress
     }
 
     /// <summary>
-    /// The request's structural words: Corvid's <see cref="StructureWords"/> and the lowercase words of the trusted system
-    /// texts (Corvid's own prompts). Not the request's JSON keys, which tools and outside content choose.
-    /// </summary>
-    internal HashSet<string> Vocabulary(IEnumerable<ChatMessage> messages)
-    {
-        var words = new HashSet<string>(StructureWords, StringComparer.Ordinal);
-        foreach (var text in Options.TrustedTexts.IsDefault ? [] : Options.TrustedTexts)
-            foreach (Match word in LowerWord().Matches(text))
-                words.Add(word.Value);
-        return words;
-    }
-
-    /// <summary>
     /// A JSON key shaped like structure: a lowercase identifier of letters (snake, kebab or camel case) of at most 32
     /// characters. A key with a capital first, a number, a space, a dot or <c>@</c> (a name, an email, a token) is always read
     /// as a value; one of this shape is structure only when <see cref="StructureKey"/> also knows its words.
@@ -638,9 +655,6 @@ public sealed partial class PrivacyEgress
 
     [GeneratedRegex(@"^[a-z]+(?:[_-][a-z]+)*$|^[a-z]+(?:[A-Z][a-z]+)+$", RegexOptions.CultureInvariant)]
     private static partial Regex IdentifierPattern();
-
-    [GeneratedRegex(@"\b[a-z][a-z_-]*\b", RegexOptions.CultureInvariant)]
-    private static partial Regex LowerWord();
 
     /// <summary>Splits text into the trusted texts it holds (each occurrence) and what lies between them, in order.</summary>
     internal static IEnumerable<(string Text, bool Trusted)> Segments(string text, ImmutableArray<string> trusted)

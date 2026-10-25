@@ -171,16 +171,19 @@ public sealed class TurnRunner
     /// </summary>
     public void Taint() => Tainted = true;
 
-    // G-15: the log position through which the running turn's last completed step lies; 0 while no turn runs.
-    private long _stepBoundary;
+    // G-15: the log position through which the running turn's last completed step lies; NoBoundary while no turn runs (0 is a
+    // boundary: a `!` line that is the session's first message holds nothing before it).
+    private const long NoBoundary = -1;
+    private long _stepBoundary = NoBoundary;
 
     /// <summary>
     /// G-15: while a turn runs, the log position a fork may copy through without splitting a step: the turn's message
     /// until its first round of tool calls has its results (the head before the message for a <c>!</c> line's turn), then
-    /// the head after each round's results. Every call issued by then has its result and no approval waits. Null between
-    /// turns. A snapshot, thread-safe: a surface reads it beside the running turn.
+    /// the head after each round's results. Every call issued by then has its result and no approval waits. 0 while a
+    /// <c>!</c> line that is the session's first message runs (nothing comes before it). Null between turns. A snapshot,
+    /// thread-safe: a surface reads it beside the running turn.
     /// </summary>
-    public long? StepBoundary => Volatile.Read(ref _stepBoundary) is > 0 and var boundary ? boundary : null;
+    public long? StepBoundary => Volatile.Read(ref _stepBoundary) is >= 0 and var boundary ? boundary : null;
 
     private void MarkStepBoundary(long sequence) => Volatile.Write(ref _stepBoundary, sequence);
 
@@ -327,7 +330,7 @@ public sealed class TurnRunner
         finally
         {
             // Steers the turn ended without taking go back to the surface, which sends them as messages.
-            Volatile.Write(ref _stepBoundary, 0);
+            Volatile.Write(ref _stepBoundary, NoBoundary);
             List<PendingSteer> left;
             lock (_steerGate)
                 (left, _steers) = (_steers ?? [], null);
@@ -769,6 +772,7 @@ public sealed class TurnRunner
                         var answer = await generator.GetResponseAsync(messages, forced, cancellationToken).ConfigureAwait(false);
                         NoteUsage(answer.Usage);
                         NotePrivacyRetreat(head, cancellationToken);
+                        _generatorId = ModelResponses.AnsweredBy(answer) ?? _generatorId;
                         return answer;
                     }
                     catch (NotSupportedException)
@@ -780,6 +784,9 @@ public sealed class TurnRunner
             var response = await generator.GetResponseAsync(messages, options, cancellationToken).ConfigureAwait(false);
             NoteUsage(response.Usage);
             NotePrivacyRetreat(head, cancellationToken);
+            // A5 review: the calls this response issues name the model that answered (after a fallback, a privacy retreat or a
+            // switch), not the one the call started on.
+            _generatorId = ModelResponses.AnsweredBy(response) ?? _generatorId;
             return response;
         }
 
@@ -1475,17 +1482,30 @@ public sealed class TurnRunner
             var (text, options) = AskUserTool.Read(arguments);
             var question = new ClarifyingQuestion(NewQuestionId(), text, options);
             var prompt = new QuestionPrompt(runner.SessionId, question.Id, callId, text, options);
+            IDisposable parked;
             lock (_gate)
             {
                 if (text.Length == 0 || _question is not null)
                     return false;
                 // The surface waits for the answer before the question reaches the log (and so the window): AskAsync follows.
                 asker.Expect(prompt);
-                runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, true, Generator: _generatorId, Usage: TakeUsage()),
-                    new ClarificationAsked(question.Id, question.Text, question.Options));
+                // A5 review: parked from before it is issued until its result is logged, so a switch while the person thinks
+                // neither waits for the call nor refuses it as orphaned (it is not running: it waits on the person).
+                parked = _services.Slots.ParkToolCall(callId);
+                try
+                {
+                    runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, true, Generator: _generatorId, Usage: TakeUsage()),
+                        new ClarificationAsked(question.Id, question.Text, question.Options));
+                }
+                catch
+                {
+                    parked.Dispose();
+                    throw;
+                }
                 // Open until answered: a cancelled turn closes it with the rest.
                 _open.Add(callId);
             }
+            using var unpark = parked;
             using var activity = StartToolActivity(callId, tool, approval: false);
             string? answer;
             try

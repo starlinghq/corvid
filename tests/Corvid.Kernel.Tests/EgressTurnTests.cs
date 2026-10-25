@@ -197,6 +197,44 @@ public sealed class EgressTurnTests : IDisposable
     }
 
     [Fact]
+    public async Task A_call_asked_for_after_the_gate_kept_the_turn_local_names_the_local_generator()
+    {
+        // A5 review: the generator is read from the response, so a privacy retreat (or a fallback, or a switch during the
+        // call) tags the call with the model that asked for it, not the one the request started on.
+        var local = new FakeGenerator(Reply.Call("list_notes", """{"limit":5}"""), Reply.Say("Answered locally."));
+        var cloudProvider = new FakeGenerator(Reply.Say("Answered in the cloud."));
+        var cloudProfile = Generator(PrivacyClass.Cloud, PromptCachingStyle.Breakpoints);
+        var cloud = new ModelBinding(cloudProfile, new PrivacyEgressChatClient(cloudProvider, cloudProfile, Egress(EgressAction.Refuse)));
+        var embedder = new KeywordEmbedder(TurnHarness.Keywords);
+        var localBinding = new ModelBinding(Generator(PrivacyClass.Local, PromptCachingStyle.None), local);
+        var registry = new ModelSlotRegistry()
+            .Bind(ModelSlots.Generator, localBinding, escalation: [cloud])
+            .Bind(ModelSlots.TextEmbedder, new ModelBinding(TurnHarness.Profile("keywords", ToolCallSupport.None, 512), embedder));
+        var slots = new SessionModelSlots(registry, _log, Session, new ModelSwitchOptions { Privacy = PrivacyGates.AllowAll });
+        await slots.SwitchAsync(ModelSlots.Generator, cloud, SwitchReason.User, pin: true, cancellationToken: Ct);
+        var services = new TurnServices
+        {
+            Log = _log,
+            Slots = slots,
+            Fabric = new DecisionFabric(DecisionPolicy.Default, new DegradedDecider(embedder, new FakeGenerator()), _log),
+            Tools = Notes(),
+        };
+
+        await new TurnRunner(Session, services).RunAsync(new Envelope(Session, "cli", "list my notes about Alice Smith"), Ct);
+
+        Assert.Empty(cloudProvider.Calls);
+        var issued = Assert.Single(_log.Read(Session, limit: 4096, cancellationToken: Ct).Select(item => item.Payload).OfType<ToolCallIssued>());
+        Assert.Equal(localBinding.Profile.Id, issued.Generator);
+
+        static ToolRegistry Notes()
+        {
+            var tools = new ToolRegistry();
+            tools.Add(new Corvid.Tools.Fixtures.NoteTools());
+            return tools;
+        }
+    }
+
+    [Fact]
     public async Task A_tool_result_carrying_a_token_reaches_a_cloud_generator_redacted_even_under_a_send_policy()
     {
         const string token = "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"; // fictitious, in GitHub's classic shape

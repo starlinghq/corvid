@@ -16,6 +16,9 @@ public sealed partial class RedactionMap
     private readonly Dictionary<string, string> _byPlaceholder = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _counters = new(StringComparer.Ordinal);
 
+    // A5 review: the longest letters-only value replaced only as a whole word.
+    internal const int WholeWordMaxLength = 3;
+
     internal long LastUsed { get; set; }
 
     public int Count
@@ -71,11 +74,12 @@ public sealed partial class RedactionMap
         var matches = new List<(int Start, int Length, string Placeholder)>();
         foreach (var (value, placeholder) in values)
         {
-            // A5: a PII value that is one word of letters is replaced where it stands as a word, not inside a longer one
-            // ("Mark" in "Marketing", "Ann" in "Annual"); the extractor reads words, so it never found it there. Anything else
-            // is replaced wherever it appears: a credential glued to other text is still the credential, and so is a number
-            // (an account, a phone) or a full name.
-            var whole = !IsCredential(placeholder) && value.All(char.IsLetter);
+            // A5: a short PII value of letters (three or fewer: "Ann", "Bo") is replaced only where it stands as a word, not
+            // inside a longer one ("Annual"), or it would rewrite unrelated words everywhere. A5 review: anything longer is
+            // replaced wherever it appears, as a credential, a number (an account, a phone) or a full name is: a name glued
+            // to other text (the handle "SmithJ") still names the person. The cost is a word that holds a name ("Mark" in
+            // "Marketing"), which the response maps back.
+            var whole = !IsCredential(placeholder) && value.Length <= WholeWordMaxLength && value.All(char.IsLetter);
             for (var at = text.IndexOf(value, StringComparison.Ordinal); at >= 0; at = text.IndexOf(value, at + 1, StringComparison.Ordinal))
                 if (!whole || (at == 0 || !char.IsLetterOrDigit(text[at - 1])) && (at + value.Length == text.Length || !char.IsLetterOrDigit(text[at + value.Length])))
                     matches.Add((at, value.Length, placeholder));

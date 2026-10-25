@@ -135,17 +135,13 @@ public sealed class EngineModelService : IModelService, IDisposable
                 return Refused($"Memory embeds only with the embedder.text models configured at start. Add {E(descriptor.Name)} to " +
                     "`Corvid:Models:Slots:embedder.text:Fallbacks`, then restart.");
 
-            var options = NextStartOptions();
-            var settings = options.Models.EffectiveSlots().GetValueOrDefault(slot);
-            if (settings is not null && string.Equals(settings.Model, descriptor.Name, StringComparison.OrdinalIgnoreCase))
-                return Written($"The {slot} is already {E(descriptor.Name)}.");
-            var edits = new List<ConfigEdit> { ConfigEdit.Set($"{CorvidOptions.Section}:Models:Slots:{slot}:Model", descriptor.Name) };
-            // A model cannot be its slot's own escalation: one on the ladder leaves it as it becomes the default.
-            if (settings is not null && settings.Escalation.Contains(descriptor.Name, StringComparer.OrdinalIgnoreCase))
-                edits.Add(Ladder(slot, [.. settings.Escalation.Where(step => !string.Equals(step, descriptor.Name, StringComparison.OrdinalIgnoreCase))], settings));
-            var result = _writer.Apply(edits);
+            // The write every surface's "default for new sessions" makes (A5 review: one writer, ModelDefaults): validated as
+            // the next start reads it, and a model on the slot's ladder leaves it as it becomes the default.
+            var result = ModelDefaults.Write(_writer, _catalogue, slot, descriptor.Name, takeOffLadder: true);
             if (!result.Written)
-                return Refused($"Not written: {E(result.FailureText)}");
+                return Refused(E(result.Detail ?? "Not written."));
+            if (result.AlreadySet)
+                return Written($"The {slot} is already {E(descriptor.Name)}.");
 
             var message = $"Written to `{E(result.Path)}`: the {slot} is {E(descriptor.Name)} for new sessions.";
             if (runtime is null)
@@ -307,11 +303,11 @@ public sealed class EngineModelService : IModelService, IDisposable
             if (pinned)
                 await session.Actor.SwitchModelAsync(slot, binding, pin: true, cancellationToken).ConfigureAwait(false);
             else
-                session.Slots.Unpin(slot);
+                await session.Slots.UnpinAsync(slot, cancellationToken).ConfigureAwait(false);
             await RefreshAsync(cancellationToken).ConfigureAwait(false);
             return Written(pinned
-                ? $"The {slot} is pinned to {E(binding.Profile.Id)} for {E(sessionId)}: escalation leaves it alone."
-                : $"The {slot} is no longer pinned in {E(sessionId)}: a hard step escalates again.");
+                ? $"The {slot} is pinned to {E(binding.Profile.Id)} for {E(sessionId)}: a turn's end leaves it where it is (escalation still moves it)."
+                : $"The {slot} is no longer pinned in {E(sessionId)}: a turn's end returns it to the session's choice again.");
         }, cancellationToken);
     }
 

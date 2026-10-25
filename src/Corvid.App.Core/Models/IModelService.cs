@@ -41,7 +41,10 @@ public interface IModelService
     Task<ConfigWrite> ClearSessionChoiceAsync(string slot, CancellationToken cancellationToken = default) =>
         Task.FromResult(new ConfigWrite(false, "Switching one session's model comes with the engine."));
 
-    /// <summary>Pins a slot's model for this session, so escalation and a switch elsewhere leave it alone.</summary>
+    /// <summary>
+    /// Pins a slot's model for this session: a turn's end leaves the slot where it is instead of returning it to the session's
+    /// choice. Escalation and fallback still move a pinned slot (plan §6, C-006); a pin only stops de-escalation.
+    /// </summary>
     Task<ConfigWrite> SetPinnedAsync(string slot, bool pinned, CancellationToken cancellationToken = default);
 
     /// <summary>Places a local model on a device (<c>cuda:0</c>, <c>cpu</c>).</summary>

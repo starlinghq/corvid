@@ -139,16 +139,21 @@ public sealed class SessionModelSlots
     /// <summary>
     /// A5: puts back a choice the person made for the session before it was opened again (a resumed session, a fork): the
     /// slot uses <paramref name="binding"/> and returns to it when a turn ends, as after <see cref="SetSessionDefaultAsync"/>.
-    /// Nothing is logged (the log already holds the choice's <c>ModelSwitched</c>) and no one is told. Only before the
-    /// session's first switch: a slot that has moved since the session opened keeps where it is.
+    /// With <paramref name="pinned"/> it is pinned again. Nothing is logged (the log already holds the choice's
+    /// <c>ModelSwitched</c>) and no one is told. It sets the slot's binding whatever it is now, so call it as the session
+    /// opens, before anything switches the slot.
     /// </summary>
-    public void RestoreSessionDefault(string slot, ModelBinding binding)
+    public void RestoreSessionDefault(string slot, ModelBinding binding, bool pinned = false)
     {
         ModelSlots.Check(slot, binding);
         lock (_state)
         {
             _chosen[slot] = binding;
             _current[slot] = binding;
+            if (pinned)
+                _pinned.Add(slot);
+            else
+                _pinned.Remove(slot);
         }
     }
 
@@ -165,11 +170,22 @@ public sealed class SessionModelSlots
             return _pinned.Contains(slot);
     }
 
-    public void Unpin(string slot)
-    {
-        lock (_state)
-            _pinned.Remove(slot);
-    }
+    /// <summary>
+    /// Unpins the slot, so the turn's end returns it to its session default again (a pin only stops de-escalation: escalation
+    /// and fallback move a pinned slot too). A5 review: logged as a <c>ModelSwitched</c> from the slot's model to itself with
+    /// the reason <see cref="SwitchReasons.Unpin"/>, so a session opened again does not pin it again; like a switch it waits
+    /// for running tool calls. False when the slot was not pinned (nothing is logged).
+    /// </summary>
+    public Task<bool> UnpinAsync(string slot, CancellationToken cancellationToken = default) =>
+        SerializedAsync(waitForTools: true, () =>
+        {
+            if (!IsPinned(slot))
+                return Task.FromResult(false);
+            var profile = TryCurrent(slot, out var bound) ? bound.Profile : ModelProfile.Unbound;
+            AppendInPlace(slot, profile, SwitchReasons.Unpin, pinned: false, reset: null, cancellationToken);
+            SetPinned(slot, false);
+            return Task.FromResult(true);
+        }, cancellationToken);
 
     /// <summary>A client that always calls the slot's current binding and falls back along the slot's chain.</summary>
     public IChatClient GetChatClient(string slot, Func<Exception, bool>? isFallbackError = null)
@@ -262,8 +278,10 @@ public sealed class SessionModelSlots
     /// switches to it, logged as <c>ModelSwitched</c> with the reason <c>session</c>, once issued tool calls finish (a
     /// running turn takes it at its next step). Escalation and fallback still move off it, and de-escalation returns to it,
     /// until the person changes it again. <paramref name="pin"/> pins the slot, or unpins it. A refusal (the privacy gate)
-    /// changes neither the binding nor the default. When the slot already uses the target, the default still changes,
-    /// nothing is logged, and the result is <see cref="SwitchStatus.Unchanged"/> with <see cref="SwitchResult.SessionDefaultChanged"/>.
+    /// changes neither the binding nor the default. When the slot already uses the target, the default (or the pin) still
+    /// changes, logged as a <c>session</c> switch from the model to itself so it lasts when the session is opened again, and
+    /// the result is <see cref="SwitchStatus.Unchanged"/> with <see cref="SwitchResult.SessionDefaultChanged"/>. Every
+    /// <c>session</c> switch logs its pin (<c>Pinned</c>).
     /// </summary>
     public Task<SwitchResult> SetSessionDefaultAsync(string slot, ModelBinding target, bool pin = false, CancellationToken cancellationToken = default)
     {
@@ -274,7 +292,9 @@ public sealed class SessionModelSlots
 
     /// <summary>
     /// Forgets the person's choice for the slot (A5): its session default is its mix's or the registry's again, and an
-    /// unpinned slot still on the choice switches back there now (logged as <c>de_escalation</c>). Null when there was no choice.
+    /// unpinned slot still on the choice switches back there now (logged as <c>de_escalation</c>). A5 review: the reset is
+    /// logged either way (<c>ModelSwitched</c> with <c>Reset</c>; from the slot's model to itself when it stays where it is,
+    /// pinned or off the choice), so a session opened again does not bring the choice back. Null when there was no choice.
     /// </summary>
     public Task<SwitchResult?> ClearSessionDefaultAsync(string slot, CancellationToken cancellationToken = default) =>
         SerializedAsync<SwitchResult?>(waitForTools: true, async () =>
@@ -282,21 +302,40 @@ public sealed class SessionModelSlots
             ModelBinding? chosen;
             lock (_state)
             {
-                if (!_chosen.Remove(slot, out chosen))
+                if (!_chosen.TryGetValue(slot, out chosen))
                     return null;
             }
             // Nothing configures the slot (a decider chosen on the degraded tier): it goes back to none.
             var target = TryConfiguration(slot, out var configured) ? configured.Default : null;
             var current = TryCurrent(slot, out var bound) ? bound : null;
-            if (IsPinned(slot) || !ReferenceEquals(current, chosen))
-                return Notify(new SwitchResult(SwitchStatus.Unchanged, slot, current?.Profile ?? ModelProfile.Unbound,
-                    target?.Profile ?? ModelProfile.Unbound, SwitchReason.DeEscalation, Detail: "the session default is the configured one again")
+            // In place when nothing moves: pinned, off the choice, or the choice is the configured default itself.
+            if (IsPinned(slot) || !ReferenceEquals(current, chosen) || ReferenceEquals(current, target))
+            {
+                var profile = current?.Profile ?? ModelProfile.Unbound;
+                var sequence = AppendInPlace(slot, profile, SwitchReason.DeEscalation.ToWireName(), pinned: null, reset: true, cancellationToken);
+                lock (_state)
+                    _chosen.Remove(slot);
+                return Notify(new SwitchResult(SwitchStatus.Unchanged, slot, profile, target?.Profile ?? ModelProfile.Unbound,
+                    SwitchReason.DeEscalation, sequence, Detail: "the session default is the configured one again")
                 {
                     SessionDefaultChanged = true,
                     Pinned = IsPinned(slot),
                 });
-            return await SwitchCoreAsync(slot, target, SwitchReason.DeEscalation, pin: false, cancellationToken, clearedChoice: true)
-                .ConfigureAwait(false);
+            }
+            // Forgotten before the switch's notice, so a surface that reads the slot then sees no choice; kept when nothing was logged.
+            lock (_state)
+                _chosen.Remove(slot);
+            try
+            {
+                return await SwitchCoreAsync(slot, target, SwitchReason.DeEscalation, pin: false, cancellationToken, clearedChoice: true)
+                    .ConfigureAwait(false);
+            }
+            catch
+            {
+                lock (_state)
+                    _chosen.TryAdd(slot, chosen);
+                throw;
+            }
         }, cancellationToken);
 
     /// <summary>Moves to the next escalation target the privacy gate allows.</summary>
@@ -437,25 +476,32 @@ public sealed class SessionModelSlots
         var from = TryCurrent(slot, out var bound) ? bound : null;
         var fromProfile = from?.Profile ?? ModelProfile.Unbound;
         var toProfile = target?.Profile ?? ModelProfile.Unbound;
+        var wasPinned = IsPinned(slot);
         if (ReferenceEquals(from, target))
         {
-            if (reason is SwitchReason.User or SwitchReason.Session)
-                SetPinned(slot, pin);
             if (reason != SwitchReason.Session || target is null)
+            {
+                if (reason == SwitchReason.User)
+                    SetPinned(slot, pin);
                 return new(SwitchStatus.Unchanged, slot, fromProfile, toProfile, reason) { Pinned = IsPinned(slot) };
+            }
             // A5: the person chose the model the slot already uses (an escalated one, say): it is the default from now on.
             bool changed;
             lock (_state)
-            {
                 changed = !_chosen.TryGetValue(slot, out var previous) || !ReferenceEquals(previous, target);
+            // A5 review: logged (from the model to itself), so the choice and its pin come back when the session is opened again.
+            long? sequence = changed || wasPinned != pin
+                ? AppendInPlace(slot, toProfile, SwitchReason.Session.ToWireName(), pinned: pin, reset: null, cancellationToken)
+                : null;
+            lock (_state)
                 _chosen[slot] = target;
-            }
-            var unchanged = new SwitchResult(SwitchStatus.Unchanged, slot, fromProfile, toProfile, reason)
+            SetPinned(slot, pin);
+            var unchanged = new SwitchResult(SwitchStatus.Unchanged, slot, fromProfile, toProfile, reason, sequence)
             {
                 SessionDefaultChanged = changed,
                 Pinned = IsPinned(slot),
             };
-            return changed ? Notify(unchanged) : unchanged;
+            return sequence is not null ? Notify(unchanged) : unchanged;
         }
 
         StoredEvent? stored = null;
@@ -478,7 +524,11 @@ public sealed class SessionModelSlots
             }
 
             // Step 3. Step 2 needs no action: pending approvals are events, and this append leaves them pending.
-            var change = new ModelSwitched(slot, fromProfile.ToSnapshot(), toProfile.ToSnapshot(), reason.ToWireName());
+            // A5 review: the person's choice carries its pin, a turn switch that changes the pin says so, and a forgotten
+            // choice says it was reset: a session opened again reads them.
+            var change = new ModelSwitched(slot, fromProfile.ToSnapshot(), toProfile.ToSnapshot(), reason.ToWireName(),
+                Pinned: reason == SwitchReason.Session || (reason == SwitchReason.User && wasPinned != pin) ? pin : null,
+                Reset: clearedChoice ? true : null);
             try
             {
                 stored = _log.Append(SessionId, state.Head, [EventData.Create(change)], cancellationToken)[0];
@@ -513,6 +563,30 @@ public sealed class SessionModelSlots
             SessionDefaultChanged = reason == SwitchReason.Session || clearedChoice,
             Pinned = IsPinned(slot),
         });
+    }
+
+    /// <summary>
+    /// A5 review: a <c>ModelSwitched</c> from the slot's model to itself, for a change of the person's choice or pin that
+    /// moves nothing (choosing the model in use, a pin, an unpin, a reset that leaves the slot where it is), so a session
+    /// opened again restores what the person chose. Issued work is checked as for a switch (step 1); nothing else runs.
+    /// </summary>
+    private long AppendInPlace(string slot, ModelProfile profile, string reason, bool? pinned, bool? reset, CancellationToken cancellationToken)
+    {
+        var snapshot = profile.ToSnapshot();
+        for (var attempt = 1; ; attempt++)
+        {
+            var state = ReadState(cancellationToken);
+            CheckIssuedWork(state);
+            try
+            {
+                return _log.Append(SessionId, state.Head, [EventData.Create(new ModelSwitched(slot, snapshot, snapshot, reason, pinned, reset))],
+                    cancellationToken)[0].Sequence;
+            }
+            catch (EventLogConflictException) when (attempt < MaxAppendAttempts)
+            {
+                // Another writer appended (a tool result): re-check against the new head.
+            }
+        }
     }
 
     private SwitchResult Notify(SwitchResult result)

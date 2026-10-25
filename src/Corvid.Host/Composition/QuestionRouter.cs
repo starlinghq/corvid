@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using Corvid.Kernel.Turns;
 
 namespace Corvid.Host.Composition;
@@ -10,25 +9,37 @@ namespace Corvid.Host.Composition;
 /// next message answers it: a gateway chat, ACP and scheduled runs keep that path. A child session asks nothing
 /// (<see cref="TurnOptions.AsksQuestions"/>), so a child's question never reaches its parent's surface.
 /// </summary>
+/// <remarks>
+/// A5 review: several surfaces can attach to one session (the window and <c>corvid chat</c> in one process, a surface opened
+/// again before the old one let go). The latest attached asks; detaching takes away only that surface's own attachment, so
+/// the one attached before it asks again rather than nobody.
+/// </remarks>
 internal sealed class QuestionRouter : IQuestionAsker
 {
-    private readonly ConcurrentDictionary<string, IQuestionAsker> _surfaces = new(StringComparer.Ordinal);
+    private readonly Lock _gate = new();
+    private readonly Dictionary<string, List<Attachment>> _surfaces = new(StringComparer.Ordinal);
 
     public IDisposable Attach(string sessionId, IQuestionAsker surface)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentNullException.ThrowIfNull(surface);
-        _surfaces[sessionId] = surface;
-        return new Detach(this, sessionId, surface);
+        var attachment = new Attachment(this, sessionId, surface);
+        lock (_gate)
+        {
+            if (!_surfaces.TryGetValue(sessionId, out var attached))
+                _surfaces[sessionId] = attached = [];
+            attached.Add(attachment);
+        }
+        return attachment;
     }
 
-    public bool CanAsk(string sessionId) => _surfaces.TryGetValue(sessionId, out var surface) && surface.CanAsk(sessionId);
+    public bool CanAsk(string sessionId) => Top(sessionId) is { } surface && surface.CanAsk(sessionId);
 
     public ValueTask<string?> AskAsync(QuestionPrompt prompt, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(prompt);
         // Detached since CanAsk: nobody to ask, so the turn ends on the question.
-        return _surfaces.TryGetValue(prompt.SessionId, out var surface)
+        return Top(prompt.SessionId) is { } surface
             ? surface.AskAsync(prompt, cancellationToken)
             : ValueTask.FromResult<string?>(null);
     }
@@ -36,12 +47,35 @@ internal sealed class QuestionRouter : IQuestionAsker
     public void Expect(QuestionPrompt prompt)
     {
         ArgumentNullException.ThrowIfNull(prompt);
-        if (_surfaces.TryGetValue(prompt.SessionId, out var surface))
-            surface.Expect(prompt);
+        Top(prompt.SessionId)?.Expect(prompt);
     }
 
-    private sealed class Detach(QuestionRouter router, string sessionId, IQuestionAsker surface) : IDisposable
+    // The latest surface attached to the session and still attached.
+    private IQuestionAsker? Top(string sessionId)
     {
-        public void Dispose() => router._surfaces.TryRemove(KeyValuePair.Create(sessionId, surface));
+        lock (_gate)
+            return _surfaces.TryGetValue(sessionId, out var attached) && attached.Count > 0 ? attached[^1].Surface : null;
+    }
+
+    private void Remove(Attachment attachment)
+    {
+        lock (_gate)
+        {
+            if (!_surfaces.TryGetValue(attachment.SessionId, out var attached))
+                return;
+            attached.Remove(attachment);
+            if (attached.Count == 0)
+                _surfaces.Remove(attachment.SessionId);
+        }
+    }
+
+    // One attachment per Attach call, so a surface attached twice detaches each one on its own.
+    private sealed class Attachment(QuestionRouter router, string sessionId, IQuestionAsker surface) : IDisposable
+    {
+        public string SessionId { get; } = sessionId;
+
+        public IQuestionAsker Surface { get; } = surface;
+
+        public void Dispose() => router.Remove(this);
     }
 }

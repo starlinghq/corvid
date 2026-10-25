@@ -32,6 +32,13 @@ public enum SwitchScope
 
 public static class SwitchReasons
 {
+    /// <summary>
+    /// A5 review: the reason logged when the person unpins a slot (<see cref="SessionModelSlots.UnpinAsync"/>): a
+    /// <c>ModelSwitched</c> from the slot's model to itself with <c>Pinned</c> false, so a session opened again does not
+    /// bring the pin back. Not a <see cref="SwitchReason"/>: nothing moves.
+    /// </summary>
+    public const string Unpin = "unpin";
+
     public static string ToWireName(this SwitchReason reason) => reason switch
     {
         SwitchReason.User => "user",
