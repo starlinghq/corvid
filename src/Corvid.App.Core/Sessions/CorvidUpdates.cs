@@ -218,7 +218,8 @@ public sealed record EngineStatus : SessionUpdate
 
 /// <summary>
 /// A clarifying question (<c>_corvid/question</c>): options as buttons and a free-text answer, pinned until answered.
-/// Needs K-6: a structured question for <c>Clarifying</c> turns rather than one inferred from the status.
+/// K-6: the log's <c>ClarificationAsked</c>, the structured question a <c>Clarifying</c> turn ended on (the decider's
+/// clarify, or the generator's <c>ask_user</c> with its options). Nothing answers it but the person's next message.
 /// </summary>
 public sealed record QuestionAsked(string QuestionId, string Text) : SessionUpdate
 {

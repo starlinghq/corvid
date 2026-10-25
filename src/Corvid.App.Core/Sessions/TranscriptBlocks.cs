@@ -701,7 +701,7 @@ public sealed class QuestionBlock : TranscriptBlock
 
     public string QuestionId { get; private set; } = "";
 
-    /// <summary>"which version number?"; the question itself when it has no title.</summary>
+    /// <summary>"which version number?"; "Question" when it has no title (the question shows below it).</summary>
     public string Title { get; private set; } = "";
 
     public string Text { get; private set; } = "";
@@ -727,7 +727,7 @@ public sealed class QuestionBlock : TranscriptBlock
                 new RelayCommand(() => _context.Session.AnswerQuestion(asked.QuestionId, option), () => IsOpen)))];
         }
 
-        Title = SafeText.Clean(asked.Title ?? asked.Text);
+        Title = SafeText.Clean(asked.Title ?? "Question");
         Text = SafeText.Clean(asked.Text);
         AllowsFreeText = asked.AllowsFreeText;
         IsOpen = question.Answer is null;

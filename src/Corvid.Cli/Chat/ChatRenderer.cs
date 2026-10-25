@@ -37,7 +37,9 @@ internal sealed class ChatRenderer : ITurnObserver
         _live = live ?? (console.Profile.Capabilities.Interactive && console.Profile.Capabilities.Ansi);
     }
 
-    private sealed record ToolRow(string CallId, string Tool, bool Approval, long Started, string? Outcome = null, TimeSpan Elapsed = default)
+    /// <param name="Tail">K-2: the running call's last line of output, cleaned for the terminal.</param>
+    private sealed record ToolRow(string CallId, string Tool, bool Approval, long Started, string? Outcome = null, TimeSpan Elapsed = default,
+        string? Tail = null)
     {
         public bool Running => Outcome is null;
     }
@@ -74,6 +76,7 @@ internal sealed class ChatRenderer : ITurnObserver
         {
             _generation.Clear();
             _tools = [];
+            Volatile.Write(ref _stepBox, null);
             _textOpen = false;
         }
     }
@@ -133,6 +136,28 @@ internal sealed class ChatRenderer : ITurnObserver
         }
     }
 
+    /// <summary>Turn progress: the live panel's header says the step ("step 2 of 8").</summary>
+    public void Progress(int step, int maxSteps)
+    {
+        Volatile.Write(ref _stepBox, new StepBox(step, maxSteps));
+    }
+
+    /// <summary>
+    /// K-2: a running call's output. The live panel shows its last line under the call; without a live panel nothing is
+    /// printed (the scrollback gets the result, not every line twice).
+    /// </summary>
+    public void ToolOutput(string callId, string tool, string tail)
+    {
+        if (!_live)
+            return;
+        lock (_gate)
+        {
+            var row = _tools.FirstOrDefault(item => item.CallId == callId && item.Running);
+            if (row is not null)
+                _tools = _tools.Replace(row, row with { Tail = LastLine(tail) });
+        }
+    }
+
     public void Decided(CheckpointDecisions decisions)
     {
         if (!_verbose)
@@ -169,9 +194,23 @@ internal sealed class ChatRenderer : ITurnObserver
                 _console.Write(new Text(text, result.Status == TurnStatus.Failed ? new Style(Color.Red) : Style.Plain));
                 _console.WriteLine();
             }
+            // K-6: a clarifying question's choices, answered on the next line by number or in words.
+            if (result.Question is { Options.IsDefaultOrEmpty: false } question)
+                _console.MarkupLine("[blue]?[/] " + string.Join(" · ", question.Options.Select((option, i) =>
+                    $"[green]{i + 1}[/] {Markup.Escape(Clean(option))}")) + " [grey](a number picks it, or answer in your words)[/]");
             _console.MarkupLine($"[grey]{Markup.Escape(Footer(result))}[/]");
         }
     }
+
+    /// <summary>
+    /// K-6: the line typed after a clarifying question with choices: a choice's number becomes that choice (as the model
+    /// offered it); anything else is the answer as typed.
+    /// </summary>
+    public static string Answer(ClarifyingQuestion? question, string line) =>
+        question is { Options.IsDefaultOrEmpty: false } asked
+        && int.TryParse(line.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var pick) && pick >= 1 && pick <= asked.Options.Length
+            ? asked.Options[pick - 1]
+            : line;
 
     public void Cancelled()
     {
@@ -312,18 +351,44 @@ internal sealed class ChatRenderer : ITurnObserver
         _panelStop = null;
     }
 
-    private static IRenderable BuildPanel(ImmutableList<ToolRow> tools)
+    private IRenderable BuildPanel(ImmutableList<ToolRow> tools)
     {
         var table = new Table().Border(TableBorder.None).HideHeaders().AddColumn("").AddColumn("").AddColumn("");
         foreach (var tool in tools)
+        {
             table.AddRow(
                 new Markup(tool.Running ? "[yellow]⏺[/]" : Mark(tool.Outcome!)),
                 new Text(tool.Tool),
                 new Markup($"[grey]{Markup.Escape(tool.Running
                     ? (tool.Approval ? "awaiting approval · " : "running · ") + Duration(Stopwatch.GetElapsedTime(tool.Started))
                     : Describe(tool.Outcome!) + " · " + Duration(tool.Elapsed))}[/]"));
-        return new Panel(table).Header("[grey] tools [/]").BorderColor(Color.Grey);
+            // K-2: the running call's last line, dim, under it.
+            if (tool.Running && tool.Tail is { Length: > 0 } tail)
+                table.AddRow(new Text(""), new Text(""), new Text(tail, new Style(Color.Grey)));
+        }
+        // Read without the lock, like the rows: a snapshot of a value type.
+        var header = Volatile.Read(ref _stepBox) is { } step
+            ? string.Create(CultureInfo.InvariantCulture, $"[grey] tools · step {step.Step} of {step.MaxSteps} [/]")
+            : "[grey] tools [/]";
+        return new Panel(table).Header(header).BorderColor(Color.Grey);
     }
+
+    // Turn progress: the step the turn is on and its budget, for the panel's header; boxed so the panel thread reads it whole.
+    private StepBox? _stepBox;
+
+    private sealed record StepBox(int Step, int MaxSteps);
+
+    /// <summary>A tail's last non-empty line for one terminal row: control and format characters dropped, at most 100 characters.</summary>
+    internal static string LastLine(string tail)
+    {
+        var line = tail.Split('\n').LastOrDefault(item => item.Trim().Length > 0) ?? "";
+        line = Clean(line).Trim();
+        return line.Length > 100 ? line[..99] + "…" : line;
+    }
+
+    /// <summary>Untrusted text for the terminal: control characters (an escape sequence's ESC among them) and format characters dropped.</summary>
+    private static string Clean(string text) =>
+        string.Concat(text.Where(c => !char.IsControl(c) && char.GetUnicodeCategory(c) != UnicodeCategory.Format));
 
     private static string Mark(string outcome) => outcome == "succeeded" ? "[green]✓[/]" : outcome == "denied" ? "[yellow]⊘[/]" : "[red]✗[/]";
 

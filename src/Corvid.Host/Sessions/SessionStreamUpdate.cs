@@ -22,6 +22,27 @@ public abstract record SessionStreamUpdate
 /// <param name="Sequence">The event's position in the log: a fork point.</param>
 public sealed record PromptSent(string Text, long Sequence) : SessionStreamUpdate;
 
+/// <summary>
+/// A message the person steered into a running turn (K-3), from its <c>UserSteered</c> event: part of the turn it was taken
+/// by, not the start of one.
+/// </summary>
+/// <param name="Sequence">The event's position in the log.</param>
+public sealed record SteerSent(string Text, long Sequence) : SessionStreamUpdate;
+
+/// <summary>
+/// The clarifying question a turn ended on (K-6), from its <c>ClarificationAsked</c> event (after the answer that carries
+/// the same text). Model text: untrusted. The person's next message answers it.
+/// </summary>
+/// <param name="Options">Answers to pick from; empty for free text.</param>
+public sealed record QuestionRaised(string QuestionId, string Text, ImmutableArray<string> Options) : SessionStreamUpdate;
+
+/// <summary>
+/// The running turn began a step (a generator response with tool calls), live from the turn loop; on replay from the step
+/// its calls record, with no budget.
+/// </summary>
+/// <param name="MaxSteps">The turn's step budget; null on replay.</param>
+public sealed record TurnStepped(int Step, int? MaxSteps) : SessionStreamUpdate;
+
 /// <summary>Answer text (ACP <c>agent_message_chunk</c>): a streamed delta live, the whole message on replay.</summary>
 public sealed record AnswerChunk(string Text) : SessionStreamUpdate;
 
@@ -94,6 +115,12 @@ public sealed record ToolCallChanged(string CallId) : SessionStreamUpdate
 
     /// <summary>What it changed, from the write ledger's checkpoints around it (C-014).</summary>
     public ImmutableArray<FileDiff> Diffs { get; init; } = [];
+
+    /// <summary>
+    /// K-2, live only: the running call's output so far as its last lines, replacing the previous tail (bounded and
+    /// credential-scrubbed by the kernel; untrusted). An update with a tail carries nothing else but the call's state.
+    /// </summary>
+    public string? Tail { get; init; }
 
     public TimeSpan? Elapsed { get; init; }
 

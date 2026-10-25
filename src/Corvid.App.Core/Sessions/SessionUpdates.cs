@@ -29,7 +29,10 @@ public sealed record UserMessage(string Text) : SessionUpdate
     /// <summary>The message's position in the event log: the fork point for "edit and resend" and "branch from here".</summary>
     public long? Position { get; init; }
 
-    /// <summary>Delivered at a step checkpoint of the running turn (Ctrl+Enter) rather than starting a turn. Needs K-3.</summary>
+    /// <summary>
+    /// Delivered at a step checkpoint of the running turn (Ctrl+Enter) rather than starting a turn (K-3: the log's
+    /// <c>UserSteered</c>, live and on replay).
+    /// </summary>
     public bool Steered { get; init; }
 }
 
@@ -54,8 +57,8 @@ public sealed record TurnStarted(int Turn, string Model) : SessionUpdate
 }
 
 /// <summary>
-/// The running turn moved to another step (<c>_corvid/turn_progress</c>): a generator response that may call tools.
-/// The turn loop counts steps already; the feed does not carry them yet (K-10).
+/// The running turn moved to another step (<c>_corvid/turn_progress</c>): a generator response that calls tools. Live from
+/// the turn loop with the turn's budget; on replay from the step each call's round records, with the budget unknown.
 /// </summary>
 public sealed record TurnProgress(int Step) : SessionUpdate
 {

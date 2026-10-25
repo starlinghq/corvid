@@ -30,11 +30,22 @@ namespace Corvid.Abstractions.Events;
 [JsonDerivedType(typeof(McpToolHeld), "mcp_tool_held")]
 [JsonDerivedType(typeof(McpToolAccepted), "mcp_tool_accepted")]
 [JsonDerivedType(typeof(McpPinsForgotten), "mcp_pins_forgotten")]
+[JsonDerivedType(typeof(UserSteered), "user_steered")]
+[JsonDerivedType(typeof(ClarificationAsked), "clarification_asked")]
 public abstract record SessionEvent;
 
 // Text is the initial message surface. Provider-specific message objects are never stored here.
 public sealed record UserMessage(string Text) : SessionEvent;
 public sealed record AssistantMessage(string Text) : SessionEvent;
+// K-3: a message the user sent into a running turn (steer now, Ctrl+Enter), taken at the turn's next step checkpoint. It is
+// part of the conversation like a UserMessage (the generator reads it as the user's words, after the results before it),
+// but it starts no turn: turn counting, undo and compaction, which look for UserMessage, never see it. It does not clear
+// taint (plan §10.3): it joins a context that may already hold outside content.
+public sealed record UserSteered(string Text) : SessionEvent;
+// K-6: the clarifying question a Clarifying turn ended on, appended just after its AssistantMessage (whose text is the
+// question too, so a reader that knows only messages loses nothing). Options are answers the person can pick; empty when
+// the question is free text only. QuestionId is unique in the session. The person's answer is their next message.
+public sealed record ClarificationAsked(string QuestionId, string Text, ImmutableArray<string> Options) : SessionEvent;
 // Round (the turn's generator response that made the call, from 1) and ReadOnly (the tool's risk descriptor said read-only)
 // were added by C-026, so the recovery scan can tell a later round from a call run one at a time after approval, and a
 // read from a change, from the log alone. Both are omitted when null, so events written before them keep their persisted

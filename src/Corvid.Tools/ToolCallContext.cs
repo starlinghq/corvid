@@ -27,6 +27,13 @@ public sealed record ToolCallContext(string SessionId, string CallId)
     /// </summary>
     public object? Approval { get; init; }
 
+    /// <summary>
+    /// K-2: where the tool writes output as it runs (a command's lines, a fetch's progress), for a surface to show as the
+    /// call's live tail. Null when nobody is watching. Untrusted text; it never reaches the model, which reads the result.
+    /// Safe to call from any thread, and it never throws.
+    /// </summary>
+    public Action<string>? Output { get; init; }
+
     private int _resultTainted;
 
     /// <summary>

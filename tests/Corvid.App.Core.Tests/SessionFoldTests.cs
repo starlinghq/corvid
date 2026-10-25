@@ -370,6 +370,71 @@ public sealed class SessionFoldTests
     }
 
     [Fact]
+    public void AClarifyingTurnsQuestionReplacesTheAnswerThatSaysTheSameAndStaysOpenPastTheTurn()
+    {
+        const string Asked = "Which reminder do you mean?";
+        var state = SessionFold.Replay("app-1",
+        [
+            At(new UserMessage("move it") { Position = 1 }, 0),
+            At(new TurnStarted(1, "qwen3.5-0.8b"), 0),
+            // The generator streamed the question as its answer (an ingress clarify), then the engine named it a question.
+            At(new AgentMessageChunk("Which reminder "), 1),
+            At(new AgentMessageChunk("do you mean? "), 2),
+            At(new QuestionAsked("q-1", Asked), 3),
+            At(new TurnEnded(1, TurnOutcome.Clarifying), 4),
+        ]);
+
+        // K-6: the block carries the words once; the turn ended and the question still waits on the person.
+        Assert.DoesNotContain(state.Transcript, entry => entry is AnswerEntry);
+        Assert.Equal(Asked, Assert.IsType<QuestionEntry>(Assert.Single(state.Transcript, entry => entry is QuestionEntry)).Question.Text);
+        Assert.False(state.Running);
+        Assert.Equal("q-1", state.Question?.QuestionId);
+        Assert.True(state.WaitingOnUser);
+
+        // An answer that says something else stays: the question did not replace it.
+        var other = SessionFold.Replay("app-2",
+        [
+            At(new UserMessage("tag it") { Position = 1 }, 0),
+            At(new TurnStarted(1, "qwen3.5-0.8b"), 0),
+            At(new AgentMessageChunk("I found two candidates."), 1),
+            At(new QuestionAsked("q-2", "0.2.0 or 0.2.0-rc1?") { Options = ["0.2.0", "0.2.0-rc1"] }, 2),
+        ]);
+        Assert.Contains(other.Transcript, entry => entry is AnswerEntry { Text: "I found two candidates." });
+    }
+
+    [Fact]
+    public void ASteerInsideARunningTurnIsPartOfItAndAProgressStepNamesTheStep()
+    {
+        var state = SessionFold.Replay("app-3",
+        [
+            At(new UserMessage("what's the weather?") { Position = 1 }, 0),
+            At(new TurnStarted(1, "qwen3.5-0.8b") { MaxSteps = 8 }, 0),
+            At(new TurnProgress(1) { MaxSteps = 8 }, 1),
+            At(new ToolCall("c1", "check_weather", ToolKind.Other, ToolCallStatus.InProgress), 1),
+            At(new ToolCallUpdate("c1") { Status = ToolCallStatus.InProgress, Tail = "asking the forecast service" }, 2),
+            At(new UserMessage("and tomorrow?") { Position = 7, Steered = true }, 3),
+        ]);
+
+        // K-3: one turn, the steer in it; turn progress: step 1 of 8; K-2: the running call's tail.
+        Assert.Equal(1, state.Turns);
+        var steer = Assert.Single(state.Transcript.OfType<UserEntry>(), entry => entry.Steered);
+        Assert.Equal((1, "and tomorrow?"), (steer.Turn, steer.Text));
+        Assert.Equal((1, 8), (state.Step, state.MaxSteps));
+        Assert.Equal("asking the forecast service", Assert.Single(state.Transcript.OfType<ToolEntry>()).Tail);
+    }
+
+    [Fact]
+    public void ARunningCardShowsTheNewestLinesOfALongTail()
+    {
+        // K-2: the engine's tail can be a dozen lines; the card's pane holds five, so it shows the newest.
+        var tail = string.Join('\n', Enumerable.Range(1, 12).Select(i => $"checked {i} of 12"));
+
+        Assert.Equal("checked 8 of 12\nchecked 9 of 12\nchecked 10 of 12\nchecked 11 of 12\nchecked 12 of 12", ToolCardBlock.LastLines(tail, ToolCardBlock.TailLines));
+        Assert.Equal("one\ntwo", ToolCardBlock.LastLines("one\ntwo", 5));
+        Assert.Equal("", ToolCardBlock.LastLines("", 5));
+    }
+
+    [Fact]
     public void AnUnknownUpdateChangesNothingButTheClock()
     {
         var before = SessionFold.Replay("s", RecordedTurn());

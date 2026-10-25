@@ -189,6 +189,8 @@ public sealed class CorvidRuntimeFactory(
                 toolRegistry.Add(new ShellTool(shell));
                 toolRegistry.Add(builtin.Web!);
                 toolRegistry.Add(new CronTools(jobs));
+                // K-6: the generator's clarifying question, which the turn loop recognises (offered in interactive turns only).
+                toolRegistry.Add(new Corvid.Kernel.Turns.AskUserTool());
                 if (memory?.Writer is { } writer)
                     toolRegistry.Add(new MemoryTools(writer, memory.Retriever));
             }

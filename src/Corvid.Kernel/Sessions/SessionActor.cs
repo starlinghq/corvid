@@ -116,6 +116,15 @@ public sealed class SessionActor : IAsyncDisposable
         _commands.Writer.TryWrite(new CancelRunning(target));
     }
 
+    /// <summary>
+    /// K-3, steer now: a message from the user for the running turn, taken at its next step checkpoint
+    /// (<see cref="TurnRunner.SteerAsync"/>). Completes true when the turn took it, false when no turn was running or the turn
+    /// ended first; the caller then sends it as an ordinary message, so it is never lost. It does not wait for queued messages
+    /// and is not one: the actor's queue and backpressure are untouched.
+    /// </summary>
+    /// <param name="withdraw">Takes the steer back while it still waits (<see cref="TurnRunner.SteerAsync"/>).</param>
+    public Task<bool> SteerAsync(string text, CancellationToken withdraw = default) => _runner.SteerAsync(text, withdraw);
+
     /// <summary>Test seam: runs in <see cref="CancelTurn"/> between cancelling the running turn and posting the command.</summary>
     internal Action? CancelSignalled { get; set; }
 

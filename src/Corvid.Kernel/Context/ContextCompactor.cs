@@ -339,6 +339,8 @@ public sealed class ContextCompactor
         {
             case UserMessage user:
                 return at + "user: " + user.Text;
+            case UserSteered steer:
+                return at + "user (during the turn): " + steer.Text;
             case AssistantMessage assistant:
                 return at + "assistant: " + assistant.Text;
             case ToolCallIssued call:

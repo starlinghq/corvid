@@ -153,12 +153,16 @@ public static class PromptRenderer
         var lastSummary = snapshot.Transcript.LastOrDefault(entry => entry.Content is Compacted);
         foreach (var entry in snapshot.Transcript)
         {
-            if (spokenOnlyBefore is { } cutoff && entry.FromSequence < cutoff && entry.Content is not (UserMessage or AssistantMessage))
+            if (spokenOnlyBefore is { } cutoff && entry.FromSequence < cutoff && entry.Content is not (UserMessage or UserSteered or AssistantMessage))
                 continue;
             switch (entry.Content)
             {
                 case UserMessage user:
                     messages.Add(new ChatMessage(ChatRole.User, user.Text));
+                    break;
+                // K-3: a steer is the user's words, read where it was taken (after the results the turn had then).
+                case UserSteered steer:
+                    messages.Add(new ChatMessage(ChatRole.User, steer.Text));
                     break;
                 case AssistantMessage assistant:
                     messages.Add(new ChatMessage(ChatRole.Assistant, assistant.Text));

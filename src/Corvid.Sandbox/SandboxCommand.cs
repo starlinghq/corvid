@@ -22,6 +22,13 @@ public sealed record SandboxCommand
     /// <summary>Written to the command's standard input, which is then closed. Null: input is closed at once.</summary>
     public string? StandardInput { get; init; }
 
+    /// <summary>
+    /// K-2: told the command's output as it arrives, standard output and error alike, decoded as UTF-8 in whatever pieces the
+    /// pipes deliver (a character split across reads is held for the next). Called on the readers' threads, possibly at once
+    /// from both; a throw is ignored. The result's captured output is the same with or without it.
+    /// </summary>
+    public Action<string>? Output { get; init; }
+
     /// <summary><c>/bin/sh -c script</c>.</summary>
     public static SandboxCommand Shell(string script) => new("/bin/sh", "-c", script);
 }

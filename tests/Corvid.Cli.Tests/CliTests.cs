@@ -1,6 +1,8 @@
 using System.Text.Json.Nodes;
 using Corvid.Cli.Chat;
 using Corvid.Host.Tests;
+using Corvid.Kernel.Sessions;
+using Corvid.Kernel.Turns;
 using Corvid.Mcp;
 using Microsoft.Extensions.DependencyInjection;
 using Spectre.Console.Testing;
@@ -584,6 +586,44 @@ public sealed class RendererTests
         Assert.Contains("succeeded · 12 ms", console.Output, StringComparison.Ordinal);
         Assert.Contains("failed · 1.5 s", console.Output, StringComparison.Ordinal);
         Assert.Contains("Done.", console.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheLivePanelShowsTheStepAndARunningCallsLastLineCleanedForTheTerminal()
+    {
+        var console = new TestConsole().Interactive();
+        console.Profile.Width = 200;
+        var renderer = new ChatRenderer(console, live: true);
+        renderer.BeginTurn();
+        renderer.Progress(2, 8);
+        renderer.ToolStarted("c1", "shell", approval: false);
+        // K-2: untrusted output; an escape sequence must not reach the terminal.
+        renderer.ToolOutput("c1", "shell", "Building…\n\u001b[31mPassed 11   Failed 1\u001b[0m\n");
+        renderer.Text("Still running.");
+
+        Assert.Contains("step 2 of 8", console.Output, StringComparison.Ordinal);
+        Assert.Contains("Passed 11   Failed 1", console.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("\u001b[31m", console.Output, StringComparison.Ordinal);
+        Assert.Equal("[31mPassed 11   Failed 1[0m", ChatRenderer.LastLine("Building…\n\u001b[31mPassed 11   Failed 1\u001b[0m\n\n"));
+    }
+
+    [Fact]
+    public void AClarifyingQuestionsChoicesAreListedAndANumberPicksOne()
+    {
+        var console = new TestConsole();
+        var renderer = new ChatRenderer(console, live: false);
+        var question = new ClarifyingQuestion("q-1", "Which version?", ["0.2.0", "0.2.0-rc1"]);
+        var result = new TurnResult(TurnStatus.Clarifying, "Which version?", 0, 1, false, "reply", [], []) { Question = question };
+        renderer.BeginTurn();
+        renderer.EndTurn(new Delivery(new Corvid.Abstractions.Sessions.Envelope("cli-1", "cli", "tag it", Corvid.Abstractions.Sessions.EnvelopeOrigin.User), result));
+
+        Assert.Contains("Which version?", console.Output, StringComparison.Ordinal);
+        Assert.Contains("1 0.2.0 · 2 0.2.0-rc1", console.Output, StringComparison.Ordinal);
+        // K-6: a number picks the choice as offered; anything else is the answer as typed.
+        Assert.Equal("0.2.0-rc1", ChatRenderer.Answer(question, " 2 "));
+        Assert.Equal("3", ChatRenderer.Answer(question, "3"));
+        Assert.Equal("rc1 please", ChatRenderer.Answer(question, "rc1 please"));
+        Assert.Equal("1", ChatRenderer.Answer(null, "1"));
     }
 
     [Fact]

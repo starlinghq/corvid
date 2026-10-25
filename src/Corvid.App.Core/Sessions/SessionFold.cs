@@ -673,6 +673,13 @@ public static class SessionFold
 
     private static SessionView OnQuestion(SessionView state, QuestionAsked question)
     {
+        // A clarifying turn's answer is its question (K-6): the block shows the words, so the turn's answer that says the
+        // same goes, whichever came first.
+        var turn = CurrentTurn(state);
+        var said = state.Transcript.FindLastIndex(entry => entry is AnswerEntry answer && answer.Turn == turn
+            && string.Equals(answer.Text.Trim(), question.Text.Trim(), StringComparison.Ordinal));
+        if (said >= 0)
+            state = state with { Transcript = state.Transcript.RemoveAt(said) };
         var id = QuestionId(question.QuestionId);
         var index = IndexOf(state.Transcript, id);
         if (index >= 0 && state.Transcript[index] is QuestionEntry entry)

@@ -44,10 +44,12 @@ namespace Corvid.App.Engine.Sessions;
 /// The queue is the engine's (messages posted to the session actor cannot be taken back): Enter while a turn runs queues,
 /// and when the turn ends the first queued message starts the next. Approvals go to the card: a prompter is attached to
 /// the session for each turn the window runs (<see cref="CardPrompter"/>), and an answer completes the pipeline's prompt.
+/// Ctrl+Enter steers the running turn (K-3) and a clarifying question waits for the person's answer (K-6), holding the
+/// queue meanwhile (EngineSessionService.Turn.cs); the turn's steps and running tails come on its report.
 /// </para>
 /// <para>
-/// Refused, with what brings each: steering (K-3), clarifying questions as their own block (K-6), renaming (G-6). Turns
-/// another process or surface runs in a session show when the session is opened again.
+/// Refused, with what brings it: renaming (G-6). Turns another process or surface runs in a session show when the session
+/// is opened again.
 /// </para>
 /// </summary>
 public sealed partial class EngineSessionService : ISessionService, IDisposable
@@ -163,12 +165,18 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     /// Queues a message behind the running turn; with none running it starts one at once. A message still in the queue
     /// with nothing running (its start failed) goes first: the new one queues behind it, never past it.
     /// </summary>
-    public async Task<QueuedMessage> QueueAsync(string sessionId, string text, CancellationToken cancellationToken = default)
+    public Task<QueuedMessage> QueueAsync(string sessionId, string text, CancellationToken cancellationToken = default) =>
+        EnqueueAsync(sessionId, text, modeLines: true, cancellationToken);
+
+    /// <param name="modeLines">Refuse a one-line <c>!</c> or <c>#</c> message (<see cref="RefuseComposerMode"/>); false for a
+    /// question's answer, which is sent as given.</param>
+    private async Task<QueuedMessage> EnqueueAsync(string sessionId, string text, bool modeLines, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(text);
         ObjectDisposedException.ThrowIf(_disposed, this);
-        RefuseComposerMode(text);
+        if (modeLines)
+            RefuseComposerMode(text);
         var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
         var tools = await _engine.ToolsAsync().ConfigureAwait(false);
         while (true)
@@ -185,7 +193,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                     continue;
                 message = new QueuedMessage($"q-{++channel.QueueCounter}", text.Trim());
                 start = !channel.Running;
-                if (start && channel.Queue.IsEmpty)
+                // K-6: with a question open the session waits on this message, the person's answer: it starts now, and what
+                // was queued before (typed before the question showed) waits behind it rather than answering it.
+                if (start && (channel.Queue.IsEmpty || channel.View?.Question is not null))
                 {
                     channel.Running = true;
                 }
@@ -227,6 +237,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     public async Task RemoveQueuedAsync(string sessionId, string queuedId, CancellationToken cancellationToken = default)
     {
         var channel = await LoadAsync(sessionId, cancellationToken).ConfigureAwait(false);
+        // K-3: a steer chip is taken back from the turn too (or, already taken, it is in the transcript).
+        WithdrawSteer(channel, queuedId, out _);
         if (ChangeQueue(channel, queue => queue.FirstOrDefault(item => item.Id == queuedId) is { } item ? queue.Remove(item) : queue))
             PublishQueue(channel);
     }
@@ -247,6 +259,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     public async Task<string?> TakeBackQueuedAsync(string sessionId, string queuedId, CancellationToken cancellationToken = default)
     {
         var channel = await LoadAsync(sessionId, cancellationToken).ConfigureAwait(false);
+        // K-3: a steer the turn has already taken is not given back (it was sent); its chip just goes.
+        var delivered = WithdrawSteer(channel, queuedId, out var sent) && sent;
         QueuedMessage? taken = null;
         if (ChangeQueue(channel, queue =>
             {
@@ -254,12 +268,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 return taken is null ? queue : queue.Remove(taken);
             }))
             PublishQueue(channel);
-        return taken?.Text;
+        return delivered ? null : taken?.Text;
     }
-
-    public Task SteerAsync(string sessionId, string text, CancellationToken cancellationToken = default) =>
-        Task.FromException(new ServiceUnavailableException(
-            "Steering comes with K-3: a running turn cannot take a message at its next step checkpoint yet. Press Enter to queue it behind the turn."));
 
     /// <summary>
     /// Interrupts the window's running turn: the work so far stays, open prompts close as cancelled, and the queue goes next.
@@ -285,10 +295,6 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             session.Cancel();
         ClosePending(channel, "interrupted");
     }
-
-    public Task AnswerQuestionAsync(string sessionId, string questionId, string answer, CancellationToken cancellationToken = default) =>
-        Task.FromException(new ServiceUnavailableException(
-            "Clarifying questions come with K-6: a turn that asks one ends with it as its answer, so reply with a message."));
 
     public async Task SetApprovalModeAsync(string sessionId, AppMode mode, CancellationToken cancellationToken = default)
     {
@@ -531,6 +537,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             prompter.Dispose();
         }
 
+        // K-3: every steer has its answer once the delivery is in: taken ones leave the queue, the rest go to its head.
+        await SettleSteersAsync(channel).ConfigureAwait(false);
         var elapsed = _time.GetElapsedTime(started);
         bool interrupted;
         lock (channel.Gate)
@@ -570,7 +578,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             channel.Cancelling = false;
             channel.TurnBegun = false;
             channel.OpenCalls.Clear();
-            if (next && !_disposed && !channel.Queue.IsEmpty)
+            // K-6: an open question holds the queue: only the person's answer goes next, never a message queued before it.
+            if (next && !_disposed && !channel.Queue.IsEmpty && channel.View?.Question is null)
             {
                 head = channel.Queue[0];
                 channel.Queue = channel.Queue.RemoveAt(0);
@@ -804,6 +813,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         {
             (AgentMessageChunk last, AgentMessageChunk next) => updates.SetItem(updates.Count - 1, last with { Text = last.Text + next.Text }),
             (AgentThoughtChunk last, AgentThoughtChunk next) => updates.SetItem(updates.Count - 1, last with { Text = last.Text + next.Text }),
+            // K-2: a running call's tail replaces the one before it, so the history keeps the latest, not every report.
+            (ToolCallUpdate last, ToolCallUpdate next) when last.CallId == next.CallId && TailOnly(last) && TailOnly(next)
+                => updates.SetItem(updates.Count - 1, next with { At = last.At }),
             _ => null,
         } is { } merged
             ? merged
@@ -841,6 +853,11 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 break;
         }
     }
+
+    /// <summary>A running call's tail and nothing else (K-2).</summary>
+    private static bool TailOnly(ToolCallUpdate update) =>
+        update is { Tail: not null, Output: null, Outcome: null, Summary: null, Verdict: null, Elapsed: null }
+        && update.Diffs.IsDefaultOrEmpty;
 
     /// <summary>
     /// Lets go of a channel nobody watches and no turn of the window's uses (nothing queued, no prompt open): its history
@@ -950,7 +967,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         if (view is null)
             return logged;
         var running = channel.Running && view.Running;
-        var waiting = running && (view.Approvals.Count > 0 || view.Question is not null);
+        // An approval waits inside the running turn; a clarifying question (K-6) waits after the turn that asked it.
+        var waiting = running && view.Approvals.Count > 0 || view.Question is not null && !running;
         (string CallId, string Tool, string? Target)? tool = running && channel.OpenCalls.Count > 0 ? channel.OpenCalls[^1] : null;
         return logged with
         {
@@ -967,6 +985,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             ForkTurn = view.ForkTurn ?? logged.ForkTurn,
             PendingApprovals = view.Approvals.Count,
             Approval = view.Approvals.Count > 0 ? view.Approvals[0].Text : null,
+            PendingQuestions = view.Question is null ? 0 : 1,
+            Question = view.Question is { } question ? question.Title ?? question.Text : null,
         };
     }
 
@@ -975,7 +995,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         var head = runtime.Log.GetHead(id);
         if (head == 0)
             return null;
-        string? title = null, preview = null;
+        string? title = null, preview = null, question = null;
         var turns = 0;
         var last = default(DateTimeOffset);
         foreach (var item in Corvid.Kernel.Events.SessionProjection.ReadRange(runtime.Log, id, 0, head))
@@ -986,9 +1006,14 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 case LoggedUserMessage user:
                     turns++;
                     title ??= user.Text;
+                    // K-6: a message answers the question before it.
+                    question = null;
                     break;
                 case LoggedAnswer answer:
                     preview = answer.Text;
+                    break;
+                case Corvid.Abstractions.Events.ClarificationAsked asked:
+                    question = asked.Text;
                     break;
             }
         }
@@ -1005,7 +1030,10 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             RunAt = job.Name is not null ? job.RunAt ?? last : null,
             Workspace = runtime.Builtin.Environment.Workspace,
             Surface = SurfaceOf(id),
-            State = IsJobRun(id) ? SessionState.Job : SessionState.Idle,
+            State = IsJobRun(id) ? SessionState.Job : question is not null ? SessionState.Waiting : SessionState.Idle,
+            PendingQuestions = question is null || IsJobRun(id) ? 0 : 1,
+            Question = question is null || IsJobRun(id) ? null : SessionUpdateTranslator.QuestionTitle(question),
+            Activity = question is null || IsJobRun(id) ? null : "waiting on you",
             LastActivity = last,
             Turns = turns,
             Tainted = open && session.Tainted,
@@ -1185,6 +1213,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         public int QueueCounter { get; set; }
 
         public Dictionary<string, PendingApproval> Pending { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>K-3: the steer chips in <see cref="Queue"/> with the turn's answer for each, by chip id.</summary>
+        public Dictionary<string, PendingSteer> Steers { get; } = new(StringComparer.Ordinal);
 
         public bool Tainted { get; set; }
 

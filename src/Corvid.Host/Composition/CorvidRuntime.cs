@@ -390,6 +390,10 @@ public sealed class CorvidRuntime : IAsyncDisposable
         return actor;
     }
 
+    /// <summary>The built-in tools' examples and the kernel's <c>ask_user</c>'s (K-6), for the shortlist.</summary>
+    private static readonly IReadOnlyDictionary<string, ImmutableArray<string>> ToolExamples =
+        new Dictionary<string, ImmutableArray<string>>(BuiltinTools.Examples, StringComparer.Ordinal) { [AskUserTool.ToolName] = AskUserTool.Examples };
+
     /// <summary>One session's turn services over the shared ones. Scheduled runs are not interactive: nobody can be asked.</summary>
     private TurnServices Services(SessionModelSlots slots, bool interactive, ToolRegistry? tools = null, SessionSettings? session = null)
     {
@@ -417,6 +421,8 @@ public sealed class CorvidRuntime : IAsyncDisposable
             Project = Memory?.Lessons is null ? null : Project,
             LessonLearning = interactive ? Memory?.LessonLearner : null,
             SkillShortlist = _skillShortlist,
+            // Turn progress and K-2's running tails, to whichever surface watches the session.
+            Listener = Feed.Listener,
             Options = new TurnOptions
             {
                 SystemPrompt = prompt,
@@ -431,7 +437,7 @@ public sealed class CorvidRuntime : IAsyncDisposable
                 ApprovalMode = Options.Approvals.Mode,
                 Interactive = interactive,
                 // C-005 has no examples file; C-012 wrote the built-in tools' examples by hand.
-                ToolExamples = BuiltinTools.Examples,
+                ToolExamples = ToolExamples,
             },
         };
     }
@@ -662,6 +668,13 @@ public sealed class CorvidSession
 
     /// <summary>Cancels the running turn (Ctrl-C, <c>/cancel</c>).</summary>
     public void Cancel() => Actor.CancelTurn();
+
+    /// <summary>
+    /// K-3, steer now: the person's message for the running turn, taken at its next step checkpoint. True once taken; false
+    /// when no turn was running or it ended first, and the caller sends the text as an ordinary message instead.
+    /// </summary>
+    /// <param name="withdraw">Takes the steer back while it still waits (the person removed it from the queue).</param>
+    public Task<bool> SteerAsync(string text, CancellationToken withdraw = default) => Actor.SteerAsync(text, withdraw);
 
     public SessionSnapshot Snapshot() => SessionProjection.Load(_runtime.Log, Id);
 

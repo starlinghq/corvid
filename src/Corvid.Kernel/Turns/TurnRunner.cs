@@ -174,11 +174,96 @@ public sealed class TurnRunner
         }
     }
 
+    // K-3: steers waiting for the running turn's next step checkpoint; null while no turn takes them.
+    private readonly Lock _steerGate = new();
+    private List<PendingSteer>? _steers;
+
+    private sealed record PendingSteer(string Text, TaskCompletionSource<bool> Taken);
+
+    /// <summary>
+    /// K-3, steer now: hands the running turn a message from the user, which it takes at its next step checkpoint (after a
+    /// round of tool results, before the step's decisions): it is logged as <c>UserSteered</c>, the fabric sees it in the
+    /// TurnState's <c>steering</c>, and the generator reads it as the user's words after the results. The task completes true
+    /// once it is taken, or false when it was not (no turn running, or the turn ended before another checkpoint), so the
+    /// surface can send it as an ordinary message instead; it is never dropped silently. Thread-safe. A steer does not
+    /// clear taint: it joins a context that may already hold outside content (plan §10.3).
+    /// <para>
+    /// <paramref name="withdraw"/> takes the steer back while it still waits (the person removed it): the task then completes
+    /// false. Once a checkpoint has begun taking it, it can no longer be withdrawn and completes true.
+    /// </para>
+    /// </summary>
+    public Task<bool> SteerAsync(string text, CancellationToken withdraw = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(text);
+        PendingSteer steer;
+        lock (_steerGate)
+        {
+            if (_steers is null || withdraw.IsCancellationRequested)
+                return Task.FromResult(false);
+            steer = new PendingSteer(text.Trim(), new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously));
+            _steers.Add(steer);
+        }
+        if (withdraw.CanBeCanceled)
+        {
+            var registration = withdraw.Register(() =>
+            {
+                lock (_steerGate)
+                    if (_steers?.Remove(steer) != true)
+                        return;
+                steer.Taken.TrySetResult(false);
+            });
+            _ = steer.Taken.Task.ContinueWith(_ => registration.Dispose(), CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+        return steer.Taken.Task;
+    }
+
+    /// <summary>Whether a turn is taking steers now (between its start and its end). A snapshot.</summary>
+    public bool TakesSteers
+    {
+        get
+        {
+            lock (_steerGate)
+                return _steers is not null;
+        }
+    }
+
+    private List<PendingSteer> TakeSteers()
+    {
+        lock (_steerGate)
+        {
+            if (_steers is not { Count: > 0 } waiting)
+                return [];
+            List<PendingSteer> taken = [.. waiting];
+            waiting.Clear();
+            return taken;
+        }
+    }
+
     public async Task<TurnResult> RunAsync(Envelope envelope, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(envelope);
         if (envelope.SessionId != SessionId)
             throw new ArgumentException("The envelope is for another session.", nameof(envelope));
+        lock (_steerGate)
+            _steers = [];
+        try
+        {
+            return await RunTurnAsync(envelope, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Steers the turn ended without taking go back to the surface, which sends them as messages.
+            List<PendingSteer> left;
+            lock (_steerGate)
+                (left, _steers) = (_steers ?? [], null);
+            foreach (var steer in left)
+                steer.Taken.TrySetResult(false);
+        }
+    }
+
+    private async Task<TurnResult> RunTurnAsync(Envelope envelope, CancellationToken cancellationToken)
+    {
         var turn = new Turn(this, envelope);
         using var activity = KernelTelemetry.Source.StartActivity(ActivityKind.Internal, tags:
         [
@@ -329,6 +414,10 @@ public sealed class TurnRunner
         private readonly List<string> _compactions = [];
         // The turn's own UserMessage: compaction during the turn never summarizes it.
         private long _turnStart;
+        // K-3: the steers this turn took, oldest first, for the TurnState's steering.
+        private readonly List<string> _steered = [];
+        // K-6: the question an ask_user call asked; the turn ends Clarifying with it after its round.
+        private ClarifyingQuestion? _question;
 
         public async Task<TurnResult> RunAsync(CancellationToken cancellationToken)
         {
@@ -442,7 +531,11 @@ public sealed class TurnRunner
                 }
 
                 _steps++;
+                Listen(listener => listener.StepStarted(runner.SessionId, _steps, _options.MaxSteps));
                 var (anyRan, failed) = await RunCallsAsync(calls, tools, cancellationToken).ConfigureAwait(false);
+                // K-6: the generator asked the user (ask_user); the round's other calls ran, and the question ends the turn.
+                if (_question is { } asked)
+                    return await FinishAsync(TurnStatus.Clarifying, asked.Text, cancellationToken, asked).ConfigureAwait(false);
                 if (failed)
                 {
                     // Repair once (§7 step 5): the error results carry the expected shape. A second failure escalates (§6).
@@ -458,6 +551,8 @@ public sealed class TurnRunner
                 if (!anyRan)
                     continue;
 
+                // K-3: the step checkpoint takes what the user steered in, before the decider and the generator read on.
+                TakeSteers();
                 var step = await StepAsync(cancellationToken).ConfigureAwait(false);
                 if (Acted(step, "stuck", out _))
                 {
@@ -638,6 +733,47 @@ public sealed class TurnRunner
 
         private static string Text(ChatResponse response) => response.Text.Trim();
 
+        private void Listen(Action<ITurnListener> notify)
+        {
+            if (_services.Listener is not { } listener)
+                return;
+            try
+            {
+                notify(listener);
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                // A surface that fails to show progress must not fail the turn.
+            }
+        }
+
+        /// <summary>
+        /// K-3: logs the steers waiting for this checkpoint as <c>UserSteered</c> events (one batch, in order) and tells each
+        /// surface it was taken. When the events cannot be appended each steer is told it was not, and the failure goes on.
+        /// </summary>
+        private void TakeSteers()
+        {
+            var steers = runner.TakeSteers();
+            if (steers.Count == 0)
+                return;
+            try
+            {
+                lock (_gate)
+                    runner.Append([.. steers.Select(steer => (SessionEvent)new UserSteered(steer.Text))]);
+            }
+            catch
+            {
+                foreach (var steer in steers)
+                    steer.Taken.TrySetResult(false);
+                throw;
+            }
+            foreach (var steer in steers)
+            {
+                _steered.Add(steer.Text);
+                steer.Taken.TrySetResult(true);
+            }
+        }
+
         // ---- tool calls ----
 
         private async Task<(bool AnyRan, bool Failed)> RunCallsAsync(List<FunctionCallContent> calls, ImmutableArray<Offered> tools,
@@ -686,7 +822,14 @@ public sealed class TurnRunner
                 // injected text could carry the user's data out in a URL. Taint is judged as of the response that made the call.
                 // C-023: an untainted network read goes through the pipeline too when detection rules have something to say
                 // about it (a web_fetch after a credential read), with this response's earlier calls as if already logged.
-                var risk = tool!.Descriptor.Risk;
+                // K-6: ask_user is the turn loop's own: logged with its result at once (no lease, nothing runs), and the turn
+                // ends with its question after the round. A second one in the round is told the first was asked.
+                if (tool!.Function is AskUserTool && _options.Interactive)
+                {
+                    AskUser(callId, call.Name, arguments);
+                    continue;
+                }
+                var risk = tool.Descriptor.Risk;
                 var ask = !risk.ReadOnly || risk.Network && (runner.Tainted
                     || _services.Approvals is { } approvals && approvals.Detects(runner.SessionId, callId,
                         new ToolAction(tool.Descriptor, arguments),
@@ -822,6 +965,11 @@ public sealed class TurnRunner
 
             CallOutcome outcome;
             ToolCallContext? callContext = null;
+            // K-2: what the tool prints while it runs reaches surfaces as a bounded, scrubbed tail; the result is unchanged.
+            using var tail = _services.Listener is { } listener
+                ? new ToolOutputTail(_services.Time, _options.OutputTailInterval, _options.OutputTailChars, _options.OutputTailLines,
+                    text => listener.ToolOutput(runner.SessionId, call.CallId, descriptor.Name, text))
+                : null;
             using (running)
             {
                 try
@@ -833,6 +981,7 @@ public sealed class TurnRunner
                         Tainted = tainted,
                         Interactive = _options.Interactive,
                         Approval = approval,
+                        Output = tail is null ? null : tail.Write,
                     };
                     var arguments = context.AttachTo(JsonValues.ToArguments(call.Arguments));
                     var value = await call.Tool.Function.InvokeAsync(arguments, cancellationToken).ConfigureAwait(false);
@@ -1094,6 +1243,37 @@ public sealed class TurnRunner
             }
         }
 
+        /// <summary>K-6: an ask_user call, logged with its result in one append; its question is the turn's.</summary>
+        private void AskUser(string callId, string tool, JsonElement arguments)
+        {
+            using var activity = StartToolActivity(callId, tool, approval: false);
+            var (text, options) = AskUserTool.Read(arguments);
+            string? decisionId;
+            bool first;
+            lock (_gate)
+            {
+                first = _question is null && text.Length > 0;
+                var result = JsonValues.ToElement(new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["asked"] = first,
+                    ["note"] = first
+                        ? "The question goes to the user and the turn ends here; their answer comes as their next message."
+                        : text.Length == 0 ? "The question was empty, so nothing was asked." : "One question per turn: the first one was asked.",
+                });
+                runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, true), new ToolResult(callId, result, IsError: !first));
+                if (first)
+                    _question = new ClarifyingQuestion(NewQuestionId(), text, options);
+                _pickDecisions.Remove(tool, out decisionId);
+            }
+            activity?.SetTag(KernelTelemetry.ToolOutcome, first ? "succeeded" : "failed");
+            if (!first)
+                activity?.SetStatus(ActivityStatusCode.Error);
+            if (decisionId is not null)
+                _services.Fabric.RecordOutcome(runner.SessionId, decisionId, first ? "tool_succeeded" : "tool_failed", CancellationToken.None);
+        }
+
+        private static string NewQuestionId() => "q-" + Guid.NewGuid().ToString("N")[..12];
+
         private void IssueRejected(string callId, string tool, JsonElement arguments, bool? readOnly, JsonElement error)
         {
             // A call that never ran still gets its span, so a trace shows the repair the next response is asked for.
@@ -1337,7 +1517,7 @@ public sealed class TurnRunner
             // The generator's own tokenizer when its binding offers one (Starling's Qwen does), so budgets are in its units.
             var builder = new TurnStateBuilder(Counter(generator), budget ?? _options.StateBudget);
             return builder.Build(new TurnStateInput(envelope.Text, envelope.Surface, Describe(profile), Recent(snapshot), snapshot.Goal,
-                _entities.IsEmpty ? null : _entities, _steps, _lastToolResult));
+                _entities.IsEmpty ? null : _entities, _steps, _lastToolResult, _steered.Count == 0 ? null : string.Join('\n', _steered)));
         }
 
         private static string Describe(ModelProfile profile) =>
@@ -1360,6 +1540,7 @@ public sealed class TurnRunner
                 switch (entry.Content)
                 {
                     case UserMessage user: lines.Add("user: " + Short(user.Text)); break;
+                    case UserSteered steer: lines.Add("user (during the turn): " + Short(steer.Text)); break;
                     case AssistantMessage assistant: lines.Add("assistant: " + Short(assistant.Text)); break;
                     case ToolCallIssued call:
                         names[call.CallId] = call.ToolName;
@@ -1406,6 +1587,8 @@ public sealed class TurnRunner
             // tool that writes memory is never a guest's, named or not: the owner's memory and review queue are not theirs.
             foreach (var function in _services.Tools.GetFunctions(_options.SecretNames))
                 if (function.GetService(typeof(ToolDescriptor)) is ToolDescriptor descriptor
+                    // K-6: a turn nobody watches (a scheduled run) has nobody to ask.
+                    && (_options.Interactive || function is not AskUserTool)
                     && (envelope.Guest is null || envelope.Guest.Allows(function.Name) && !descriptor.Risk.SideEffects.HasFlag(SideEffects.Memory)))
                     _catalogue[function.Name] = new Offered(function, descriptor);
             if (_catalogue.Count == 0 || !_services.Slots.TryCurrent(ModelSlots.TextEmbedder, out var binding)
@@ -1539,9 +1722,16 @@ public sealed class TurnRunner
 
         // ---- egress ----
 
-        private async Task<TurnResult> FinishAsync(TurnStatus status, string text, CancellationToken cancellationToken)
+        private async Task<TurnResult> FinishAsync(TurnStatus status, string text, CancellationToken cancellationToken,
+            ClarifyingQuestion? question = null)
         {
-            var answer = runner.Append(new AssistantMessage(text)).Sequence;
+            // K-6: a clarifying turn's question is logged with its answer, structured, so every surface shows it as a question.
+            if (status == TurnStatus.Clarifying)
+                question ??= new ClarifyingQuestion(NewQuestionId(), text, []);
+            var answer = question is null
+                ? runner.Append(new AssistantMessage(text)).Sequence
+                : runner.Append(new AssistantMessage(text), new ClarificationAsked(question.Id, question.Text, question.Options))[0].Sequence;
+            _question = question;
             var deliver = "reply";
             var egress = new List<KeyValuePair<string, DecisionQuestion>>();
             // A guest's message (C-020) is never offered to memory: staged, it would sit in the owner's review queue as a
@@ -1678,6 +1868,8 @@ public sealed class TurnRunner
                 Skill = _skill,
                 SkillQueued = _skillQueued,
                 LessonQueued = _lessonQueued,
+                Question = status == TurnStatus.Clarifying ? _question : null,
+                Steers = _steered.Count,
             };
     }
 

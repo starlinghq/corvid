@@ -70,6 +70,21 @@ public sealed class ShellToolTests : IDisposable
     }
 
     [Fact]
+    public async Task The_calls_output_sink_is_the_commands_output_watcher()
+    {
+        var watched = new List<string>();
+        var context = await Approved(_pipeline, "ls -la") with { Output = watched.Add };
+
+        await Invoke(_shell, "shell", """{"command":"ls -la"}""", context);
+
+        // K-2: the sandbox is handed the call's sink, so what the command prints reaches a watching surface as it runs.
+        var (_, command) = Assert.Single(_sandbox.Runs);
+        Assert.NotNull(command.Output);
+        command.Output!("Passed!\n");
+        Assert.Equal(["Passed!\n"], watched);
+    }
+
+    [Fact]
     public async Task Without_an_approval_for_exactly_this_command_nothing_runs()
     {
         // Outside a turn: no context at all.

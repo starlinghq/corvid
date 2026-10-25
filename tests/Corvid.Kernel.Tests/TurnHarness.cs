@@ -379,8 +379,15 @@ internal sealed class TurnHarness : IDisposable
 
     public Corvid.Memory.CoreSnapshot? CoreBlocks { get; init; }
 
+    /// <summary>Hears turn progress and running tails (K-2).</summary>
+    public ITurnListener? Listener { get; init; }
+
+    public TimeProvider? Time { get; init; }
+
     public TurnServices Services() => new()
     {
+        Listener = Listener,
+        Time = Time ?? TimeProvider.System,
         Log = Log,
         Slots = Slots,
         Fabric = Fabric,
