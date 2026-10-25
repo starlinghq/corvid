@@ -32,6 +32,9 @@ public sealed record Envelope(string SessionId, string Surface, string Text, Env
     /// </summary>
     public GuestScope? Guest { get; init; }
 
+    /// <summary>Who wrote the text when it is not the session's own user (a guest): logged on its message (security M2).</summary>
+    public string? From => Guest is { } guest ? guest.Sender ?? "a guest" : null;
+
     /// <summary>
     /// Set for the composer's <c>!</c> line (A4, docs/plan/tui.md §4.1): the turn runs this command through the shell tool,
     /// the approval pipeline, the sandbox and the checkpoints, as a call the user made, and asks the generator nothing. Only
@@ -65,4 +68,10 @@ public sealed class GuestScope(IEnumerable<string> tools)
         tools ?? throw new ArgumentNullException(nameof(tools)));
 
     public bool Allows(string tool) => Tools.Contains(tool);
+
+    /// <summary>
+    /// Who the guest is, as the log and the prompt name them ("telegram guest dana (1001)"); one line, no control
+    /// characters. Null when the surface does not say.
+    /// </summary>
+    public string? Sender { get; init; }
 }

@@ -129,6 +129,7 @@ public static class SessionReplay
                     items.Add((entry.FromSequence, new PromptSent(user.Text, entry.FromSequence)
                     {
                         At = at,
+                        From = user.From,
                         Generator = generators.GetValueOrDefault(entry.FromSequence),
                     }));
                     round = null;

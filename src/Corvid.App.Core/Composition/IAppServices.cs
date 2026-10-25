@@ -13,6 +13,7 @@ using Corvid.App.Core.Safety;
 using Corvid.App.Core.Secrets;
 using Corvid.App.Core.Sessions;
 using Corvid.App.Core.Settings;
+using Corvid.App.Core.Shell;
 using Corvid.App.Core.Skills;
 
 namespace Corvid.App.Core.Composition;
@@ -66,4 +67,7 @@ public interface IAppServices
     ISettingsService CreateSettingsService(AppComposition app);
 
     IPromptHistory CreatePromptHistory(AppComposition app);
+
+    /// <summary>The app's hosting of the gateway and the scheduler (U-8); a window that hosts nothing by default.</summary>
+    IHostingService CreateHostingService(AppComposition app) => new NoHostingService("This window does not host the gateway or the scheduler.");
 }

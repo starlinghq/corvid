@@ -126,13 +126,14 @@ public sealed class SessionUpdateTranslator(string workspace)
                 _turnRemembers = false;
                 var generator = prompt.Generator ?? (ShellLine ? "" : Model);
                 ShellLine = false;
-                // K-6: the person's next message is their answer to the open question; nothing else answers it.
-                if (_openQuestion is { } open)
+                // K-6: the person's next message is their answer to the open question; nothing else answers it, a guest's
+                // message in a gateway chat included (security M2: shown as the guest's, the question stays open).
+                if (_openQuestion is { } open && prompt.From is null)
                 {
                     _openQuestion = null;
                     output.Add(new QuestionAnswered(open, prompt.Text) { At = at });
                 }
-                output.Add(new UserMessage(prompt.Text) { Position = prompt.Sequence, At = at });
+                output.Add(new UserMessage(prompt.Text) { Position = prompt.Sequence, At = at, From = prompt.From });
                 // A replayed turn names the generator its first decision saw; a live one starts on the slot's.
                 output.Add(new TurnStarted(Turn, generator) { At = at, MaxSteps = MaxSteps });
                 output.AddRange(_early);

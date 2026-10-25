@@ -129,7 +129,9 @@ public sealed class UserMessageBlock : TranscriptBlock
     {
         var user = (UserEntry)entry;
         var clock = SessionText.Clock(user.At, context.Zone);
-        Who = user.Steered ? $"you · steer · {clock}" : $"you · {clock}";
+        // Security M2: a gateway guest's message is named as theirs, never "you".
+        Who = user.From is { } from ? $"{SafeText.Clean(from)} · outside content · {clock}"
+            : user.Steered ? $"you · steer · {clock}" : $"you · {clock}";
         Text = SafeText.Clean(user.Text);
         IsSteer = user.Steered;
         Position = user.Position;

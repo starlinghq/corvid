@@ -120,17 +120,19 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             var summaries = new List<SessionSummary>();
             var pinned = Pins();
             var heads = new Dictionary<string, long>(StringComparer.Ordinal);
-            foreach (var id in runtime.Log.ListSessions(cancellationToken))
+            // Read before the heads, so a write between the two is seen as a change at the next look.
+            var marker = runtime.Log.ChangeMarker(cancellationToken);
+            foreach (var (id, head) in runtime.Log.ListHeads(cancellationToken).OrderBy(pair => pair.Key, StringComparer.Ordinal))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!IsConversation(id))
                     continue;
-                heads[id] = runtime.Log.GetHead(id, cancellationToken);
+                heads[id] = head;
                 if (Summarize(runtime, id, pinned) is { } summary)
                     summaries.Add(Live(id, summary));
             }
             // G-12: what other processes write from here on reaches the list at the log's next look.
-            Listed(heads);
+            Listed(heads, marker);
             foreach (var (id, created) in _created)
                 if (runtime.Log.GetHead(id, cancellationToken) == 0)
                     summaries.Add(Live(id, Empty(runtime, id, created)));
@@ -939,6 +941,20 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         }
         StopTail(channel);
         _channels.TryRemove(new KeyValuePair<string, Channel>(channel.SessionId, channel));
+        // M2 (A4 review): a session this window drove is let go of once nothing of it is open here, so a terminal's
+        // `corvid chat --session` can drive it; the next request here opens it again. Not a gateway chat's or another surface's,
+        // and not a new one with nothing in the log yet (it lives only in the runtime until its first message).
+        if (_engine.Runtime is { IsCompletedSuccessfully: true } started && started.Result.TryGetSession(channel.SessionId, out var session)
+            && session.Surface == Surface)
+        {
+            var runtime = started.Result;
+            var id = channel.SessionId;
+            Track(Task.Run(async () =>
+            {
+                if (runtime.Log.GetHead(id) > 0 && !_channels.ContainsKey(id))
+                    await runtime.ReleaseDriverAsync(id).ConfigureAwait(false);
+            }));
+        }
     }
 
     /// <summary>The channels this window holds, for a test of their release.</summary>

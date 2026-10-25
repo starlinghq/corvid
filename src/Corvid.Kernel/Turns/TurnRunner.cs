@@ -460,13 +460,13 @@ public sealed class TurnRunner
             if (_services.Project is { } project && runner._boundProject != project.Id)
             {
                 _turnStart = runner.Snapshot().ProjectId == project.Id
-                    ? runner.Append(new UserMessage(envelope.Text)).Sequence
-                    : runner.Append(new ProjectBound(project.Id, project.Source), new UserMessage(envelope.Text))[^1].Sequence;
+                    ? runner.Append(new UserMessage(envelope.Text, From: envelope.From)).Sequence
+                    : runner.Append(new ProjectBound(project.Id, project.Source), new UserMessage(envelope.Text, From: envelope.From))[^1].Sequence;
                 runner._boundProject = project.Id;
             }
             else
             {
-                _turnStart = runner.Append(new UserMessage(envelope.Text)).Sequence;
+                _turnStart = runner.Append(new UserMessage(envelope.Text, From: envelope.From)).Sequence;
             }
 
             await ExtractEntitiesAsync(cancellationToken).ConfigureAwait(false);
@@ -1616,7 +1616,7 @@ public sealed class TurnRunner
                 {
                     // A4: a `!!` line is the user's alone, as in the prompt.
                     case UserMessage { LocalOnly: true } or ToolCallIssued { LocalOnly: true } or ToolResult { LocalOnly: true }: break;
-                    case UserMessage user: lines.Add("user: " + Short(user.Text)); break;
+                    case UserMessage user: lines.Add((user.From is null ? "user: " : "guest (outside content): ") + Short(user.Text)); break;
                     case UserSteered steer: lines.Add("user (during the turn): " + Short(steer.Text)); break;
                     case AssistantMessage assistant: lines.Add("assistant: " + Short(assistant.Text)); break;
                     case ToolCallIssued call:

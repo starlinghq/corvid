@@ -396,6 +396,8 @@ public sealed class GatewayCommandTests
         // G-14: the same allowlist the app's Gateway page sets, checked the same way.
         Assert.Equal(ExitCodes.Success, await run.RunAsync(["gateway", "pair", "tools", "telegram", "42", "list_notes", "web_fetch"]));
         Assert.Equal(["list_notes", "web_fetch"], store.GuestTools("telegram", "42"));
+        // The first per-guest allowlist moves gateway.db to schema 2, one way: the CLI says so (once).
+        Assert.Contains("upgraded to schema 2", run.Output, StringComparison.Ordinal);
         Assert.Equal(ExitCodes.Success, await run.RunAsync(["gateway", "pair"]));
         Assert.Contains("list_notes, web_fetch (their own)", run.Output, StringComparison.Ordinal);
         Assert.Equal(ExitCodes.Usage, await run.RunAsync(["gateway", "pair", "tools", "telegram", "42", "cron_create"]));
@@ -405,6 +407,12 @@ public sealed class GatewayCommandTests
         Assert.Equal(["list_notes", "web_fetch"], store.GuestTools("telegram", "42"));
         Assert.Equal(ExitCodes.Success, await run.RunAsync(["gateway", "pair", "tools", "telegram", "42", "--adapter"]));
         Assert.Null(store.GuestTools("telegram", "42"));
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(run.Output, "upgraded to schema 2"));
+        // L9: an empty allowlist of their own (no tool, whatever the adapter's GuestTools say).
+        Assert.Equal(ExitCodes.Success, await run.RunAsync(["gateway", "pair", "tools", "telegram", "42", "--none"]));
+        Assert.Equal([], store.GuestTools("telegram", "42"));
+        Assert.Contains("may use no tool", run.Output, StringComparison.Ordinal);
+        Assert.Equal(ExitCodes.Usage, await run.RunAsync(["gateway", "pair", "tools", "telegram", "42", "--none", "list_notes"]));
     }
 
     [Fact]

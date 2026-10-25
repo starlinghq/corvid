@@ -58,6 +58,23 @@ public sealed class CorvidOptions
 
     /// <summary>Session titles and recaps (G-6).</summary>
     public SessionsSettings Sessions { get; set; } = new();
+
+    /// <summary>The windowed app's own choices (U-8); the CLI's commands ignore them.</summary>
+    public AppSettings App { get; set; } = new();
+}
+
+/// <summary>
+/// What the windowed app hosts when it is the engine (U-8). Both are off by default: hosting the gateway connects every
+/// enabled adapter with its Vault token, and hosting the scheduler runs scheduled jobs with their tools, so the person turns
+/// each on (here, or Start hosting on the Gateway and Jobs pages). The one-lock rule still decides which process runs them.
+/// </summary>
+public sealed class AppSettings
+{
+    /// <summary>The app hosts the gateway: connects the enabled adapters with their Vault tokens while it is open.</summary>
+    public bool HostGateway { get; set; }
+
+    /// <summary>The app hosts the scheduler: runs due jobs, with their tools, while it is open (<c>Corvid:Scheduler:Enabled</c> permitting).</summary>
+    public bool HostScheduler { get; set; }
 }
 
 /// <summary>Session titles and recaps (G-6, extending K-9), written by the local generator only.</summary>

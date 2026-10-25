@@ -1,3 +1,4 @@
+using Corvid.Abstractions.IO;
 using Corvid.Gateway;
 using Corvid.Host.Commands;
 using Corvid.Host.Configuration;
@@ -127,10 +128,22 @@ public sealed class HostedGateway : IAsyncDisposable
             {
                 await host.StartAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch (InvalidOperationException)
+            catch (GatewayLockHeldException)
             {
                 await host.DisposeAsync().ConfigureAwait(false);
                 return Set(GatewayStatus.Elsewhere(ProcessLock.ReadNote(GatewayStatus.LockPath(_options))));
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // L5, L8: a lock file nobody can open (a read-only or full file system) is not another gateway; the host goes.
+                await host.DisposeAsync().ConfigureAwait(false);
+                return Set(new GatewayStatus(GatewayHosting.Off,
+                    "The gateway cannot start: " + FileLocks.Unopenable(GatewayStatus.LockPath(_options), exception) + "."));
+            }
+            catch
+            {
+                await host.DisposeAsync().ConfigureAwait(false);
+                throw;
             }
             _holder = new LockHolder(ProcessLock.ProcessName, Environment.ProcessId, _time.GetUtcNow());
             ProcessLock.WriteNote(GatewayStatus.LockPath(_options), _holder);

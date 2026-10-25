@@ -13,6 +13,7 @@ using Corvid.App.Core.Safety;
 using Corvid.App.Core.Secrets;
 using Corvid.App.Core.Sessions;
 using Corvid.App.Core.Settings;
+using Corvid.App.Core.Shell;
 using Corvid.App.Core.Skills;
 
 namespace Corvid.App.Core.Composition;
@@ -376,4 +377,6 @@ public class UnavailableAppServices(string reason) : IAppServices
     public virtual ISettingsService CreateSettingsService(AppComposition app) => new Unavailable.Settings(Reason);
 
     public virtual IPromptHistory CreatePromptHistory(AppComposition app) => new Unavailable.PromptHistory(Reason);
+
+    public virtual IHostingService CreateHostingService(AppComposition app) => new NoHostingService(Reason);
 }

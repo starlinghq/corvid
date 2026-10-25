@@ -19,6 +19,9 @@ public sealed record UserEntry(string Id, string Text, DateTimeOffset At) : Tran
     public long? Position { get; init; }
 
     public bool Steered { get; init; }
+
+    /// <summary>Who wrote it when it is not the person (a gateway guest); null for their own.</summary>
+    public string? From { get; init; }
 }
 
 /// <summary>A turn's header: its number, the generators it ran on in order, and its measures so far.</summary>

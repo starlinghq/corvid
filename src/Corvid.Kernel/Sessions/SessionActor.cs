@@ -73,6 +73,14 @@ public sealed class SessionActor : IAsyncDisposable
     /// </summary>
     public bool TurnRunning => Volatile.Read(ref _turnCancellation) is not null;
 
+    /// <summary>
+    /// Nothing of the session is running or waiting here: no turn, no queued message, no exclusive work (a restore). A
+    /// snapshot, for a surface deciding whether it may let go of the session.
+    /// </summary>
+    public bool IsIdle => !TurnRunning && _capacity.CurrentCount == _options.MaxPendingMessages && Volatile.Read(ref _exclusiveWork) == 0;
+
+    private int _exclusiveWork;
+
     /// <summary>Queues a message. Waits while the session already holds <see cref="SessionActorOptions.MaxPendingMessages"/>.</summary>
     public async ValueTask SubmitAsync(Envelope envelope, CancellationToken cancellationToken = default)
     {
@@ -149,11 +157,25 @@ public sealed class SessionActor : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(work);
         var command = new Exclusive(async token => await work(token).ConfigureAwait(false), cancellationToken);
+        Interlocked.Increment(ref _exclusiveWork);
         if (!_commands.Writer.TryWrite(command))
+        {
+            Interlocked.Decrement(ref _exclusiveWork);
             throw new ObjectDisposedException(nameof(SessionActor));
+        }
         return Typed();
 
-        async Task<T> Typed() => (T)(await command.Completion.Task.ConfigureAwait(false))!;
+        async Task<T> Typed()
+        {
+            try
+            {
+                return (T)(await command.Completion.Task.ConfigureAwait(false))!;
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _exclusiveWork);
+            }
+        }
     }
 
     /// <summary>Completes when every queued message has been answered.</summary>

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Globalization;
 using Corvid.Abstractions.Events;
+using Corvid.Abstractions.IO;
 using Corvid.Abstractions.Sessions;
 using Corvid.Abstractions.Tokens;
 using Corvid.Approvals;
@@ -69,6 +70,8 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     private Task _maintenance = Task.CompletedTask;
     private ProcessLock? _schedulerLock;
     private Task? _scheduler;
+    // Stops this process's scheduler without stopping the runtime (the app's Stop hosting); linked to _lifetime.
+    private CancellationTokenSource? _schedulerStop;
     private JobScheduler? _jobScheduler;
     // Starting the scheduler (C-041: again on a session open after losing the lock) and disposal's lock release, one at a time.
     private readonly Lock _schedulerGate = new();
@@ -80,7 +83,8 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     internal CorvidRuntime(CorvidOptions options, ModelCatalogue catalogue, ModelComposer composer, DeviceSchedulers devices,
         ModelMetrics metrics, TurnFeed feed, SqliteEventLog log, ModelSlotRegistry registry, DecisionFabric fabric,
         ApprovalPipeline approvals, ApprovalRouter prompters, ToolRegistry tools, MemoryServices? memory, ITokenCounter? counter,
-        BuiltinServices builtin, CheckpointService? checkpoints = null, SkillServices? skills = null, McpClients? mcp = null)
+        BuiltinServices builtin, CheckpointService? checkpoints = null, SkillServices? skills = null, McpClients? mcp = null,
+        bool hostScheduler = true)
     {
         Mcp = mcp;
         Checkpoints = checkpoints;
@@ -103,13 +107,24 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         Counter = counter;
         Builtin = builtin;
         _swap = memory is null ? null : new EmbedderSwapJob(memory.Vectors);
-        Sessions = new SessionHost(CreateActor);
+        Sessions = new SessionHost(CreateActor, new SessionHostOptions
+        {
+            // A message whose session cannot be routed (its driver lock went to another process after a release, M2) fails
+            // its send with why, rather than leaving the sender waiting.
+            RoutingFailed = (envelope, exception) =>
+            {
+                if (envelope.MessageId is { } id && _waiting.TryRemove(id, out var waiter))
+                    waiter.TrySetException(exception);
+            },
+        });
         if (memory is not null && registry.TryGet(ModelSlots.TextEmbedder, out var embedder)
             && memory.Vectors.State.Active != embedder.Default.Profile.Id)
             // The configured embedder changed since the store was written (or the store is new): §4.3's swap, in the background.
             _swap!.Start(embedder.Default.Profile.Id);
-        if (options.Scheduler.Enabled)
+        if (options.Scheduler.Enabled && hostScheduler)
             TryStartScheduler();
+        else if (options.Scheduler.Enabled)
+            SchedulerState = SchedulerNotHosted;
         // The learning loop (plan §11): queued opportunities are drafted and replay-tested in the background.
         if (Skills.Learner is { } learner)
             _learning = Task.Run(() => learner.RunAsync(_lifetime.Token));
@@ -251,6 +266,12 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     // The state of a runtime that lost jobs.db.lock to another process; the only one a session open retries (C-041).
     private const string SchedulerElsewhere = "run by another corvid process";
 
+    /// <summary>
+    /// The state of a runtime that does not host the scheduler (the windowed app until it is asked to, U-8): it neither runs
+    /// due jobs nor takes the scheduler over; <see cref="StartScheduler"/> makes it try.
+    /// </summary>
+    public const string SchedulerNotHosted = "off (not hosted by this process)";
+
     /// <summary>The scheduler's lock beside the job store: whichever process holds it runs the jobs (U-8).</summary>
     public string SchedulerLockPath => Builtin.Jobs.Path + ".lock";
 
@@ -359,7 +380,9 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     /// <exception cref="SessionHeldException">Another process drives the session (G-12); nothing was written.</exception>
     public SessionTitled Rename(string sessionId, string title)
     {
-        var titled = Titles.Rename(sessionId, title, () => RefuseIfHeld(sessionId));
+        SessionTitled titled;
+        using (var guard = GuardWrite(sessionId))
+            titled = Titles.Rename(sessionId, title, guard.Check);
         _titled[sessionId] = 0;
         TitleChanged?.Invoke(sessionId, titled);
         return titled;
@@ -376,7 +399,11 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     /// </exception>
     public async Task<SessionRecapped?> RecapAsync(string sessionId, string source = RecapSources.Requested, CancellationToken cancellationToken = default)
     {
-        var recap = await Titles.RecapAsync(sessionId, source, () => RefuseIfHeld(sessionId), cancellationToken).ConfigureAwait(false);
+        SessionRecapped? recap;
+        // The check before generating only looks (the generator takes seconds, and the lock would keep a terminal out);
+        // the write takes the lock (L7).
+        using (var guard = GuardWrite(sessionId, probes: 1))
+            recap = await Titles.RecapAsync(sessionId, source, guard.Check, cancellationToken).ConfigureAwait(false);
         if (recap is not null)
             Recapped?.Invoke(sessionId, recap);
         return recap;
@@ -515,7 +542,10 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         if (_lessonLearning is not null)
             await _lessonLearning.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         lock (_schedulerGate)
+        {
             _schedulerLock?.Dispose();
+            _schedulerStop?.Dispose();
+        }
         await Sessions.DisposeAsync().ConfigureAwait(false);
         // After the sessions, so no turn of theirs is still writing when another process may take one over (G-12).
         ReleaseDrivers();
@@ -576,6 +606,9 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
 
     private SessionActor CreateActor(string sessionId)
     {
+        // G-12: every actor runs under the session's driver lock, also one made again for a message posted while the session
+        // was being let go of (ReleaseDriverAsync): idempotent when OpenSession already took it.
+        TakeDriver(sessionId);
         var slots = NewSlots(sessionId);
         var settings = _settings.TryGetValue(sessionId, out var chosen) ? chosen : SessionSettings.Default;
         var runner = new TurnRunner(sessionId, Services(slots, settings.Interactive, settings.Tools ? Tools : new ToolRegistry(), settings));
@@ -670,16 +703,67 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Hosts the scheduler in this process from now on (the app's Start hosting, U-8): takes its lock and runs due jobs, or,
+    /// while another process holds the lock, waits to take it over (<see cref="WakeScheduler"/> retries). True when it runs
+    /// here now. Off with <c>Corvid:Scheduler:Enabled</c> false.
+    /// </summary>
+    public bool StartScheduler()
+    {
+        if (!Options.Scheduler.Enabled)
+            return false;
+        lock (_schedulerGate)
+        {
+            if (_scheduler is null && !_lifetime.IsCancellationRequested)
+                StartSchedulerLocked();
+            return _jobScheduler is not null;
+        }
+    }
+
+    /// <summary>
+    /// Stops hosting the scheduler (the app's Stop hosting): the scheduler stops (a run in progress is cancelled and marked
+    /// so), its lock is released for another process, and this runtime takes it over no more until <see cref="StartScheduler"/>.
+    /// </summary>
+    public async Task StopSchedulerAsync()
+    {
+        Task? running;
+        CancellationTokenSource? stop;
+        lock (_schedulerGate)
+        {
+            (running, stop) = (_scheduler, _schedulerStop);
+            if (stop is not null)
+                stop.Cancel();
+        }
+        if (running is not null)
+            await running.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        lock (_schedulerGate)
+        {
+            // Only what this call stopped: a Start that ran meanwhile keeps its own.
+            if (ReferenceEquals(_schedulerStop, stop))
+            {
+                _schedulerLock?.Dispose();
+                _schedulerLock = null;
+                _scheduler = null;
+                _jobScheduler = null;
+                _schedulerStop = null;
+                stop?.Dispose();
+            }
+            if (Options.Scheduler.Enabled && _scheduler is null)
+                SchedulerState = SchedulerNotHosted;
+        }
+    }
+
     private void StartSchedulerLocked()
     {
         try
         {
             _schedulerLock = ProcessLock.TryAcquire(SchedulerLockPath, attempts: 3);
         }
-        catch (UnauthorizedAccessException exception)
+        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
         {
-            // An unwritable lock file should not stop the chat; the jobs simply wait for a process that can run them.
-            SchedulerState = "off: " + exception.Message;
+            // An unwritable lock file (a read-only directory, a full disk) should not stop the chat; the jobs simply wait
+            // for a process that can run them. Not "run by another process": nobody holds it.
+            SchedulerState = "off: " + FileLocks.Unopenable(SchedulerLockPath, exception);
             return;
         }
         if (_schedulerLock is null)
@@ -701,7 +785,9 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         };
         SchedulerState = "running in this process";
         _jobScheduler = scheduler;
-        var lifetime = _lifetime.Token;
+        _schedulerStop?.Dispose();
+        _schedulerStop = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        var lifetime = _schedulerStop.Token;
         _scheduler = Task.Run(() => scheduler.RunAsync(lifetime));
     }
 

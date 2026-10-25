@@ -15,5 +15,5 @@ public sealed partial class AppComposition
     public IGatewayService GatewayService => _gatewayService ??= Services.CreateGatewayService(this);
 
     /// <summary>The Gateway area: pairing, paired users, channels and deliveries.</summary>
-    public GatewayViewModel Gateway => _gateway ??= new GatewayViewModel(GatewayService, Shell, StatusBar, Time);
+    public GatewayViewModel Gateway => _gateway ??= new GatewayViewModel(GatewayService, Shell, StatusBar, Time, HostingService);
 }

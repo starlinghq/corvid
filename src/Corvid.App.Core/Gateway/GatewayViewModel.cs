@@ -41,7 +41,9 @@ public sealed class GatewayViewModel : AreaViewModel, IDisposable
     private string _hostTag = "";
     private string _guestToolsNote = "";
 
-    public GatewayViewModel(IGatewayService service, ShellViewModel shell, StatusBarViewModel statusBar, TimeProvider time)
+    /// <param name="hosting">Start and Stop hosting (U-8); none, and the page shows no control.</param>
+    public GatewayViewModel(IGatewayService service, ShellViewModel shell, StatusBarViewModel statusBar, TimeProvider time,
+        IHostingService? hosting = null)
         : base(Area.Gateway, "The Telegram, Discord and Slack adapters, pairing requests, paired users and deliveries.")
     {
         ArgumentNullException.ThrowIfNull(service);
@@ -53,6 +55,9 @@ public sealed class GatewayViewModel : AreaViewModel, IDisposable
         _time = time;
         _lease = new StatusBarLease(statusBar);
         DismissNoticeCommand = new RelayCommand(() => Say(true, ""));
+        Hosting = new HostingToggleViewModel(hosting ?? new NoHostingService("This window does not host the gateway."), HostedPart.Gateway, Say);
+        // The page's host or scheduler line follows a start, a stop or a take-over at once.
+        Hosting.Changed += OnHostingChanged;
 
         _service.Changed += OnServiceChanged;
         _shell.PropertyChanged += OnShellChanged;
@@ -90,6 +95,9 @@ public sealed class GatewayViewModel : AreaViewModel, IDisposable
 
     public IReadOnlyList<TextRun> HostText { get => _hostText; private set => SetProperty(ref _hostText, value); }
 
+    /// <summary>Start hosting (asks once) and Stop hosting the gateway in this app (U-8).</summary>
+    public HostingToggleViewModel Hosting { get; }
+
     // ---- Notice ----
 
     public IReadOnlyList<TextRun> Notice { get => _notice; private set { if (SetProperty(ref _notice, value)) OnPropertyChanged(nameof(HasNotice)); } }
@@ -117,7 +125,7 @@ public sealed class GatewayViewModel : AreaViewModel, IDisposable
     /// <summary>Esc: closes an open question or allowlist editor. False when there was nothing to close.</summary>
     public bool Close()
     {
-        var closed = false;
+        var closed = Hosting.Close();
         foreach (var request in Requests)
         {
             closed |= request.IsConfirmingOwner;
@@ -136,12 +144,16 @@ public sealed class GatewayViewModel : AreaViewModel, IDisposable
         _disposed = true;
         _service.Changed -= OnServiceChanged;
         _shell.PropertyChanged -= OnShellChanged;
+        Hosting.Changed -= OnHostingChanged;
+        Hosting.Dispose();
         _lease.Release();
     }
 
     // ---- Loading ----
 
     private void OnServiceChanged(object? sender, EventArgs e) => _ = RefreshAsync();
+
+    private void OnHostingChanged(object? sender, EventArgs e) => _ = RefreshAsync();
 
     private async Task RefreshAsync()
     {
@@ -183,13 +195,17 @@ public sealed class GatewayViewModel : AreaViewModel, IDisposable
         Overrides = [.. snapshot.Overrides.Select(chat => new GatewayLine(
             $"{GatewayText.Channel(chat.Adapter)} · {SafeText.Clean(chat.Chat)}",
             $"persona {SafeText.Clean(chat.Persona)} · {SafeText.Clean(chat.Slot)}"))];
-        GuestToolsNote = "A guest can use only the tools on its allowlist, chosen from: " + string.Join(", ", snapshot.GuestTools.Select(SafeText.Clean)) + ".";
+        // L9: a guest's own allowlist replaces their adapter's GuestTools for them; it is not narrowed by it.
+        GuestToolsNote = "A guest can use only the tools on its allowlist, chosen from: " + string.Join(", ", snapshot.GuestTools.Select(SafeText.Clean))
+            + ". A guest given an allowlist of their own gets exactly it, in place of their adapter's GuestTools (it can be wider or narrower).";
         var hostSince = snapshot.Host.Since is { } at ? " since " + JobsText.When(at, now, zone) : "";
         (HostTag, var host) = snapshot.Host switch
         {
             { HostedHere: true } => ("in this app", $"This app hosts the gateway{hostSince}: the adapters run here while it is open, and their messages reach the sessions it runs."),
-            { Nowhere: true } => ("off", $"No process hosts the gateway: {Spans.Escape(SafeText.Clean(snapshot.Host.Reason))} Pairing requests already waiting can still be answered here."),
-            _ => ("elsewhere", $"**{Spans.Escape(SafeText.Clean(snapshot.Host.Holder))}** hosts the gateway{hostSince}; this app shows its state and approves its pairings."),
+            { Nowhere: true } => ("off", $"No process hosts the gateway: {Spans.Escape(SafeText.Clean(snapshot.Host.Reason))} Pairing requests already waiting can still be answered here."
+                + (Hosting.CanHost && !Hosting.IsOn ? " Start hosting runs it in this app." : "")),
+            _ => ("elsewhere", $"**{Spans.Escape(SafeText.Clean(snapshot.Host.Holder))}** hosts the gateway{hostSince}; this app shows its state and approves its pairings."
+                + (Hosting.IsOn ? " This app hosts the gateway as soon as that process lets go." : "")),
         };
         HostText = Spans.Parse(host);
         Subtitle = Spans.Parse(SubtitleText(snapshot));

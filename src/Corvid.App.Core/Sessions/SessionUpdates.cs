@@ -34,6 +34,9 @@ public sealed record UserMessage(string Text) : SessionUpdate
     /// <c>UserSteered</c>, live and on replay).
     /// </summary>
     public bool Steered { get; init; }
+
+    /// <summary>Who wrote it when it is not the person (a gateway guest, security M2): the transcript names them.</summary>
+    public string? From { get; init; }
 }
 
 /// <summary>Streamed answer text (ACP <c>agent_message_chunk</c>): appended to the running turn's answer.</summary>

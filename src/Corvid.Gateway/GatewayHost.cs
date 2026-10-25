@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using Corvid.Abstractions.Events;
+using Corvid.Abstractions.IO;
 using Corvid.Abstractions.Sessions;
 using Corvid.Approvals;
 
@@ -90,22 +91,41 @@ public sealed class GatewayHost : IAsyncDisposable
     /// <summary>Open deliveries, for <c>corvid gateway status</c> and tests.</summary>
     public IReadOnlyList<PendingDelivery> PendingDeliveries => _ledger.Pending;
 
+    /// <summary>How many times the lock is tried before it counts as held: a status probe holds it for an instant.</summary>
+    public const int LockAttempts = 4;
+
+    /// <summary>The wait before the next try of the lock (tests make it deterministic); a few milliseconds by default.</summary>
+    internal Func<int, CancellationToken, Task> LockRetryDelay { get; init; } =
+        (attempt, cancellationToken) => Task.Delay(TimeSpan.FromMilliseconds(15 * attempt), cancellationToken);
+
     /// <summary>
     /// Starts every adapter on its own task and returns without waiting for any of them to connect. Only one gateway may
     /// run against a data directory: a lock beside <c>gateway.db</c> decides, as the scheduler's does beside <c>jobs.db</c>.
+    /// A process probing the status (<c>corvid gateway status</c>, an app's Gateway page) takes the lock for an instant, so a
+    /// refusal for that reason is tried again, <see cref="LockAttempts"/> times, before it counts as another gateway.
     /// </summary>
-    /// <exception cref="InvalidOperationException">Another gateway holds the lock.</exception>
-    public Task StartAsync(CancellationToken cancellationToken = default)
+    /// <exception cref="GatewayLockHeldException">Another gateway holds the lock.</exception>
+    /// <exception cref="IOException">The lock file cannot be opened (a read-only or full file system): not another gateway.</exception>
+    /// <exception cref="UnauthorizedAccessException">The lock file may not be written.</exception>
+    public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         if (_started)
             throw new InvalidOperationException("The gateway is already started.");
-        try
+        for (var attempt = 1; ; attempt++)
         {
-            _lock = new FileStream(_pairing.Path + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-        }
-        catch (IOException exception)
-        {
-            throw new InvalidOperationException("Another corvid gateway is running against this data directory.", exception);
+            try
+            {
+                _lock = new FileStream(_pairing.Path + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+                break;
+            }
+            catch (IOException exception) when (FileLocks.IsHeldElsewhere(exception) && attempt < LockAttempts)
+            {
+                await LockRetryDelay(attempt, cancellationToken).ConfigureAwait(false);
+            }
+            catch (IOException exception) when (FileLocks.IsHeldElsewhere(exception))
+            {
+                throw new GatewayLockHeldException(exception);
+            }
         }
         _started = true;
         var lowWater = long.TryParse(_pairing.GetState(LowWaterKey), NumberStyles.None, CultureInfo.InvariantCulture, out var stored) ? stored : 0;
@@ -114,7 +134,6 @@ public sealed class GatewayHost : IAsyncDisposable
         foreach (var supervisor in _supervisors.Values)
             supervisor.Start();
         _ledgerLoop = Task.Run(LedgerLoopAsync, CancellationToken.None);
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -215,6 +234,12 @@ public sealed class GatewayHost : IAsyncDisposable
                 Answer(message, sessionId, text);
                 return;
             }
+            // Security L2: /sessions lists the titles of every conversation, on every surface: never to a group.
+            if (!message.Direct && IsCommandNamed(text, "sessions"))
+            {
+                Queue(message, "/sessions lists every conversation's title, so it answers only in a direct message with this bot.", "notice");
+                return;
+            }
             // Off the receive loop: /undo waits for a running turn, which may itself wait for an /approve still to come.
             Track(RunCommandAsync(message, sessionId, text));
             return;
@@ -223,13 +248,35 @@ public sealed class GatewayHost : IAsyncDisposable
         // Anyone but the owner gets the adapter's guest tools only (none by default): taint asks before network and sends, but
         // would not stop a read-only file tool showing the owner's workspace to a guest.
         // A paired guest's own allowlist (G-14) replaces the adapter's for them.
+        // Security M2: the guest is named on their message in the log, so the owner's next turn reads it as theirs.
         var reply = await _agent.PostAsync(sessionId, text, role == SenderRole.Owner ? null
-                : new GuestScope(_pairing.GuestTools(message.Adapter, message.SenderId) ?? (IEnumerable<string>)adapter.GuestTools), cancellationToken)
+                : new GuestScope(_pairing.GuestTools(message.Adapter, message.SenderId) ?? (IEnumerable<string>)adapter.GuestTools)
+                {
+                    Sender = GuestName(message),
+                }, cancellationToken)
             .ConfigureAwait(false);
         Track(DeliverAsync(message, sessionId, adapter, reply));
     }
 
-    private static string PairingNotice(PairingRequest request) =>
+    /// <summary>Whether the line is <c>/name</c>, alone or with arguments, or addressed as Telegram does (<c>/name@bot</c>).</summary>
+    internal static bool IsCommandNamed(string text, string name)
+    {
+        var line = text.TrimStart();
+        if (!line.StartsWith('/') || !line.AsSpan(1).StartsWith(name, StringComparison.OrdinalIgnoreCase))
+            return false;
+        var rest = line[(1 + name.Length)..];
+        return rest.Length == 0 || char.IsWhiteSpace(rest[0]) || rest[0] == '@';
+    }
+
+    /// <summary>"telegram guest dana (1001)": one line, no control characters, at most 100 characters (names are the platform's).</summary>
+    internal static string GuestName(InboundMessage message)
+    {
+        var name = $"{message.Adapter} guest " + (message.SenderName is { Length: > 0 } shown ? $"{shown} ({message.SenderId})" : message.SenderId);
+        name = new string([.. name.Where(c => !char.IsControl(c) && c is not ('\u2028' or '\u2029'))]);
+        return name.Length <= 100 ? name : name[..100] + "…";
+    }
+
+        private static string PairingNotice(PairingRequest request) =>
         $"This is a private agent. To talk to it, its owner must approve you: on their machine, " +
         $"`corvid gateway pair approve {PairingStore.Display(request.Code)}`. The code expires at " +
         $"{request.ExpiresAt.UtcDateTime.ToString("HH:mm", CultureInfo.InvariantCulture)} UTC.";
@@ -765,5 +812,31 @@ public sealed class GatewayHost : IAsyncDisposable
                 // Abandoned: nothing waits for it.
             }
         }
+    }
+}
+
+/// <summary>Another gateway holds the lock beside <c>gateway.db</c>: only one gateway runs against a data directory.</summary>
+public sealed class GatewayLockHeldException : InvalidOperationException
+{
+    public const string Text = "Another corvid gateway is running against this data directory.";
+
+    public GatewayLockHeldException()
+        : base(Text)
+    {
+    }
+
+    public GatewayLockHeldException(Exception innerException)
+        : base(Text, innerException)
+    {
+    }
+
+    public GatewayLockHeldException(string message)
+        : base(message)
+    {
+    }
+
+    public GatewayLockHeldException(string message, Exception innerException)
+        : base(message, innerException)
+    {
     }
 }

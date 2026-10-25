@@ -117,8 +117,10 @@ public static class SessionCatalogue
                     turns++;
                     if (user.LocalOnly != true)
                         first ??= user.Text;
-                    // K-6: a message answers the question before it.
-                    question = null;
+                    // K-6: a message answers the question before it; in a gateway chat only the owner's does (security M2:
+                    // a guest's reply is theirs, and the question stays open for the owner).
+                    if (user.From is null)
+                        question = null;
                     break;
                 case ClarificationAsked asked:
                     question = asked;

@@ -193,9 +193,12 @@ public sealed class EngineRewindService : IRewindService, IDisposable
         // The restore runs on the session's actor, so it opens the session (no turn of it can start meanwhile). G-12: a session
         // another process drives is that process's to restore; nothing is changed from here.
         CorvidSession session;
+        // M2: a session this restore opens is let go of once it is done, so a terminal can drive it again.
+        var opened = false;
         try
         {
-            session = runtime.TryGetSession(sessionId, out var open) ? open : runtime.OpenSession(sessionId, EngineSessionService.Surface);
+            opened = !runtime.TryGetSession(sessionId, out var open);
+            session = opened ? runtime.OpenSession(sessionId, EngineSessionService.Surface) : open;
         }
         catch (SessionHeldException exception)
         {
@@ -207,10 +210,21 @@ public sealed class EngineRewindService : IRewindService, IDisposable
         }
         // The kernel rolls back to just before the call (its position minus one): the call's turn keeps its prompt, and only
         // the turns after it leave whole, as the plan says.
-        var plan = session.PlanRollbackTo(checkpointId) ?? throw Missing(sessionId, checkpointId);
-        var firstGone = ledger.TurnAt(plan.Position) + 1;
-        var partial = ledger.TurnAt(entry.CallSequence) == firstGone - 1;
-        var result = await session.RollbackToAsync(checkpointId, Scope(scope), null, cancellationToken).ConfigureAwait(false);
+        RestoreResult? result;
+        int firstGone;
+        bool partial;
+        try
+        {
+            var plan = session.PlanRollbackTo(checkpointId) ?? throw Missing(sessionId, checkpointId);
+            firstGone = ledger.TurnAt(plan.Position) + 1;
+            partial = ledger.TurnAt(entry.CallSequence) == firstGone - 1;
+            result = await session.RollbackToAsync(checkpointId, Scope(scope), null, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (opened)
+                await runtime.ReleaseDriverAsync(sessionId).ConfigureAwait(false);
+        }
         var at = _time.GetUtcNow();
         RestoreOutcome outcome = result is null
             ? new RestoreOutcome(label, at, scope) { Refused = true, Detail = $"{checkpointId} is no longer in the ledger. Nothing was changed." }

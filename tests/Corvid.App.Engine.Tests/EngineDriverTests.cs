@@ -123,6 +123,30 @@ public sealed class EngineDriverTests
     }
 
     [Fact]
+    public async Task AQuietLogIsLookedAtButNotScanned()
+    {
+        // M1: every look reads the log's change marker; the sessions' heads are read only when something was appended.
+        await using var fixture = await EngineFixture.StartAsync(new FakeModels(new FakeGenerator(Reply.Say("One."))));
+        using var sessions = fixture.Sessions();
+        await sessions.ListAsync(Ct);
+        fixture.Time.Advance(EngineSessionService.ListInterval);
+        await sessions.IdleAsync();
+        fixture.Time.Advance(EngineSessionService.ListInterval);
+        await sessions.IdleAsync();
+        Assert.Equal(0, sessions.LogScans);
+
+        await using var other = await OtherProcessAsync(fixture.Host);
+        await other.OpenSession("cli-busy-log").SendAsync("first", Ct);
+        fixture.Time.Advance(EngineSessionService.ListInterval);
+        await sessions.IdleAsync();
+        Assert.Equal(1, sessions.LogScans);
+
+        fixture.Time.Advance(EngineSessionService.ListInterval);
+        await sessions.IdleAsync();
+        Assert.Equal(1, sessions.LogScans);
+    }
+
+    [Fact]
     public async Task ASessionAnotherProcessTakesWhileItIsOpenTurnsReadOnly()
     {
         await using var fixture = await EngineFixture.StartAsync(new FakeModels(new FakeGenerator(Reply.Say("One."), Reply.Say("Two."))));

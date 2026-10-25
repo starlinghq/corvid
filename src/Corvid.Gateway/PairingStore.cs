@@ -317,7 +317,8 @@ public sealed class PairingStore
             transaction.Commit();
             return true;
         }
-        if (!HasGuestTools(command))
+        var upgrading = !HasGuestTools(command);
+        if (upgrading)
         {
             command.CommandText = GuestToolsSchema;
             command.ExecuteNonQuery();
@@ -327,8 +328,15 @@ public sealed class PairingStore
         command.Parameters.AddWithValue("$tools", string.Join('\n', tools.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)));
         command.ExecuteNonQuery();
         transaction.Commit();
+        UpgradedSchema |= upgrading;
         return true;
     }
+
+    /// <summary>
+    /// This store moved <c>gateway.db</c> to schema 2 (the first per-guest allowlist): one way, as a corvid older than A4
+    /// refuses a schema it does not know. A surface says so.
+    /// </summary>
+    public bool UpgradedSchema { get; private set; }
 
     private static bool HasGuestTools(SqliteCommand command)
     {
