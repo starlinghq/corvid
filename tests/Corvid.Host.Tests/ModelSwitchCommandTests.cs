@@ -97,6 +97,21 @@ public sealed class ModelSwitchCommandTests
     }
 
     [Fact]
+    public async Task StatusAndTheDeciderListSayThisSessionsDecider()
+    {
+        var (host, runtime, session, commands) = await StartAsync();
+        await using (host)
+        await using (runtime)
+        {
+            Assert.Contains((await Run(runtime, session, commands, "/status")).Lines, line => line == $"decider: {runtime.DeciderState}");
+            Assert.Equal(OutputTone.Success, (await Run(runtime, session, commands, "/model decider fake-kev")).Tone);
+            var status = await Run(runtime, session, commands, "/status");
+            Assert.Contains(status.Lines, line => line.StartsWith("decider: fake-kev", StringComparison.Ordinal) && line.Contains("for this session", StringComparison.Ordinal));
+            Assert.Contains((await Run(runtime, session, commands, "/model decider")).Lines, line => line.Contains("for this session", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
     public async Task TheSharedDefaultWriteRefusesWithoutWriting()
     {
         await using var host = TestHost.Create();

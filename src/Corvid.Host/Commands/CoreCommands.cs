@@ -174,6 +174,19 @@ public static class CoreCommands
             : CommandOutput.Success($"{slot}: this session's choice is forgotten; it returns to the default, {result.To?.Id ?? "none"}, when the slot moves back.");
     }
 
+    /// <summary>
+    /// A5: the decider this session's checkpoints run on (per session now): the runtime's state when it is the shared one,
+    /// else the session's own with the default for new sessions beside it.
+    /// </summary>
+    private static string SessionDecider(SlashCommandContext context)
+    {
+        var deciders = context.Runtime.Deciders;
+        if (ReferenceEquals(deciders.For(context.Session.Slots), deciders.Shared))
+            return context.Runtime.DeciderState;
+        var name = deciders.DeciderName(context.Session.Slots) is { } named ? TerminalText.Visible(named) : "degraded tier";
+        return $"{name} for this session (new sessions: {context.Runtime.DeciderState})";
+    }
+
     private static bool IsPickNumber(string argument) => argument.Length is > 0 and < 4 && argument.All(char.IsAsciiDigit);
 
     /// <summary>The model a number names in a slot's list. The list is ordered by name, so the numbers are stable.</summary>
@@ -228,7 +241,7 @@ public static class CoreCommands
             .OfType<string>();
         var prefix = slot == ModelSlots.Generator ? "/model" : $"/model {slot}";
         string[] lines = models.Count == 0 ? [$"No model can serve {slot}."]
-            : slot == ModelSlots.Decider ? [$"decider: {runtime.DeciderState}.",
+            : slot == ModelSlots.Decider ? [$"decider: {SessionDecider(context)}.",
                 $"Switch this session's decider with {prefix} <number> or {prefix} <name>; add --default for new sessions instead. /model reset {slot} forgets this session's choice."]
             : [$"Switch this session with {prefix} <number> or {prefix} <name> (it lasts until you change it); add --pin to keep it past escalation. " +
                 $"Add --default to make it the default for new sessions instead; /model reset {slot} forgets this session's choice."];
@@ -282,7 +295,7 @@ public static class CoreCommands
                 (session.Tainted ? ", tainted by outside content" : ""),
                 $"goal: {snapshot.Goal ?? "none"}",
                 $"project: {(runtime.Project is { } project ? $"{project.Id[..12]} ({project.Source})" : "none (lessons off)")}",
-                $"decider: {runtime.DeciderState}",
+                $"decider: {SessionDecider(context)}",
                 $"scheduler: {runtime.SchedulerState}",
                 $"skills: {(runtime.Skills.Store is { } skills ? $"{skills.Skills.Count} in {skills.Root}" : runtime.Skills.State)}" +
                 (runtime.Skills.Database?.Pending() is { Count: > 0 } drafts ? $", {drafts.Count} draft(s) to review" : ""),

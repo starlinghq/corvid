@@ -324,7 +324,8 @@ internal sealed class ChatRenderer : ITurnObserver
     public static string? ModelNotice(Corvid.Host.Sessions.ModelChanged change)
     {
         ArgumentNullException.ThrowIfNull(change);
-        if (change.Sequence is null || change.From == change.To)
+        // A choice the person changed (a reset) is said by its command's reply.
+        if (change.Sequence is null || change.From == change.To || change.SessionDefault)
             return null;
         var what = change.Reason switch
         {
