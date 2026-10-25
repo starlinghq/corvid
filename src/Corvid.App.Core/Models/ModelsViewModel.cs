@@ -421,9 +421,25 @@ public sealed class ModelsViewModel : AreaViewModel
 
     private async Task SwitchAsync(string slot, string model, bool forSession)
     {
-        var answer = forSession
-            ? await _service.SwitchSessionAsync(slot, model).ConfigureAwait(true)
-            : await _service.SwitchAsync(slot, model).ConfigureAwait(true);
+        // A local model loads before the switch is made (Kev-4B takes seconds on the CPU): until then the open session is on
+        // the old one, so the picker says so rather than looking as if the click did nothing.
+        var hint = SwitchHint;
+        var pending = forSession
+            ? $"Switching this session's {slot} to {SafeText.Clean(model)}… A model that is not loaded yet loads first; until then the session stays on {SafeText.Clean(_service.Snapshot.Slot(slot)?.SessionModel ?? _service.Snapshot.Slot(slot)?.Model ?? "its current model")}."
+            : $"Writing {SafeText.Clean(model)} as the {slot} for new sessions…";
+        SwitchHint = pending;
+        ConfigWrite answer;
+        try
+        {
+            answer = forSession
+                ? await _service.SwitchSessionAsync(slot, model).ConfigureAwait(true)
+                : await _service.SwitchAsync(slot, model).ConfigureAwait(true);
+        }
+        finally
+        {
+            if (SwitchHint == pending)
+                SwitchHint = hint;
+        }
         if (answer.Written)
             ClosePicker();
         Report(answer);

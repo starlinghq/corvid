@@ -571,6 +571,72 @@ public sealed class ModelsTests
             Task.FromException<ConfigWrite>(new IOException("the store is read-only"));
     }
 
+    /// <summary>The demo store, with "This session" switches held until the test lets them go, as a model loading would.</summary>
+    private sealed class HeldSwitchService(DemoModelService inner) : IModelService
+    {
+        // Continuations run inline, so the page has taken the answer when SetResult returns.
+        public TaskCompletionSource Release { get; } = new();
+
+        public event EventHandler? Changed { add => inner.Changed += value; remove => inner.Changed -= value; }
+
+        public ModelsSnapshot Snapshot => inner.Snapshot;
+
+        public Task<ModelsSnapshot> LoadAsync(CancellationToken cancellationToken = default) => inner.LoadAsync(cancellationToken);
+
+        public Task<ConfigWrite> SetLadderAsync(string slot, IReadOnlyList<string> ladder, CancellationToken cancellationToken = default) =>
+            inner.SetLadderAsync(slot, ladder, cancellationToken);
+
+        public Task<ConfigWrite> SwitchAsync(string slot, string model, CancellationToken cancellationToken = default) =>
+            inner.SwitchAsync(slot, model, cancellationToken);
+
+        public async Task<ConfigWrite> SwitchSessionAsync(string slot, string model, CancellationToken cancellationToken = default)
+        {
+            await Release.Task;
+            return await inner.SwitchSessionAsync(slot, model, cancellationToken);
+        }
+
+        public Task<ConfigWrite> SetPinnedAsync(string slot, bool pinned, CancellationToken cancellationToken = default) =>
+            inner.SetPinnedAsync(slot, pinned, cancellationToken);
+
+        public Task<ConfigWrite> SetPlacementAsync(string model, string device, CancellationToken cancellationToken = default) =>
+            inner.SetPlacementAsync(model, device, cancellationToken);
+
+        public Task DownloadAsync(IEnumerable<string> models, CancellationToken cancellationToken = default) =>
+            inner.DownloadAsync(models, cancellationToken);
+
+        public Task CancelDownloadAsync(string model, CancellationToken cancellationToken = default) =>
+            inner.CancelDownloadAsync(model, cancellationToken);
+
+        public Task<ServerCheck> CheckServerAsync(string model, CancellationToken cancellationToken = default) =>
+            inner.CheckServerAsync(model, cancellationToken);
+
+        public Task<ConfigWrite> AddServerAsync(string name, string url, CancellationToken cancellationToken = default) =>
+            inner.AddServerAsync(name, url, cancellationToken);
+    }
+
+    [Fact]
+    public void AThisSessionSwitchStillLoadingSaysSoInThePicker()
+    {
+        var (demo, _) = Demo();
+        var service = new HeldSwitchService(demo);
+        var models = ViewModel(service);
+        models.SwitchGeneratorCommand.Execute(null);
+        var hint = models.SwitchHint;
+
+        models.SwitchChoices[1].Choose.Execute(null);
+
+        // Held (the model loading): the picker stays open and says the session is still on its old model.
+        Assert.True(models.IsSwitchOpen);
+        Assert.StartsWith("Switching this session's generator to qwen-27b…", models.SwitchHint, StringComparison.Ordinal);
+        Assert.Contains("stays on qwen3.5-0.8b", models.SwitchHint, StringComparison.Ordinal);
+
+        service.Release.SetResult();
+
+        Assert.False(models.IsPickerOpen);
+        Assert.Equal(hint, models.SwitchHint);
+        Assert.Equal("default · this session: qwen-27b", models.Slots[0].CurrentNote);
+    }
+
     [Fact]
     public void SpansReadCodeBoldAndMutedMarks()
     {
