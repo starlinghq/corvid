@@ -51,6 +51,10 @@ public sealed class JobsHostingTests
             await chat.DisposeAsync();
         }
 
+        // The next look finds the holder gone: this app takes the scheduler over, and the page hears of it.
+        time.Advance(EngineJobsService.ElsewhereInterval);
+        await service.IdleAsync();
+        Assert.Equal("running in this process", app.SchedulerState);
         var here = (await service.LoadAsync(Token)).Scheduler;
         Assert.Equal(SchedulerHost.Here, here.Host);
         Assert.Equal("running in this process", app.SchedulerState);

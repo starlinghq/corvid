@@ -268,7 +268,8 @@ public sealed class EngineJobsService : IJobsService, IDisposable
 
     /// <summary>
     /// While another process runs the scheduler, looks at the store every <see cref="ElsewhereInterval"/> and raises
-    /// <see cref="Changed"/> when its jobs or their latest runs differ; stops once this app runs it or it is off.
+    /// <see cref="Changed"/> when its jobs, their latest runs or the scheduler's holder differ, taking the scheduler over
+    /// once that process has exited; stops once this app runs it or it is off.
     /// </summary>
     private void Watch(CorvidRuntime runtime, JobsSnapshot snapshot)
     {
@@ -278,7 +279,7 @@ public sealed class EngineJobsService : IJobsService, IDisposable
         {
             if (_disposed)
                 return;
-            _seen = Fingerprint(snapshot.Jobs);
+            _seen = Fingerprint(snapshot.Jobs) + "\n" + snapshot.Scheduler;
             if (elsewhere && _elsewhere is null)
                 _elsewhere = _time.CreateTimer(_ => Look(runtime), null, ElsewhereInterval, ElsewhereInterval);
             else if (!elsewhere)
@@ -296,8 +297,12 @@ public sealed class EngineJobsService : IJobsService, IDisposable
             try
             {
                 var store = runtime.Builtin.Jobs;
+                // The holder exited: take the scheduler over now, as a load would, rather than at the next session open.
+                if (runtime.SchedulerState == ElsewhereState)
+                    runtime.WakeScheduler();
                 var now = Fingerprint([.. store.List(includeFinished: true).Where(job => job.State != KernelJobState.Removed)
-                    .OrderByDescending(job => job.CreatedAt).Take(MaxJobs).Select(job => Record(job, store.Runs(job.JobId, 1) is [var last] ? last : null))]);
+                    .OrderByDescending(job => job.CreatedAt).Take(MaxJobs).Select(job => Record(job, store.Runs(job.JobId, 1) is [var last] ? last : null))])
+                    + "\n" + Scheduler(runtime.SchedulerState, runtime.SchedulerHolder);
                 var changed = false;
                 lock (_gate)
                 {
