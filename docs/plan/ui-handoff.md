@@ -424,8 +424,8 @@ Decisions taken while merging:
 - The models pill measured itself to decide whether it fits. Once it had given way (`MaxWidth` 0) it measured 0 wide and
   came back, a layout cycle whenever the title's room was near the line: at 1440 with the dock open the composer stopped
   showing typed text. It now measures its text.
-- ACP's `available_commands` still leave out `/agents`, `/delegate` and `/fork`. A re-record (`CORVID_RECORD_ACP=1`)
-  after every merge produced no diff.
+- ACP's `available_commands` still leave out `/agents`, `/delegate` and `/fork`. Re-recording (`CORVID_RECORD_ACP=1`) after the
+  leftovers merge and again at the end produced no diff.
 
 The integrator ran the merged app once on the engine and once with `--demo`, in a temporary home with two scripted
 OpenAI-compatible servers. On the engine: a spawn's approval card showed the child's goal, tools, budget and models; the
