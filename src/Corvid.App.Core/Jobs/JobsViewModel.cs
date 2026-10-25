@@ -59,7 +59,9 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
     /// <summary>Each destination's choice with the destination as the snapshot gave it: a choice is matched by that, not its cleaned label.</summary>
     private IReadOnlyList<(string Raw, Choice Choice)> _destinationChoices = [];
 
-    public JobsViewModel(IJobsService service, ShellViewModel shell, StatusBarViewModel statusBar, TimeProvider time)
+    /// <param name="hosting">Start and Stop hosting (U-8); none, and the page shows no control.</param>
+    public JobsViewModel(IJobsService service, ShellViewModel shell, StatusBarViewModel statusBar, TimeProvider time,
+        IHostingService? hosting = null)
         : base(Area.Jobs, "Scheduled jobs with their next run and history, and the scheduler's state.")
     {
         ArgumentNullException.ThrowIfNull(service);
@@ -80,6 +82,7 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
         CancelNewCommand = new RelayCommand(CloseForm);
         CreateCommand = new AsyncRelayCommand(CreateAsync, CanCreate);
         DismissNoticeCommand = new RelayCommand(() => Say(true, ""));
+        Hosting = new HostingToggleViewModel(hosting ?? new NoHostingService("This window does not host the scheduler."), HostedPart.Scheduler, Say);
         foreach (var command in new[] { PauseCommand, ResumeCommand, RemoveCommand, CreateCommand })
             ReportFailures(command);
 
@@ -195,6 +198,9 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
 
     public IReadOnlyList<TextRun> SchedulerText { get => _schedulerText; private set => SetProperty(ref _schedulerText, value); }
 
+    /// <summary>Start hosting (asks once) and Stop hosting the scheduler in this app (U-8).</summary>
+    public HostingToggleViewModel Hosting { get; }
+
     // ---- The create form ----
 
     public bool IsCreating { get => _creating; private set => SetProperty(ref _creating, value); }
@@ -279,6 +285,8 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
     /// <summary>Esc: closes the remove question, then the form. False when there was nothing to close.</summary>
     public bool Close()
     {
+        if (Hosting.Close())
+            return true;
         if (IsConfirmingRemove)
         {
             IsConfirmingRemove = false;
@@ -301,6 +309,7 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
         _disposed = true;
         _service.Changed -= OnServiceChanged;
         _shell.PropertyChanged -= OnShellChanged;
+        Hosting.Dispose();
         _lease.Release();
     }
 
@@ -477,13 +486,14 @@ public sealed class JobsViewModel : AreaViewModel, IDisposable
                 + "that runs the scheduler (`corvid serve`) takes over within its poll interval."),
             SchedulerHost.Elsewhere => ("held elsewhere", Tone.Amber,
                 $"**{Spans.Escape(SafeText.Clean(status.Holder))}** holds the scheduler's lock{since}, so jobs run there, not here. "
-                + "Pause, resume and remove still work: it picks the change up within its poll interval."),
+                + "Pause, resume and remove still work: it picks the change up within its poll interval."
+                + (Hosting.IsOn ? " This app hosts the scheduler as soon as that process lets go." : "")),
             // The engine knows only its own process: it says why it does not run the scheduler, not whether another does.
             _ when status.Holder.Length > 0 => ("off here", Tone.Grey,
                 $"{Spans.Escape(SafeText.Clean(status.Holder))}. Jobs run only in a process that runs the scheduler (`corvid serve`, "
-                + "or this app with Corvid:Scheduler:Enabled)."),
+                + "or this app with Start hosting)."),
             _ => ("off", Tone.Grey,
-                "No process runs the scheduler, so no job runs. Start `corvid serve`, or let this app run it from Settings."),
+                "No process runs the scheduler, so no job runs. Start `corvid serve`, or Start hosting runs it in this app."),
         };
         SchedulerText = Spans.Parse(text);
     }

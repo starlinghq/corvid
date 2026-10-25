@@ -382,6 +382,11 @@ public sealed class EngineJobsService : IJobsService, IDisposable
         "running in this process" => new SchedulerStatus(SchedulerHost.Here, "this app", holder?.Since),
         ElsewhereState => new SchedulerStatus(SchedulerHost.Elsewhere, (holder?.ToString() ?? "another corvid process") + " (it holds jobs.db.lock)",
             holder?.Since),
+        // U-8: the app does not host the scheduler; who does, if anyone, is the lock's.
+        CorvidRuntime.SchedulerNotHosted when holder is not null => new SchedulerStatus(SchedulerHost.Elsewhere,
+            holder + " (it holds jobs.db.lock)", holder.Since),
+        CorvidRuntime.SchedulerNotHosted => new SchedulerStatus(SchedulerHost.Off,
+            "This app does not host the scheduler (Corvid:App:HostScheduler is off), and no other process holds jobs.db.lock"),
         _ when state.StartsWith("off: ", StringComparison.Ordinal) =>
             new SchedulerStatus(SchedulerHost.Off, "This app cannot run the scheduler: " + state["off: ".Length..]),
         _ => new SchedulerStatus(SchedulerHost.Off, "This app does not run the scheduler: Corvid:Scheduler:Enabled is off"),

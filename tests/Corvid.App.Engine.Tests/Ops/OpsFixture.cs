@@ -17,16 +17,18 @@ internal sealed class OpsFixture : IAsyncDisposable
     {
         Host = host;
         Runtime = runtime;
-        Engine = AppEngine.ForRuntime(host.Host, runtime, hostGateway: hostGateway);
+        // The engine's take-over timer (U-8) runs on the fixture's manual clock: it fires only when a test advances it.
+        Engine = AppEngine.ForRuntime(host.Host, runtime, hostGateway: hostGateway, time: Time);
     }
 
     public TestHost Host { get; }
+
+    public ManualTimeProvider Time { get; } = ManualTimeProvider.Demo();
 
     public CorvidRuntime Runtime { get; }
 
     public AppEngine Engine { get; }
 
-    public ManualTimeProvider Time { get; } = ManualTimeProvider.Demo();
 
     /// <param name="before">Runs on the built host before its runtime starts: state an earlier start left (MCP pins).</param>
     /// <param name="hostGateway">The engine hosts the gateway (G-14), with the adapters <paramref name="services"/> registers.</param>

@@ -44,6 +44,9 @@ public sealed class EngineSettingsTests
             ["Approvals:TimeoutSeconds"] = SettingApplies.Now,
             ["Turn:MaxSteps"] = SettingApplies.NewSessions,
             ["Turn:MaxOutputTokens"] = SettingApplies.NewSessions,
+            // U-8: the app starts or stops hosting at once.
+            ["App:HostGateway"] = SettingApplies.Now,
+            ["App:HostScheduler"] = SettingApplies.Now,
         };
         Assert.All(service.Definitions.Where(definition => definition.Store == SettingStore.CorvidJson),
             definition => Assert.Equal(live.GetValueOrDefault(definition.Key, SettingApplies.Restart), definition.Applies));
@@ -155,6 +158,27 @@ public sealed class EngineSettingsTests
         Assert.Equal(TimeSpan.FromSeconds(45), fixture.Runtime.Approvals.Options.Timeout);
         Assert.Equal(Corvid.Approvals.ApprovalMode.Smart, open.ApprovalMode);
         Assert.Equal(Corvid.Approvals.ApprovalMode.Manual, fixture.Runtime.OpenSession(surface: "app").ApprovalMode);
+    }
+
+    [Fact]
+    public async Task TheHostingSettingsStartAndStopHostingAtOnce()
+    {
+        await using var fixture = await EngineFixture.StartAsync();
+        var service = new EngineSettingsService(fixture.Engine);
+        Assert.False(fixture.Engine.HostsGateway);
+        Assert.Equal("false", (await service.LoadAsync(Token)).Values["App:HostGateway"]);
+
+        var write = await service.SaveAsync(new Dictionary<string, string> { ["App:HostGateway"] = "true" }, Token);
+
+        Assert.True(write.Written, write.Message);
+        Assert.Contains("host the gateway in this app (started)", write.Message, StringComparison.Ordinal);
+        Assert.Empty(write.RestartKeys);
+        Assert.True(fixture.Engine.HostsGateway);
+        Assert.Equal("true", (await service.LoadAsync(Token)).Values["App:HostGateway"]);
+
+        write = await service.SaveAsync(new Dictionary<string, string> { ["App:HostGateway"] = "false" }, Token);
+        Assert.Contains("host the gateway in this app (stopped)", write.Message, StringComparison.Ordinal);
+        Assert.False(fixture.Engine.HostsGateway);
     }
 
     [Fact]

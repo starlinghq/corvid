@@ -44,7 +44,7 @@ public sealed class GatewayServiceTests
 
         var snapshot = await service.LoadAsync(Token);
 
-        Assert.Equal(new GatewayHost(false, "", null) { Reason = "No gateway is running." }, snapshot.Host);
+        Assert.Equal(new GatewayHost(false, "", null) { Reason = "This app does not host it (Corvid:App:HostGateway is off)." }, snapshot.Host);
         Assert.True(snapshot.Host.Nowhere);
         Assert.Equal(["discord", "slack", "telegram"], snapshot.Adapters.Select(adapter => adapter.Name));
         var telegram = snapshot.Adapters.Single(adapter => adapter.Name == "telegram");

@@ -52,6 +52,7 @@ public sealed partial class AppComposition : IDisposable
         // same whichever page opens first, not DemoShell's placeholder until MCP, Gateway or the Board is visited.
         _ = BoardService;
         _ = SkillsService; // counts the waiting drafts for the rail's Skills badge before the page is visited
+        _ = HostingService; // the status bar says so whenever this app hosts the gateway or the scheduler (U-8)
         Shell.Navigate(options.Page ?? Area.Sessions);
         // G-7: the layout the person chose, from ui.db.
         if (!options.Demo && Services.GetType() != typeof(UnavailableAppServices))
@@ -90,6 +91,7 @@ public sealed partial class AppComposition : IDisposable
         _jobs?.Dispose();
         _mcp?.Dispose();
         _gateway?.Dispose();
+        DisposeHosting();
         (_mcpService as IDisposable)?.Dispose();
         (_gatewayService as IDisposable)?.Dispose();
         SessionHub.Dispose();

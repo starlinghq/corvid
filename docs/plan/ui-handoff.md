@@ -279,6 +279,13 @@ test project after each merge:
   another process drives is followed read-only, its turns tailed from the log. G-14: the app hosts the gateway under the
   same one-lock rule as `corvid gateway`, with a per-person guest allowlist (`gateway.db` schema 2 on the first one) and
   `corvid gateway pair tools`; the Jobs page takes the scheduler over when its holder exits.
+  After the A4 review (security M1, the user's decision) hosting is opt-in: the app hosts neither the gateway nor the
+  scheduler unless `Corvid:App:HostGateway` or `Corvid:App:HostScheduler` is on (Settings › Hosting) or Start hosting on
+  the Gateway or Jobs page was answered (it asks once, naming what hosting does: the enabled adapters connect with their
+  Vault tokens; scheduled jobs run with their tools; it is remembered through the config writer). Stop hosting stops it
+  and releases the lock. While asked for and held elsewhere, the engine's own timer (`AppEngine.TakeOverInterval`, 10 s)
+  takes it over once the holder exits, with no page open (review M3). The status bar's "hosting" item, and the Gateway
+  and Jobs status lines, say whenever this app hosts either.
 - **Parity (`a4/parity`).** Replay carries each turn's generator, the checkpoints' decisions, taint and compaction
   markers; an interrupted turn replays as interrupted. The approval mode, approval deadline, steps and output tokens
   apply live from Settings. First run and Models start the runtime after their downloads without a restart. The A3

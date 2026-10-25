@@ -357,7 +357,7 @@ by side; for MCP tools the server's trust; the deadline as a countdown (five min
 - **Gateway**: adapters (Telegram, Discord, Slack) with state and since when; pairing requests in the attention tray,
   approved as owner or guest on this machine and never from a chat; paired users and revoke; deliveries waiting;
   per-chat persona and slot overrides; the guest tool allowlist, empty by default. The app can host the gateway when it
-  is the engine (U-8).
+  is the engine and the person asks (U-8: off by default).
 - **MCP**: servers with transport, state and trust; tools with pinned hash and held reason (new, changed, flagged with
   the matched text, injection); a diff of a held definition; accept, allow (a flagged tool then always asks), forget; an
   add-server form; `corvid mcp serve` with what it exposes.
@@ -655,7 +655,7 @@ subagent views, worktrees per session, images, voice. G-1, G-4, G-15, K-8.
 | U-5 | Markdown through native text blocks or a WebView | native blocks |
 | U-6 | Secret entry through a separate Vault helper process | yes; a terminal hand-off until it exists |
 | U-7 | The app's name and binary | the window is "Corvid"; the binary `corvid-app`, installed by `install.sh --app` |
-| U-8 | Whether the app hosts the scheduler and the gateway when it is the engine | yes, under the existing one-lock rule |
+| U-8 | Whether the app hosts the scheduler and the gateway when it is the engine | only when the person asks: off by default (`Corvid:App:HostGateway`, `Corvid:App:HostScheduler`, or Start hosting on the Gateway and Jobs pages, which asks once and names what it does), then under the existing one-lock rule, taken over on the engine's own timer while another process holds the lock; the status bar says so whenever the app hosts either |
 | U-9 | Linux packaging | tarball and `.desktop` through `install.sh`; Flatpak later, once bubblewrap inside a Flatpak sandbox is understood |
 | U-10 | When the mobile heads start | after the WebAssembly client has served a phone for a release |
 | U-11 | A tab strip for sessions, and shared theme and keybinding files with the TUI | no tab strip in v1; shared files |

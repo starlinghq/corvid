@@ -88,13 +88,24 @@ public sealed class CorvidRuntimeFactory(
     /// <param name="progress">Told each stage as it begins and ends (each model load is one), mostly from a pool thread.</param>
     /// <param name="cancellationToken">Cancels the start.</param>
     /// <exception cref="ModelsUnavailableException">A configured model is not usable offline; nothing was loaded.</exception>
-    public async Task<CorvidRuntime> StartAsync(IProgress<StartupStep>? progress, CancellationToken cancellationToken = default)
+    public Task<CorvidRuntime> StartAsync(IProgress<StartupStep>? progress, CancellationToken cancellationToken = default) =>
+        StartAsync(progress, hostScheduler: true, cancellationToken);
+
+    /// <param name="progress">Told each stage as it begins and ends (each model load is one), mostly from a pool thread.</param>
+    /// <param name="hostScheduler">
+    /// Whether the runtime runs due jobs from the start (<c>Corvid:Scheduler:Enabled</c> permitting): every CLI surface does;
+    /// the windowed app does only when asked (U-8, <c>Corvid:App:HostScheduler</c>), and later through
+    /// <see cref="CorvidRuntime.StartScheduler"/>.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the start.</param>
+    /// <exception cref="ModelsUnavailableException">A configured model is not usable offline; nothing was loaded.</exception>
+    public async Task<CorvidRuntime> StartAsync(IProgress<StartupStep>? progress, bool hostScheduler, CancellationToken cancellationToken = default)
     {
         var (required, optional) = StartupStep.Run(progress, "Checking the model cache", Check);
         if (required.Count > 0)
             throw new ModelsUnavailableException([.. required]);
         // Loading reads models from disk synchronously (seconds for Qwen); keep it off the caller's thread.
-        return await Task.Run(() => Build(optional, progress), cancellationToken).ConfigureAwait(false);
+        return await Task.Run(() => Build(optional, progress, hostScheduler), cancellationToken).ConfigureAwait(false);
     }
 
     private (IReadOnlyList<ModelAvailability> Required, IReadOnlyList<ModelAvailability> Optional) Check()
@@ -106,7 +117,7 @@ public sealed class CorvidRuntimeFactory(
         return ([.. unready.Except(optional)], optional);
     }
 
-    private CorvidRuntime Build(IReadOnlyList<ModelAvailability> unavailable, IProgress<StartupStep>? progress)
+    private CorvidRuntime Build(IReadOnlyList<ModelAvailability> unavailable, IProgress<StartupStep>? progress, bool hostScheduler)
     {
         var settings = options.Value;
         var devices = new DeviceSchedulers(settings.Devices.CpuThreads);
@@ -235,7 +246,7 @@ public sealed class CorvidRuntimeFactory(
             }, untitled);
 
             return new CorvidRuntime(settings, catalogue, composer, devices, metrics, feed, log, registry, fabric, approvals, prompters,
-                toolRegistry, memory, counter, builtin, checkpoints, skills, mcp)
+                toolRegistry, memory, counter, builtin, checkpoints, skills, mcp, hostScheduler)
             {
                 UnavailableModels = [.. unavailable],
                 Project = project,

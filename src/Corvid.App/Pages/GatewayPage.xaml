@@ -314,6 +314,22 @@
                 </Border>
                 <StackPanel Padding="14,12" Spacing="8">
                   <TextBlock local:SpanText.Runs="{x:Bind ViewModel.HostText, Mode=OneWay}" Style="{StaticResource PanelText}" />
+                  <!-- U-8: Start hosting asks once, naming what it does; Stop hosting stops at once and releases the lock. -->
+                  <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" HorizontalAlignment="Left" Content="{x:Bind ViewModel.Hosting.StartLabel}"
+                                         Command="{x:Bind ViewModel.Hosting.AskCommand}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.Hosting.ShowStart), Mode=OneWay}"
+                                         AutomationProperties.HelpText="Asks first, saying what hosting does" />
+                  <controls:ToneRow Tone="Amber" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.Hosting.IsAsking), Mode=OneWay}">
+                    <StackPanel Spacing="8">
+                      <TextBlock Text="{x:Bind ViewModel.Hosting.Question}" TextWrapping="Wrap" LineHeight="18.125" LineStackingStrategy="BlockLineHeight" />
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Primary" Content="Start hosting" Command="{x:Bind ViewModel.Hosting.StartCommand}" />
+                        <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Content="Cancel" Command="{x:Bind ViewModel.Hosting.CancelCommand}" />
+                      </StackPanel>
+                    </StackPanel>
+                  </controls:ToneRow>
+                  <controls:CorvidButton Style="{StaticResource CorvidSmallButton}" HorizontalAlignment="Left" Content="{x:Bind ViewModel.Hosting.StopLabel}"
+                                         Command="{x:Bind ViewModel.Hosting.StopCommand}" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.Hosting.ShowStop), Mode=OneWay}"
+                                         AutomationProperties.HelpText="Stops it in this app and releases its lock" />
                   <TextBlock Text="Pairing is approved on this machine only; a chat can never pair itself or anyone else." Style="{StaticResource PanelSmall}" />
                 </StackPanel>
               </StackPanel>

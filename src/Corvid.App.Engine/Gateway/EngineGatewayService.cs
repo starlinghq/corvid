@@ -24,11 +24,11 @@ namespace Corvid.App.Engine.Gateway;
 /// <see cref="PairingStore.Revoke"/>, as <c>corvid gateway pair</c> does. A gateway in another process reads the store on
 /// each message, so what is decided here applies there at once.
 /// <para>
-/// G-14: the engine hosts the gateway (<see cref="AppEngine.GatewayAsync"/>, under the one-lock rule shared with
-/// <c>corvid gateway</c>), so the page shows where it runs from the host's status API: here, with each adapter's live state
-/// and since when; in another process, named from its lock's note, whose adapters' state is that process's
-/// (<see cref="AdapterState.Unknown"/>); or nowhere, with why. A load that finds the lock free again (the other process
-/// exited) takes the gateway over. The gateway's notices (an adapter connecting or failing, a pairing request) raise
+/// G-14: the engine can host the gateway (<see cref="AppEngine.GatewayAsync"/>, under the one-lock rule shared with
+/// <c>corvid gateway</c>), only when the person asked (U-8: off by default), so the page shows where it runs from the host's
+/// status API: here, with each adapter's live state and since when; in another process, named from its lock's note, whose
+/// adapters' state is that process's (<see cref="AdapterState.Unknown"/>); or nowhere, with why. While asked for, a load
+/// that finds the lock free again (the other process exited) takes the gateway over, as the engine's timer does. The gateway's notices (an adapter connecting or failing, a pairing request) raise
 /// <see cref="Changed"/>.
 /// </para>
 /// </summary>
@@ -112,9 +112,10 @@ public sealed class EngineGatewayService : IGatewayService, IDisposable
     {
         var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
         var gateway = await _engine.GatewayAsync().ConfigureAwait(false);
-        // Another process ran it and has exited: this app takes it over (the one-lock rule decides, as at start).
+        // Asked to host it (U-8) and another process ran it and has exited: this app takes it over now (the one-lock rule
+        // decides, as at start), as the engine's own timer would within its interval. Never when the app is not asked to.
         // Off the caller's thread (the UI's): the probe touches the lock file, and starting composes the gateway.
-        if (gateway is { Status.Hosting: GatewayHosting.Elsewhere })
+        if (_engine.HostsGateway && gateway is { Status.Hosting: GatewayHosting.Elsewhere })
             await Task.Run(async () =>
             {
                 if (ProcessLock.Probe(GatewayStatus.LockPath(runtime.Options), withoutNote: true).State == LockState.Free)
@@ -123,14 +124,29 @@ public sealed class EngineGatewayService : IGatewayService, IDisposable
         return await Task.Run(() =>
         {
             var options = runtime.Options;
-            // An engine that hosts nothing (a test's) reads the lock as another process would.
-            var status = gateway?.Status ?? GatewayStatus.Probe(options);
+            var status = Status(gateway, options, _engine.HostsGateway);
             var store = Store(runtime);
             var requests = store?.Pending().Select(Request).ToList() ?? [];
             var users = Users(options, store);
             return new GatewaySnapshot(Host(status), Adapters(options, status), requests, users, Deliveries(runtime.Log, status),
                 Overrides(options), GuestTools(options, runtime.Tools.List()));
         }, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Where the gateway runs: here, with the live state; else in the process whose lock the probe finds (whether or not this
+    /// app is asked to host it); else nowhere, with why (this app's refusal when asked, or that it is not asked).
+    /// </summary>
+    internal static GatewayStatus Status(HostedGateway? gateway, CorvidOptions options, bool hosting)
+    {
+        if (gateway is { Status: { Hosting: GatewayHosting.Here } here })
+            return here;
+        var probe = GatewayStatus.Probe(options);
+        if (probe.Hosting == GatewayHosting.Elsewhere)
+            return probe;
+        return hosting && gateway is not null
+            ? gateway.Status
+            : new GatewayStatus(GatewayHosting.Off, "This app does not host it (Corvid:App:HostGateway is off).");
     }
 
     /// <summary>Where the gateway runs, for the page's line: this app since it took the lock, the process the note names, or nobody and why.</summary>

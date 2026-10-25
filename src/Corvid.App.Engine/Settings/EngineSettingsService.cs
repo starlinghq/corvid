@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text.Json.Nodes;
 using Corvid.App.Core;
 using Corvid.App.Core.Settings;
+using Corvid.App.Core.Shell;
 using Corvid.Host.Composition;
 using Corvid.Host.Configuration;
 using Corvid.Host.State;
@@ -48,7 +49,7 @@ public sealed class EngineSettingsService : ISettingsService
     /// </summary>
     public IReadOnlyList<SettingDefinition> Definitions { get; } =
     [
-        .. SettingsCatalogue.Definitions.Select(definition => definition.Store != SettingStore.CorvidJson ? definition
+        .. SettingsCatalogue.Definitions.Select(definition => definition.Store != SettingStore.CorvidJson || HostingKeys.Contains(definition.FullKey) ? definition
             : CorvidRuntime.LiveSettings.TryGetValue(definition.FullKey, out var live)
                 ? definition with { Applies = live == LiveSetting.Now ? SettingApplies.Now : SettingApplies.NewSessions }
                 : definition with { Applies = SettingApplies.Restart }),
@@ -186,8 +187,27 @@ public sealed class EngineSettingsService : ISettingsService
         if (!_engine.Runtime.IsCompletedSuccessfully)
             return [];
         var next = _writer.NextStart().GetSection(CorvidOptions.Section).Get<CorvidOptions>() ?? new CorvidOptions();
-        return _engine.Runtime.Result.ApplyLiveSettings(next);
+        var applied = _engine.Runtime.Result.ApplyLiveSettings(next);
+        // U-8: the app's hosting follows its two settings at once (Start or Stop hosting, as on the Gateway and Jobs pages).
+        foreach (var (part, on, key) in new[]
+                 {
+                     (HostedPart.Gateway, next.App.HostGateway, HostingKeys[0]),
+                     (HostedPart.Scheduler, next.App.HostScheduler, HostingKeys[1]),
+                 })
+        {
+            if ((part == HostedPart.Gateway ? _engine.HostsGateway : _engine.HostsScheduler) == on)
+                continue;
+            // On the pool already (SaveAsync's work): stopping waits for the gateway's answers in flight, as Stop hosting does.
+            _engine.SetHostingAsync(part, on).GetAwaiter().GetResult();
+            applied = applied.Add(key);
+        }
+        return applied;
     }
+
+    private bool IsOn(SettingDefinition definition) => definition.FullKey == HostingKeys[0] ? _engine.HostsGateway : _engine.HostsScheduler;
+
+    /// <summary>The app's hosting settings (U-8), which the engine applies itself rather than the runtime.</summary>
+    private static readonly string[] HostingKeys = ["Corvid:App:HostGateway", "Corvid:App:HostScheduler"];
 
     private static SettingsWrite Refused(IReadOnlyList<SettingProblem> problems)
     {
@@ -217,7 +237,9 @@ public sealed class EngineSettingsService : ISettingsService
                 parts.Add($"Written to {SafeText.Clean(result.Path)}.");
                 var now = Definitions.Where(definition => live.Contains(definition.FullKey, StringComparer.OrdinalIgnoreCase)).ToList();
                 if (now.Count > 0)
-                    parts.Add("Applied now: " + string.Join(", ", now.Select(definition => definition.Applies == SettingApplies.Now
+                    parts.Add("Applied now: " + string.Join(", ", now.Select(definition => HostingKeys.Contains(definition.FullKey)
+                        ? $"{definition.Label.ToLowerInvariant()} ({(IsOn(definition) ? "started" : "stopped")})"
+                        : definition.Applies == SettingApplies.Now
                         ? $"{definition.Label.ToLowerInvariant()} (from the next prompt)"
                         : $"{definition.Label.ToLowerInvariant()} (in sessions opened from now on)")) + ".");
                 if (changed.Count > 0)
