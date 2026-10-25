@@ -80,6 +80,11 @@ public static class SessionReplay
             .GroupBy(result => result.CallId, StringComparer.Ordinal).ToDictionary(group => group.Key, group => group.Last(), StringComparer.Ordinal);
         var calls = snapshot.Transcript.Select(entry => entry.Content).OfType<ToolCallIssued>()
             .GroupBy(call => call.CallId, StringComparer.Ordinal).ToDictionary(group => group.Key, group => group.Last(), StringComparer.Ordinal);
+        // When each call was issued: a result's time less its call's is how long it took, as the live turn reports it.
+        var issuedAt = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        foreach (var entry in snapshot.Transcript)
+            if (entry.Content is ToolCallIssued { CallId: var issuedId } && stored.TryGetValue(entry.FromSequence, out var issuedItem))
+                issuedAt[issuedId] = issuedItem.RecordedAt;
         var checkpoints = snapshot.CheckpointEvents.Where(item => snapshot.IsVisible(item.Sequence)).ToList();
         var approvals = options.Approvals ? Approvals(stored.Values, snapshot.IsVisible) : [];
         // G-2: why a call that asked nobody ran, or was refused.
@@ -196,6 +201,7 @@ public static class SessionReplay
                         Output = result.Result,
                         OutputText = ToolPresentation.ResultText(result.Result),
                         Diffs = [.. diffs],
+                        Elapsed = issuedAt.TryGetValue(result.CallId, out var started) && started != default && at >= started ? at - started : null,
                     }));
                     // A network read's result is outside content: the session is tainted from here until the user speaks.
                     if (options.Taint && !tainted && calls.GetValueOrDefault(result.CallId) is { } read && tools.Network(read.ToolName))

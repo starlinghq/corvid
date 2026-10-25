@@ -172,6 +172,28 @@ public sealed class SessionStreamTests
         Assert.Empty(transcript.Updates.OfType<ToolCallChanged>());
     }
 
+    [Fact]
+    public async Task AReplayedCallTookFromItsIssueToItsResultAsTheLiveCardSaid()
+    {
+        await using var host = TestHost.Create();
+        var runtime = await host.StartAsync();
+        await using var _ = runtime;
+        var ct = TestContext.Current.CancellationToken;
+        var session = runtime.OpenSession(surface: "test");
+        using var arguments = System.Text.Json.JsonDocument.Parse("""{"path":"notes.txt"}""");
+        var called = runtime.Log.Append(session.Id, runtime.Log.GetHead(session.Id, ct),
+            [Event(new Corvid.Abstractions.Events.UserMessage("read my notes")), Event(new Corvid.Abstractions.Events.ToolCallIssued("c1", "read_file", arguments.RootElement.Clone()))],
+            ct)[^1];
+        using var output = System.Text.Json.JsonDocument.Parse("""{"content":"hello"}""");
+        var answered = runtime.Log.Append(session.Id, called.Sequence, [Event(new Corvid.Abstractions.Events.ToolResult("c1", output.RootElement.Clone()))], ct)[^1];
+
+        var replay = await SessionReplay.ReadAsync(runtime, session.Id, new ToolPresentation(runtime), cancellationToken: ct);
+
+        // The live card's time is the call's whole wait (an approval included): the log's call to its result.
+        var closed = Assert.Single(replay.Updates.OfType<ToolCallChanged>());
+        Assert.Equal(answered.RecordedAt - called.RecordedAt, closed.Elapsed);
+    }
+
     private sealed class DenyWithReason(string reason) : IApprovalPrompter
     {
         public ValueTask<ApprovalAnswer> AskAsync(ApprovalPrompt prompt, CancellationToken cancellationToken) =>

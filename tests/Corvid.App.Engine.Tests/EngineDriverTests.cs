@@ -91,6 +91,38 @@ public sealed class EngineDriverTests
     }
 
     [Fact]
+    public async Task ASessionAnotherProcessStartsAfterTheListWasReadIsRaisedAtTheLogsNextLook()
+    {
+        await using var fixture = await EngineFixture.StartAsync(new FakeModels(new FakeGenerator(Reply.Say("One."), Reply.Say("Two."))));
+        using var sessions = fixture.Sessions();
+        var raised = new List<SessionSummary>();
+        sessions.SessionChanged += (_, summary) => raised.Add(summary);
+        Assert.DoesNotContain(await sessions.ListAsync(Ct), summary => summary.Id == "cli-later");
+
+        // A terminal starts a session after the window listed its sessions.
+        await using var other = await OtherProcessAsync(fixture.Host);
+        var terminal = other.OpenSession("cli-later");
+        await terminal.SendAsync("first", Ct);
+        fixture.Time.Advance(EngineSessionService.ListInterval);
+        await sessions.IdleAsync();
+
+        // The rail and the Board hear of it, read-only while the terminal drives it.
+        var listed = Assert.Single(raised, summary => summary.Id == "cli-later");
+        Assert.True(listed.ReadOnly);
+        Assert.Equal(1, listed.Turns);
+
+        // It grows: the next look raises it again; a look with nothing new raises nothing.
+        await terminal.SendAsync("second", Ct);
+        fixture.Time.Advance(EngineSessionService.ListInterval);
+        await sessions.IdleAsync();
+        Assert.Equal(2, raised.Last(summary => summary.Id == "cli-later").Turns);
+        var count = raised.Count;
+        fixture.Time.Advance(EngineSessionService.ListInterval);
+        await sessions.IdleAsync();
+        Assert.DoesNotContain(raised.Skip(count), summary => summary.Id == "cli-later");
+    }
+
+    [Fact]
     public async Task ASessionAnotherProcessTakesWhileItIsOpenTurnsReadOnly()
     {
         await using var fixture = await EngineFixture.StartAsync(new FakeModels(new FakeGenerator(Reply.Say("One."), Reply.Say("Two."))));

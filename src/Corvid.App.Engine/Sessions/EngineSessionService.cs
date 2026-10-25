@@ -82,6 +82,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         _engine.Started += OnEngineStarted;
         _ = WatchJobsAsync();
         _ = WatchRecordsAsync();
+        _ = WatchLogAsync();
     }
 
     public event EventHandler<SessionSummary>? SessionChanged;
@@ -95,6 +96,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         if (_disposed)
             return;
         _ = WatchJobsAsync();
+        _ = WatchLogAsync();
         _dispatcher.Post(() =>
         {
             if (!_disposed)
@@ -117,12 +119,18 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         {
             var summaries = new List<SessionSummary>();
             var pinned = Pins();
+            var heads = new Dictionary<string, long>(StringComparer.Ordinal);
             foreach (var id in runtime.Log.ListSessions(cancellationToken))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (IsConversation(id) && Summarize(runtime, id, pinned) is { } summary)
+                if (!IsConversation(id))
+                    continue;
+                heads[id] = runtime.Log.GetHead(id, cancellationToken);
+                if (Summarize(runtime, id, pinned) is { } summary)
                     summaries.Add(Live(id, summary));
             }
+            // G-12: what other processes write from here on reaches the list at the log's next look.
+            Listed(heads);
             foreach (var (id, created) in _created)
                 if (runtime.Log.GetHead(id, cancellationToken) == 0)
                     summaries.Add(Live(id, Empty(runtime, id, created)));
@@ -389,6 +397,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         _engine.Started -= OnEngineStarted;
         UnwatchJobs();
         UnwatchRecords();
+        StopWatchingLog();
         StopTails();
         foreach (var channel in _channels.Values)
         {
