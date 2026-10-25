@@ -18,6 +18,66 @@ public sealed class TranslatorTests
     private static JsonElement Json(string text) => JsonDocument.Parse(text).RootElement.Clone();
 
     [Fact]
+    public void ASteerIsASteeredMessageInsideItsTurnAndAStepIsProgressOnlyWhileATurnIsOpen()
+    {
+        var translator = new SessionUpdateTranslator(Workspace) { MaxSteps = 8 };
+        // No turn yet: a step has nothing to belong to.
+        Assert.Empty(translator.Translate(new TurnStepped(1, 8) { At = T0 }));
+        translator.Translate(new PromptSent("what's the weather?", 3) { At = T0 });
+
+        Assert.Equal(new TurnProgress(1) { MaxSteps = 8, At = T0 }, Assert.Single(translator.Translate(new TurnStepped(1, 8) { At = T0 })));
+        // A replayed step has no budget: the translator's, when it knows one.
+        Assert.Equal(8, Assert.IsType<TurnProgress>(Assert.Single(translator.Translate(new TurnStepped(2, null) { At = T0 }))).MaxSteps);
+        var steer = Assert.IsType<UserMessage>(Assert.Single(translator.Translate(new SteerSent("and tomorrow?", 9) { At = T0 })));
+        Assert.Equal(new UserMessage("and tomorrow?") { Position = 9, Steered = true, At = T0 }, steer);
+        // Still turn 1: a steer opens no turn.
+        Assert.Equal(1, translator.Turn);
+        Assert.True(translator.TurnOpen);
+    }
+
+    [Fact]
+    public void ARunningCallsTailIsAnUpdateOfItsCard()
+    {
+        var translator = new SessionUpdateTranslator(Workspace);
+        translator.Translate(new PromptSent("run the tests", 1) { At = T0 });
+
+        var update = Assert.IsType<ToolCallUpdate>(Assert.Single(translator.Translate(new ToolCallChanged("c1")
+        {
+            At = T0,
+            Tool = "shell",
+            Kind = ToolCallKinds.Execute,
+            Status = ToolCallState.InProgress,
+            Tail = "Passed 11   Failed 1",
+        })));
+        Assert.Equal(("c1", ToolCallStatus.InProgress, "Passed 11   Failed 1"), (update.CallId, update.Status, update.Tail));
+        Assert.Null(update.Outcome);
+    }
+
+    [Fact]
+    public void AQuestionStaysOpenPastItsTurnItsRepeatedAnswerIsNotShownTwiceAndTheNextMessageAnswersIt()
+    {
+        var translator = new SessionUpdateTranslator(Workspace);
+        translator.Translate(new PromptSent("tag the release", 1) { At = T0 });
+
+        var asked = Assert.IsType<QuestionAsked>(Assert.Single(translator.Translate(
+            new QuestionRaised("q-1", "Which version: 0.2.0 or 0.2.0-rc1?\nThe first tag decides the changelog.", ["0.2.0", "0.2.0-rc1"]) { At = T0 })));
+        Assert.Equal(("q-1", "Which version: 0.2.0 or 0.2.0-rc1?", true), (asked.QuestionId, asked.Title, asked.AllowsFreeText));
+        Assert.Equal(["0.2.0", "0.2.0-rc1"], asked.Options);
+        // The delivered answer that repeats the question (ask_user's) is the block's already.
+        Assert.Empty(translator.Translate(new AnswerChunk("Which version: 0.2.0 or 0.2.0-rc1?\nThe first tag decides the changelog.") { At = T0 }));
+        translator.EndTurn(TurnOutcome.Clarifying, T0.AddSeconds(1));
+        Assert.Equal("q-1", translator.OpenQuestion);
+
+        var next = translator.Translate(new PromptSent("0.2.0-rc1", 7) { At = T0.AddSeconds(9) });
+
+        Assert.Equal(new QuestionAnswered("q-1", "0.2.0-rc1") { At = T0.AddSeconds(9) }, next[0]);
+        Assert.IsType<UserMessage>(next[1]);
+        Assert.Null(translator.OpenQuestion);
+        // The next turn's answer is shown whatever it says.
+        Assert.Single(translator.Translate(new AnswerChunk("Which version: 0.2.0 or 0.2.0-rc1?\nThe first tag decides the changelog.") { At = T0 }));
+    }
+
+    [Fact]
     public void APromptOpensANumberedTurnOnTheGeneratorAndTheNextPromptClosesAReplayedOne()
     {
         var translator = new SessionUpdateTranslator(Workspace);
