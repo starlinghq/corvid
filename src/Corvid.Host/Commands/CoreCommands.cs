@@ -75,14 +75,20 @@ public static class CoreCommands
 
     // ---- /model ----
 
-    internal const string ModelUsage = "[slot] [<model> | <number>] [--pin] | unpin <slot>";
+    internal const string ModelUsage = "[slot] [<model> | <number>] [--pin | --default] | unpin <slot> | reset <slot>";
 
     private static async ValueTask<CommandOutput> ModelAsync(SlashCommandContext context, SlashInvocation invocation, CancellationToken cancellationToken)
     {
-        var arguments = invocation.Arguments.Where(argument => argument != "--pin").ToArray();
+        var arguments = invocation.Arguments.Where(argument => argument is not ("--pin" or "--default")).ToArray();
         var pin = invocation.Arguments.Contains("--pin");
+        // A5: "default for new sessions" is a separate choice from this session's (corvid.json, as `corvid model switch` writes it).
+        var asDefault = invocation.Arguments.Contains("--default");
+        if (pin && asDefault)
+            return CommandOutput.Error("--pin is for this session and --default for new sessions: pick one.");
         if (arguments.Length == 0)
             return ModelPicker(context, ModelSlots.Generator);
+        if (arguments is ["reset", var reset])
+            return await ResetModelAsync(context, reset, cancellationToken).ConfigureAwait(false);
         if (arguments is ["unpin", var unpinned])
         {
             ModelSlots.ContractOf(unpinned);
@@ -123,23 +129,49 @@ public static class CoreCommands
         if (slot == ModelSlots.TextEmbedder && !context.Runtime.IsConfigured(slot, name))
             return CommandOutput.Error($"Memory embeds only with the embedder.text models configured at start. Add {name} to " +
                 "Corvid:Models:Slots:embedder.text:Fallbacks, then restart.");
+        if (asDefault)
+            return DefaultModel(context, slot, name);
         var availability = context.Runtime.Catalogue.Check(name);
         if (!availability.IsReady)
             return CommandOutput.Error(availability.Detail + (availability.Acquire is { } acquire ? $" Run `{acquire}`." : ""));
 
+        // A5: a turn running now takes the switch at its next step, once its issued tool calls finish.
+        var running = context.Runtime.IsTurnRunning(context.Session.Id);
         // A5: the switch is this session's choice until changed (de-escalation returns to it); the decider too, per session.
         // `corvid model switch` changes the default for new sessions.
         var result = await context.Session.SetModelAsync(slot, name, pin ? SwitchScope.Pin : SwitchScope.Session, cancellationToken).ConfigureAwait(false);
         var carried = result.PendingApprovals.IsEmpty ? "" : $" {result.PendingApprovals.Length} pending approval(s) carry over.";
         var target = result.To?.Id ?? name;
+        var when = running ? " The running turn takes it at its next step." : "";
         return result.Status switch
         {
-            SwitchStatus.Switched => CommandOutput.Success($"{slot}: {result.From.Id} → {target}{(pin ? " (pinned)" : "")} for this session.{carried}"),
+            SwitchStatus.Switched => CommandOutput.Success($"{slot}: {result.From.Id} → {target}{(pin ? " (pinned)" : "")} for this session.{when}{carried}"),
             SwitchStatus.Unchanged when result.SessionDefaultChanged => CommandOutput.Success($"{slot} already uses {target}; it is this session's choice now."),
             SwitchStatus.Unchanged => CommandOutput.Text($"{slot} already uses {target}."),
             SwitchStatus.Refused => CommandOutput.Error($"{slot}: the privacy gate refused {target}: {result.Detail}"),
             _ => CommandOutput.Error($"{slot}: nothing to switch to ({result.Detail})."),
         };
+    }
+
+    /// <summary>A5: <c>/model [slot] &lt;model&gt; --default</c>: the default for new sessions, written to corvid.json; this session stays.</summary>
+    private static CommandOutput DefaultModel(SlashCommandContext context, string slot, string name)
+    {
+        if (context.Runtime.ConfigWriter is null)
+            return CommandOutput.Error("This Corvid has no configuration file to write a default to; use `corvid model switch`.");
+        var change = context.Runtime.WriteDefaultModel(slot, name);
+        return change.Write.Written ? CommandOutput.Success(change.Describe()) : CommandOutput.Error(change.Describe());
+    }
+
+    /// <summary>A5: <c>/model reset &lt;slot&gt;</c>: forgets this session's choice, so the slot follows the default again.</summary>
+    private static async Task<CommandOutput> ResetModelAsync(SlashCommandContext context, string slot, CancellationToken cancellationToken)
+    {
+        ModelSlots.ContractOf(slot);
+        var result = await context.Session.ClearModelChoiceAsync(slot, cancellationToken).ConfigureAwait(false);
+        if (result is null)
+            return CommandOutput.Text($"{slot}: this session made no choice; it follows the default.");
+        return result.Status == SwitchStatus.Switched
+            ? CommandOutput.Success($"{slot}: back to the default, {result.To?.Id ?? "none"}, for this session.")
+            : CommandOutput.Success($"{slot}: this session's choice is forgotten; it returns to the default, {result.To?.Id ?? "none"}, when the slot moves back.");
     }
 
     private static bool IsPickNumber(string argument) => argument.Length is > 0 and < 4 && argument.All(char.IsAsciiDigit);
@@ -197,9 +229,9 @@ public static class CoreCommands
         var prefix = slot == ModelSlots.Generator ? "/model" : $"/model {slot}";
         string[] lines = models.Count == 0 ? [$"No model can serve {slot}."]
             : slot == ModelSlots.Decider ? [$"decider: {runtime.DeciderState}.",
-                $"Switch this session's decider with {prefix} <number> or {prefix} <name>; `corvid model switch {slot} <model>` changes the default for new sessions."]
+                $"Switch this session's decider with {prefix} <number> or {prefix} <name>; add --default for new sessions instead. /model reset {slot} forgets this session's choice."]
             : [$"Switch this session with {prefix} <number> or {prefix} <name> (it lasts until you change it); add --pin to keep it past escalation. " +
-                $"`corvid model switch {slot} <model>` changes the default for new sessions."];
+                $"Add --default to make it the default for new sessions instead; /model reset {slot} forgets this session's choice."];
         return new CommandOutput
         {
             Title = $"{slot}: {(bound ? current!.Profile.Id : slot == ModelSlots.Decider ? "degraded tier" : "unbound")}",

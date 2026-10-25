@@ -83,21 +83,19 @@ internal static class ModelCommand
             return ExitCodes.Usage;
         }
 
-        // The file is validated with the change applied before it is written, so a bad switch never breaks the next start.
-        var key = $"{CorvidOptions.Section}:Models:Slots:{slot}:Model";
-        var result = host.Services.GetRequiredService<CorvidConfigWriter>().Apply(ConfigEdit.Set(key, descriptor.Name));
+        // A5: the host's "default for new sessions" write, which /model --default, the app's Models page and Alt+P share. The
+        // file is validated with the change applied before it is written, so a bad switch never breaks the next start.
+        var result = ModelDefaults.Write(host.Services.GetRequiredService<CorvidConfigWriter>(), catalogue, slot, descriptor.Name);
         if (!result.Written)
         {
-            foreach (var failure in result.Failures)
-                console.MarkupLine($"[red]•[/] {Markup.Escape(failure)}");
+            console.MarkupLine($"[red]•[/] {Markup.Escape(result.Detail ?? "Not written.")}");
             return ExitCodes.Usage;
         }
-        console.MarkupLine($"[green]{Markup.Escape(slot)} now defaults to {Markup.Escape(descriptor.Name)}[/] [grey]({Markup.Escape(result.Path)}; new sessions use it)[/]");
+        console.MarkupLine($"[green]{Markup.Escape(slot)} now defaults to {Markup.Escape(result.Model)}[/] [grey]({Markup.Escape(result.Path)}; new sessions use it)[/]");
         if (result.ShadowedKeys.Length > 0)
-            console.MarkupLine($"[yellow]This run's environment or --set overrides {Markup.Escape(key)}, so it goes on using that.[/]");
-        var availability = catalogue.Check(descriptor.Name);
-        if (!availability.IsReady)
-            console.MarkupLine($"[yellow]It is not in the model cache yet:[/] run [bold]{Markup.Escape(availability.Acquire ?? "corvid model download " + descriptor.Name)}[/].");
+            console.MarkupLine($"[yellow]This run's environment or --set overrides {Markup.Escape(ModelDefaults.Key(slot))}, so it goes on using that.[/]");
+        if (result.NotReady is { } availability)
+            console.MarkupLine($"[yellow]It is not in the model cache yet:[/] run [bold]{Markup.Escape(availability.Acquire ?? "corvid model download " + result.Model)}[/].");
         return ExitCodes.Success;
     }
 
