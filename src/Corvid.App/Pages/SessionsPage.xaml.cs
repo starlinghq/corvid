@@ -49,8 +49,8 @@ public sealed partial class SessionsPage : Page, IDockProvider
     private int _newCount;
     private DateTimeOffset _lastEscape;
     private bool _swallowLineBreak;
-    // Whether Ctrl is down as the composer's own key events say (A4V2-1).
-    private bool _composerCtrl;
+    // Whether Ctrl is down as the page's own key events say (A4V2-1).
+    private bool _ctrlHeld;
     private bool _spinning;
 
     public SessionsPage()
@@ -58,9 +58,11 @@ public sealed partial class SessionsPage : Page, IDockProvider
         InitializeComponent();
         _spinner = Spinner();
         Composer.AddHandler(PreviewKeyDownEvent, new KeyEventHandler(OnComposerKeyDown), true);
-        Composer.AddHandler(PreviewKeyUpEvent, new KeyEventHandler(OnComposerKeyUp), true);
-        // A Ctrl released elsewhere never reaches the composer's key up: losing focus forgets it.
-        Composer.LostFocus += (_, _) => _composerCtrl = false;
+        // A4V2-1: Ctrl as the page's own key events see it, before the composer or a card reads Enter.
+        Root.AddHandler(PreviewKeyDownEvent, new KeyEventHandler((_, e) => TrackCtrl(e.Key, down: true)), true);
+        Root.AddHandler(PreviewKeyUpEvent, new KeyEventHandler((_, e) => TrackCtrl(e.Key, down: false)), true);
+        Root.LostFocus += (_, _) => _ctrlHeld = false;
+        Root.AddHandler(PreviewKeyDownEvent, new KeyEventHandler(OnCardPreviewKeyDown), true);
         Composer.BeforeTextChanging += OnComposerTextChanging;
         Root.KeyDown += OnRootKeyDown;
         for (var i = 0; i < 7; i++)
@@ -521,14 +523,9 @@ public sealed partial class SessionsPage : Page, IDockProvider
     {
         if (_session is not { } session)
             return;
-        if (e.Key is VirtualKey.Control or VirtualKey.LeftControl or VirtualKey.RightControl)
-        {
-            _composerCtrl = true;
+        if (IsCtrlKey(e.Key))
             return;
-        }
-        // A4V2-1: Ctrl as the composer's own key events saw it (the same stream as this Enter, so in order), with the
-        // thread's key state as a second source; Uno's KeyRoutedEventArgs has no public modifiers.
-        var ctrl = _composerCtrl || IsDown(VirtualKey.Control);
+        var ctrl = CtrlDown;
         var shift = IsDown(VirtualKey.Shift);
         switch (e.Key)
         {
@@ -563,11 +560,20 @@ public sealed partial class SessionsPage : Page, IDockProvider
         }
     }
 
-    private void OnComposerKeyUp(object sender, KeyRoutedEventArgs e)
+    private static bool IsCtrlKey(VirtualKey key) => key is VirtualKey.Control or VirtualKey.LeftControl or VirtualKey.RightControl;
+
+    private void TrackCtrl(VirtualKey key, bool down)
     {
-        if (e.Key is VirtualKey.Control or VirtualKey.LeftControl or VirtualKey.RightControl)
-            _composerCtrl = false;
+        if (IsCtrlKey(key))
+            _ctrlHeld = down;
     }
+
+    /// <summary>
+    /// A4V2-1: Ctrl as the page's key events saw it (the same stream as the Enter being read, so in order), or the thread's
+    /// key state; Uno's KeyRoutedEventArgs has no public modifiers. Focus moving within or out of the page forgets it, so a
+    /// Ctrl released where the page never hears it does not stay held.
+    /// </summary>
+    private bool CtrlDown => _ctrlHeld || IsDown(VirtualKey.Control);
 
     /// <summary>
     /// The text box still types the line break of an Enter the page handled (its text input does not wait for the key
@@ -629,6 +635,45 @@ public sealed partial class SessionsPage : Page, IDockProvider
             e.Handled = true;
             Escape(session);
         }
+    }
+
+    /// <summary>
+    /// A4V2-1: keys on a focused approval card that are not its answers, read before its buttons see them. Typing (a letter)
+    /// goes back to the composer, since a person who types after Enter pointed at the card means the composer; Space never
+    /// presses an answer (a space in the words being typed approved the call); Ctrl+Enter is a steer, never an answer, so it
+    /// goes back to the composer too. Digits, the arrows and Enter answer as before; the card's reason field is left alone.
+    /// </summary>
+    private void OnCardPreviewKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Handled || e.OriginalSource is TextBox || !InApprovalCard(e.OriginalSource as DependencyObject))
+            return;
+        var ctrl = CtrlDown;
+        if (e.Key == VirtualKey.Space || e.Key == VirtualKey.Enter && ctrl)
+        {
+            e.Handled = true;
+            if (e.Key == VirtualKey.Enter)
+                FocusComposerAtEnd();
+            return;
+        }
+        if (e.Key is >= VirtualKey.A and <= VirtualKey.Z && !ctrl && !IsDown(VirtualKey.Menu))
+            FocusComposerAtEnd();
+    }
+
+    private void FocusComposerAtEnd()
+    {
+        Composer.Focus(FocusState.Keyboard);
+        Composer.SelectionStart = Composer.Text.Length;
+    }
+
+    private static bool InApprovalCard(DependencyObject? element)
+    {
+        for (var node = element; node is not null; node = VisualTreeHelper.GetParent(node))
+        {
+            if (node is FrameworkElement { DataContext: ApprovalCardBlock })
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>Digits answer the focused card, the arrows move between its answers, Esc goes back to the composer.</summary>
