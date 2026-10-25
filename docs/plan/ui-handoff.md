@@ -18,8 +18,8 @@ pull request starlinghq/corvid#71.
 | A0 verify loop | done: one independent verifier, one fix round (§1.1) | `60e90fd` |
 | A1 the seven other mocked screens: Review and Rewind, Board, Models and First run, Memory, Audit | done, verified on the running app by an independent verifier in two rounds (§1.2) | branch `a1/screens` |
 | A2 the pages without mockups (Skills, Jobs, MCP, Gateway, Safety, Secrets, Settings), the palette, the rest of the keys, the phone screens, an accessibility pass | done, verified on the running app in three rounds, PR review fixed (§1.3) | PR #76, branch `a2/screens` |
-| A3 `Corvid.App.Engine`: the real runtime behind the services | done behind `--engine`, verified end to end in three rounds (§1.4) | branch `a3/engine` |
-| A4 the gaps A3 left: the running turn, records, egress, hosting, parity; the engine becomes the default | integrated (§1.5) | branch `a4/gaps-int` |
+| A3 `Corvid.App.Engine`: the real runtime behind the services | done behind `--engine`, verified end to end in three rounds, PR review fixed (§1.4) | PR #77 |
+| A4 the gaps A3 left: the running turn, records, egress, hosting, parity; the engine becomes the default | done, verified end to end in three rounds (§1.5) | branch `a4/engine` |
 
 The build ran as a workflow in a cloud container: one agent per step, each building, launching the app on a virtual
 display, screenshotting it and comparing it with the mockup renders, then an independent verifier. It was stopped during
@@ -322,6 +322,18 @@ sampling without a seed). Still open from that pass:
 - A gateway adapter needs Vault for its token, so nothing in a temporary home can deliver a message; pairing, tools and
   revoke were exercised through a seeded pairing code and the CLI.
 - With the 0.8B generator a title can be the answer's first sentence rather than eight words.
+
+The independent verifier ran three rounds: round 1 found a blocker (hidden characters in `ask_user`'s options reaching
+the answer sent) and a major defect, round 2 one major and seven minor, all fixed but one; round 3 passed with four
+minor ones. Still open from verification:
+
+- A steer typed while an approval card waits was lost twice under the harness (the composer emptied, no chip, nothing
+  logged); it could not be reproduced on demand, and may be a focus race between the card and the composer.
+- The kernel does not reserve the call id of the person's own `!` call, so a model could choose the same id; the CLI's
+  `!` line reports the last shell result even when the turn issued no call; a `#` line typed just after answering a
+  question was once lost; a Board card's relative time can stand still after its session's holder exits.
+
+### What the running app shows today
 
 
 
