@@ -186,6 +186,8 @@ public sealed class EngineDriverTests
         Assert.Contains("is driven by", restored.Detail, StringComparison.Ordinal);
         Assert.EndsWith("Nothing was changed.", restored.Detail, StringComparison.Ordinal);
         Assert.Equal("ONE\n", fixture.Read("story.txt"));
+        // The page's last restore panel says so.
+        Assert.Equal(restored, (await rewind.GetTimelineAsync("cli-busy", Ct)).LastRestore);
 
         var file = (await review.GetChangesAsync("cli-busy", ReviewScope.ThisSession, Ct)).Files.Single();
         var reverted = await review.RevertFileAsync("cli-busy", file.Path, file.CheckpointId!, Ct);

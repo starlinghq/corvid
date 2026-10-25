@@ -199,7 +199,11 @@ public sealed class EngineRewindService : IRewindService, IDisposable
         }
         catch (SessionHeldException exception)
         {
-            return new RestoreOutcome(label, _time.GetUtcNow(), scope) { Refused = true, Detail = exception.Message + " Nothing was changed." };
+            var refused = new RestoreOutcome(label, _time.GetUtcNow(), scope) { Refused = true, Detail = exception.Message + " Nothing was changed." };
+            // Shown as the last restore, as any refusal is, until the log has a later one.
+            _unrecorded[sessionId] = (refused, await Task.Run(() => runtime.Log.GetHead(sessionId, CancellationToken.None), CancellationToken.None)
+                .ConfigureAwait(false));
+            return refused;
         }
         // The kernel rolls back to just before the call (its position minus one): the call's turn keeps its prompt, and only
         // the turns after it leave whole, as the plan says.
