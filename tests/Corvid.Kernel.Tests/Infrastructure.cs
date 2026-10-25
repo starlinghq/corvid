@@ -90,6 +90,11 @@ internal static class Samples
         new McpPinsForgotten("notes", 3),
         new UserSteered("also check the retry count"),
         new ClarificationAsked("q-1", "0.2.0, or 0.2.0-rc1?", ["0.2.0", "0.2.0-rc1"]),
+        new UserMessage("!!cat notes.md", LocalOnly: true),
+        new ToolCallIssued("user-shell", "shell", Json("""{"command":"cat notes.md"}"""), 1, false, LocalOnly: true),
+        new ToolResult("user-shell", Json("""{"exit_code":0}"""), LocalOnly: true),
+        new SessionTitled("Move the dentist reminder", TitleSources.Generated),
+        new SessionRecapped("You moved the reminder to Friday.", 0, 4, RecapSources.Requested),
     ];
 
     public static EventData[] Data(params SessionEvent[] events) => events.Select(EventData.Create).ToArray();

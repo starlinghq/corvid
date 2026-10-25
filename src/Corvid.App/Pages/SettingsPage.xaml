@@ -327,7 +327,7 @@
               <Border Style="{StaticResource PanelHead}" BorderThickness="0">
                 <controls:WrapRowPanel Spacing="10" LineSpacing="2">
                   <TextBlock Text="Accessibility and density" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
-                  <TextBlock Text="{x:Bind local:SettingsPage.PreferencesNote}" Style="{StaticResource PanelNote}" />
+                  <TextBlock Text="{x:Bind ViewModel.PreferencesNote}" Style="{StaticResource PanelNote}" />
                 </controls:WrapRowPanel>
               </Border>
               <ItemsControl ItemsSource="{x:Bind ViewModel.AppearanceFields, Mode=OneWay}" IsTabStop="False" ItemTemplate="{StaticResource FieldTemplate}" />
@@ -338,7 +338,7 @@
         <!-- Notifications. -->
         <StackPanel Spacing="18" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsNotifications), Mode=OneWay}">
           <controls:ToneRow Tone="Grey">
-            <TextBlock Text="Native notifications (D-Bus on Linux, toasts on Windows, the notification centre on macOS) come with the platform integration (docs/plan/ui.md §4.16). What you choose here is kept for this run and used when they arrive; a click on one lands on its item."
+            <TextBlock Text="Native notifications (D-Bus on Linux, toasts on Windows, the notification centre on macOS) come with the platform integration (docs/plan/ui.md §4.16). What you choose here is kept (see the note beside each panel) and used when they arrive; a click on one lands on its item."
                        TextWrapping="Wrap" LineHeight="18.125" LineStackingStrategy="BlockLineHeight" />
           </controls:ToneRow>
           <Border Style="{StaticResource CorvidPanel}">
@@ -346,7 +346,7 @@
               <Border Style="{StaticResource PanelHead}" BorderThickness="0">
                 <controls:WrapRowPanel Spacing="10" LineSpacing="2">
                   <TextBlock Text="Notify me when" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
-                  <TextBlock Text="{x:Bind local:SettingsPage.PreferencesNote}" Style="{StaticResource PanelNote}" />
+                  <TextBlock Text="{x:Bind ViewModel.PreferencesNote}" Style="{StaticResource PanelNote}" />
                 </controls:WrapRowPanel>
               </Border>
               <ItemsControl ItemsSource="{x:Bind ViewModel.NotificationFields, Mode=OneWay}" IsTabStop="False" ItemTemplate="{StaticResource FieldTemplate}" />
@@ -361,7 +361,7 @@
               <Border Style="{StaticResource PanelHead}" BorderThickness="0">
                 <controls:WrapRowPanel Spacing="10" LineSpacing="2">
                   <TextBlock Text="Layout" Style="{StaticResource PanelTitle}" AutomationProperties.HeadingLevel="Level2" />
-                  <TextBlock Text="{x:Bind local:SettingsPage.PreferencesNote}" Style="{StaticResource PanelNote}" />
+                  <TextBlock Text="{x:Bind ViewModel.PreferencesNote}" Style="{StaticResource PanelNote}" />
                 </controls:WrapRowPanel>
               </Border>
               <ItemsControl ItemsSource="{x:Bind ViewModel.LayoutFields, Mode=OneWay}" IsTabStop="False" ItemTemplate="{StaticResource FieldTemplate}" />

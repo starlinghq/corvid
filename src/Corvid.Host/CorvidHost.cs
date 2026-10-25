@@ -3,6 +3,7 @@ using Corvid.Host.Composition;
 using Corvid.Host.Configuration;
 using Corvid.Host.Diagnostics;
 using Corvid.Host.Models;
+using Corvid.Host.State;
 using Corvid.Host.Telemetry;
 using Corvid.Models.Starling;
 using Microsoft.Extensions.Configuration;
@@ -79,6 +80,8 @@ public static class CorvidHost
             provider.GetService<CorvidConfigFile>() ?? new CorvidConfigFile(CorvidPaths.UserConfigFile),
             provider.GetRequiredService<IConfiguration>(), provider.GetRequiredService<IValidateOptions<CorvidOptions>>()));
         services.TryAddSingleton(_ => CoreCommands.Register(new SlashCommandRegistry()));
+        // G-7: ui.db beside the event log, shared by the CLI and the app; created on first use.
+        services.TryAddSingleton(provider => new UiStateStore(UiStateStore.PathFor(provider.GetRequiredService<IOptions<CorvidOptions>>().Value)));
         services.AddLogging(logging => logging.ClearProviders());
 
         var endpoint = configuration[$"{CorvidOptions.Section}:Telemetry:OtlpEndpoint"];

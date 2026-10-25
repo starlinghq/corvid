@@ -38,6 +38,8 @@ public sealed class EventJsonTests
         [typeof(McpPinsForgotten)] = "mcp_pins_forgotten",
         [typeof(UserSteered)] = "user_steered",
         [typeof(ClarificationAsked)] = "clarification_asked",
+        [typeof(SessionTitled)] = "session_titled",
+        [typeof(SessionRecapped)] = "session_recapped",
     };
 
     [Fact]

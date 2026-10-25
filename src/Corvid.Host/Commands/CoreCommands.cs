@@ -45,6 +45,11 @@ public static class CoreCommands
             .Add(new SlashCommand("rollback", "List checkpoints, or go back to before the Nth latest one (files and conversation).",
                 "[N]", RollbackAsync))
             .Add(new SlashCommand("cancel", "Cancel the running turn.", "", Cancel))
+            .Add(new SlashCommand("sessions", "Recent conversations with their titles, pinned first.", "", SessionCommands.Sessions))
+            .Add(new SlashCommand("rename", "Show or change this session's title.", "[<title>]", SessionCommands.Rename))
+            .Add(new SlashCommand("recap", "A few lines on what happened in this session since its last recap, by the local generator.", "",
+                SessionCommands.RecapAsync))
+            .Add(new SlashCommand("pin", "Keep this session at the top of the app's rail and of /sessions.", "[off]", SessionCommands.Pin))
             .Add(new SlashCommand("exit", "Leave the session.", "", Exit) { Aliases = ["quit"] });
     }
 

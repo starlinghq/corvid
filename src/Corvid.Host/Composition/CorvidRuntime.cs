@@ -9,6 +9,8 @@ using Corvid.Fabric;
 using Corvid.Gateway;
 using Corvid.Host.Configuration;
 using Corvid.Host.Models;
+using Corvid.Host.Sessions;
+using Corvid.Host.State;
 using Corvid.Host.Telemetry;
 using Corvid.Kernel.Checkpoints;
 using Corvid.Kernel.Context;
@@ -210,6 +212,62 @@ public sealed class CorvidRuntime : IAsyncDisposable
     /// <summary>How many completed runs <see cref="JobCompleted"/> keeps to replay to a handler added later.</summary>
     public const int JobCompletedReplay = 32;
 
+    /// <summary>
+    /// Session titles and recaps (G-6): generated after a session's first exchange (K-9) on the local generator, renamed by
+    /// <see cref="Rename"/>, recapped by <see cref="RecapAsync"/>. Without one set at start, nothing is generated.
+    /// </summary>
+    public SessionTitler Titles
+    {
+        get => LazyInitializer.EnsureInitialized(ref _titles, () => new SessionTitler(Log, null, unavailable: "titles were not set up"));
+        init => _titles = value;
+    }
+
+    private SessionTitler? _titles;
+
+    /// <summary><c>ui.db</c> (G-7): drafts, pins, review points, when sessions were last seen and the app's preferences.</summary>
+    public UiStateStore UiState
+    {
+        get => LazyInitializer.EnsureInitialized(ref _uiState, () => new UiStateStore(UiStateStore.PathFor(Options)));
+        init => _uiState = value;
+    }
+
+    private UiStateStore? _uiState;
+
+    // Sessions known to hold a title, so a turn after the first does not read the log to find out again.
+    private readonly ConcurrentDictionary<string, byte> _titled = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// A session's title changed (G-6): the local generator wrote one after the first exchange, or someone renamed it here.
+    /// Raised on the thread that wrote it (a pool thread for a generated one); handlers must be thread-safe.
+    /// </summary>
+    public event Action<string, SessionTitled>? TitleChanged;
+
+    /// <summary>A recap was written here (G-6). Raised on the thread that wrote it; handlers must be thread-safe.</summary>
+    public event Action<string, SessionRecapped>? Recapped;
+
+    /// <summary>Renames a session (G-6): a <c>SessionTitled</c> by the user in the log, then <see cref="TitleChanged"/>.</summary>
+    /// <exception cref="ArgumentException">The title is blank.</exception>
+    public SessionTitled Rename(string sessionId, string title)
+    {
+        var titled = Titles.Rename(sessionId, title);
+        _titled[sessionId] = 0;
+        TitleChanged?.Invoke(sessionId, titled);
+        return titled;
+    }
+
+    /// <summary>
+    /// A recap of the session's events since its last one, written by the local generator and logged (G-6), then
+    /// <see cref="Recapped"/>; null when nothing happened since.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">No local generator, or it failed.</exception>
+    public async Task<SessionRecapped?> RecapAsync(string sessionId, string source = RecapSources.Requested, CancellationToken cancellationToken = default)
+    {
+        var recap = await Titles.RecapAsync(sessionId, source, cancellationToken).ConfigureAwait(false);
+        if (recap is not null)
+            Recapped?.Invoke(sessionId, recap);
+        return recap;
+    }
+
     internal ITokenCounter? Counter { get; }
 
     /// <summary>
@@ -355,14 +413,15 @@ public sealed class CorvidRuntime : IAsyncDisposable
     /// turns finish (the gateway) keeps each chat's order without waiting for answers.
     /// </summary>
     internal async Task<Task<Delivery>> PostAsync(CorvidSession session, string text, EnvelopeOrigin origin, GuestScope? guest,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, ShellLine? shell = null)
     {
         var messageId = Guid.NewGuid().ToString("N");
         var waiter = new TaskCompletionSource<Delivery>(TaskCreationOptions.RunContinuationsAsynchronously);
         _waiting[messageId] = waiter;
         try
         {
-            await Sessions.PostAsync(new Envelope(session.Id, session.Surface, text, origin, messageId) { Guest = guest }, cancellationToken).ConfigureAwait(false);
+            await Sessions.PostAsync(new Envelope(session.Id, session.Surface, text, origin, messageId) { Guest = guest, Shell = shell },
+                cancellationToken).ConfigureAwait(false);
         }
         catch
         {
@@ -386,7 +445,7 @@ public sealed class CorvidRuntime : IAsyncDisposable
         var settings = _settings.TryGetValue(sessionId, out var chosen) ? chosen : SessionSettings.Default;
         var runner = new TurnRunner(sessionId, Services(slots, settings.Interactive, settings.Tools ? Tools : new ToolRegistry(), settings));
         var actor = new SessionActor(runner, slots, new Sink(this), new SessionActorOptions { EmbedderSwap = _swap });
-        _sessions[sessionId] = new CorvidSession(this, sessionId, slots, runner, actor);
+        _sessions[sessionId] = new CorvidSession(this, sessionId, slots, runner, actor) { Interactive = settings.Interactive };
         return actor;
     }
 
@@ -549,6 +608,12 @@ public sealed class CorvidRuntime : IAsyncDisposable
         // Queued before the sender hears back, so MaintenanceIdleAsync after SendAsync always covers this turn.
         if (Memory is { } memory)
             QueueCatchUp(memory, delivery.Request.SessionId);
+        // K-9: after an answered exchange, a session without a title gets one from the local generator, in the background.
+        // Not for sessions nobody looks at as a conversation here (an HTTP client's, non-interactive): each would cost a call.
+        if (delivery.Result is { Status: TurnStatus.Answered, Text: not null } && Titles is { Unavailable: null, Options.Generate: true }
+            && !_titled.ContainsKey(delivery.Request.SessionId)
+            && TryGetSession(delivery.Request.SessionId, out var answered) && answered.Interactive)
+            QueueTitle(delivery.Request.SessionId);
         if (delivery.Request.MessageId is { } id && _waiting.TryRemove(id, out var waiter))
             waiter.TrySetResult(delivery);
     }
@@ -565,6 +630,33 @@ public sealed class CorvidRuntime : IAsyncDisposable
                     var added = memory.Episodes.CatchUp(Log, sessionId);
                     if (added.Count > 0)
                         await memory.Vectors.EmbedAsync([.. added.Select(episode => (episode.ItemId, episode.Text))]).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is not OutOfMemoryException)
+                {
+                }
+            }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
+    }
+
+    // On the maintenance chain, so MaintenanceIdleAsync (the CLI before it exits) waits for the title. A title is a
+    // convenience: a failure leaves the session titled by its first message.
+    private void QueueTitle(string sessionId)
+    {
+        var lifetime = _lifetime.Token;
+        lock (_maintenanceGate)
+            _maintenance = _maintenance.ContinueWith(async _ =>
+            {
+                try
+                {
+                    if (SessionProjection.Load(Log, sessionId, cancellationToken: lifetime).Title is not null)
+                    {
+                        _titled[sessionId] = 0;
+                        return;
+                    }
+                    if (await Titles.TitleAsync(sessionId, lifetime).ConfigureAwait(false) is { } titled)
+                    {
+                        _titled[sessionId] = 0;
+                        TitleChanged?.Invoke(sessionId, titled);
+                    }
                 }
                 catch (Exception exception) when (exception is not OutOfMemoryException)
                 {
@@ -624,6 +716,9 @@ public sealed class CorvidSession
 
     public string Surface { get; internal set; } = "cli";
 
+    /// <summary>Someone can answer its approvals (<see cref="SessionSettings.Interactive"/>); an HTTP client's session cannot.</summary>
+    public bool Interactive { get; internal init; } = true;
+
     public SessionModelSlots Slots { get; }
 
     public SessionActor Actor { get; }
@@ -664,6 +759,36 @@ public sealed class CorvidSession
     {
         ArgumentNullException.ThrowIfNull(guest);
         return _runtime.PostAsync(this, text, EnvelopeOrigin.External, guest, cancellationToken);
+    }
+
+    /// <summary>
+    /// The composer's <c>!</c> line (A4): queues a turn that runs <paramref name="shell"/>'s command as the user's own
+    /// <c>shell</c> call (approvals, sandbox, checkpoints) and asks the generator nothing; <paramref name="line"/> is the line
+    /// as typed, which the log keeps as the message. Returns once queued, with a task for its delivery.
+    /// </summary>
+    public Task<Task<Delivery>> PostShellAsync(string line, ShellLine shell, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(line);
+        ArgumentNullException.ThrowIfNull(shell);
+        return _runtime.PostAsync(this, line, EnvelopeOrigin.User, null, cancellationToken, shell);
+    }
+
+    /// <summary>
+    /// The composer's <c>#</c> line (A4): <paramref name="text"/> through memory's gated write path, as the user's request.
+    /// Without a calibrated decider it is staged for <c>/memory pending</c>; in a tainted session it is staged whatever the
+    /// decider says (plan §10.3); a credential is refused and stored nowhere.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Memory is off, or there is no extractor to write with.</exception>
+    public Task<MemoryWriteResult> RememberAsync(string text, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(text);
+        if (_runtime.Memory?.Writer is not { } writer)
+            throw new InvalidOperationException(_runtime.Memory is null
+                ? "Memory is off (Corvid:Memory:Enabled), so nothing was staged."
+                : "Memory writes need the extractor slot; bind one to stage and review writes.");
+        var generator = Slots.TryCurrent(ModelSlots.Generator, out var binding) ? binding.Profile.Id : "unknown";
+        return writer.WriteAsync(new MemoryWriteRequest(Id, text.Trim(), Surface: Surface, Generator: generator, Tainted: Tainted),
+            cancellationToken);
     }
 
     /// <summary>Cancels the running turn (Ctrl-C, <c>/cancel</c>).</summary>

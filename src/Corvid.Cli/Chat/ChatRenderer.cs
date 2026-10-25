@@ -212,6 +212,32 @@ internal sealed class ChatRenderer : ITurnObserver
             ? asked.Options[pick - 1]
             : line;
 
+    /// <summary>The most lines of a <c>!</c> line's output shown; the rest is in the log.</summary>
+    public const int ShellLines = 200;
+
+    /// <summary>
+    /// A <c>!</c> line's output (A4): standard output and error as the sandbox returned them, without control characters,
+    /// its last <see cref="ShellLines"/> lines, then the exit code and where the output went.
+    /// </summary>
+    public void ShellResult(string? output, int? exitCode, bool localOnly)
+    {
+        lock (_gate)
+        {
+            StopPanel();
+            EndText();
+            if (output is { Length: > 0 })
+            {
+                var lines = Host.Sessions.SessionCatalogue.Visible(output).TrimEnd('\n').Split('\n');
+                if (lines.Length > ShellLines)
+                    _console.MarkupLine($"[grey]… {lines.Length - ShellLines} earlier line(s) are in the session's log[/]");
+                foreach (var line in lines.TakeLast(ShellLines))
+                    _console.Write(new Text(line + "\n"));
+            }
+            var exit = exitCode is { } code ? $"exit {code.ToString(CultureInfo.InvariantCulture)}" : "not run";
+            _console.MarkupLine($"[grey]{Markup.Escape(exit)} · {(localOnly ? "the output stays here (!!): the model never sees it" : "the output is in the conversation for your next message")}[/]");
+        }
+    }
+
     public void Cancelled()
     {
         lock (_gate)

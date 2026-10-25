@@ -278,6 +278,8 @@ public enum NoticeKind
     Decider,
     /// <summary>The approval mode changed (the confirmation row).</summary>
     Mode,
+    /// <summary>A recap the local generator wrote (G-6): the text is its heading, the detail its lines.</summary>
+    Recap,
 }
 
 /// <summary>

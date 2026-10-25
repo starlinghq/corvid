@@ -231,6 +231,8 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
         {
             _loading = false;
         }
+        // G-7: the draft kept in ui.db, once the history shows.
+        await LoadDraftAsync().ConfigureAwait(true);
     }
 
     public void Dispose()
@@ -238,6 +240,7 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
         if (_disposed)
             return;
         _disposed = true;
+        DisposeRecords();
         _subscription?.Dispose();
         _ticker?.Dispose();
         _ticker = null;

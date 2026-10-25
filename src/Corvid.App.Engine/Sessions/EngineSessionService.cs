@@ -17,6 +17,7 @@ using AppMode = Corvid.App.Core.Shell.ApprovalMode;
 using LoggedAnswer = Corvid.Abstractions.Events.AssistantMessage;
 using LoggedUserMessage = Corvid.Abstractions.Events.UserMessage;
 using McpSessions = Corvid.Abstractions.Events.McpSessions;
+using TitleSources = Corvid.Abstractions.Events.TitleSources;
 using PipelineMode = Corvid.Approvals.ApprovalMode;
 using SessionState = Corvid.App.Core.Shell.SessionState;
 
@@ -48,8 +49,8 @@ namespace Corvid.App.Engine.Sessions;
 /// queue meanwhile (EngineSessionService.Turn.cs); the turn's steps and running tails come on its report.
 /// </para>
 /// <para>
-/// Refused, with what brings it: renaming (G-6). Turns another process or surface runs in a session show when the session
-/// is opened again.
+/// Turns another process or surface runs in a session show when the session is opened again. Titles, recaps, pins, drafts
+/// and the composer's <c>!</c> and <c>#</c> lines are in <c>EngineSessionService.Records.cs</c> (A4).
 /// </para>
 /// </summary>
 public sealed partial class EngineSessionService : ISessionService, IDisposable
@@ -79,6 +80,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         _dispatcher = dispatcher;
         _time = time;
         _ = WatchJobsAsync();
+        _ = WatchRecordsAsync();
     }
 
     public event EventHandler<SessionSummary>? SessionChanged;
@@ -97,10 +99,11 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         return await Task.Run(() =>
         {
             var summaries = new List<SessionSummary>();
+            var pinned = Pins();
             foreach (var id in runtime.Log.ListSessions(cancellationToken))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (IsConversation(id) && Summarize(runtime, id) is { } summary)
+                if (IsConversation(id) && Summarize(runtime, id, pinned) is { } summary)
                     summaries.Add(Live(id, summary));
             }
             foreach (var (id, created) in _created)
@@ -136,47 +139,23 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         QueueAsync(sessionId, text, cancellationToken);
 
     /// <summary>
-    /// The composer's <c>!</c> shell line and <c>#</c> memory line (docs/plan/tui.md §4.1, ui.md §3) are modes of their own,
-    /// not built yet in the app or the CLI (the placeholder leaves them out, <see cref="HasComposerModes"/>): a one-line
-    /// message starting with one is refused, not sent to the model as text, so a habit from the terminal never quietly does
-    /// something else. Text of more than one line (pasted notes under a Markdown heading) and a Markdown image (<c>![</c>)
-    /// are not mode lines and are sent. The draft stays in the composer.
-    /// </summary>
-    private static void RefuseComposerMode(string text)
-    {
-        var line = text.Trim();
-        // The composer's text box breaks lines with \r, a paste may bring \n.
-        if (line.AsSpan().IndexOfAny('\r', '\n') >= 0 || line.StartsWith("![", StringComparison.Ordinal))
-            return;
-        if (line.StartsWith('!'))
-            throw new ServiceUnavailableException(
-                "The ! shell line comes with the composer's shell mode (docs/plan/tui.md §4.1): the command would run through the approvals, " +
-                "the sandbox and the checkpoints. Nothing was sent. Ask for the command in words, or start the message with another character.");
-        if (line.StartsWith('#'))
-            throw new ServiceUnavailableException(
-                "The # memory line comes with the composer's memory mode (docs/plan/tui.md §4.1): the fact would be staged for review. " +
-                "Nothing was sent. Ask in words for it to be remembered, or start the message with another character.");
-    }
-
-    /// <summary>The engine has no <c>!</c> shell line or <c>#</c> memory line yet: the composer's placeholder leaves them out.</summary>
-    public bool HasComposerModes => false;
-
-    /// <summary>
     /// Queues a message behind the running turn; with none running it starts one at once. A message still in the queue
     /// with nothing running (its start failed) goes first: the new one queues behind it, never past it.
     /// </summary>
     public Task<QueuedMessage> QueueAsync(string sessionId, string text, CancellationToken cancellationToken = default) =>
         EnqueueAsync(sessionId, text, modeLines: true, cancellationToken);
 
-    /// <param name="modeLines">Refuse a one-line <c>!</c> or <c>#</c> message (<see cref="RefuseComposerMode"/>); false for a
-    /// question's answer, which is sent as given.</param>
+    /// <param name="modeLines">Read a <c>!</c> or <c>#</c> line as the composer's mode (<see cref="ComposerLineAsync"/>); false
+    /// for a question's answer, which is sent as given.</param>
     private async Task<QueuedMessage> EnqueueAsync(string sessionId, string text, bool modeLines, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(text);
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (modeLines)
-            RefuseComposerMode(text);
+        // A4: a # line is staged at once, never queued; a ! line queues as a turn of its own (StartTurnAsync posts it). A
+        // question's answer is sent as given.
+        if (modeLines && await ComposerLineAsync(sessionId, text, cancellationToken).ConfigureAwait(false) is { } handled)
+            return handled;
         var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
         var tools = await _engine.ToolsAsync().ConfigureAwait(false);
         while (true)
@@ -215,7 +194,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             {
                 try
                 {
-                    await StartTurnAsync(channel, runtime, tools, message.Text, cancellationToken).ConfigureAwait(false);
+                    await StartTurnAsync(channel, runtime, tools, message.Text, cancellationToken, verbatim: !modeLines).ConfigureAwait(false);
                 }
                 catch
                 {
@@ -383,10 +362,6 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         return id;
     }
 
-    public Task RenameAsync(string sessionId, string title, CancellationToken cancellationToken = default) =>
-        Task.FromException(new ServiceUnavailableException(
-            "Renaming comes with G-6: the event log has no title event yet, so a session's title is its first message."));
-
     /// <summary>
     /// Stops every callback: subscribers hear nothing more, open prompts are denied, and turns still running finish in the
     /// runtime (whose own disposal ends them) without reporting here. Never waits: it runs on the UI thread.
@@ -395,6 +370,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     {
         _disposed = true;
         UnwatchJobs();
+        UnwatchRecords();
         foreach (var channel in _channels.Values)
         {
             PendingApproval[] open;
@@ -451,7 +427,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     /// message posted. Returns once the session's actor has it; the turn's end is tracked by <see cref="FinishTurnAsync"/>.
     /// A turn that cannot start lets go of what it attached and throws; the caller hands the session on (<see cref="HandOff"/>).
     /// </summary>
-    private async Task StartTurnAsync(Channel channel, CorvidRuntime runtime, ToolPresentation tools, string text, CancellationToken cancellationToken)
+    /// <param name="verbatim">Send the text as a message even when it reads as a <c>!</c> line (a question's answer).</param>
+    private async Task StartTurnAsync(Channel channel, CorvidRuntime runtime, ToolPresentation tools, string text, CancellationToken cancellationToken,
+        bool verbatim = false)
     {
         var sessionId = channel.SessionId;
         IDisposable? feed = null, prompter = null;
@@ -478,11 +456,13 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             lock (channel.Gate)
                 (channel.Feed, channel.Prompter) = (feed, prompter);
             var started = _time.GetTimestamp();
-            // A session's first message is its title until K-9 titles and G-6 renames are events, as the rail shows it.
+            // A session's first message is its title until the local generator writes one after the first exchange (K-9) or
+            // the person renames it (G-6), as the rail shows it.
             if (Line(text) is { Length: > 0 } title)
                 Publish(channel, _ => channel.View is { Title.Length: > 0 } ? [] : [new TitleChanged(title) { At = _time.GetUtcNow() }]);
-            // Returns once the session's actor has the message; the turn runs on, and its end is tracked below.
-            var delivery = await session.PostAsync(text, EnvelopeOrigin.User, cancellationToken).ConfigureAwait(false);
+            // Returns once the session's actor has the message (or the ! line's command); the turn runs on, and its end is
+            // tracked below.
+            var delivery = await PostLineAsync(session, text, verbatim, cancellationToken).ConfigureAwait(false);
             Track(FinishTurnAsync(channel, reporter, delivery, feed, prompter, started));
             feed = prompter = null;
         }
@@ -555,6 +535,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         });
 
         HandOff(channel);
+        // G-7: what the turn of a session the person is looking at did has been seen.
+        if (_viewing.ContainsKey(channel.SessionId))
+            Seen(channel.SessionId);
         if (_engine.Runtime.IsCompletedSuccessfully)
         {
             Refresh(_engine.Runtime.Result, channel.SessionId);
@@ -728,6 +711,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         var history = await SessionReplay.ReadAsync(runtime, id, tools, options).ConfigureAwait(false);
         var goal = Corvid.Kernel.Events.SessionProjection.Load(runtime.Log, id).Goal;
         var summary = Summarize(runtime, id) ?? Empty(runtime, id, _time.GetUtcNow());
+        var described = SessionCatalogue.Describe(runtime.Log, id);
         var commands = Commands();
         var mode = Mode(open ? session.ApprovalMode : runtime.Options.Approvals.Mode);
         var changes = await ChangesAsync(runtime, id, CancellationToken.None).ConfigureAwait(false);
@@ -743,9 +727,12 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 updates.AddRange(channel.Translator.Translate(update));
             updates.AddRange(channel.Translator.EndReplay(running: channel.Running));
             updates.Add(changes);
-            // The rail's title (the first message, until K-9 titles and G-6 renames are events) heads the session too.
-            if (summary.Turns > 0 && summary.Title != id)
-                updates.Add(new TitleChanged(summary.Title) { At = at });
+            // The rail's title (a rename, the generated title, else the first message) heads the session too.
+            if (summary.Title != id && (summary.Turns > 0 || described?.Titled is not null))
+                updates.Add(new TitleChanged(summary.Title) { At = at, Generated = described?.Titled?.Source == TitleSources.Generated });
+            // G-6: the latest recap, when nothing has happened since it.
+            if (RecapNotice(described, at) is { } recap)
+                updates.Add(recap);
             // What the session is beside its transcript: where it was forked from (this window's forks only), its goal,
             // its approval mode, whether outside content is in its context, and the commands the composer offers.
             if (_forks.TryGetValue(id, out var fork))
@@ -990,38 +977,21 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         };
     }
 
-    private SessionSummary? Summarize(CorvidRuntime runtime, string id)
+    private SessionSummary? Summarize(CorvidRuntime runtime, string id, IReadOnlySet<string>? pinned = null)
     {
-        var head = runtime.Log.GetHead(id);
-        if (head == 0)
+        // G-6: the title every surface shows (a rename, the generated title, else the first message), from the host.
+        if (SessionCatalogue.Describe(runtime.Log, id) is not { } described)
             return null;
-        string? title = null, preview = null, question = null;
-        var turns = 0;
-        var last = default(DateTimeOffset);
-        foreach (var item in Corvid.Kernel.Events.SessionProjection.ReadRange(runtime.Log, id, 0, head))
-        {
-            last = item.RecordedAt;
-            switch (item.Payload)
-            {
-                case LoggedUserMessage user:
-                    turns++;
-                    title ??= user.Text;
-                    // K-6: a message answers the question before it.
-                    question = null;
-                    break;
-                case LoggedAnswer answer:
-                    preview = answer.Text;
-                    break;
-                case Corvid.Abstractions.Events.ClarificationAsked asked:
-                    question = asked.Text;
-                    break;
-            }
-        }
+        var (title, preview, turns, last) = (described.Title, described.Preview, described.Turns, described.LastActivity);
+        // K-6: the question the session ended on, while no message has answered it.
+        var question = described.OpenQuestion?.Text;
         var open = runtime.TryGetSession(id, out var session);
         var job = IsJobRun(id) ? JobOf(runtime, id) : default;
         // A session this window made holding no message yet (a fork before the first one) is new, not its id.
-        return new SessionSummary(id, Line(title) ?? (_created.ContainsKey(id) || _forks.ContainsKey(id) ? "New session" : id))
+        return new SessionSummary(id, title ?? (_created.ContainsKey(id) || _forks.ContainsKey(id) ? "New session" : id))
         {
+            // G-7: pinned in ui.db, by this window or the CLI's /pin.
+            Pinned = (pinned ?? Pins()).Contains(id),
             // A job's run is the scheduler's: read-only here, as the demo's run is, and listed as the job's.
             ReadOnly = job.Name is not null,
             Holder = job.Name is not null ? JobHolder : null,
@@ -1037,7 +1007,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             LastActivity = last,
             Turns = turns,
             Tainted = open && session.Tainted,
-            Preview = Line(preview),
+            Preview = preview,
             ForkOf = _forks.TryGetValue(id, out var fork) ? fork.From : null,
             ForkTurn = _forks.TryGetValue(id, out var at) ? at.AtTurn : null,
         };
@@ -1068,6 +1038,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     /// <summary>A session this window started with nothing in it yet.</summary>
     private SessionSummary Empty(CorvidRuntime runtime, string id, DateTimeOffset created) => new(id, "New session")
     {
+        Pinned = Pins().Contains(id),
         Workspace = runtime.Builtin.Environment.Workspace,
         Surface = SurfaceOf(id),
         State = SessionState.Idle,

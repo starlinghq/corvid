@@ -1,4 +1,5 @@
 using Corvid.App.Core.Sessions;
+using Corvid.Host.Sessions;
 
 namespace Corvid.App.Engine.Sessions;
 
@@ -20,7 +21,12 @@ public sealed partial class EngineSessionService
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(text);
         ObjectDisposedException.ThrowIf(_disposed, this);
-        RefuseComposerMode(text);
+        // A4: a ! or # line is not a steer: it goes as Enter sends it (a # line is staged at once, a ! line queues as a turn).
+        if (ComposerLine.Parse(text) is not null)
+        {
+            await QueueAsync(sessionId, text, cancellationToken).ConfigureAwait(false);
+            return;
+        }
         var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
         var channel = await LoadAsync(sessionId, cancellationToken).ConfigureAwait(false);
         Writable(channel);

@@ -155,6 +155,9 @@ public static class PromptRenderer
         {
             if (spokenOnlyBefore is { } cutoff && entry.FromSequence < cutoff && entry.Content is not (UserMessage or UserSteered or AssistantMessage))
                 continue;
+            // A4: the composer's `!!` line ran a command for the user alone; its message, call and output never reach the model.
+            if (entry.Content is UserMessage { LocalOnly: true } or ToolCallIssued { LocalOnly: true } or ToolResult { LocalOnly: true })
+                continue;
             switch (entry.Content)
             {
                 case UserMessage user:

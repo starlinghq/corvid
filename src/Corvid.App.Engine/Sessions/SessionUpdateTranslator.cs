@@ -158,6 +158,8 @@ public sealed class SessionUpdateTranslator(string workspace)
             case ToolCallChanged { Tool: Corvid.Kernel.Turns.AskUserTool.ToolName }:
                 break;
             case ToolCallStarted started:
+                // A4: a ! line's turn is its shell call (TurnRunner's user-shell ids); it has no answer, and needs none.
+                _answered |= started.CallId.StartsWith(Corvid.Kernel.Turns.TurnRunner.UserShellCall, StringComparison.Ordinal);
                 output.Add(new ToolCall(started.CallId, started.Tool ?? started.Title, Kind(started.Kind, started.Tool), Status(started.Status))
                 {
                     At = at,

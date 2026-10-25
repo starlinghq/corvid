@@ -174,27 +174,8 @@ public sealed class EngineSessionTests
         await Assert.ThrowsAsync<KeyNotFoundException>(() => service.SteerAsync("cli-nowhere", "now", TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<KeyNotFoundException>(() =>
             service.AnswerQuestionAsync("cli-nowhere", "q-1", "yes", TestContext.Current.CancellationToken));
-        var rename = await Assert.ThrowsAsync<ServiceUnavailableException>(() =>
-            service.RenameAsync("cli-nowhere", "a title", TestContext.Current.CancellationToken));
-        Assert.StartsWith("Renaming comes with G-6:", rename.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task AShellOrMemoryLineIsRefusedNotSentAsText()
-    {
-        await using var fixture = await EngineFixture.StartAsync(NotesTurn());
-        var id = fixture.Runtime.OpenSession(surface: "app").Id;
-        using var service = fixture.Sessions();
-        var head = fixture.Runtime.Log.GetHead(id, TestContext.Current.CancellationToken);
-
-        var shell = await Assert.ThrowsAsync<ServiceUnavailableException>(() => service.SendAsync(id, "!ls", TestContext.Current.CancellationToken));
-        Assert.StartsWith("The ! shell line comes with the composer's shell mode", shell.Message, StringComparison.Ordinal);
-        var memory = await Assert.ThrowsAsync<ServiceUnavailableException>(() => service.QueueAsync(id, "  # I prefer tabs", TestContext.Current.CancellationToken));
-        Assert.StartsWith("The # memory line comes with the composer's memory mode", memory.Message, StringComparison.Ordinal);
-
-        // Nothing reached the log or the generator.
-        Assert.Equal(head, fixture.Runtime.Log.GetHead(id, TestContext.Current.CancellationToken));
-        Assert.False(((ISessionService)service).HasComposerModes);
+        // A title never starts a session of its own.
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => service.RenameAsync("cli-nowhere", "a title", TestContext.Current.CancellationToken));
     }
 
     [Theory]

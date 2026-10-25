@@ -38,6 +38,10 @@ public static class EventScrubber
             ApprovalRequested approval => Approval(approval),
             Decision decision => Decision(decision),
             DeliveryQueued delivery when Text(delivery.Text) is { } text => delivery with { Text = text },
+            // G-6: a generated title or recap is model output over the conversation; a rename is scrubbed too, since a
+            // title is shown in every list rather than kept as a recorded message.
+            SessionTitled titled when Text(titled.Title) is { } text => titled with { Title = text },
+            SessionRecapped recap when Text(recap.Text) is { } text => recap with { Text = text },
             _ => payload,
         };
     }

@@ -76,6 +76,8 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue) : IValidate
             errors.Add("Corvid:Approvals:TimeoutSeconds must be between 1 and 86400.");
         if (options.Turn.MaxSteps is < 1 or > 64)
             errors.Add("Corvid:Turn:MaxSteps must be between 1 and 64.");
+        if (options.Sessions.RecapAfterMinutes is < 0 or > 10_080)
+            errors.Add("Corvid:Sessions:RecapAfterMinutes must be between 0 (off) and 10080 (a week).");
         if (options.Turn.MaxOutputTokens is < 16 or > 65_536)
             errors.Add("Corvid:Turn:MaxOutputTokens must be between 16 and 65536.");
         if (options.Telemetry.OtlpEndpoint is { Length: > 0 } endpoint

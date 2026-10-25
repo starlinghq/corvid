@@ -32,10 +32,16 @@ namespace Corvid.Abstractions.Events;
 [JsonDerivedType(typeof(McpPinsForgotten), "mcp_pins_forgotten")]
 [JsonDerivedType(typeof(UserSteered), "user_steered")]
 [JsonDerivedType(typeof(ClarificationAsked), "clarification_asked")]
+[JsonDerivedType(typeof(SessionTitled), "session_titled")]
+[JsonDerivedType(typeof(SessionRecapped), "session_recapped")]
 public abstract record SessionEvent;
 
 // Text is the initial message surface. Provider-specific message objects are never stored here.
-public sealed record UserMessage(string Text) : SessionEvent;
+// LocalOnly (A4: the composer's `!!` line, docs/plan/tui.md §4.1) marks the message of a turn that ran a shell command for the
+// user with its output kept from the model: the prompt and the episodic index leave the message, its call and the call's
+// result out, and the log keeps all of them for audit. Omitted when null, so events written before it keep their form.
+public sealed record UserMessage(string Text,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? LocalOnly = null) : SessionEvent;
 public sealed record AssistantMessage(string Text) : SessionEvent;
 // K-3: a message the user sent into a running turn (steer now, Ctrl+Enter), taken at the turn's next step checkpoint. It is
 // part of the conversation like a UserMessage (the generator reads it as the user's words, after the results before it),
@@ -49,11 +55,16 @@ public sealed record ClarificationAsked(string QuestionId, string Text, Immutabl
 // Round (the turn's generator response that made the call, from 1) and ReadOnly (the tool's risk descriptor said read-only)
 // were added by C-026, so the recovery scan can tell a later round from a call run one at a time after approval, and a
 // read from a change, from the log alone. Both are omitted when null, so events written before them keep their persisted
-// form; ReadOnly is null when the call named no offered tool.
+// form; ReadOnly is null when the call named no offered tool. LocalOnly (A4) is a call the user ran from the composer's `!!`
+// line, which the prompt and the episodic index leave out with its result; omitted when null too.
 public sealed record ToolCallIssued(string CallId, string ToolName, JsonElement Arguments,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Round = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? ReadOnly = null) : SessionEvent;
-public sealed record ToolResult(string CallId, JsonElement Result, bool IsError = false) : SessionEvent;
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? ReadOnly = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? LocalOnly = null) : SessionEvent;
+// LocalOnly (A4) marks the result of a `!!` call, so a reader of one event (the episodic index) leaves it out without
+// finding its call; omitted when null.
+public sealed record ToolResult(string CallId, JsonElement Result, bool IsError = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? LocalOnly = null) : SessionEvent;
 // CatalogueVersion (the floors configuration in force) and Decider (which tier answered) were added by C-004a; State (the
 // TurnState the decider saw) and Question (instructions and options as asked) by C-021, so a decision can be exported as
 // a Kev training record; Calibrated (whether the answer came from a calibrated model, DecisionAnswer.Calibrated), also by
@@ -185,6 +196,30 @@ public sealed record DetectionMatched(string RuleId, int RuleVersion, string Sev
     ImmutableArray<long> Sequences,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? CallId = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Enforced = null) : SessionEvent;
+// G-6 (extends K-9, docs/plan/ui.md §9): the session's title, as lists and headers show it. Source is a TitleSources name:
+// "generated" when the local generator wrote it after the first exchange, "user" for a rename. The latest one is the title;
+// a generated title is appended only while the session has none, so it never replaces a rename. Session metadata: never in
+// the transcript or the prompt, and a rewind does not take it back.
+public sealed record SessionTitled(string Title, string Source) : SessionEvent;
+
+public static class TitleSources
+{
+    public const string Generated = "generated";
+    public const string User = "user";
+}
+
+// G-6: a few lines the local generator wrote about the session's events in (FromSequence, ThroughSequence], for a person
+// coming back to it (docs/plan/ui.md §4.5). Source is a RecapSources name: "requested" (/recap, the app's Recap) or
+// "absence" (the app opened the session after the person had been away). Display only: never in the transcript or the
+// prompt.
+public sealed record SessionRecapped(string Text, long FromSequence, long ThroughSequence, string Source) : SessionEvent;
+
+public static class RecapSources
+{
+    public const string Requested = "requested";
+    public const string Absence = "absence";
+}
+
 // C-025: the project a session works in, so its lessons are recalled and filed under it. ProjectId is the 64-character hex
 // hash of the normalized origin remote, main checkout path or workspace path; Source says which ("remote", "checkout",
 // "path"). Appended before a turn's user message when the session has no project yet or a different one.

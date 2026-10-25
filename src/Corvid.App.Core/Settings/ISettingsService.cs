@@ -24,4 +24,10 @@ public interface ISettingsService
 
     /// <summary>Saves the raw text as the file.</summary>
     Task<SettingsWrite> SaveJsonAsync(string json, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Where the app's own preferences (density, notifications, layout) are kept, for the panels' note: the engine keeps
+    /// them in ui.db (G-7); a service without it, for this run only. Added in A4 as a default member.
+    /// </summary>
+    string PreferencesNote => "kept for this run";
 }

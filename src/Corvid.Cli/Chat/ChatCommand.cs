@@ -1,6 +1,9 @@
 using System.Globalization;
+using Corvid.Abstractions.Events;
+using Corvid.Abstractions.Sessions;
 using Corvid.Host.Commands;
 using Corvid.Host.Composition;
+using Corvid.Host.Sessions;
 using Corvid.Kernel.Jobs;
 using Corvid.Kernel.Sessions;
 using Corvid.Kernel.Turns;
@@ -52,7 +55,9 @@ internal static class ChatCommand
             foreach (var notice in runtime.DeciderNotices)
                 renderer.Notice($"[yellow]{Markup.Escape(notice)}[/]");
             if (session.Snapshot().Head > 0)
-                renderer.Notice($"[grey]Resumed: {session.Snapshot().Transcript.Length} entries in this session's log.[/]");
+                await ResumeAsync(runtime, session, renderer, console, cancellationToken).ConfigureAwait(false);
+            // G-7: seen now, so a recap on the next return covers only what happens after.
+            Shared(() => runtime.UiState.MarkSeen(session.Id, runtime.Log.GetHead(session.Id), DateTimeOffset.UtcNow));
             // After the banner: runs that finished since the runtime started are replayed here (C-039), then later ones live.
             runtime.JobCompleted += OnJob;
 
@@ -138,10 +143,25 @@ internal static class ChatCommand
                         continue;
                     }
 
+                    // A4: the composer's ! and # lines (docs/plan/tui.md §4.1), read as the app reads them.
+                    var mode = ComposerLine.Parse(line);
+                    if (mode is ComposerLine.Empty empty)
+                    {
+                        renderer.Notice($"[yellow]{Markup.Escape(empty.Message)}[/]");
+                        continue;
+                    }
+                    if (mode is ComposerLine.Memory memory)
+                    {
+                        renderer.Output(await RememberAsync(session, memory.Text, leave.Token).ConfigureAwait(false));
+                        continue;
+                    }
                     line = ChatRenderer.Answer(question, line);
                     question = null;
+
                     renderer.BeginTurn();
-                    var turn = session.SendAsync(line, cancellationToken);
+                    var turn = mode is ComposerLine.Shell shell
+                        ? await session.PostShellAsync(line.Trim(), new ShellLine(shell.Command, shell.LocalOnly), cancellationToken).ConfigureAwait(false)
+                        : session.SendAsync(line, cancellationToken);
                     Volatile.Write(ref running, turn);
                     Delivery delivery;
                     try
@@ -151,6 +171,11 @@ internal static class ChatCommand
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
                         break;
+                    }
+                    if (mode is ComposerLine.Shell ran && delivery.Error is null)
+                    {
+                        var (output, exit) = ComposerLine.LastShellResult(session.Snapshot());
+                        renderer.ShellResult(output, exit, ran.LocalOnly);
                     }
                     renderer.EndTurn(delivery);
                     question = delivery.Result?.Question;
@@ -162,9 +187,86 @@ internal static class ChatCommand
                 runtime.JobCompleted -= OnJob;
             }
             console.MarkupLine($"[grey]Session {Markup.Escape(session.Id)} is in the log; resume it with `corvid chat --session {Markup.Escape(session.Id)}`.[/]");
+            // The title the local generator writes after the first exchange lands before the runtime goes.
             await runtime.MaintenanceIdleAsync().ConfigureAwait(false);
+            Shared(() => runtime.UiState.MarkSeen(session.Id, runtime.Log.GetHead(session.Id), DateTimeOffset.UtcNow));
         }
         return ExitCodes.Success;
+    }
+
+    /// <summary>
+    /// A resumed session (G-6, G-7): its title and size, the draft the app kept for it in <c>ui.db</c> (the chat reads lines,
+    /// so the draft is shown rather than put back), and a recap when the person has been away longer than
+    /// <c>Corvid:Sessions:RecapAfterMinutes</c>.
+    /// </summary>
+    private static async Task ResumeAsync(CorvidRuntime runtime, CorvidSession session, ChatRenderer renderer, IAnsiConsole console,
+        CancellationToken cancellationToken)
+    {
+        var description = SessionCatalogue.Describe(runtime.Log, session.Id, cancellationToken);
+        var title = description?.Title is { } named ? $" Title: \"{named}\" (/rename changes it)." : "";
+        renderer.Notice($"[grey]Resumed: {session.Snapshot().Transcript.Length} entries in this session's log.{Markup.Escape(title)}[/]");
+        var draft = Shared(() => runtime.UiState.GetDraft(session.Id));
+        if (draft is { Text.Length: > 0 })
+            renderer.Notice($"[grey]A draft from the app is waiting for this session: {Markup.Escape(SessionCatalogue.Line(draft.Text) ?? "")}[/]");
+        var seen = Shared(() => runtime.UiState.LastSeen(session.Id));
+        if (description is null || !runtime.Titles.ShouldRecapOnReturn(description, seen?.At))
+            return;
+        try
+        {
+            var recap = console.Profile.Capabilities.Interactive
+                ? await console.Status().StartAsync("Recapping what happened while you were away…",
+                    _ => runtime.RecapAsync(session.Id, RecapSources.Absence, cancellationToken)).ConfigureAwait(false)
+                : await runtime.RecapAsync(session.Id, RecapSources.Absence, cancellationToken).ConfigureAwait(false);
+            if (recap is not null)
+                renderer.Output(new CommandOutput
+                {
+                    Title = "While you were away",
+                    Lines = [.. SessionCatalogue.Visible(recap.Text).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)],
+                });
+        }
+        catch (InvalidOperationException exception)
+        {
+            renderer.Notice($"[grey]No recap: {Markup.Escape(exception.Message)}[/]");
+        }
+    }
+
+    /// <summary>A <c>#</c> line through memory's gated write path, as command output.</summary>
+    private static async Task<CommandOutput> RememberAsync(CorvidSession session, string fact, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var (text, problem) = ComposerLine.Describe(await session.RememberAsync(fact, cancellationToken).ConfigureAwait(false), fact);
+            return problem ? CommandOutput.Warning(text) : CommandOutput.Success(text);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return CommandOutput.Warning(exception.Message);
+        }
+        catch (ArgumentException exception)
+        {
+            // The extractor refused the text (too long).
+            return CommandOutput.Warning("Not remembered: " + exception.Message);
+        }
+    }
+
+    // ui.db is a convenience: a file another process holds too long, or a read-only data directory, never stops the chat.
+    private static void Shared(Action action) => Shared<object?>(() =>
+    {
+        action();
+        return null;
+    });
+
+    private static T? Shared<T>(Func<T> read)
+    {
+        try
+        {
+            return read();
+        }
+        catch (Exception exception) when (exception is System.Data.Common.DbException or IOException or UnauthorizedAccessException
+            or InvalidDataException)
+        {
+            return default;
+        }
     }
 
     /// <summary>

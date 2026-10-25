@@ -876,6 +876,28 @@
               </Flyout>
             </controls:CorvidButton.Flyout>
           </controls:CorvidButton>
+          <!-- A4: the session's records: rename (G-6), pin to the rail (G-7, ui.db) and a recap by the local generator. -->
+          <controls:IconButton x:Name="SessionMenuButton" Icon="More" AutomationProperties.Name="Rename, pin or recap this session"
+                               ToolTipService.ToolTip="Rename, pin or recap this session">
+            <controls:IconButton.Flyout>
+              <Flyout x:Name="SessionMenu" Placement="BottomEdgeAlignedRight" Opening="OnSessionMenuOpening">
+                <StackPanel Spacing="8" Width="300">
+                  <TextBlock Text="Rename the session" FontWeight="SemiBold" />
+                  <TextBox x:Name="RenameBox" PlaceholderText="A title for the rail and the CLI's /sessions" AutomationProperties.Name="Session title"
+                           KeyDown="OnRenameKeyDown" />
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <controls:CorvidButton x:Name="RenameButton" Content="Rename" Variant="Primary" Style="{StaticResource CorvidSmallButton}" Click="OnRename" />
+                    <TextBlock Text="Kept in the log; the CLI shows it too." Style="{StaticResource CorvidSmallText}" VerticalAlignment="Center" />
+                  </StackPanel>
+                  <Border Height="1" Background="{ThemeResource CorvidLine}" Margin="0,2" />
+                  <controls:CorvidButton x:Name="PinButton" Variant="Ghost" HorizontalAlignment="Left" Click="OnTogglePin"
+                                         Content="{x:Bind ViewModel.Session.PinLabel, Mode=OneWay, FallbackValue='Pin to the rail'}" />
+                  <controls:CorvidButton x:Name="RecapButton" Content="Recap what happened" Variant="Ghost" HorizontalAlignment="Left" Click="OnRecap"
+                                         ToolTipService.ToolTip="A few lines by the local generator on what happened since the last recap" />
+                </StackPanel>
+              </Flyout>
+            </controls:IconButton.Flyout>
+          </controls:IconButton>
           <controls:IconButton x:Name="PopOutButton" Icon="PopOut" IsEnabled="False" AutomationProperties.Name="Pop out into its own window"
                                ToolTipService.ToolTip="Pop out into its own window (comes with multiple windows)" />
         </StackPanel>

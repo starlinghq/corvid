@@ -7,6 +7,7 @@ using Corvid.App.Core.Sessions;
 using Corvid.App.Engine.History;
 using Corvid.App.Engine.Sessions;
 using Corvid.Host.Composition;
+using Corvid.Host.State;
 using Corvid.Kernel.Checkpoints;
 using Corvid.Tools;
 using Corvid.Tools.Builtin;
@@ -22,7 +23,7 @@ namespace Corvid.App.Engine.Review;
 /// Comments go to the session as one message through the window's session service. One file goes back with
 /// <see cref="CorvidSession.RollbackToAsync"/>, files only and that path only (G-3), merging three ways as a restore does.
 /// <para>
-/// Review points live in this process only (G-7 keeps them in <c>ui.db</c>, which the host does not have yet). Open in
+/// Review points are kept in <c>ui.db</c> (G-7), beside the log, so "since last review" lasts across restarts. Open in
 /// editor runs <c>$VISUAL</c> or <c>$EDITOR</c> when one is set and is not a terminal editor, with an argument list and no
 /// shell; otherwise it is refused, saying how to set one.
 /// </para>
@@ -48,7 +49,6 @@ public sealed class EngineReviewService : IReviewService, IDisposable
     private readonly Func<string, string?> _environment;
     private readonly Func<ProcessStartInfo, Process?> _start;
     private readonly Lazy<Task<LedgerTexts>> _texts;
-    private readonly ConcurrentDictionary<string, (ReviewPoint Point, long Head)> _points = new(StringComparer.Ordinal);
     /// <summary>Files put back from here, by session: the checkpoint each went back to.</summary>
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, string>> _reverted = new(StringComparer.Ordinal);
 
@@ -79,7 +79,10 @@ public sealed class EngineReviewService : IReviewService, IDisposable
         return await Task.Run(async () =>
         {
             var ledger = SessionLedger.Load(runtime, sessionId, cancellationToken);
-            var point = _points.TryGetValue(sessionId, out var known) ? known : ((ReviewPoint, long)?)null;
+            // G-7: the point in ui.db, with the log head it was sent at.
+            var point = runtime.UiState.GetReviewPoint(sessionId) is { } kept
+                ? (new ReviewPoint(kept.Turn, kept.CommentsSent, kept.At), kept.Head)
+                : ((ReviewPoint, long)?)null;
             Func<KernelEntry, bool> inScope = scope switch
             {
                 ReviewScope.ThisTurn => entry => ledger.TurnAt(entry.CallSequence) == ledger.Turn,
@@ -141,7 +144,8 @@ public sealed class EngineReviewService : IReviewService, IDisposable
         await _sessions.SendAsync(sessionId, ReviewMessage.Compose(comments), cancellationToken).ConfigureAwait(true);
         var point = new ReviewPoint(ledger.Turn, comments.Count, _time.GetUtcNow());
         // What the ledger held when the comments went is reviewed; "since last review" is every call after it.
-        _points[sessionId] = (point, ledger.Head);
+        await Task.Run(() => runtime.UiState.SetReviewPoint(new UiReviewPoint(sessionId, point.Turn, point.CommentsSent, point.At, ledger.Head)),
+            cancellationToken).ConfigureAwait(true);
         return point;
     }
 
