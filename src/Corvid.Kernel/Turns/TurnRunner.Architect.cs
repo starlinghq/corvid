@@ -134,7 +134,7 @@ public sealed partial class TurnRunner
         /// <summary>
         /// The generator slot is on the planner (just escalated): one plan, no tools, through the planner's own binding (so a
         /// refusal of its egress gate is not retreated into a local plan), logged with its <see cref="TurnPlan"/>; then the
-        /// slot goes to the editor. A refused planner records <c>{planner}: privacy</c> and hands back unplanned, so nothing
+        /// slot goes to the editor. A refused planner records <c>{editor}: privacy</c> and hands back unplanned, so nothing
         /// the gate kept back leaves and the turn goes on locally. A planner that fails otherwise, or writes nothing, leaves
         /// the turn where an ordinary escalation would: on the escalated model.
         /// </summary>
@@ -158,7 +158,8 @@ public sealed partial class TurnRunner
             catch (PrivacyEgressRefusedException)
             {
                 // Plan §10.4: the gate refused the planner before anything was sent; the work stays local, unplanned.
-                _escalations.Add($"{planner.Profile.Id}: {PrivacyRetreat}");
+                // Named for the model the work stays on, as a slot's privacy retreat is.
+                _escalations.Add($"{editor.Profile.Id}: {PrivacyRetreat}");
                 await HandBackAsync(editor, cancellationToken).ConfigureAwait(false);
                 return;
             }
@@ -208,15 +209,16 @@ public sealed partial class TurnRunner
 
         /// <summary>
         /// The model that applies a plan: <see cref="TurnOptions.EditorModel"/> when one of the generator slot's bindings has
-        /// that profile id (the default, a fallback or a rung of the ladder, the mix's for a session with one), else the
-        /// session's own generator.
+        /// that profile id or is that model at some placement (<c>name@placement</c>; the default, a fallback or a rung of the
+        /// ladder, the mix's for a session with one), else the session's own generator.
         /// </summary>
         private ModelBinding EditorBinding()
         {
             var slots = _services.Slots;
             if (_options.EditorModel is { Length: > 0 } wanted && slots.TryConfiguration(ModelSlots.Generator, out var configuration))
                 foreach (var binding in new[] { configuration.Default }.Concat(configuration.Fallbacks).Concat(configuration.Escalation))
-                    if (string.Equals(binding.Profile.Id, wanted, StringComparison.Ordinal))
+                    if (string.Equals(binding.Profile.Id, wanted, StringComparison.OrdinalIgnoreCase)
+                        || binding.Profile.Id.StartsWith(wanted + "@", StringComparison.OrdinalIgnoreCase))
                         return binding;
             return slots.SessionDefault(ModelSlots.Generator);
         }

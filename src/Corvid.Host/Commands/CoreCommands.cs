@@ -29,6 +29,8 @@ public static class CoreCommands
             .Add(new SlashCommand("help", "List the commands.", "", Help))
             .Add(new SlashCommand("model", "Pick a model: lists a slot's models numbered, or switches one for this session.",
                 ModelUsage, ModelAsync) { Aliases = ["models"], DuringTurn = true })
+            // A7: architect/editor turns asked for by the person; it sets what the next turn does, so it runs beside one.
+            .Add(new SlashCommand("architect", ArchitectCommand.Summary, ArchitectCommand.Usage, ArchitectCommand.Run) { DuringTurn = true })
             .Add(new SlashCommand("status", "Slots with their device, queue depth and median latency; the session's state.", "", Status))
             .Add(new SlashCommand("goal", "Show, set or clear the standing goal.", "[text | clear]", Goal))
             .Add(new SlashCommand("approvals", "Pending approvals and the remembered approval rules.", "", Approvals))

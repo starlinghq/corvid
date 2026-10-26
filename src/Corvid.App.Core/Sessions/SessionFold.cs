@@ -86,6 +86,8 @@ public static class SessionFold
             QuestionAsked question => OnQuestion(state, question),
             QuestionAnswered answered => OnQuestionAnswered(state, answered),
             CompactionUpdate compaction => AddNew(state, "compaction", id => new CompactionEntry(id, compaction) { Turn = 0 }),
+            // A7: an architect/editor turn's plan, in its turn where it was made, before the editor's calls.
+            TurnPlanned planned => AddNew(state, "plan", id => new TurnPlanEntry(id, planned)),
             Notice notice => AddNew(state, "notice", id => new NoticeEntry(id, notice)),
             _ => state,
         };

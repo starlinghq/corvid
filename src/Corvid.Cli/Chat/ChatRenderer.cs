@@ -144,6 +144,23 @@ internal sealed class ChatRenderer : ITurnObserver
         }
     }
 
+    /// <summary>
+    /// A7: an architect/editor turn's plan, printed once it is logged, before the editor's calls: who planned and who edits,
+    /// then the plan itself, dimmed (a model's text, cleaned of control and hidden characters).
+    /// </summary>
+    public void Planned(Corvid.Abstractions.Events.TurnPlan plan, string text)
+    {
+        lock (_gate)
+        {
+            StopPanel();
+            EndText();
+            _console.MarkupLine($"  [blue]✎[/] [grey]{(plan.Attempt > 1 ? "re-planned" : "planned")} by[/] {Markup.Escape(TerminalText.Visible(plan.Planner))}"
+                + $" [grey]· edited by[/] {Markup.Escape(TerminalText.Visible(plan.Editor))}");
+            foreach (var line in TerminalText.Visible(text).ReplaceLineEndings("\n").Split('\n'))
+                _console.MarkupLine($"    [grey]{Markup.Escape(line)}[/]");
+        }
+    }
+
     /// <summary>Turn progress: the live panel's header says the step ("step 2 of 8").</summary>
     public void Progress(int step, int maxSteps)
     {
@@ -503,6 +520,8 @@ internal sealed class ChatRenderer : ITurnObserver
         var parts = new List<string> { status ?? TurnRunner.StatusName(result.Status).Replace('_', ' ') };
         if (result.Steps > 0)
             parts.Add($"{result.Steps} step(s), {result.ToolCalls} tool call(s)");
+        // A7: an architect/editor turn says who planned and who edited.
+        parts.AddRange(result.Plans.Select(plan => $"{(plan.Attempt > 1 ? "re-planned" : "planned")} by {plan.Planner}, edited by {plan.Editor}"));
         parts.AddRange(result.Escalations.Select(escalation => escalation.EndsWith(": " + TurnRunner.PrivacyRetreat, StringComparison.Ordinal)
             ? $"kept local on {escalation[..^(TurnRunner.PrivacyRetreat.Length + 2)]}: the privacy policy refused the cloud model"
             : "escalated to " + escalation));

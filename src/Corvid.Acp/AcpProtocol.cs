@@ -186,6 +186,9 @@ internal static class ToolKinds
     public const string Search = "search";
     public const string Execute = "execute";
     public const string Fetch = "fetch";
+
+    /// <summary>A7: a step of thought, as an architect/editor turn's plan is shown.</summary>
+    public const string Think = "think";
     public const string Other = "other";
 }
 

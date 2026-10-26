@@ -435,6 +435,7 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
         NoticeEntry notice => new NoticeBlock(notice, _context),
         DetectionEntry detection => new DetectionBlock(detection, _context),
         CompactionEntry compaction => new CompactionBlock(compaction, _context),
+        TurnPlanEntry plan => new PlanBlock(plan, _context),
         RewindEntry rewind => new RewindBlock(rewind, _context),
         QuestionEntry question => new QuestionBlock(question, _context),
         CommandEntry command => new CommandBlock(command, _context),

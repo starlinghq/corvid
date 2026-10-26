@@ -549,6 +549,19 @@ public sealed class TurnSettings
     /// reduces only when Kev runs on the CPU.
     /// </summary>
     public ReducedCheckpoints ReducedCheckpoints { get; set; } = ReducedCheckpoints.Auto;
+
+    /// <summary>
+    /// A7, architect/editor turns (plan §6): when a coding turn escalates (difficulty, context or repair), the escalated model
+    /// writes one plan and the session's own model (or <see cref="EditorModel"/>) makes the edits; an editor that gets stuck
+    /// gets one re-plan. Default off. <c>/architect</c> asks for it for the next turn or the session, whatever this says.
+    /// </summary>
+    public bool ArchitectEditor { get; set; }
+
+    /// <summary>
+    /// A7: the model that applies an architect/editor turn's plan, by name (a catalogue model on the generator slot's
+    /// default, fallbacks or escalation ladder); unset, or a model not on them, uses the session's own generator.
+    /// </summary>
+    public string? EditorModel { get; set; }
 }
 
 /// <summary>Whether the fabric runs the reduced checkpoint profile (C-030).</summary>

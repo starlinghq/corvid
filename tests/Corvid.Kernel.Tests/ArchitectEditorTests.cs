@@ -277,7 +277,7 @@ public sealed class ArchitectEditorTests
         var tainted = await GatedTurnAsync(EnvelopeOrigin.External);
         Assert.Empty(tainted.Large.Calls);
         Assert.Empty(tainted.Result.Plans);
-        Assert.Equal(["gen-cloud: difficulty", "gen-cloud: privacy"], tainted.Result.Escalations);
+        Assert.Equal(["gen-cloud: difficulty", "gen-small: privacy"], tainted.Result.Escalations);
         Assert.Equal("Edited locally.", tainted.Result.Text);
         Assert.True(tainted.Result.Tainted);
         Assert.Equal(["escalation", "de_escalation"], tainted.Events.OfType<ModelSwitched>().Select(change => change.Reason));

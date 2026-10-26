@@ -62,6 +62,7 @@ internal sealed class TurnReporter : ITurnObserver
     private static SessionUpdate? Live(SessionStreamUpdate update) => update switch
     {
         AnswerChunk chunk => new AgentMessageChunk(new TextContent(chunk.Text)),
+        TurnPlanned planned => Plan(planned),
         ToolCallStarted started => new ToolCall(started.CallId, started.Title, started.Kind, Status(started.Status))
         {
             RawInput = started.Input,
@@ -91,6 +92,7 @@ internal sealed class TurnReporter : ITurnObserver
     {
         PromptSent prompt => new UserMessageChunk(new TextContent(prompt.Text)),
         AnswerChunk chunk => new AgentMessageChunk(new TextContent(chunk.Text)),
+        TurnPlanned planned => Plan(planned),
         ToolCallStarted started => new ToolCall(started.CallId, started.Title, started.Kind, Status(started.Status))
         {
             RawInput = started.Input,
@@ -126,6 +128,19 @@ internal sealed class TurnReporter : ITurnObserver
         },
         _ => null,
     };
+
+    /// <summary>
+    /// A7: an architect/editor turn's plan as a finished <c>think</c> step (<c>plan-{sequence}</c>), titled with who planned
+    /// and who edits, the plan as its content, live and on <c>session/load</c> alike. Model text, sent as text: the client
+    /// renders it, nothing runs it.
+    /// </summary>
+    internal static ToolCall Plan(TurnPlanned planned) =>
+        new("plan-" + planned.Sequence.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            $"Plan by {planned.Plan.Planner} · edited by {planned.Plan.Editor}" + (planned.Plan.Attempt > 1 ? " (re-plan)" : ""),
+            ToolKinds.Think, ToolStatuses.Completed)
+        {
+            Content = [new ContentToolCallContent(new TextContent(planned.Text))],
+        };
 
     private static string Short(string text)
     {

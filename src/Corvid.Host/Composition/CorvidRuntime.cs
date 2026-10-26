@@ -739,6 +739,9 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
                 AsksQuestions = child is null,
                 // C-005 has no examples file; C-012 wrote the built-in tools' examples by hand.
                 ToolExamples = ToolExamples,
+                // A7: architect/editor turns, and the model that applies a plan.
+                ArchitectEditor = turn.ArchitectEditor,
+                EditorModel = turn.EditorModel,
             },
         };
     }

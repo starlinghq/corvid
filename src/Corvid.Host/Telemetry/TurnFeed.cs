@@ -52,6 +52,12 @@ public interface ITurnObserver
     /// previous tail. Untrusted text: clean it before showing it.
     /// </summary>
     void ToolOutput(string callId, string tool, string tail) { }
+
+    /// <summary>
+    /// A7: an architect/editor turn's plan was logged, written by <c>plan.Planner</c> for <c>plan.Editor</c>, whose calls
+    /// follow. Model text: untrusted, clean it before showing it.
+    /// </summary>
+    void Planned(Abstractions.Events.TurnPlan plan, string text) { }
 }
 
 public sealed record QuestionDecision(string Question, double Confidence, string Action, bool Acted);
@@ -120,6 +126,9 @@ public sealed class TurnFeed : IDisposable
 
         public void ToolOutput(string sessionId, string callId, string tool, string tail) =>
             feed.Publish(sessionId, observer => observer.ToolOutput(callId, tool, tail));
+
+        public void Planned(string sessionId, Abstractions.Events.TurnPlan plan, string text) =>
+            feed.Publish(sessionId, observer => observer.Planned(plan, text));
     }
 
     private void Started(Activity activity)

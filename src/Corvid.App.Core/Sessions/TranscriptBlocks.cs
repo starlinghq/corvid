@@ -38,6 +38,8 @@ public enum TranscriptBlockKind
     Question,
     /// <summary><see cref="CommandBlock"/>: a slash command's output.</summary>
     Command,
+    /// <summary>A7, <see cref="PlanBlock"/>: an architect/editor turn's plan, "planned by X · edited by Y".</summary>
+    Plan,
 }
 
 /// <summary>What a block needs from its session to word itself and to act: the clock, the zone, and the session's actions.</summary>
@@ -591,6 +593,51 @@ internal static class DetectionText
 
     public static IReadOnlyList<string> Events(DetectionInfo detection) =>
         [.. detection.Events.Select(match => string.Create(CultureInfo.InvariantCulture, $"#{match.Sequence} {SafeText.Clean(match.Summary)}"))];
+}
+
+/// <summary>
+/// A7: an architect/editor turn's plan (plan §6): "planned by claude-sonnet-5 · edited by qwen3.5-0.8b" as a muted link,
+/// and the plan under it when expanded (collapsed at first, like a thought). The plan and the model names are untrusted
+/// text, cleaned.
+/// </summary>
+public sealed class PlanBlock : TranscriptBlock
+{
+    private string _label = "";
+    private string _text = "";
+    private bool _isExpanded;
+
+    internal PlanBlock(TurnPlanEntry entry, BlockContext context)
+        : base(entry)
+    {
+        ToggleCommand = new RelayCommand(() => IsExpanded = !IsExpanded);
+        Apply(entry, context);
+    }
+
+    public override TranscriptBlockKind Kind => TranscriptBlockKind.Plan;
+
+    /// <summary>"planned by X · edited by Y", or "re-planned by X · edited by Y" for the re-plan of a stuck editor.</summary>
+    public string Label { get => _label; private set => SetProperty(ref _label, value); }
+
+    /// <summary>The plan, cleaned.</summary>
+    public string Text { get => _text; private set => SetProperty(ref _text, value); }
+
+    public bool IsExpanded { get => _isExpanded; set => SetProperty(ref _isExpanded, value); }
+
+    public RelayCommand ToggleCommand { get; }
+
+    internal override void Apply(TranscriptEntry entry, BlockContext context)
+    {
+        var plan = ((TurnPlanEntry)entry).Plan;
+        Label = Words(plan);
+        Text = SafeText.Clean(plan.Text);
+    }
+
+    /// <summary>The label's words for a plan.</summary>
+    public static string Words(TurnPlanned plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        return $"{(plan.Attempt > 1 ? "re-planned" : "planned")} by {SafeText.Clean(plan.Planner)} · edited by {SafeText.Clean(plan.Editor)}";
+    }
 }
 
 /// <summary>A labelled line of a compaction record ("goal", "decisions").</summary>

@@ -24,7 +24,9 @@ internal sealed class InstrumentedChatClient(IChatClient inner, ModelProfile pro
         try
         {
             ChatResponse response;
-            if (stream is not null && HostTelemetry.StreamingSessionOf(Activity.Current) is { } session && stream.HasObservers(session))
+            // A7: an architect/editor turn's plan is not streamed as the answer; surfaces show it once it is logged.
+            if (stream is not null && HostTelemetry.StreamingSessionOf(Activity.Current) is { } session && stream.HasObservers(session)
+                && options?.AdditionalProperties?.TryGetValue(global::Corvid.Models.Privacy.ModelRequestKeys.Unstreamed, out _) != true)
             {
                 stream.Publish(session, observer => observer.GenerationStarted());
                 var updates = new List<ChatResponseUpdate>();
