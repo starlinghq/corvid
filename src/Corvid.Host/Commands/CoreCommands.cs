@@ -57,7 +57,7 @@ public static class CoreCommands
             .Add(new SlashCommand("pin", "Keep this session at the top of the app's rail and of /sessions.", "[off]", SessionCommands.Pin))
             .Add(new SlashCommand("fork", "Fork this session into a new one; during a turn, at its last completed step.", ForkCommand.Usage,
                 ForkCommand.RunAsync) { DuringTurn = true })
-            .Add(new SlashCommand("workspace", "Where this session works; start a session in another directory or a new git worktree.",
+            .Add(new SlashCommand("workspace", "Where this session works; start a session in another directory or a new git worktree, or remove one Corvid made.",
                 WorkspaceCommands.Usage, WorkspaceCommands.RunAsync))
             .Add(new SlashCommand("exit", "Leave the session.", "", Exit) { Aliases = ["quit"] });
     }

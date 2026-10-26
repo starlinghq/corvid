@@ -121,6 +121,9 @@ public sealed class WorkspaceChooserViewModel : ObservableObject
         WorktreeCommand.NotifyCanExecuteChanged();
         Error = "";
         IsOpen = true;
+        // Typed afresh each time (A6 e2e: a second worktree's name was appended to the first's), once the boxes show.
+        Path = "";
+        WorktreeName = "";
     }
 
     private Task WorktreeAsync()

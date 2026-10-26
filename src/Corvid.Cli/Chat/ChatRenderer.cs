@@ -366,10 +366,14 @@ internal sealed class ChatRenderer : ITurnObserver
             $" from {Markup.Escape(TerminalText.Visible(change.From))}{Markup.Escape(cloud)}[/]";
     }
 
+    /// <summary>A line of its own, also after an answer that streamed without a newline (A6 fix).</summary>
     public void Notice(string markup)
     {
         lock (_gate)
+        {
+            EndText();
             _console.MarkupLine(markup);
+        }
     }
 
     /// <summary>Command output for any surface that writes to a Spectre console (chat, <c>corvid model</c>).</summary>

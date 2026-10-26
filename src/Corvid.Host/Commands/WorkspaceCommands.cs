@@ -66,7 +66,7 @@ internal static class WorkspaceCommands
         var others = runtime.OpenWorkspaces.Where(workspace => workspace.Root != session.Workspace.Root).ToList();
         if (others.Count > 0)
             lines.Add("Other workspaces open here: " + string.Join(", ", others.Select(workspace => TerminalText.Visible(workspace.Root))) + ".");
-        lines.Add("A session keeps its workspace: /workspace open <path> or /workspace new [<name>] (a git worktree) starts another.");
+        lines.Add("A session keeps its workspace: /workspace open <path> or /workspace new [<name>] (a git worktree) starts another; /workspace list shows the worktrees Corvid made, and /workspace remove <name> removes one.");
         return new CommandOutput { Title = "Workspace", Lines = [.. lines] };
     }
 
