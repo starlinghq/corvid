@@ -1,5 +1,5 @@
 <linker>
-  <!-- Keep the app's own types for XAML's reflection-based paths when the WebAssembly build is trimmed. -->
-  <assembly fullname="Corvid.App" />
+  <!-- Keep the app's own types (the assembly is corvid-app since U-7) for XAML's reflection-based paths when the WebAssembly build is trimmed. -->
+  <assembly fullname="corvid-app" />
   <assembly fullname="Corvid.App.Core" />
 </linker>

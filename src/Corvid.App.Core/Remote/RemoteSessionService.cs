@@ -210,7 +210,7 @@ public sealed class RemoteSessionService : ISessionService, IAsyncDisposable, ID
             var item = new JsonObject { ["data"] = Convert.ToBase64String(image.Data) };
             if (image.Name is { Length: > 0 } name)
                 item["name"] = Path.GetFileName(name);
-            array.Add(item);
+            array.Add((JsonNode)item); // the JsonNode overload: Add<T> is not trim-safe (the WebAssembly head trims)
         }
         return CallAsync(AttachedProtocol.Prompt, new JsonObject { ["sessionId"] = sessionId, ["text"] = text, ["images"] = array }, cancellationToken);
     }
