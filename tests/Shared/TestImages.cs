@@ -118,6 +118,106 @@ internal static class TestImages
         return output.ToArray();
     }
 
+    /// <summary>
+    /// A6 review: a progressive JPEG with <see cref="Secret"/> where a walk that stops at the first scan keeps it: an ICC
+    /// profile before the frame, an APP1 and a comment between two scans, and bytes after EOI. Its scans hold a stuffed
+    /// 0xFF00, a restart marker and fill bytes, which are image data.
+    /// </summary>
+    public static byte[] ProgressiveJpeg(int width = 64, int height = 48)
+    {
+        var secret = Encoding.ASCII.GetBytes(Secret);
+        using var output = new MemoryStream();
+        output.Write([0xFF, 0xD8]);
+        Segment(output, 0xE0, [.. "JFIF\0"u8, 1, 1, 0, 0, 1, 0, 1, 0, 0]);
+        Segment(output, 0xE2, [.. "ICC_PROFILE\0"u8, 1, 1, .. secret]);
+        Segment(output, 0xDB, [0, .. Enumerable.Repeat((byte)1, 64)]);
+        var frame = new byte[] { 8, 0, 0, 0, 0, 1, 1, 0x11, 0 };
+        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(1), (ushort)height);
+        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(3), (ushort)width);
+        Segment(output, 0xC2, frame);
+        Segment(output, 0xC4, [0, 1, .. new byte[15], 0]);
+        Segment(output, 0xDA, [1, 1, 0, 0, 0, 0]);
+        output.Write([0x12, 0xFF, 0x00, 0x34, 0xFF, 0xD0, 0x56, 0xFF, 0xFF]);
+        Segment(output, 0xE1, [.. "Exif\0\0"u8, .. Exif()]);
+        Segment(output, 0xFE, secret);
+        Segment(output, 0xC4, [0x10, 1, .. new byte[15], 0]);
+        Segment(output, 0xDA, [1, 1, 0, 1, 63, 0]);
+        output.Write([0x9A, 0xBC, 0xFF, 0x00]);
+        output.Write([0xFF, 0xD9]);
+        output.Write(secret);
+        return output.ToArray();
+    }
+
+    /// <summary>A6 review: a PNG with an iCCP chunk whose profile name and data hold <see cref="Secret"/>.</summary>
+    public static byte[] PngWithIcc()
+    {
+        var png = Png(metadata: false);
+        using var output = new MemoryStream();
+        // After the signature and IHDR (8 + 25 bytes), as an encoder writes it.
+        output.Write(png.AsSpan(0, 33));
+        Chunk(output, "iCCP", [.. "ICC\0"u8, 0, .. Encoding.ASCII.GetBytes(Secret)]);
+        output.Write(png.AsSpan(33));
+        return output.ToArray();
+    }
+
+    /// <summary>
+    /// A6 review: an animated WebP with an ICCP chunk (and its flag), a chunk no decoder knows, and a frame holding a chunk of
+    /// its own beside its bitstream, each with <see cref="Secret"/>.
+    /// </summary>
+    public static byte[] AnimatedWebp(int width = 16, int height = 9)
+    {
+        var secret = Encoding.ASCII.GetBytes(Secret);
+        using var body = new MemoryStream();
+        body.Write("WEBP"u8);
+        var vp8x = new byte[10];
+        vp8x[0] = 0x20 | 0x02; // ICC and animation
+        vp8x[4] = (byte)(width - 1);
+        vp8x[7] = (byte)(height - 1);
+        RiffChunk(body, "VP8X", vp8x);
+        RiffChunk(body, "ICCP", secret);
+        RiffChunk(body, "ANIM", [0, 0, 0, 0, 0, 0]);
+        using (var frame = new MemoryStream())
+        {
+            var header = new byte[16];
+            header[6] = (byte)(width - 1);
+            header[9] = (byte)(height - 1);
+            frame.Write(header);
+            RiffChunk(frame, "ZZZZ", secret);
+            var bits = (uint)(width - 1) | (uint)(height - 1) << 14;
+            var lossless = new byte[] { 0x2F, 0, 0, 0, 0, 0 };
+            BinaryPrimitives.WriteUInt32LittleEndian(lossless.AsSpan(1), bits);
+            RiffChunk(frame, "VP8L", lossless);
+            RiffChunk(body, "ANMF", frame.ToArray());
+        }
+        RiffChunk(body, "UNKN", secret);
+        using var output = new MemoryStream();
+        output.Write("RIFF"u8);
+        Span<byte> size = stackalloc byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(size, (uint)body.Length);
+        output.Write(size);
+        output.Write(body.ToArray());
+        return output.ToArray();
+    }
+
+    /// <summary>A6 review: a GIF whose logical screen is small and whose one frame is placed and sized as given.</summary>
+    public static byte[] GifWithFrame(int left, int top, int width, int height)
+    {
+        using var output = new MemoryStream();
+        output.Write("GIF89a"u8);
+        output.Write([2, 0, 2, 0, 0x80, 0, 0]);
+        output.Write([0, 0, 0, 255, 255, 255]);
+        Span<byte> descriptor = stackalloc byte[10];
+        descriptor[0] = 0x2C;
+        BinaryPrimitives.WriteUInt16LittleEndian(descriptor[1..], (ushort)left);
+        BinaryPrimitives.WriteUInt16LittleEndian(descriptor[3..], (ushort)top);
+        BinaryPrimitives.WriteUInt16LittleEndian(descriptor[5..], (ushort)width);
+        BinaryPrimitives.WriteUInt16LittleEndian(descriptor[7..], (ushort)height);
+        output.Write(descriptor);
+        output.Write([2, 2, 0x44, 0x01, 0]);
+        output.WriteByte(0x3B);
+        return output.ToArray();
+    }
+
     /// <summary>Whether the bytes still hold <see cref="Secret"/> anywhere.</summary>
     public static bool HoldsSecret(ReadOnlySpan<byte> data) => data.IndexOf(Encoding.ASCII.GetBytes(Secret)) >= 0;
 
