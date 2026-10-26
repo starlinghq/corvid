@@ -516,7 +516,7 @@ public sealed class CorvidRuntimeFactory(
         {
             Lessons = lessons,
             LessonLearner = learner,
-            Consolidator = writer is null ? null : Consolidator(settings, composer, blocks, writer, log),
+            Consolidator = writer is null ? null : Consolidator(settings, composer, blocks, facts, writer, log),
         };
     }
 
@@ -527,7 +527,7 @@ public sealed class CorvidRuntimeFactory(
     internal static IDisposable ConsolidationRequest(Corvid.Memory.CoreBlock block) =>
         new Corvid.Models.Privacy.ModelRequestContext(Abstractions.Events.MemoryJobs.Session, Tainted: false, block.LocalOnly).Enter();
 
-    private static BlockConsolidator Consolidator(CorvidOptions settings, ModelComposer composer, CoreBlockStore blocks, MemoryWriter writer,
+    private static BlockConsolidator Consolidator(CorvidOptions settings, ModelComposer composer, CoreBlockStore blocks, FactGraph facts, MemoryWriter writer,
         SqliteEventLog log)
     {
         var generator = composer.CreateBackgroundSlots().Get(ModelSlots.Generator).Default;
@@ -542,6 +542,9 @@ public sealed class CorvidRuntimeFactory(
                 IdleDelay = TimeSpan.FromSeconds(Math.Max(0, configured.IdleSeconds)),
                 // Never a spin: a busy session is looked at again at most five times a second.
                 BusyRetry = TimeSpan.FromSeconds(Math.Max(0.2, configured.IdleSeconds)),
-            });
+            })
+        {
+            Deduplicator = new FactDeduplicator(facts, writer, log),
+        };
     }
 }

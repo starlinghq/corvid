@@ -158,7 +158,7 @@ public sealed record CompactionSummary(string? Goal, ImmutableArray<string> Cons
     ImmutableArray<string> Files, ImmutableArray<string> OpenQuestions, string? NextStep);
 public sealed record MemoryWritten(string MemoryId, string Operation) : SessionEvent;
 public sealed record SkillChanged(string SkillId, string Revision, string Author) : SessionEvent;
-// Plan §9.5: one run of a sleep-time memory job (Job, a MemoryJobs name) on Subject (block:user), what came of it (Outcome:
+// Plan §9.5: one run of a sleep-time memory job (Job, a MemoryJobs name) on Subject (block:user, a fact id), what came of it (Outcome:
 // staged, proposed, declined, refused or failed), why in Detail (sizes and reasons, never the memory's text), the staged
 // write's id when it staged one, and what started it (Trigger: idle, cli, app).
 public sealed record MemoryJobRan(string Job, string Subject, string Outcome, string Detail, string Trigger,
@@ -233,6 +233,9 @@ public static class MemoryJobs
 
     /// <summary>The block rewrite job: a core block over or near its budget rewritten to fit, staged for review.</summary>
     public const string ConsolidateBlock = "consolidate_block";
+
+    /// <summary>The fact dedupe job: a current fact that says what an earlier one says, its ending staged for review.</summary>
+    public const string DedupeFacts = "dedupe_facts";
 }
 
 public static class McpSessions

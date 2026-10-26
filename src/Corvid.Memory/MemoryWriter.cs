@@ -323,6 +323,31 @@ public sealed class MemoryWriter
         return Stage(sessionId, PendingKind.Block, proposal, null, why, [], []);
     }
 
+    /// <summary>What the reason of every staged duplicate starts with (plan §9.5).</summary>
+    public const string DuplicateReason = "duplicate";
+
+    /// <summary>
+    /// Stages ending <paramref name="duplicate"/> because it says what <paramref name="kept"/> says (plan §9.5's fact dedupe):
+    /// an <c>invalidate</c> of the duplicate, with the kept fact as its nearest neighbour, for <c>/memory pending</c>. Nothing
+    /// is ended until a person approves it. Null when that duplicate already waits or a person rejected ending it.
+    /// </summary>
+    public MemoryWriteResult? StageDuplicate(string sessionId, Fact duplicate, Fact kept)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentNullException.ThrowIfNull(duplicate);
+        ArgumentNullException.ThrowIfNull(kept);
+        if (duplicate.FactId == kept.FactId)
+            throw new ArgumentException("A fact is not its own duplicate.", nameof(duplicate));
+        bool Same(PendingWrite write) => write.Kind == PendingKind.Fact && write.Proposal.Operation == MemoryOperations.Invalidate
+            && write.Proposal.TargetFactId == duplicate.FactId && write.Reason.StartsWith(DuplicateReason, StringComparison.Ordinal);
+        if (_pending.List(PendingStatus.Pending).Any(Same) || _pending.List(PendingStatus.Rejected).Any(Same))
+            return null;
+        var proposal = new MemoryProposal(MemoryOperations.Invalidate, duplicate.FactId, duplicate.Text,
+            [.. duplicate.Entities.Select(entity => new ProposedEntity(entity.Label, entity.Name))], null, duplicate.SourceSequence,
+            [kept.FactId], LocalOnly: duplicate.LocalOnly ? true : null);
+        return Stage(sessionId, PendingKind.Fact, proposal, null, $"{DuplicateReason}: says what {kept.FactId} says", [kept], []);
+    }
+
     /// <summary>The consolidation of <paramref name="block"/> waiting for review, or null.</summary>
     public PendingWrite? PendingConsolidation(string block) =>
         _pending.List(PendingStatus.Pending).FirstOrDefault(write => write.Kind == PendingKind.Block

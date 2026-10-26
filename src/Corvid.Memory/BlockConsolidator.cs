@@ -121,6 +121,9 @@ public sealed class BlockConsolidator
 
     public BlockConsolidatorOptions Options => _options;
 
+    /// <summary>The fact dedupe (plan §9.5) each <see cref="RunOnceAsync"/> pass runs after the blocks; none when null.</summary>
+    public FactDeduplicator? Deduplicator { get; init; }
+
     /// <summary>Raised after each attempt the loop or a caller made (not for blocks that needed nothing).</summary>
     public event Action<BlockRewrite>? Processed;
 
@@ -204,6 +207,8 @@ public sealed class BlockConsolidator
                 results.Add(await RewriteAndStageAsync(MemoryJobs.Session, block, content, edit.PendingId, trigger, cancellationToken)
                     .ConfigureAwait(false));
             }
+            // The other sleep-time job that needs no generator: duplicate facts, their ending staged for review.
+            Deduplicator?.StageDuplicates(MemoryJobs.Session, trigger);
             return results;
         }
         finally
