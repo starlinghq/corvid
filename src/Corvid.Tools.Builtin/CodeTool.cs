@@ -135,7 +135,7 @@ public sealed record CodeToolOptions
     /// <summary>The client a script is run with (code mode's client generators); null runs scripts as written.</summary>
     public CodeClientFactory? Clients { get; init; }
 
-    /// <summary>Where the per-run tools socket directories are made: a directory only this user can enter. Default: the temp directory.</summary>
+    /// <summary>Where the per-run tools socket directories are made: a directory only this user can enter, hidden from this run's command. Default: <see cref="SandboxScratch"/>'s root, which every sandbox hides.</summary>
     public string? SocketRoot { get; init; }
 
     /// <summary>The wire format's limits for a run: <see cref="MaxCalls"/> and the defaults for the rest.</summary>
@@ -359,15 +359,16 @@ public sealed class CodeRunner
         var token = CodeModeProtocol.NewToken();
         var session = new CodeModeSession(token, tools, Record, Options.Limits);
         var client = Options.Clients?.Invoke(language, tools);
-        var source = client is null ? code : client.Prefix + code + client.Suffix;
+        var source = client is null ? code : Compose(language, client, code);
 
-        // A directory only this user can enter, outside the workspace, deleted after the run.
+        // A directory only this user can enter, outside the workspace, deleted after the run. A7V1-2: by default under the
+        // root every sandbox hides (SandboxScratch), so no other run's command sees this socket, whatever TMPDIR is.
         if (OperatingSystem.IsWindows())
             throw new SandboxRefusedException("Code mode needs a Unix socket and the Linux sandbox.");
         var socketDirectory = Options.SocketRoot is { } root
             ? Directory.CreateDirectory(Path.Combine(root, "corvid-code-" + Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(8))),
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute)
-            : Directory.CreateTempSubdirectory("corvid-code-");
+            : SandboxScratch.CreateDirectory("corvid-code-");
         try
         {
             var socketPath = Path.Combine(socketDirectory.FullName, "tools.sock");
@@ -375,7 +376,8 @@ public sealed class CodeRunner
             if (Encoding.UTF8.GetByteCount(socketPath) > 100)
                 throw new SandboxRefusedException($"The tools socket's path is too long for a Unix socket ({socketPath}); set TMPDIR to a shorter directory.");
             var basePolicy = _shell.Policy;
-            var hidden = IsUnder(socketDirectory.FullName, "/tmp") || IsUnder(socketDirectory.FullName, "/run")
+            // A socket root a caller chose is hidden from this run's command too; the default root is hidden from every run's.
+            var hidden = Options.SocketRoot is null || IsUnder(socketDirectory.FullName, "/tmp") || IsUnder(socketDirectory.FullName, "/run")
                 ? basePolicy.DeniedPaths
                 : basePolicy.DeniedPaths.Add(socketDirectory.FullName);
             var values = EnvironmentFor(language, runtime, basePolicy.Workspace);
@@ -500,6 +502,48 @@ public sealed class CodeRunner
         CodeLanguage.JavaScript => "install node",
         _ => "install the .NET 10 SDK",
     };
+
+    /// <summary>
+    /// The script with its client around it. A7V1-4: Python allows <c>from __future__ import …</c> only at the top of a module
+    /// (after its docstring, comments and blank lines), so the script's leading future imports go above the client's prefix.
+    /// A future import after a leading docstring is not moved, and Python reports it.
+    /// </summary>
+    internal static string Compose(CodeLanguage language, CodeClient client, string code)
+    {
+        if (language != CodeLanguage.Python)
+            return client.Prefix + code + client.Suffix;
+        var lines = code.Split('\n');
+        var futures = new List<string>();
+        var i = 0;
+        for (; i < lines.Length; i++)
+        {
+            var line = lines[i].TrimEnd('\r');
+            var trimmed = line.TrimStart();
+            if (trimmed.Length == 0 || trimmed.StartsWith('#'))
+                continue;
+            if (!FutureImport(trimmed))
+                break;
+            futures.Add(line.Trim());
+            lines[i] = "";
+            // A parenthesised list may run over several lines.
+            if (trimmed.Contains('(', StringComparison.Ordinal) && !trimmed.Contains(')', StringComparison.Ordinal))
+                for (i++; i < lines.Length; i++)
+                {
+                    futures[^1] += " " + lines[i].Trim();
+                    var closes = lines[i].Contains(')', StringComparison.Ordinal);
+                    lines[i] = "";
+                    if (closes)
+                        break;
+                }
+        }
+        if (futures.Count == 0)
+            return client.Prefix + code + client.Suffix;
+        // Blank lines stay where the imports were, so the script's own lines keep their places.
+        return string.Join("\n", futures) + "\n" + client.Prefix + string.Join("\n", lines) + client.Suffix;
+
+        static bool FutureImport(string line) =>
+            System.Text.RegularExpressions.Regex.IsMatch(line, @"^from\s+__future__\s+import\b", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    }
 
     private static bool IsUnder(string path, string directory) =>
         path.StartsWith(directory + "/", StringComparison.Ordinal);

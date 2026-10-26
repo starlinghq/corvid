@@ -155,6 +155,52 @@ public sealed class PolicyTests
     }
 }
 
+public sealed class ScratchTests
+{
+    // A7V1-2: the root every sandbox hides: in the runtime directory when it is set, else in TMPDIR, denied unless the
+    // sandbox replaces it anyway.
+    [Fact]
+    public void The_private_root_is_denied_only_where_the_sandbox_does_not_already_hide_it()
+    {
+        using var runtime = new TempDirectory();
+        var withRuntime = new Dictionary<string, string> { ["XDG_RUNTIME_DIR"] = runtime.Path, ["TMPDIR"] = "/srv/ci/tmp" };
+        var withTmpdir = new Dictionary<string, string> { ["TMPDIR"] = "/srv/ci/tmp/" };
+        var withTmp = new Dictionary<string, string> { ["TMPDIR"] = "/tmp" };
+
+        Assert.Equal(Path.Combine(runtime.Path, SandboxScratch.RuntimeRootName), SandboxScratch.Root(withRuntime));
+        Assert.Null(SandboxScratch.DeniedRoot(withRuntime));
+        Assert.StartsWith("/srv/ci/tmp/corvid-runs-", SandboxScratch.DeniedRoot(withTmpdir), StringComparison.Ordinal);
+        Assert.Null(SandboxScratch.DeniedRoot(withTmp));
+        Assert.Null(SandboxScratch.DeniedRoot(new Dictionary<string, string>()));
+
+        var policy = SandboxPolicy.ForWorkspace("/w") with { DeniedPaths = ["/secret"] };
+        Assert.Equal(["/secret", SandboxScratch.Root(withTmpdir)], BubblewrapSandbox.HidingScratch(policy, withTmpdir).DeniedPaths);
+        Assert.Equal(["/secret"], BubblewrapSandbox.HidingScratch(policy, withTmp).DeniedPaths);
+    }
+
+    [Fact]
+    public void A_runs_directory_is_private_and_under_the_root()
+    {
+        using var runtime = new TempDirectory();
+        var environment = new Dictionary<string, string> { ["XDG_RUNTIME_DIR"] = runtime.Path };
+
+        var directory = SandboxScratch.CreateDirectory("corvid-code-", environment);
+
+        Assert.Equal(SandboxScratch.Root(environment), directory.Parent!.FullName);
+        Assert.StartsWith("corvid-code-", directory.Name, StringComparison.Ordinal);
+        var owner = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+        Assert.Equal(owner, File.GetUnixFileMode(directory.FullName));
+        Assert.Equal(owner, File.GetUnixFileMode(directory.Parent.FullName));
+    }
+
+    private sealed class TempDirectory : IDisposable
+    {
+        public string Path { get; } = Directory.CreateTempSubdirectory("corvid-scratch-test-").FullName;
+
+        public void Dispose() => Directory.Delete(Path, recursive: true);
+    }
+}
+
 public sealed class LauncherTests
 {
     [Theory]

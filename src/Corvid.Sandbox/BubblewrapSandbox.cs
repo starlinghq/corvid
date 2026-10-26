@@ -32,7 +32,10 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
         cancellationToken.ThrowIfCancellationRequested();
 
         string launcher = LocateLauncher();
-        DirectoryInfo statusDirectory = Directory.CreateTempSubdirectory("corvid-sandbox-"); // mode 0700
+        IReadOnlyDictionary<string, string> source = _options.Environment ?? CurrentEnvironment();
+        policy = HidingScratch(policy, source);
+        // A7V1-2: under the root every sandbox hides, so no other command sees the token or the CA, whatever TMPDIR is.
+        DirectoryInfo statusDirectory = SandboxScratch.CreateDirectory("corvid-sandbox-", source); // mode 0700
         try
         {
             string statusFile = Path.Combine(statusDirectory.FullName, "status.json");
@@ -69,7 +72,6 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
             }
 
             start.Environment.Clear();
-            IReadOnlyDictionary<string, string> source = _options.Environment ?? CurrentEnvironment();
             foreach (string name in policy.Environment.Concat(LauncherEnvironment).Distinct(StringComparer.Ordinal))
             {
                 if (source.TryGetValue(name, out string? value))
@@ -180,6 +182,7 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
             throw new ArgumentException("A prepared launch cannot use the tools socket (A7 covers run-to-completion commands only).", nameof(policy));
         var environment = new Dictionary<string, string>(StringComparer.Ordinal);
         IReadOnlyDictionary<string, string> source = _options.Environment ?? CurrentEnvironment();
+        policy = HidingScratch(policy, source);
         foreach (string name in policy.Environment.Concat(LauncherEnvironment).Distinct(StringComparer.Ordinal))
         {
             if (source.TryGetValue(name, out string? value))
@@ -188,6 +191,15 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
 
         return new SandboxLaunch(LocateLauncher(), [.. Arguments(policy, command, statusFile, _options)], environment);
     }
+
+    /// <summary>
+    /// A7V1-2: the policy with <see cref="SandboxScratch.DeniedRoot"/> denied when there is one, so this command cannot see
+    /// another run's status directory (its tools token, its proxy CA) or code mode's tools socket.
+    /// </summary>
+    internal static SandboxPolicy HidingScratch(SandboxPolicy policy, IReadOnlyDictionary<string, string> environment) =>
+        SandboxScratch.DeniedRoot(environment) is { } root && !policy.DeniedPaths.Contains(root, StringComparer.Ordinal)
+            ? policy with { DeniedPaths = policy.DeniedPaths.Add(root) }
+            : policy;
 
     /// <summary>The launcher's exit code when it refused and nothing ran; its status file says why.</summary>
     public const int RefusedExitCode = NotStarted;

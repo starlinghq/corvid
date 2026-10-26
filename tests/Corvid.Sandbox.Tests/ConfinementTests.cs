@@ -56,6 +56,40 @@ public sealed class ConfinementTests : IDisposable
         Assert.Equal("warning\n", result.StandardError);
     }
 
+    // A7V1-2: another run's status directory (its tools token, its proxy CA) and code mode's socket directory live under a
+    // root every sandbox hides, so a TMPDIR outside /tmp (CI's runner.temp) does not show them to a neighbour's command.
+    [Fact]
+    public async Task Another_runs_private_directory_cannot_be_seen_with_TMPDIR_outside_tmp()
+    {
+        Host.RequireBubblewrap();
+        string tmp = Path.Combine(_layout.Root, "tmpdir");
+        Directory.CreateDirectory(tmp);
+        _layout.Environment["TMPDIR"] = tmp;
+        DirectoryInfo neighbour = SandboxScratch.CreateDirectory("corvid-code-", _layout.Environment);
+        Assert.StartsWith(tmp + "/", neighbour.FullName, StringComparison.Ordinal);
+        string token = "SECRET-" + System.Security.Cryptography.RandomNumberGenerator.GetHexString(24, lowercase: true);
+        string tokenFile = Path.Combine(neighbour.FullName, "tools.token");
+        await File.WriteAllTextAsync(tokenFile, token, Ct);
+        string script = $"""
+            cat '{Path.Combine(_layout.Home, "notes.txt")}'
+            cat '{tokenFile}'
+            ls -la '{neighbour.FullName}' '{SandboxScratch.Root(_layout.Environment)}'
+            find '{tmp}'
+            grep -r SECRET- '{tmp}'
+            echo done
+            """;
+
+        SandboxResult result = await _layout.Sandbox().RunAsync(_layout.Policy, SandboxCommand.Shell(script), Ct);
+
+        string everything = result.StandardOutput + result.StandardError;
+        Assert.Contains(_layout.VisibleCanary, result.StandardOutput, StringComparison.Ordinal);
+        Assert.EndsWith("done\n", result.StandardOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain(token, everything, StringComparison.Ordinal);
+        Assert.DoesNotContain(neighbour.Name, result.StandardOutput, StringComparison.Ordinal);
+        // The neighbour's directory is still there on the host; only the sandbox cannot see it.
+        Assert.Equal(token, await File.ReadAllTextAsync(tokenFile, Ct));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

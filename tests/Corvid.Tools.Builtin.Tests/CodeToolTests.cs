@@ -6,6 +6,7 @@ using System.Text.Json;
 using Corvid.Approvals;
 using Corvid.Kernel.Events;
 using Corvid.Sandbox;
+using Corvid.Tools.CodeMode;
 using static Corvid.Tools.Builtin.Tests.Fixtures;
 
 namespace Corvid.Tools.Builtin.Tests;
@@ -255,6 +256,48 @@ public sealed class CodeToolTests : IDisposable
         Assert.Equal("/opt/dotnet", values["DOTNET_ROOT"]);
         // Valid for the sandbox: no secret-like names, nothing the launcher sets itself.
         new SandboxPolicy { Workspace = Workspace, EnvironmentValues = values, Tools = new SandboxTools("/tmp/x/tools.sock", new string('a', 43)) }.Validate();
+    }
+
+    // A7V1-4: Python takes future imports only at the top of a module, so a script's leading ones go above the client.
+    [Fact]
+    public void A_python_scripts_leading_future_imports_go_above_its_client()
+    {
+        var client = new CodeClient("import json\n\n", "");
+        const string code = "# typed\nfrom __future__ import annotations\nfrom  __future__ import (\n    division,\n)\n\nx: int = 1\nfrom __future__ import late\n";
+
+        var source = CodeRunner.Compose(CodeLanguage.Python, client, code);
+
+        Assert.StartsWith("from __future__ import annotations\nfrom  __future__ import ( division, )\nimport json\n\n# typed\n", source, StringComparison.Ordinal);
+        // Only the leading ones move; one after the script's first statement stays, and Python reports it as it would.
+        Assert.EndsWith("x: int = 1\nfrom __future__ import late\n", source, StringComparison.Ordinal);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(source, "annotations"));
+        // Nothing moves without one, and other languages are untouched.
+        Assert.Equal("import json\n\nprint(1)", CodeRunner.Compose(CodeLanguage.Python, client, "print(1)"));
+        Assert.Equal("P" + code + "S", CodeRunner.Compose(CodeLanguage.JavaScript, new CodeClient("P", "S"), code));
+    }
+
+    [Fact]
+    public async Task A_python_script_starting_with_a_future_import_compiles_with_the_generated_client()
+    {
+        var python = CodeRuntimes.Discover().Python;
+        Assert.SkipWhen(python is null, "python3 is not installed.");
+        var tools = CodeModeCatalog.Describe(CodeFixtures.Registry(AppContext.BaseDirectory), null, new CodeToolOptions().Tools);
+        var (prefix, suffix) = CodeModeClients.Inline(CodeModeLanguage.Python, tools);
+        var source = CodeRunner.Compose(CodeLanguage.Python, new CodeClient(prefix, suffix), "from __future__ import annotations\nprint(corvid)\n");
+
+        var start = new System.Diagnostics.ProcessStartInfo(python!, ["-I", "-c", "import sys; compile(sys.stdin.read(), 'script', 'exec'); print('ok')"])
+        {
+            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+        };
+        using var process = System.Diagnostics.Process.Start(start)!;
+        await process.StandardInput.WriteAsync(source);
+        process.StandardInput.Close();
+        var output = await process.StandardOutput.ReadToEndAsync(Ct);
+        var error = await process.StandardError.ReadToEndAsync(Ct);
+        await process.WaitForExitAsync(Ct);
+
+        Assert.True(process.ExitCode == 0, error);
+        Assert.Equal("ok\n", output);
     }
 
     [Theory]
