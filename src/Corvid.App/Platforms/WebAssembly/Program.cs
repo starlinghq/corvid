@@ -14,13 +14,15 @@ namespace Corvid.App;
 /// address's fragment (<c>#pair=XXXXX-XXXXX</c>, from <c>corvid serve pair</c>; a fragment never reaches a server's log),
 /// keeps the device token in the browser's storage, and takes the code out of the address. <c>?demo</c> opens the demo.
 /// </summary>
+[System.Runtime.Versioning.SupportedOSPlatform("browser")]
 public static class Program
 {
     private const string TokenKey = "corvid.attach.token:";
 
     public static async Task Main(string[] args)
     {
-        AppLogging.Initialize();
+        // No AppLogging here: its console logger provider is not supported in a browser (PlatformNotSupportedException at
+        // start, which left the tab on its loading bar). Uno's own browser console logging stays.
         var options = new AppOptions { Demo = true };
         Core.Composition.IAppServices? services = null;
         LateDispatcher? dispatcher = null;

@@ -91,9 +91,12 @@ public sealed class WebSocketMessageChannel(WebSocket socket, int maxMessageByte
         var text = reason.Length > 100 ? reason[..100] : reason;
         try
         {
-            await Socket.CloseOutputAsync(WebSocketCloseStatus.PolicyViolation, text, cancellationToken).ConfigureAwait(false);
+            // A browser closes only with 1000 or 3000-4999 (1008 throws there); the reason says why either way.
+            var status = OperatingSystem.IsBrowser() ? WebSocketCloseStatus.NormalClosure : WebSocketCloseStatus.PolicyViolation;
+            await Socket.CloseOutputAsync(status, text, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is WebSocketException or IOException or ObjectDisposedException or OperationCanceledException)
+        catch (Exception exception) when (exception is WebSocketException or IOException or ObjectDisposedException or OperationCanceledException
+                                              or ArgumentException)
         {
         }
     }
