@@ -46,6 +46,13 @@ public sealed record ApprovalContext(string SessionId, ApprovalMode Mode, TurnSt
     /// uses the pipeline's own. It shares the pipeline's policy and log, so floors and calibration are unchanged.
     /// </summary>
     public DecisionFabric? Fabric { get; init; }
+
+    /// <summary>
+    /// A6: why this action asks the person whatever the mode, the <c>risk</c> answer or a remembered rule says (creating or
+    /// removing a git worktree, which writes outside the workspace); null for none. Offered once only, like any forced reason;
+    /// the hardline list still applies first, and with nobody to ask it is denied.
+    /// </summary>
+    public string? AlwaysAsk { get; init; }
 }
 
 public enum ApprovalOutcome
@@ -348,6 +355,8 @@ public sealed class ApprovalPipeline
         ImmutableArray<ApprovalReason> detected, CancellationToken cancellationToken)
     {
         var forced = Forced(analysis, action, context).AddRange(detected);
+        if (context.AlwaysAsk is { Length: > 0 } required)
+            forced = forced.Add(new(ApprovalReasons.Required, required));
         var parsed = analysis.Unsupported is null;
         // A tool declared read-only (C-005) needs no approval even when it reads the network; taint is a forced reason.
         var sideEffecting = action is ToolAction { Tool.Risk.ReadOnly: true }

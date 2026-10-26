@@ -16,6 +16,33 @@ public sealed class RuntimeTests
         return registry;
     }
 
+    /// <summary>A6 (G-4): a registry over another shadows by name, hides what it is told to, and sees later changes below.</summary>
+    [Fact]
+    public async Task A_registry_over_another_shadows_hides_and_follows_it()
+    {
+        var below = new ToolRegistry();
+        var shared = new NoteTools();
+        below.Add(shared);
+        var own = new NoteTools();
+        var over = new ToolRegistry(below, hidden: ["clear_notes"]);
+        over.AddRange(own.CreateTools().Where(tool => tool.Name == "add_note"));
+
+        await Tool(over, "add_note").InvokeAsync(Json("""{"text":"mine"}"""), TestContext.Current.CancellationToken);
+        await Tool(over, "list_notes").InvokeAsync(Json("{}"), TestContext.Current.CancellationToken);
+
+        Assert.Equal(["mine"], own.Notes.Select(note => note.Text));
+        Assert.Empty(shared.Notes);
+        Assert.False(over.TryGet("clear_notes", out _));
+        Assert.Equal(["add_note", "list_notes"], over.List().Select(tool => tool.Name));
+        Assert.Equal(["add_note", "list_notes"], over.GetFunctions().Select(tool => tool.Name));
+        // A tool added below later (an MCP server's) shows above; removing above takes only its own.
+        below.AddRange(ApiTools.CreateTools().Where(tool => tool.Name == "ping"));
+        Assert.Contains("ping", over.List().Select(tool => tool.Name));
+        Assert.False(over.Remove("ping"));
+        Assert.True(over.Remove("add_note"));
+        Assert.True(over.TryGet("add_note", out var fallback) && below.TryGet("add_note", out var original) && ReferenceEquals(fallback, original));
+    }
+
     /// <summary>Arguments as a tool-call parser produces them: each value a <see cref="JsonElement"/>.</summary>
     private static AIFunctionArguments Json(string json) =>
         new(JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json)!.ToDictionary(p => p.Key, p => (object?)p.Value));

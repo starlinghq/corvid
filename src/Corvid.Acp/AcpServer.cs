@@ -409,6 +409,8 @@ internal sealed partial class AcpAgent : IJsonRpcHandler, IAsyncDisposable
             .Where(command => command.Name is not ("exit" or "quit" or "fork"))
             // A5: /agents and /delegate run when typed; the editor's list keeps its recorded set (they are the chat's and the app's).
             .Where(command => command.Name is not ("agents" or "delegate"))
+            // A6: /workspace opens sessions elsewhere, which an editor bound to its cwd does not drive; its list stays as recorded.
+            .Where(command => command.Name is not "workspace")
             .Select(command => new AvailableCommand(command.Name, command.Summary)
             {
                 Input = command.Usage.Contains(' ', StringComparison.Ordinal) ? new AvailableCommandInput(command.Usage) : null,

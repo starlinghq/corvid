@@ -37,6 +37,8 @@ public static class ApprovalReasons
     public const string Signal = "signals_processes";
     /// <summary>An enforced detection rule matched (C-023): asks whatever risk, the mode or remembered approvals say.</summary>
     public const string Detection = "detection";
+    /// <summary>A6: the caller requires the person's answer (<see cref="ApprovalContext.AlwaysAsk"/>): a worktree, say.</summary>
+    public const string Required = "required";
 }
 
 /// <summary>
