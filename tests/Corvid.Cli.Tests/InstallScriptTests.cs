@@ -179,6 +179,96 @@ public sealed class InstallScriptTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(Prefix, "lib")));
     }
 
+    // A6 review: the desktop entry's Exec= is escaped as the Desktop Entry spec says, so a prefix with a space, a %, a quote, a
+    // backquote, a $ or a backslash still launches the app; TryExec= and Icon= escape the backslash only.
+    [Fact]
+    public void A_prefix_with_a_space_a_percent_and_shell_characters_gives_a_desktop_entry_that_launches_it()
+    {
+        SkipUnlessReleasePlatform();
+        var prefix = Path.Combine(_root, "my apps 100% \"q\" `b` $HOME \\x");
+
+        var (status, output) = Run("sh", [Path.Combine(RepositoryRoot(), "install.sh"), "--from", CliTarball(), "--app", "--from-app", AppTarball(),
+            "--prefix", prefix]);
+
+        Assert.True(status == 0, output);
+        var app = Path.Combine(prefix, "bin", "corvid-app");
+        Assert.Equal(Path.Combine(prefix, "lib", "corvid", Version, "app", "corvid-app"), new FileInfo(app).LinkTarget);
+        var entry = Path.Combine(prefix, "share", "applications", "corvid-app.desktop");
+        var desktop = File.ReadAllLines(entry);
+        var root = _root.Replace("\\", "\\\\", StringComparison.Ordinal);
+        Assert.Contains($"Exec=\"{root}/my apps 100%% \\\\\"q\\\\\" \\\\`b\\\\` \\\\$HOME \\\\\\\\x/bin/corvid-app\"", desktop);
+        Assert.Contains($"TryExec={root}/my apps 100% \"q\" `b` $HOME \\\\x/bin/corvid-app", desktop);
+        Assert.Equal([app], Unescaped(desktop.Single(line => line.StartsWith("Exec=", StringComparison.Ordinal))["Exec=".Length..]));
+        if (Tool("desktop-file-validate") is { } validate)
+        {
+            var (valid, says) = Run(validate, [entry]);
+            Assert.True(valid == 0, says);
+        }
+    }
+
+    [Fact]
+    public void A_local_corvid_with_app_needs_the_local_app_tarball_too()
+    {
+        SkipUnlessReleasePlatform();
+
+        var (status, output) = Install("--from", CliTarball(), "--app");
+
+        Assert.NotEqual(0, status);
+        Assert.Contains("--app needs --from-app", output, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(Prefix));
+    }
+
+    // A6 review: a link in a tarball could point a later write or copy outside the version's directory.
+    [Fact]
+    public void A_tarball_holding_a_link_is_refused_before_anything_is_unpacked()
+    {
+        SkipUnlessReleasePlatform();
+        var stage = Path.Combine(_root, "stage-app-link");
+        Stub(Path.Combine(stage, "corvid-app"), "the app");
+        File.WriteAllText(Path.Combine(stage, "VERSION"), Version + "\n");
+        Directory.CreateDirectory(Path.Combine(stage, "Assets", "Icons"));
+        File.CreateSymbolicLink(Path.Combine(stage, "Assets", "Icons", "Svg"), Path.Combine(_root, "home", ".ssh"));
+        var tarball = Tar(stage, "linked.tar.gz");
+
+        var (status, output) = Install("--from", CliTarball(), "--from-app", tarball);
+
+        Assert.NotEqual(0, status);
+        Assert.Contains("holds something other than files and directories (a link?)", output, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(Prefix));
+        Assert.False(Directory.Exists(Path.Combine(_root, "home", ".ssh")));
+    }
+
+    // The Exec value as a launcher reads it (Desktop Entry spec): string escapes first, then the quoted arguments, then %%.
+    private static List<string> Unescaped(string value)
+    {
+        var text = new System.Text.StringBuilder();
+        for (var at = 0; at < value.Length; at++)
+            text.Append(value[at] == '\\' && at + 1 < value.Length ? value[++at] switch { 's' => ' ', 'n' => '\n', 't' => '\t', 'r' => '\r', var other => other } : value[at]);
+        var arguments = new List<string>();
+        var current = new System.Text.StringBuilder();
+        var quoted = false;
+        var line = text.ToString();
+        for (var at = 0; at < line.Length; at++)
+        {
+            var c = line[at];
+            if (quoted && c == '\\' && at + 1 < line.Length)
+                current.Append(line[++at]);
+            else if (c == '"')
+                quoted = !quoted;
+            else if (!quoted && c == ' ')
+            {
+                arguments.Add(current.ToString());
+                current.Clear();
+            }
+            else if (c == '%' && at + 1 < line.Length && line[at + 1] == '%')
+                current.Append(line[++at]);
+            else
+                current.Append(c);
+        }
+        arguments.Add(current.ToString());
+        return arguments;
+    }
+
     private static string? Tool(string program) =>
         new[] { "/usr/bin", "/usr/local/bin", "/bin" }.Select(directory => Path.Combine(directory, program)).FirstOrDefault(File.Exists);
 }

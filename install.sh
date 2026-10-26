@@ -51,6 +51,17 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# A local corvid tarball with --app needs the local app tarball of the same release: the app is not downloaded to go with
+# a corvid whose release this script cannot know before unpacking it.
+if [ -n "$from" ] && [ -n "$app" ] && [ -z "$from_app" ]; then
+    die "--from installs a local corvid tarball, so --app needs --from-app <corvid-app-linux-x64.tar.gz> of the same release"
+fi
+# The desktop entry names paths under the prefix, and a line break cannot be written in one.
+case "$prefix" in
+    *'
+'*) die "--prefix may not contain a line break" ;;
+esac
+
 # Corvid is Linux-first: the sandbox is bubblewrap, Landlock and seccomp, and Vault's master key is systemd-creds.
 [ "$(uname -s)" = "Linux" ] || die "Corvid releases are Linux only for now; build from source elsewhere."
 case "$(uname -m)" in
@@ -109,6 +120,14 @@ obtain() {
     [ "$expected" = "$actual" ] || die "checksum mismatch for $1 (expected $expected, got $actual)"
 }
 
+# Only regular files and directories are unpacked: a link (or a device, a FIFO) in a tarball could point a later write or
+# copy outside the version's directory, so the tarball is refused before anything is extracted.
+plain_tarball() {
+    entries="$(tar -tvzf "$work/$1")" || die "$1 could not be read"
+    odd="$(printf '%s\n' "$entries" | awk 'NF && substr($1, 1, 1) != "-" && substr($1, 1, 1) != "d" { print }' | head -n 1)"
+    [ -z "$odd" ] || die "$1 holds something other than files and directories (a link?), so it was not unpacked: $odd"
+}
+
 asset="corvid-linux-x64${variant}.tar.gz"
 obtain "$asset" "$from"
 # The app runs its models on the CPU: one asset serves both variants.
@@ -116,6 +135,7 @@ app_asset="corvid-app-linux-x64.tar.gz"
 [ -z "$app" ] || obtain "$app_asset" "$from_app"
 
 mkdir "$work/x"
+plain_tarball "$asset"
 tar -xzf "$work/$asset" -C "$work/x"
 for bin in corvid corvid-vault corvid-sandbox; do
     [ -f "$work/x/$bin" ] || die "$asset has no $bin"
@@ -128,7 +148,9 @@ case "$installed" in */*|.*) die "$asset has an unusable VERSION: $installed" ;;
 # same release as the CLI or it is refused: they share the data directory and the event log's format.
 if [ -n "$app" ]; then
     mkdir "$work/x/app"
+    plain_tarball "$app_asset"
     tar -xzf "$work/$app_asset" -C "$work/x/app"
+    [ -z "$(find "$work/x/app" ! -type f ! -type d | head -n 1)" ] || die "$app_asset unpacked something other than files and directories"
     [ -f "$work/x/app/corvid-app" ] || die "$app_asset has no corvid-app"
     [ -f "$work/x/app/Assets/Icons/Svg/corvid.svg" ] || die "$app_asset has no icon (Assets/Icons/Svg/corvid.svg)"
     app_version="$(cat "$work/x/app/VERSION" 2>/dev/null || true)"
@@ -176,6 +198,13 @@ if [ -n "$app" ]; then
         cp "$dest/app/Assets/Icons/corvid.png" "$share/icons/hicolor/256x256/apps/corvid-app.png"
     fi
     desktop="$share/applications/corvid-app.desktop"
+    # The Desktop Entry spec: a string value escapes "\" as "\\"; Exec's argument, quoted, also escapes " ` $ and \ with a
+    # backslash (before the string escaping doubles it) and writes % as %%, so a prefix with any of them still launches.
+    desktop_string() { printf '%s' "$1" | sed 's/\\/\\\\/g'; }
+    exec_arg="$(printf '%s' "$bindir/corvid-app" | sed -e 's/[\\"`$]/\\&/g' -e 's/%/%%/g')"
+    exec_line="$(desktop_string "\"$exec_arg\"")"
+    tryexec_line="$(desktop_string "$bindir/corvid-app")"
+    icon_line="$(desktop_string "$share/icons/hicolor/scalable/apps/corvid-app.svg")"
     cat > "$desktop.new" <<EOF
 [Desktop Entry]
 Type=Application
@@ -183,9 +212,9 @@ Version=1.5
 Name=Corvid
 GenericName=Coding agent
 Comment=The windowed Corvid: conversations, approvals, review and the rest of the agent's evidence
-Exec="$bindir/corvid-app"
-TryExec=$bindir/corvid-app
-Icon=$share/icons/hicolor/scalable/apps/corvid-app.svg
+Exec=$exec_line
+TryExec=$tryexec_line
+Icon=$icon_line
 Terminal=false
 Categories=Development;
 StartupWMClass=com.starlinghq.corvid
