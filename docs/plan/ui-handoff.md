@@ -632,6 +632,26 @@ crossed the socket and reached the generator, and Open a workspace on the Board 
 which the rail grouped under its own workspace. `corvid serve` stopped on SIGTERM and removed its socket. `--demo` drew
 the main scene. Screenshots are in `ui-shots/a6int-*.png` (git-ignored).
 
+The end-to-end pass ran the merged branch in a temporary home with scripted servers (a vision-capable generator, a
+text-only model and a gated "cloud" model with `Egress: { Action: Send, Tainted: Refuse, Images: true }`) and GLiNER2 for
+the gate. It fixed three things: the WebAssembly head did not publish (the linker config still named the assembly
+`Corvid.App`, and an attached image prompt used the trim-unsafe `JsonArray.Add<T>`); a copied image or copied files did
+not paste on X11 (Uno raises no `Paste` for a clipboard without text, and lists a copied PNG as `image/png`, not as the
+Bitmap format: Ctrl+V now takes them, `ImageSignature.ClipboardImageFormat`); and `corvid serve`'s pairing hint named
+`Corvid.App`. Seen working: `corvid serve --attach --listen` with the app attached over the Unix socket (a turn, an
+approval and a question answered there, an approval still pending at the engine after the window dropped and answered
+after it attached again), a wrong token, a request before authenticating and an oversized first request refused and
+closed, a tokenless initialize refused and the connection left to the authentication window (any next request closes it), a
+foreign Host (421) and Origin (403) refused, a used pairing code refused, the app paired over loopback TCP and the
+published WebAssembly head paired from `#pair=`; two workspaces in one window with a session and a file write in each; a
+session's worktree from the Board and a child's from `isolation: worktree`, both removed with `/workspace remove` in
+`corvid chat`; an image pasted in the app (also attached) and given with `/image` and `@path` in the CLI, sent stripped to
+the vision model, refused for the text-only one with the draft kept, shown on replay, sent to the gated model untainted
+and refused to it once a `web_fetch` tainted the turn (the turn stayed local); `install.sh --app` into a temporary prefix,
+the installed `corvid-app` running on the engine and `corvid doctor` finding it; `Ctrl+Shift+F` and `/search` across
+sessions; the plain-word password reaching the gated model as `<CREDENTIAL_1>`; a tainted child's answer enclosed between
+`outside-content` markers. Screenshots are in `ui-shots/a6e2e-*.png` (git-ignored).
+
 New on the wire: `workspace_bound`; the optional `images` on `user_message`; attached mode's protocol (version 1). A
 binary older than A6 cannot read a log that holds `workspace_bound` (the same one-way step as before) and reads a message
 with images as its text alone.
@@ -645,10 +665,18 @@ Left:
 - Attached mode: an owner UI in the app for `CreatePairingCodeAsync` (pairing codes come from `corvid serve pair`); a
   pairing box in the browser instead of `#pair=`; reconnecting after a drop; dropping a revoked device's live connection;
   an attached badge in the status bar (the Board's status bar says "engine unreachable" when attached). A paired device
-  may hold up to 16 requests of 64 MB at once (it is trusted with the engine already). The WebAssembly build was not
-  published or run in a browser in the integration pass (the attached group ran it with `a6-attached-scripts`).
-- Images: paste and drop were driven by the media group; the integration pass used the attach box. A browser drop gives
-  no path, so a browser attaches by paste only.
+  may hold up to 16 requests of 64 MB at once (it is trusted with the engine already).
+- Images: a browser drop gives no path, so a browser attaches by paste only. A drop on the desktop head was not driven
+  (the harness has no drag source).
+- Seen in the end-to-end pass and not fixed: in the app, `/workspace remove` refuses a worktree while the window holds a
+  session that works in it, and the window lets go of a session only when its channel closes, never of one with nothing
+  in the log, so removing a worktree a window session used means `corvid chat` or a restart; Open a workspace offers
+  worktrees already removed (from the sessions recorded there), and its worktree name box keeps the last name, so a second
+  name is appended to it; an approval card that arrives outside a turn at the end of a long transcript is cut off at the
+  bottom and the wheel cannot scroll to its buttons (Enter from the composer brings it into view); a child that answered
+  from one model call shows "0 steps"; on replay a model switch between turns is folded into the turn before it ("the
+  running turn takes it at its next step"); the user's own message keeps a pasted password in the log and the search
+  index (the answer echoing it is scrubbed), since nothing moves it into Vault without one.
 - Packaging: Flatpak (U-9) not started.
 - From §1.6, still: a steer's position in the report; the Board's Take over; the lock files under `drivers/`; a job's
   message read as the user's on replay; a gateway adapter needs Vault for its token; delegation's same-round calls run one
@@ -671,7 +699,7 @@ page with its title. The scaffold's report lists these remaining differences:
 - Popups and tooltips follow the application theme, not a theme switched at run time.
 - The status bar items are not click targets yet, and Board, Audit and First run do not have their own variants yet.
 - The window carries the Corvid mark as its icon and the binary is `corvid-app` (U-7, A6).
-- The WebAssembly head builds with `-p:CorvidAppWasm=true` and attaches to the Corvid that serves it; the attached group published and ran it in a browser, the integration pass did not (A6, §1.7).
+- The WebAssembly head builds with `-p:CorvidAppWasm=true` and attaches to the Corvid that serves it; the end-to-end pass published it and ran it paired in headless Chromium (A6, §1.7).
 
 ## 2. Picking it up on another machine
 
