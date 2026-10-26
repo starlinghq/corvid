@@ -19,6 +19,24 @@ namespace Corvid.Host.Sessions;
 public static partial class ImageAttachments
 {
     /// <summary>
+    /// The rules a session's named images are read under: its own workspace's (G-4), so <c>@shot.png</c> and a relative
+    /// <c>/image</c> path are that workspace's files. A session whose workspace is gone falls back to the runtime's rules
+    /// only for reading (its message is refused when sent, as every call there is).
+    /// </summary>
+    public static ApprovalEnvironment EnvironmentFor(Composition.CorvidRuntime runtime, string sessionId)
+    {
+        ArgumentNullException.ThrowIfNull(runtime);
+        try
+        {
+            return runtime.WorkspaceServicesOf(sessionId).Environment;
+        }
+        catch (Composition.WorkspaceUnavailableException)
+        {
+            return runtime.Builtin.Environment;
+        }
+    }
+
+    /// <summary>
     /// The image paths a message names with <c>@</c>: <c>@shot.png</c>, <c>@docs/diagram.webp</c>, or quoted for a path with
     /// spaces, <c>@"screen shot.png"</c>. Only names with an image extension count; other <c>@</c> words are left alone.
     /// </summary>

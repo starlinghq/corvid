@@ -67,7 +67,7 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
     public async Task ServeAsync(IMessageChannel channel, string peer, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        var connection = new Connection(this, peer);
+        var connection = new Connection(this, peer, channel);
         var rpc = new JsonRpcPeer(channel, connection.HandleAsync, onNotification: null);
         connection.Peer = rpc;
         await using (rpc.ConfigureAwait(false))
@@ -108,7 +108,7 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
             NoClientsLeft?.Invoke();
     }
 
-    private sealed class Connection(AttachedServer server, string from)
+    private sealed class Connection(AttachedServer server, string from, IMessageChannel channel)
     {
         private readonly ConcurrentDictionary<string, Opened> _open = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, byte> _viewing = new(StringComparer.Ordinal);
@@ -167,7 +167,12 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
                 case AttachedProtocol.List:
                     return JsonSerializer.SerializeToNode([.. await Sessions.ListAsync(cancellationToken).ConfigureAwait(false)], AttachedJson.Summaries);
                 case AttachedProtocol.New:
-                    return new JsonObject { ["sessionId"] = await Sessions.CreateAsync(cancellationToken).ConfigureAwait(false) };
+                    return new JsonObject
+                    {
+                        ["sessionId"] = p.NewSession() is { } request
+                            ? await Sessions.CreateAsync(request, cancellationToken).ConfigureAwait(false)
+                            : await Sessions.CreateAsync(cancellationToken).ConfigureAwait(false),
+                    };
                 case AttachedProtocol.Load:
                     return await LoadAsync(p.Id("sessionId"), p.Id("subscription"), cancellationToken).ConfigureAwait(false);
                 case AttachedProtocol.Close:
@@ -175,8 +180,15 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
                         closing.Subscription?.Dispose();
                     return null;
                 case AttachedProtocol.Prompt:
-                    await Sessions.SendAsync(p.Id("sessionId"), p.Text("text"), cancellationToken).ConfigureAwait(false);
+                    if (p.Images() is { Count: > 0 } images)
+                        await Sessions.SendAsync(p.Id("sessionId"), p.Text("text"), images, cancellationToken).ConfigureAwait(false);
+                    else
+                        await Sessions.SendAsync(p.Id("sessionId"), p.Text("text"), cancellationToken).ConfigureAwait(false);
                     return null;
+                case AttachedProtocol.ReadImage:
+                    return await Sessions.ReadImageAsync(p.Id("sessionId"), p.Text("digest", 128), cancellationToken).ConfigureAwait(false) is { } bytes
+                        ? new JsonObject { ["data"] = Convert.ToBase64String(bytes) }
+                        : null;
                 case AttachedProtocol.Queue:
                     return JsonSerializer.SerializeToNode(await Sessions.QueueAsync(p.Id("sessionId"), p.Text("text"), cancellationToken).ConfigureAwait(false),
                         AttachedJson.Queued);
@@ -297,6 +309,8 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
                 Who = identity.Role == AttachedRole.Owner ? "the owner" : $"device '{identity.Device}'";
                 Role = identity.Role;
             }
+            // The owner or a paired device may send prompts with images (A6, K-8); an unauthenticated one only small requests.
+            channel.AllowMessagesUpTo(AttachedProtocol.MaxAuthenticatedRequestBytes);
             server.Joined(this);
             return new JsonObject
             {
@@ -311,6 +325,8 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
                     ["canPin"] = Sessions.CanPin,
                     ["canRecap"] = Sessions.CanRecap,
                     ["hasComposerModes"] = Sessions.HasComposerModes,
+                    ["canSendImages"] = Sessions.CanSendImages,
+                    ["canChooseWorkspace"] = Sessions.CanChooseWorkspace,
                 },
             };
         }
@@ -418,6 +434,51 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
 
         public bool Bool(string name) =>
             parameters?[name] is JsonValue value && value.TryGetValue<bool>(out var flag) ? flag : throw Invalid(name);
+
+        public bool OptionalBool(string name) => parameters?[name] is not null && Bool(name);
+
+        /// <summary>
+        /// Where a new session works (A6, G-4), or null for the window's workspace as before: a path on the engine's machine,
+        /// which the engine checks (absolute, an existing directory Corvid works in), or a worktree the person approves on
+        /// the asking session's card.
+        /// </summary>
+        public NewSessionRequest? NewSession()
+        {
+            var workspace = parameters?["workspace"] is null ? null : Text("workspace", 4096);
+            var worktree = OptionalBool("worktree");
+            var name = parameters?["worktreeName"] is null ? null : Text("worktreeName", 128);
+            var askIn = parameters?["askIn"] is null ? null : Id("askIn");
+            return workspace is null && !worktree && name is null && askIn is null
+                ? null
+                : new NewSessionRequest(workspace) { Worktree = worktree, WorktreeName = name, AskIn = askIn };
+        }
+
+        /// <summary>
+        /// A prompt's images (A6, K-8): at most <see cref="ImageSignature.MaxPerMessage"/>, base64, at most
+        /// <see cref="AttachedProtocol.MaxPromptImageBytes"/> together. Untrusted bytes: the engine reads their format, strips
+        /// and stores them, or refuses the message, exactly as for the window's own composer.
+        /// </summary>
+        public IReadOnlyList<ImageAttachment>? Images()
+        {
+            if (parameters?["images"] is null)
+                return null;
+            if (parameters["images"] is not JsonArray array || array.Count > ImageSignature.MaxPerMessage)
+                throw Invalid("images");
+            var images = new List<ImageAttachment>(array.Count);
+            long total = 0;
+            foreach (var item in array)
+            {
+                if (item is not JsonObject image || image["data"] is not JsonValue data || !data.TryGetValue<string>(out var text)
+                    || text.Length > (AttachedProtocol.MaxPromptImageBytes / 3 + 1) * 4)
+                    throw Invalid("images");
+                var bytes = new byte[text.Length / 4 * 3];
+                if (!Convert.TryFromBase64String(text, bytes, out var written) || (total += written) > AttachedProtocol.MaxPromptImageBytes)
+                    throw Invalid("images");
+                var name = image["name"] is null ? null : new Params(image).Text("name", 256);
+                images.Add(new ImageAttachment(bytes.AsSpan(0, written).ToArray(), name));
+            }
+            return images;
+        }
 
         public ApprovalMode Mode() =>
             Enum.TryParse<ApprovalMode>(Text("mode", 32), ignoreCase: false, out var mode) && Enum.IsDefined(mode) ? mode : throw Invalid("mode");

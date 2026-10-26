@@ -28,6 +28,15 @@ public static class AttachedProtocol
     /// <summary>The largest message the server reads: requests are small, so anything bigger is refused and closes the connection.</summary>
     public const int MaxRequestBytes = 256 * 1024;
 
+    /// <summary>
+    /// The largest message the server reads once a connection has authenticated as the owner or a paired device: a prompt
+    /// with images (A6, K-8) carries them base64-encoded. Before that, <see cref="MaxRequestBytes"/>.
+    /// </summary>
+    public const int MaxAuthenticatedRequestBytes = 64 * 1024 * 1024;
+
+    /// <summary>The most image bytes one prompt carries over the wire, all images together, before base64 (A6, K-8).</summary>
+    public const int MaxPromptImageBytes = 40 * 1024 * 1024;
+
     /// <summary>The largest message the client reads: a long session's history arrives in one <see cref="Load"/> result.</summary>
     public const int MaxResponseBytes = 64 * 1024 * 1024;
 
@@ -71,6 +80,9 @@ public static class AttachedProtocol
     public const string Viewed = "_corvid/viewed";
     public const string Recap = "_corvid/recap";
 
+    /// <summary>A message image's bytes by digest, base64-encoded (A6, K-8).</summary>
+    public const string ReadImage = "_corvid/read_image";
+
     /// <summary>The owner only: makes a pairing code for another device, shown on the owner's screen (<c>corvid serve pair</c>).</summary>
     public const string PairingCode = "_corvid/pairing_code";
 
@@ -91,7 +103,7 @@ public static class AttachedProtocol
     {
         List, New, Load, Close, Prompt, Cancel, Fork, Queue, QueueRemove, QueueMove, QueueTakeBack, Steer, AnswerApproval,
         AnswerQuestion, Command, SetMode, SetGoal, Compact, StopChild, Rename, LoadDraft, SaveDraft, SetPinned, Viewed, Recap,
-        PairingCode,
+        PairingCode, ReadImage,
     };
 
     /// <summary>JSON-RPC error codes: the standard ones, and Corvid's for the exceptions the seam documents.</summary>

@@ -25,12 +25,24 @@ public interface IMessageChannel : IAsyncDisposable
 
     /// <summary>The reason the other end gave when it closed the connection, once it has; untrusted text.</summary>
     string? ClosedBecause => null;
+
+    /// <summary>
+    /// Raises the largest message this end reads (never lowers it): the server reads small requests until a connection has
+    /// authenticated, then messages with images up to <see cref="AttachedProtocol.MaxAuthenticatedRequestBytes"/> (A6).
+    /// A no-op where nothing is limited.
+    /// </summary>
+    void AllowMessagesUpTo(int maxMessageBytes)
+    {
+    }
 }
 
 /// <summary>A WebSocket as an <see cref="IMessageChannel"/>: text messages, each read whole up to a size limit.</summary>
 public sealed class WebSocketMessageChannel(WebSocket socket, int maxMessageBytes) : IMessageChannel
 {
     private readonly SemaphoreSlim _sending = new(1, 1);
+    private int _maxMessageBytes = maxMessageBytes;
+
+    public void AllowMessagesUpTo(int maxMessageBytes) => _maxMessageBytes = Math.Max(_maxMessageBytes, maxMessageBytes);
 
     public WebSocket Socket { get; } = socket;
 
@@ -78,8 +90,9 @@ public sealed class WebSocketMessageChannel(WebSocket socket, int maxMessageByte
                 }
                 if (result.MessageType != WebSocketMessageType.Text)
                     throw new InvalidDataException("Attached mode speaks text messages only.");
-                if (message.Length + result.Count > maxMessageBytes)
-                    throw new InvalidDataException($"A message over {maxMessageBytes} bytes was refused.");
+                var max = _maxMessageBytes;
+                if (message.Length + result.Count > max)
+                    throw new InvalidDataException($"A message over {max} bytes was refused.");
                 message.Write(buffer, 0, result.Count);
                 if (result.EndOfMessage)
                     return Encoding.UTF8.GetString(message.GetBuffer(), 0, (int)message.Length);

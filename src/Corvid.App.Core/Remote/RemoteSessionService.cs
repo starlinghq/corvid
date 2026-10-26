@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Corvid.App.Core.Composition;
 using Corvid.App.Core.Mvvm;
 using Corvid.App.Core.Sessions;
 using Corvid.App.Core.Shell;
@@ -21,6 +22,12 @@ public sealed record AttachedCapabilities(AttachedRole Role, string? Device)
     public bool CanRecap { get; init; }
 
     public bool HasComposerModes { get; init; }
+
+    /// <summary>Messages carry images (A6, K-8): the engine on the other end reads them.</summary>
+    public bool CanSendImages { get; init; }
+
+    /// <summary>New sessions may start in another workspace or a new worktree on the engine's machine (A6, G-4).</summary>
+    public bool CanChooseWorkspace { get; init; }
 
     /// <summary>Where the attached Corvid runs, as it names itself (its host name); untrusted text.</summary>
     public string? Host { get; init; }
@@ -73,6 +80,10 @@ public sealed class RemoteSessionService : ISessionService, IAsyncDisposable, ID
     public bool CanRecap => Capabilities.CanRecap;
 
     public bool CanCreate => Capabilities.CanCreate;
+
+    public bool CanSendImages => Capabilities.CanSendImages;
+
+    public bool CanChooseWorkspace => Capabilities.CanChooseWorkspace;
 
     /// <summary>Authenticates with a token (the owner's, or a paired device's) and returns the service.</summary>
     /// <exception cref="UnauthorizedAccessException">The engine refused the token.</exception>
@@ -177,6 +188,96 @@ public sealed class RemoteSessionService : ISessionService, IAsyncDisposable, ID
     public Task SendAsync(string sessionId, string text, CancellationToken cancellationToken = default) =>
         CallAsync(AttachedProtocol.Prompt, new JsonObject { ["sessionId"] = sessionId, ["text"] = text }, cancellationToken);
 
+    /// <summary>
+    /// A message with images (A6, K-8), sent to the engine as the window's composer sends it: the engine checks, strips and
+    /// stores them, or refuses the message with why. Refused here first when they could not cross the wire.
+    /// </summary>
+    public Task SendAsync(string sessionId, string text, IReadOnlyList<ImageAttachment> images, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(images);
+        if (images.Count == 0)
+            return SendAsync(sessionId, text, cancellationToken);
+        if (!CanSendImages)
+            return Task.FromException(new ServiceUnavailableException("The attached Corvid does not take images in messages (K-8)."));
+        if (images.Count > ImageSignature.MaxPerMessage)
+            return Task.FromException(new InvalidOperationException($"A message carries at most {ImageSignature.MaxPerMessage} images."));
+        if (images.Sum(image => (long)image.Data.Length) > AttachedProtocol.MaxPromptImageBytes)
+            return Task.FromException(new InvalidOperationException(
+                $"An attached Corvid takes at most {ImageSignature.Size(AttachedProtocol.MaxPromptImageBytes)} of images in one message."));
+        var array = new JsonArray();
+        foreach (var image in images)
+        {
+            var item = new JsonObject { ["data"] = Convert.ToBase64String(image.Data) };
+            if (image.Name is { Length: > 0 } name)
+                item["name"] = Path.GetFileName(name);
+            array.Add(item);
+        }
+        return CallAsync(AttachedProtocol.Prompt, new JsonObject { ["sessionId"] = sessionId, ["text"] = text, ["images"] = array }, cancellationToken);
+    }
+
+    /// <summary>
+    /// A dropped or named image file (A6, K-8), read on this device, where the person dropped it: the path is this machine's,
+    /// not the engine's, and a paired device never reads the engine's files this way. Read bounded; the engine checks the
+    /// bytes when the message is sent, as it checks a paste.
+    /// </summary>
+    public async Task<ImageAttachment> ReadImageFileAsync(string sessionId, string path, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        if (!CanSendImages)
+            throw new ServiceUnavailableException("The attached Corvid does not take images in messages (K-8).");
+        var name = SafeText.Clean(Path.GetFileName(path));
+        FileInfo file;
+        try
+        {
+            file = new FileInfo(path);
+            if (!file.Exists || file.Attributes.HasFlag(FileAttributes.Directory))
+                throw new InvalidOperationException($"'{name}' is not a file this device can read.");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException
+                                              or System.Security.SecurityException)
+        {
+            throw new InvalidOperationException($"'{name}' could not be read: {SafeText.Clean(exception.Message)}");
+        }
+        if (file.Length > ImageSignature.MaxBytes)
+            throw new InvalidOperationException($"'{name}' is over {ImageSignature.Size(ImageSignature.MaxBytes)}, the most one image may be.");
+        byte[] data;
+        try
+        {
+            await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
+            using var buffer = new MemoryStream();
+            var chunk = new byte[81920];
+            int read;
+            while ((read = await stream.ReadAsync(chunk, cancellationToken).ConfigureAwait(false)) > 0)
+            {
+                if (buffer.Length + read > ImageSignature.MaxBytes)
+                    throw new InvalidOperationException($"'{name}' is over {ImageSignature.Size(ImageSignature.MaxBytes)}, the most one image may be.");
+                buffer.Write(chunk, 0, read);
+            }
+            data = buffer.ToArray();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new InvalidOperationException($"'{name}' could not be read: {SafeText.Clean(exception.Message)}");
+        }
+        return ImageSignature.MediaType(data) is null
+            ? throw new InvalidOperationException($"'{name}' is not a PNG, JPEG, GIF or WebP image.")
+            : new ImageAttachment(data, Path.GetFileName(path));
+    }
+
+    /// <summary>A message image's bytes from the engine's media store (A6, K-8); untrusted, as in-process.</summary>
+    public async Task<byte[]?> ReadImageAsync(string sessionId, string digest, CancellationToken cancellationToken = default)
+    {
+        if (!CanSendImages || string.IsNullOrEmpty(digest) || digest.Length > 128)
+            return null;
+        var result = await CallAsync(AttachedProtocol.ReadImage, new JsonObject { ["sessionId"] = sessionId, ["digest"] = digest }, cancellationToken)
+            .ConfigureAwait(false);
+        if ((result as JsonObject)?["data"] is not JsonValue value || !value.TryGetValue<string>(out var text)
+            || text.Length > (ImageSignature.MaxBytes / 3 + 1) * 4)
+            return null;
+        var bytes = new byte[text.Length / 4 * 3];
+        return Convert.TryFromBase64String(text, bytes, out var written) ? bytes.AsSpan(0, written).ToArray() : null;
+    }
+
     public async Task<QueuedMessage> QueueAsync(string sessionId, string text, CancellationToken cancellationToken = default)
     {
         var result = await CallAsync(AttachedProtocol.Queue, new JsonObject { ["sessionId"] = sessionId, ["text"] = text }, cancellationToken)
@@ -278,6 +379,29 @@ public sealed class RemoteSessionService : ISessionService, IAsyncDisposable, ID
         return SessionIdOf(result);
     }
 
+    /// <summary>
+    /// A new session in another workspace or a new worktree on the engine's machine (A6, G-4); the path is the engine's. A
+    /// worktree waits on the asking session's card, which this client shows when it has that session open.
+    /// </summary>
+    public async Task<string> CreateAsync(NewSessionRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request is { Workspace: null, Worktree: false, WorktreeName: null, AskIn: null })
+            return await CreateAsync(cancellationToken).ConfigureAwait(false);
+        if (!CanChooseWorkspace)
+            throw new ServiceUnavailableException("The attached Corvid does not start sessions in other workspaces (G-4).");
+        var parameters = new JsonObject();
+        if (request.Workspace is { } workspace)
+            parameters["workspace"] = workspace;
+        if (request.Worktree)
+            parameters["worktree"] = true;
+        if (request.WorktreeName is { } name)
+            parameters["worktreeName"] = name;
+        if (request.AskIn is { } askIn)
+            parameters["askIn"] = askIn;
+        return SessionIdOf(await CallAsync(AttachedProtocol.New, parameters, cancellationToken).ConfigureAwait(false));
+    }
+
     /// <summary>The owner only: a pairing code for another device, which redeems once before <see cref="PairingCode.Expires"/>.</summary>
     /// <exception cref="UnauthorizedAccessException">This client is a paired device, not the owner.</exception>
     public async Task<PairingCode> CreatePairingCodeAsync(CancellationToken cancellationToken = default)
@@ -347,6 +471,8 @@ public sealed class RemoteSessionService : ISessionService, IAsyncDisposable, ID
             CanPin = Flag("canPin"),
             CanRecap = Flag("canRecap"),
             HasComposerModes = Flag("hasComposerModes"),
+            CanSendImages = Flag("canSendImages"),
+            CanChooseWorkspace = Flag("canChooseWorkspace"),
             Host = Text("host"),
         };
     }

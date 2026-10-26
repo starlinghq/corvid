@@ -46,7 +46,7 @@ public sealed partial class EngineSessionService
         var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
         try
         {
-            var image = await Task.Run(() => ImageAttachments.FromPath(path, runtime.Builtin.Environment), cancellationToken).ConfigureAwait(false);
+            var image = await Task.Run(() => ImageAttachments.FromPath(path, ImageAttachments.EnvironmentFor(runtime, sessionId)), cancellationToken).ConfigureAwait(false);
             return new ImageAttachment(image.Data, image.Name);
         }
         catch (ImageRefusedException refused)

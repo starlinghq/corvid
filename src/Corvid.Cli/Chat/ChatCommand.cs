@@ -208,7 +208,7 @@ internal static class ChatCommand
                     // K-8 (A6): /image <path> stages an image for the next message (the chat's own; the app attaches by drop or paste).
                     if (ImageCommand.Matches(line))
                     {
-                        renderer.Notice(ImageCommand.Run(line, staged, runtime.Builtin.Environment));
+                        renderer.Notice(ImageCommand.Run(line, staged, ImageAttachments.EnvironmentFor(runtime, session.Id)));
                         continue;
                     }
 
@@ -264,7 +264,7 @@ internal static class ChatCommand
                     var images = new List<Abstractions.Media.ImageInput>();
                     if (mode is null)
                     {
-                        var (named, problems) = ImageAttachments.FromReferences(line, runtime.Builtin.Environment);
+                        var (named, problems) = ImageAttachments.FromReferences(line, ImageAttachments.EnvironmentFor(runtime, session.Id));
                         if (!problems.IsEmpty)
                         {
                             foreach (var problem in problems)

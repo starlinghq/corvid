@@ -27,7 +27,7 @@ public sealed class EngineAttachedTests
     }
 
     /// <summary>The engine's session service served as <c>corvid serve --attach</c> serves it.</summary>
-    private sealed class Served : IAsyncDisposable
+    internal sealed class Served : IAsyncDisposable
     {
         private readonly CancellationTokenSource _stop = new();
         private readonly List<Task> _connections = [];

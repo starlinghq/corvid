@@ -21,6 +21,8 @@ public sealed class JsonRpcPeerCloseTests
 
         public ConcurrentQueue<string> Events { get; } = new();
 
+        public TaskCompletionSource ClosedOnce { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public void Deliver(string? message) => _incoming.Writer.TryWrite(message);
 
         public ValueTask SendAsync(string message, CancellationToken cancellationToken)
@@ -45,6 +47,7 @@ public sealed class JsonRpcPeerCloseTests
         public ValueTask CloseAsync(string reason, CancellationToken cancellationToken)
         {
             Events.Enqueue("close " + reason);
+            ClosedOnce.TrySetResult();
             return ValueTask.CompletedTask;
         }
 
@@ -62,7 +65,7 @@ public sealed class JsonRpcPeerCloseTests
 
         Assert.Equal("that token is refused", await peer.Closed.WaitAsync(Ct));
         // The other end reads the answer and the close, then closes back: the reading ends with it.
-        await WaitForAsync(() => channel.Events.Contains("close that token is refused"));
+        await channel.ClosedOnce.Task.WaitAsync(Ct);
         Assert.DoesNotContain("read cancelled", channel.Events);
         channel.Deliver(null);
         await peer.DisposeAsync();
@@ -82,16 +85,5 @@ public sealed class JsonRpcPeerCloseTests
         Assert.Null(await peer.Closed.WaitAsync(Ct));
         await peer.DisposeAsync();
         Assert.Equal(["close closed"], channel.Events);
-    }
-
-    private static async Task WaitForAsync(Func<bool> condition)
-    {
-        // The writer and the close run on the thread pool; poll the recorded order rather than sleep a fixed time.
-        var until = DateTime.UtcNow.AddSeconds(10);
-        while (!condition())
-        {
-            Assert.True(DateTime.UtcNow < until, "timed out");
-            await Task.Yield();
-        }
     }
 }
