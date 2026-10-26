@@ -788,7 +788,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         var tools = await _engine.ToolsAsync().ConfigureAwait(false);
         while (true)
         {
-            var channel = _channels.GetOrAdd(sessionId, id => new Channel(id, new SessionUpdateTranslator(tools.WorkspaceRoot) { IsChildRunning = runtime.IsChildRunning }));
+            var channel = _channels.GetOrAdd(sessionId, id => new Channel(id, new SessionUpdateTranslator(tools.WorkspaceRoot) { IsChildRunning = runtime.IsChildRunning, CodeLimits = runtime.CodeLimits }));
             Task loading;
             lock (channel.Gate)
             {

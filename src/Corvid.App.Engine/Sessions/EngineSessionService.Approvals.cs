@@ -185,7 +185,7 @@ public sealed partial class EngineSessionService
                     Delegation = [.. delegation],
                     DelegationWhole = [.. whole],
                     // A7: a code mode run's whole script, from the prompt's in-memory arguments (what runs).
-                    Code = SessionUpdateTranslator.CodeRunOf(CodeRunCard.Run(prompt)),
+                    Code = SessionUpdateTranslator.CodeRunOf(CodeRunCard.Run(prompt), translator.CodeLimits),
                 };
                 return
                 [

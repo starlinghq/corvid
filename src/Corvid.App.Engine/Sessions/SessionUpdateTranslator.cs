@@ -75,6 +75,9 @@ public sealed partial class SessionUpdateTranslator(string workspace)
     /// </summary>
     public bool ShellLine { get; set; }
 
+    /// <summary>A7 e2e: the limits a code run starts with here (<c>Corvid:Tools:Code</c>), which its card shows.</summary>
+    public Corvid.Tools.CodeMode.CodeModeLimits CodeLimits { get; set; } = Corvid.Tools.CodeMode.CodeModeLimits.Default;
+
     /// <summary>The step budget a turn opened from here on has (<c>Corvid:Turn:MaxSteps</c>); null when unknown (a replay).</summary>
     public int? MaxSteps { get; set; }
 
@@ -240,7 +243,7 @@ public sealed partial class SessionUpdateTranslator(string workspace)
                     Locations = Relative(started.Locations),
                     // A7: a script's call names its run; a run brings its script.
                     ParentCallId = started.ParentCallId,
-                    Code = CodeRunOf(CodeRunPresentation.Read(started.Tool, started.Input)),
+                    Code = CodeRunOf(CodeRunPresentation.Read(started.Tool, started.Input), CodeLimits),
                 });
                 break;
             case ToolCallChanged changed:
@@ -255,7 +258,7 @@ public sealed partial class SessionUpdateTranslator(string workspace)
                         Input = input.GetRawText(),
                         Locations = Relative(changed.Locations),
                         ParentCallId = changed.ParentCallId,
-                        Code = CodeRunOf(CodeRunPresentation.Read(tool, input)),
+                        Code = CodeRunOf(CodeRunPresentation.Read(tool, input), CodeLimits),
                     });
                 output.Add(new ToolCallUpdate(changed.CallId)
                 {
@@ -510,14 +513,17 @@ public sealed partial class SessionUpdateTranslator(string workspace)
     /// was refused unasked (G-2: the pipeline's assessment), else "read-only" for a tool that declared itself so; null when
     /// none of these is known, which leaves the card's verdict as it was.
     /// </summary>
-    /// <summary>A7: a code mode run as App.Core's cards show it, with the host's limits; null for any other call.</summary>
-    internal static CodeRun? CodeRunOf(CodeRunView? run) =>
+    /// <summary>
+    /// A7: a code mode run as App.Core's cards show it, with the host's limits (<paramref name="limits"/>, the configured
+    /// ones; the defaults when none are given); null for any other call.
+    /// </summary>
+    internal static CodeRun? CodeRunOf(CodeRunView? run, Corvid.Tools.CodeMode.CodeModeLimits? limits = null) =>
         run is null
             ? null
             : new CodeRun(run.DisplayLanguage, run.Source)
             {
-                MaxCalls = Corvid.Tools.CodeMode.CodeModeLimits.Default.MaxCalls,
-                Limits = CodeRunPresentation.LimitsText(),
+                MaxCalls = (limits ?? Corvid.Tools.CodeMode.CodeModeLimits.Default).MaxCalls,
+                Limits = CodeRunPresentation.LimitsText(limits),
             };
 
     private static string? NonEmpty(string text) => text.Length == 0 ? null : text;

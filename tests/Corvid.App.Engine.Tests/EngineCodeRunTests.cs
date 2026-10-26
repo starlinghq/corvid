@@ -28,7 +28,9 @@ public sealed class EngineCodeRunTests
             Reply.Say("The script listed your notes.")),
             // Code mode is offered only to a generator outside this process (plan §15).
             generatorPrivacy: Corvid.Models.PrivacyClass.LocalServer);
-        await using var engine = await CustomEngine.StartAsync(models, new Dictionary<string, string?> { ["Corvid:Approvals:Mode"] = "Manual" },
+        // A7 e2e: the cards show the configured call limit, not the default 50.
+        await using var engine = await CustomEngine.StartAsync(models,
+            new Dictionary<string, string?> { ["Corvid:Approvals:Mode"] = "Manual", ["Corvid:Tools:Code:MaxCalls"] = "7" },
             services => services.AddSingleton<IToolProvider>(new Tools(new FakeCodeTool(("list_notes", "{}")))));
         var id = engine.Runtime.OpenSession(surface: "app").Id;
         using var service = engine.Sessions();
@@ -40,7 +42,8 @@ public sealed class EngineCodeRunTests
 
             var code = Assert.IsType<CodeRun>(request.Code);
             Assert.Equal(("Python", "import corvid_tools as t\nprint(t.list_notes())  # \u202e"), (code.Language, code.Source));
-            Assert.Equal(50, code.MaxCalls);
+            Assert.Equal(7, code.MaxCalls);
+            Assert.Contains("at most 7 tool calls", code.Limits, StringComparison.Ordinal);
             Assert.Contains("no network", code.Limits, StringComparison.Ordinal);
             // The run's card, announced by its prompt, shows the script while it waits.
             var waiting = SessionFold.Replay(id, waiter.Updates.ToList()).Transcript.OfType<ToolEntry>().Single(tool => tool.CallId == request.CallId);

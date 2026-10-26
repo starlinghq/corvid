@@ -162,6 +162,13 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     public CorvidOptions Options { get; }
 
     /// <summary>
+    /// A7 e2e: the limits a code mode run starts with (<c>Corvid:Tools:Code</c>), as <c>execute_code</c> enforces them, for
+    /// the cards that show a run (an approval card says what the person grants).
+    /// </summary>
+    public Corvid.Tools.CodeMode.CodeModeLimits CodeLimits =>
+        Corvid.Tools.CodeMode.CodeModeLimits.Default with { MaxCalls = Options.Tools.Code.MaxCalls };
+
+    /// <summary>
     /// The settings a running runtime takes without a restart (A4), by configuration key, with when each applies: the
     /// default approval mode for sessions opened from now on, the approval deadline from the next prompt, the step budget
     /// and output tokens per step for sessions opened from now on. Everything else in corvid.json is read once, at start.

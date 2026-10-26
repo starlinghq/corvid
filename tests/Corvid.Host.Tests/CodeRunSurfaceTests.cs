@@ -65,6 +65,22 @@ public sealed class CodeRunSurfaceTests
     }
 
     [Fact]
+    public async Task The_approval_card_names_the_configured_call_limit_not_the_default()
+    {
+        // A7 e2e: the card read "at most 50 tool calls" with Corvid:Tools:Code:MaxCalls at 5, so the person approved a limit
+        // the run did not have.
+        await using var host = TestHost.Create(settings: new Dictionary<string, string?> { ["Corvid:Tools:Code:MaxCalls"] = "5" });
+        var runtime = await host.StartAsync();
+        await using var _ = runtime;
+
+        var lines = await CodeRunCard.WithDelegationAsync(runtime, Prompt("execute_code", """{"language":"python","code":"print(1)\n"}"""), Ct, whole: false);
+
+        Assert.Equal(5, runtime.CodeLimits.MaxCalls);
+        Assert.StartsWith("Code run: Python, 1 line; at most 5 tool calls,", lines.Single(line => line.StartsWith("Code run:", StringComparison.Ordinal)),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_running_code_run_is_announced_with_its_script_and_other_calls_without_input()
     {
         await using var host = TestHost.Create();

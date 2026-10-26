@@ -25,8 +25,11 @@ public static class CodeRunCard
             ? CodeRunPresentation.Read(action.Tool.Name, action.Arguments)
             : null;
 
-    /// <summary>The card's lines for a code run; empty for any other prompt.</summary>
-    public static IReadOnlyList<string> Lines(ApprovalPrompt prompt)
+    /// <summary>
+    /// The card's lines for a code run; empty for any other prompt. <paramref name="limits"/> are the run's (the runtime's
+    /// <see cref="CorvidRuntime.CodeLimits"/>); none given, the defaults.
+    /// </summary>
+    public static IReadOnlyList<string> Lines(ApprovalPrompt prompt, Corvid.Tools.CodeMode.CodeModeLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(prompt);
         if (!IsCodeRun(prompt))
@@ -35,7 +38,7 @@ public static class CodeRunCard
             return ["Code run: the call names no script, so nothing would run."];
         var lines = new List<string>
         {
-            $"Code run: {TerminalText.Visible(run.DisplayLanguage)}, {run.Lines} line{(run.Lines == 1 ? "" : "s")}; {CodeRunPresentation.LimitsText()}.",
+            $"Code run: {TerminalText.Visible(run.DisplayLanguage)}, {run.Lines} line{(run.Lines == 1 ? "" : "s")}; {CodeRunPresentation.LimitsText(limits)}.",
             CodeRunPresentation.EachCallAsked,
         };
         if (TerminalText.HasHidden(run.Source) || run.Source.Contains(LineSeparator, StringComparison.Ordinal) || run.Source.Contains(ParagraphSeparator, StringComparison.Ordinal))
@@ -64,7 +67,7 @@ public static class CodeRunCard
         bool whole)
     {
         var lines = await DelegationCard.LinesAsync(runtime, prompt, cancellationToken, whole).ConfigureAwait(false);
-        var code = Lines(prompt);
+        var code = Lines(prompt, runtime.CodeLimits);
         return code.Count == 0 ? lines : [.. lines, .. code];
     }
 }
