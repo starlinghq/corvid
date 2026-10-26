@@ -580,8 +580,9 @@ public sealed class ConsolidationSettings
 {
     /// <summary>
     /// When every session is idle, a <c>user</c> or <c>agent</c> block at <see cref="Threshold"/> of its budget (or over it),
-    /// and an edit staged over its block's budget, is rewritten on the background generator and staged for review; nothing is
-    /// applied unapproved. Off, <c>/memory consolidate</c> and the app's Consolidate still work on demand.
+    /// and an edit staged over its block's budget, is rewritten on the background generator and staged for review, and the
+    /// ending of duplicate facts is staged too; nothing is applied unapproved. Off, <c>/memory consolidate</c> and the app's
+    /// Consolidate still work on demand.
     /// </summary>
     public bool Background { get; set; } = true;
 

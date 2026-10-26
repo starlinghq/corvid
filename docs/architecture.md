@@ -617,12 +617,69 @@ and deciders.
 
 Not built yet: sqlite-vec (no first-party .NET package; it would replace the scan behind
 `IVectorIndex` and needs a checker rule for its native library); Kev reranking of the top 8
-(§9.3); the consolidation job that rewrites an over-budget block (§9.5); relation extraction
-(`IExtractor` returns spans, so relations come only from callers) and entity aliasing; fact
-deduplication and merging; media memory (§9.4). C-015 added local-only facts (schema version 2) and core blocks that are
+(§9.3); relation extraction
+(`IExtractor` returns spans, so relations come only from callers) and entity aliasing; merging facts that say the same
+thing in other words; media memory (§9.4). A7 added the block rewrite job and the exact-duplicate fact dedupe (see
+[Sleep-time memory jobs](#sleep-time-memory-jobs-a7)). C-015 added local-only facts (schema version 2) and core blocks that are
 local-only by default, and the turn loop leaves both out of a cloud model's prompt. C-012 added the memory tools; C-013 added `/memory` (pending, approve, reject) and runs
 `EpisodicIndex.CatchUp` after each turn. C-011 starts the re-embed job when
 `embedder.text` switches and the write path when `remember` acts at egress.
+
+## Sleep-time memory jobs (A7)
+
+Plan §9.5 and §9.2 step 4. Two jobs, both in `Corvid.Memory`, both staging for review: nothing they produce is applied
+until a person approves it, since a core block enters every prompt and a fact feeds recall. No new project, package or
+checker rule.
+
+- **Block rewrite (`BlockConsolidator`).** A `user` or `agent` block at `Threshold` (0.9) of its budget or over it, counted
+  with the store's tokenizer (the generator's), is sent to the background generator (`CreateBackgroundSlots()`,
+  `DevicePriority.Background`) with a fixed system prompt (`BlockConsolidator.SystemPrompt`, on the egress gate's trusted
+  list) asking for a rewrite to `TargetFill` (0.75) of the budget that keeps every fact and instruction. The block is sent
+  as data between markers. Every request runs inside `ModelRequestContext(memory-jobs, tainted: false, block.LocalOnly)`
+  (`CorvidRuntimeFactory.ConsolidationRequest`), so the egress gate refuses to send a local-only block (the default) to a
+  cloud generator. The reply is untrusted: a code fence or echoed markers are stripped; an empty reply, one holding a
+  hidden character (control, format, variation selector or tag), one holding a credential value (C-040's detector), one
+  not shorter than the block and one over the budget after one retry are declined. A block holding a credential value is
+  never sent. The persona block is never rewritten. A rewrite that passes is staged by `MemoryWriter.StageConsolidation`
+  as a block proposal with replace semantics (`Content` is the whole block, `Consolidation = true`, `BlockRevision` the
+  revision it was made from, reason `consolidation: 57 of 60 tokens rewritten to 43`); approving it goes through
+  `ApproveAsync`'s block path, so a block changed since fails with the conflict and nothing is written.
+- **Over-budget edits.** An edit `EditBlockAsync` staged as `over_budget` gets a rewrite with the edit folded in
+  (`Supersedes` = the edit's pending id). Approving the rewrite resolves the edit as approved (`consolidated into …`);
+  rejecting the edit rejects its rewrite, which would otherwise write it after all.
+- **Fact dedupe (`FactDeduplicator`).** Current facts with the same words (case, spacing and a closing full stop ignored,
+  NFKC), the same relation and the same local-only mark: the earliest is kept and ending each later one is staged as an
+  `invalidate` with the kept fact as its neighbour (`MemoryWriter.StageDuplicate`, reason `duplicate: says what … says`).
+  Merging facts that say the same in other words needs judgement and is not built.
+- **The loop.** `BlockConsolidator.RunAsync` (started in `CorvidRuntime.Consolidation.cs`, awaited at disposal) wakes on
+  `Nudge()` after every delivered turn and every `Corvid:Memory:Consolidation:IntervalMinutes` (15), waits `IdleSeconds`
+  (30), and runs a pass only when every session open in the process is idle (`SessionActor.IsIdle`); while one is busy it
+  looks again every `IdleSeconds`. A pass rewrites the blocks that need it, then the over-budget edits, then runs the fact
+  dedupe. One consolidation waits per block; a rewrite a person rejected, or one the job declined in this process, is not
+  asked for again until the block changes. `Corvid:Memory:Consolidation:Background` (true) turns the loop off; the
+  on-demand paths stay. Both jobs need the write path (an extractor slot).
+- **Journey.** Background runs record in the `memory-jobs` log session (`MemoryJobs.Session`), which `/sessions`,
+  `/search`, the app's session list and prompt history leave out and Audit names "memory jobs": the staging's
+  `MemoryWritten(pending, staged)` and a `MemoryJobRan(job, subject, outcome, detail, trigger, pending_id)` event per
+  attempt (outcomes `staged`, `proposed`, `declined`, `refused`, `failed`; the detail holds sizes and reasons, never the
+  memory's text). Audit groups `MemoryJobRan` with memory and skills.
+- **Surfaces.** `/memory consolidate [user | agent]` stages a rewrite for the named block, or for each block at the
+  threshold, and prints it as a line diff (`BlockDiff`, longest common run of lines); `/memory approve` and `/memory
+  reject` resolve it. In the app, Consolidate on a staged block update (`ConsolidateAsync`) proposes the block rewritten
+  with the update folded in, which Approve writes as the whole block; "Consolidate now" on a block near its budget
+  (`ConsolidateBlockAsync`) stages a rewrite that appears in Review as a diff (`StagedBlockUpdate.Replaces`, `Diff`). The
+  demo service stages a stand-in rewrite. The ACP recordings were re-recorded for the `/memory` hint.
+- Tests: `Corvid.Memory.Tests.ConsolidationTests` (a scripted generator's rewrite staged and not applied; approve applies;
+  reject leaves the block and is not re-proposed; one per block; credentials in the block or the reply refused; over
+  budget retried then declined; hidden characters and empty replies declined; persona and blocks below the threshold
+  left alone; over-budget edits folded in and resolved; a stale approval writes nothing; the loop runs only when idle; a
+  proposal stages nothing), `DedupeTests`, `Corvid.Host.Tests.ConsolidationCommandTests` (`/memory consolidate` and
+  approve; a local-only block refused by the egress gate in front of a cloud generator; the idle trigger after a turn in
+  the jobs' own session), `Corvid.App.Engine.Tests.MemoryServiceTests` and `Corvid.App.Core.Tests.MemoryTests`.
+- Not built: merging near-duplicate facts (needs a decider or the generator and a calibrated floor), the other §9.5 jobs
+  (skill distillation and the curator have their own loops; recalibration, episode summaries), a `/journey` view over
+  `MemoryJobRan` (Audit shows the events), a CLI verb for the dedupe, a decider gate in front of consolidation, and a
+  persisted record of declined rewrites (kept in memory per process).
 
 ## Calibration and decision export (C-021)
 
