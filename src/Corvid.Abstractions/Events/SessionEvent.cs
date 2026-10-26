@@ -59,8 +59,16 @@ public sealed record UserMessage(string Text,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ImmutableArray<Media.ImageRef>? Images = null) : SessionEvent;
 // Usage (A5) is the generator calls' tokens since the previous call's record, on the answer that ended them; omitted when
 // null (no call reported any, or a message from elsewhere), so events written before it keep their persisted form.
+// Plan (A7, architect/editor turns, plan §6): set on a plan an escalated model wrote for the session's own (or the editor)
+// model to apply, mid-turn, before the edits; null on an answer. Omitted when null, so answers keep their persisted form,
+// and a binary older than A7 reads a plan as an ordinary assistant message (unknown properties are skipped).
 public sealed record AssistantMessage(string Text,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] TokenUsage? Usage = null) : SessionEvent;
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] TokenUsage? Usage = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] TurnPlan? Plan = null) : SessionEvent;
+// A7: who wrote an architect/editor turn's plan and who applies it. Planner and Editor are model profile ids; Trigger is what
+// made the turn plan (difficulty, context, repair, stuck for a re-plan, or architect when the person asked with /architect);
+// Attempt is 1 for the plan and 2 for the one re-plan a turn may make.
+public sealed record TurnPlan(string Planner, string Editor, string Trigger, int Attempt = 1);
 // A5: what one or more generator calls used, as their provider reported it (K-5 in the log). InputTokens and OutputTokens are
 // summed over the Calls it covers; PromptTokens is the latest call's prompt, which is what a context gauge shows. Each is
 // null when no call reported it.

@@ -163,7 +163,10 @@ public static class SessionReplay
                 case AssistantMessage assistant:
                     if (options.Usage && assistant.Usage is { } answered)
                         items.Add((entry.FromSequence, Used(answered, at)));
-                    items.Add((entry.FromSequence, new AnswerChunk(assistant.Text) { At = at }));
+                    // A7: an architect/editor turn's plan is its own update, never part of the answer.
+                    items.Add((entry.FromSequence, assistant.Plan is { } plan
+                        ? new TurnPlanned(assistant.Text, plan, entry.FromSequence) { At = at }
+                        : new AnswerChunk(assistant.Text) { At = at }));
                     break;
                 case ToolCallIssued call:
                     if (options.Usage && call.Usage is { } issuedUsage)

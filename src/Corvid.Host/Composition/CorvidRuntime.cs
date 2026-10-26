@@ -682,9 +682,25 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     /// A7: offers <c>execute_code</c> only while the session's generator is a cloud or local-server model; an in-process one
     /// (0.8B) writes poor code (plan §15). Every other tool passes.
     /// </summary>
-    internal static Func<Corvid.Tools.ToolDescriptor, bool> CodeModeFilter(SessionModelSlots slots) => tool =>
+    /// <remarks>
+    /// A7 int: an architect/editor turn hands its tools to the editor (<paramref name="editorModel"/>, else the session's own
+    /// generator, which the current one is at the turn's start). An editor named in process withholds code mode too, so a
+    /// plan from a server model is never applied by an in-process model writing scripts.
+    /// </remarks>
+    internal static Func<Corvid.Tools.ToolDescriptor, bool> CodeModeFilter(SessionModelSlots slots, string? editorModel = null) => tool =>
         tool.Name != CodeTool.ToolName
-        || slots.TryCurrent(ModelSlots.Generator, out var generator) && generator.Profile.Privacy != PrivacyClass.Local;
+        || slots.TryCurrent(ModelSlots.Generator, out var generator) && generator.Profile.Privacy != PrivacyClass.Local
+            && !(EditorFor(slots, editorModel) is { } editor && editor.Profile.Privacy == PrivacyClass.Local);
+
+    // The generator binding an editor model names, as the turn runner picks it (by profile id or name@placement), or null.
+    private static ModelBinding? EditorFor(SessionModelSlots slots, string? editorModel)
+    {
+        if (editorModel is not { Length: > 0 } wanted || !slots.TryConfiguration(ModelSlots.Generator, out var configuration))
+            return null;
+        return new[] { configuration.Default }.Concat(configuration.Fallbacks).Concat(configuration.Escalation)
+            .FirstOrDefault(binding => string.Equals(binding.Profile.Id, wanted, StringComparison.OrdinalIgnoreCase)
+                || binding.Profile.Id.StartsWith(wanted + "@", StringComparison.OrdinalIgnoreCase));
+    }
 
     /// <summary>One session's turn services over the shared ones. Scheduled runs are not interactive: nobody can be asked.</summary>
     private TurnServices Services(SessionModelSlots slots, bool interactive, ToolRegistry? tools = null, SessionSettings? session = null,
@@ -752,7 +768,10 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
                 ToolExamples = ToolExamples,
                 // A7 (plan §15): code mode only for a generator that runs outside this process (a cloud or local-server
                 // model), read at each turn's start, so a /model switch changes it from the next turn.
-                ToolFilter = CodeModeFilter(slots),
+                ToolFilter = CodeModeFilter(slots, turn.EditorModel),
+                // A7: architect/editor turns, and the model that applies a plan.
+                ArchitectEditor = turn.ArchitectEditor,
+                EditorModel = turn.EditorModel,
             },
         };
     }

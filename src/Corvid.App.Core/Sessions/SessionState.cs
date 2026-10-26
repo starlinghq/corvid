@@ -151,6 +151,9 @@ public sealed record DetectionEntry(string Id, DetectionInfo Detection, DateTime
 
 public sealed record CompactionEntry(string Id, CompactionUpdate Compaction) : TranscriptEntry(Id);
 
+/// <summary>A7: an architect/editor turn's plan: "planned by X · edited by Y", the plan collapsed under it.</summary>
+public sealed record TurnPlanEntry(string Id, TurnPlanned Plan) : TranscriptEntry(Id);
+
 public sealed record RewindEntry(string Id, SessionRewound Rewind) : TranscriptEntry(Id);
 
 /// <summary>A clarifying question, pinned while open; <see cref="Answer"/> once answered.</summary>

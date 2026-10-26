@@ -138,7 +138,8 @@ public static class SessionCatalogue
                 case ClarificationAnswered answered when question?.QuestionId == answered.QuestionId:
                     question = null;
                     break;
-                case AssistantMessage assistant:
+                // A7: an architect/editor turn's plan is not an answer.
+                case AssistantMessage { Plan: null } assistant:
                     answer = assistant.Text;
                     break;
                 case SessionTitled value:
@@ -314,7 +315,8 @@ public sealed class SessionTitler
             if (transcript[i].Content is UserMessage { LocalOnly: not true, From: null } user && message is null
                 && !(i + 1 < transcript.Length && transcript[i + 1].Content is ToolCallIssued { CallId: var call } && call.StartsWith(Corvid.Kernel.Turns.TurnRunner.UserShellCall, StringComparison.Ordinal)))
                 message = user.Text;
-            else if (transcript[i].Content is AssistantMessage assistant && message is not null)
+            // A7: an architect/editor turn's plan is not its answer.
+            else if (transcript[i].Content is AssistantMessage { Plan: null } assistant && message is not null)
             {
                 answer = assistant.Text;
                 break;
@@ -439,6 +441,10 @@ public sealed class SessionTitler
                     break;
                 case UserMessage user:
                     lines.Add("user: " + Cut(user.Text, LineChars));
+                    break;
+                // A7: an architect/editor turn's plan, said to be one.
+                case AssistantMessage { Plan: { } plan } planned:
+                    lines.Add($"plan by {plan.Planner}: " + Cut(planned.Text, LineChars));
                     break;
                 case AssistantMessage assistant:
                     lines.Add("assistant: " + Cut(assistant.Text, LineChars));

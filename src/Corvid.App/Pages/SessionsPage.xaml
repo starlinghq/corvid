@@ -744,6 +744,19 @@
       </StackPanel>
     </DataTemplate>
 
+    <!-- A7: an architect/editor turn's plan: "planned by X · edited by Y" as a muted link; expanded, the plan in muted text. -->
+    <DataTemplate x:Key="PlanTemplate" x:DataType="sessions:PlanBlock">
+      <StackPanel Spacing="6" Padding="2,0">
+        <Button Content="{x:Bind Label, Mode=OneWay}" Style="{StaticResource MutedLinkButton}" Command="{x:Bind ToggleCommand}"
+                HorizontalAlignment="Left" AutomationProperties.Name="{x:Bind local:SessionsPage.ThoughtName(Label, IsExpanded), Mode=OneWay}" />
+        <Border BorderBrush="{ThemeResource CorvidLine}" BorderThickness="2,0,0,0" Padding="10,0,0,0"
+                Visibility="{x:Bind ui:Ui.VisibleIf(IsExpanded), Mode=OneWay}">
+          <TextBlock controls:RichText.Runs="{x:Bind sessions:SessionText.Runs(Text), Mode=OneWay}" Style="{StaticResource CorvidSmallText}"
+                     FontSize="12.5" IsTextSelectionEnabled="True" TextWrapping="Wrap" />
+        </Border>
+      </StackPanel>
+    </DataTemplate>
+
     <!-- A note row: staged memory (grey, with "review"), a held MCP tool (red), a finished job (violet), a warning (amber). -->
     <DataTemplate x:Key="NoticeTemplate" x:DataType="sessions:NoticeBlock">
       <controls:ToneRow Tone="{x:Bind Tone}">
@@ -892,7 +905,8 @@
                                       Compaction="{StaticResource CompactionTemplate}"
                                       Rewind="{StaticResource RewindTemplate}"
                                       Question="{StaticResource QuestionTemplate}"
-                                      Command="{StaticResource CommandTemplate}" />
+                                      Command="{StaticResource CommandTemplate}"
+                                      Plan="{StaticResource PlanTemplate}" />
   </Page.Resources>
 
   <Grid x:Name="Root">

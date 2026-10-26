@@ -388,6 +388,10 @@ public sealed class SessionUpdateReporter : ITurnObserver
                         case TodosSet todos:
                             _fromLog.Add(new PlanChanged(todos.Items) { At = item.RecordedAt });
                             break;
+                        // A7: an architect/editor turn's plan; the answer itself comes streamed, or at the turn's end.
+                        case AssistantMessage { Plan: { } plan } planned:
+                            _fromLog.Add(new TurnPlanned(planned.Text, plan, item.Sequence) { At = item.RecordedAt });
+                            break;
                         case ToolCallIssued call:
                             _calls[call.CallId] = call;
                             break;

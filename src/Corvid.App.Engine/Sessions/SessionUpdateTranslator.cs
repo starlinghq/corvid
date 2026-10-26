@@ -3,6 +3,8 @@ using Corvid.App.Core.Sessions;
 using Corvid.Host.Sessions;
 using Corvid.Host.Telemetry;
 using HostPlan = Corvid.Host.Sessions.PlanChanged;
+using HostTurnPlanned = Corvid.Host.Sessions.TurnPlanned;
+using TurnPlanned = Corvid.App.Core.Sessions.TurnPlanned;
 using ApprovalAssessed = Corvid.Abstractions.Events.ApprovalAssessed;
 using ApprovalResolutions = Corvid.Abstractions.Events.ApprovalResolutions;
 
@@ -197,6 +199,15 @@ public sealed partial class SessionUpdateTranslator(string workspace)
                 break;
             case ThoughtChunk thought:
                 output.Add(new AgentThoughtChunk(thought.Text) { At = at });
+                break;
+            // A7: an architect/editor turn's plan, live once it is logged and on replay alike.
+            case HostTurnPlanned planned:
+                output.Add(new TurnPlanned(planned.Text, Bare(planned.Plan.Planner), Bare(planned.Plan.Editor), planned.Plan.Attempt)
+                {
+                    At = at,
+                    Trigger = planned.Plan.Trigger,
+                    Position = planned.Sequence,
+                });
                 break;
             case UsageReported usage:
                 // K-5 as far as a call reports it: the turn's tokens so far, and the prompt the latest call sent against the
@@ -395,6 +406,8 @@ public sealed partial class SessionUpdateTranslator(string workspace)
             // A de-escalation is the turn's end; one before the turn answered (or a forgotten choice, live) is a reset.
             "de_escalation" when change.SessionDefault || (TurnOpen && !_answered) => (ModelSwitchKind.Returned, "this session's choice was reset to the default"),
             "de_escalation" => (ModelSwitchKind.Returned, "the turn ended"),
+            // A7: an architect/editor turn's plan is made; this model applies it.
+            "editor" => (ModelSwitchKind.Returned, "to apply the plan"),
             "user" => (ModelSwitchKind.Switched, "for this turn" + next),
             _ => (ModelSwitchKind.Switched, "for this session" + next),
         };

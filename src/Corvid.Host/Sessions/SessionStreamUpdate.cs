@@ -74,6 +74,15 @@ public sealed record TurnStepped(int Step, int? MaxSteps) : SessionStreamUpdate
 public sealed record AnswerChunk(string Text) : SessionStreamUpdate;
 
 /// <summary>
+/// A7: an architect/editor turn's plan (plan §6), from its <c>AssistantMessage</c> with a <see cref="TurnPlan"/>: written by
+/// <c>Plan.Planner</c> (the escalated model) for <c>Plan.Editor</c> (the session's own, or the configured editor), which
+/// makes the edits after it. Live once it is logged (its request is not streamed as the answer) and on replay. A model's
+/// text: untrusted, clean it before showing it.
+/// </summary>
+/// <param name="Sequence">The event's position in the log.</param>
+public sealed record TurnPlanned(string Text, TurnPlan Plan, long Sequence) : SessionStreamUpdate;
+
+/// <summary>
 /// Reasoning the generator streamed (ACP <c>agent_thought_chunk</c>, K-1): live only, a delta; the log does not keep it,
 /// so a replay has none.
 /// </summary>
