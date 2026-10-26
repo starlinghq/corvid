@@ -77,6 +77,9 @@ internal sealed class ToolsSocketServer : IAsyncDisposable
                     continue;
                 }
                 _open++;
+                // Finished connections are dropped (a failed one is kept for StopAsync to report), so a script that
+                // connects and closes in a loop holds nothing.
+                _connections.RemoveAll(task => task.IsCompletedSuccessfully);
                 _connections.Add(ServeAsync(client, token));
             }
         }

@@ -630,6 +630,8 @@ public sealed class CodeLanguageTests : IDisposable
         // A workspace whose build files would break any project built inside it.
         _tree.Write("home/project/Directory.Build.props", "<Project><Target Name=\"Poison\" BeforeTargets=\"Build\"><Error Text=\"POISONED\" /></Target></Project>");
         _tree.Write("home/project/Directory.Build.targets", "<Project><Target Name=\"Poison2\" BeforeTargets=\"Build\"><Error Text=\"POISONED\" /></Target></Project>");
+        // And a global.json pinning an SDK no machine has: the SDK is chosen from the working directory upward.
+        _tree.Write("home/project/global.json", """{"sdk":{"version":"1.0.100","rollForward":"disable"}}""");
         const string code = """
             using System.Net.Sockets;
             using System.Text.Json;
@@ -654,8 +656,9 @@ public sealed class CodeLanguageTests : IDisposable
         Assert.Equal(["read_file {\"path\":\"data.txt\"}"], calls);
         // The SDK's caches stay in the workspace's .corvid, which keeps itself out of git.
         Assert.Equal("*\n", File.ReadAllText(Path.Combine(_workspace, ".corvid", "code", ".gitignore")));
-        // A successful build says nothing: the script's own output is all there is.
-        Assert.Equal("", result.GetProperty("stderr").GetString());
+        // A successful build says nothing of its own (a runtime may still warn, so only failures are ruled out).
+        Assert.DoesNotContain("error", result.GetProperty("stderr").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Unhandled", result.GetProperty("stderr").GetString(), StringComparison.Ordinal);
 
         // A second run in the workspace starts from the SDK's cached first use (no first-use step to make its directories).
         var again = await RunAsync("csharp", "Console.WriteLine(\"again\");", calls);

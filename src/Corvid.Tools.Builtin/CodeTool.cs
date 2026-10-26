@@ -281,12 +281,14 @@ public sealed class CodeRunner
 {
     // C#: a fixed wrapper, never the script, run by /bin/sh inside the sandbox. It writes the source from standard input to
     // the sandbox's own /tmp (outside the workspace, so the workspace's Directory.Build.* and NuGet settings are not read),
-    // with stub build files that stop MSBuild's upward search, builds there (its output on stderr only when it fails), then runs the app.
+    // with stub build files that stop MSBuild's upward search, and builds there (its output on stderr only when it fails) from
+    // there, so the workspace's global.json does not pick the SDK either. Then it runs the built app in the workspace through
+    // the host, which reads the app's runtimeconfig, never a global.json.
     // The SDK's caches go under the workspace's .corvid/code, the only writable place that lasts; the sandbox writes them.
     private const string CSharpWrapper =
         """
         set -eu
-        dotnet="$1"; cache="$2"
+        dotnet="$1"; cache="$2"; workspace="$PWD"
         app=/tmp/corvid-code; mkdir -p "$app" "$cache" "$XDG_DATA_HOME"
         [ -e "$cache/../.gitignore" ] || printf '*\n' > "$cache/../.gitignore"
         cat > "$app/Program.cs"
@@ -294,8 +296,12 @@ public sealed class CodeRunner
         printf '%s\n' '<Project />' > "$app/Directory.Build.targets"
         printf '%s\n' '<Project />' > "$app/Directory.Packages.props"
         printf '%s\n' '<?xml version="1.0" encoding="utf-8"?><configuration><packageSources><clear /></packageSources></configuration>' > "$app/nuget.config"
+        cd "$app"
         "$dotnet" build "$app/Program.cs" --artifacts-path "$app/artifacts" -v q -nologo -clp:NoSummary > "$app/build.log" 2>&1 || { cat "$app/build.log" >&2; exit 1; }
-        exec "$dotnet" run --no-build --file "$app/Program.cs" --artifacts-path "$app/artifacts" --no-launch-profile
+        built="$app/artifacts/bin/debug/Program.dll"
+        [ -f "$built" ] || { cat "$app/build.log" >&2; echo "corvid-code: the build left no $built" >&2; exit 1; }
+        cd "$workspace"
+        exec "$dotnet" "$built"
         """;
 
     private readonly SandboxedShell _shell;
