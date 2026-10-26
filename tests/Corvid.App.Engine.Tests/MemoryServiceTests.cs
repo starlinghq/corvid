@@ -118,13 +118,84 @@ public sealed class MemoryServiceTests
         Assert.Equal("Works on corvid.\nPrefers brief answers.", corrected.Text);
         Assert.Equal("Works on corvid.\nPrefers brief answers.", Memory(fixture).Blocks.Get("user").Content);
 
-        // Consolidation has no engine side yet, and says so.
+        // A staged edit is not a consolidation; the card's text may still replace the whole block (Consolidate, then edit).
         await writer.EditBlockAsync(Session, "agent", "Use metric.", cancellationToken: Ct);
         var agent = Assert.Single((await service.LoadAsync(Ct)).BlockUpdates);
-        var refusal = await Assert.ThrowsAsync<ServiceUnavailableException>(() => service.ConsolidateAsync(agent.Id, Ct));
-        Assert.Equal(EngineMemoryService.NoConsolidation, refusal.Message);
+        Assert.False(agent.Replaces);
         var replaced = await service.ApproveBlockUpdateAsync(agent.Id, "Use metric units.", true, Ct);
         Assert.Equal("Use metric units.", replaced.Text);
+    }
+
+    private const string Full =
+        "Prefers metric units and short answers.\nPrefers metric units, always.\nWorks on corvid in the evening; CI first.\n"
+        + "Likes answers short, no preamble at all.\nShort answers please, thanks.";
+
+    private const string Rewrite = "Prefers metric units and short answers, no preamble.\nWorks on corvid in the evening; CI first.";
+
+    /// <summary>A generator that rewrites a block when the block rewrite job asks, and says hello otherwise.</summary>
+    private static FakeModels Rewriting(string rewrite = Rewrite) =>
+        new(new FakeGenerator([.. Enumerable.Repeat<Func<IReadOnlyList<Microsoft.Extensions.AI.ChatMessage>, Microsoft.Extensions.AI.ChatResponse>>(
+            messages => Reply.Text(messages[0].Text == BlockConsolidator.SystemPrompt ? rewrite : "Hello."), 8)]));
+
+    private static async Task<EngineFixture> FullAgentBlockAsync()
+    {
+        var fixture = await EngineFixture.StartAsync(Rewriting(), new Dictionary<string, string?> { ["Corvid:Memory:Consolidation:Background"] = "false" });
+        Memory(fixture).Blocks.SetBudget("agent", 50);
+        Memory(fixture).Blocks.Set("agent", Full);
+        return fixture;
+    }
+
+    [Fact]
+    public async Task ConsolidateOnAStagedUpdateProposesTheBlockRewrittenAndApprovingWritesIt()
+    {
+        await using var fixture = await FullAgentBlockAsync();
+        var writer = Memory(fixture).Writer!;
+        var service = Service(fixture);
+        await writer.EditBlockAsync(Session, "agent", Full + "\nLint before every push, always.", cancellationToken: Ct);
+        var update = Assert.Single((await service.LoadAsync(Ct)).BlockUpdates);
+        Assert.StartsWith("over_budget", update.Why, StringComparison.Ordinal);
+
+        var proposed = await service.ConsolidateAsync(update.Id, Ct);
+
+        Assert.Equal(("agent", Rewrite), (proposed.Block, proposed.Text));
+        Assert.Equal(Memory(fixture).Blocks.CountTokens(Rewrite), proposed.Tokens);
+        // A proposal stages and writes nothing.
+        Assert.Equal(Full, Memory(fixture).Blocks.Get("agent").Content);
+        Assert.Single(writer.ListPending());
+        var block = await service.ApproveBlockUpdateAsync(update.Id, proposed.Text, true, Ct);
+        Assert.Equal(Rewrite, block.Text);
+        Assert.Empty(writer.ListPending());
+    }
+
+    [Fact]
+    public async Task ConsolidateNowStagesARewriteThatReplacesTheBlockShownAsADiff()
+    {
+        await using var fixture = await FullAgentBlockAsync();
+        var writer = Memory(fixture).Writer!;
+        var service = Service(fixture);
+
+        var staged = await service.ConsolidateBlockAsync("agent", Ct);
+
+        Assert.True(staged.Replaces);
+        Assert.Equal((Rewrite, "", "memory-jobs"), (staged.Added, staged.Context, staged.StagedBy));
+        Assert.StartsWith("consolidation: ", staged.Why, StringComparison.Ordinal);
+        Assert.Contains(new BlockDiffRow(BlockLineKind.Removed, "Prefers metric units, always."), staged.Diff);
+        Assert.Contains(new BlockDiffRow(BlockLineKind.Kept, "Works on corvid in the evening; CI first."), staged.Diff);
+        Assert.Contains(new BlockDiffRow(BlockLineKind.Added, "Prefers metric units and short answers, no preamble."), staged.Diff);
+        Assert.Equal(Full, Memory(fixture).Blocks.Get("agent").Content);
+        Assert.Equal(staged, Assert.Single((await service.LoadAsync(Ct)).BlockUpdates) with { StagedAt = staged.StagedAt, Diff = staged.Diff });
+        // One waits per block; the persona is never rewritten.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ConsolidateBlockAsync("agent", Ct));
+        await Assert.ThrowsAsync<ArgumentException>(() => service.ConsolidateBlockAsync("persona", Ct));
+
+        // Rejecting leaves the block; staging again and approving replaces it.
+        await service.RejectAsync(staged.Id, "keep it", Ct);
+        Assert.Equal(Full, Memory(fixture).Blocks.Get("agent").Content);
+        Memory(fixture).Blocks.Set("agent", Full + " ok");
+        var again = await service.ConsolidateBlockAsync("agent", Ct);
+        var written = await service.ApproveBlockUpdateAsync(again.Id, again.Added, false, Ct);
+        Assert.Equal(Rewrite, written.Text);
+        Assert.Empty(writer.ListPending());
     }
 
     [Fact]

@@ -85,11 +85,17 @@ public sealed class CoreBlockView(CoreBlock block, TimeProvider time)
 
     public bool CanOpenReview => IsNearBudget && HasPendingUpdate;
 
+    /// <summary>Asks the block rewrite job for a shorter rewrite, staged in Review (plan §9.5).</summary>
+    public System.Windows.Input.ICommand? ConsolidateNow { get; init; }
+
+    /// <summary>Near its budget with nothing waiting for it: "Consolidate now" is offered.</summary>
+    public bool CanConsolidateNow => IsNearBudget && !HasPendingUpdate && ConsolidateNow is not null;
+
     /// <summary>The Core blocks tab's line under a block near its budget (F11: "offers consolidation").</summary>
     public string ConsolidationOffer => !IsNearBudget ? ""
         : HasPendingUpdate
             ? "Near its budget: consolidation is offered with the update waiting in Review."
-            : "Near its budget: consolidation is offered with the next staged write to it.";
+            : "Near its budget: consolidate it now, or with the next staged write to it.";
 
     public string AutomationName => $"{Name} block, {Block.Tokens} of {Block.Budget} tokens{(IsNearBudget ? ", near its budget" : "")}, {Detail}";
 }

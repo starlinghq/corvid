@@ -262,7 +262,7 @@ public sealed class MemoryWriter
         var current = _blocks.Get(block);
         var proposal = new MemoryProposal(MemoryOperations.Update, null, null, [], null, null, [], block, content, current.Revision);
         var tokens = _blocks.CountTokens(content);
-        // The consolidation job that proposes a rewrite to fit (plan §9.5) is not built; the reviewer sees the reason.
+        // Staged with the reason; the consolidation job (plan §9.5, BlockConsolidator) proposes a rewrite that fits.
         if (tokens > current.BudgetTokens)
             return Stage(sessionId, PendingKind.Block, proposal, null, $"over_budget: {tokens} of {current.BudgetTokens} tokens", [], []);
         if (tainted)
@@ -287,6 +287,80 @@ public sealed class MemoryWriter
         Append(sessionId, new MemoryWritten(BlockId(block), MemoryOperations.Update));
         return new MemoryWriteResult(MemoryWriteStatus.Applied, MemoryOperations.Update, BlockId(block), null, verdict, [], [], Block: applied.Block);
     }
+
+    /// <summary>What the reason of every staged consolidation starts with (plan §9.5).</summary>
+    public const string ConsolidationReason = "consolidation";
+
+    /// <summary>
+    /// Stages a block rewrite the consolidation job proposed (plan §9.5, §9.2 step 4) for <c>/memory pending</c>: once a person
+    /// approves it, <paramref name="content"/> replaces the whole block, at <paramref name="revision"/> or not at all. Nothing
+    /// is applied here, since a core block enters every prompt. A rewrite holding a credential value is refused (C-040) and
+    /// one over the block's budget is never staged. The persona block is the user's alone, so it is never rewritten.
+    /// </summary>
+    /// <param name="revision">The block revision the rewrite was made from; approving it after the block changed fails.</param>
+    /// <param name="reason">Why it was staged, for the reviewer; prefixed with <see cref="ConsolidationReason"/>.</param>
+    /// <param name="supersedes">The staged edit the rewrite folds in, resolved when the rewrite is approved.</param>
+    /// <exception cref="ArgumentException">The persona block, or a rewrite over the block's budget; nothing was staged.</exception>
+    public MemoryWriteResult StageConsolidation(string sessionId, string block, string content, long revision, string reason,
+        string? supersedes = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        CoreBlockStore.CheckName(block);
+        ArgumentException.ThrowIfNullOrWhiteSpace(content);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        if (block == CoreBlockNames.Persona)
+            throw new ArgumentException("The persona block is edited only by the user.", nameof(block));
+        if (CredentialRefusal(content) is { } refused)
+            return Refused(refused);
+        var current = _blocks.Get(block);
+        var tokens = _blocks.CountTokens(content);
+        if (tokens > current.BudgetTokens)
+            throw new ArgumentException($"The rewrite is {tokens} tokens, over block '{block}' budget of {current.BudgetTokens}; nothing was staged.",
+                nameof(content));
+        var proposal = new MemoryProposal(MemoryOperations.Update, null, null, [], null, null, [], block, content, revision,
+            Consolidation: true, Supersedes: supersedes);
+        var why = reason.StartsWith(ConsolidationReason, StringComparison.Ordinal) ? reason : ConsolidationReason + ": " + reason;
+        return Stage(sessionId, PendingKind.Block, proposal, null, why, [], []);
+    }
+
+    /// <summary>What the reason of every staged duplicate starts with (plan §9.5).</summary>
+    public const string DuplicateReason = "duplicate";
+
+    /// <summary>
+    /// Stages ending <paramref name="duplicate"/> because it says what <paramref name="kept"/> says (plan §9.5's fact dedupe):
+    /// an <c>invalidate</c> of the duplicate, with the kept fact as its nearest neighbour, for <c>/memory pending</c>. Nothing
+    /// is ended until a person approves it. Null when that duplicate already waits or a person rejected ending it.
+    /// </summary>
+    public MemoryWriteResult? StageDuplicate(string sessionId, Fact duplicate, Fact kept)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentNullException.ThrowIfNull(duplicate);
+        ArgumentNullException.ThrowIfNull(kept);
+        if (duplicate.FactId == kept.FactId)
+            throw new ArgumentException("A fact is not its own duplicate.", nameof(duplicate));
+        bool Same(PendingWrite write) => write.Kind == PendingKind.Fact && write.Proposal.Operation == MemoryOperations.Invalidate
+            && write.Proposal.TargetFactId == duplicate.FactId && write.Reason.StartsWith(DuplicateReason, StringComparison.Ordinal);
+        if (_pending.List(PendingStatus.Pending).Any(Same) || _pending.List(PendingStatus.Rejected).Any(Same))
+            return null;
+        var proposal = new MemoryProposal(MemoryOperations.Invalidate, duplicate.FactId, duplicate.Text,
+            [.. duplicate.Entities.Select(entity => new ProposedEntity(entity.Label, entity.Name))], null, duplicate.SourceSequence,
+            [kept.FactId], LocalOnly: duplicate.LocalOnly ? true : null);
+        return Stage(sessionId, PendingKind.Fact, proposal, null, $"{DuplicateReason}: says what {kept.FactId} says", [kept], []);
+    }
+
+    /// <summary>The consolidation of <paramref name="block"/> waiting for review, or null.</summary>
+    public PendingWrite? PendingConsolidation(string block) =>
+        _pending.List(PendingStatus.Pending).FirstOrDefault(write => write.Kind == PendingKind.Block
+            && write.Proposal.Consolidation == true && write.Proposal.Block == block);
+
+    /// <summary>
+    /// A person rejected a consolidation of <paramref name="block"/> made from <paramref name="revision"/> (folding in
+    /// <paramref name="supersedes"/>): the job does not propose one again until the block changes.
+    /// </summary>
+    public bool ConsolidationRejected(string block, long revision, string? supersedes = null) =>
+        _pending.List(PendingStatus.Rejected).Any(write => write.Kind == PendingKind.Block && write.Proposal.Consolidation == true
+            && write.Proposal.Block == block && write.Proposal.BlockRevision == revision
+            && string.Equals(write.Proposal.Supersedes, supersedes, StringComparison.Ordinal));
 
     /// <summary>
     /// Why <paramref name="text"/> may not be written (C-040), or null: it holds a credential value under the egress rules
@@ -374,6 +448,11 @@ public sealed class MemoryWriter
                     : $"The edit is {write.ContentTokens} tokens, over block '{proposal.Block}' budget of {write.Block.BudgetTokens}.");
             }
             Append(pending.SessionId, new MemoryWritten(BlockId(proposal.Block!), applied));
+            // A consolidation that folded a staged edit in wrote that edit too, so it no longer waits.
+            if (proposal.Supersedes is { } folded && _pending.Get(folded) is { Status: PendingStatus.Pending } edit
+                && _pending.Resolve(folded, PendingStatus.Approved, "consolidated into " + pending.PendingId, _time.GetUtcNow())
+                && edit.DecisionId is { } editDecision)
+                _fabric.RecordOutcome(edit.SessionId, editDecision, "corrected", cancellationToken);
             result = new MemoryWriteResult(MemoryWriteStatus.Applied, applied, BlockId(proposal.Block!), pending, null, [], [], Block: write.Block);
         }
         else
@@ -427,6 +506,9 @@ public sealed class MemoryWriter
         Resolve(pending, PendingStatus.Rejected, reason);
         if (pending.DecisionId is { } decisionId)
             _fabric.RecordOutcome(pending.SessionId, decisionId, "rejected", cancellationToken);
+        // A consolidation folding this edit in would write it after all, so it goes with it.
+        foreach (var rewrite in _pending.List(PendingStatus.Pending).Where(write => write.Proposal.Supersedes == pendingId))
+            _pending.Resolve(rewrite.PendingId, PendingStatus.Rejected, "the edit it folds in was rejected", _time.GetUtcNow());
         return _pending.Get(pendingId)!;
     }
 

@@ -155,6 +155,8 @@ public static class Unavailable
 
         public Task<BlockConsolidation> ConsolidateAsync(string updateId, CancellationToken cancellationToken) => Fail<BlockConsolidation>(message);
 
+        public Task<StagedBlockUpdate> ConsolidateBlockAsync(string block, CancellationToken cancellationToken) => Fail<StagedBlockUpdate>(message);
+
         public Task<int> CountTokensAsync(string text, CancellationToken cancellationToken) => Fail<int>(message);
 
         public Task<Lesson> ApproveLessonAsync(string id, string? supersedesId, CancellationToken cancellationToken) => Fail<Lesson>(message);

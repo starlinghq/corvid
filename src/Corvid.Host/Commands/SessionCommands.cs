@@ -155,7 +155,7 @@ internal static class SessionCommands
 
     /// <summary>Conversations a person had, not scheduled runs or the logs Corvid keeps for itself.</summary>
     internal static bool IsConversation(string id) =>
-        id is not (McpSessions.Pins or GatewaySessions.Ledger) && !id.StartsWith("job:", StringComparison.Ordinal);
+        id is not (McpSessions.Pins or GatewaySessions.Ledger or MemoryJobs.Session) && !id.StartsWith("job:", StringComparison.Ordinal);
 
     // Model output: shown without control or format characters.
     private static IEnumerable<string> Lines(string text) =>

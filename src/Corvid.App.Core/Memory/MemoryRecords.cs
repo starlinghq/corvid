@@ -83,7 +83,26 @@ public sealed record StagedBlockUpdate(string Id, string Block)
 
     /// <summary>The fill (0 to 1) from which "Consolidate the block…" is offered: 0.9.</summary>
     public double ConsolidateAt { get; init; } = 0.9;
+
+    /// <summary>
+    /// The update rewrites the whole block (a consolidation the block rewrite job staged, plan §9.5): <see cref="Added"/> is
+    /// the whole block as it would be, and <see cref="Diff"/> its lines against the block now.
+    /// </summary>
+    public bool Replaces { get; init; }
+
+    /// <summary>For an update that <see cref="Replaces"/> the block: the lines kept, removed and added, in order.</summary>
+    public IReadOnlyList<BlockDiffRow> Diff { get; init; } = [];
 }
+
+public enum BlockLineKind
+{
+    Kept,
+    Removed,
+    Added,
+}
+
+/// <summary>One line of a block rewrite's diff.</summary>
+public sealed record BlockDiffRow(BlockLineKind Kind, string Text);
 
 /// <summary>A consolidation's proposal: the block rewritten shorter, and its size counted with the generator's tokenizer.</summary>
 public sealed record BlockConsolidation(string Block, string Text, int Tokens);

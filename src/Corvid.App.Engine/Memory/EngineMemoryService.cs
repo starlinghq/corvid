@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Corvid.Abstractions.Events;
 using Corvid.App.Core;
 using Corvid.App.Core.Composition;
 using Corvid.App.Core.Memory;
@@ -24,8 +25,10 @@ namespace Corvid.App.Engine.Memory;
 /// <para>
 /// Shown as the engine keeps it, not guessed: the nearest facts of a staged write, scored by the store's search as it
 /// stands now (the pending row keeps only their ids), who wrote a block (only the persona is the user's alone), and a block update as the line it adds
-/// when it appends to the block, or as the whole block when it rewrites it. Consolidation is refused: the rewrite job
-/// (plan §9.5) is not built.
+/// when it appends to the block, or as the whole block when it rewrites it. Consolidation is the block rewrite job's
+/// (plan §9.5, <see cref="BlockConsolidator"/>, on the background generator): Consolidate on a staged update proposes the
+/// block rewritten with the update folded in, written only when the person approves it; "Consolidate now" on a block stages
+/// its rewrite as an update that replaces the block, shown as a diff.
 /// </para>
 /// </summary>
 public sealed class EngineMemoryService : IMemoryService, IDisposable
@@ -33,9 +36,9 @@ public sealed class EngineMemoryService : IMemoryService, IDisposable
     /// <summary>The session an import's staged entries are recorded in (the window has no current session for them).</summary>
     public const string ImportSession = "app:memory-import";
 
-    /// <summary>The refusal Consolidate shows.</summary>
+    /// <summary>The refusal Consolidate shows without the block rewrite job (memory has no write path).</summary>
     public const string NoConsolidation =
-        "Consolidation needs the block rewrite job (plan §9.5), which the engine does not have yet: correct the update by hand, or reject it.";
+        "Consolidation needs the block rewrite job (plan §9.5), which needs the memory write path: bind an extractor model, or correct the update by hand.";
 
     private const int FactLimit = 200;
     private const int SearchTokens = 4_000;
@@ -153,8 +156,46 @@ public sealed class EngineMemoryService : IMemoryService, IDisposable
             .ConfigureAwait(false);
     }
 
-    public Task<BlockConsolidation> ConsolidateAsync(string updateId, CancellationToken cancellationToken) =>
-        Task.FromException<BlockConsolidation>(new ServiceUnavailableException(NoConsolidation));
+    public async Task<BlockConsolidation> ConsolidateAsync(string updateId, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(updateId);
+        var (_, memory) = await MemoryAsync().ConfigureAwait(false);
+        var writer = Writer(memory);
+        var job = memory.Consolidator ?? throw new ServiceUnavailableException(NoConsolidation);
+        return await Task.Run(async () =>
+        {
+            var proposal = Pending(writer, updateId, PendingKind.Block).Proposal;
+            // The block as the update would leave it, rewritten to fit; nothing is staged or written.
+            var rewrite = await job.ProposeAsync(proposal.Block!, proposal.Content, cancellationToken).ConfigureAwait(false);
+            job.RecordProposal(MemoryJobs.Session, rewrite, "app");
+            return rewrite is { Status: BlockRewriteStatus.Proposed, Text: { } text }
+                ? new BlockConsolidation(proposal.Block!, text, rewrite.TokensAfter)
+                : throw new InvalidOperationException("The block rewrite job made no rewrite: " + rewrite.Detail + ".");
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<StagedBlockUpdate> ConsolidateBlockAsync(string block, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(block);
+        var (_, memory) = await MemoryAsync().ConfigureAwait(false);
+        Writer(memory);
+        var job = memory.Consolidator ?? throw new ServiceUnavailableException(NoConsolidation);
+        if (!BlockConsolidator.Blocks.Contains(block))
+            throw new ArgumentException(block == CoreBlockNames.Persona
+                ? "The persona block is edited only by you; it is never rewritten."
+                : $"There is no {block} block to consolidate.", nameof(block));
+        return await Task.Run(async () =>
+        {
+            var rewrite = await job.StageAsync(MemoryJobs.Session, block, "app", cancellationToken).ConfigureAwait(false);
+            return rewrite switch
+            {
+                { Status: BlockRewriteStatus.Staged, Pending: { } staged } => Update(memory.Blocks, staged),
+                { Status: BlockRewriteStatus.NotNeeded } => throw new InvalidOperationException(
+                    $"A consolidation of the {block} block already waits in Review."),
+                _ => throw new InvalidOperationException("The block rewrite job staged nothing: " + rewrite.Detail + "."),
+            };
+        }, cancellationToken).ConfigureAwait(false);
+    }
 
     public async Task<int> CountTokensAsync(string text, CancellationToken cancellationToken)
     {
@@ -353,13 +394,22 @@ public sealed class EngineMemoryService : IMemoryService, IDisposable
         var current = store.Get(proposal.Block!);
         var proposed = proposal.Content ?? "";
         var added = Appended(current.Content, proposed);
+        var replaces = proposal.Consolidation == true;
         return new StagedBlockUpdate(write.PendingId, proposal.Block!)
         {
+            // A consolidation replaces the whole block: shown as its lines against the block now.
+            Replaces = replaces,
+            Diff = replaces ? [.. BlockDiff.Lines(current.Content, proposed).Select(line => new BlockDiffRow(line.Kind switch
+            {
+                BlockDiffKind.Added => BlockLineKind.Added,
+                BlockDiffKind.Removed => BlockLineKind.Removed,
+                _ => BlockLineKind.Kept,
+            }, line.Text))] : [],
             StagedAt = write.CreatedAt,
             StagedBy = write.SessionId,
             Why = write.Reason,
-            Context = added is null ? "" : LastLine(current.Content),
-            Added = added ?? proposed,
+            Context = added is null || replaces ? "" : LastLine(current.Content),
+            Added = replaces ? proposed : added ?? proposed,
             TokensNow = store.CountTokens(current.Content),
             TokensAfter = store.CountTokens(proposed),
             Budget = current.BudgetTokens,
