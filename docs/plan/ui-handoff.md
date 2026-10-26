@@ -22,6 +22,7 @@ pull request starlinghq/corvid#71.
 | A4 the gaps A3 left: the running turn, records, egress, hosting, parity; the engine becomes the default | done, verified end to end in three rounds (§1.5) | branch `a4/engine` |
 | A5 model switching at any time, subagents with a model mix, G-15 forks mid-turn, the A4 leftovers | done, verified end to end in two rounds (§1.6) | branch `a5/engine` |
 | A6 attached mode (G-1), workspaces and worktrees per session (G-4), images (K-8, F19), search across sessions (G-5), the `corvid-app` binary and its tarball (U-7, U-9), the A5 leftovers | done, verified end to end in two rounds (§1.7) | branch `a6/engine` |
+| A7 code mode (plan §15, parity row 1.6), architect/editor turns (plan §6), sleep-time memory jobs (plan §9.5) | merged and tested where the groups meet; the app run once on the engine (§1.8) | branch `a7/int` |
 
 The build ran as a workflow in a cloud container: one agent per step, each building, launching the app on a virtual
 display, screenshotting it and comparing it with the mockup renders, then an independent verifier. It was stopped during
@@ -755,6 +756,85 @@ Left from the review: the WebAssembly head's `#pair=` cleanup compiled but was n
 a fork or command started over attached mode is not waited for, so a prompt sent right after can overtake it; tests
 that run the real sandbox with the account's HOME create Corvid's empty 0700 `~/.local/state/corvid/attach` mask
 directory, as the launcher does in use.
+
+### 1.8 Code mode, architect/editor turns and sleep-time memory jobs (A7)
+
+Four groups in parallel worktrees, merged one at a time by an integrator (`a7/int`: codehost, codeclients, architect,
+consolidate), building the projects each merge touched and running their tests, then the whole solution, the checker and
+every test project, and tests where the groups meet (`tests/Corvid.Host.Tests/A7MeetingTests.cs`):
+
+- **Code mode, the host side (`a7/codehost`).** `execute_code` (`Corvid.Tools.Builtin.CodeTool`), off by default
+  (`Corvid:Tools:Code:Enabled`), runs a Python, JavaScript (an ES module) or C# (a file-based app) script in the sandbox
+  with no network. The script is assessed as kind `code` (`CodeAnalyzer`: its source as the text, nothing mined from it as
+  targets, one unresolved reason, so it always asks and offers "once" only) and runs only after the pipeline allowed
+  exactly that source. It reaches the host only through a per-run Unix socket bind-mounted into the sandbox
+  (`ToolsSocketServer` over `CodeModeSession`) with a per-run token file; each call it makes goes through the turn's own
+  call path (the approval pipeline per call under `<run>.n`, checkpoints, the credential scrub, taint, egress, leases),
+  never straight to the registry. Time, call count, stdout, stderr and response bytes are limited on the host side. The
+  source travels on stdin and the C# build happens in the sandbox's `/tmp`, outside the workspace's build files and
+  `global.json`. `corvid doctor` has a `code` row per runtime. Offered only while the session's generator runs outside
+  this process (`CodeModeFilter`).
+- **Clients and surfaces (`a7/codeclients`).** `CodeModeClients` writes a client per run from the run's tools
+  (`corvid.read_file(…)` in Python, `await corvid.read_file(…)` in JavaScript, `await CorvidTools.ReadFileAsync(…)` in C#),
+  descriptions escaped as untrusted text. The app's tool card shows a run's language, lines, calls used and exit, and the
+  whole script revealed; its calls are drawn indented under it, live and on replay; the approval card shows the whole
+  script with a note when it holds hidden characters and says each call is asked on its own. `corvid chat` indents a
+  script's calls and its approval box adds the card's lines; ACP marks a script's calls with
+  `_meta.corvid.parentToolCallId`. Review says "write_file via execute_code · turn N".
+- **Architect/editor turns (`a7/architect`).** `/architect [on | off | status]` and `Corvid:Turn:ArchitectEditor` (a coding
+  turn that escalates for difficulty, context or repair): the escalated model writes a plan with no tools, logged as an
+  `AssistantMessage` with its `TurnPlan`, then the generator slot goes back to the session's own model (or
+  `Corvid:Turn:EditorModel`) with the new switch reason `editor`, which makes the edits; a stuck editor gets one re-plan.
+  The plan is never streamed as the answer: the stream, ACP (a `think` tool call), chat and the app (a plan row) show it
+  as a plan, live and on replay.
+- **Sleep-time memory jobs (`a7/consolidate`).** The block rewrite (`BlockConsolidator`) and the exact-duplicate fact
+  dedupe (`FactDeduplicator`), run when every session in the process is idle, after each turn and on an interval, or on
+  demand (`/memory consolidate`, the app's Consolidate and "Consolidate now"). Everything is staged for review with its
+  diff in Corvid's own `memory-jobs` session (`MemoryJobRan`), which conversations, search and prompt history leave out;
+  a local-only block never reaches a cloud generator.
+
+Decisions taken while merging:
+
+- **Clients wired** in `WorkspaceComposer.CodeOptionsFor` (`GeneratedClient`), and `execute_code`'s description names the
+  three calling forms. Without it scripts ran with no client.
+- **An in-process editor withholds code mode.** `CodeModeFilter(slots, EditorModel)` withholds `execute_code` when the
+  configured editor model is a generator binding that runs in process, not only when the session's generator does, so a
+  server model's plan is never applied by a 0.8B model writing scripts.
+- **The surfaces' tests run on a local-server generator.** codeclients' ACP, chat and engine tests used a stand-in
+  `execute_code` on the in-process fake generator; after the merge code mode was (rightly) not offered there, so the call
+  was refused as not offered. `FakeModels` gained `generatorPrivacy`, and those tests pass `LocalServer`.
+- **The ACP exchanges** (`prompt-streaming.jsonl`, `write-with-permission.jsonl`) were re-recorded once more: against
+  consolidate's recording the only difference is architect's `/architect` entry. The Builtin confinement pin in CI is 15
+  (codehost's 8 new tests), checked by running the trait.
+
+Tests where the groups meet (`A7MeetingTests`): a generated Python, JavaScript and C# client on the real `execute_code`
+server through a composed turn (its calls logged under the run, the side effect asked under `<run>.1`); an `/architect`
+turn whose editor runs a script after the plan; code mode withheld from an in-process editor; the sleep-time pass held
+off while a code run waits on its script's approval, then staging after the turn.
+
+New on the wire: the optional `plan` on `assistant_message`, the switch reason `editor`, `memory_job_ran`, and
+`_meta.corvid.parentToolCallId` on ACP's `tool_call` and `tool_call_update` (`parent_call_id` on `tool_call_issued` came
+with the code mode foundation before A7's groups). A binary older than A7 cannot read a log that holds `memory_job_ran`
+(the same one-way step as before).
+
+Still refused on the engine, each with its message: opening a terminal or the Vault helper (U-6), the Vault policy, role,
+budget and daily counts (V-n) and media memory (plan §9.4). Memory consolidation is no longer refused. Code mode is not
+offered to an in-process generator or editor (a call to it is refused as not offered), and a C# script's `#:` directive is
+refused before anything runs.
+
+Left:
+
+- Code mode: a Settings-catalogue entry for `Corvid:Tools:Code` in the app; syntax colouring of the script; `<workspace>/.corvid/code`
+  (the SDK caches) is writable by any sandboxed script or shell command, so it has the workspace's trust, as the shell's
+  does.
+- Architect/editor: choosing the planner other than by the escalation ladder, a per-session editor choice, a calibrated
+  "coding task" question (the shortlist's file tools stand in).
+- Sleep-time jobs: the other §9.5 jobs, a `/journey` view over `MemoryJobRan` (Audit shows them), a CLI verb for the
+  dedupe, declined rewrites remembered across restarts. Consolidate saw, in two short-lived CLI drives, the idle pass's
+  2 s delay not complete before the CLI exited (not diagnosed; a longer drive ran it).
+- Harness: the shared X stand-ins in `tmp/xbin` broke when mise's latest Python became 3.15 (their venv is 3.14);
+  `tmp/a7xbin` (architect's copies with `PYTHONPATH` to the 3.14 site-packages) works. Nobody changed the shared venv.
+- From §1.7, still: everything listed there except memory consolidation, which A7 built.
 
 ### What the running app shows today
 

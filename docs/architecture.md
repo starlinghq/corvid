@@ -4476,8 +4476,10 @@ Frozen at version 1; `Corvid.Tools.CodeMode` implements the host side (`CodeMode
   outside content; the kernel then marks the parent's result tainted too (asked `injection`, taints the session).
 - **Offered** only while the session's generator is a cloud or local-server model (plan §15): `CorvidRuntime` sets
   `TurnOptions.ToolFilter` to `CodeModeFilter(slots)`, read at each turn's start, so a `/model` switch to an in-process
-  model withdraws it from the next turn, and a call to it is refused as not offered. A client the script is run with (the
-  generated clients) plugs in as `CodeToolOptions.Clients` (`CodeClientFactory`: a prefix and a suffix around the source).
+  model withdraws it from the next turn, and a call to it is refused as not offered. The client the script is run with plugs
+  in as `CodeToolOptions.Clients` (`CodeClientFactory`: a prefix and a suffix around the source); the composed runtime sets
+  it to the generated clients ([where the A7 groups meet](#code-mode-where-the-a7-groups-meet)), and an editor model that
+  runs in process withholds the tool too.
 - **Tests.** `CodeToolTests` (the analysis, the refusals, the policy and command handed to the sandbox),
   `CodeConfinementTests` (Python under the real launcher, CI-pinned: tool calls through the invoker, a call waiting on
   its approval, a tainting result, the call budget, output caps, the time limit, no network even to the host's loopback,
@@ -4542,6 +4544,25 @@ project: the generators are in `Corvid.Tools.CodeMode` (`CodeModeClients`), the 
     request) with `_meta: {"corvid":{"parentToolCallId":"<run's id>"}}`, live and on `session/load`. The model's own calls
     carry no `_meta`, so the recorded exchanges are unchanged. The run's permission request carries the card's lines as
     text content.
+
+### Code mode where the A7 groups meet
+
+- **Clients wired.** `WorkspaceComposer.CodeOptionsFor` sets `CodeToolOptions.Clients` to `GeneratedClient`, which writes
+  `CodeModeClients.Inline` for the run's language from `CodeModeCatalog.Describe`'s tools, so every script gets its client
+  (Python and JavaScript before the source, C# after it). `execute_code`'s description tells the model the three calling
+  forms. The client changes nothing about the boundary: the host still checks the token, the tools, the limits and the
+  turn's path.
+- **Architect/editor.** The planner is offered no tools, so it never writes a script; the editor is. `CodeModeFilter`
+  withholds `execute_code` when the session's generator runs in process and also when `Corvid:Turn:EditorModel` names a
+  generator binding that runs in process, so a server model's plan is never applied by an in-process model writing
+  scripts. A script the editor runs is approved and its calls asked exactly as in any turn.
+- **Sleep-time jobs.** A turn whose code run waits on its script's approval keeps its session busy
+  (`CorvidRuntime.SessionsIdle`), so the block rewrite does not run then; the turn's end nudges it.
+- Tests: `Corvid.Host.Tests.A7MeetingTests` (a generated Python, JavaScript and C# client on the real `execute_code`
+  server through a composed turn; an `/architect` turn whose editor runs a script; code mode withheld from an in-process
+  editor; the sleep-time pass during a code run). The surfaces' tests (ACP, chat, the engine) run their stand-in
+  `execute_code` on a local-server generator (`FakeModels(generatorPrivacy: LocalServer)`), since code mode is not
+  offered in process.
 
 ## Running the check
 
