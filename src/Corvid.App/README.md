@@ -49,10 +49,10 @@ that they run on the engine's machine.
 
 ```sh
 corvid serve --attach --no-openai                                  # unix:$XDG_RUNTIME_DIR/corvid/attach.sock
-Corvid.App --attach unix:$XDG_RUNTIME_DIR/corvid/attach.sock       # the owner, on the same machine
+corvid-app --attach unix:$XDG_RUNTIME_DIR/corvid/attach.sock       # the owner, on the same machine
 corvid serve --attach --listen ws://127.0.0.1:8737 --web <wasm publish>/wwwroot   # plus a loopback WebSocket and the browser app
 corvid serve pair                                                  # a one-time code (5 min) for another device
-Corvid.App --attach ws://127.0.0.1:8737 --pair XXXXX-XXXXX         # pairs, keeps the device token, attaches
+corvid-app --attach ws://127.0.0.1:8737 --pair XXXXX-XXXXX         # pairs, keeps the device token, attaches
 # a browser: http://127.0.0.1:8737/#pair=XXXXX-XXXXX               # the code in the fragment, the token in localStorage
 corvid serve devices; corvid serve revoke <name>
 ```
@@ -73,6 +73,13 @@ corvid serve devices; corvid serve revoke <name>
   (then denied), and once no client is left a question a turn asked inside the turn is put aside (the turn ends with it
   open, and the next message answers it). The window shows a notice in each open session and its requests fail; open it
   again to attach (no automatic reconnect yet).
+- **Images and workspaces (A6).** A message's images cross the wire base64 in `session/prompt` (at most 8, 40 MB
+  together), and thumbnails come back by digest (`_corvid/read_image`); the engine checks, strips and stores them as for
+  its own window. The server reads requests of up to 256 KB until a connection authenticates with the owner's or a paired
+  device's token, and up to 64 MB after (a pairing connection never gets more). A file dropped on an attached window is
+  read on that device, where the person dropped it, never on the engine's machine. `session/new` takes `workspace` (a
+  path on the engine's machine, which the engine checks), `worktree`, `worktreeName` and `askIn`; the worktree's approval
+  is the asking session's card, answered from the client. The capabilities say `canSendImages` and `canChooseWorkspace`.
 
 ## Command line
 
