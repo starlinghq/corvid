@@ -84,7 +84,9 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         Filters[0].IsSelected = true;
         // The engine starts a session in the window's workspace; the demo's scenario cannot, so there it stays disabled.
         NewSessionCommand = new RelayCommand(_hub.StartNew, () => _hub.CanCreate);
-        OpenWorkspaceCommand = new RelayCommand(() => { }, () => false);
+        // A6 (G-4): a session in another workspace or a new git worktree, on the engine; disabled in the demo's scenario.
+        Chooser = new WorkspaceChooserViewModel(_hub, _shell);
+        OpenWorkspaceCommand = Chooser.OpenCommand;
         ClosePeekCommand = new RelayCommand(ClosePeek, () => _peek is not null);
         // Nothing sends native notifications yet, so the toggle is off and says why, as New session does.
         ToggleNotifyCommand = new RelayCommand(() => NotifyWhenUnfocused = !NotifyWhenUnfocused, () => false);
@@ -181,7 +183,12 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
     public RelayCommand OpenWorkspaceCommand { get; }
 
     /// <summary>Why New session and Open a workspace are disabled.</summary>
-    public string UnavailableReason => Unavailable;
+    public string UnavailableReason => _hub.CanChooseWorkspace ? Available : Unavailable;
+
+    private const string Available = "A new session works in the workspace of the session in view; Open a workspace… picks another folder or a new git worktree.";
+
+    /// <summary>A6 (G-4): "Open a workspace…": a folder, one of the window's workspaces, or a new git worktree.</summary>
+    public WorkspaceChooserViewModel Chooser { get; }
 
     /// <summary>Why "Notify when unfocused" is disabled.</summary>
     public string NotifyUnavailableReason => NotifyUnavailable;
@@ -580,12 +587,12 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
 
     private static IReadOnlyList<MarkdownRun> NewSessionText(string workspace) =>
         workspace.Length == 0
-            ? [new MarkdownRun("Start another session, or open a workspace. Each workspace runs its own engine until workspace-per-session lands (G-4).")]
+            ? [new MarkdownRun("Start another session, or open a workspace or a new git worktree. Each session keeps the workspace it starts in (G-4).")]
             :
             [
                 new MarkdownRun("Start another session in "),
                 new MarkdownRun(SafeText.Clean(workspace), InlineStyle.Bold),
-                new MarkdownRun(", or open a workspace. Each workspace runs its own engine until workspace-per-session lands (G-4)."),
+                new MarkdownRun(", or open a workspace or a new git worktree. Each session keeps the workspace it starts in (G-4)."),
             ];
 
     /// <summary>

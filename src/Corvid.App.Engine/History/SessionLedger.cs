@@ -105,15 +105,38 @@ internal sealed record FileText(bool Exists, string? Text, string? Note = null)
 /// file, outside the workspace) is never read or shown. A binary, oversized or linked file is reported, not decoded.
 /// Counts of what each finished call changed are kept by its after checkpoint, which never changes.
 /// </summary>
-internal sealed class LedgerTexts(CorvidRuntime runtime)
+/// <param name="runtime">The runtime whose log and checkpoints are read.</param>
+/// <param name="scope">A6 (G-4): the workspace the session works in; the runtime's configured one when null.</param>
+internal sealed class LedgerTexts(CorvidRuntime runtime, WorkspaceServices? scope = null)
 {
-    private readonly Workspace _workspace = Workspace.For(runtime.Builtin.Environment);
+    private readonly WorkspaceServices _scope = scope ?? runtime.DefaultWorkspace;
+    private readonly Workspace _workspace = Workspace.For((scope ?? runtime.DefaultWorkspace).Environment);
     private readonly ConcurrentDictionary<string, ImmutableArray<FileChange>> _counts = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, LedgerTexts> _others = new(StringComparer.Ordinal);
 
     /// <summary>The workspace the paths are relative to.</summary>
     public string Root => _workspace.Root;
 
-    public ShadowStore? Store => runtime.Checkpoints is { Store: { IsAvailable: true } store } ? store : null;
+    public ShadowStore? Store => _scope.Checkpoints is { Store: { IsAvailable: true } store } ? store : null;
+
+    /// <summary>
+    /// A6 (G-4): the texts of a session's workspace (this one when it works here): its files now and its checkpoints, never
+    /// another directory's.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The session's workspace cannot be used now (a removed worktree), said why.</exception>
+    public LedgerTexts For(string sessionId)
+    {
+        WorkspaceServices workspace;
+        try
+        {
+            workspace = runtime.WorkspaceServicesOf(sessionId);
+        }
+        catch (WorkspaceUnavailableException exception)
+        {
+            throw new InvalidOperationException(exception.Message, exception);
+        }
+        return workspace.Root == _scope.Root ? this : _others.GetOrAdd(workspace.Root, _ => new LedgerTexts(runtime, workspace));
+    }
 
     /// <summary>Whether the file tools may read the workspace-relative path.</summary>
     public bool Readable(string relative)

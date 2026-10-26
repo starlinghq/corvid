@@ -486,6 +486,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             // Opening the session and reading the head touch the log (SQLite): off the caller's thread, which is the UI's.
             var (session, head) = await Task.Run(() => (Session(runtime, sessionId), runtime.Log.GetHead(sessionId, cancellationToken)), cancellationToken)
                 .ConfigureAwait(false);
+            // A6 (G-4): the approval cards show the calls in the session's own workspace.
+            tools = tools.In(session.Workspace);
             SessionUpdateReporter? reporter = null;
             reporter = new SessionUpdateReporter(runtime, sessionId, tools, head, update => Report(channel, session, reporter!, update),
                 reason => Log("corvid app: could not report a session update: " + reason), _time, () => session.Tainted);
@@ -781,6 +783,11 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         var open = runtime.TryGetSession(id, out var session);
         if (runtime.Log.GetHead(id) == 0 && !open)
             throw new KeyNotFoundException($"There is no session '{id}' in Corvid's log.");
+        // A6 (G-4): the session's own workspace: its calls' paths are shown relative to it, and the header names it.
+        tools = tools.ForSessionOrSelf(id);
+        var bound = runtime.WorkspaceOf(id);
+        lock (channel.Gate)
+            channel.Translator.Workspace = tools.WorkspaceRoot;
         // A call with no result is cancelled only when no turn of the session is running: one opened mid-turn (a job
         // run from the Board, another surface's turn) is still working on it.
         // G-12: a session another process drives is followed read-only; its open calls are that process's, still running.
@@ -842,9 +849,11 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             // here, the choices its log holds, which it starts on when it opens.
             var choices = open ? null : runtime.ModelChoices(id);
             var decider = choices?.GetValueOrDefault(Corvid.Models.ModelSlots.Decider)?.Split('@')[0] ?? DeciderLabel(runtime, open ? session : null);
+            // A6 (G-4): with where the session works, for the brand line and the status bar's branch.
+            var (workspaceName, branch) = (WorkspaceText.Name(bound.Path), bound.Branch ?? WorkspaceText.Branch(bound.Path));
             updates.Add((choices?.GetValueOrDefault(Corvid.Models.ModelSlots.Generator)?.Split('@')[0] ?? CurrentGenerator(runtime, open ? session : null)) is { Length: > 0 } generator
-                ? new EngineStatus { Model = generator, Decider = decider, At = at }
-                : new EngineStatus { Decider = decider, At = at });
+                ? new EngineStatus { Model = generator, Decider = decider, Workspace = workspaceName, Branch = branch, At = at }
+                : new EngineStatus { Decider = decider, Workspace = workspaceName, Branch = branch, At = at });
             updates.Add(new AvailableCommandsUpdate(commands) { At = at });
             channel.ReadOnly = summary.ReadOnly;
             channel.Holder = summary.Holder;
@@ -1137,7 +1146,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             Job = job.Name,
             Schedule = job.Schedule,
             RunAt = job.Name is not null ? job.RunAt ?? last : null,
-            Workspace = runtime.Builtin.Environment.Workspace,
+            // A6 (G-4): where this session works, with the branch of the worktree Corvid made for it.
+            Workspace = runtime.WorkspaceOf(id).Path,
+            Branch = runtime.WorkspaceOf(id).Branch ?? "",
             Surface = SurfaceOf(id),
             State = IsJobRun(id) ? SessionState.Job : question is not null ? SessionState.Waiting : SessionState.Idle,
             PendingQuestions = question is null || IsJobRun(id) ? 0 : 1,
@@ -1178,7 +1189,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     private SessionSummary Empty(CorvidRuntime runtime, string id, DateTimeOffset created) => new(id, "New session")
     {
         Pinned = Pins().Contains(id),
-        Workspace = runtime.Builtin.Environment.Workspace,
+        Workspace = runtime.WorkspaceOf(id).Path,
+        Branch = runtime.WorkspaceOf(id).Branch ?? "",
         Surface = SurfaceOf(id),
         State = SessionState.Idle,
         LastActivity = created,

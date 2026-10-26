@@ -52,7 +52,7 @@ public sealed class ToolPresentation(CorvidRuntime runtime, WorkspaceServices? s
     /// As <see cref="ForSession"/>, or this presentation when the session's workspace cannot be used now (a removed
     /// worktree): its calls are still listed, and paths outside this workspace are not read.
     /// </summary>
-    internal ToolPresentation ForSessionOrSelf(string sessionId)
+    public ToolPresentation ForSessionOrSelf(string sessionId)
     {
         try
         {

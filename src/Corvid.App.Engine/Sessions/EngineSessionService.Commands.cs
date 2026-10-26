@@ -35,6 +35,9 @@ public sealed partial class EngineSessionService
                 if (channel.Reporter is not null)
                     channel.Cancelling = true;
 
+        // A6 (G-4): /workspace new and remove ask the person before writing a worktree; outside a turn, on this page's card.
+        using var cards = invocation.Name == "workspace" ? await AttachCardsAsync(runtime, channel).ConfigureAwait(false) : null;
+
         // Commands read and write the log (SQLite): off the UI thread.
         var (output, logged) = await Task.Run(async () =>
         {
