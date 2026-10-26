@@ -612,6 +612,8 @@ public sealed partial class TurnRunner
 
             if (Acted(verdicts, "difficulty", out _) && _options.EscalationAllowed)
                 await EscalateAsync("difficulty", cancellationToken).ConfigureAwait(false);
+            // A7: a turn the person asked to plan (/architect) plans now.
+            await PlanOnRequestAsync(cancellationToken).ConfigureAwait(false);
             if (verdicts.Verdicts.ContainsKey("needs_recall"))
                 await RecallAsync(Acted(verdicts, "needs_recall", out _), cancellationToken).ConfigureAwait(false);
 
@@ -869,7 +871,9 @@ public sealed partial class TurnRunner
                 // call the turn stuck), so the generator can act on it. The step budget still bounds the turn.
                 if (!steered && Acted(step, "stuck", out _))
                 {
-                    if (!_options.EscalationAllowed || !await EscalateAsync("stuck", cancellationToken).ConfigureAwait(false))
+                    // A7: an editor stuck on its plan gets one re-plan before the turn's own stuck handling.
+                    if (!await ReplanAsync(cancellationToken).ConfigureAwait(false)
+                        && (!_options.EscalationAllowed || !await EscalateAsync("stuck", cancellationToken).ConfigureAwait(false)))
                     {
                         finishing = true;
                         status = TurnStatus.Stuck;
@@ -883,11 +887,15 @@ public sealed partial class TurnRunner
 
         // ---- generator ----
 
+        /// <param name="binding">
+        /// A7: call this binding directly instead of the generator slot (an architect/editor turn's planner): no fallback and no
+        /// privacy retreat, so a refusal of its egress gate reaches the caller as <see cref="PrivacyEgressRefusedException"/>.
+        /// </param>
         private async Task<ChatResponse> GenerateAsync(ImmutableArray<Offered> tools, string? nudge, string? required,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken, ModelBinding? binding = null)
         {
-            var generator = _services.Slots.GetChatClient(ModelSlots.Generator);
-            var profile = _services.Slots.Current(ModelSlots.Generator).Profile;
+            var generator = binding?.GetService<IChatClient>() ?? _services.Slots.GetChatClient(ModelSlots.Generator);
+            var profile = binding?.Profile ?? _services.Slots.Current(ModelSlots.Generator).Profile;
             _generatorId = profile.Id;
             var counter = Counter(generator);
             var budget = profile.AcceptedContext - _options.MaxOutputTokens - _options.ContextReserve;
@@ -895,7 +903,7 @@ public sealed partial class TurnRunner
                 + counter.CountTokens(tool.Function.JsonSchema.GetRawText()));
             // Prompt caching (plan §8): a model that caches on breakpoints keeps a frozen system prompt, so this turn's recalled
             // memory and skill go after the history as a one-shot note instead of into the system prompt.
-            var notes = string.Join("\n\n", new[] { MemoryNote(profile), _skillNote }.Where(part => part.Length > 0));
+            var notes = string.Join("\n\n", new[] { MemoryNote(profile), _skillNote, _planNote }.Where(part => part.Length > 0));
             var frozen = profile.Caching == PromptCachingStyle.Breakpoints;
             var noteTokens = frozen && notes.Length > 0 ? counter.CountTokens(notes) : 0;
             var system = SystemPrompt(profile, frozen ? "" : notes);
@@ -923,6 +931,8 @@ public sealed partial class TurnRunner
             _heldLocalOnly |= holdsLocalOnly;
             var options = new ModelRequestContext(runner.SessionId, runner.Tainted, holdsLocalOnly)
                 .Apply(new ChatOptions { MaxOutputTokens = _options.MaxOutputTokens });
+            if (_planning)
+                (options.AdditionalProperties ??= [])[ModelRequestKeys.Unstreamed] = true;
             if (!tools.IsEmpty)
             {
                 options.Tools = [.. tools.Select(tool => (AITool)tool.Function)];
@@ -2236,6 +2246,9 @@ public sealed partial class TurnRunner
                 return false;
             runner.NoteBudgetChange(result);
             _escalations.Add($"{result.To!.Id}: {reason}");
+            // A7: a coding turn under ArchitectEditor (or one the person asked to plan) plans on the escalated model and hands back.
+            if (PlansOn(reason))
+                await PlanAsync(reason, cancellationToken).ConfigureAwait(false);
             return true;
         }
 
@@ -2390,6 +2403,7 @@ public sealed partial class TurnRunner
                 LessonQueued = _lessonQueued,
                 Question = status == TurnStatus.Clarifying ? _question : null,
                 Steers = _steered.Count,
+                Plans = [.. _plans],
             };
     }
 

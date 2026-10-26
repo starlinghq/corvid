@@ -91,4 +91,10 @@ public static class ModelRequestKeys
 
     /// <summary>True when the messages hold local-only memory: no cloud model may receive them (plan §10.4).</summary>
     public const string LocalOnly = "corvid.local_only";
+
+    /// <summary>
+    /// A7: true on an architect/editor turn's plan request: a host that streams the generator's text to a surface does not
+    /// stream this call's, because the plan is shown as the plan once it is logged, not as the answer.
+    /// </summary>
+    public const string Unstreamed = "corvid.unstreamed";
 }

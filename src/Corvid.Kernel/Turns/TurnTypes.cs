@@ -74,6 +74,21 @@ public sealed record TurnOptions
     /// <summary>Policy allows escalating the generator (privacy and profile ladder, plan §6); the slot ladder decides where.</summary>
     public bool EscalationAllowed { get; init; } = true;
 
+    /// <summary>
+    /// A7, architect/editor turns (plan §6): when a coding turn (one whose shortlist holds a tool that changes files)
+    /// escalates for difficulty, context or repair, the escalated model writes one plan without tools and the session's own
+    /// model (or <see cref="EditorModel"/>) makes the edits with it; an editor that gets stuck gets one re-plan. Off by
+    /// default: escalation then moves the whole turn, as before. <c>/architect</c> asks for it per turn or session.
+    /// </summary>
+    public bool ArchitectEditor { get; init; }
+
+    /// <summary>
+    /// A7: the profile id of the model that applies an architect/editor turn's plan, when it is one of the generator slot's
+    /// bindings (its default, a fallback or a rung of its ladder, the mix's for a session with one); null, or an id none of
+    /// them has, uses the session's own generator.
+    /// </summary>
+    public string? EditorModel { get; init; }
+
     /// <summary>Example requests per tool name, for multi-vector shortlisting (§5.4). C-005 has no examples file yet.</summary>
     public IReadOnlyDictionary<string, ImmutableArray<string>>? ToolExamples { get; init; }
 
@@ -257,6 +272,12 @@ public interface ITurnListener
     /// tail. Untrusted: whatever the command or the page printed.
     /// </summary>
     void ToolOutput(string sessionId, string callId, string tool, string tail) { }
+
+    /// <summary>
+    /// A7: an architect/editor turn's plan was logged (<see cref="AssistantMessage"/> with its <see cref="TurnPlan"/>), as
+    /// written: a model's text, untrusted. The editor's calls follow.
+    /// </summary>
+    void Planned(string sessionId, TurnPlan plan, string text) { }
 }
 
 /// <summary>
@@ -320,4 +341,7 @@ public sealed record TurnResult(
 
     /// <summary>Messages the user steered into the turn (K-3) that it took, in order.</summary>
     public int Steers { get; init; }
+
+    /// <summary>A7: the plans an architect/editor turn made (the plan and at most one re-plan), in order; empty for any other turn.</summary>
+    public ImmutableArray<TurnPlan> Plans { get; init; } = [];
 }
