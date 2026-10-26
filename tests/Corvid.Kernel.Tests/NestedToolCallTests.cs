@@ -108,6 +108,72 @@ public sealed class NestedToolCallTests
     }
 
     [Fact]
+    public async Task The_tools_socket_session_runs_a_scripts_requests_through_the_parents_invoker()
+    {
+        // The pieces code mode joins: a Unix socket, the wire format's session over it, and the parent's invoker.
+        var prompter = FakePrompter.Always(approve: true);
+        var replies = new List<string>();
+        ToolRegistry? registry = null;
+        var script = Script(async (context, token) =>
+        {
+            var directory = Directory.CreateTempSubdirectory("cmt-");
+            try
+            {
+                var path = Path.Combine(directory.FullName, "tools.sock");
+                var secret = Corvid.Tools.CodeMode.CodeModeProtocol.NewToken();
+                var catalogue = Corvid.Tools.CodeMode.CodeModeCatalog.Describe(registry!, context.OfferedTools, ["add_note", "list_notes"]);
+                var session = new Corvid.Tools.CodeMode.CodeModeSession(secret, catalogue, context.InvokeToolAsync);
+                using var listener = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.Unix, System.Net.Sockets.SocketType.Stream,
+                    System.Net.Sockets.ProtocolType.Unspecified);
+                listener.Bind(new System.Net.Sockets.UnixDomainSocketEndPoint(path));
+                listener.Listen(1);
+                var served = Task.Run(async () =>
+                {
+                    using var connection = await listener.AcceptAsync(token);
+                    await using var stream = new System.Net.Sockets.NetworkStream(connection, ownsSocket: false);
+                    await session.ServeAsync(stream, token);
+                }, token);
+                // The "script": a client that speaks the wire format.
+                using var client = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.Unix, System.Net.Sockets.SocketType.Stream,
+                    System.Net.Sockets.ProtocolType.Unspecified);
+                await client.ConnectAsync(new System.Net.Sockets.UnixDomainSocketEndPoint(path), token);
+                await using var stream = new System.Net.Sockets.NetworkStream(client, ownsSocket: false);
+                using var reader = new StreamReader(stream);
+                await using var writer = new StreamWriter(stream) { AutoFlush = true, NewLine = "\n" };
+                await writer.WriteLineAsync($$"""{"token":"{{secret}}","v":1}""");
+                replies.Add((await reader.ReadLineAsync(token))!);
+                await writer.WriteLineAsync("""{"id":1,"tool":"add_note","args":{"text":"over the socket"}}""");
+                replies.Add((await reader.ReadLineAsync(token))!);
+                await writer.WriteLineAsync("""{"id":2,"tool":"clear_notes"}""");
+                replies.Add((await reader.ReadLineAsync(token))!);
+                client.Shutdown(System.Net.Sockets.SocketShutdown.Send);
+                await served;
+                return "script done";
+            }
+            finally
+            {
+                directory.Delete(recursive: true);
+            }
+        });
+        using var harness = Harness(Generator(), prompter, tools =>
+        {
+            registry = tools;
+            tools.Add(script);
+        });
+
+        await harness.RunAsync("run the weather script");
+
+        Assert.StartsWith("""{"ok":true,"v":1""", replies[0], StringComparison.Ordinal);
+        Assert.Equal("""{"id":1,"ok":true,"result":"saved note 1","tainted":false}""", replies[1]);
+        // Not in the allowlist: refused at the socket, never reaching the turn.
+        Assert.Contains("\"code\":\"unknown_tool\"", replies[2], StringComparison.Ordinal);
+        Assert.Equal("over the socket", Assert.Single(harness.Notes.Notes).Text);
+        Assert.Equal(Parent, Assert.Single(harness.Payloads().OfType<ToolCallIssued>(), call => call.ToolName == "add_note").ParentCallId);
+        Assert.DoesNotContain(harness.Payloads().OfType<ToolCallIssued>(), call => call.ToolName == "clear_notes");
+        Assert.Single(prompter.Prompts);
+    }
+
+    [Fact]
     public async Task A_denied_nested_call_comes_back_as_an_error_and_changes_nothing()
     {
         var prompter = FakePrompter.Always(approve: false);

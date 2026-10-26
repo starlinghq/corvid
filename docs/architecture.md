@@ -466,7 +466,8 @@ Plan §10.1 and §3.4, and `vault.md` §3.3 and "Implementation status". Linux o
 - `sandbox/Corvid.Sandbox.Launcher` builds `corvid-sandbox`, a Native AOT executable
   (`IsAotCompatible`, published and smoke-run in CI's aot job) with no package or project
   dependencies. Its command line is the contract (`corvid-sandbox --help`): `--workspace`,
-  `--chdir`, `--ro`, `--deny`, `--env NAME`, `--network`, `--proxy-socket` and `--proxy-ca` (V-003b, below),
+  `--chdir`, `--ro`, `--deny`, `--env NAME`, `--setenv NAME=VALUE` (A7), `--network`, `--proxy-socket` and `--proxy-ca`
+  (V-003b, below), `--tools-socket` and `--tools-token` (A7, [Code mode foundation](#code-mode-foundation-a7)),
   `--best-effort-layers`, `--bwrap`, `--status-file`, then `-- COMMAND`. Exit status is the command's, or 125 when the sandbox
   was not set up and nothing ran. The status file (JSON: `started`, `exitCode`, `layers`,
   `error`) tells a refusal from a command that exited 125. It is opened before anything runs,
@@ -540,7 +541,7 @@ paths such as tool caches in home, the HTTPS proxy route for sandboxed scripts (
 `corvid-exec` user and value injection for Vault's exec path, container and SSH backends,
 macOS and Windows, hiding the other credential stores the approval pipeline protects (`~/.kube`,
 `~/.netrc`, `~/.docker/config.json` and others) and Corvid's own configuration (`~/.config/corvid`; Landlock
-already blocks writes to it), and the code tool (§15). The shell tool (C-012) runs only through the sandbox and passes
+already blocks writes to it), and the code tool (§15; its tools socket and wire format are built, [A7](#code-mode-foundation-a7)). The shell tool (C-012) runs only through the sandbox and passes
 Vault's configured locations as denied paths (see [Built-in tools and scheduler](#built-in-tools-and-scheduler-c-012)).
 
 ## Memory store (C-008)
@@ -4252,6 +4253,77 @@ exists on `TurnOptions` (`StateBudget`, `RecentEvents`, `DualShortlistStateBudge
   compaction inside a history, and a CI gate on the condition. Adding cases changes `cases_sha256`; S2's committed
   reports name the older versions, and an S2 re-run on this version includes history cases in its summaries (not its
   headline) unless filtered by tag.
+
+## Code mode foundation (A7)
+
+Plan §15 and parity row 1.6 (Hermes #74078: a script's tool calls must not get a weaker policy than the model's). The
+seams the code tool, its client generators and the surfaces build on. Nothing here runs a script yet. No new project: the
+launcher stays dependency-free, `Corvid.Sandbox` gains two records, `Corvid.Tools` the wire format, the kernel the
+nested-call path.
+
+- **Tools socket (sandbox).** `SandboxPolicy.Tools` (`SandboxTools(SocketPath, Token)`) mounts one host Unix socket
+  read-only at `/run/corvid-sandbox/tools.sock` and the run's token at `/run/corvid-sandbox/tools.token`, after the masks
+  and after `--tmpfs /run`, as V-003b mounts the proxy's: nothing else of the socket's host directory is in view. The
+  token never travels on a command line or in an environment: `BubblewrapSandbox` writes it (0600) to its own per-run
+  directory and passes `--tools-token FILE`; the launcher checks the file (not a symlink, regular, 1 to 1024 bytes, outside
+  the workspace) as it checks the CA, and refuses a missing socket. The launcher itself sets `CORVID_TOOLS_SOCKET` and
+  `CORVID_TOOLS_TOKEN_FILE`; an `--env` or `--setenv` of either is refused. The socket adds no network (the namespace stays
+  private; a host abstract socket stays unreachable); code mode's "no network" is its own policy (neither `Network` nor
+  `Proxy`), not the launcher's. The caller keeps the socket in a 0700 directory and lists that directory in
+  `DeniedPaths` when it is not under `/tmp` or `/run`. `SandboxPolicy.EnvironmentValues` (`--setenv NAME=VALUE`) sets
+  values, under `--env`'s name rules (secret-like names refused, no name both passed and set, no proxy or tools name),
+  at most 32 KiB, no NUL; values are on the launcher's command line, so never secrets. `Prepare` (long-lived launches)
+  refuses `Tools`. Tests: `ToolsSocketTests` (confinement: the script reaches the mounted socket with the token, and not
+  the socket's neighbour, its host path or a host abstract socket; the token file is read-only; refusals run nothing) and
+  `ToolsSocketUnitTests`.
+- **Nested calls (kernel).** `ToolCallContext.Invoker` / `InvokeToolAsync(tool, args, ct)` → `NestedToolResult(CallId,
+  Result, IsError, Tainted)`. `TurnRunner` sets it on every top-level call (never on a nested one: depth 1). A nested call
+  takes the model's path: the tool must be in the turn's catalogue (`OfferedTools`), not `ask_user` and not the parent's own
+  tool; its arguments are validated against the schema; it asks exactly when a model's call would (a side effect; a network
+  read in a tainted session or one a detection rule flags), with taint read as of the call, so a script's earlier fetch
+  makes its later post ask; then `ExecuteAsync` runs it: its own lease (tracked, or parked while its approval is open)
+  under its own id `{parent}.{n}` while the parent keeps its tracked lease, the approval pipeline (blocking until
+  answered; the prompt's `CallId` is the nested id), checkpoints, the credential scrub, the log, and taint. Refusals come
+  back as error results (and are logged as rejected nested calls), never exceptions; a cancellation throws. Nested calls
+  of one parent run one at a time. When the parent's tool returns (or throws), its nested calls still running are
+  cancelled and awaited, so each has its result before the parent's; later calls throw `InvalidOperationException`. A
+  nested result that is outside content (a network tool's, or one the tool marked) marks the parent's result tainted,
+  so the parent's result is asked `injection` and taints the session as a network tool's does. The result returned is
+  the log's (scrubbed). A `/model` switch waits for the parent (it is tracked) even while a nested call is parked.
+- **`ToolCallIssued.ParentCallId`.** Set on a nested call, omitted when null (older logs read and write as before). The
+  prompt, budget clearing and compaction summaries leave nested calls and their results out (the model never asked for
+  them; the parent's result says what the script did); the decider's recent events, the episodic index and replay keep
+  them. The `execute_tool` span carries `corvid.tool.parent_call_id` and is the parent span's child. The
+  host stream carries it: `ToolCallStarted.ParentCallId` (live, from the span through
+  `ITurnObserver.ToolStarted(callId, tool, approval, parentCallId)`, whose default forwards to the older overload; on
+  replay, from the log) and `ToolCallChanged.ParentCallId` (from the log). ACP's wire is unchanged.
+
+### Code mode wire format (A7)
+
+Frozen at version 1; `Corvid.Tools.CodeMode` implements the host side (`CodeModeSession`, `CodeModeCatalog`).
+
+- **Transport.** The tools socket, a Unix stream socket. Each line is one compact UTF-8 JSON object ending in `\n` (a
+  trailing `\r` is ignored). A script may open several connections; each starts with a hello. Requests on a connection are
+  answered in order, one at a time (the host reads the next line after answering).
+- **Hello.** The script reads the token from `$CORVID_TOOLS_TOKEN_FILE` and sends `{"token":"<token>","v":1}`. The host
+  compares it in constant time and answers `{"ok":true,"v":1,"limits":{"calls":50,"request_bytes":262144,
+  "response_bytes":1048576,"total_response_bytes":8388608}}` (the run's limits), or
+  `{"id":null,"ok":false,"error":{"code":"unauthorized","message":…}}` and closes. A wrong `v` is `bad_request`.
+- **Request.** `{"id":<string of at most 128 characters, or integer>,"tool":"<name>","args":{…}}`; `args` may be left out.
+- **Response.** Success: `{"id":…,"ok":true,"result":<the tool's result as the log holds it>,"tainted":<bool>}`. Failure:
+  `{"id":…,"ok":false,"error":{"code":…,"message":…,"detail":<the kernel's error object, for tool_error>},"tainted":<bool,
+  when a call ran>}`; `id` is null when the request's could not be read. `tainted: true` means the result is outside
+  content. Codes: `unauthorized`, `bad_request`, `unknown_tool` (not in the descriptor; nothing ran), `call_limit`,
+  `too_large` (a request over `request_bytes`: nothing ran; a result over `response_bytes`: the call ran, its result is
+  withheld), `output_limit` (`total_response_bytes` reached; nothing ran), `tool_error` (refused, denied, not run or
+  failed in the turn), `cancelled`, `closed` (the run's parent call has finished; the host closes the connection).
+- **Limits** are the host's (`CodeModeLimits`), across all of a run's connections: 50 calls, 256 KiB per request line,
+  1 MiB per response line, 8 MiB of responses. The run's time limit is the sandbox's (`SandboxOptions.Timeout`).
+- **Tool descriptor** (what client generators read): `{"version":1,"tools":[{"name":…,"description":…,"parameters":
+  <JSON Schema object>}]}`, from `CodeModeCatalog.Describe(registry, context.OfferedTools, allowlist)`: the registry's
+  tools that the turn may offer and the allowlist names, ordered by name, leaving out tools with a secret parameter and
+  names that are not identifiers (`[A-Za-z_][A-Za-z0-9_]*`, at most 64). Descriptions are untrusted text (an MCP server
+  may have written them): a generator escapes them for the language it writes.
 
 ## Running the check
 
