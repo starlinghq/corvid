@@ -1069,6 +1069,34 @@ public sealed class CorvidSession
         return _runtime.SendAsync(this, text, EnvelopeOrigin.User, cancellationToken, [.. images]);
     }
 
+    /// <summary>
+    /// K-8 (A6): why this session would refuse these images now (no model could read them, or one is not an image, too
+    /// large, or there are too many), or null when the turn would take them. A surface asks before posting so the person
+    /// keeps their message; the turn checks again, then strips and stores them.
+    /// </summary>
+    public string? CheckImages(IReadOnlyList<ImageInput> images)
+    {
+        ArgumentNullException.ThrowIfNull(images);
+        if (images.Count == 0)
+            return null;
+        if (TurnRunner.ImageRefusal(Slots, _runtime.Media) is { } refusal)
+            return refusal;
+        if (images.Count > Corvid.Models.Images.ImageFiles.MaxPerMessage)
+            return $"The message was not sent: a message may carry at most {Corvid.Models.Images.ImageFiles.MaxPerMessage} images; this one has {images.Count}.";
+        foreach (var image in images)
+        {
+            try
+            {
+                Corvid.Models.Images.ImageFiles.Prepare(image.Data, image.Name);
+            }
+            catch (ImageRefusedException refused)
+            {
+                return "The message was not sent: " + refused.Message;
+            }
+        }
+        return null;
+    }
+
     /// <summary>K-8 (A6): queues a message with images, as <see cref="SendAsync(string, IReadOnlyList{ImageInput}, CancellationToken)"/> does.</summary>
     public Task<Task<Delivery>> PostAsync(string text, IReadOnlyList<ImageInput> images, EnvelopeOrigin origin, CancellationToken cancellationToken = default)
     {

@@ -22,6 +22,9 @@ public sealed record UserEntry(string Id, string Text, DateTimeOffset At) : Tran
 
     /// <summary>Who wrote it when it is not the person (a gateway guest); null for their own.</summary>
     public string? From { get; init; }
+
+    /// <summary>K-8 (A6): the images it carried.</summary>
+    public ImmutableArray<MessageImage> Images { get; init; } = [];
 }
 
 /// <summary>A turn's header: its number, the generators it ran on in order, and its measures so far.</summary>

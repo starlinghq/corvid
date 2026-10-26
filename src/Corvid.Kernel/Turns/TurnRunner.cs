@@ -71,6 +71,24 @@ public sealed class TurnRunner
 
     private const int MaxDescriptionChars = 4_000;
 
+    /// <summary>
+    /// K-8 (A6): why a session cannot take images now, or null when it can: no media store, or no model that could read them
+    /// (the generator reads images, or a model is set for the vision slot to describe them). Surfaces ask before posting, so
+    /// the person keeps their message; the turn asks again when it starts.
+    /// </summary>
+    public static string? ImageRefusal(SessionModelSlots slots, Abstractions.Media.IMediaStore? media)
+    {
+        ArgumentNullException.ThrowIfNull(slots);
+        if (media is null)
+            return "The message was not sent: this Corvid keeps no media store, so it takes no images.";
+        var generator = slots.Current(ModelSlots.Generator).Profile;
+        if (generator.Vision || slots.TryCurrent(ModelSlots.Vision, out _))
+            return null;
+        return $"The message was not sent: its generator ({generator.Id}) does not read images, and no model is set for the vision "
+            + "slot to describe them. Make a model that reads images the generator (a remote model with \"Vision\": true), or set "
+            + "one for the vision slot (Corvid:Models:Slots:vision:Model).";
+    }
+
     // The project this runner last bound or found bound (C-025), so a turn reads the projection for it only when it changes.
     private string? _boundProject;
     private readonly TurnOptions _options;
@@ -644,13 +662,9 @@ public sealed class TurnRunner
         /// </summary>
         private Abstractions.Media.ImageRefusedException? TakeImages()
         {
-            if (_services.Media is not { } media)
-                return new("The message was not sent: this Corvid keeps no media store, so it takes no images.");
-            var generator = _services.Slots.Current(ModelSlots.Generator).Profile;
-            if (!generator.Vision && !_services.Slots.TryCurrent(ModelSlots.Vision, out _))
-                return new($"The message was not sent: its generator ({generator.Id}) does not read images, and no model is set for "
-                    + "the vision slot to describe them. Make a model that reads images the generator (a remote model with "
-                    + "\"Vision\": true), or set one for the vision slot (Corvid:Models:Slots:vision:Model).");
+            if (ImageRefusal(_services.Slots, _services.Media) is { } refusal)
+                return new(refusal);
+            var media = _services.Media!;
             try
             {
                 _images = Media.ImageIngest.Store(media, envelope.Images);

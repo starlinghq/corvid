@@ -137,6 +137,7 @@ public static class SessionFold
             Turn = state.Turn + 1,
             Position = message.Position,
             From = message.From,
+            Images = message.Images,
         };
         return Add(Advance(state), prompt);
     }

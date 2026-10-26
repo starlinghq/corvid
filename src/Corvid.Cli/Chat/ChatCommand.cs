@@ -258,6 +258,12 @@ internal static class ChatCommand
                         }
                         images.AddRange(staged);
                         images.AddRange(named);
+                        // Asked before the turn, so a refusal keeps the line unsent and the staged images staged.
+                        if (images.Count > 0 && session.CheckImages(images) is { } refusal)
+                        {
+                            renderer.Notice($"[yellow]{Markup.Escape(TerminalText.Visible(refusal))}[/]");
+                            continue;
+                        }
                     }
                     else if (staged.Count > 0)
                     {
