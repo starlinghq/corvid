@@ -66,6 +66,33 @@ public sealed class EngineCodeRunTests
         AssertNested(view, view.Transcript.OfType<ToolEntry>().Single(tool => tool.Tool == "execute_code").CallId);
     }
 
+    [Fact]
+    public async Task Review_names_the_run_a_scripts_change_came_from()
+    {
+        await using var fixture = await HistoryFixture.StartAsync();
+        var id = fixture.Session();
+        fixture.Append(id, new Corvid.Abstractions.Events.UserMessage("run the script"),
+            new Corvid.Abstractions.Events.ToolCallIssued("c1", "execute_code",
+                System.Text.Json.JsonSerializer.SerializeToElement(new { language = "python", code = "t.write_file('a.txt', 'x')" })));
+        // The script's write, as the turn records a nested call: issued under its run, the ledger's checkpoints around it.
+        fixture.Append(id, new Corvid.Abstractions.Events.ToolCallIssued("c1.1", "write_file",
+            System.Text.Json.JsonSerializer.SerializeToElement(new { path = "a.txt", content = "x\n" }), ParentCallId: "c1"));
+        var analysis = fixture.Runtime.Approvals.Analyze(new Corvid.Approvals.ShellAction("rm a.txt"));
+        var before = await fixture.Runtime.Checkpoints!.BeforeAsync("c1.1", analysis);
+        fixture.Append(id, before);
+        fixture.Write("a.txt", "x\n");
+        fixture.Append(id, await fixture.Runtime.Checkpoints.AfterAsync("c1.1", before, analysis),
+            new Corvid.Abstractions.Events.ToolResult("c1.1", System.Text.Json.JsonSerializer.SerializeToElement(new { path = "a.txt" })),
+            new Corvid.Abstractions.Events.ToolResult("c1", System.Text.Json.JsonSerializer.SerializeToElement(new { calls = 1, exit_code = 0 })),
+            new Corvid.Abstractions.Events.AssistantMessage("Done."));
+        using var review = fixture.Review();
+
+        var changes = await review.GetChangesAsync(id, Corvid.App.Core.Review.ReviewScope.ThisSession, Ct);
+
+        var file = Assert.Single(changes.Files);
+        Assert.Equal(("a.txt", "write_file", "execute_code"), (file.Path, file.Tool, file.Via));
+    }
+
     private static void AssertNested(SessionView view, string runId)
     {
         var tools = view.Transcript.OfType<ToolEntry>().ToList();

@@ -161,6 +161,9 @@ public sealed partial class SessionsPage : Page, IDockProvider
 
     public static string ExpandName(bool expanded) => expanded ? "Collapse output" : "Expand output";
 
+    /// <summary>A7: a code mode script's call is drawn indented under its run's card.</summary>
+    public static Thickness NestedIndent(bool nested) => nested ? new Thickness(28, 0, 0, 0) : new Thickness(0);
+
     /// <summary>The accent outline (.opt.focus): the answer Enter chooses, or the one whose preview is open.</summary>
     public static Visibility OutlineVisible(bool focused, bool expanded) => focused || expanded ? Visibility.Visible : Visibility.Collapsed;
 

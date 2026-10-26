@@ -421,6 +421,9 @@ public sealed class ApprovalCardBlock : TranscriptBlock
     public bool CodeHasHidden { get; private set; }
 
     /// <summary>A7: what approving a script grants, and what it does not.</summary>
+    public string CodeNoteText => CodeNote;
+
+    /// <summary>A7: what approving a script grants, and what it does not (the card's words).</summary>
     public const string CodeNote =
         "Approving runs this script in the sandbox. Each tool it calls is asked for on its own, exactly as the model's own call would be; taint and egress apply to every call.";
 

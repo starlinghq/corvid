@@ -154,9 +154,12 @@ public sealed class ReviewViewModel : AreaViewModel
         ? _selected.File.Reverted ? $"reverted · {checkpoint}" : $"reversible · {checkpoint}"
         : "";
 
-    /// <summary>"patch_file · turn 12": the call that last changed it.</summary>
-    public string DiffSource => _selected?.File is { Tool: { } tool, Turn: { } turn }
-        ? string.Create(CultureInfo.InvariantCulture, $"{tool} · turn {turn}")
+    /// <summary>
+    /// "patch_file · turn 12": the call that last changed it; "write_file via execute_code · turn 12" when a code mode
+    /// script made that call (A7).
+    /// </summary>
+    public string DiffSource => _selected?.File is { Tool: { } tool, Turn: { } turn } file
+        ? string.Create(CultureInfo.InvariantCulture, $"{SafeText.Clean(tool)}{(file.Via is { } via ? " via " + SafeText.Clean(via) : "")} · turn {turn}")
         : "";
 
     /// <summary>The file has text to draw; otherwise <see cref="NoDiffText"/> says why not.</summary>
