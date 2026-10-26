@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
+using Windows.Storage.Streams;
 using Windows.System;
 
 namespace Corvid.App.Pages;
@@ -48,10 +49,31 @@ public sealed partial class SessionsPage
     }
 
     // A paste that holds an image (a bitmap, or copied image files) attaches it; text pastes as usual.
-    private async void OnComposerPaste(object sender, TextControlPasteEventArgs e)
+    private void OnComposerPaste(object sender, TextControlPasteEventArgs e)
+    {
+        if (ImagesOnClipboard() is not { } content)
+            return;
+        e.Handled = true;
+        PasteImages(content.Session, content.View);
+    }
+
+    /// <summary>
+    /// Ctrl+V in the composer when the clipboard holds an image or files and no text. Uno's TextBox raises
+    /// <see cref="TextBox.Paste"/> only for a clipboard that holds text (the A6 end-to-end pass on X11: a copied PNG, or copied
+    /// files as <c>text/uri-list</c>, raised no Paste at all), so the key takes them; text still pastes as the TextBox does it.
+    /// </summary>
+    private bool PasteImagesFromKey()
+    {
+        if (ImagesOnClipboard() is not { } content)
+            return false;
+        PasteImages(content.Session, content.View);
+        return true;
+    }
+
+    private (SessionViewModel Session, DataPackageView View)? ImagesOnClipboard()
     {
         if (_session is not { CanAttachImages: true } session)
-            return;
+            return null;
         DataPackageView content;
         try
         {
@@ -60,11 +82,19 @@ public sealed partial class SessionsPage
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
             Console.Error.WriteLine("corvid app: the clipboard could not be read: " + exception.Message);
-            return;
+            return null;
         }
-        if (content.Contains(StandardDataFormats.Text) || !(content.Contains(StandardDataFormats.Bitmap) || content.Contains(StandardDataFormats.StorageItems)))
-            return;
-        e.Handled = true;
+        if (content.Contains(StandardDataFormats.Text)
+            || !(content.Contains(StandardDataFormats.Bitmap) || content.Contains(StandardDataFormats.StorageItems) || RawImageFormat(content) is not null))
+            return null;
+        return (session, content);
+    }
+
+    // An image the clipboard holds under its media type rather than as the Bitmap format (Uno's X11 clipboard).
+    private static string? RawImageFormat(DataPackageView view) => ImageSignature.ClipboardImageFormat(view.AvailableFormats);
+
+    private async void PasteImages(SessionViewModel session, DataPackageView content)
+    {
         try
         {
             await TakeAsync(session, content).ConfigureAwait(true);
@@ -95,6 +125,24 @@ public sealed partial class SessionsPage
             // Bounded: one byte past the limit is enough to refuse it.
             var bytes = await ReadBoundedAsync(stream, ImageSignature.MaxBytes + 1).ConfigureAwait(true);
             session.Attach(new ImageAttachment(bytes));
+            return;
+        }
+        if (RawImageFormat(view) is { } format)
+        {
+            var data = await view.GetDataAsync(format);
+            var bytes = data switch
+            {
+                byte[] raw => raw.Length > ImageSignature.MaxBytes ? raw[..(ImageSignature.MaxBytes + 1)] : raw,
+                Stream stream => await ReadBoundedAsync(stream, ImageSignature.MaxBytes + 1).ConfigureAwait(true),
+                IRandomAccessStream random => await ReadBoundedAsync(random.AsStreamForRead(), ImageSignature.MaxBytes + 1).ConfigureAwait(true),
+                RandomAccessStreamReference reference => await ReadBoundedAsync((await reference.OpenReadAsync()).AsStreamForRead(), ImageSignature.MaxBytes + 1)
+                    .ConfigureAwait(true),
+                _ => null,
+            };
+            if (bytes is null)
+                session.ReportAttachProblem($"The clipboard's {Core.SafeText.Clean(format)} could not be read as an image.");
+            else
+                session.Attach(new ImageAttachment(bytes));
         }
     }
 

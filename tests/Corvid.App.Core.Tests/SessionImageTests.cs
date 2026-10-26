@@ -88,6 +88,18 @@ public sealed class SessionImageTests
         return (view, service, demo);
     }
 
+    // A6 end-to-end: Uno's X11 clipboard lists a copied screenshot as the X target image/png, never as the Bitmap format.
+    [Theory]
+    [InlineData("TARGETS,image/png", "image/png")]
+    [InlineData("TARGETS,image/jpeg,image/png", "image/png")]
+    [InlineData("TARGETS,IMAGE/JPEG", "IMAGE/JPEG")]
+    [InlineData("image/gif,image/webp", "image/webp")]
+    [InlineData("TARGETS,image/tiff", null)]
+    [InlineData("TARGETS,UTF8_STRING,text/plain", null)]
+    [InlineData("", null)]
+    public void A_clipboard_image_is_found_by_its_media_type(string formats, string? expected) =>
+        Assert.Equal(expected, ImageSignature.ClipboardImageFormat(formats.Split(',', StringSplitOptions.RemoveEmptyEntries)));
+
     [Fact]
     public async Task A_pasted_image_becomes_a_chip_and_goes_with_the_message()
     {

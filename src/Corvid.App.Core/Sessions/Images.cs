@@ -49,6 +49,21 @@ public static class ImageSignature
         _ => "image",
     };
 
+    private static readonly string[] ClipboardImageTypes = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+
+    /// <summary>
+    /// The clipboard format that holds an image under its media type, or null: Uno's X11 clipboard lists the X selection's
+    /// targets as they are (a copied screenshot is <c>image/png</c>, never the Bitmap format), seen in the A6 end-to-end pass.
+    /// PNG first, then JPEG, WebP and GIF; another image type is not one the engine takes. The bytes are checked either way.
+    /// </summary>
+    public static string? ClipboardImageFormat(IEnumerable<string> formats)
+    {
+        ArgumentNullException.ThrowIfNull(formats);
+        var listed = formats.ToList();
+        return ClipboardImageTypes.Select(type => listed.FirstOrDefault(format => string.Equals(format?.Trim(), type, StringComparison.OrdinalIgnoreCase)))
+            .FirstOrDefault(format => format is not null);
+    }
+
     /// <summary>Whether a file name has an image extension (a dropped file is attached as an image only when its bytes agree).</summary>
     public static bool HasImageExtension(string path) =>
         Path.GetExtension(path).ToLowerInvariant() is ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp";

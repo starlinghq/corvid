@@ -595,6 +595,10 @@ public sealed partial class SessionsPage : Page, IDockProvider
                 e.Handled = true;
                 session.StashDraftCommand.Execute(null);
                 return;
+            case VirtualKey.V when ctrl && !shift:
+                // K-8: an image or copied files on the clipboard (SessionsPage.Images.cs); text pastes as usual.
+                e.Handled = PasteImagesFromKey();
+                return;
         }
     }
 
