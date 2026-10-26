@@ -253,6 +253,13 @@ public sealed partial class CorvidRuntime
         if (result.Tainted)
         {
             outcome["outside_content"] = true;
+            // A6 fix (A5 left): a schema-checked output is outside content as much as free text is (its strings can carry
+            // instructions): its JSON text is enclosed too, in place of the object, and the note says it met the schema.
+            if (outcome.Remove("output", out var structured) && structured is JsonElement element)
+            {
+                outcome["answer"] = element.GetRawText();
+                note ??= "the output met the schema; it is the JSON text between the outside-content markers";
+            }
             if (outcome.TryGetValue("answer", out var answer) && answer is string said)
                 outcome["answer"] = EncloseOutside(said);
         }
