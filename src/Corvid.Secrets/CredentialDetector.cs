@@ -373,7 +373,23 @@ public static partial class CredentialDetector
         "strongest", "weakest", "shortest", "longest", "together", "unknown", "nonexistent", "inactive", "disabled", "enabled",
         "nonsense", "everywhere", "overridden", "forbidden", "rewritten", "mistaken", "unbroken", "overwritten", "thirteen",
         "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "hundred", "thousand", "plenty", "worthwhile",
-        "pointless", "mismatch", "overkill", "whatsoever");
+        "pointless", "mismatch", "overkill", "whatsoever",
+        // Review: evaluative adjectives and their comparatives ("the password is incorrect", "the new one is stronger", "it is
+        // gibberish"). Short ones are listed for the quoted rule and for the prefix rule below ("in" + "correct").
+        "incorrect", "correct", "invalid", "valid", "wrong", "right", "strong", "stronger", "weak", "weaker", "expired",
+        "required", "missing", "gibberish", "garbage", "rubbish", "nonsensical", "random", "secure", "securer", "safe", "safer",
+        "unsafe", "accurate", "inaccurate", "usable", "unusable", "good", "better", "bad", "worse", "best", "worst", "great",
+        "fine", "okay", "simple", "simpler", "easy", "easier", "hard", "harder", "short", "shorter", "long", "longer", "complex",
+        "obvious", "guessable", "memorable", "unmemorable", "blank", "empty", "broken", "stale", "old", "new", "fresh", "same",
+        "visible", "known", "sufficient", "insufficient", "complete", "incomplete", "acceptable", "unacceptable", "allowed",
+        "disallowed", "permitted", "compliant", "noncompliant", "matching", "mismatching", "consistent", "inconsistent",
+        "predictable", "unpredictable", "reasonable", "unreasonable", "trivial", "nontrivial", "ridiculous", "hopeless",
+        "useless", "different", "longish", "shortish", "lengthy", "awful", "horrible", "decent", "perfect", "imperfect");
+
+    // Review: a negating prefix before a descriptor ("incorrect", "unsecure", "irreplaceable", "nonstandard") describes the
+    // password too, so the word is turned away when what follows the prefix is a descriptor, a stopword or has a descriptor
+    // ending.
+    private static readonly string[] NegatingPrefixes = ["non", "dis", "mis", "un", "in", "im", "ir", "il"];
 
     // What may follow a plain-word password: the clause ends with it, so it is the password and not the start of a
     // description ("the password is different from the old one").
@@ -403,21 +419,54 @@ public static partial class CredentialDetector
                 return false;
         }
 
-        if (Descriptors.Contains(word))
+        if (IsDescriptor(word))
             return false;
+        return EndsClause(text, start + length);
+    }
+
+    // A word that describes a password rather than gives it: a listed descriptor or stopword, a descriptor ending, or one of
+    // those after a negating prefix ("in" + "correct", "un" + "guessable").
+    private static bool IsDescriptor(ReadOnlySpan<char> word)
+    {
+        if (IsDescriptorStem(word))
+            return true;
+        foreach (var prefix in NegatingPrefixes)
+        {
+            if (word.Length - prefix.Length >= 4 && word.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                && IsDescriptorStem(word[prefix.Length..]))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool IsDescriptorStem(ReadOnlySpan<char> word)
+    {
+        if (Descriptors.Contains(word) || Stopwords.Contains(word))
+            return true;
         foreach (var ending in DescriptorEndings)
         {
             if (word.EndsWith(ending, StringComparison.OrdinalIgnoreCase))
-                return false;
+                return true;
         }
-
-        return EndsClause(text, start + length);
+        return false;
     }
 
     // A quoted value after a password noun is the password whatever it holds ("my password is 'sunshine'"), once it has six
     // characters or more and is not a descriptor.
     private static bool IsQuotedPassword(string value) =>
-        value.Trim().Length >= 6 && !Descriptors.Contains(value.AsSpan().Trim());
+        value.Trim().Length >= 6 && !Descriptors.Contains(value.AsSpan().Trim()) && !IsNegatedDescriptor(value.AsSpan().Trim());
+
+    // "'incorrect'", "'unguessable'": a quoted value that is a negating prefix before a listed descriptor or stopword.
+    private static bool IsNegatedDescriptor(ReadOnlySpan<char> word)
+    {
+        foreach (var prefix in NegatingPrefixes)
+        {
+            if (word.Length - prefix.Length >= 4 && word.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                && (Descriptors.Contains(word[prefix.Length..]) || Stopwords.Contains(word[prefix.Length..])))
+                return true;
+        }
+        return false;
+    }
 
     private static bool EndsClause(string text, int end)
     {
