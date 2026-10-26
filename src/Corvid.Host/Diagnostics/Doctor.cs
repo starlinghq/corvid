@@ -77,7 +77,30 @@ public sealed class Doctor(IConfiguration configuration, ModelCatalogue catalogu
         checks.Add(await VaultAsync(options, cancellationToken).ConfigureAwait(false));
         checks.Add(SkillsGit(options));
         checks.AddRange(Mcp(options));
+        checks.Add(App(AppContext.BaseDirectory, FindOnPath));
         return checks;
+    }
+
+    /// <summary>The command that installs the windowed app, as the doctor and the README give it.</summary>
+    public const string AppInstall = "curl -fsSL https://raw.githubusercontent.com/starlinghq/corvid/main/install.sh | sh -s -- --app";
+
+    /// <summary>
+    /// U-7, U-9: the windowed app (<c>corvid-app</c>), optional, so this only informs: beside this binary (the app's own
+    /// directory), in the <c>app/</c> directory install.sh puts beside corvid, or on PATH; else how to install it.
+    /// </summary>
+    internal static DoctorCheck App(string baseDirectory, Func<string, string?> onPath)
+    {
+        ArgumentNullException.ThrowIfNull(baseDirectory);
+        ArgumentNullException.ThrowIfNull(onPath);
+        foreach (var candidate in new[] { Path.Combine(baseDirectory, "corvid-app"), Path.Combine(baseDirectory, "app", "corvid-app") })
+        {
+            if (File.Exists(candidate))
+                return new DoctorCheck("app", "corvid-app", CheckStatus.Info, $"installed ({candidate})");
+        }
+        return onPath("corvid-app") is { } found
+            ? new DoctorCheck("app", "corvid-app", CheckStatus.Info, $"installed ({found})")
+            : new DoctorCheck("app", "corvid-app", CheckStatus.Info, "the windowed app is not installed (it is optional)",
+                $"Install it beside corvid with install.sh: {AppInstall}");
     }
 
     private static DoctorCheck DataDirectory(CorvidOptions options)

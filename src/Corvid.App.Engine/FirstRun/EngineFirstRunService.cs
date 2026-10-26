@@ -257,6 +257,8 @@ public sealed class EngineFirstRunService : IFirstRunService, IDisposable
             ("vault", var named) => (CheckSections.Sandbox, $"Vault {named}"),
             ("mcp", var named) => (CheckSections.Sandbox, $"MCP {named}"),
             ("gpu", var named) => (CheckSections.Gpu, named),
+            // A6: whether the windowed app is installed, which the window that asks knows already.
+            ("app", _) => (null, ""),
             (var area, var named) => (CheckSections.Configuration, $"{area} {named}"),
         };
         if (section is null)

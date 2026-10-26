@@ -14,7 +14,7 @@ public sealed class DoctorTests
         await using var host = TestHost.Create();
         var checks = await host.Services.GetRequiredService<Doctor>().RunAsync(cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(["config", "models", "gpu", "sandbox", "checkpoints", "vault", "skills"], checks.Select(check => check.Area).Distinct());
+        Assert.Equal(["config", "models", "gpu", "sandbox", "checkpoints", "vault", "skills", "app"], checks.Select(check => check.Area).Distinct());
         // Nothing is placed on a GPU (C-029): the gpu area only informs.
         Assert.All(checks.Where(check => check.Area == "gpu"), check => Assert.Equal(CheckStatus.Info, check.Status));
         Assert.Contains(checks, check => check is { Name: "configuration", Status: CheckStatus.Ok });
@@ -27,6 +27,33 @@ public sealed class DoctorTests
         Assert.Contains(checks, check => check.Area == "vault");
         Assert.Contains(checks, check => check.Name == Doctor.MallocVariable);
         Assert.Empty(host.Models.Provider.Loaded);
+    }
+
+    [Fact]
+    public void TheWindowedAppIsFoundBesideCorvidOrSaysHowToInstallIt()
+    {
+        var root = Directory.CreateTempSubdirectory("corvid-doctor-app-").FullName;
+        try
+        {
+            var missing = Doctor.App(root, _ => null);
+            Assert.Equal((CheckStatus.Info, "corvid-app"), (missing.Status, missing.Name));
+            Assert.Contains("install.sh", missing.Fix, StringComparison.Ordinal);
+            Assert.Contains("--app", missing.Fix, StringComparison.Ordinal);
+
+            // install.sh puts it in app/ beside corvid.
+            Directory.CreateDirectory(Path.Combine(root, "app"));
+            File.WriteAllText(Path.Combine(root, "app", "corvid-app"), "");
+            var installed = Doctor.App(root, _ => null);
+            Assert.Equal(CheckStatus.Info, installed.Status);
+            Assert.Null(installed.Fix);
+            Assert.Contains(Path.Combine(root, "app", "corvid-app"), installed.Detail, StringComparison.Ordinal);
+
+            Assert.Contains("/opt/bin/corvid-app", Doctor.App(Path.Combine(root, "none"), _ => "/opt/bin/corvid-app").Detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]

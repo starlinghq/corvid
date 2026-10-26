@@ -582,11 +582,11 @@ page with its title. The scaffold's report lists these remaining differences:
 git fetch origin && git checkout claude/zen-allen-puw590
 dotnet --version                      # 10.0.401 or a later 10.0.4xx (global.json)
 dotnet build Corvid.slnx -c Release   # restores Uno.Sdk 6.7.30 from NuGet; no workload needed
-dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll --demo
-dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll --demo --scene approval --theme dark --page sessions
+dotnet src/Corvid.App/bin/Release/net10.0-desktop/corvid-app.dll --demo
+dotnet src/Corvid.App/bin/Release/net10.0-desktop/corvid-app.dll --demo --scene approval --theme dark --page sessions
 # The engine is the default: with no --demo the app runs on this machine's Corvid home (corvid.json, models, event log).
 # Point HOME, CORVID_CONFIG and the XDG directories at a temporary home to try it without touching yours.
-dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll
+dotnet src/Corvid.App/bin/Release/net10.0-desktop/corvid-app.dll
 dotnet test --project tests/Corvid.App.Core.Tests/Corvid.App.Core.Tests.csproj -c Release
 dotnet run --project tools/Corvid.Architecture -c Release --no-build -- .
 ```
