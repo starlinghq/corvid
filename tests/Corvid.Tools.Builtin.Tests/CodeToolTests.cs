@@ -656,6 +656,11 @@ public sealed class CodeLanguageTests : IDisposable
         Assert.Equal("*\n", File.ReadAllText(Path.Combine(_workspace, ".corvid", "code", ".gitignore")));
         // A successful build says nothing: the script's own output is all there is.
         Assert.Equal("", result.GetProperty("stderr").GetString());
+
+        // A second run in the workspace starts from the SDK's cached first use (no first-use step to make its directories).
+        var again = await RunAsync("csharp", "Console.WriteLine(\"again\");", calls);
+        Assert.True(again.GetProperty("exit_code").GetInt32() == 0, again.GetProperty("stderr").GetString());
+        Assert.Equal("again\n", again.GetProperty("stdout").GetString());
     }
 
     [Fact]

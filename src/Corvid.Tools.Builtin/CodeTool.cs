@@ -287,7 +287,7 @@ public sealed class CodeRunner
         """
         set -eu
         dotnet="$1"; cache="$2"
-        app=/tmp/corvid-code; mkdir -p "$app" "$cache"
+        app=/tmp/corvid-code; mkdir -p "$app" "$cache" "$XDG_DATA_HOME"
         [ -e "$cache/../.gitignore" ] || printf '*\n' > "$cache/../.gitignore"
         cat > "$app/Program.cs"
         printf '%s\n' '<Project><PropertyGroup><PublishAot>false</PublishAot><UseSharedCompilation>false</UseSharedCompilation><TreatWarningsAsErrors>false</TreatWarningsAsErrors><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally></PropertyGroup></Project>' > "$app/Directory.Build.props"
