@@ -104,8 +104,16 @@ internal static class ServeCommand
             using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             void OnInterrupt() => stop.Cancel();
             context.Interrupts.Interrupted += OnInterrupt;
+            // SIGTERM (systemd, kill) stops it as Ctrl-C does, so the socket and the sessions are let go of.
+            using var terminate = OperatingSystem.IsWindows() ? null : System.Runtime.InteropServices.PosixSignalRegistration.Create(
+                System.Runtime.InteropServices.PosixSignal.SIGTERM, signal =>
+                {
+                    signal.Cancel = true;
+                    stop.Cancel();
+                });
             WebApplication? openAIApp = null;
             WebApplication? attachApp = null;
+            var boundSocket = false;
             try
             {
                 if (openAI)
@@ -146,7 +154,10 @@ internal static class ServeCommand
                         return ExitCodes.Failure;
                     }
                     if (plan.Socket is { } socket)
+                    {
+                        boundSocket = true;
                         AttachEndpoint.Secure(socket);
+                    }
                     var where = new List<string>();
                     if (plan.Socket is { } unix)
                         where.Add("unix:" + unix);
@@ -178,7 +189,8 @@ internal static class ServeCommand
                     await openAIApp.StopAsync(CancellationToken.None).ConfigureAwait(false);
                     await openAIApp.DisposeAsync().ConfigureAwait(false);
                 }
-                if (plan?.Socket is { } leftover)
+                // Only a socket this process bound: one that failed to bind is another server's.
+                if (boundSocket && plan?.Socket is { } leftover)
                     TryDelete(leftover);
             }
         }
@@ -328,7 +340,7 @@ internal static class ServeCommand
             var code = await client.CreatePairingCodeAsync(cancellationToken).ConfigureAwait(false);
             var minutes = Math.Max(1, (int)Math.Round((code.Expires - DateTimeOffset.UtcNow).TotalMinutes));
             console.MarkupLine($"Pairing code: [bold]{Markup.Escape(code.Code)}[/] (redeems once, within {minutes} min). " +
-                "Give it to the device: Corvid.App --attach <address> --pair <code>, or the browser's pairing box.");
+                "Give it to the device: Corvid.App --attach <address> --pair <code>, or the app's page in a browser with #pair=<code> after its address.");
             return ExitCodes.Success;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)

@@ -99,7 +99,9 @@ internal static class AttachEndpoint
     public static Uri? ListeningOn(WebApplication app)
     {
         var addresses = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()?.Addresses ?? [];
-        return addresses.Where(address => address.StartsWith("http://", StringComparison.Ordinal)).Select(address => new Uri(address)).FirstOrDefault();
+        // Kestrel names a Unix socket http://unix:/path; only the TCP one is an address to give.
+        return addresses.Where(address => address.StartsWith("http://", StringComparison.Ordinal) && !address.StartsWith("http://unix:", StringComparison.Ordinal))
+            .Select(address => new Uri(address)).FirstOrDefault();
     }
 
     /// <summary>Whether an address is this machine's own.</summary>

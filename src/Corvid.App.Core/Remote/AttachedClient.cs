@@ -66,7 +66,9 @@ public static class AttachedClient
         var socket = new ClientWebSocket();
         try
         {
-            socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
+            // A browser keeps its WebSockets alive itself and refuses the option.
+            if (!OperatingSystem.IsBrowser())
+                socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
             if (address.UnixSocket is { } path)
             {
                 if (OperatingSystem.IsBrowser())
