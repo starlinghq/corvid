@@ -59,6 +59,113 @@ public sealed class SessionSearchTests
         Assert.Equal((other, 1), (hit.SessionId, hit.Turn));
     }
 
+    // A6 review (M4): a search over an unchanged log catches up nothing and projects nothing again; a session that moved is
+    // the only one read.
+    [Fact]
+    public async Task A_search_over_an_unchanged_log_reads_nothing_from_it()
+    {
+        await using var host = TestHost.Create(null, NoTitles);
+        await using var runtime = await host.StartAsync();
+        for (var i = 0; i < 5; i++)
+            runtime.Log.Append($"cli-{i}", 0, [EventData.Create(new UserMessage($"the walrus plan {i}")), EventData.Create(new AssistantMessage("Noted."))], Ct);
+        var log = new CountingLog(runtime.Log);
+        var cache = new SessionSearchCache();
+
+        var first = SessionSearch.Search(log, runtime.Memory!.Episodes, runtime.Log.ListHeads(Ct), "walrus", cache: cache, cancellationToken: Ct);
+        Assert.Equal(5, first.Hits.Count);
+        Assert.True(log.Reads > 0);
+        log.Reset();
+
+        var again = SessionSearch.Search(log, runtime.Memory!.Episodes, runtime.Log.ListHeads(Ct), "walrus", cache: cache, cancellationToken: Ct);
+
+        Assert.Equal(first.Hits, again.Hits);
+        Assert.Equal(0, log.Reads);
+
+        // One session moves: only it is read (its catch-up and its projection at the new head).
+        runtime.Log.Append("cli-3", 2, [EventData.Create(new UserMessage("and the walrus budget"))], Ct);
+        var moved = SessionSearch.Search(log, runtime.Memory!.Episodes, runtime.Log.ListHeads(Ct), "walrus", cache: cache, cancellationToken: Ct);
+        Assert.Equal(6, moved.Hits.Count);
+        Assert.Equal(["cli-3"], log.Sessions);
+    }
+
+    [Fact]
+    public async Task A_cancelled_search_stops()
+    {
+        await using var host = TestHost.Create(null, NoTitles);
+        await using var runtime = await host.StartAsync();
+        runtime.Log.Append("cli-x", 0, [EventData.Create(new UserMessage("the heron note"))], Ct);
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+
+        Assert.Throws<OperationCanceledException>(() => runtime.SearchSessions("heron", cancellationToken: cancelled.Token));
+    }
+
+    // A6 review (L5): one rule for /search and the palette, as for prompt history: gateway chats (other people's messages)
+    // and scheduled job runs are left out, and /search says so.
+    [Fact]
+    public async Task Gateway_chats_and_job_runs_are_left_out_of_a_search_and_it_says_so()
+    {
+        await using var host = TestHost.Create(null, NoTitles);
+        await using var runtime = await host.StartAsync();
+        var commands = host.Services.GetRequiredService<SlashCommandRegistry>();
+        runtime.Log.Append(Corvid.Gateway.GatewaySessions.Prefix + "telegram:42", 0, [EventData.Create(new UserMessage("the ibis secret from a guest"))], Ct);
+        runtime.Log.Append("job:nightly:1", 0, [EventData.Create(new UserMessage("the ibis report job"))], Ct);
+        runtime.Log.Append("cli-own", 0, [EventData.Create(new UserMessage("my own ibis note"))], Ct);
+        var session = runtime.OpenSession();
+
+        var hit = Assert.Single(runtime.SearchSessions("ibis", cancellationToken: Ct).Hits);
+        var output = await Run(runtime, session, commands, "/search ibis");
+        var none = await Run(runtime, session, commands, "/search guest");
+
+        Assert.Equal("cli-own", hit.SessionId);
+        Assert.False(CorvidRuntime.IsSearchable(Corvid.Gateway.GatewaySessions.Prefix + "slack:C1"));
+        Assert.False(CorvidRuntime.IsSearchable("job:nightly:1"));
+        Assert.Contains("gateway chats (other people's messages) and scheduled job runs are left out", output.Lines[0], StringComparison.Ordinal);
+        Assert.Contains("gateway chats (other people's messages) and scheduled job runs are left out", none.Lines[0], StringComparison.Ordinal);
+    }
+
+    /// <summary>An event log that counts reads, and which sessions were read, and passes everything on.</summary>
+    private sealed class CountingLog(IEventLog inner) : IEventLog
+    {
+        private readonly List<string> _sessions = [];
+
+        public int Reads { get; private set; }
+
+        public IReadOnlyList<string> Sessions
+        {
+            get
+            {
+                lock (_sessions)
+                    return [.. _sessions.Distinct()];
+            }
+        }
+
+        public void Reset()
+        {
+            lock (_sessions)
+            {
+                Reads = 0;
+                _sessions.Clear();
+            }
+        }
+
+        public long GetHead(string sessionId, CancellationToken cancellationToken = default) => inner.GetHead(sessionId, cancellationToken);
+
+        public IReadOnlyList<StoredEvent> Append(string sessionId, long expectedHead, IReadOnlyList<EventData> events,
+            CancellationToken cancellationToken = default) => inner.Append(sessionId, expectedHead, events, cancellationToken);
+
+        public IReadOnlyList<StoredEvent> Read(string sessionId, long afterSequence = 0, long throughSequence = long.MaxValue, int limit = 256,
+            CancellationToken cancellationToken = default)
+        {
+            lock (_sessions)
+            {
+                Reads++;
+                _sessions.Add(sessionId);
+            }
+            return inner.Read(sessionId, afterSequence, throughSequence, limit, cancellationToken);
+        }
+    }
+
     [Fact]
     public async Task What_an_undo_took_out_of_the_conversation_is_not_a_hit()
     {

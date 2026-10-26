@@ -47,6 +47,6 @@ public sealed class EngineSessionSearchTests
         Assert.IsType<EngineSessionSearch>(composition.SessionSearch);
         composition.Palette.Execute(Corvid.App.Core.Keys.KeyCommands.Search);
         Assert.Equal("", composition.Palette.Note);
-        Assert.Equal("Search what was said in every session…", composition.Palette.Placeholder);
+        Assert.Equal("Search what was said in your sessions…", composition.Palette.Placeholder);
     }
 }

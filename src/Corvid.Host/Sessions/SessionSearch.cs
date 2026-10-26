@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Globalization;
 using Corvid.Abstractions.Events;
 using Corvid.Kernel.Events;
@@ -30,11 +32,43 @@ public sealed record SessionSearchResult(IReadOnlyList<SessionSearchHit> Hits, s
 }
 
 /// <summary>
+/// G-5 (A6 review): what a search keeps between searches, per session and keyed by the session's head: which events are
+/// out of the conversation (undone or rolled back), where its turns start, and its title. A session whose head has not
+/// moved is not read again, so a search typed letter by letter over an unchanged log reads nothing from it.
+/// </summary>
+public sealed class SessionSearchCache
+{
+    private readonly ConcurrentDictionary<string, SessionView> _views = new(StringComparer.Ordinal);
+
+    internal sealed record SessionView(long Head, ImmutableArray<HiddenRange> Hidden, long[] Prompts, string? Title)
+    {
+        public bool IsVisible(long sequence) => !Hidden.Any(range => range.Contains(sequence));
+    }
+
+    internal SessionView For(IEventLog log, string sessionId, long head, CancellationToken cancellationToken)
+    {
+        if (_views.TryGetValue(sessionId, out var cached) && cached.Head == head)
+            return cached;
+        var snapshot = SessionProjection.Load(log, sessionId, throughSequence: head, expandCompactions: true, cancellationToken: cancellationToken);
+        var prompts = snapshot.Transcript.Where(entry => entry.Content is UserMessage).Select(entry => entry.FromSequence).Order().ToArray();
+        var title = SessionCatalogue.Describe(log, sessionId, cancellationToken)?.Title;
+        var view = new SessionView(head, snapshot.Hidden, prompts, title);
+        _views[sessionId] = view;
+        return view;
+    }
+}
+
+/// <summary>
 /// G-5: search across sessions through the episodic index (plan §9.1, <see cref="EpisodicIndex"/>), shared by
 /// <c>/search</c> in <c>corvid chat</c> and the app's <c>Ctrl+Shift+F</c>. Each session's index first catches up with the log,
 /// so what was said a moment ago, here or in another process, is found. Only what the conversation still holds is a hit: an
 /// event an undo or rollback took out of it is left out, though the log keeps it. The index never holds a <c>!!</c> line's
 /// message, call or output (A4: those are the person's alone).
+/// <para>
+/// A6 review: the caller passes every searched session's head (one query on the log), and only a session whose head is past
+/// the index's mark for it (one query on the index) is caught up; each hit's session is projected once per head through a
+/// <see cref="SessionSearchCache"/>. Cancellation is checked between sessions and between hits.
+/// </para>
 /// </summary>
 public static class SessionSearch
 {
@@ -44,54 +78,50 @@ public static class SessionSearch
     /// <summary>How many characters of a matched event a snippet shows, around the first matched word.</summary>
     public const int SnippetChars = 160;
 
-    /// <param name="sessions">The sessions to search, in any order; the caller decides which are conversations.</param>
+    /// <param name="heads">The sessions to search and each one's head (the log's <c>ListHeads</c>, filtered by the caller, who
+    /// decides which are conversations).</param>
     /// <param name="caughtUp">Called with the episodes each session's catch-up added (to embed them, say); may be null.</param>
-    public static SessionSearchResult Search(IEventLog log, EpisodicIndex index, IEnumerable<string> sessions, string query, int limit = 20,
-        Action<IReadOnlyList<Episode>>? caughtUp = null, CancellationToken cancellationToken = default)
+    /// <param name="cache">What earlier searches learned about each session at its head; null learns it afresh.</param>
+    public static SessionSearchResult Search(IEventLog log, EpisodicIndex index, IReadOnlyDictionary<string, long> heads, string query,
+        int limit = 20, Action<IReadOnlyList<Episode>>? caughtUp = null, SessionSearchCache? cache = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(log);
         ArgumentNullException.ThrowIfNull(index);
-        ArgumentNullException.ThrowIfNull(sessions);
+        ArgumentNullException.ThrowIfNull(heads);
         ArgumentNullException.ThrowIfNull(query);
         limit = Math.Clamp(limit, 1, MaxHits);
-        if (query.Trim().Length == 0)
+        if (query.Trim().Length == 0 || heads.Count == 0)
             return new([]);
-        var included = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var id in sessions)
+        cache ??= new SessionSearchCache();
+        var marks = index.IndexedMarks();
+        foreach (var (id, head) in heads)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!included.Add(id))
+            if (head <= marks.GetValueOrDefault(id))
                 continue;
             var added = index.CatchUp(log, id, cancellationToken);
             if (added.Count > 0)
                 caughtUp?.Invoke(added);
         }
-        if (included.Count == 0)
-            return new([]);
 
         // The index searches every session; hits in sessions not asked for, or no longer in the conversation, are dropped,
         // so a few times the limit is read.
         var candidates = index.Search(query, Math.Min(limit * 4, 400));
-        var projections = new Dictionary<string, (SessionSnapshot Snapshot, long[] Prompts)>(StringComparer.Ordinal);
         var hits = new List<SessionSearchHit>(limit);
         foreach (var candidate in candidates)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var episode = candidate.Episode;
-            if (!included.Contains(episode.SessionId))
+            // An episode past the head read for this search was written meanwhile; the next search finds it.
+            if (!heads.TryGetValue(episode.SessionId, out var head) || episode.Sequence > head)
                 continue;
-            if (!projections.TryGetValue(episode.SessionId, out var projection))
-            {
-                var snapshot = SessionProjection.Load(log, episode.SessionId, expandCompactions: true, cancellationToken: cancellationToken);
-                var prompts = snapshot.Transcript.Where(entry => entry.Content is UserMessage).Select(entry => entry.FromSequence).Order().ToArray();
-                projections[episode.SessionId] = projection = (snapshot, prompts);
-            }
-            if (!projection.Snapshot.IsVisible(episode.Sequence))
+            var view = cache.For(log, episode.SessionId, head, cancellationToken);
+            if (!view.IsVisible(episode.Sequence))
                 continue;
-            var (turn, at) = TurnAt(projection.Prompts, episode.Sequence);
-            var title = SessionCatalogue.Describe(log, episode.SessionId, cancellationToken)?.Title;
+            var (turn, at) = TurnAt(view.Prompts, episode.Sequence);
             hits.Add(new SessionSearchHit(episode.SessionId, episode.Sequence, turn, at, episode.Kind, episode.RecordedAt,
-                Snippet(episode.Text, query), title));
+                Snippet(episode.Text, query), view.Title));
             if (hits.Count == limit)
                 break;
         }

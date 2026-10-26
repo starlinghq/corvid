@@ -6,8 +6,9 @@ namespace Corvid.App.Engine.PromptHistory;
 
 /// <summary>
 /// G-5 on the engine: <see cref="CorvidRuntime.SearchSessions"/> (the episodic index, caught up with the log first), for the
-/// palette's <c>Ctrl+Shift+F</c>. Every session the runtime's log holds is searched but Corvid's own stores and the memory
-/// import's staging session; a match in a session the rail does not list says so when it is chosen.
+/// palette's <c>Ctrl+Shift+F</c>. The sessions searched are the ones <see cref="CorvidRuntime.IsSearchable"/> takes (the
+/// person's own: not Corvid's stores, gateway chats or job runs, the same rule as <c>/search</c>) but the memory import's
+/// staging session; a match in a session the rail does not list says so when it is chosen.
 /// <para>The index is SQLite, read synchronously, so the search runs on the pool, never on the UI thread.</para>
 /// </summary>
 public sealed class EngineSessionSearch(AppEngine engine) : ISessionSearch
@@ -21,8 +22,8 @@ public sealed class EngineSessionSearch(AppEngine engine) : ISessionSearch
     {
         ArgumentNullException.ThrowIfNull(query);
         var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
-        var found = await Task.Run(() => runtime.SearchSessions(query, MaxMatches,
-            runtime.Log.ListSessions(cancellationToken).Where(Searched), cancellationToken), cancellationToken).ConfigureAwait(false);
+        var found = await Task.Run(() => runtime.SearchSessions(query, MaxMatches, Searched, cancellationToken), cancellationToken)
+            .ConfigureAwait(false);
         if (found.Unavailable is { } why)
             return new SessionMatches([], why);
         return new SessionMatches([.. found.Hits.Select(hit =>

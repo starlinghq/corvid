@@ -59,7 +59,7 @@ public sealed class SessionSearchPaletteTests
         Assert.Equal("Search sessions", palette.Title);
         Assert.Equal("", palette.Note);
         Assert.Empty(palette.Items);
-        Assert.Equal("Type to search what was said in every session.", palette.EmptyText);
+        Assert.Equal("Type to search what was said in your sessions. Gateway chats (other people's messages) and scheduled job runs are left out.", palette.EmptyText);
         Assert.Empty(search.Asked);
 
         palette.Query = "zebra";
