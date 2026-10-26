@@ -676,7 +676,7 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     private TurnServices Services(SessionModelSlots slots, bool interactive, ToolRegistry? tools = null, SessionSettings? session = null,
         ChildPlan? child = null, WorkspaceServices? workspace = null)
     {
-        // Scheduled runs work in the configured workspace.
+        // A scheduled run passes its job's workspace (CorvidRuntime.Jobs.cs); none given is the configured one.
         workspace ??= DefaultWorkspace;
         var turn = Options.Turn;
         var prompt = turn.SystemPrompt is { Length: > 0 } configured ? configured : TurnOptions.DefaultSystemPrompt;
@@ -838,8 +838,9 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
             SchedulerState = SchedulerElsewhere;
             return;
         }
-        var scripts = new SandboxedScriptRunner(Builtin.Shell, Approvals, Options.Approvals.Mode);
-        var agent = RecordingTaint(new TurnJobAgent(sessionId => Services(NewSlots(sessionId), interactive: false)));
+        // A6 (G-4): each run works in the workspace of the session that created its job (CorvidRuntime.Jobs.cs).
+        var scripts = JobScripts();
+        var agent = RecordingTaint(JobAgent());
         var scheduler = new JobScheduler(Builtin.Jobs, Fabric, scripts, agent,
             options: new JobSchedulerOptions { Generator = Registry.Get(ModelSlots.Generator).Default.Profile.Id })
         {
