@@ -115,12 +115,13 @@ internal static class SessionCommands
 
     /// <summary>
     /// G-5: <c>/search &lt;words&gt;</c> finds what was said across sessions through the episodic index, best match first, with
-    /// each hit's session, turn and a snippet; <c>corvid chat --session &lt;id&gt;</c> resumes one.
+    /// each hit's session, turn and a snippet; <c>corvid chat --session &lt;id&gt;</c> resumes one. It covers the person's own
+    /// sessions (<see cref="CorvidRuntime.IsSearchable"/>): gateway chats and scheduled job runs are left out, and it says so.
     /// </summary>
     public static async ValueTask<CommandOutput> SearchAsync(SlashCommandContext context, SlashInvocation invocation, CancellationToken cancellationToken)
     {
         if (invocation.Text.Trim().Length == 0)
-            return CommandOutput.Error("Usage: /search <words>. It searches what was said in every session, this one too.");
+            return CommandOutput.Error("Usage: /search <words>. It searches what was said in " + CorvidRuntime.SearchScope + ".");
         var runtime = context.Runtime;
         var query = invocation.Text.Trim();
         // SQLite, read synchronously: off the caller's thread, as the app's search is.
@@ -129,7 +130,7 @@ internal static class SessionCommands
         if (found.Unavailable is { } why)
             return CommandOutput.Warning("No search: " + why + ".");
         if (found.Hits.Count == 0)
-            return CommandOutput.Text($"Nothing said in any session matches \"{SessionCatalogue.Line(query)}\".");
+            return CommandOutput.Text($"Nothing said in your sessions matches \"{SessionCatalogue.Line(query)}\" (it searched {CorvidRuntime.SearchScope}).");
         var zone = TimeZoneInfo.Local;
         return new CommandOutput
         {
@@ -137,7 +138,7 @@ internal static class SessionCommands
             Lines =
             [
                 (found.Hits.Count == Searched ? $"The {Searched} best matches" : found.Hits.Count == 1 ? "One match" : $"{found.Hits.Count} matches")
-                    + ", best first. Resume a session with corvid chat --session <id>.",
+                    + ", best first, in " + CorvidRuntime.SearchScope + ". Resume a session with corvid chat --session <id>.",
             ],
             Table = CommandTable.Of(["session", "title", "where", "said"], found.Hits.Select(hit => new[]
             {

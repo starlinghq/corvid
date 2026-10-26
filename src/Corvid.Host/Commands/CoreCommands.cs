@@ -49,7 +49,7 @@ public static class CoreCommands
                 "[N]", RollbackAsync))
             .Add(new SlashCommand("cancel", "Cancel the running turn.", "", Cancel))
             .Add(new SlashCommand("sessions", "Recent conversations with their titles, pinned first.", "", SessionCommands.Sessions))
-            .Add(new SlashCommand("search", "Search what was said across sessions, with each match's session and turn.", SessionCommands.SearchUsage,
+            .Add(new SlashCommand("search", "Search what was said across your sessions (not gateway chats or job runs), with each match's session and turn.", SessionCommands.SearchUsage,
                 SessionCommands.SearchAsync))
             .Add(new SlashCommand("rename", "Show or change this session's title.", "[<title>]", SessionCommands.Rename))
             .Add(new SlashCommand("recap", "A few lines on what happened in this session since its last recap, by the local generator.", "",

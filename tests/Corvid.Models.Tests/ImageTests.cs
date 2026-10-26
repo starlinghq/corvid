@@ -133,6 +133,91 @@ public sealed class ImageFileTests
         Assert.Equal("image 2 (shot.png, 4×3 PNG, 84 KB)", ImageNames.Label(new ImageRef(new string('a', 64), ImageFiles.Png, 86_000, 4, 3, "shot.png"), 2));
     }
 
+    // A6 review (security L5): the walk goes through every segment to EOI, so an APP1 or a comment between progressive scans
+    // goes, the ICC profile goes, and nothing after EOI is kept; the scans' data (stuffed bytes, a restart, fill) stays.
+    [Fact]
+    public void A_progressive_jpeg_loses_metadata_between_its_scans_its_icc_profile_and_what_follows_eoi()
+    {
+        var original = TestImages.ProgressiveJpeg();
+        Assert.True(TestImages.HoldsSecret(original));
+
+        var (stripped, info) = ImageFiles.Prepare(original, "progressive.jpg");
+
+        Assert.False(TestImages.HoldsSecret(stripped));
+        Assert.Equal(new ImageInfo(ImageFiles.Jpeg, 64, 48), info);
+        Assert.Equal([0xFF, 0xD9], stripped[^2..]);
+        // Both scans and both tables are kept, with their entropy-coded data as it was.
+        Assert.Equal(2, Count(stripped, [0xFF, 0xDA]));
+        Assert.Equal(2, Count(stripped, [0xFF, 0xC4]));
+        Assert.Equal(1, Count(stripped, [0x12, 0xFF, 0x00, 0x34, 0xFF, 0xD0, 0x56]));
+        Assert.Equal(1, Count(stripped, [0x9A, 0xBC, 0xFF, 0x00, 0xFF, 0xD9]));
+        Assert.Equal(0, Count(stripped, "ICC_PROFILE"u8.ToArray()));
+        Assert.Equal(stripped, ImageFiles.StripMetadata(stripped));
+    }
+
+    [Fact]
+    public void A_png_loses_its_icc_profile()
+    {
+        var original = TestImages.PngWithIcc();
+        Assert.True(TestImages.HoldsSecret(original));
+
+        var stripped = ImageFiles.StripMetadata(original);
+
+        Assert.Equal(["IHDR", "IDAT", "IEND"], PngChunks(stripped));
+    }
+
+    [Fact]
+    public void A_webp_keeps_only_the_pictures_own_chunks_in_a_frame_too_and_clears_the_icc_flag()
+    {
+        var original = TestImages.AnimatedWebp();
+        Assert.True(TestImages.HoldsSecret(original));
+
+        var stripped = ImageFiles.StripMetadata(original);
+
+        Assert.False(TestImages.HoldsSecret(stripped));
+        Assert.Equal(stripped.Length - 8, BitConverter.ToInt32(stripped, 4));
+        Assert.Equal(0, stripped[20] & 0x2C);
+        Assert.Equal(0x02, stripped[20] & 0x02);
+        var chunks = System.Text.Encoding.ASCII.GetString(stripped);
+        Assert.Contains("ANMF", chunks, StringComparison.Ordinal);
+        Assert.Contains("VP8L", chunks, StringComparison.Ordinal);
+        Assert.DoesNotContain("ICCP", chunks, StringComparison.Ordinal);
+        Assert.DoesNotContain("UNKN", chunks, StringComparison.Ordinal);
+        Assert.DoesNotContain("ZZZZ", chunks, StringComparison.Ordinal);
+        // The frame's size is its kept chunks': its header and the VP8L chunk.
+        var frame = chunks.IndexOf("ANMF", StringComparison.Ordinal);
+        Assert.Equal(16 + 8 + 6, BitConverter.ToInt32(stripped, frame + 4));
+        Assert.Equal(new ImageInfo(ImageFiles.Webp, 16, 9), ImageFiles.Inspect(stripped));
+    }
+
+    // A6 review (nit): a GIF's frames are checked as well as its logical screen.
+    [Fact]
+    public void A_gif_frame_past_the_limits_is_refused_whatever_the_screen_says()
+    {
+        var wide = Assert.Throws<ImageRefusedException>(() => ImageFiles.Prepare(TestImages.GifWithFrame(0, 0, 20_000, 2), "wide.gif"));
+        Assert.Contains("a frame of 20000×2 pixels", wide.Message, StringComparison.Ordinal);
+
+        var far = Assert.Throws<ImageRefusedException>(() => ImageFiles.Prepare(TestImages.GifWithFrame(16_000, 0, 1_000, 2), "far.gif"));
+        Assert.Contains("at 16000,0", far.Message, StringComparison.Ordinal);
+
+        var many = Assert.Throws<ImageRefusedException>(() => ImageFiles.Prepare(TestImages.GifWithFrame(0, 0, 10_000, 10_000), "many.gif"));
+        Assert.Contains("10000×10000", many.Message, StringComparison.Ordinal);
+
+        Assert.Equal(new ImageInfo(ImageFiles.Gif, 2, 2), ImageFiles.Prepare(TestImages.GifWithFrame(0, 0, 2, 2), "fine.gif").Info);
+    }
+
+    private static int Count(byte[] data, byte[] pattern)
+    {
+        var count = 0;
+        for (var at = data.AsSpan().IndexOf(pattern); at >= 0;)
+        {
+            count++;
+            var next = data.AsSpan(at + 1).IndexOf(pattern);
+            at = next < 0 ? -1 : at + 1 + next;
+        }
+        return count;
+    }
+
     private static List<string> PngChunks(byte[] data)
     {
         var chunks = new List<string>();

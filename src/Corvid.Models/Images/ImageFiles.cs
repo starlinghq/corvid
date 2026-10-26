@@ -10,9 +10,16 @@ public sealed record ImageInfo(string MediaType, int Width, int Height);
 /// K-8 (A6): reading and cleaning images without an imaging library. The format comes from the bytes' signature and the size
 /// from their header (PNG's IHDR, JPEG's SOF, GIF's screen descriptor, WebP's VP8, VP8L or VP8X chunk). Metadata is
 /// stripped by walking the format's own structure: JPEG's APP1 (EXIF, XMP, where a phone writes the location) and every
-/// other application segment but JFIF, ICC and Adobe colour, and comments; PNG's text, EXIF and time chunks and every
-/// ancillary chunk not needed to draw it; GIF's comments and application extensions but the loop count; WebP's EXIF and XMP
-/// chunks. Anything that does not parse is refused rather than passed on.
+/// other application segment but JFIF and Adobe colour, and comments, in every segment through EOI (between progressive
+/// scans too), and any bytes after EOI; PNG's text, EXIF and time chunks and every ancillary chunk not needed to draw it;
+/// GIF's comments and application extensions but the loop count; every WebP chunk but the picture's own (VP8X, VP8, VP8L,
+/// ALPH, ANIM, ANMF and, inside a frame, its ALPH, VP8 and VP8L). Anything that does not parse is refused rather than passed on.
+/// <para>
+/// ICC colour profiles go in every format (JPEG's APP2, PNG's iCCP, WebP's ICCP): a profile can carry the device's maker and
+/// model, descriptions and dates, and none is needed to show the picture. Vision models read pixels as sRGB, so a picture
+/// tagged with a wider profile (Display P3, Adobe RGB) shows slightly duller colours without it. PNG's fixed-form sRGB, gAMA
+/// and cHRM chunks and JPEG's Adobe segment (needed to decode CMYK and YCCK) stay.
+/// </para>
 /// </summary>
 public static class ImageFiles
 {
@@ -71,6 +78,10 @@ public static class ImageFiles
         if (info.Width <= 0 || info.Height <= 0 || info.Width > MaxSide || info.Height > MaxSide || (long)info.Width * info.Height > MaxPixels)
             throw new Abstractions.Media.ImageRefusedException(
                 $"{label} is {info.Width}×{info.Height} pixels; an image may be at most {MaxSide} pixels a side and {MaxPixels / 1_000_000} megapixels.");
+        // A GIF's frames carry their own size and place: a small logical screen can hold a frame a decoder would draw huge.
+        if (info.MediaType == Gif && GifOversizedFrame(data) is { } frame)
+            throw new Abstractions.Media.ImageRefusedException(
+                $"{label} has a frame of {frame.Width}×{frame.Height} pixels at {frame.Left},{frame.Top}; an image may be at most {MaxSide} pixels a side and {MaxPixels / 1_000_000} megapixels.");
         byte[] stripped;
         try
         {
@@ -187,7 +198,7 @@ public static class ImageFiles
     // Critical chunks, what drawing needs (transparency, colour, gamma, density) and APNG's animation chunks.
     private static readonly HashSet<string> PngKept = new(StringComparer.Ordinal)
     {
-        "IHDR", "PLTE", "IDAT", "IEND", "tRNS", "gAMA", "cHRM", "sRGB", "iCCP", "sBIT", "bKGD", "pHYs", "acTL", "fcTL", "fdAT",
+        "IHDR", "PLTE", "IDAT", "IEND", "tRNS", "gAMA", "cHRM", "sRGB", "sBIT", "bKGD", "pHYs", "acTL", "fcTL", "fdAT",
     };
 
     private static byte[] StripPng(ReadOnlySpan<byte> data)
@@ -247,29 +258,98 @@ public static class ImageFiles
             if (length < 2 || at + 2 + length > data.Length)
                 throw new InvalidDataException("A JPEG segment runs past the end.");
             var segment = data.Slice(at, 2 + length);
+            at += segment.Length;
             if (marker == 0xDA)
             {
-                // The scan and everything after it (entropy-coded data, further scans and tables, EOI) is image data.
-                output.Write(data[at..]);
-                return output.ToArray();
+                // A scan: its header, then entropy-coded data up to the next marker (a stuffed 0xFF00 and the restart
+                // markers are part of the data). The walk then goes on, so an APPn or a comment between progressive scans
+                // goes too, and it ends at EOI, so nothing after the picture is kept.
+                output.Write(segment);
+                var scanned = EntropyEnd(data, at);
+                output.Write(data[at..scanned]);
+                at = scanned;
+                continue;
             }
             if (KeepJpegSegment(marker, segment[4..]))
                 output.Write(segment);
-            at += segment.Length;
         }
     }
 
-    // APP0 JFIF (not its JFXX thumbnail extension, which can be a whole second picture), APP2 ICC profiles and APP14 Adobe
-    // colour; every other APPn (APP1's EXIF and XMP, APP13's IPTC) and comments go.
+    // Where a scan's entropy-coded data ends: at the 0xFF that starts a marker other than a restart. 0xFF00 is a stuffed
+    // byte; fill bytes (0xFF runs) before a marker belong to the marker, which the segment walk skips.
+    private static int EntropyEnd(ReadOnlySpan<byte> data, int at)
+    {
+        while (at + 1 < data.Length)
+        {
+            if (data[at] != 0xFF)
+            {
+                at++;
+                continue;
+            }
+            var next = at + 1;
+            while (next < data.Length && data[next] == 0xFF)
+                next++;
+            if (next >= data.Length)
+                break;
+            if (data[next] is not (0x00 or >= 0xD0 and <= 0xD7))
+                return at;
+            at = next + 1;
+        }
+        throw new InvalidDataException("A JPEG scan has no end.");
+    }
+
+    // APP0 JFIF (not its JFXX thumbnail extension, which can be a whole second picture) and APP14 Adobe colour (decoding CMYK
+    // and YCCK needs it); every other APPn (APP1's EXIF and XMP, APP2's ICC profile, APP13's IPTC) and comments go.
     private static bool KeepJpegSegment(byte marker, ReadOnlySpan<byte> body) => marker switch
     {
         0xE0 => body.StartsWith("JFIF\0"u8),
-        0xE2 => body.StartsWith("ICC_PROFILE\0"u8),
         0xEE => body.StartsWith("Adobe"u8),
         >= 0xE0 and <= 0xEF => false,
         0xFE => false,
         _ => true,
     };
+
+    /// <summary>A GIF frame that reaches past <see cref="MaxSide"/> or <see cref="MaxPixels"/>, or null.</summary>
+    private static (int Left, int Top, int Width, int Height)? GifOversizedFrame(ReadOnlySpan<byte> data)
+    {
+        try
+        {
+            var flags = data[10];
+            var at = 13 + ((flags & 0x80) != 0 ? 3 * (1 << ((flags & 0x07) + 1)) : 0);
+            while (at < data.Length)
+            {
+                switch (data[at])
+                {
+                    case 0x21:
+                        at = SubBlocksEnd(data, at + 2);
+                        break;
+                    case 0x2C:
+                    {
+                        int left = BinaryPrimitives.ReadUInt16LittleEndian(data[(at + 1)..]);
+                        int top = BinaryPrimitives.ReadUInt16LittleEndian(data[(at + 3)..]);
+                        int width = BinaryPrimitives.ReadUInt16LittleEndian(data[(at + 5)..]);
+                        int height = BinaryPrimitives.ReadUInt16LittleEndian(data[(at + 7)..]);
+                        // The canvas a decoder may grow to hold the frame, as well as the frame itself.
+                        if (left + width > MaxSide || top + height > MaxSide || (long)(left + width) * (top + height) > MaxPixels)
+                            return (left, top, width, height);
+                        var local = data[at + 9];
+                        at += 10 + ((local & 0x80) != 0 ? 3 * (1 << ((local & 0x07) + 1)) : 0);
+                        at = SubBlocksEnd(data, at + 1);
+                        break;
+                    }
+                    default:
+                        // The trailer, or a block stripping refuses with its own reason.
+                        return null;
+                }
+            }
+            return null;
+        }
+        catch (Exception exception) when (exception is ArgumentOutOfRangeException or IndexOutOfRangeException or InvalidDataException)
+        {
+            // Malformed: stripping refuses it with its own reason.
+            return null;
+        }
+    }
 
     private static byte[] StripGif(ReadOnlySpan<byte> data)
     {
@@ -338,41 +418,66 @@ public static class ImageFiles
         }
     }
 
+    // The chunks that make the picture (RFC 9649): the extended header, the bitstreams, alpha and animation. ICCP, EXIF, XMP
+    // and every chunk not listed go.
+    private static readonly string[] WebpKept = ["VP8X", "VP8 ", "VP8L", "ALPH", "ANIM", "ANMF"];
+
+    // Inside an ANMF frame, after its 16-byte header: the frame's alpha and bitstream; anything else goes.
+    private static readonly string[] WebpFrameKept = ["ALPH", "VP8 ", "VP8L"];
+
     private static byte[] StripWebp(ReadOnlySpan<byte> data)
     {
         var declared = BinaryPrimitives.ReadUInt32LittleEndian(data[4..]);
         var end = (int)Math.Min(data.Length, 8L + declared);
         using var output = new MemoryStream(data.Length);
         output.Write(data[..12]);
-        var at = 12;
-        while (at + 8 <= end)
+        WriteWebpChunks(data[12..end], output, WebpKept, inFrame: false);
+        var bytes = output.ToArray();
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(4), (uint)(bytes.Length - 8));
+        return bytes;
+    }
+
+    private static void WriteWebpChunks(ReadOnlySpan<byte> chunks, MemoryStream output, string[] kept, bool inFrame)
+    {
+        var at = 0;
+        while (at + 8 <= chunks.Length)
         {
-            var type = data.Slice(at, 4);
-            var length = BinaryPrimitives.ReadUInt32LittleEndian(data[(at + 4)..]);
+            var type = Encoding.ASCII.GetString(chunks.Slice(at, 4));
+            var length = BinaryPrimitives.ReadUInt32LittleEndian(chunks[(at + 4)..]);
             var padded = length + (length & 1);
-            if (at + 8 + (long)length > end)
+            if (at + 8 + (long)length > chunks.Length)
                 throw new InvalidDataException("A WebP chunk runs past the end.");
-            var whole = data.Slice(at, (int)Math.Min(8 + padded, end - at));
-            if (type.SequenceEqual("EXIF"u8) || type.SequenceEqual("XMP "u8))
-            {
-                at += whole.Length;
+            var whole = chunks.Slice(at, (int)Math.Min(8 + padded, chunks.Length - at));
+            at += whole.Length;
+            if (!kept.Contains(type, StringComparer.Ordinal))
                 continue;
-            }
-            if (type.SequenceEqual("VP8X"u8) && length >= 10)
+            if (type == "VP8X" && length >= 10)
             {
                 var copy = whole.ToArray();
-                // The EXIF (bit 3) and XMP (bit 2) flags go with their chunks.
-                copy[8] = (byte)(copy[8] & ~0x0C);
+                // The ICC (bit 5), EXIF (bit 3) and XMP (bit 2) flags go with their chunks.
+                copy[8] = (byte)(copy[8] & ~0x2C);
                 output.Write(copy);
+            }
+            else if (type == "ANMF" && !inFrame)
+            {
+                if (length < 16)
+                    throw new InvalidDataException("A WebP frame is cut short.");
+                using var frame = new MemoryStream();
+                frame.Write(whole.Slice(8, 16));
+                WriteWebpChunks(whole.Slice(24, (int)length - 16), frame, WebpFrameKept, inFrame: true);
+                var body = frame.ToArray();
+                var header = new byte[8];
+                "ANMF"u8.CopyTo(header);
+                BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(4), (uint)body.Length);
+                output.Write(header);
+                output.Write(body);
+                if ((body.Length & 1) != 0)
+                    output.WriteByte(0);
             }
             else
             {
                 output.Write(whole);
             }
-            at += whole.Length;
         }
-        var bytes = output.ToArray();
-        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(4), (uint)(bytes.Length - 8));
-        return bytes;
     }
 }

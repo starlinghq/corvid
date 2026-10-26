@@ -717,8 +717,12 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
             Questions = _questions,
             // K-8 (A6): images beside the event log, by digest.
             Media = Media,
+            // A6 review: an image goes only to a model whose egress policy allows images.
+            EgressPolicyFor = Egress.PolicyFor,
             Options = new TurnOptions
             {
+                // A6 review: only the latest messages' images are sent again; older ones are stubs.
+                ImageTurns = turn.ImageTurns,
                 SystemPrompt = prompt,
                 // A gateway chat can be answered elsewhere: in a thread, the home channel, or not at all (C-020).
                 AskDeliver = child is null && (session?.AskDeliver ?? false),
@@ -1115,7 +1119,7 @@ public sealed class CorvidSession
         ArgumentNullException.ThrowIfNull(images);
         if (images.Count == 0)
             return null;
-        if (TurnRunner.ImageRefusal(Slots, _runtime.Media) is { } refusal)
+        if (TurnRunner.ImageRefusal(Slots, _runtime.Media, _runtime.Egress.PolicyFor) is { } refusal)
             return refusal;
         if (images.Count > Corvid.Models.Images.ImageFiles.MaxPerMessage)
             return $"The message was not sent: a message may carry at most {Corvid.Models.Images.ImageFiles.MaxPerMessage} images; this one has {images.Count}.";

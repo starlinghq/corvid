@@ -121,6 +121,16 @@ public sealed record TurnOptions
     /// <summary>K-2: a running call's tail is reported at most this often; output between reports joins the next one.</summary>
     public TimeSpan OutputTailInterval { get; init; } = TimeSpan.FromMilliseconds(150);
 
+    /// <summary>
+    /// K-8 (A6 review): the images of this many of the latest user messages go to the generator as images (or descriptions);
+    /// an older message's images are a one-line stub naming each, so a picture is not read and sent again on every later
+    /// model call. At least 1 (the message being answered).
+    /// </summary>
+    public int ImageTurns { get; init; } = DefaultImageTurns;
+
+    /// <summary>The message being answered and the one before it, so "and what about the corner?" still sees the picture.</summary>
+    public const int DefaultImageTurns = 2;
+
     public TurnOptions Validate()
     {
         ArgumentNullException.ThrowIfNull(Compaction);
@@ -135,6 +145,7 @@ public sealed record TurnOptions
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(OutputTailChars);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(OutputTailLines);
         ArgumentOutOfRangeException.ThrowIfLessThan(OutputTailInterval, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ImageTurns);
         return this;
     }
 }
@@ -222,6 +233,13 @@ public sealed class TurnServices
     /// carries any is refused with why.
     /// </summary>
     public Abstractions.Media.IMediaStore? Media { get; init; }
+
+    /// <summary>
+    /// K-8 (A6 review): the egress gate's policy for a model (null for one it does not gate), so the turn sends an image
+    /// only to a model whose policy allows images, and refuses a message when no model that could read its images may be
+    /// sent them. Null treats every model as ungated, as a host without a gate is.
+    /// </summary>
+    public Func<ModelProfile, Models.Privacy.EgressPolicy?>? EgressPolicyFor { get; init; }
 }
 
 /// <summary>

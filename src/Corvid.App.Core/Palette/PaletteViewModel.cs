@@ -274,7 +274,7 @@ public sealed class PaletteViewModel : ObservableObject
                 break;
             case PaletteMode.Search when _host.Search is not null:
                 // G-5: what was said, through the episodic index, as the person types.
-                Present("Search sessions", "Search what was said in every session…", TypeToSearch, []);
+                Present("Search sessions", "Search what was said in your sessions…", TypeToSearch, []);
                 break;
             case PaletteMode.Search:
                 Present("Search sessions", "Search every session…", "No session matches.", []);
@@ -562,7 +562,8 @@ public sealed class PaletteViewModel : ObservableObject
         Refilter();
     }
 
-    private const string TypeToSearch = "Type to search what was said in every session.";
+    // A6 review: the engine searches the person's own sessions; gateway chats and job runs are left out, as in prompt history.
+    private const string TypeToSearch = "Type to search what was said in your sessions. Gateway chats (other people's messages) and scheduled job runs are left out.";
 
     /// <summary>
     /// G-5: runs the search for what is typed, once typing pauses (<see cref="PaletteHost.SearchDelay"/>); a newer query, or

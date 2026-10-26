@@ -73,21 +73,38 @@ public sealed class TurnRunner
 
     /// <summary>
     /// K-8 (A6): why a session cannot take images now, or null when it can: no media store, or no model that could read them
-    /// (the generator reads images, or a model is set for the vision slot to describe them). Surfaces ask before posting, so
-    /// the person keeps their message; the turn asks again when it starts.
+    /// (the generator reads images, or a model is set for the vision slot to describe them) and may be sent them: since the
+    /// A6 review a gated model counts only when its egress policy allows images (<paramref name="egressPolicyFor"/>, the
+    /// gate's own check), so a gated describer with <c>Images: false</c> no longer takes a message whose image it would never
+    /// be sent. Surfaces ask before posting, so the person keeps their message; the turn asks again when it starts.
     /// </summary>
-    public static string? ImageRefusal(SessionModelSlots slots, Abstractions.Media.IMediaStore? media)
+    public static string? ImageRefusal(SessionModelSlots slots, Abstractions.Media.IMediaStore? media,
+        Func<ModelProfile, Models.Privacy.EgressPolicy?>? egressPolicyFor = null)
     {
         ArgumentNullException.ThrowIfNull(slots);
         if (media is null)
             return "The message was not sent: this Corvid keeps no media store, so it takes no images.";
         var generator = slots.Current(ModelSlots.Generator).Profile;
-        if (generator.Vision || slots.TryCurrent(ModelSlots.Vision, out _))
+        var hasVision = slots.TryCurrent(ModelSlots.Vision, out var vision);
+        if (generator.Vision && MaySendImages(generator, egressPolicyFor) || hasVision && MaySendImages(vision!.Profile, egressPolicyFor))
             return null;
+        const string Allow = "(Corvid:Privacy:Images, or the model's own Egress:Images)";
+        if (hasVision)
+            return $"The message was not sent: the vision slot's model ({vision!.Profile.Id}) may not be sent images under its egress policy {Allow}"
+                + (generator.Vision ? $", and neither may the generator ({generator.Id})." : $", and the generator ({generator.Id}) does not read images.")
+                + " Allow images for one of them, or set a model that may be sent them for the vision slot (Corvid:Models:Slots:vision:Model).";
+        if (generator.Vision)
+            return $"The message was not sent: its generator ({generator.Id}) may not be sent images under its egress policy {Allow}, and no "
+                + "model is set for the vision slot to describe them. Allow images for it, or set a model for the vision slot "
+                + "(Corvid:Models:Slots:vision:Model).";
         return $"The message was not sent: its generator ({generator.Id}) does not read images, and no model is set for the vision "
             + "slot to describe them. Make a model that reads images the generator (a remote model with \"Vision\": true), or set "
             + "one for the vision slot (Corvid:Models:Slots:vision:Model).";
     }
+
+    /// <summary>K-8 (A6 review): whether the egress gate lets images go to this model: an ungated one, or a policy with <c>Images</c>.</summary>
+    public static bool MaySendImages(ModelProfile profile, Func<ModelProfile, Models.Privacy.EgressPolicy?>? egressPolicyFor) =>
+        egressPolicyFor?.Invoke(profile) is not { Images: false };
 
     // The project this runner last bound or found bound (C-025), so a turn reads the projection for it only when it changes.
     private string? _boundProject;
@@ -181,8 +198,8 @@ public sealed class TurnRunner
 
     // The history as the generator would read it, with no system prompt and no budget pressure: nothing is stubbed beyond
     // the log's own clear_results decisions.
-    private static int HistoryTokens(SessionSnapshot snapshot, ITokenCounter counter) =>
-        PromptRenderer.Render(snapshot, "", counter, int.MaxValue).Tokens;
+    private int HistoryTokens(SessionSnapshot snapshot, ITokenCounter counter) =>
+        PromptRenderer.Render(snapshot, "", counter, int.MaxValue, imageTurns: _options.ImageTurns).Tokens;
 
     private static ITokenCounter Counter(IChatClient generator) =>
         generator.GetService(typeof(ITokenCounter)) as ITokenCounter ?? CharsPerTokenCounter.Instance;
@@ -655,6 +672,10 @@ public sealed class TurnRunner
         // K-8: the envelope's images as stored, for its UserMessage.
         private ImmutableArray<Abstractions.Media.ImageRef> _images = [];
 
+        // K-8 (A6 review): each image's bytes as read from the store, by digest, for this turn's model calls: a turn with
+        // several steps reads and checks each image once, not once per call. Null for one no longer stored.
+        private readonly Dictionary<string, byte[]?> _imageBytes = new(StringComparer.Ordinal);
+
         /// <summary>
         /// K-8 (A6): takes the envelope's images in, or says why not: no media store; no model that could read them (the
         /// generator reads images, or a model is set for the vision slot to describe them); or an image the checks refuse
@@ -662,7 +683,7 @@ public sealed class TurnRunner
         /// </summary>
         private Abstractions.Media.ImageRefusedException? TakeImages()
         {
-            if (ImageRefusal(_services.Slots, _services.Media) is { } refusal)
+            if (ImageRefusal(_services.Slots, _services.Media, _services.EgressPolicyFor) is { } refusal)
                 return new(refusal);
             var media = _services.Media!;
             try
@@ -713,12 +734,20 @@ public sealed class TurnRunner
 
         private async Task<AIContent> ResolveAsync(Models.Images.ImageReferenceContent reference, ModelProfile profile, CancellationToken cancellationToken)
         {
-            if (_services.Media?.Read(reference.Image.Digest) is not { } bytes)
+            var digest = reference.Image.Digest;
+            if (!_imageBytes.TryGetValue(digest, out var stored))
+                _imageBytes[digest] = stored = _services.Media?.Read(digest);
+            if (stored is not { } bytes)
                 return Models.Images.ImageContents.Note(reference, "it is no longer in the media store");
-            if (profile.Vision)
+            // A6 review: a gated generator whose policy does not allow images gets the vision slot's description instead.
+            if (profile.Vision && MaySendImages(profile, _services.EgressPolicyFor))
                 return Models.Images.ImageContents.Data(reference, bytes);
             if (!_services.Slots.TryCurrent(ModelSlots.Vision, out var vision))
-                return Models.Images.ImageContents.Note(reference, $"the generator ({profile.Id}) does not read images and no vision model is set");
+                return Models.Images.ImageContents.Note(reference, profile.Vision
+                    ? $"the generator ({profile.Id}) may not be sent images under its egress policy and no vision model is set"
+                    : $"the generator ({profile.Id}) does not read images and no vision model is set");
+            if (!MaySendImages(vision.Profile, _services.EgressPolicyFor))
+                return Models.Images.ImageContents.Note(reference, $"the vision model ({vision.Profile.Id}) may not be sent images under its egress policy");
             var key = reference.Image.Digest + "\u0001" + vision.Profile.Id;
             if (!runner._descriptions.TryGetValue(key, out var description))
             {
@@ -871,7 +900,7 @@ public sealed class TurnRunner
             var rendered = await FitAsync((snapshot, clearMore) =>
                 PromptRenderer.Render(snapshot, system, counter, budget, _lastRound, toolTokens + noteTokens, clearMore,
                     // A guest (C-020) sees what was said in the chat before its turn, never the user's tool results there.
-                    envelope.Guest is null ? null : _turnStart), profile, counter,
+                    envelope.Guest is null ? null : _turnStart, _options.ImageTurns), profile, counter,
                 budget, cancellationToken).ConfigureAwait(false);
             if (rendered.OverBudget)
                 throw new ContextOverBudgetException($"{rendered.Tokens} tokens against a budget of {rendered.Budget}");

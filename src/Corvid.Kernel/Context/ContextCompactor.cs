@@ -341,10 +341,11 @@ public sealed class ContextCompactor
             case UserMessage { LocalOnly: true } or ToolCallIssued { LocalOnly: true } or ToolResult { LocalOnly: true }:
                 return null;
             // A gateway guest's message stays outside content in the summary, quoted as theirs (A4 verification).
+            // K-8 (A6 review): a message's images are named in the summary ("[image: shot.png]"), so it can say one was shown.
             case UserMessage { From: { } guest } user:
-                return at + PromptRenderer.Quoted(guest, user.Text);
+                return at + PromptRenderer.Quoted(guest, user.Text) + ImageNames(user);
             case UserMessage user:
-                return at + "user: " + user.Text;
+                return at + "user: " + user.Text + ImageNames(user);
             case UserSteered steer:
                 return at + "user (during the turn): " + steer.Text;
             case AssistantMessage assistant:
@@ -362,6 +363,11 @@ public sealed class ContextCompactor
                 return null;
         }
     }
+
+    private static string ImageNames(UserMessage message) =>
+        message.Images is { IsDefaultOrEmpty: false } images
+            ? " " + string.Join(" ", images.Select(image => PromptRenderer.ImageStub(image, withSize: false)))
+            : "";
 
     /// <summary>Lines grouped into chunks of at most <paramref name="room"/> tokens; a longer line is split into parts, never cut.</summary>
     internal static IReadOnlyList<string> Chunk(IReadOnlyList<string> lines, ITokenCounter counter, int room)

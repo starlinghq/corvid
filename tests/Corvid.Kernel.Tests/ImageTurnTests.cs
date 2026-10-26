@@ -193,12 +193,154 @@ public sealed class ImageTurnTests
         Assert.Empty(harness.Payloads());
     }
 
+    // A6 review: no upper cap, since the full-size bytes are what is sent.
     [Fact]
     public void An_image_costs_tokens_in_the_prompt_by_its_size()
     {
         Assert.Equal(85, PromptRenderer.ImageTokens(4, 3));
         Assert.Equal(1_228, PromptRenderer.ImageTokens(1280, 720));
-        Assert.Equal(1_600, PromptRenderer.ImageTokens(4000, 3000));
+        Assert.Equal(16_000, PromptRenderer.ImageTokens(4000, 3000));
+    }
+
+    // A6 review (M5): a turn with several model calls reads, checks and hashes each image once.
+    [Fact]
+    public async Task A_turn_reads_each_image_from_the_store_once_however_many_model_calls_it_makes()
+    {
+        var generator = new FakeGenerator(Reply.Call("list_notes", """{"limit":5}"""), Reply.Call("list_notes", """{"limit":6}"""), Reply.Say("Two notes."));
+        using var harness = new TurnHarness(generator, generatorVision: true) { MediaStore = new CountingStore() };
+        var store = (CountingStore)harness.MediaStore!;
+        store.Inner = harness.Media;
+
+        var result = await SendAsync(harness, harness.Runner(), "list my notes and look at this", [new ImageInput(TestImages.Png(), "a.png")]);
+
+        Assert.Equal(TurnStatus.Answered, result.Status);
+        var digest = MediaStore.Digest(TestImages.Png(metadata: false));
+        var withImage = generator.Calls.Count(call => call.Messages.SelectMany(item => item.Contents).OfType<DataContent>().Any());
+        Assert.True(withImage >= 3, $"{withImage} model calls carried the image");
+        Assert.Equal(1, store.Reads(digest));
+    }
+
+    // A6 review (M5): only the latest TurnOptions.ImageTurns messages' images are sent; an older one is a stub and is not read.
+    [Fact]
+    public async Task An_image_older_than_the_latest_image_turns_is_a_stub_and_is_not_read_again()
+    {
+        var generator = new FakeGenerator(Reply.Say("A square."), Reply.Say("Blue."), Reply.Say("Yes."));
+        using var harness = new TurnHarness(generator, generatorVision: true, options: TurnOptions.Default with { ImageTurns = 2 })
+        {
+            MediaStore = new CountingStore(),
+        };
+        var store = (CountingStore)harness.MediaStore!;
+        store.Inner = harness.Media;
+        var runner = harness.Runner();
+        await SendAsync(harness, runner, "what is this?", [new ImageInput(TestImages.Png(), "a.png")]);
+        await harness.RunAsync(runner, "what colour is it?");
+        var digest = MediaStore.Digest(TestImages.Png(metadata: false));
+        var readsBefore = store.Reads(digest);
+
+        await harness.RunAsync(runner, "is it square?");
+
+        var third = generator.Calls.Last(call => call.LastText.Contains("square?", StringComparison.Ordinal));
+        Assert.DoesNotContain(third.Messages.SelectMany(item => item.Contents), content => content is DataContent or ImageReferenceContent);
+        Assert.Contains("what is this?\n[image: a.png, 4×3; shown in an earlier turn]", third.AllText, StringComparison.Ordinal);
+        Assert.Equal(readsBefore, store.Reads(digest));
+        var second = generator.Calls.Last(call => call.LastText.Contains("colour", StringComparison.Ordinal));
+        Assert.Single(second.Messages.SelectMany(item => item.Contents).OfType<DataContent>());
+    }
+
+    [Fact]
+    public void A_pasted_image_stub_names_its_kind_and_the_render_counts_the_stub_as_text()
+    {
+        var pasted = new ImageRef(new string('b', 64), ImageFiles.Jpeg, 9_000, 4000, 3000);
+        var snapshot = SessionProjection.Build(TurnHarness.Session,
+        [
+            Stored(1, new UserMessage("look", Images: [pasted])),
+            Stored(2, new AssistantMessage("A photo.")),
+            Stored(3, new UserMessage("thanks")),
+        ]);
+
+        var all = PromptRenderer.Render(snapshot, "system", Corvid.Fabric.CharsPerTokenCounter.Instance, 100_000);
+        var recent = PromptRenderer.Render(snapshot, "system", Corvid.Fabric.CharsPerTokenCounter.Instance, 100_000, imageTurns: 1);
+
+        Assert.Contains("[image: a pasted JPEG, 4000×3000; shown in an earlier turn]", string.Join("\n", recent.Messages.Select(message => message.Text)), StringComparison.Ordinal);
+        Assert.True(all.Tokens - recent.Tokens > 15_000, $"{all.Tokens} against {recent.Tokens}");
+    }
+
+    // A6 review (M5): the summarizer is told a message had images, by name.
+    [Fact]
+    public void A_compaction_line_names_the_messages_images()
+    {
+        var entry = new TranscriptEntry(7, 7, new UserMessage("compare these", Images:
+            [new ImageRef(new string('a', 64), ImageFiles.Png, 10, 4, 3, "before.png"), new ImageRef(new string('c', 64), ImageFiles.Gif, 10, 2, 2)]));
+
+        var line = Corvid.Kernel.Context.ContextCompactor.Line(entry, [], ImmutableDictionary<string, ResultView>.Empty);
+
+        Assert.Equal("[7] user: compare these [image: before.png] [image: a pasted GIF]", line);
+    }
+
+    // A6 review: the vision slot counts only when its egress policy lets it be sent images; a gated describer with
+    // Images: false no longer takes the message only to drop its image.
+    [Fact]
+    public async Task A_vision_model_whose_egress_policy_refuses_images_does_not_make_a_message_with_images_acceptable()
+    {
+        var vision = new RecordingVision("unused");
+        using var harness = new TurnHarness(new FakeGenerator(Reply.Say("unused")), vision: vision)
+        {
+            EgressPolicyFor = profile => profile.Id == "vision" ? new Corvid.Models.Privacy.EgressPolicy { Action = Corvid.Models.Privacy.EgressAction.Send } : null,
+        };
+
+        var result = await SendAsync(harness, harness.Runner(), "what is this?", [new ImageInput(TestImages.Png(), "a.png")]);
+
+        Assert.Equal(TurnStatus.Failed, result.Status);
+        Assert.Contains("the vision slot's model (vision) may not be sent images under its egress policy", result.Text, StringComparison.Ordinal);
+        Assert.Empty(harness.Payloads());
+        Assert.Empty(vision.Calls);
+        Assert.Null(TurnRunner.ImageRefusal(harness.Slots, harness.Media,
+            profile => new Corvid.Models.Privacy.EgressPolicy { Action = Corvid.Models.Privacy.EgressAction.Send, Images = true }));
+    }
+
+    // A6 review: a gated generator that reads images but may not be sent them gets the vision slot's description instead.
+    [Fact]
+    public async Task A_generator_that_may_not_be_sent_images_gets_the_vision_slots_description()
+    {
+        var vision = new RecordingVision("A blue square.");
+        using var harness = new TurnHarness(new FakeGenerator(Reply.Say("Blue.")), generatorVision: true, vision: vision)
+        {
+            EgressPolicyFor = profile => profile.Id == "gen-small" ? new Corvid.Models.Privacy.EgressPolicy { Action = Corvid.Models.Privacy.EgressAction.Send } : null,
+        };
+
+        var result = await SendAsync(harness, harness.Runner(), "what colour?", [new ImageInput(TestImages.Png(), "a.png")]);
+
+        Assert.Equal(TurnStatus.Answered, result.Status);
+        Assert.Single(vision.Calls);
+        var call = harness.Generator.Calls.Last(item => item.LastText.Contains("what colour", StringComparison.Ordinal));
+        Assert.DoesNotContain(call.Messages.SelectMany(item => item.Contents), content => content is DataContent);
+        Assert.Contains("A blue square.", call.AllText, StringComparison.Ordinal);
+    }
+
+    private static StoredEvent Stored(long sequence, SessionEvent payload) =>
+        new(TurnHarness.Session, sequence, Guid.NewGuid(), DateTimeOffset.UnixEpoch, payload);
+
+    /// <summary>A media store that counts reads by digest and passes everything to the harness's own.</summary>
+    private sealed class CountingStore : IMediaStore
+    {
+        private readonly Dictionary<string, int> _reads = new(StringComparer.Ordinal);
+
+        public IMediaStore? Inner { get; set; }
+
+        public int Reads(string digest)
+        {
+            lock (_reads)
+                return _reads.GetValueOrDefault(digest);
+        }
+
+        public string Put(ReadOnlySpan<byte> data) => Inner!.Put(data);
+
+        public byte[]? Read(string digest)
+        {
+            lock (_reads)
+                _reads[digest] = _reads.GetValueOrDefault(digest) + 1;
+            return Inner!.Read(digest);
+        }
     }
 }
 
@@ -215,5 +357,36 @@ public sealed class ImageEventJsonTests
         Assert.Equal("""{"type":"user_message","text":"look","images":[{"digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","media_type":"image/png","bytes":1234,"width":640,"height":480,"name":"shot.png"}]}""", json);
         var read = Assert.IsType<UserMessage>(EventJson.Deserialize(EventJson.Version, json));
         Assert.Equal(image, Assert.Single(read.Images!.Value));
+    }
+}
+
+/// <summary>K-8 (A6): the content-addressed media store.</summary>
+public sealed class MediaStoreTests : IDisposable
+{
+    private readonly string _root = Path.Combine(Path.GetTempPath(), "corvid-media-" + Guid.NewGuid().ToString("N"));
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_root))
+            Directory.Delete(_root, recursive: true);
+    }
+
+    // A6 review (nit): a file of the right length under the digest is not taken as stored unless its bytes are these.
+    [Fact]
+    public void A_damaged_file_under_the_digest_is_replaced_not_taken_as_stored()
+    {
+        var store = new MediaStore(_root);
+        var bytes = TestImages.Png(metadata: false);
+        var digest = MediaStore.Digest(bytes);
+        var path = Path.Combine(_root, "sha256", digest[..2], digest);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllBytes(path, new byte[bytes.Length]);
+        Assert.Null(store.Read(digest));
+
+        Assert.Equal(digest, store.Put(bytes));
+
+        Assert.Equal(bytes, store.Read(digest));
+        Assert.Equal(digest, store.Put(bytes));
+        Assert.Equal(bytes, store.Read(digest));
     }
 }

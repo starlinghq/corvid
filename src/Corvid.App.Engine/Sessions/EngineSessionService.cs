@@ -548,7 +548,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 channel.Translator.MaxSteps = runtime.Options.Turn.MaxSteps;
                 channel.Translator.ContextWindow = ContextWindow(runtime, session);
                 channel.TurnBegun = false;
-                channel.Sent = text;
+                // A6V2-06: the log keeps the message with credential values scrubbed; the turn's prompt is matched in that form.
+                channel.Sent = Corvid.Kernel.Events.EventScrubber.UserText(text);
                 channel.Reporter = reporter;
             }
             feed = runtime.Feed.Subscribe(sessionId, reporter);
@@ -729,7 +730,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         var cancel = false;
         // Only the window's own message begins its turn: another surface may post between the head the reporter reads from
         // and the window's post, and its turn runs first; an interrupt asked for meanwhile must not reach it. The log keeps a
-        // user's message as it was sent (it is not scrubbed), so its text tells the two apart.
+        // user's message as it was sent (but for credential values, scrubbed in Sent too), so its text tells the two apart.
         if (update is PromptSent prompt)
         {
             lock (channel.Gate)

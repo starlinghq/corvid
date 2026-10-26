@@ -537,6 +537,13 @@ public sealed class TurnSettings
     public int DualShortlistStateTokens { get; set; } = Kernel.Turns.TurnOptions.DefaultDualShortlistStateTokens;
 
     /// <summary>
+    /// K-8 (A6 review): how many of the latest user messages send their images to the model again (1 to 64; default 2). An
+    /// older message's images are a one-line stub naming each (<c>[image: shot.png, 1280×720; shown in an earlier turn]</c>),
+    /// so a picture is not read and paid for on every later model call.
+    /// </summary>
+    public int ImageTurns { get; set; } = Kernel.Turns.TurnOptions.DefaultImageTurns;
+
+    /// <summary>
     /// Fewer decider questions per turn (C-030, spike S1 decision 2): step checkpoints ask at most two questions (done, stuck,
     /// tool in that order) and pre_execute skips <c>risk</c> where the outcome is ask whatever it says. <see cref="ReducedCheckpoints.Auto"/>
     /// reduces only when Kev runs on the CPU.
