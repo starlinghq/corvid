@@ -1196,6 +1196,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             RunAt = job.Name is not null ? job.RunAt ?? last : null,
             // A6 (G-4): where this session works, with the branch of the worktree Corvid made for it.
             Workspace = runtime.WorkspaceOf(id).Path,
+            WorkspaceGone = !Directory.Exists(runtime.WorkspaceOf(id).Path),
             Branch = runtime.WorkspaceOf(id).Branch ?? "",
             Surface = SurfaceOf(id),
             State = IsJobRun(id) ? SessionState.Job : question is not null ? SessionState.Waiting : SessionState.Idle,
@@ -1238,6 +1239,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     {
         Pinned = Pins().Contains(id),
         Workspace = runtime.WorkspaceOf(id).Path,
+        WorkspaceGone = !Directory.Exists(runtime.WorkspaceOf(id).Path),
         Branch = runtime.WorkspaceOf(id).Branch ?? "",
         Surface = SurfaceOf(id),
         State = SessionState.Idle,

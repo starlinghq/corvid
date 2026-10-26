@@ -26,6 +26,7 @@ internal static class ApprovalCards
     {
         "risk" => "risk",
         "mode" => "mode",
+        Corvid.Host.Composition.CorvidRuntime.JobWorkspaceReason => "workspace",
         ApprovalReasons.Unparsed => "unparsed",
         ApprovalReasons.Unresolved => "unresolved",
         ApprovalReasons.CredentialRead => "credential",

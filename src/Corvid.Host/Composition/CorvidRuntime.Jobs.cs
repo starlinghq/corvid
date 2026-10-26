@@ -1,3 +1,4 @@
+using Corvid.Approvals;
 using Corvid.Kernel.Jobs;
 using Corvid.Tools.Builtin;
 
@@ -27,6 +28,29 @@ public sealed partial class CorvidRuntime
         var recorded = WorkspaceOf(origin);
         var scope = WorkspaceServicesOf(origin);
         return BindWorkspace(runSession, scope.Root, recorded);
+    }
+
+    /// <summary>The reason code of the line <c>cron_create</c>'s approval carries naming where the job will run.</summary>
+    public const string JobWorkspaceReason = "job_workspace";
+
+    /// <summary>
+    /// A6V2-04: <c>cron_create</c>'s approval says which workspace the job will run in, the asking session's (the job's
+    /// origin), so the person approves the job knowing where its script and turns will read and write.
+    /// </summary>
+    private ApprovalPrompt AnnotateJobWorkspace(ApprovalPrompt prompt)
+    {
+        if (prompt.Action is not ToolAction { Tool.Name: "cron_create" } || prompt.Reasons.Any(reason => reason.Code == JobWorkspaceReason))
+            return prompt;
+        string root;
+        try
+        {
+            root = WorkspaceOf(prompt.SessionId) is { IsDefault: false } recorded ? recorded.Path : DefaultWorkspace.Root;
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+        {
+            return prompt;
+        }
+        return prompt with { Reasons = prompt.Reasons.Add(new ApprovalReason(JobWorkspaceReason, $"the job will run in {root}, this session's workspace")) };
     }
 
     /// <summary>The scheduler's script runner: each job's script in its own workspace.</summary>

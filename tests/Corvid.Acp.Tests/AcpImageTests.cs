@@ -64,7 +64,8 @@ public sealed class AcpImageTests
         var said = client.UpdatesFor(session).Last(update => update["sessionUpdate"]!.GetValue<string>() == "agent_message_chunk");
         Assert.Contains("does not read images, and no model is set for the vision slot", said["content"]!["text"]!.GetValue<string>(), StringComparison.Ordinal);
         var runtime = await client.Runtime;
-        Assert.Equal(0, runtime.Log.GetHead(session, TestContext.Current.CancellationToken));
+        // Nothing posted: the log holds only where the session works (WorkspaceBound, A6 review).
+        Assert.Equal(1, runtime.Log.GetHead(session, TestContext.Current.CancellationToken));
     }
 
     [Fact]

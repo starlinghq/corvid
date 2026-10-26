@@ -108,6 +108,7 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         _deciders = new SessionDeciders(fabric, registry);
         Approvals = approvals;
         _prompters = prompters;
+        _prompters.Annotate = AnnotateJobWorkspace;
         Tools = tools;
         Memory = memory;
         Counter = counter;
@@ -1338,10 +1339,13 @@ internal sealed class ApprovalRouter : IApprovalPrompter
 
     public void Forget(string childId) => _parents.TryRemove(childId, out _);
 
+    /// <summary>What the runtime adds to a prompt before a surface shows it (a job's workspace on <c>cron_create</c>'s, A6V2-04).</summary>
+    public Func<ApprovalPrompt, ApprovalPrompt>? Annotate { get; set; }
+
     public ValueTask<ApprovalAnswer> AskAsync(ApprovalPrompt prompt, CancellationToken cancellationToken) =>
         _prompters.TryGetValue(prompt.SessionId, out var prompter)
         || _parents.TryGetValue(prompt.SessionId, out var parent) && _prompters.TryGetValue(parent, out prompter)
-            ? prompter.AskAsync(prompt, cancellationToken)
+            ? prompter.AskAsync(Annotate is { } annotate ? annotate(prompt) : prompt, cancellationToken)
             : throw new InvalidOperationException($"No surface is attached to session '{prompt.SessionId}' to answer the approval.");
 
     private sealed class Detach(ApprovalRouter router, string sessionId, IApprovalPrompter prompter) : IDisposable
