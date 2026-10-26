@@ -92,6 +92,16 @@ public abstract record ProposedAction;
 /// <summary>A shell command line, run by a shell tool.</summary>
 public sealed record ShellAction(string Command) : ProposedAction;
 
+/// <summary>
+/// A7: a script a code tool runs (<see cref="ApprovalOptions.CodeTools"/>), assessed as code of its own kind, never as a
+/// shell command or a tool call whose arguments name paths: Corvid cannot know its effects before it runs, so it always
+/// asks, once (its tool calls are each assessed as they are made).
+/// </summary>
+/// <param name="Tool">The code tool's name.</param>
+/// <param name="Language">The script's language, as the call names it.</param>
+/// <param name="Code">The script's source.</param>
+public sealed record CodeAction(string Tool, string Language, string Code) : ProposedAction;
+
 /// <summary>A call to a tool with C-005 risk metadata.</summary>
 /// <param name="Targets">
 /// Paths, hosts or URLs the caller extracted from the arguments. When default, string arguments whose parameter names say

@@ -1,4 +1,5 @@
 using System.Net.Sockets;
+using Corvid.Host.Composition;
 using Corvid.Host.Configuration;
 using Corvid.Host.Models;
 using Corvid.Models;
@@ -77,6 +78,7 @@ public sealed class Doctor(IConfiguration configuration, ModelCatalogue catalogu
         checks.Add(await VaultAsync(options, cancellationToken).ConfigureAwait(false));
         checks.Add(SkillsGit(options));
         checks.AddRange(Mcp(options));
+        checks.AddRange(CodeRuntimes(options.Tools.Code, Corvid.Tools.Builtin.CodeRuntimes.Discover()));
         checks.Add(App(AppContext.BaseDirectory, FindOnPath));
         return checks;
     }
@@ -292,6 +294,28 @@ public sealed class Doctor(IConfiguration configuration, ModelCatalogue catalogu
             ? new DoctorCheck("skills", "git", CheckStatus.Ok, $"{options.Skills.Git} runs; skills in {CorvidPaths.SkillsDirectory(options)}")
             : new DoctorCheck("skills", "git", CheckStatus.Warning, $"{options.Skills.Git} does not run; skills are off without it.",
                 "Install git, or set Corvid:Skills:Git.");
+    }
+
+    /// <summary>
+    /// A7: the runtimes code mode's <c>execute_code</c> runs scripts with, one row each. A missing one refuses its language: a
+    /// warning with code mode on, information with it off.
+    /// </summary>
+    internal static IEnumerable<DoctorCheck> CodeRuntimes(CodeSettings code, Corvid.Tools.Builtin.CodeRuntimes found)
+    {
+        var options = WorkspaceComposer.CodeOptionsFor(code, found).Runtimes;
+        var missing = code.Enabled ? CheckStatus.Warning : CheckStatus.Info;
+        var state = code.Enabled ? "" : " (code mode is off: Corvid:Tools:Code:Enabled)";
+        (string Name, string? Path, string Setting, string Fix)[] rows =
+        [
+            ("python", options.Python, "Python", "Install python3, or set Corvid:Tools:Code:Python to its absolute path."),
+            ("javascript", options.Node, "Node", "Install Node.js, or set Corvid:Tools:Code:Node to its absolute path."),
+            ("csharp", options.Dotnet, "Dotnet", "Install the .NET 10 SDK, or set Corvid:Tools:Code:Dotnet to the dotnet host beside it."),
+        ];
+        foreach (var (name, path, setting, fix) in rows)
+            yield return path is { Length: > 0 } && File.Exists(path)
+                ? new DoctorCheck("code", name, CheckStatus.Ok, path + state)
+                : new DoctorCheck("code", name, missing,
+                    (path is { Length: > 0 } ? $"{path} does not exist" : "not found") + $"; execute_code refuses {name} scripts" + state, fix);
     }
 
     private static DoctorCheck Bubblewrap()

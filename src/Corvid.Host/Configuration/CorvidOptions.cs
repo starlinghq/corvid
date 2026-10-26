@@ -602,6 +602,42 @@ public sealed class ToolSettings
     /// <c>Corvid:Agents:MaxDepth</c> 0 turns it off too.
     /// </summary>
     public bool Delegate { get; set; } = true;
+
+    /// <summary>A7: code mode's <c>execute_code</c> (plan §15).</summary>
+    public CodeSettings Code { get; set; } = new();
+}
+
+/// <summary>
+/// A7: code mode (plan §15, parity row 1.6): <c>execute_code</c> runs a short C#, Python or JavaScript program in the
+/// sandbox with no network, and its tool calls go through the turn's own path. Offered only when the session's generator is
+/// a cloud or local-server model. Limits are Hermes' and enforced by Corvid, whatever the script does.
+/// </summary>
+public sealed class CodeSettings
+{
+    /// <summary>Register <c>execute_code</c> (needs <c>Corvid:Tools:Builtin</c>). Off by default.</summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>A run's wall-clock limit in seconds, including time its tool calls wait for approval.</summary>
+    public int TimeoutSeconds { get; set; } = 300;
+
+    /// <summary>Tool calls one run may make.</summary>
+    public int MaxCalls { get; set; } = 50;
+
+    /// <summary>Bytes of a run's standard output its result keeps.</summary>
+    public int MaxStdoutBytes { get; set; } = 50 * 1000;
+
+    /// <summary>Bytes of a run's standard error its result keeps.</summary>
+    public int MaxStderrBytes { get; set; } = 10 * 1000;
+
+    /// <summary>The tools a script may call, when the turn offers them too. Null: the built-in file tools, shell, web_fetch and memory search.</summary>
+    public List<string>? Tools { get; set; }
+
+    /// <summary>Absolute paths of the runtimes; unset ones are found on PATH (<c>python3</c>, <c>node</c>) or as the .NET SDK's host.</summary>
+    public string? Python { get; set; }
+
+    public string? Node { get; set; }
+
+    public string? Dotnet { get; set; }
 }
 
 public sealed class SchedulerSettings

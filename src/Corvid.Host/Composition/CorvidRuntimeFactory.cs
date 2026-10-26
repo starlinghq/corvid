@@ -179,6 +179,8 @@ public sealed class CorvidRuntimeFactory(
                     Timeout = TimeSpan.FromSeconds(settings.Approvals.TimeoutSeconds),
                     // Without the mapping the shell tool never runs: it requires the approval of its command line.
                     ShellTools = BuiltinTools.ShellToolMapping,
+                    // A7: execute_code's calls are assessed as the script they run; without it the code tool never runs.
+                    CodeTools = BuiltinTools.CodeToolMapping,
                     // C-023: the built-in rule pack after the hardline list; enforce rules force a prompt, never more.
                     Detections = settings.Detections.Enabled
                         ? new DetectionEngine(RulePack.BuiltIn(), BuiltinTools.ShellToolMapping, settings.Detections.Enforce)
@@ -206,6 +208,12 @@ public sealed class CorvidRuntimeFactory(
                 var shellTools = new ShellTool(shell).CreateTools();
                 toolRegistry.AddRange(shellTools);
                 bound.UnionWith(fileTools.Concat(shellTools).Select(tool => tool.Name));
+                // A7: code mode, bound to the workspace like the shell whose policy its scripts run under.
+                if (workspaces.CodeToolFor(shell, () => toolRegistry) is { } code)
+                {
+                    toolRegistry.Add(code);
+                    bound.Add(CodeTool.ToolName);
+                }
                 toolRegistry.Add(builtin.Web!);
                 toolRegistry.Add(new CronTools(jobs));
                 // K-6: the generator's clarifying question, which the turn loop recognises (offered in interactive turns only).

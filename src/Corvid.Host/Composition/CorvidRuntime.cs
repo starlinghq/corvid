@@ -673,7 +673,18 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
 
     /// <summary>The built-in tools' examples and the kernel's <c>ask_user</c>'s (K-6), for the shortlist.</summary>
     private static readonly IReadOnlyDictionary<string, ImmutableArray<string>> ToolExamples =
-        new Dictionary<string, ImmutableArray<string>>(BuiltinTools.Examples, StringComparer.Ordinal) { [AskUserTool.ToolName] = AskUserTool.Examples, [DelegateTaskTool.ToolName] = DelegateTaskTool.Examples };
+        new Dictionary<string, ImmutableArray<string>>(BuiltinTools.Examples, StringComparer.Ordinal)
+        {
+            [AskUserTool.ToolName] = AskUserTool.Examples, [DelegateTaskTool.ToolName] = DelegateTaskTool.Examples, [CodeTool.ToolName] = CodeTool.Examples,
+        };
+
+    /// <summary>
+    /// A7: offers <c>execute_code</c> only while the session's generator is a cloud or local-server model; an in-process one
+    /// (0.8B) writes poor code (plan §15). Every other tool passes.
+    /// </summary>
+    internal static Func<Corvid.Tools.ToolDescriptor, bool> CodeModeFilter(SessionModelSlots slots) => tool =>
+        tool.Name != CodeTool.ToolName
+        || slots.TryCurrent(ModelSlots.Generator, out var generator) && generator.Profile.Privacy != PrivacyClass.Local;
 
     /// <summary>One session's turn services over the shared ones. Scheduled runs are not interactive: nobody can be asked.</summary>
     private TurnServices Services(SessionModelSlots slots, bool interactive, ToolRegistry? tools = null, SessionSettings? session = null,
@@ -739,6 +750,9 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
                 AsksQuestions = child is null,
                 // C-005 has no examples file; C-012 wrote the built-in tools' examples by hand.
                 ToolExamples = ToolExamples,
+                // A7 (plan §15): code mode only for a generator that runs outside this process (a cloud or local-server
+                // model), read at each turn's start, so a /model switch changes it from the next turn.
+                ToolFilter = CodeModeFilter(slots),
             },
         };
     }

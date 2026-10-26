@@ -13,6 +13,14 @@ public static class BuiltinTools
         ImmutableDictionary.CreateRange(StringComparer.Ordinal, [KeyValuePair.Create(ShellTool.ToolName, ShellTool.CommandParameter)]);
 
     /// <summary>
+    /// A7, for <c>ApprovalOptions.CodeTools</c>: <c>execute_code</c>'s calls are assessed as the script they run (kind
+    /// <c>code</c>, always asked). Without it the code tool never runs, because it requires a code approval.
+    /// </summary>
+    public static IReadOnlyDictionary<string, Approvals.CodeToolParameters> CodeToolMapping { get; } =
+        ImmutableDictionary.CreateRange(StringComparer.Ordinal,
+            [KeyValuePair.Create(CodeTool.ToolName, new Approvals.CodeToolParameters(CodeTool.LanguageParameter, CodeTool.CodeParameter))]);
+
+    /// <summary>
     /// Example requests per tool, for the multi-vector shortlist (plan §5.4; <c>TurnOptions.ToolExamples</c>). C-005 has no
     /// generated examples file yet, so they are written here, in the user's words rather than the tool's.
     /// </summary>
