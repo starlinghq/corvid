@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using Corvid.Abstractions.Events;
 using Corvid.Host.Composition;
 using Corvid.Host.Sessions;
@@ -66,9 +67,11 @@ internal sealed class TurnReporter : ITurnObserver
         {
             RawInput = started.Input,
             Locations = Locations(started.Locations),
+            Meta = ParentMeta(started.ParentCallId),
         },
         ToolCallChanged changed => new ToolCallUpdate(changed.CallId)
         {
+            Meta = ParentMeta(changed.ParentCallId),
             Title = changed.Title,
             Status = changed.Status is { } status ? Status(status) : null,
             RawInput = changed.Input,
@@ -95,9 +98,11 @@ internal sealed class TurnReporter : ITurnObserver
         {
             RawInput = started.Input,
             Locations = Locations(started.Locations),
+            Meta = ParentMeta(started.ParentCallId),
         },
         ToolCallChanged changed => new ToolCallUpdate(changed.CallId)
         {
+            Meta = ParentMeta(changed.ParentCallId),
             Status = changed.Status is { } status ? Status(status) : null,
             RawOutput = changed.Output,
             Content = changed.OutputText is { } text ? [new ContentToolCallContent(new TextContent(text))] : null,
@@ -131,6 +136,28 @@ internal sealed class TurnReporter : ITurnObserver
     {
         var line = text.ReplaceLineEndings(" ").Trim();
         return line.Length > 80 ? line[..80] + "…" : line;
+    }
+
+    /// <summary>
+    /// A7: ACP has no nested calls, so a call a code mode script made carries its parent in <c>_meta</c>:
+    /// <c>{"corvid":{"parentToolCallId":"call-3"}}</c>. Null (no <c>_meta</c>) for the model's own calls, so their messages
+    /// are as before.
+    /// </summary>
+    internal static JsonElement? ParentMeta(string? parentCallId)
+    {
+        if (parentCallId is null)
+            return null;
+        var buffer = new System.Buffers.ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteStartObject("corvid");
+            writer.WriteString("parentToolCallId", parentCallId);
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        }
+        using var document = JsonDocument.Parse(buffer.WrittenMemory);
+        return document.RootElement.Clone();
     }
 
     internal static ToolCallLocation[]? Locations(ImmutableArray<string> paths) =>
