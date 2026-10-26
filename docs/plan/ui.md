@@ -405,7 +405,8 @@ come later, on the same substrate.
 Attached mode over loopback comes first. The WebAssembly build, served by the engine on the LAN after a pairing code
 shown on the desktop, lets the owner read sessions, answer approvals and questions with the full card, and send messages
 from a phone. Push notification goes through a channel Vault holds the key for (vault.md §7 names ntfy). Native iOS and
-Android heads compile from the same code once the remote client has served a phone for a release.
+Android heads compile from the same code once the remote client has served a phone for a release. In A6 an attached
+window has Sessions and the Board; the other areas say they run on the engine's machine (U-12).
 
 ### 4.15 Accessibility, themes and keyboard
 
@@ -666,6 +667,7 @@ A5 phase; attached mode, worktrees, images, search and packaging in A6. Voice an
 | U-9 | Linux packaging | tarball and `.desktop` through `install.sh`; Flatpak later, once bubblewrap inside a Flatpak sandbox is understood (the tarball and `install.sh --app` done in A6; Flatpak not yet) |
 | U-10 | When the mobile heads start | after the WebAssembly client has served a phone for a release |
 | U-11 | A tab strip for sessions, and shared theme and keybinding files with the TUI | no tab strip in v1; shared files |
+| U-12 | What attached mode covers in A6 | Sessions and the Board only, decided in A6's fix round (A6V1-02): the session seam (`ISessionService`) crosses the wire with approvals, questions, the queue, images and workspaces, and every other area (Review, Rewind, Models, Memory, Audit, Safety, Skills, Jobs, MCP, Gateway, Secrets, Settings) says that it runs on the engine's machine; Ctrl+Shift+F searches titles, previews and ids. Each area's service crosses later, Review and Rewind first (a phone answering an approval wants the diff behind it). No TLS on the listener: past loopback the tokens cross in cleartext, `corvid serve` warns at start, and an SSH tunnel or a TLS proxy is the way across an untrusted network |
 
 ## 12. Sources
 
@@ -694,3 +696,4 @@ A5 phase; attached mode, worktrees, images, search and packaging in A6. Voice an
 | --- | --- | --- |
 | 0.1 | 2026-10-23 | First draft: the feature catalogue and the flows, before mockups. |
 | 0.2 | 2026-10-25 | A6: G-1, G-4, G-5, K-8, U-7 and U-9 marked built (docs/plan/ui-handoff.md §1.7). |
+| 0.3 | 2026-10-25 | A6 fix round: U-12, attached mode's scope in A6 (Sessions and the Board) and its cleartext listener. |

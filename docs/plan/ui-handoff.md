@@ -652,6 +652,31 @@ the installed `corvid-app` running on the engine and `corvid doctor` finding it;
 sessions; the plain-word password reaching the gated model as `<CREDENTIAL_1>`; a tainted child's answer enclosed between
 `outside-content` markers. Screenshots are in `ui-shots/a6e2e-*.png` (git-ignored).
 
+The fix round after the verifier's pass (A6V1-01 to 11) and the end-to-end pass:
+
+- **A scheduled job runs where it was made (A6V1-01).** A job's runs work in the workspace of the session that created
+  it (`ScheduledJob.OriginSession`; `CorvidRuntime.Jobs.cs`): the pre-run script in that workspace's sandbox under its
+  approvals, the agent turn with its tools, and the run's session records the workspace. When that workspace is gone (a
+  removed worktree), the script is refused and the run fails with why; nothing runs in the configured workspace instead.
+  A job made in a chat, on the Jobs page or with no origin runs in the configured workspace, as before.
+- **Removing a worktree from the app (e2e).** The window tells the runtime which sessions it views
+  (`CorvidRuntime.AddViewer`), and `RemoveWorktreeAsync` first lets go of an idle session held there that no surface
+  views (the one the Board made); a viewed or running one still refuses. Review's per-workspace copy is replaced when the
+  runtime's services for that directory are new (A6V1-09), and an approval answered outside any call (a worktree's) stays
+  in the transcript with its verdict (A6V1-09). The chooser opens with empty boxes, and `/workspace` says how to remove.
+- **Attached mode (A6V1-04 to 06).** Wrong tokens and codes are counted per peer (10 a minute) and for the network as a
+  whole (100), never against the Unix socket, so the LAN cannot lock the owner out; pairing writes the devices file
+  outside the authenticator's gate. A revoked device's live connections close at their next request or within 5 s
+  (`IAttachedAuthenticator.IsCurrentAsync`, `AttachedProtocol.RevocationCheck`). `corvid serve` warns that `ws://` past
+  loopback is cleartext, and the README says so; there is no TLS (U-12). The browser head sends a `#pair=` code only to
+  the server that served the page. Attached mode's scope in A6 is recorded as U-12: Sessions and the Board (A6V1-02).
+- **Smaller ones.** `install.sh` without `--app` keeps an app of the same release and removes a stale app's link, desktop
+  entry and icon with a note (A6V1-03). A slot left pinned after its choice was reset is pinned again on reopen
+  (A6V1-07, `SessionModelSlots.RestorePin`). A tainted child's schema-checked output is enclosed as outside content
+  (A6V1-08). A chat notice starts on its own line (A6V1-10). The approval-deadline test runs on a test clock
+  (`CorvidRuntimeFactory` takes a registered `TimeProvider` for the approvals), and the Secrets tests' absent socket is
+  short whatever `TMPDIR` is (A6V1-11).
+
 New on the wire: `workspace_bound`; the optional `images` on `user_message`; attached mode's protocol (version 1). A
 binary older than A6 cannot read a log that holds `workspace_bound` (the same one-way step as before) and reads a message
 with images as its text alone.
@@ -663,16 +688,13 @@ areas other than Sessions and the Board say they run on the engine's machine.
 Left:
 
 - Attached mode: an owner UI in the app for `CreatePairingCodeAsync` (pairing codes come from `corvid serve pair`); a
-  pairing box in the browser instead of `#pair=`; reconnecting after a drop; dropping a revoked device's live connection;
-  an attached badge in the status bar (the Board's status bar says "engine unreachable" when attached). A paired device
+  pairing box in the browser instead of `#pair=`; reconnecting after a drop (opening the window again attaches); TLS on
+  the listener (U-12); the other areas over the wire (U-12); an attached badge in the status bar (the Board's status bar says "engine unreachable" when attached). A paired device
   may hold up to 16 requests of 64 MB at once (it is trusted with the engine already).
 - Images: a browser drop gives no path, so a browser attaches by paste only. A drop on the desktop head was not driven
   (the harness has no drag source).
-- Seen in the end-to-end pass and not fixed: in the app, `/workspace remove` refuses a worktree while the window holds a
-  session that works in it, and the window lets go of a session only when its channel closes, never of one with nothing
-  in the log, so removing a worktree a window session used means `corvid chat` or a restart; Open a workspace offers
-  worktrees already removed (from the sessions recorded there), and its worktree name box keeps the last name, so a second
-  name is appended to it; an approval card that arrives outside a turn at the end of a long transcript is cut off at the
+- Seen in the end-to-end pass and not fixed: Open a workspace offers worktrees already removed (from the sessions
+  recorded there); the cron_create card does not say which workspace the job will run in; an approval card that arrives outside a turn at the end of a long transcript is cut off at the
   bottom and the wheel cannot scroll to its buttons (Enter from the composer brings it into view); a child that answered
   from one model call shows "0 steps"; on replay a model switch between turns is folded into the turn before it ("the
   running turn takes it at its next step"); the user's own message keeps a pasted password in the log and the search
