@@ -370,15 +370,22 @@ public static partial class CredentialDetector
         "important", "personal", "confidential", "terrible", "excellent", "standard", "universal", "irrelevant", "elsewhere",
         "somewhere", "nowhere", "anywhere", "therefore", "obsolete", "outdated", "unchanged", "untouched", "whichever",
         "lowercase", "uppercase", "alphanumeric", "numeric", "encrypted", "unencrypted", "complicated", "unsecure",
-        "strongest", "weakest", "shortest", "longest", "together", "unknown", "nonexistent", "inactive", "disabled", "enabled");
+        "strongest", "weakest", "shortest", "longest", "together", "unknown", "nonexistent", "inactive", "disabled", "enabled",
+        "nonsense", "everywhere", "overridden", "forbidden", "rewritten", "mistaken", "unbroken", "overwritten", "thirteen",
+        "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "hundred", "thousand", "plenty", "worthwhile",
+        "pointless", "mismatch", "overkill", "whatsoever");
 
     // What may follow a plain-word password: the clause ends with it, so it is the password and not the start of a
     // description ("the password is different from the old one").
     private static readonly FrozenWords ClauseFollowers = new(
         "and", "but", "so", "or", "then", "now", "for", "on", "at", "in", "from", "if", "when", "until", "since", "while");
 
-    // Adjective, participle and adverb endings: "is guessable", "is hardcoded", "is expiring", "is strictly", "is worthless".
-    private static readonly string[] DescriptorEndings = ["ed", "ing", "ly", "able", "ible", "ous", "less", "ful", "ive"];
+    // Adjective, participle and adverb endings: "is guessable", "is hardcoded", "is expiring", "is strictly", "is worthless",
+    // "is necessary", "is insufficient", "is redundant", "is problematic", "is essential", "is adequate", "is complete",
+    // "is absolute". They turn away some real passwords too ("elephant", "chocolate"): prose about a password is far more
+    // common than one given as a single plain word, and a word with a digit or a symbol is still found by the secret-like rule.
+    private static readonly string[] DescriptorEndings =
+        ["ed", "ing", "ly", "able", "ible", "ous", "less", "ful", "ive", "ary", "ory", "ent", "ant", "ic", "al", "ate", "ete", "ute"];
 
     /// <summary>
     /// A6: the labelled-prose rule for a password that is one plain word ("my wifi password is sunshinerainbow"), which
