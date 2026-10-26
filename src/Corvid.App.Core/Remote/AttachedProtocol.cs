@@ -71,6 +71,9 @@ public static class AttachedProtocol
     public const string Viewed = "_corvid/viewed";
     public const string Recap = "_corvid/recap";
 
+    /// <summary>The owner only: makes a pairing code for another device, shown on the owner's screen (<c>corvid serve pair</c>).</summary>
+    public const string PairingCode = "_corvid/pairing_code";
+
     /// <summary>Server to client: an update of an open session, of one of ACP's kinds.</summary>
     public const string SessionUpdate = "session/update";
 
@@ -88,6 +91,7 @@ public static class AttachedProtocol
     {
         List, New, Load, Close, Prompt, Cancel, Fork, Queue, QueueRemove, QueueMove, QueueTakeBack, Steer, AnswerApproval,
         AnswerQuestion, Command, SetMode, SetGoal, Compact, StopChild, Rename, LoadDraft, SaveDraft, SetPinned, Viewed, Recap,
+        PairingCode,
     };
 
     /// <summary>JSON-RPC error codes: the standard ones, and Corvid's for the exceptions the seam documents.</summary>

@@ -21,6 +21,9 @@ public interface IAttachedAuthenticator
     /// or expired, or too many attempts failed lately.
     /// </summary>
     ValueTask<(string Token, AttachedIdentity Identity)?> PairAsync(string code, string device, CancellationToken cancellationToken);
+
+    /// <summary>Makes a pairing code for the owner to give another device; null when this server does not pair devices.</summary>
+    ValueTask<PairingCode?> CreatePairingCodeAsync(CancellationToken cancellationToken) => ValueTask.FromResult<PairingCode?>(null);
 }
 
 /// <summary>
@@ -121,6 +124,9 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
         public string From { get; } = from;
 
         public string Who { get; private set; } = "a client";
+
+        /// <summary>The authenticated role; only the owner makes pairing codes.</summary>
+        public AttachedRole Role { get; private set; } = AttachedRole.Device;
 
         private ISessionService Sessions => server._sessions;
 
@@ -235,6 +241,14 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
                         _viewing.TryRemove(viewed, out _);
                     await Sessions.ViewedAsync(viewed, viewing, cancellationToken).ConfigureAwait(false);
                     return null;
+                case AttachedProtocol.PairingCode:
+                    // A paired device cannot pair others: only the machine's own user hands out access.
+                    if (Role != AttachedRole.Owner)
+                        throw new JsonRpcException(AttachedProtocol.Errors.Unauthorized, "Only the owner makes pairing codes.");
+                    if (await server._authenticator.CreatePairingCodeAsync(cancellationToken).ConfigureAwait(false) is not { } made)
+                        throw new JsonRpcException(AttachedProtocol.Errors.Unavailable, "This Corvid does not pair devices.");
+                    server.Log?.Invoke($"attach: {Who} made a pairing code");
+                    return new JsonObject { ["code"] = made.Code, ["expires"] = made.Expires.ToString("O") };
                 case AttachedProtocol.Recap:
                     await Sessions.RecapAsync(p.Id("sessionId"), cancellationToken).ConfigureAwait(false);
                     return null;
@@ -281,6 +295,7 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
                     throw new JsonRpcException(AttachedProtocol.Errors.Unauthorized, "closed");
                 _authenticated = true;
                 Who = identity.Role == AttachedRole.Owner ? "the owner" : $"device '{identity.Device}'";
+                Role = identity.Role;
             }
             server.Joined(this);
             return new JsonObject

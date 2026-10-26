@@ -267,6 +267,18 @@ public sealed class RemoteSessionService : ISessionService, IAsyncDisposable, ID
         return SessionIdOf(result);
     }
 
+    /// <summary>The owner only: a pairing code for another device, which redeems once before <see cref="PairingCode.Expires"/>.</summary>
+    /// <exception cref="UnauthorizedAccessException">This client is a paired device, not the owner.</exception>
+    public async Task<PairingCode> CreatePairingCodeAsync(CancellationToken cancellationToken = default)
+    {
+        var result = await CallAsync(AttachedProtocol.PairingCode, new JsonObject(), cancellationToken).ConfigureAwait(false) as JsonObject;
+        return result?["code"] is JsonValue code && code.TryGetValue<string>(out var text) && text.Length is > 0 and <= 64
+            && result["expires"] is JsonValue expires && expires.TryGetValue<string>(out var when)
+            && DateTimeOffset.TryParse(when, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out var at)
+            ? new PairingCode(SafeText.Clean(text), at)
+            : throw new IOException("The attached Corvid did not return a pairing code.");
+    }
+
     public async ValueTask DisposeAsync()
     {
         _disposed = true;
@@ -386,6 +398,12 @@ public sealed class RemoteSessionService : ISessionService, IAsyncDisposable, ID
         if (_disposed)
             return;
         var words = SafeText.Clean(reason ?? "the connection ended");
+        // Each open session says so where the person is looking: what it shows stops here, and what they send now fails.
+        foreach (var subscription in _subscriptions.Values)
+            subscription.Push(new Notice(NoticeKind.Warning, "Disconnected from the attached Corvid: " + words)
+            {
+                Detail = "Its turns go on there; an approval nobody answers is denied at its deadline. Open the app again to attach.",
+            });
         _dispatcher.Post(() =>
         {
             if (!_disposed)

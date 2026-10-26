@@ -276,6 +276,9 @@ public sealed class ServeSettings
     /// <summary>The largest request body accepted.</summary>
     public int MaxRequestBytes { get; set; } = 1024 * 1024;
 
+    /// <summary>Attached mode (G-1, <c>corvid serve --attach</c>): the app's session seam for a window elsewhere.</summary>
+    public AttachSettings Attach { get; set; } = new();
+
     /// <summary>Whether <see cref="Url"/> names a loopback host (<c>127.0.0.0/8</c>, <c>::1</c> or <c>localhost</c>).</summary>
     public static bool IsLoopback(Uri url)
     {
@@ -283,6 +286,29 @@ public sealed class ServeSettings
         return url.IsLoopback || url.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
             || System.Net.IPAddress.TryParse(url.Host.Trim('[', ']'), out var address) && System.Net.IPAddress.IsLoopback(address);
     }
+}
+
+/// <summary>
+/// Attached mode (G-1): where <c>corvid serve --attach</c> serves the app's session seam, and whose token opens it. Every
+/// connection needs a token: the owner's (this Vault secret when <see cref="TokenSecret"/> names one, else a token generated
+/// in a 0600 file under <c>$XDG_STATE_HOME/corvid/attach</c>) or a paired device's.
+/// </summary>
+public sealed class AttachSettings
+{
+    /// <summary>The Unix socket to listen on; empty for <c>$XDG_RUNTIME_DIR/corvid/attach.sock</c>, <c>off</c> for none.</summary>
+    public string? Socket { get; set; }
+
+    /// <summary>
+    /// A WebSocket address to listen on as well (<c>ws://127.0.0.1:8737</c>), for a browser or another machine; empty for none.
+    /// Anything other than a loopback address needs <see cref="TokenSecret"/>.
+    /// </summary>
+    public string? Listen { get; set; }
+
+    /// <summary>The Vault secret that is the owner token. Without it the owner token is generated in a 0600 file.</summary>
+    public string? TokenSecret { get; set; }
+
+    /// <summary>A directory of static files served beside the socket on <see cref="Listen"/>: the app's WebAssembly build.</summary>
+    public string? Web { get; set; }
 }
 
 /// <summary>
