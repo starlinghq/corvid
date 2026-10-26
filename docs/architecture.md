@@ -173,6 +173,55 @@ breakpoints itself, C-015), restoring current bindings and pins from the log on 
 are not persisted), recording switch costs for `/insights`, and the
 media-embedder contract.
 
+### Architect/editor turns (A7)
+
+Plan §6's split, after Aider: for coding, the escalated model plans and the session's own model applies the edits. A turn
+mode in the kernel (`TurnRunner.Architect.cs`), not a child session; no new project, package, event type or checker rule.
+
+- **When.** `Corvid:Turn:ArchitectEditor` (`TurnOptions.ArchitectEditor`, default off): a coding turn, one whose
+  shortlist holds a tool that changes files (`SideEffects.Filesystem`), that escalates for `difficulty`, `context` or
+  `repair`. `/architect` asks for it whatever the setting: `/architect` for the next turn, `/architect on` for every turn
+  of the session until `/architect off`, `/architect status` (held by the process, like the approval mode; refused when
+  the generator has no escalation ladder). A requested turn escalates at ingress with the reason `architect` (plan §6's
+  "the user asks for it"), unless an escalation already moved it.
+- **Plan.** The escalated generator (the slot's binding, called directly through `GenerateAsync`'s binding override,
+  so a refusal is not retreated into a local "plan") gets the history and a nudge to write a short numbered plan, with no
+  tools. The request carries `corvid.unstreamed`, so the host does not stream it as the answer. The plan is logged as an
+  `AssistantMessage` with `Plan` (`TurnPlan(Planner, Editor, Trigger, Attempt)`, omitted on answers, so older logs read
+  and write as before), through the same append and credential scrub as an answer; its tokens ride on it. Every reader
+  of the log takes it as history (the prompt, compaction, the episodic index, Beacon export); titles skip it, recaps and
+  the audit name it a plan.
+- **Edit.** The generator slot then switches to the editor, logged as `ModelSwitched` with the new reason `editor`
+  (`SwitchReason.Editor`): not a de-escalation, so a person's session choice and a pin are untouched, and a reopened
+  session does not read it as a reset. The editor is `TurnOptions.EditorModel` (`Corvid:Turn:EditorModel`) when one of
+  the generator slot's bindings is that model (its default, fallbacks or ladder; the mix's for a child), else the
+  session's own generator. It runs the turn's ordinary loop with the plan in its history and a note (in the system
+  prompt, or after the history for a breakpoint-caching model) that names the planner and says the plan is a model's,
+  not the user's words. The turn's end returns the slot to the session default as after any escalation.
+- **Re-plan.** An editor the step checkpoint calls `stuck` gets one re-plan: escalate again, a revised plan (attempt 2,
+  trigger `stuck`), hand back. After that, `stuck` escalates as before and the escalated model finishes. A second
+  `context` or `repair` escalation after a plan stays on the escalated model without planning again (an editor whose
+  window cannot hold the history would otherwise loop).
+- **Security.** Nothing about the split touches approvals, taint, egress or leases: every edit is a call through the
+  turn's own path. The planner's request passes the switch-time privacy hook and the egress gate inside its binding like
+  any request; a refusal (a tainted session under `Tainted: Refuse`, say) is recorded as `{editor}: privacy` on the
+  turn's escalations, the slot goes to the editor, and the turn goes on locally, unplanned. A plan written from tainted
+  context is a model's text: every surface cleans it, and it grants nothing.
+- **Surfaces.** `TurnResult.Plans`; `ITurnListener.Planned` → `ITurnObserver.Planned`. The host stream's `TurnPlanned(Text,
+  Plan, Sequence)`, live (the reporter reads it from the log, so it comes before the editor's calls) and on replay
+  (instead of `AnswerChunk`). `corvid chat` prints "planned by X · edited by Y" with the plan dimmed and says so in the
+  footer. ACP shows it as a finished `think` tool call `plan-{sequence}` titled "Plan by X · edited by Y" with the plan
+  as content, live and on `session/load` (the recorded exchanges changed only by `/architect` in the command list). The
+  app: `TurnPlanned` (`_corvid/turn_planned` attached), a collapsed row "planned by X · edited by Y" that opens to the
+  plan, placed above the hand-back row even when the live switch arrives first; the hand-back row reads "back to Y: to
+  apply the plan".
+- Tests: `ArchitectEditorTests` (kernel: the split, the listener, the re-plan, the context guard, a turn that never
+  escalates, the split off, a non-coding turn, `/architect` next turn and session, the editor model, the egress gate
+  refusing a tainted planner, the persisted form), `ArchitectStreamTests` (host), `AcpArchitectTests`,
+  `ChatArchitectTests`, `EngineArchitectTests`, `ArchitectPlanViewTests`.
+- Not built: read-only tools for the planner (it plans from the history alone), choosing the planner other than by the
+  ladder, a per-session editor choice, and a calibrated "coding task" question (the shortlist test stands in).
+
 ## Starling adapters (C-010)
 
 `Corvid.Models.Starling` is the in-process adapter for Starling's models (plan §1,
