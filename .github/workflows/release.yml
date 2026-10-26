@@ -4,6 +4,7 @@ name: release
 #
 #   corvid-linux-x64.tar.gz        corvid (CPU), corvid-vault, corvid-sandbox, VERSION
 #   corvid-linux-x64-cuda.tar.gz   the same with the CUDA corvid (C-029)
+#   corvid-app-linux-x64.tar.gz    the windowed app (corvid-app, U-7, U-9), self-contained, for install.sh --app
 #   SHA256SUMS, install.sh
 #
 # Asset names carry no version, so releases/latest/download/<asset> always names the newest. A manual run builds and
@@ -74,6 +75,14 @@ jobs:
           tar -czf "${{ matrix.asset }}.tar.gz" -C "$out/stage" corvid corvid-vault corvid-sandbox VERSION
           ls -l "${{ matrix.asset }}.tar.gz"
 
+      # U-9: the app runs its models on the CPU, so the CPU job alone builds its tarball (the CorvidAppTarball target).
+      - name: Publish the app
+        if: ${{ !matrix.cuda }}
+        run: |
+          dotnet publish src/Corvid.App/Corvid.App.csproj -c Release -f net10.0-desktop -r linux-x64 --self-contained \
+            -p:Version="$VERSION" -p:CorvidAppTarball="$PWD/corvid-app-linux-x64.tar.gz" -o "$RUNNER_TEMP/pub/app"
+          ls -l corvid-app-linux-x64.tar.gz
+
       # Install the tarball with install.sh exactly as a user would, then run the binaries from the installed links. As in
       # ci.yml's cli job: no models, an empty model cache, and doctor and chat report what to download instead of fetching.
       - name: Install and smoke test
@@ -84,7 +93,9 @@ jobs:
           set -o pipefail
           prefix="$RUNNER_TEMP/prefix"
           variant=""; if [ "${{ matrix.cuda }}" = true ]; then variant="--cuda"; fi
-          sh install.sh --from "${{ matrix.asset }}.tar.gz" --prefix "$prefix" $variant
+          app=""; if [ "${{ matrix.cuda }}" != true ]; then app="--from-app corvid-app-linux-x64.tar.gz"; fi
+          # shellcheck disable=SC2086 # $variant and $app are each empty or whole options.
+          sh install.sh --from "${{ matrix.asset }}.tar.gz" --prefix "$prefix" $variant $app
           "$prefix/bin/corvid" --version | tee version.log
           grep -q "corvid $VERSION" version.log
           "$prefix/bin/corvid-vault" --help
@@ -96,12 +107,27 @@ jobs:
           if [ "${{ matrix.cuda }}" != true ]; then
             status=0; echo hello | "$prefix/bin/corvid" chat | tee chat.log || status=$?
             test "$status" -eq 3
+            # The app is linked, beside its own corvid-sandbox, with its desktop entry; the runner has no display, so it
+            # is not started.
+            test -x "$(readlink -f "$prefix/bin/corvid-app")"
+            test -x "$(dirname "$(readlink -f "$prefix/bin/corvid-app")")/corvid-sandbox"
+            grep -q "^Exec=\"$prefix/bin/corvid-app\"$" "$prefix/share/applications/corvid-app.desktop"
+            test -f "$prefix/share/icons/hicolor/scalable/apps/corvid-app.svg"
+            grep -q "corvid-app.*installed" doctor.log
           fi
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.asset }}
           path: ${{ matrix.asset }}.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !matrix.cuda }}
+        with:
+          name: corvid-app-linux-x64
+          path: corvid-app-linux-x64.tar.gz
           if-no-files-found: error
           retention-days: 14
 
@@ -124,7 +150,7 @@ jobs:
         run: |
           cp install.sh dist/
           cd dist
-          sha256sum corvid-linux-x64.tar.gz corvid-linux-x64-cuda.tar.gz install.sh > SHA256SUMS
+          sha256sum corvid-linux-x64.tar.gz corvid-linux-x64-cuda.tar.gz corvid-app-linux-x64.tar.gz install.sh > SHA256SUMS
           cat SHA256SUMS
 
       # A tag with a hyphen (v0.2.0-rc.1) is a prerelease, which releases/latest never points at.
@@ -135,4 +161,4 @@ jobs:
           prerelease=""; case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "Corvid $GITHUB_REF_NAME" \
             --generate-notes --verify-tag $prerelease \
-            dist/corvid-linux-x64.tar.gz dist/corvid-linux-x64-cuda.tar.gz dist/install.sh dist/SHA256SUMS
+            dist/corvid-linux-x64.tar.gz dist/corvid-linux-x64-cuda.tar.gz dist/corvid-app-linux-x64.tar.gz dist/install.sh dist/SHA256SUMS
