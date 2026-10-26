@@ -72,7 +72,17 @@ public sealed partial class TurnRunner
             ArgumentNullException.ThrowIfNull(name);
             if (nested.Closing)
                 throw Finished(nested);
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, nested.Stopping);
+            CancellationTokenSource linkedSource;
+            try
+            {
+                linkedSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, nested.Stopping);
+            }
+            catch (ObjectDisposedException)
+            {
+                // The parent finished between the check above and here.
+                throw Finished(nested);
+            }
+            using var linked = linkedSource;
             var token = linked.Token;
             await nested.One.WaitAsync(token).ConfigureAwait(false);
             try
