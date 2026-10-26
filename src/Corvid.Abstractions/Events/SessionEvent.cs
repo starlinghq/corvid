@@ -40,6 +40,7 @@ namespace Corvid.Abstractions.Events;
 [JsonDerivedType(typeof(ChildSpawned), "child_spawned")]
 [JsonDerivedType(typeof(ChildFinished), "child_finished")]
 [JsonDerivedType(typeof(ChildOf), "child_of")]
+[JsonDerivedType(typeof(WorkspaceBound), "workspace_bound")]
 public abstract record SessionEvent;
 
 // Text is the initial message surface. Provider-specific message objects are never stored here.
@@ -350,6 +351,15 @@ public sealed record ChildFinished(string ChildId, string Status, int Steps, lon
 // and what it was started with, as on the parent's ChildSpawned.
 public sealed record ChildOf(string ParentId, int Depth, string Goal, ImmutableArray<string> Tools, ChildBudget Budget,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] JsonElement? Mix = null) : SessionEvent;
+
+// A6 (G-4): the directory a session works in, among its first events (after ChildOf in a child's log), written once when the
+// session is created in a workspace a surface chose; approvals, the sandbox, the file tools, checkpoints and the project
+// follow it for the session's life. A session without one works in the runtime's configured workspace, as every session
+// did before A6. Path is absolute. Repository and Branch are set when the workspace is a git worktree Corvid created for
+// the session: the main checkout it belongs to and the worktree's branch. Optional members are omitted when null.
+public sealed record WorkspaceBound(string Path,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Repository = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Branch = null) : SessionEvent;
 
 /// <summary>The wire names of <see cref="ChildFinished.Status"/>.</summary>
 public static class ChildStatuses

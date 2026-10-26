@@ -429,6 +429,12 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         // HTTP API, a terminal) it would be an ordinary session with the full toolset. Every surface shows it read-only.
         RefuseChildSession(id);
         TakeDriver(id);
+        // A6 (G-4): a new session records the workspace it was asked for; an existing one must already work there.
+        if (settings?.Workspace is { } workspace)
+            BindWorkspace(id, workspace, settings.Worktree);
+        else
+            // A session whose workspace is gone fails here, with why, rather than in its actor.
+            WorkspaceServicesOf(id);
         if (settings is not null)
             _settings.TryAdd(id, settings);
         Sessions.GetOrCreate(id);
@@ -465,7 +471,9 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(checkpointId);
-        return CheckpointService.PlanRollbackTo(SessionProjection.Load(Log, sessionId, cancellationToken: cancellationToken), checkpointId, ChangesFiles);
+        var workspace = WorkspaceServicesOf(sessionId);
+        return CheckpointService.PlanRollbackTo(SessionProjection.Load(Log, sessionId, cancellationToken: cancellationToken), checkpointId,
+            call => ChangesFiles(call, workspace));
     }
 
     /// <summary>
@@ -476,21 +484,26 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     /// </summary>
     public async Task<RestoreDraft?> DraftRollbackToAsync(string sessionId, string checkpointId, IReadOnlyCollection<string>? only = null,
         CancellationToken cancellationToken = default) =>
-        PlanRollbackTo(sessionId, checkpointId, cancellationToken) is { } plan && Checkpoints is { } checkpoints
+        PlanRollbackTo(sessionId, checkpointId, cancellationToken) is { } plan && WorkspaceServicesOf(sessionId).Checkpoints is { } checkpoints
             ? await checkpoints.DraftAsync(plan, only, cancellationToken).ConfigureAwait(false)
             : null;
 
-    /// <summary>A call that would have taken a checkpoint: a tool that changes files, running something other than a read-only command.</summary>
-    internal bool ChangesFiles(ToolCallIssued call)
+    /// <summary>
+    /// A call that would have taken a checkpoint: a tool that changes files, running something other than a read-only
+    /// command, judged in the workspace the call ran in (A6).
+    /// </summary>
+    internal bool ChangesFiles(ToolCallIssued call, WorkspaceServices? workspace = null)
     {
+        workspace ??= DefaultWorkspace;
         // A tool no longer registered cannot be analysed, so its call counts as one that may have changed files (fail closed).
-        if (Tools.List().FirstOrDefault(tool => tool.Name == call.ToolName) is not { } descriptor)
+        if (!workspace.Tools.TryGet(call.ToolName, out var tool))
             return true;
+        var descriptor = tool.Descriptor;
         if (!descriptor.Risk.SideEffects.HasFlag(SideEffects.Filesystem))
             return false;
         try
         {
-            return CheckpointService.Covers(descriptor, Approvals.Analyze(new ToolAction(descriptor, call.Arguments)));
+            return CheckpointService.Covers(descriptor, workspace.Approvals.Analyze(new ToolAction(descriptor, call.Arguments)));
         }
         catch (ArgumentException)
         {
@@ -630,14 +643,17 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         // A5: a session opened again keeps the models the person chose for it (CorvidRuntime.Models.cs).
         if (child is null)
             RestoreModelChoices(sessionId, slots);
-        var tools = child is not null ? ChildTools(child) : settings.Tools ? Tools : new ToolRegistry();
-        var runner = new TurnRunner(sessionId, Services(slots, settings.Interactive, tools, settings, child));
+        // A6 (G-4): the session's own workspace: its approvals, shell, file tools, checkpoints and project.
+        var workspace = WorkspaceServicesOf(sessionId);
+        var tools = child is not null ? ChildTools(child) : settings.Tools ? workspace.Tools : new ToolRegistry();
+        var runner = new TurnRunner(sessionId, Services(slots, settings.Interactive, tools, settings, child, workspace));
         var actor = new SessionActor(runner, slots, new Sink(this), new SessionActorOptions { EmbedderSwap = _swap });
         _sessions[sessionId] = new CorvidSession(this, sessionId, slots, runner, actor)
         {
             Interactive = settings.Interactive,
             Tools = tools,
             Child = child,
+            Workspace = workspace,
         };
         return actor;
     }
@@ -648,8 +664,10 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
 
     /// <summary>One session's turn services over the shared ones. Scheduled runs are not interactive: nobody can be asked.</summary>
     private TurnServices Services(SessionModelSlots slots, bool interactive, ToolRegistry? tools = null, SessionSettings? session = null,
-        ChildPlan? child = null)
+        ChildPlan? child = null, WorkspaceServices? workspace = null)
     {
+        // Scheduled runs work in the configured workspace.
+        workspace ??= DefaultWorkspace;
         var turn = Options.Turn;
         var prompt = turn.SystemPrompt is { Length: > 0 } configured ? configured : TurnOptions.DefaultSystemPrompt;
         if (session?.Persona is { Length: > 0 } persona)
@@ -665,11 +683,11 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
             Fabric = Fabric,
             // A5: the session's own decider (its mix's, or a person's switch), else the shared one.
             Deciders = _deciders,
-            Tools = tools ?? Tools,
-            Approvals = Approvals,
+            Tools = tools ?? workspace.Tools,
+            Approvals = workspace.Approvals,
             Memory = child is null ? Memory?.Writer : null,
             Retriever = Memory?.Retriever,
-            Checkpoints = Checkpoints,
+            Checkpoints = workspace.Checkpoints,
             // Frozen per session (plan §9.1): an edit made during the session shows from the next one.
             CoreBlocks = Memory?.Blocks.Snapshot(),
             Shortlist = _shortlist,
@@ -677,7 +695,7 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
             // Unattended job turns are not distilled into skills: nobody saw them.
             SkillLearning = learns ? Skills.Learner : null,
             // C-025: the project scopes recall and lessons; unattended turns draft none, as for skills.
-            Project = Memory?.Lessons is null ? null : Project,
+            Project = Memory?.Lessons is null ? null : workspace.Project,
             LessonLearning = learns ? Memory?.LessonLearner : null,
             SkillShortlist = _skillShortlist,
             // Turn progress and K-2's running tails, to whichever surface watches the session.
@@ -955,6 +973,15 @@ internal sealed class TaintRecordingJobAgent(IJobAgent inner, ConcurrentDictiona
 public sealed record SessionSettings(bool Interactive = true, bool Tools = true, string? Persona = null, bool AskDeliver = false)
 {
     public static SessionSettings Default { get; } = new();
+
+    /// <summary>
+    /// A6 (G-4): the directory a new session works in (absolute, existing), recorded in its log; null for the configured
+    /// workspace. Opening an existing session with one checks that it works there, and refuses otherwise.
+    /// </summary>
+    public string? Workspace { get; init; }
+
+    /// <summary>A6: the worktree <see cref="Workspace"/> is, when Corvid created it for the session (recorded with it).</summary>
+    internal SessionWorkspace? Worktree { get; init; }
 }
 
 /// <summary>One conversation: its slots, its turn runner and its actor. Surfaces talk to it through this handle.</summary>
@@ -987,6 +1014,11 @@ public sealed class CorvidSession
 
     /// <summary>The tools the session's turns may be offered (A5: a child's explicit toolset is its own registry).</summary>
     public ToolRegistry Tools { get; internal init; } = new();
+
+    /// <summary>A6 (G-4): the workspace the session works in, with its approvals, shell, checkpoints and project.</summary>
+    public WorkspaceServices Workspace { get => _workspace ?? _runtime.DefaultWorkspace; internal init => _workspace = value; }
+
+    private readonly WorkspaceServices? _workspace;
 
     /// <summary>A5: what this child session was started with, or null for a top-level session.</summary>
     public ChildPlan? Child { get; internal init; }
@@ -1136,7 +1168,7 @@ public sealed class CorvidSession
         {
             if (plan(SessionProjection.Load(_runtime.Log, Id, cancellationToken: token)) is not { } chosen)
                 return null;
-            return _runtime.Checkpoints is { } checkpoints
+            return Workspace.Checkpoints is { } checkpoints
                 ? await checkpoints.RestoreAsync(_runtime.Log, Id, chosen, token).ConfigureAwait(false)
                 : CheckpointService.Rewind(_runtime.Log, Id, chosen, token);
         }, cancellationToken);
@@ -1154,7 +1186,7 @@ public sealed class CorvidSession
     /// </summary>
     public async Task<RestoreDraft?> DraftRollbackToAsync(string checkpointId, IReadOnlyCollection<string>? only = null,
         CancellationToken cancellationToken = default) =>
-        PlanRollbackTo(checkpointId) is { } plan && _runtime.Checkpoints is { } checkpoints
+        PlanRollbackTo(checkpointId) is { } plan && Workspace.Checkpoints is { } checkpoints
             ? await checkpoints.DraftAsync(plan, only, cancellationToken).ConfigureAwait(false)
             : null;
 
@@ -1171,7 +1203,7 @@ public sealed class CorvidSession
         {
             if (CheckpointService.PlanRollbackTo(SessionProjection.Load(_runtime.Log, Id, cancellationToken: token), checkpointId, ChangesFiles) is not { } plan)
                 return null;
-            if (_runtime.Checkpoints is { } checkpoints)
+            if (Workspace.Checkpoints is { } checkpoints)
                 return await checkpoints.RestoreAsync(_runtime.Log, Id, plan, scope, only, token).ConfigureAwait(false);
             // Without checkpoints only the transcript can move.
             return scope switch
@@ -1183,7 +1215,7 @@ public sealed class CorvidSession
         }, cancellationToken);
     }
 
-    private bool ChangesFiles(ToolCallIssued call) => _runtime.ChangesFiles(call);
+    private bool ChangesFiles(ToolCallIssued call) => _runtime.ChangesFiles(call, Workspace);
 
     /// <summary>
     /// Starts an empty session with a conversation held elsewhere (an HTTP client that sends its whole history): the user's

@@ -227,7 +227,9 @@ public sealed partial class CorvidRuntime
         try
         {
             JsonElement? mix = plan.Mix is { } resolved ? Json(resolved.ToString()) : null;
-            Log.Append(id, 0, [EventData.Create(new ChildOf(plan.ParentId, plan.Depth, plan.Goal, plan.Tools, plan.Budget, mix))]);
+            // A6: a child works in its parent's workspace, recorded after ChildOf.
+            Log.Append(id, 0, [EventData.Create(new ChildOf(plan.ParentId, plan.Depth, plan.Goal, plan.Tools, plan.Budget, mix)),
+                .. ChildBinding(plan.ParentId) is { } bound ? [EventData.Create(bound)] : Array.Empty<EventData>()]);
             var spawned = new ChildSpawned(id, plan.Goal, plan.Tools, plan.Budget, plan.By, plan.Tainted, mix, plan.OutputSchema, plan.CallId);
             var sequence = AppendTo(plan.ParentId, spawned);
             _childPlans[id] = plan;

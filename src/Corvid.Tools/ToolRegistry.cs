@@ -10,6 +10,39 @@ public sealed class ToolRegistry
 {
     private readonly Dictionary<string, ToolFunction> _tools = new(StringComparer.Ordinal);
     private readonly Lock _gate = new();
+    private readonly ToolRegistry? _under;
+    private readonly HashSet<string> _hidden = new(StringComparer.Ordinal);
+
+    public ToolRegistry()
+    {
+    }
+
+    /// <summary>
+    /// A6 (G-4): a registry over <paramref name="under"/>: its own tools first, then <paramref name="under"/>'s, live (a tool
+    /// added to or removed from it later, an MCP server's, shows here too). An own tool shadows one of the same name below,
+    /// and <paramref name="hidden"/> names tools of <paramref name="under"/> left out. A session in another workspace gets
+    /// the runtime's tools this way, with the file tools and the shell bound to its own workspace.
+    /// </summary>
+    public ToolRegistry(ToolRegistry under, IEnumerable<string>? hidden = null)
+    {
+        ArgumentNullException.ThrowIfNull(under);
+        _under = under;
+        if (hidden is not null)
+            _hidden.UnionWith(hidden);
+    }
+
+    /// <summary>Every tool offered, own ones first and then those below not shadowed or hidden, in no order.</summary>
+    private List<ToolFunction> Snapshot()
+    {
+        List<ToolFunction> all;
+        lock (_gate)
+            all = [.. _tools.Values];
+        if (_under is null)
+            return all;
+        var own = all.Select(tool => tool.Name).ToHashSet(StringComparer.Ordinal);
+        all.AddRange(_under.Snapshot().Where(tool => !own.Contains(tool.Name) && !_hidden.Contains(tool.Name)));
+        return all;
+    }
 
     public void Add(ToolFunction tool)
     {
@@ -25,7 +58,7 @@ public sealed class ToolRegistry
     }
 
     /// <summary>
-    /// Removes a tool by name (C-033: a definition withheld after review, so later turns no longer offer it). A turn that
+    /// Removes a tool by name (a registry over another removes only its own; C-033: a definition withheld after review, so later turns no longer offer it). A turn that
     /// already holds the tool's function keeps it until its next shortlist; the tool itself must refuse such calls.
     /// </summary>
     public bool Remove(string name)
@@ -55,10 +88,7 @@ public sealed class ToolRegistry
     /// <summary>Every registered tool's metadata, ordered by name.</summary>
     public IReadOnlyList<ToolDescriptor> List()
     {
-        lock (_gate)
-        {
-            return [.. _tools.Values.Select(t => t.Descriptor).OrderBy(d => d.Name, StringComparer.Ordinal)];
-        }
+        return [.. Snapshot().Select(t => t.Descriptor).OrderBy(d => d.Name, StringComparer.Ordinal)];
     }
 
     /// <summary>
@@ -69,8 +99,13 @@ public sealed class ToolRegistry
     {
         lock (_gate)
         {
-            return _tools.TryGetValue(name, out tool);
+            if (_tools.TryGetValue(name, out tool))
+                return true;
         }
+        if (_under is not null && !_hidden.Contains(name))
+            return _under.TryGet(name, out tool);
+        tool = null;
+        return false;
     }
 
     /// <summary>
@@ -83,9 +118,8 @@ public sealed class ToolRegistry
     {
         string[] names = secretNames is null ? [] : [.. secretNames.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
         var functions = new List<AIFunction>();
-        lock (_gate)
         {
-            foreach (ToolFunction tool in _tools.Values.OrderBy(t => t.Name, StringComparer.Ordinal))
+            foreach (ToolFunction tool in Snapshot().OrderBy(t => t.Name, StringComparer.Ordinal))
             {
                 if (!tool.Descriptor.HasSecretParameters)
                 {

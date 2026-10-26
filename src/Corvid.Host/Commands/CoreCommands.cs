@@ -300,7 +300,8 @@ public static class CoreCommands
                 $"session {session.Id}: {snapshot.Head} events, {snapshot.PendingApprovals.Count} pending approval(s)" +
                 (session.Tainted ? ", tainted by outside content" : ""),
                 $"goal: {snapshot.Goal ?? "none"}",
-                $"project: {(runtime.Project is { } project ? $"{project.Id[..12]} ({project.Source})" : "none (lessons off)")}",
+                $"workspace: {TerminalText.Visible(session.Workspace.Root)}",
+                $"project: {(session.Workspace.Project is { } project ? $"{project.Id[..12]} ({project.Source})" : "none (lessons off)")}",
                 $"decider: {SessionDecider(context)}",
                 $"scheduler: {runtime.SchedulerState}",
                 $"skills: {(runtime.Skills.Store is { } skills ? $"{skills.Skills.Count} in {skills.Root}" : runtime.Skills.State)}" +
@@ -388,7 +389,7 @@ public static class CoreCommands
         {
             case [] or ["pending"]:
                 var pending = writer.ListPending();
-                var lessonCount = LessonCandidates(context.Runtime);
+                var lessonCount = LessonCandidates(context.Runtime, context.Session);
                 var lessonLine = lessonCount > 0 ? $"{lessonCount} lesson candidate(s): /memory lessons pending" : null;
                 if (pending.Count == 0)
                     return CommandOutput.Text(lessonLine is null ? "Nothing is waiting for review." : "No memory write is waiting for review. " + lessonLine + ".");
@@ -426,12 +427,12 @@ public static class CoreCommands
     private const string LessonsUsage =
         "Usage: /memory lessons [pending] | approve <id> [supersedes <old>] | reject <id> [reason] | supersede <old> <new>.";
 
-    private static int LessonCandidates(CorvidRuntime runtime) =>
-        runtime.Memory?.Lessons is { } lessons && runtime.Project is { } project ? lessons.Pending(project.Id).Count : 0;
+    private static int LessonCandidates(CorvidRuntime runtime, CorvidSession session) =>
+        runtime.Memory?.Lessons is { } lessons && session.Workspace.Project is { } project ? lessons.Pending(project.Id).Count : 0;
 
     private static CommandOutput Lessons(SlashCommandContext context, string[] arguments, CancellationToken cancellationToken)
     {
-        if (context.Runtime.Memory?.Lessons is not { } lessons || context.Runtime.Project is not { } project)
+        if (context.Runtime.Memory?.Lessons is not { } lessons || context.Session.Workspace.Project is not { } project)
             return CommandOutput.Warning(context.Runtime.Memory is null
                 ? "Memory is off (Corvid:Memory:Enabled)."
                 : "Lessons are off (Corvid:Memory:Lessons:Enabled).");
@@ -651,7 +652,7 @@ public static class CoreCommands
         {
             case []:
                 if (ledger.IsEmpty)
-                    return CommandOutput.Text(context.Runtime.Checkpoints?.Store.UnavailableReason is { } reason
+                    return CommandOutput.Text(context.Session.Workspace.Checkpoints?.Store.UnavailableReason is { } reason
                         ? $"No checkpoints: they are unavailable ({reason})."
                         : "No checkpoints in this conversation yet: one is taken before each tool call that changes files.");
                 return new CommandOutput

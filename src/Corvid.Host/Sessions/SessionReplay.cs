@@ -84,6 +84,8 @@ public static class SessionReplay
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentNullException.ThrowIfNull(tools);
         options ??= ReplayOptions.Full;
+        // A6 (G-4): calls are shown in the workspace the session works in.
+        tools = tools.ForSessionOrSelf(sessionId);
         var head = through ?? runtime.Log.GetHead(sessionId, cancellationToken);
         var snapshot = SessionProjection.Load(runtime.Log, sessionId, head, expandCompactions: true, cancellationToken);
         // Each transcript entry's time is its event's: read once, by position, with the plans and checkpoints between them.
