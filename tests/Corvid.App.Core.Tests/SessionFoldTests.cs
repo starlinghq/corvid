@@ -104,6 +104,33 @@ public sealed class SessionFoldTests
     }
 
     [Fact]
+    public void AnApprovalOutsideAnyCallStaysInTheTranscriptOnceAnswered()
+    {
+        // A6 fix: a worktree's approval has no call to carry its verdict, so its card vanished once answered.
+        var deadline = Start.AddMinutes(5);
+        List<SessionUpdate> updates =
+        [
+            .. RecordedTurn(),
+            At(new ApprovalRequested("a-40", "shell", "git worktree add …/feature", deadline), 70),
+        ];
+        var state = SessionFold.Replay("cli-9f2e", updates);
+        Assert.Single(state.Transcript.OfType<ApprovalEntry>());
+
+        state = SessionFold.Apply(state, At(new ApprovalResolved("a-40", ApprovalOutcome.Approved), 71));
+        state = SessionFold.Apply(state, At(new ApprovalRequested("a-41", "shell", "git worktree remove …/feature", deadline), 72));
+        state = SessionFold.Apply(state, At(new ApprovalResolved("a-41", ApprovalOutcome.Denied) { Reason = "not yet" }, 73));
+
+        Assert.Empty(state.Transcript.OfType<ApprovalEntry>());
+        var answered = state.Transcript.OfType<ToolEntry>().Where(entry => entry.Id.StartsWith("approval:", StringComparison.Ordinal)).ToList();
+        Assert.Equal(["git worktree add …/feature", "git worktree remove …/feature"], answered.Select(entry => entry.Summary));
+        Assert.Equal((VerdictKind.ApprovedOnce, ToolOutcome.Succeeded), (answered[0].Verdict!.Kind, answered[0].Outcome));
+        Assert.Equal((VerdictKind.Denied, ToolOutcome.Denied, "not yet"), (answered[1].Verdict!.Kind, answered[1].Outcome, answered[1].Verdict!.Detail));
+        // Applied twice (a replay after live), it is there once.
+        Assert.Equal(answered.Count, SessionFold.Apply(state, At(new ApprovalResolved("a-41", ApprovalOutcome.Denied), 74))
+            .Transcript.OfType<ToolEntry>().Count(entry => entry.Id.StartsWith("approval:", StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public void TheApprovalCardFollowsItsToolCardAndTheSummaryShowsTheCheckpointThatAsked()
     {
         var deadline = Start.AddMinutes(5);

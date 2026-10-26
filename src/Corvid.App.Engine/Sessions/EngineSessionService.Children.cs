@@ -76,7 +76,8 @@ public sealed partial class EngineSessionService
             if (update is ChildStarted { Child.By: ChildSessions.ByUser } start && _engine.ToolsAsync() is { IsCompletedSuccessfully: true } tools)
             {
                 var id = start.Child.ChildId;
-                var attached = runtime.AttachPrompter(id, new CardPrompter(this, channel, runtime, tools.Result, reporter: null,
+                // A6: the child's calls in its own workspace (a worktree of its own, or its parent's).
+                var attached = runtime.AttachPrompter(id, new CardPrompter(this, channel, runtime, tools.Result.ForSessionOrSelf(id), reporter: null,
                     live: () => runtime.IsChildRunning(id)));
                 if (!_childPrompters.TryAdd(id, attached))
                     attached.Dispose();

@@ -31,7 +31,18 @@ namespace Corvid.App.Engine.Sessions;
 /// </summary>
 public sealed partial class SessionUpdateTranslator(string workspace)
 {
-    private readonly string _workspace = Path.TrimEndingDirectorySeparator(Path.GetFullPath(workspace));
+    private string _workspace = Path.TrimEndingDirectorySeparator(Path.GetFullPath(workspace));
+
+    /// <summary>
+    /// A6 (G-4): the workspace paths are shown relative to: the session's own, set once it is known (the replay finds it off the
+    /// UI thread), before anything is translated.
+    /// </summary>
+    public string Workspace
+    {
+        get => _workspace;
+        set => _workspace = Path.TrimEndingDirectorySeparator(Path.GetFullPath(value));
+    }
+
     private readonly List<SessionUpdate> _early = [];
     private bool _answered;
     private DateTimeOffset _turnStarted;
@@ -139,7 +150,8 @@ public sealed partial class SessionUpdateTranslator(string workspace)
                     _openQuestion = null;
                     output.Add(new QuestionAnswered(open, prompt.Text) { At = at });
                 }
-                output.Add(new UserMessage(prompt.Text) { Position = prompt.Sequence, At = at, From = prompt.From });
+                // K-8 (A6): its images, drawn under its text.
+                output.Add(new UserMessage(prompt.Text) { Position = prompt.Sequence, At = at, From = prompt.From, Images = EngineImages.Views(prompt.Images) });
                 // A replayed turn names the generator its first decision saw; a live one starts on the slot's.
                 output.Add(new TurnStarted(Turn, generator) { At = at, MaxSteps = MaxSteps });
                 output.AddRange(_early);

@@ -154,17 +154,39 @@ public sealed class SessionHub : IDisposable
     /// Starts a new, empty session, lists it in the rail at once (the engine's own summary follows) and opens it in the
     /// Sessions area. Throws what the service refused with.
     /// </summary>
-    public async Task<string> CreateAsync(CancellationToken cancellationToken = default)
+    public Task<string> CreateAsync(CancellationToken cancellationToken = default) => CreateAsync(null, cancellationToken);
+
+    /// <summary>
+    /// A6 (G-4): whether a new session can start in a workspace the person picks or in a new git worktree
+    /// (<see cref="ISessionService.CanChooseWorkspace"/>); the rail then groups sessions by workspace.
+    /// </summary>
+    public bool CanChooseWorkspace => _service.CanChooseWorkspace;
+
+    /// <summary>
+    /// A6 (G-4): where a new session started from the window works when nothing else is said: the current session's
+    /// workspace (a new session picks its workspace from the one in view), else the window's.
+    /// </summary>
+    public NewSessionRequest? DefaultRequest() =>
+        CanChooseWorkspace && _current is { } current && _summaries.TryGetValue(current.SessionId, out var summary) && summary.Workspace.Length > 0
+            ? new NewSessionRequest(summary.Workspace)
+            : null;
+
+    /// <summary>
+    /// A6 (G-4): <see cref="CreateAsync(CancellationToken)"/> where <paramref name="request"/> says (the window's workspace
+    /// when null). A worktree is asked for on the asking session's card first, which this awaits.
+    /// </summary>
+    public async Task<string> CreateAsync(NewSessionRequest? request, CancellationToken cancellationToken = default)
     {
         // A5 (A4 leftover): text typed while the new session starts (Ctrl+N while the runtime loads) is the new session's:
         // typed into the composer with no session open (StartingDraft), or onto the end of the draft of the one that was.
         var from = _current;
         var before = from?.Draft ?? "";
-        SetStarting(true);
+        // A6: not while a worktree waits on its card: the person answers it on the session in view, whose composer stays its own.
+        SetStarting(request is not { Worktree: true });
         string id;
         try
         {
-            id = await _service.CreateAsync(cancellationToken).ConfigureAwait(true);
+            id = await (request is null ? _service.CreateAsync(cancellationToken) : _service.CreateAsync(request, cancellationToken)).ConfigureAwait(true);
         }
         catch
         {
@@ -175,7 +197,7 @@ public sealed class SessionHub : IDisposable
         {
             _summaries[id] = new SessionSummary(id, "New session")
             {
-                Workspace = _shell.Workspace,
+                Workspace = request?.Workspace ?? _shell.Workspace,
                 Surface = "app",
                 State = SessionState.Idle,
                 LastActivity = _time.GetUtcNow(),
@@ -228,7 +250,8 @@ public sealed class SessionHub : IDisposable
         _shell.Navigate(Area.Sessions);
         try
         {
-            await CreateAsync().ConfigureAwait(true);
+            // A6 (G-4): in the workspace of the session in view.
+            await CreateAsync(DefaultRequest()).ConfigureAwait(true);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
@@ -371,7 +394,8 @@ public sealed class SessionHub : IDisposable
         _summaries[summary.Id] = summary;
         if (_open.TryGetValue(summary.Id, out var open))
             open.SetPinned(summary.Pinned);
-        if (!known || previous!.Pinned != summary.Pinned || previous.ReadOnly != summary.ReadOnly || InRail(previous) != InRail(summary))
+        if (!known || previous!.Pinned != summary.Pinned || previous.ReadOnly != summary.ReadOnly || InRail(previous) != InRail(summary)
+            || previous.Workspace != summary.Workspace || previous.Branch != summary.Branch)
             RebuildRail();
         else if (_shell.FindSession(summary.Id) is { } item)
             Refresh(item, summary);
@@ -395,10 +419,46 @@ public sealed class SessionHub : IDisposable
         var groups = new List<SessionGroup>();
         if (pinned.Count > 0)
             groups.Add(new SessionGroup("Pinned", pinned));
-        if (recent.Count > 0)
+        // A6 (G-4): with sessions in several workspaces, the rest group by workspace (the most recently active first).
+        var workspaces = WorkspaceGroups(listed.Where(summary => !summary.Pinned).ToList());
+        if (workspaces is not null)
+            groups.AddRange(workspaces);
+        else if (recent.Count > 0)
             groups.Add(new SessionGroup("Recent", recent));
         _shell.SetSessions(groups);
         UpdateCounts();
+    }
+
+    /// <summary>
+    /// A6 (G-4): the rail's groups by workspace, titled with the folder's name (its path where two share a name) and the
+    /// worktree's branch; null when every session works in one workspace, or the service keeps one per window (the demo),
+    /// so the rail stays Pinned and Recent.
+    /// </summary>
+    private List<SessionGroup>? WorkspaceGroups(List<SessionSummary> listed)
+    {
+        if (!CanChooseWorkspace)
+            return null;
+        var byWorkspace = listed.GroupBy(summary => summary.Workspace, StringComparer.Ordinal).ToList();
+        if (byWorkspace.Count < 2)
+            return null;
+        var names = byWorkspace.ToDictionary(group => group.Key, group => WorkspaceName(group.Key), StringComparer.Ordinal);
+        return [.. byWorkspace.Select(group =>
+        {
+            var title = names.Values.Count(name => name == names[group.Key]) > 1 ? group.Key : names[group.Key];
+            if (group.Key.Length == 0)
+                title = "Workspace";
+            if (group.Select(summary => summary.Branch).Distinct(StringComparer.Ordinal).ToList() is [{ Length: > 0 } branch])
+                title += " · " + branch;
+            return new SessionGroup(SafeText.Clean(title), [.. group.Select(Item)]);
+        })];
+    }
+
+    /// <summary>A workspace's folder name ("corvid" for /home/me/src/corvid).</summary>
+    internal static string WorkspaceName(string workspace)
+    {
+        var trimmed = workspace.TrimEnd('/', '\\');
+        var cut = trimmed.LastIndexOfAny(['/', '\\']);
+        return cut >= 0 && cut < trimmed.Length - 1 ? trimmed[(cut + 1)..] : trimmed.Length > 0 ? trimmed : workspace;
     }
 
     private SessionListItem Item(SessionSummary summary) => _shell.CreateSession(summary.Id, SafeText.Clean(summary.Title), summary.State, When(summary));

@@ -169,6 +169,28 @@ public sealed partial class CorvidRuntime
         return true;
     }
 
+    private readonly ConcurrentDictionary<object, Func<string, bool>> _viewers = new();
+
+    /// <summary>
+    /// A6: a surface that keeps sessions open to show them (the window) says which it views now, so a command that lets go
+    /// of idle sessions here (removing a worktree, <see cref="RemoveWorktreeAsync"/>) leaves those alone. Asked under the
+    /// driver gate. Disposing the result removes it.
+    /// </summary>
+    public IDisposable AddViewer(Func<string, bool> views)
+    {
+        ArgumentNullException.ThrowIfNull(views);
+        var key = new object();
+        _viewers[key] = views;
+        return new Viewer(_viewers, key);
+    }
+
+    private bool Viewed(string sessionId) => _viewers.Values.Any(views => views(sessionId));
+
+    private sealed class Viewer(ConcurrentDictionary<object, Func<string, bool>> viewers, object key) : IDisposable
+    {
+        public void Dispose() => viewers.TryRemove(key, out _);
+    }
+
     private void ReleaseDrivers()
     {
         lock (_driverGate)

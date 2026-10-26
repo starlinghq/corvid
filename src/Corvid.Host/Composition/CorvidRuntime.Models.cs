@@ -78,33 +78,43 @@ public sealed partial class CorvidRuntime
     /// </summary>
     private void RestoreModelChoices(string sessionId, SessionModelSlots slots)
     {
-        foreach (var (slot, (id, pinned)) in ModelChoiceStates(sessionId))
+        var choices = ScanModelChoices(sessionId, null, out var pins);
+        foreach (var (slot, (id, pinned)) in choices)
+            if (Usable(slot, id, "choice") is { } binding)
+                slots.RestoreSessionDefault(slot, binding, pinned);
+        // A6 fix (A5 left): a slot pinned after its choice was reset stays pinned where it was, with no choice, as it was live.
+        foreach (var (slot, id) in pins)
+            if (!choices.ContainsKey(slot) && Usable(slot, id, "pinned model") is { } binding)
+                slots.RestorePin(slot, binding);
+
+        ModelBinding? Usable(string slot, string id, string what)
         {
             if (slot == ModelSlots.TextEmbedder || !ModelSlots.All.Contains(slot, StringComparer.Ordinal))
-                continue;
+                return null;
             var name = id.Split('@')[0];
             if (!Catalogue.TryFind(name, out var model) || !model.Serves(slot))
             {
-                RaiseNotice($"{sessionId}: its {slot} choice {TerminalText.Visible(name)} is not in the catalogue now, so it starts on the default.");
-                continue;
+                RaiseNotice($"{sessionId}: its {slot} {what} {TerminalText.Visible(name)} is not in the catalogue now, so it starts on the default.");
+                return null;
             }
             if (model.Profile.Privacy == PrivacyClass.Cloud)
             {
-                RaiseNotice($"{sessionId}: its {slot} choice {TerminalText.Visible(model.Name)} is a cloud model; choose it again (/model) to send through the privacy gate.");
-                continue;
+                RaiseNotice($"{sessionId}: its {slot} {what} {TerminalText.Visible(model.Name)} is a cloud model; choose it again (/model) to send through the privacy gate.");
+                return null;
             }
             if (!Catalogue.Check(model.Name).IsReady)
             {
-                RaiseNotice($"{sessionId}: its {slot} choice {TerminalText.Visible(model.Name)} is not usable now, so it starts on the default.");
-                continue;
+                RaiseNotice($"{sessionId}: its {slot} {what} {TerminalText.Visible(model.Name)} is not usable now, so it starts on the default.");
+                return null;
             }
             try
             {
-                slots.RestoreSessionDefault(slot, _composer.Bind(slot, model.Name, Corvid.Kernel.Scheduling.DevicePriority.Interactive), pinned);
+                return _composer.Bind(slot, model.Name, Corvid.Kernel.Scheduling.DevicePriority.Interactive);
             }
             catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or ModelUnavailableException or IOException)
             {
-                RaiseNotice($"{sessionId}: its {slot} choice {TerminalText.Visible(model.Name)} could not load ({TerminalText.Visible(exception.Message)}), so it starts on the default.");
+                RaiseNotice($"{sessionId}: its {slot} {what} {TerminalText.Visible(model.Name)} could not load ({TerminalText.Visible(exception.Message)}), so it starts on the default.");
+                return null;
             }
         }
 
@@ -138,9 +148,23 @@ public sealed partial class CorvidRuntime
     /// was pinned; a log from before A5's review has none, so unpinned); a <c>de_escalation</c> with <c>Reset</c> forgets it
     /// (and, in an older log, one to another model after it); an <c>unpin</c> or a turn switch that changed the pin sets the pin.
     /// </summary>
-    public IReadOnlyDictionary<string, ModelChoice> ModelChoiceStates(string sessionId, long? through = null)
+    public IReadOnlyDictionary<string, ModelChoice> ModelChoiceStates(string sessionId, long? through = null) =>
+        ScanModelChoices(sessionId, through, out _);
+
+    /// <summary>
+    /// A6 fix: the slots the log leaves pinned with no choice (a pinned slot whose choice was reset stays pinned on its model),
+    /// by slot, as profile ids. Restored with <see cref="SessionModelSlots.RestorePin"/> when the session is opened again.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> ModelPinsWithoutChoice(string sessionId)
+    {
+        var choices = ScanModelChoices(sessionId, null, out var pins);
+        return pins.Where(pin => !choices.ContainsKey(pin.Key)).ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal);
+    }
+
+    private Dictionary<string, ModelChoice> ScanModelChoices(string sessionId, long? through, out Dictionary<string, string> pins)
     {
         var choices = new Dictionary<string, ModelChoice>(StringComparer.Ordinal);
+        var pinnedOnly = pins = new Dictionary<string, string>(StringComparer.Ordinal);
         var head = Log.GetHead(sessionId);
         if (head == 0)
             return choices;
@@ -162,12 +186,22 @@ public sealed partial class CorvidRuntime
             if (item.Payload is not Corvid.Abstractions.Events.ModelSwitched switched || Profile(switched.NewProfile) is not { } to)
                 return;
             if (switched.Reason == SwitchReason.Session.ToWireName())
+            {
                 choices[switched.Slot] = new ModelChoice(to, switched.Pinned == true);
+                pinnedOnly.Remove(switched.Slot);
+            }
             else if (switched.Reason == SwitchReason.DeEscalation.ToWireName()
                 && choices.TryGetValue(switched.Slot, out var chosen) && (switched.Reset == true || chosen.Profile != to))
+            {
                 choices.Remove(switched.Slot);
+                // A reset of a pinned slot logs its pin (Pinned true): the slot stays pinned where it is, without the choice.
+                if (switched.Reset == true && switched.Pinned == true)
+                    pinnedOnly[switched.Slot] = to;
+            }
             else if (switched.Pinned is { } pinned && choices.TryGetValue(switched.Slot, out var held))
                 choices[switched.Slot] = held with { Pinned = pinned };
+            else if (switched.Pinned == false)
+                pinnedOnly.Remove(switched.Slot);
         }
 
         static string? Profile(System.Text.Json.JsonElement snapshot)

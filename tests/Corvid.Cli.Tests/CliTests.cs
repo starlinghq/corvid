@@ -624,6 +624,18 @@ public sealed class McpCommandTests
 public sealed class RendererTests
 {
     [Fact]
+    public void ANoticeAfterAnAnswerThatStreamedWithoutANewlineStartsOnItsOwnLine()
+    {
+        var console = new TestConsole();
+        var renderer = new ChatRenderer(console, live: false);
+        renderer.BeginTurn();
+        renderer.Text("The answer");
+        renderer.Notice("[grey]↳ generator back to fake from cloud[/]");
+
+        Assert.Contains("The answer\n↳ generator back to fake from cloud", console.Output.Replace("\r\n", "\n", StringComparison.Ordinal), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TheLivePanelLeavesItsLastStateInTheScrollback()
     {
         var console = new TestConsole().Interactive();

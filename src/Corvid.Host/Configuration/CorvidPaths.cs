@@ -79,6 +79,12 @@ public static class CorvidPaths
     /// </summary>
     public static string McpWorkspace(string server) => Path.Combine(Xdg("XDG_STATE_HOME", Path.Combine(".local", "state")), "corvid-mcp", server);
 
+    /// <summary>A6 (G-4): where session worktrees go (<c>Corvid:Sessions:WorktreesDirectory</c>, else <c>$XDG_STATE_HOME/corvid-worktrees</c>).</summary>
+    public static string Worktrees(CorvidOptions options) =>
+        options.Sessions.WorktreesDirectory is { Length: > 0 } configured
+            ? ExpandHome(configured)
+            : Path.Combine(Xdg("XDG_STATE_HOME", Path.Combine(".local", "state")), "corvid-worktrees");
+
     /// <summary>A leading <c>~/</c> means the home directory; anything else is returned as given.</summary>
     public static string ExpandHome(string path)
     {

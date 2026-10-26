@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  U-7: the package's name and logo as Uno's Skia desktop reads them (an embedded resource of the single project). The X11
+  head sets the window's icon from the logo, the Corvid mark (Assets/Icons/corvid.png, rendered from Svg/corvid.svg with rsvg-convert -w 256).
+-->
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+         IgnorableNamespaces="uap">
+  <Identity Name="com.starlinghq.corvid" Publisher="CN=Corvid" Version="0.2.0.0" />
+  <Properties>
+    <DisplayName>Corvid</DisplayName>
+    <PublisherDisplayName>Corvid</PublisherDisplayName>
+    <Logo>Assets\Icons\corvid.png</Logo>
+  </Properties>
+  <Applications>
+    <Application Id="App" Executable="corvid-app" EntryPoint="Corvid.App.App">
+      <uap:VisualElements DisplayName="Corvid" Description="The windowed Corvid" BackgroundColor="#1b2230"
+                          Square150x150Logo="Assets\Icons\corvid.png" Square44x44Logo="Assets\Icons\corvid.png" />
+    </Application>
+  </Applications>
+</Package>

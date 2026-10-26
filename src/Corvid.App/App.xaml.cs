@@ -15,15 +15,18 @@ public partial class App : Application
 {
     private readonly AppOptions _options;
     private readonly IAppServices? _services;
+    private readonly Core.Mvvm.LateDispatcher? _attached;
     private Window? _window;
     private AppComposition? _composition;
 
     /// <param name="services">Each area's service source; null for the demo's (or, in engine mode, a refusal: no engine here).</param>
-    public App(AppOptions options, IAppServices? services = null)
+    /// <param name="attached">G-1: the dispatcher an attached connection already posts to, bound to the window's once it exists.</param>
+    public App(AppOptions options, IAppServices? services = null, Core.Mvvm.LateDispatcher? attached = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         _options = options;
         _services = services;
+        _attached = attached;
         FeatureConfiguration.Font.DefaultTextFontFamily = "ms-appx:///Assets/Fonts/Inter";
         // A theme named on the command line is the application's too, not only the root page's: Uno resolves the theme
         // resources of a control's focus and pointer states against the application's theme, so under --theme light on
@@ -37,7 +40,9 @@ public partial class App : Application
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         _window = new Window { Title = "Corvid" };
-        _composition = new AppComposition(_options, new UiDispatcher(_window.DispatcherQueue), services: _services);
+        var dispatcher = new UiDispatcher(_window.DispatcherQueue);
+        _attached?.Bind(dispatcher);
+        _composition = new AppComposition(_options, dispatcher, services: _services);
         // The composition's feeds, timers and the engine's subscriptions end with the window; the head stops the runtime.
         _window.Closed += (_, _) =>
         {

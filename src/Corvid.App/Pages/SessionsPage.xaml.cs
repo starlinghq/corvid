@@ -66,6 +66,8 @@ public sealed partial class SessionsPage : Page, IDockProvider
         Root.LostFocus += (_, _) => _ctrlHeld = false;
         Root.AddHandler(PreviewKeyDownEvent, new KeyEventHandler(OnCardPreviewKeyDown), true);
         Composer.BeforeTextChanging += OnComposerTextChanging;
+        // K-8 (A6): a pasted image becomes a chip (SessionsPage.Images.cs).
+        Composer.Paste += OnComposerPaste;
         // A5: with no session open while a new one starts, what is typed is kept for it.
         Composer.TextChanged += (_, _) =>
         {
@@ -593,6 +595,10 @@ public sealed partial class SessionsPage : Page, IDockProvider
                 e.Handled = true;
                 session.StashDraftCommand.Execute(null);
                 return;
+            case VirtualKey.V when ctrl && !shift:
+                // K-8: an image or copied files on the clipboard (SessionsPage.Images.cs); text pastes as usual.
+                e.Handled = PasteImagesFromKey();
+                return;
         }
     }
 
@@ -722,7 +728,10 @@ public sealed partial class SessionsPage : Page, IDockProvider
         var digit = e.Key is (>= VirtualKey.Number1 and <= VirtualKey.Number5) or (>= VirtualKey.NumberPad1 and <= VirtualKey.NumberPad5);
         if ((e.Key == VirtualKey.Enter || digit) && !IsDown(VirtualKey.Menu))
         {
-            var repeated = e.KeyStatus.WasKeyDown || e.KeyStatus.RepeatCount > 1;
+            // The browser head has no KeyStatus (Uno0001); there the card's quiet window alone holds back a held key's repeats.
+#pragma warning disable Uno0001
+            var repeated = !OperatingSystem.IsBrowser() && (e.KeyStatus.WasKeyDown || e.KeyStatus.RepeatCount > 1);
+#pragma warning restore Uno0001
             switch (_cardKeys.Decide(digit, repeated))
             {
                 case CardKey.Ignore:
@@ -860,19 +869,11 @@ public sealed partial class SessionsPage : Page, IDockProvider
     /// <summary>The header's Aside: the same surface as Ctrl+;, which says what asides come with.</summary>
     private void OnAside(object sender, RoutedEventArgs e) => _composition?.Palette.Execute(Corvid.App.Core.Keys.KeyCommands.Aside);
 
-    /// <summary>The index of the block find-in-session asked for, taken once; -1 when none was asked or it is gone.</summary>
-    private int RevealIndex(SessionViewModel session)
-    {
-        if (ViewModel.TakeReveal() is not { } id)
-            return -1;
-        for (var i = 0; i < session.Blocks.Count; i++)
-        {
-            if (session.Blocks[i].Id == id)
-                return i;
-        }
-
-        return -1;
-    }
+    /// <summary>
+    /// The index of the block find-in-session asked for, or of the turn a search across sessions opened this session at (G-5),
+    /// taken once; -1 when none was asked or it is gone.
+    /// </summary>
+    private int RevealIndex(SessionViewModel session) => ViewModel.TakeRevealIndex(session);
 
     /// <summary>Find chose a block while the page shows: scroll to it now (and once more after the repeater's layout).</summary>
     private void OnRevealRequested(object? sender, EventArgs e)

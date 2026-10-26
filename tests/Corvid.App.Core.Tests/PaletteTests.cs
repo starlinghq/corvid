@@ -257,13 +257,13 @@ public sealed class PaletteTests
     }
 
     [Fact]
-    public void CtrlShiftFSearchesTheSessionsAndSaysWhatComesWithTheIndex()
+    public void CtrlShiftFSearchesTheSessionsTitlesWhereThereIsNoIndex()
     {
         using var composition = Compose();
         var palette = composition.Palette;
 
         palette.Execute(KeyCommands.Search);
-        Assert.Contains("G-5", palette.Note, StringComparison.Ordinal);
+        Assert.Contains("no episodic index here", palette.Note, StringComparison.Ordinal);
         palette.Query = "release";
         var hit = Assert.Single(palette.Items);
         Assert.Equal("Draft release notes for v0.2", hit.Title);

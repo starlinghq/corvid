@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- The Corvid mark: a corvid's head in profile, facing right, on a rounded square. -->
+  <rect width="256" height="256" rx="56" fill="#1b2230"/>
+  <path d="M60 204 C52 150 66 104 104 82 C138 62 180 66 200 92 L238 118 L198 128 C192 158 170 182 136 194 C110 203 84 206 60 204 Z" fill="#e9edf5"/>
+  <path d="M200 92 L238 118 L198 128 Z" fill="#9aa8c2"/>
+  <circle cx="164" cy="104" r="11" fill="#1b2230"/>
+  <circle cx="168" cy="100" r="3.5" fill="#e9edf5"/>
+</svg>

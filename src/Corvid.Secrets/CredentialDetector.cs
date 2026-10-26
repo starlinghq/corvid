@@ -329,12 +329,19 @@ public static partial class CredentialDetector
         // Prose names a password in passing ("the password is stored in Vault"), so its value must also look like one.
         foreach (Match match in ProseIs().Matches(text))
             if (!LabelModifiers.Contains(FirstWord(match.Groups["words"].ValueSpan)))
-                AddProse(text, match.Groups["value"], found);
+                AddProse(text, match.Groups["value"], found, plainWords: IsPasswordNoun(match.Groups["noun"].ValueSpan));
         foreach (Match match in ProseWith().Matches(text))
             AddProse(text, match.Groups["value"], found);
     }
 
-    private static void AddProse(string text, Group group, List<CredentialMatch> found)
+    // A6: the nouns after which a plain word that ends the clause is taken as the password itself ("my wifi password is
+    // sunshinerainbow"). Not "secret" or the key and token nouns: "the secret is patience" is prose, and a key or token is
+    // never one plain word.
+    private static bool IsPasswordNoun(ReadOnlySpan<char> noun) =>
+        noun.StartsWith("password", StringComparison.OrdinalIgnoreCase) || noun.Equals("passwd", StringComparison.OrdinalIgnoreCase)
+        || noun.Equals("passphrase", StringComparison.OrdinalIgnoreCase) || noun.Equals("passcode", StringComparison.OrdinalIgnoreCase);
+
+    private static void AddProse(string text, Group group, List<CredentialMatch> found, bool plainWords = false)
     {
         var (start, length) = Unquote(group);
         if (IsBare(group))
@@ -346,8 +353,135 @@ public static partial class CredentialDetector
         if (length == 0)
             return;
         var value = text.Substring(start, length);
-        if (!IsExcluded(value) && !IsStopword(value) && !IsPathOrUrl(value) && IsSecretLike(value))
+        if (IsExcluded(value) || IsStopword(value) || IsPathOrUrl(value))
+            return;
+        if (IsSecretLike(value) || (plainWords && (IsBare(group) ? IsPlainWordPassword(text, start, length) : IsQuotedPassword(value))))
             found.Add(new(CredentialKind.ProseValue, start, length, 0, CredentialStrength.Labelled));
+    }
+
+    /// <summary>The fewest letters a plain-word password in prose has (A6): "is ok", "is set" and "is blank" are never one.</summary>
+    internal const int MinPlainWordLength = 8;
+
+    // Words after "the password is" that describe the password rather than give it, beyond the stopwords. Shorter words than
+    // MinPlainWordLength are never taken, so only longer ones need listing.
+    private static readonly FrozenWords Descriptors = new(
+        "different", "identical", "separate", "sensitive", "temporary", "permanent", "mandatory", "insecure", "plaintext",
+        "cleartext", "available", "unavailable", "forgotten", "something", "whatever", "anything", "nothing", "everything",
+        "important", "personal", "confidential", "terrible", "excellent", "standard", "universal", "irrelevant", "elsewhere",
+        "somewhere", "nowhere", "anywhere", "therefore", "obsolete", "outdated", "unchanged", "untouched", "whichever",
+        "lowercase", "uppercase", "alphanumeric", "numeric", "encrypted", "unencrypted", "complicated", "unsecure",
+        "strongest", "weakest", "shortest", "longest", "together", "unknown", "nonexistent", "inactive", "disabled", "enabled",
+        "nonsense", "everywhere", "overridden", "forbidden", "rewritten", "mistaken", "unbroken", "overwritten", "thirteen",
+        "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "hundred", "thousand", "plenty", "worthwhile",
+        "pointless", "mismatch", "overkill", "whatsoever",
+        // Review: evaluative adjectives and their comparatives ("the password is incorrect", "the new one is stronger", "it is
+        // gibberish"). Short ones are listed for the quoted rule and for the prefix rule below ("in" + "correct").
+        "incorrect", "correct", "invalid", "valid", "wrong", "right", "strong", "stronger", "weak", "weaker", "expired",
+        "required", "missing", "gibberish", "garbage", "rubbish", "nonsensical", "random", "secure", "securer", "safe", "safer",
+        "unsafe", "accurate", "inaccurate", "usable", "unusable", "good", "better", "bad", "worse", "best", "worst", "great",
+        "fine", "okay", "simple", "simpler", "easy", "easier", "hard", "harder", "short", "shorter", "long", "longer", "complex",
+        "obvious", "guessable", "memorable", "unmemorable", "blank", "empty", "broken", "stale", "old", "new", "fresh", "same",
+        "visible", "known", "sufficient", "insufficient", "complete", "incomplete", "acceptable", "unacceptable", "allowed",
+        "disallowed", "permitted", "compliant", "noncompliant", "matching", "mismatching", "consistent", "inconsistent",
+        "predictable", "unpredictable", "reasonable", "unreasonable", "trivial", "nontrivial", "ridiculous", "hopeless",
+        "useless", "different", "longish", "shortish", "lengthy", "awful", "horrible", "decent", "perfect", "imperfect");
+
+    // Review: a negating prefix before a descriptor ("incorrect", "unsecure", "irreplaceable", "nonstandard") describes the
+    // password too, so the word is turned away when what follows the prefix is a descriptor, a stopword or has a descriptor
+    // ending.
+    private static readonly string[] NegatingPrefixes = ["non", "dis", "mis", "un", "in", "im", "ir", "il"];
+
+    // What may follow a plain-word password: the clause ends with it, so it is the password and not the start of a
+    // description ("the password is different from the old one").
+    private static readonly FrozenWords ClauseFollowers = new(
+        "and", "but", "so", "or", "then", "now", "for", "on", "at", "in", "from", "if", "when", "until", "since", "while");
+
+    // Adjective, participle and adverb endings: "is guessable", "is hardcoded", "is expiring", "is strictly", "is worthless",
+    // "is necessary", "is insufficient", "is redundant", "is problematic", "is essential", "is adequate", "is complete",
+    // "is absolute". They turn away some real passwords too ("elephant", "chocolate"): prose about a password is far more
+    // common than one given as a single plain word, and a word with a digit or a symbol is still found by the secret-like rule.
+    private static readonly string[] DescriptorEndings =
+        ["ed", "ing", "ly", "able", "ible", "ous", "less", "ful", "ive", "ary", "ory", "ent", "ant", "ic", "al", "ate", "ete", "ute"];
+
+    /// <summary>
+    /// A6: the labelled-prose rule for a password that is one plain word ("my wifi password is sunshinerainbow"), which
+    /// <see cref="IsSecretLike"/> turns away for want of a digit or symbol: letters only, at least
+    /// <see cref="MinPlainWordLength"/> of them, no stopword, descriptor or adjective ending, and the clause ends with it.
+    /// </summary>
+    private static bool IsPlainWordPassword(string text, int start, int length)
+    {
+        var word = text.AsSpan(start, length);
+        if (word.Length < MinPlainWordLength || word.Length > 64)
+            return false;
+        foreach (var c in word)
+        {
+            if (!char.IsLetter(c))
+                return false;
+        }
+
+        if (IsDescriptor(word))
+            return false;
+        return EndsClause(text, start + length);
+    }
+
+    // A word that describes a password rather than gives it: a listed descriptor or stopword, a descriptor ending, or one of
+    // those after a negating prefix ("in" + "correct", "un" + "guessable").
+    private static bool IsDescriptor(ReadOnlySpan<char> word)
+    {
+        if (IsDescriptorStem(word))
+            return true;
+        foreach (var prefix in NegatingPrefixes)
+        {
+            if (word.Length - prefix.Length >= 4 && word.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                && IsDescriptorStem(word[prefix.Length..]))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool IsDescriptorStem(ReadOnlySpan<char> word)
+    {
+        if (Descriptors.Contains(word) || Stopwords.Contains(word))
+            return true;
+        foreach (var ending in DescriptorEndings)
+        {
+            if (word.EndsWith(ending, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    // A quoted value after a password noun is the password whatever it holds ("my password is 'sunshine'"), once it has six
+    // characters or more and is not a descriptor.
+    private static bool IsQuotedPassword(string value) =>
+        value.Trim().Length >= 6 && !Descriptors.Contains(value.AsSpan().Trim()) && !IsNegatedDescriptor(value.AsSpan().Trim());
+
+    // "'incorrect'", "'unguessable'": a quoted value that is a negating prefix before a listed descriptor or stopword.
+    private static bool IsNegatedDescriptor(ReadOnlySpan<char> word)
+    {
+        foreach (var prefix in NegatingPrefixes)
+        {
+            if (word.Length - prefix.Length >= 4 && word.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                && (Descriptors.Contains(word[prefix.Length..]) || Stopwords.Contains(word[prefix.Length..])))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool EndsClause(string text, int end)
+    {
+        if (end >= text.Length)
+            return true;
+        var next = text[end];
+        if (next is '.' or ',' or ';' or ':' or '!' or '?' or ')' or '\r' or '\n' or '"' or '\'')
+            return true;
+        if (next is not (' ' or '\t'))
+            return false;
+        var rest = text.AsSpan(end).TrimStart(" \t");
+        if (rest.IsEmpty || rest[0] is '\r' or '\n' or '(' or '-' or '–' or '—')
+            return true;
+        var stop = rest.IndexOfAny(" \t\r\n.,;:!?)");
+        return ClauseFollowers.Contains(stop < 0 ? rest : rest[..stop]);
     }
 
     // A sentence's own punctuation is not part of a bare value; "!" and "?" are kept, since passwords end in them. A bare value
@@ -688,7 +822,7 @@ public static partial class CredentialDetector
     // "the password is X", "the wifi password at the cabin is X", "the root password was changed to X", "secret access key: X".
     // The longer separators come first: the engine prefers the first alternative that matches, as a backtracking one would.
     [GeneratedRegex(
-        """\b(?:passwords?|passwd|passphrase|passcode|secret access key|secret key|access key|api key|api token|access token|auth token|bot token|bearer token|refresh token|session token|client secret|secret)(?<words>(?:[ \t]+[A-Za-z0-9_'-]+){0,5}?)(?:[ \t]+(?:is|was|has[ \t]+been)[ \t]+(?:set|changed|reset)[ \t]+to|[ \t]+(?:set|changed|reset)[ \t]+to|[ \t]+(?:is|was)(?:[ \t]+(?:now|still))?|[ \t]*[:=])[ \t]+(?<value>"(?:[^"\\\r\n]|\\[^\r\n]){1,200}"|'(?:[^'\\\r\n]|\\[^\r\n]){1,200}'|[^\s"'`<>][^\s<>]{0,255})""",
+        """\b(?<noun>passwords?|passwd|passphrase|passcode|secret access key|secret key|access key|api key|api token|access token|auth token|bot token|bearer token|refresh token|session token|client secret|secret)(?<words>(?:[ \t]+[A-Za-z0-9_'-]+){0,5}?)(?:[ \t]+(?:is|was|has[ \t]+been)[ \t]+(?:set|changed|reset)[ \t]+to|[ \t]+(?:set|changed|reset)[ \t]+to|[ \t]+(?:is|was)(?:[ \t]+(?:now|still))?|[ \t]*[:=])[ \t]+(?<value>"(?:[^"\\\r\n]|\\[^\r\n]){1,200}"|'(?:[^'\\\r\n]|\\[^\r\n]){1,200}'|[^\s"'`<>][^\s<>]{0,255})""",
         IgnoreCase, TimeoutMilliseconds)]
     private static partial Regex ProseIs();
 

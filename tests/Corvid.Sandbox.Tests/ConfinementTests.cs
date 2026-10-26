@@ -69,7 +69,7 @@ public sealed class ConfinementTests : IDisposable
             cat '{Path.Combine(layout.Home, "notes.txt")}'
             {reads}
             {listings}
-            ls -la '{layout.VaultData}/' '{layout.VaultConfig}/'
+            ls -la '{layout.VaultData}/' '{layout.VaultConfig}/' '{layout.AttachState}/'
             find '{layout.Home}' '{layout.Root}'
             grep -r SECRET- '{layout.Root}'
             echo done
@@ -89,13 +89,16 @@ public sealed class ConfinementTests : IDisposable
         // Directory listings show nothing inside: not a file name, let alone a value. (The cat errors name the files
         // the script itself asked for.)
         string shown = result.StandardOutput + string.Join('\n', result.StandardError.Split('\n').Where(l => !l.StartsWith("cat:", StringComparison.Ordinal)));
-        foreach (string name in (string[])["id_ed25519", "key.key", "credentials", "hosts.yml", "store.bin", "master.cred", "vault.json"])
+        foreach (string name in (string[])["id_ed25519", "key.key", "credentials", "hosts.yml", "store.bin", "master.cred", "vault.json", "owner.token",
+                     "devices.json", "client-tokens.json"])
         {
             Assert.DoesNotContain(name, shown, StringComparison.Ordinal);
         }
 
         Assert.True(Denied(result.StandardError, "ls", layout.VaultData), $"Listing {layout.VaultData} was not refused.");
         Assert.True(Denied(result.StandardError, "ls", layout.VaultConfig), $"Listing {layout.VaultConfig} was not refused.");
+        // A6 review H2: attached mode's tokens, in a home the workspace is inside.
+        Assert.True(Denied(result.StandardError, "ls", layout.AttachState), $"Listing {layout.AttachState} was not refused.");
         Assert.Contains("bubblewrap", result.Layers);
     }
 

@@ -465,7 +465,9 @@ public sealed class ReviewViewModel : AreaViewModel
         var line = FileComments.FirstOrDefault()?.Line ?? FirstChangedLine();
         try
         {
-            var ran = await _service.OpenInEditorAsync(_selected.Path, line).ConfigureAwait(true);
+            var ran = await (_sessionId is { } sessionId
+                ? _service.OpenInEditorAsync(sessionId, _selected.Path, line)
+                : _service.OpenInEditorAsync(_selected.Path, line)).ConfigureAwait(true);
             Say($"Opened in the editor: {SafeText.Reveal(ran)}", Tone.Grey);
         }
         catch (InvalidOperationException exception)

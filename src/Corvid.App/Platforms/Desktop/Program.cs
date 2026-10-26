@@ -1,5 +1,7 @@
 using Corvid.App.Core;
 using Corvid.App.Core.Composition;
+using Corvid.App.Core.Mvvm;
+using Corvid.App.Core.Remote;
 using Corvid.App.Engine;
 using Corvid.App.Infrastructure;
 using Corvid.Host;
@@ -35,7 +37,24 @@ internal static class Program
         AppLogging.Initialize();
         AppEngine? engine = null;
         IAppServices? services = null;
-        if (!options.Demo)
+        LateDispatcher? attachedDispatcher = null;
+        RemoteSessionService? attached = null;
+        if (options.Attach is { } address)
+        {
+            // G-1: another Corvid's sessions in this window. Connected before the window opens (its updates wait for the
+            // window's dispatcher); a refusal opens the window anyway, every area saying why.
+            attachedDispatcher = new LateDispatcher();
+            // A6 review M3: a host that accepts and then says nothing opens the window refused after a while, never hung.
+            using var connecting = new CancellationTokenSource(AttachedStartup.ConnectTimeout);
+            var result = AttachedStartup.ConnectAsync(address, options.Pair, $"{Environment.MachineName} (Corvid app)", attachedDispatcher,
+                new FileDeviceTokenStore(), AttachedPaths.OwnerTokenFile, connecting.Token).GetAwaiter().GetResult();
+            Console.Error.WriteLine("corvid app: " + result.Report);
+            services = result.Services;
+            attached = result.Connection;
+            if (attached is not null)
+                attached.Disconnected += (_, reason) => Console.Error.WriteLine("corvid app: the attached Corvid disconnected: " + reason);
+        }
+        else if (!options.Demo)
         {
             // Before the UI thread exists, so nothing waits on it: the host's start validates corvid.json and the check
             // reads file sizes only. The models load on the pool from here on.
@@ -69,7 +88,7 @@ internal static class Program
         if (string.Equals(Environment.GetEnvironmentVariable("CORVID_APP_RENDERER"), "software", StringComparison.OrdinalIgnoreCase))
             FeatureConfiguration.Rendering.UseOpenGLOnX11 = false;
         var host = UnoPlatformHostBuilder.Create()
-            .App(() => new App(options, services))
+            .App(() => new App(options, services, attachedDispatcher))
             .UseX11()
             .UseLinuxFrameBuffer()
             .UseMacOS()
@@ -78,6 +97,8 @@ internal static class Program
         host.Run();
         // The window is gone and the UI thread with it: stop the runtime (its sessions, MCP servers, background indexing).
         engine?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        // Attached: close the connection; the engine there goes on (its turns, its approvals' deadlines).
+        attached?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         return 0;
     }
 

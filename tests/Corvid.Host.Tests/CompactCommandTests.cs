@@ -31,18 +31,19 @@ public sealed class CompactCommandTests
         var session = runtime.OpenSession();
         Assert.Equal("Nothing before the latest turn needs compacting.", (await Run(host, runtime, session, "/compact")).Lines[0]);
 
-        runtime.Log.Append(session.Id, 0, [
+        runtime.Log.Append(session.Id, runtime.Log.GetHead(session.Id, TestContext.Current.CancellationToken), [
             EventData.Create(new UserMessage("draft section one")), EventData.Create(new AssistantMessage("Section one is drafted.")),
             EventData.Create(new UserMessage("now section two")), EventData.Create(new AssistantMessage("Working on it.")),
         ], Ct);
 
         var output = await Run(host, runtime, session, "/compact");
         Assert.Equal(OutputTone.Success, output.Tone);
-        Assert.Equal(["compacted events 1–2 by fake-gen@cpu in 1 chunk(s).", "goal: ship the report", "next step: draft section two"], output.Lines[..3]);
+        Assert.Equal(["compacted events 1–3 by fake-gen@cpu in 1 chunk(s).", "goal: ship the report", "next step: draft section two"], output.Lines[..3]);
         Assert.Matches(Figures, output.Lines[3]);
         var transcript = session.Snapshot().Transcript;
         var compacted = Assert.IsType<Compacted>(transcript[0].Content);
-        Assert.Equal((1L, 2L), (compacted.FromSequence, compacted.ThroughSequence));
+        // Event 1 is where the session works (WorkspaceBound, A6 review); the conversation starts at 2.
+        Assert.Equal((1L, 3L), (compacted.FromSequence, compacted.ThroughSequence));
         Assert.IsType<UserMessage>(transcript[1].Content);
 
         // Compacting again finds a lone record, which is as short as it gets.
@@ -57,7 +58,7 @@ public sealed class CompactCommandTests
         Assert.DoesNotContain(session.Snapshot().Transcript, entry => entry.Content is UserMessage { Text: "now section two" });
         // Undo goes back to just before the latest turn's message, and the compaction was written after it, so the
         // earlier turn is raw again: nothing was lost, and /compact can run again.
-        Assert.Equal([1L, 2L], session.Snapshot().Transcript.Select(entry => entry.FromSequence));
+        Assert.Equal([2L, 3L], session.Snapshot().Transcript.Select(entry => entry.FromSequence));
         Assert.DoesNotContain(session.Snapshot().Transcript, entry => entry.Content is Compacted);
     }
 
@@ -80,7 +81,7 @@ public sealed class CompactCommandTests
         await using var runtime = await host.StartAsync();
         var session = runtime.OpenSession();
         var answer = string.Join(" ", Enumerable.Repeat("Section one covers the revenue table and the churn chart.", 20));
-        runtime.Log.Append(session.Id, 0, [
+        runtime.Log.Append(session.Id, runtime.Log.GetHead(session.Id, TestContext.Current.CancellationToken), [
             EventData.Create(new UserMessage("draft section one")), EventData.Create(new AssistantMessage(answer)),
             EventData.Create(new UserMessage("now section two")), EventData.Create(new AssistantMessage("Working on it.")),
         ], Ct);
@@ -104,7 +105,7 @@ public sealed class CompactCommandTests
         await using var host = TestHost.Create(Summarizing());
         await using var runtime = await host.StartAsync();
         var session = runtime.OpenSession();
-        runtime.Log.Append(session.Id, 0, [
+        runtime.Log.Append(session.Id, runtime.Log.GetHead(session.Id, TestContext.Current.CancellationToken), [
             EventData.Create(new UserMessage("draft section one")), EventData.Create(new AssistantMessage("Section one is drafted.")),
             EventData.Create(new UserMessage("now section two")), EventData.Create(new AssistantMessage("Working on it.")),
         ], Ct);
@@ -123,7 +124,7 @@ public sealed class CompactCommandTests
         await using var host = TestHost.Create(new FakeModels(new FakeGenerator(Reply.Say("not a record"))));
         await using var runtime = await host.StartAsync();
         var session = runtime.OpenSession();
-        runtime.Log.Append(session.Id, 0, [
+        runtime.Log.Append(session.Id, runtime.Log.GetHead(session.Id, TestContext.Current.CancellationToken), [
             EventData.Create(new UserMessage("draft section one")), EventData.Create(new AssistantMessage("Section one is drafted.")),
             EventData.Create(new UserMessage("now section two")), EventData.Create(new AssistantMessage("Working on it.")),
         ], Ct);
@@ -132,7 +133,7 @@ public sealed class CompactCommandTests
 
         Assert.Equal(OutputTone.Warning, output.Tone);
         var line = Assert.Single(output.Lines);
-        Assert.StartsWith("kept events 1–2 uncompacted: fake-gen@cpu: ", line, StringComparison.Ordinal);
+        Assert.StartsWith("kept events 1–3 uncompacted: fake-gen@cpu: ", line, StringComparison.Ordinal);
         Assert.EndsWith(".", line, StringComparison.Ordinal);
         Assert.DoesNotContain(session.Snapshot().Transcript, entry => entry.Content is Compacted);
     }

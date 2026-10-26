@@ -71,7 +71,8 @@ public sealed class CorvidRuntimeFactory(
     IMcpTransports? mcpTransports = null,
     WebFetchTransport? webTransport = null,
     UiStateStore? uiState = null,
-    CorvidConfigWriter? configWriter = null)
+    CorvidConfigWriter? configWriter = null,
+    TimeProvider? time = null)
 {
     /// <summary>
     /// Configured models that stop the runtime from starting, checked offline (by size for Starling's): every missing or
@@ -151,18 +152,27 @@ public sealed class CorvidRuntimeFactory(
 
             // Vault's locations are protected twice (C-012): the hardline list refuses them, and the shell's sandbox hides them.
             var vault = VaultLocationsFor(settings);
-            var environment = vault.Protect(ApprovalEnvironment.FromProcess(CorvidPaths.Workspace(settings)));
-            var rulesFile = settings.Approvals.RulesFile is { Length: > 0 } file ? CorvidPaths.ExpandHome(file) : JsonFileApprovalRuleStore.DefaultPath(environment);
-            environment = ProtectCorvidState(environment, settings, rulesFile, configFile?.Path ?? CorvidPaths.UserConfigFile);
-            // The skills repository's history is how authorship is known (C-017), so no tool may write it; the skill files
-            // themselves stay readable in the sandbox, where skill scripts run.
-            if (settings.Skills.Enabled)
-                environment = Protect(environment, Path.Combine(CorvidPaths.SkillsDirectory(settings), ".git"));
+            var launcher = settings.Sandbox.LauncherPath is { Length: > 0 } path ? CorvidPaths.ExpandHome(path) : null;
+            var sandboxOptions = new SandboxOptions { LauncherPath = launcher };
+            ISandbox sandbox = OperatingSystem.IsLinux()
+                ? new BubblewrapSandbox(sandboxOptions)
+                : new NoSandbox();
+            // V-003b: with the shell's network on, commands reach HTTPS through Vault's per-sandbox proxy only; without a
+            // Vault socket the egress is absent and such a command refuses rather than run another way.
+            var egress = settings.Tools.ShellNetwork && vault.SocketPath is { } vaultSocket ? new VaultSandboxEgress(vaultSocket) : null;
+            // A6 (G-4): every workspace a session works in is composed the same way, this one at start and others on demand.
+            // Corvid's own state is protected (the skills repository's history too: it is how authorship is known, C-017),
+            // and the skill files themselves stay readable in the sandbox, where skill scripts run.
+            var workspaces = new WorkspaceComposer(settings, vault,
+                settings.Approvals.RulesFile is { Length: > 0 } file ? CorvidPaths.ExpandHome(file) : null,
+                configFile?.Path ?? CorvidPaths.UserConfigFile, sandbox, egress, sandboxOptions);
+            var (environment, rulesFile) = workspaces.EnvironmentFor(CorvidPaths.Workspace(settings));
             // A workspace that contains the skills directory (the home directory, say) would let the file tools and the shell
             // edit skills, and an edit on disk is committed as the user's: the agent could rewrite a user or hub skill, or turn
             // hub content into trusted content. The skills directory is read-only to commands and closed to the file tools.
             var skillsGuard = SkillsGuard(settings, environment.Workspace);
             var prompters = new ApprovalRouter();
+            // The approvals' deadlines run on the registered TimeProvider (a test's), else the system clock.
             var approvals = new ApprovalPipeline(environment, fabric, log, prompters, new JsonFileApprovalRuleStore(rulesFile),
                 new ApprovalOptions
                 {
@@ -173,44 +183,29 @@ public sealed class CorvidRuntimeFactory(
                     Detections = settings.Detections.Enabled
                         ? new DetectionEngine(RulePack.BuiltIn(), BuiltinTools.ShellToolMapping, settings.Detections.Enforce)
                         : null,
-                });
+                }, timeProvider: time);
 
             var counter = composer.GeneratorCounter();
             var memory = settings.Memory.Enabled
                 ? StartupStep.Run(progress, "Opening memory", () => BuildMemory(settings, composer, registry, fabric, log, counter))
                 : null;
 
-            var launcher = settings.Sandbox.LauncherPath is { Length: > 0 } path ? CorvidPaths.ExpandHome(path) : null;
-            var sandboxOptions = new SandboxOptions { LauncherPath = launcher };
-            ISandbox sandbox = OperatingSystem.IsLinux()
-                ? new BubblewrapSandbox(sandboxOptions)
-                : new NoSandbox();
-            // V-003b: with the shell's network on, commands reach HTTPS through Vault's per-sandbox proxy only; without a
-            // Vault socket the egress is absent and such a command refuses rather than run another way.
-            var egress = settings.Tools.ShellNetwork && vault.SocketPath is { } vaultSocket ? new VaultSandboxEgress(vaultSocket) : null;
             // The sandbox leaves everything outside the workspace read-only, but a workspace can contain Corvid's own state.
-            var shell = new SandboxedShell(sandbox, new ShellOptions
-            {
-                Workspace = environment.Workspace,
-                Vault = vault,
-                // A5: the launcher stays protected from the tools' writes but is never hidden from the sandbox it runs:
-                // stage 2 re-executes it inside bubblewrap. It is read-only to commands instead.
-                DeniedPaths = [.. WithoutLauncher(environment.Protected.SafetyConfiguration, settings)],
-                ReadOnlyPaths = [.. skillsGuard.ReadOnly, .. LauncherInside(settings, environment.Workspace)],
-                Network = settings.Tools.ShellNetwork,
-                EgressLifetime = sandboxOptions.Timeout + TimeSpan.FromMinutes(1),
-            }, egress);
+            var shell = workspaces.ShellFor(environment, skillsGuard.ReadOnly);
             var jobs = new JobStore(CorvidPaths.JobStore(settings));
             var builtin = new BuiltinServices(environment, shell, jobs, settings.Tools.Builtin ? new WebFetchTool(webTransport?.Handler) : null);
 
             // Tools registered in DI (any later toolset) are offered alongside the built-in ones.
             var toolRegistry = new ToolRegistry();
+            // A6: the tools bound to this workspace, which a session in another one gets its own of.
+            var bound = new HashSet<string>(StringComparer.Ordinal);
             if (settings.Tools.Builtin)
             {
-                var workspace = Workspace.For(environment);
-                toolRegistry.Add(new FileTools(skillsGuard.ReadOnly.IsEmpty ? workspace
-                    : new Workspace(environment.Workspace, workspace.Denied.Concat(skillsGuard.ReadOnly))));
-                toolRegistry.Add(new ShellTool(shell));
+                var fileTools = WorkspaceComposer.FileToolsFor(environment, skillsGuard.ReadOnly).CreateTools();
+                toolRegistry.AddRange(fileTools);
+                var shellTools = new ShellTool(shell).CreateTools();
+                toolRegistry.AddRange(shellTools);
+                bound.UnionWith(fileTools.Concat(shellTools).Select(tool => tool.Name));
                 toolRegistry.Add(builtin.Web!);
                 toolRegistry.Add(new CronTools(jobs));
                 // K-6: the generator's clarifying question, which the turn loop recognises (offered in interactive turns only).
@@ -225,16 +220,20 @@ public sealed class CorvidRuntimeFactory(
             var skills = skillsGuard.Refusal is { } refusal ? new SkillServices(null, null, null, null, refusal)
                 : StartupStep.Run(progress, "Opening skills", () => OpenSkills(settings, log));
             if (skills.Store is { } store)
-                toolRegistry.Add(new SkillFileTools(store, shell));
+            {
+                var skillTools = new SkillFileTools(store, shell).CreateTools();
+                toolRegistry.AddRange(skillTools);
+                bound.UnionWith(skillTools.Select(tool => tool.Name));
+                workspaces.Skills = store;
+            }
+            workspaces.BoundToolNames = [.. bound];
             foreach (var provider in toolProviders)
                 toolRegistry.Add(provider);
             toolRegistry.AddRange(tools);
             if (skills.Store is { } skillStore && skills.Database is { } skillsDatabase)
                 skills = AddLearning(skills, settings, skillStore, skillsDatabase, composer, log, fabric, toolRegistry);
 
-            var checkpoints = settings.Checkpoints.Enabled
-                ? new CheckpointService(new ShadowStore(CheckpointOptionsFor(settings, environment, skillsGuard.ReadOnly)))
-                : null;
+            var checkpoints = workspaces.CheckpointsFor(environment, skillsGuard.ReadOnly);
 
             // C-018: configured MCP servers start in the background and add their tools as they list them; last, so built-in
             // and DI tools keep their names. A sandboxed server is denied what the shell is denied. C-022: held and accepted
@@ -245,8 +244,7 @@ public sealed class CorvidRuntimeFactory(
 
             // C-025: the workspace's project, once, with the checkpoints' git and the user's home as discovery's ceiling.
             ProjectIdentity? project = memory?.Lessons is null ? null
-                : StartupStep.Run(progress, "Identifying the workspace's project",() => Kernel.Sessions.ProjectResolver.ResolveAsync(
-                    environment.Workspace, CorvidPaths.ExpandHome(settings.Checkpoints.GitPath), CorvidPaths.Home).GetAwaiter().GetResult());
+                : StartupStep.Run(progress, "Identifying the workspace's project", () => workspaces.ProjectFor(environment.Workspace, lessons: true));
             composer.Progress = null;
 
             // G-6: titles and recaps on the default generator at background priority, only when it runs on this machine.
@@ -266,6 +264,7 @@ public sealed class CorvidRuntimeFactory(
                 UiState = uiState ?? new UiStateStore(UiStateStore.PathFor(settings)),
                 // A5: the "default for new sessions" choice on surfaces that have only the runtime (/model --default).
                 ConfigWriter = configWriter,
+                Workspaces = workspaces,
             };
             return created;
         }
@@ -376,7 +375,7 @@ public sealed class CorvidRuntimeFactory(
         }
     }
 
-    private static ApprovalEnvironment Protect(ApprovalEnvironment environment, string path)
+    internal static ApprovalEnvironment Protect(ApprovalEnvironment environment, string path)
     {
         var protectedPaths = environment.Protected with
         {

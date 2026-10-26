@@ -55,18 +55,26 @@ public static class PromptRenderer
     /// messages. Tool calls and their results, compaction summaries (which restate tool output) and the standing goal and
     /// todos are the user's own work and are left out, so a guest never reads a file an earlier turn of the user's read.
     /// </param>
+    /// <param name="imageTurns">
+    /// K-8 (A6 review): the images of only this many of the latest user messages are in the prompt as images; an older one
+    /// is a one-line stub (<c>[image: shot.png, 1280×720; shown in an earlier turn]</c>), so a picture is not read, sent and
+    /// paid for again on every later model call. The default keeps every image.
+    /// </param>
     public static RenderedPrompt Render(SessionSnapshot snapshot, string systemPrompt, ITokenCounter counter, int budget,
-        IReadOnlySet<string>? protectedCalls = null, int fixedTokens = 0, bool clearMore = false, long? spokenOnlyBefore = null)
+        IReadOnlySet<string>? protectedCalls = null, int fixedTokens = 0, bool clearMore = false, long? spokenOnlyBefore = null,
+        int imageTurns = int.MaxValue)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(systemPrompt);
         ArgumentNullException.ThrowIfNull(counter);
+        ArgumentOutOfRangeException.ThrowIfNegative(imageTurns);
 
         var decided = DecidedViews(snapshot);
         var views = new Dictionary<string, ResultView>(decided, StringComparer.Ordinal);
         var results = ResultsOldestFirst(snapshot);
 
-        var messages = Build(snapshot, systemPrompt, views, spokenOnlyBefore);
+        var shown = ImageMessages(snapshot, imageTurns);
+        var messages = Build(snapshot, systemPrompt, views, spokenOnlyBefore, shown);
         var tokens = Count(messages, counter) + fixedTokens;
         // Lever 1 under budget pressure: stub the oldest full results first, sparing the protected ones, then those too,
         // except the newest result, which the generator needs to continue.
@@ -80,7 +88,7 @@ public static class PromptRenderer
                     || pass && results.Count > 0 && results[^1].CallId == callId)
                     continue;
                 views[callId] = ResultView.Stub;
-                messages = Build(snapshot, systemPrompt, views, spokenOnlyBefore);
+                messages = Build(snapshot, systemPrompt, views, spokenOnlyBefore, shown);
                 tokens = Count(messages, counter) + fixedTokens;
             }
         }
@@ -89,7 +97,7 @@ public static class PromptRenderer
             foreach (var (callId, _) in results)
                 if (views.GetValueOrDefault(callId) == ResultView.Stub || !views.ContainsKey(callId) && protectedCalls?.Contains(callId) != true)
                     views[callId] = ResultView.Dropped;
-            messages = Build(snapshot, systemPrompt, views, spokenOnlyBefore);
+            messages = Build(snapshot, systemPrompt, views, spokenOnlyBefore, shown);
             tokens = Count(messages, counter) + fixedTokens;
         }
         return new RenderedPrompt(messages, tokens, budget, views.ToImmutableDictionary(StringComparer.Ordinal), tokens > budget);
@@ -138,6 +146,11 @@ public static class PromptRenderer
                     TextContent text => counter.CountTokens(text.Text),
                     FunctionCallContent call => counter.CountTokens(call.Name) + counter.CountTokens(JsonValues.Object(call.Arguments).GetRawText()),
                     FunctionResultContent result => counter.CountTokens(result.Result is JsonElement json ? JsonValues.Text(json) : result.Result?.ToString() ?? ""),
+                    Models.Images.ImageReferenceContent image => ImageTokens(image.Image.Width, image.Image.Height),
+                    // Bytes that are not an image Corvid reads are never sent as one: the binding's guard makes them a note.
+                    DataContent data when data.HasTopLevelMediaType("image") =>
+                        Models.Images.ImageFiles.Inspect(data.Data.Span) is { } info ? ImageTokens(info.Width, info.Height)
+                            : counter.CountTokens(Models.Images.ImageContents.Note(data, "it could not be read as a PNG, JPEG, GIF or WebP image").Text),
                     _ => 0,
                 };
             }
@@ -193,8 +206,22 @@ public static class PromptRenderer
         return builder.ToString();
     }
 
+    // K-8 (A6 review): the user messages whose images are shown, by sequence: the latest imageTurns of them.
+    private static HashSet<long> ImageMessages(SessionSnapshot snapshot, int imageTurns)
+    {
+        var shown = new HashSet<long>();
+        if (imageTurns == 0)
+            return shown;
+        for (var at = snapshot.Transcript.Length - 1; at >= 0 && shown.Count < imageTurns; at--)
+        {
+            if (snapshot.Transcript[at] is { Content: UserMessage { LocalOnly: not true } } entry)
+                shown.Add(entry.FromSequence);
+        }
+        return shown;
+    }
+
     private static List<ChatMessage> Build(SessionSnapshot snapshot, string systemPrompt, IReadOnlyDictionary<string, ResultView> views,
-        long? spokenOnlyBefore)
+        long? spokenOnlyBefore, HashSet<long> imagesShown)
     {
         var messages = new List<ChatMessage> { new(ChatRole.System, systemPrompt) };
         var toolNames = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -210,10 +237,10 @@ public static class PromptRenderer
             {
                 // Security M2: a guest's message is outside content, quoted as theirs, never the owner's words or answer.
                 case UserMessage { From: { } from } guest:
-                    messages.Add(new ChatMessage(ChatRole.User, Quoted(from, guest.Text)));
+                    messages.Add(WithImages(Quoted(from, guest.Text), guest.Images, imagesShown.Contains(entry.FromSequence)));
                     break;
                 case UserMessage user:
-                    messages.Add(new ChatMessage(ChatRole.User, user.Text));
+                    messages.Add(WithImages(user.Text, user.Images, imagesShown.Contains(entry.FromSequence)));
                     break;
                 // K-3: a steer is the user's words, read where it was taken (after the results the turn had then).
                 case UserSteered steer:
@@ -246,6 +273,40 @@ public static class PromptRenderer
         }
         return messages;
     }
+
+    // K-8 (A6): a message's images follow its text as references; the turn reads their bytes (or describes them) per model.
+    // An older message's images (A6 review) are stubs, one line each, after its text.
+    private static ChatMessage WithImages(string text, ImmutableArray<Abstractions.Media.ImageRef>? images, bool shown)
+    {
+        if (images is not { IsDefaultOrEmpty: false } list)
+            return new ChatMessage(ChatRole.User, text);
+        if (!shown)
+            return new ChatMessage(ChatRole.User, text + "\n" + string.Join("\n", list.Select(image => ImageStub(image, withSize: true))));
+        List<AIContent> contents = [new TextContent(text)];
+        contents.AddRange(list.Select((image, index) => new Models.Images.ImageReferenceContent(image, index + 1)));
+        return new ChatMessage(ChatRole.User, contents);
+    }
+
+    /// <summary>
+    /// K-8 (A6 review): an image no longer shown, as one line: <c>[image: shot.png, 1280×720; shown in an earlier turn]</c>
+    /// for the prompt, <c>[image: shot.png]</c> for a summary. A pasted image, which has no name, is named by its kind.
+    /// </summary>
+    internal static string ImageStub(Abstractions.Media.ImageRef image, bool withSize)
+    {
+        var name = Abstractions.Media.ImageNames.Clean(image.Name) ?? "a pasted " + Abstractions.Media.ImageNames.Kind(image.MediaType);
+        return withSize
+            ? string.Create(CultureInfo.InvariantCulture, $"[image: {name}, {image.Width}×{image.Height}; shown in an earlier turn]")
+            : $"[image: {name}]";
+    }
+
+    /// <summary>
+    /// K-8: what an image costs in the prompt, estimated from its size: about one token per 750 pixels, at least 85. Since the
+    /// A6 review there is no upper cap: the full-size bytes are what is sent, a model that reads them in patches (most local
+    /// vision models) is billed by its pixels, and a hosted one that scales a large picture down costs less than this, which
+    /// errs on the side of compacting early. A stand-in note, stub or description is counted as text.
+    /// </summary>
+    public static int ImageTokens(int width, int height) =>
+        (int)Math.Clamp((long)Math.Max(width, 1) * Math.Max(height, 1) / 750, 85, int.MaxValue);
 
     /// <summary>Plan §8: <c>[cleared: web_extract of example.com, 14 KB; re-run or see event 812]</c>.</summary>
     internal static string Stub(ResultView view, string tool, ToolResult result, long sequence)

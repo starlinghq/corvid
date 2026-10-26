@@ -131,6 +131,60 @@ public sealed class SessionsViewModel : AreaViewModel
         return id;
     }
 
+    /// <summary>
+    /// G-5: a session and log position a search across sessions asked to open at (the matched turn's prompt), until the page
+    /// shows that session and takes it with <see cref="TakeRevealIndex"/>.
+    /// </summary>
+    public (string SessionId, long Position)? PendingPosition { get; private set; }
+
+    /// <summary>
+    /// Asks the page to bring the turn at <paramref name="position"/> of <paramref name="sessionId"/> into view: at once when
+    /// it shows that session, else once it has opened it (the search opens it next).
+    /// </summary>
+    public void RevealAt(string sessionId, long position)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sessionId);
+        PendingPosition = (sessionId, position);
+        RevealRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Forgets a position asked for (the session could not be opened).</summary>
+    public void CancelReveal() => PendingPosition = null;
+
+    /// <summary>
+    /// The index in <paramref name="session"/>'s blocks of what was asked to be brought into view, taken once; -1 when nothing
+    /// was asked for this session or it is not there. A block (find in the session) is taken by its id. A position (search
+    /// across sessions) is the latest message of the person's at or before it, its turn's prompt: it waits for its own
+    /// session, so a page still showing another one leaves it for the session being opened.
+    /// </summary>
+    public int TakeRevealIndex(SessionViewModel session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        if (TakeReveal() is { } id)
+        {
+            for (var i = 0; i < session.Blocks.Count; i++)
+            {
+                if (session.Blocks[i].Id == id)
+                    return i;
+            }
+
+            return -1;
+        }
+
+        if (PendingPosition is not { } pending || !string.Equals(pending.SessionId, session.SessionId, StringComparison.Ordinal))
+            return -1;
+        PendingPosition = null;
+        var found = -1;
+        for (var i = 0; i < session.Blocks.Count; i++)
+        {
+            if (session.Blocks[i] is UserMessageBlock { Position: { } at } && at <= pending.Position)
+                found = i;
+        }
+
+        // Before the first turn (a goal set first, say): the top of the transcript.
+        return found < 0 && session.Blocks.Count > 0 ? 0 : found;
+    }
+
     /// <summary>Sets a dock tab's count (Changes: files changed; Tasks: open tasks).</summary>
     public void SetPanelBadge(string label, int count) =>
         Panels.First(panel => string.Equals(panel.Label, label, StringComparison.Ordinal)).Badge = count;

@@ -30,6 +30,19 @@ public sealed record DelegationTask(string Goal)
     public int? MaxSeconds { get; init; }
 
     public JsonElement? OutputSchema { get; init; }
+
+    /// <summary>
+    /// A6 (G-4): <see cref="Isolations.Worktree"/> runs the child in a new git worktree of the parent's workspace, so children
+    /// that write do not collide; null (or <see cref="Isolations.None"/>) runs it in the parent's workspace.
+    /// </summary>
+    public string? Isolation { get; init; }
+}
+
+/// <summary>A6: the wire names of <see cref="DelegationTask.Isolation"/>.</summary>
+public static class Isolations
+{
+    public const string None = "none";
+    public const string Worktree = "worktree";
 }
 
 /// <summary>
@@ -75,6 +88,7 @@ public sealed class DelegateTaskTool : ToolFunction
                 new ToolParameter("max_tokens", "The most tokens.", false, false),
                 new ToolParameter("max_seconds", "The longest it may run.", false, false),
                 new ToolParameter("output_schema", "A JSON Schema of an object the answer must meet.", false, false),
+                new ToolParameter("isolation", "worktree to run the child in its own git worktree.", false, false),
                 new ToolParameter("tasks", "Several children to run in parallel, each with these fields.", false, false),
             ]))
     {
@@ -184,6 +198,12 @@ public sealed class DelegateTaskTool : ToolFunction
         if (!Number(item, "max_steps", out var steps, ref error) || !Number(item, "max_tokens", out var tokens, ref error)
             || !Number(item, "max_seconds", out var seconds, ref error))
             return false;
+        var isolation = Text(item, "isolation");
+        if (isolation is not (null or Isolations.None or Isolations.Worktree))
+        {
+            error = "'isolation' must be \"none\" or \"worktree\"";
+            return false;
+        }
         task = new DelegationTask(goal)
         {
             Tools = tools,
@@ -194,6 +214,7 @@ public sealed class DelegateTaskTool : ToolFunction
             MaxTokens = tokens,
             MaxSeconds = seconds,
             OutputSchema = schema,
+            Isolation = isolation == Isolations.None ? null : isolation,
         };
         return true;
 
@@ -259,6 +280,12 @@ public sealed class DelegateTaskTool : ToolFunction
             {
                 ["type"] = "object",
                 ["description"] = "A JSON Schema of an object; the child's answer must be such an object, checked on return.",
+            },
+            ["isolation"] = new JsonObject
+            {
+                ["type"] = "string",
+                ["enum"] = new JsonArray(Isolations.None, Isolations.Worktree),
+                ["description"] = "worktree: the child works in a new git worktree of this workspace, so children that write do not collide (the user is asked first). none by default.",
             },
         };
         var properties = Child();

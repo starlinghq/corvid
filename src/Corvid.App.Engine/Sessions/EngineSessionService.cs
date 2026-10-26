@@ -80,6 +80,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         _dispatcher = dispatcher;
         _time = time;
         _engine.Started += OnEngineStarted;
+        _ = WatchViewsAsync();
         _ = WatchJobsAsync();
         _ = WatchRecordsAsync();
         _ = WatchLogAsync();
@@ -95,6 +96,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     {
         if (_disposed)
             return;
+        AddViewer(runtime);
         _ = WatchJobsAsync();
         _ = WatchLogAsync();
         _dispatcher.Post(() =>
@@ -102,6 +104,38 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             if (!_disposed)
                 ListChanged?.Invoke(this, EventArgs.Empty);
         });
+    }
+
+    private readonly Lock _viewerGate = new();
+    private IDisposable? _viewer;
+    private CorvidRuntime? _viewerOf;
+
+    /// <summary>
+    /// A6 fix: tells the runtime which sessions the window views, so removing a worktree lets go of an idle session here
+    /// that the window holds but does not show (one the Board made), and never of one it shows.
+    /// </summary>
+    private async Task WatchViewsAsync()
+    {
+        try
+        {
+            AddViewer(await _engine.Runtime.ConfigureAwait(false));
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            // A runtime that could not start: OnEngineStarted adds the viewer to the one that starts later.
+        }
+    }
+
+    private void AddViewer(CorvidRuntime runtime)
+    {
+        lock (_viewerGate)
+        {
+            if (_disposed || ReferenceEquals(_viewerOf, runtime))
+                return;
+            _viewer?.Dispose();
+            _viewer = runtime.AddViewer(IsViewed);
+            _viewerOf = runtime;
+        }
     }
 
     /// <summary>The turns and summary refreshes in flight, for a test or a shutdown that waits for them; a turn the queue starts counts.</summary>
@@ -133,8 +167,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             }
             // G-12: what other processes write from here on reaches the list at the log's next look.
             Listed(heads, marker);
+            // A6 review: a new session's log holds where it works from the start; with nothing else it is still new.
             foreach (var (id, created) in _created)
-                if (runtime.Log.GetHead(id, cancellationToken) == 0)
+                if (SessionCatalogue.Describe(runtime.Log, id, cancellationToken) is null)
                     summaries.Add(Live(id, Empty(runtime, id, created)));
             return (IReadOnlyList<SessionSummary>)[.. summaries.OrderByDescending(summary => summary.LastActivity)];
         }, cancellationToken).ConfigureAwait(false);
@@ -174,11 +209,19 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
 
     /// <param name="modeLines">Read a <c>!</c> or <c>#</c> line as the composer's mode (<see cref="ComposerLineAsync"/>); false
     /// for a question's answer, which is sent as given.</param>
-    private async Task<QueuedMessage> EnqueueAsync(string sessionId, string text, bool modeLines, CancellationToken cancellationToken)
+    /// <param name="images">K-8 (A6): the images the message carries, checked by <see cref="SendAsync(string, string, IReadOnlyList{ImageAttachment}, CancellationToken)"/>.</param>
+    private async Task<QueuedMessage> EnqueueAsync(string sessionId, string text, bool modeLines, CancellationToken cancellationToken,
+        ImmutableArray<ImageAttachment> images = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(text);
+        images = images.IsDefault ? [] : images;
+        if (images.IsEmpty)
+            ArgumentException.ThrowIfNullOrWhiteSpace(text);
+        ArgumentNullException.ThrowIfNull(text);
         ObjectDisposedException.ThrowIf(_disposed, this);
+        // K-8: a ! or # line is a mode, not a message: it takes no images.
+        if (!images.IsEmpty && modeLines && ComposerLine.Parse(text) is not null)
+            throw new InvalidOperationException("A ! or # line cannot carry images; send them with a message. Nothing was sent.");
         // A4: a # line is staged at once, never queued; a ! line queues as a turn of its own (StartTurnAsync posts it). A
         // question's answer is sent as given.
         if (modeLines && await ComposerLineAsync(sessionId, text, cancellationToken).ConfigureAwait(false) is { } handled)
@@ -203,7 +246,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 // it (A4 verification).
                 if (shellLine && channel.View?.Question is not null)
                     throw new InvalidOperationException("A question is open: answer it first, then send the ! line. Nothing was sent.");
-                message = new QueuedMessage($"q-{++channel.QueueCounter}", text.Trim());
+                message = new QueuedMessage($"q-{++channel.QueueCounter}", text.Trim()) { Images = images };
                 start = !channel.Running;
                 // K-6: with a question open the session waits on this message, the person's answer: it starts now, and what
                 // was queued before (typed before the question showed) waits behind it rather than answering it.
@@ -227,7 +270,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             {
                 try
                 {
-                    await StartTurnAsync(channel, runtime, tools, message.Text, cancellationToken, verbatim: !modeLines).ConfigureAwait(false);
+                    await StartTurnAsync(channel, runtime, tools, message.Text, cancellationToken, verbatim: !modeLines, images: message.Images).ConfigureAwait(false);
                 }
                 catch
                 {
@@ -411,6 +454,11 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     {
         _disposed = true;
         _engine.Started -= OnEngineStarted;
+        lock (_viewerGate)
+        {
+            _viewer?.Dispose();
+            _viewer = null;
+        }
         UnwatchJobs();
         UnwatchRecords();
         StopWatchingLog();
@@ -476,7 +524,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     /// </summary>
     /// <param name="verbatim">Send the text as a message even when it reads as a <c>!</c> line (a question's answer).</param>
     private async Task StartTurnAsync(Channel channel, CorvidRuntime runtime, ToolPresentation tools, string text, CancellationToken cancellationToken,
-        bool verbatim = false)
+        bool verbatim = false, ImmutableArray<ImageAttachment> images = default)
     {
         var sessionId = channel.SessionId;
         IDisposable? feed = null, prompter = null;
@@ -486,6 +534,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             // Opening the session and reading the head touch the log (SQLite): off the caller's thread, which is the UI's.
             var (session, head) = await Task.Run(() => (Session(runtime, sessionId), runtime.Log.GetHead(sessionId, cancellationToken)), cancellationToken)
                 .ConfigureAwait(false);
+            // A6 (G-4): the approval cards show the calls in the session's own workspace.
+            tools = tools.In(session.Workspace);
             SessionUpdateReporter? reporter = null;
             reporter = new SessionUpdateReporter(runtime, sessionId, tools, head, update => Report(channel, session, reporter!, update),
                 reason => Log("corvid app: could not report a session update: " + reason), _time, () => session.Tainted);
@@ -498,7 +548,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 channel.Translator.MaxSteps = runtime.Options.Turn.MaxSteps;
                 channel.Translator.ContextWindow = ContextWindow(runtime, session);
                 channel.TurnBegun = false;
-                channel.Sent = text;
+                // A6V2-06: the log keeps the message with credential values scrubbed; the turn's prompt is matched in that form.
+                channel.Sent = Corvid.Kernel.Events.EventScrubber.UserText(text);
                 channel.Reporter = reporter;
             }
             feed = runtime.Feed.Subscribe(sessionId, reporter);
@@ -516,7 +567,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             await PauseAt("post").ConfigureAwait(false);
             // Returns once the session's actor has the message (or the ! line's command); the turn runs on, and its end is
             // tracked below.
-            var delivery = await PostLineAsync(session, text, verbatim, cancellationToken).ConfigureAwait(false);
+            var delivery = await PostLineAsync(session, text, verbatim, cancellationToken, images).ConfigureAwait(false);
             Track(FinishTurnAsync(channel, reporter, delivery, feed, prompter, started));
             feed = prompter = null;
         }
@@ -651,7 +702,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         {
             var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
             var tools = await _engine.ToolsAsync().ConfigureAwait(false);
-            await StartTurnAsync(channel, runtime, tools, message.Text, CancellationToken.None).ConfigureAwait(false);
+            await StartTurnAsync(channel, runtime, tools, message.Text, CancellationToken.None, images: message.Images).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
@@ -679,7 +730,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         var cancel = false;
         // Only the window's own message begins its turn: another surface may post between the head the reporter reads from
         // and the window's post, and its turn runs first; an interrupt asked for meanwhile must not reach it. The log keeps a
-        // user's message as it was sent (it is not scrubbed), so its text tells the two apart.
+        // user's message as it was sent (but for credential values, scrubbed in Sent too), so its text tells the two apart.
         if (update is PromptSent prompt)
         {
             lock (channel.Gate)
@@ -781,6 +832,11 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         var open = runtime.TryGetSession(id, out var session);
         if (runtime.Log.GetHead(id) == 0 && !open)
             throw new KeyNotFoundException($"There is no session '{id}' in Corvid's log.");
+        // A6 (G-4): the session's own workspace: its calls' paths are shown relative to it, and the header names it.
+        tools = tools.ForSessionOrSelf(id);
+        var bound = runtime.WorkspaceOf(id);
+        lock (channel.Gate)
+            channel.Translator.Workspace = tools.WorkspaceRoot;
         // A call with no result is cancelled only when no turn of the session is running: one opened mid-turn (a job
         // run from the Board, another surface's turn) is still working on it.
         // G-12: a session another process drives is followed read-only; its open calls are that process's, still running.
@@ -842,9 +898,11 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             // here, the choices its log holds, which it starts on when it opens.
             var choices = open ? null : runtime.ModelChoices(id);
             var decider = choices?.GetValueOrDefault(Corvid.Models.ModelSlots.Decider)?.Split('@')[0] ?? DeciderLabel(runtime, open ? session : null);
+            // A6 (G-4): with where the session works, for the brand line and the status bar's branch.
+            var (workspaceName, branch) = (WorkspaceText.Name(bound.Path), bound.Branch ?? WorkspaceText.Branch(bound.Path));
             updates.Add((choices?.GetValueOrDefault(Corvid.Models.ModelSlots.Generator)?.Split('@')[0] ?? CurrentGenerator(runtime, open ? session : null)) is { Length: > 0 } generator
-                ? new EngineStatus { Model = generator, Decider = decider, At = at }
-                : new EngineStatus { Decider = decider, At = at });
+                ? new EngineStatus { Model = generator, Decider = decider, Workspace = workspaceName, Branch = branch, At = at }
+                : new EngineStatus { Decider = decider, Workspace = workspaceName, Branch = branch, At = at });
             updates.Add(new AvailableCommandsUpdate(commands) { At = at });
             channel.ReadOnly = summary.ReadOnly;
             channel.Holder = summary.Holder;
@@ -978,7 +1036,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             var id = channel.SessionId;
             Track(Task.Run(async () =>
             {
-                if (runtime.Log.GetHead(id) > 0 && !_channels.ContainsKey(id))
+                if (SessionCatalogue.Describe(runtime.Log, id) is not null && !_channels.ContainsKey(id))
                     await runtime.ReleaseDriverAsync(id).ConfigureAwait(false);
             }));
         }
@@ -1137,7 +1195,10 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             Job = job.Name,
             Schedule = job.Schedule,
             RunAt = job.Name is not null ? job.RunAt ?? last : null,
-            Workspace = runtime.Builtin.Environment.Workspace,
+            // A6 (G-4): where this session works, with the branch of the worktree Corvid made for it.
+            Workspace = runtime.WorkspaceOf(id).Path,
+            WorkspaceGone = !Directory.Exists(runtime.WorkspaceOf(id).Path),
+            Branch = runtime.WorkspaceOf(id).Branch ?? "",
             Surface = SurfaceOf(id),
             State = IsJobRun(id) ? SessionState.Job : question is not null ? SessionState.Waiting : SessionState.Idle,
             PendingQuestions = question is null || IsJobRun(id) ? 0 : 1,
@@ -1178,7 +1239,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     private SessionSummary Empty(CorvidRuntime runtime, string id, DateTimeOffset created) => new(id, "New session")
     {
         Pinned = Pins().Contains(id),
-        Workspace = runtime.Builtin.Environment.Workspace,
+        Workspace = runtime.WorkspaceOf(id).Path,
+        WorkspaceGone = !Directory.Exists(runtime.WorkspaceOf(id).Path),
+        Branch = runtime.WorkspaceOf(id).Branch ?? "",
         Surface = SurfaceOf(id),
         State = SessionState.Idle,
         LastActivity = created,

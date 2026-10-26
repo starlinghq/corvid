@@ -155,9 +155,13 @@ internal sealed record PromptResponse(string StopReason);
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
 [JsonDerivedType(typeof(TextContent), "text")]
+[JsonDerivedType(typeof(ImageContent), "image")]
 internal abstract record ContentBlock;
 
 internal sealed record TextContent(string Text) : ContentBlock;
+
+/// <summary>K-8 (A6): an image block, base64 data and its media type, as <c>session/load</c> replays a message's images.</summary>
+internal sealed record ImageContent(string Data, string MimeType) : ContentBlock;
 
 internal sealed record SessionNotification(string SessionId, SessionUpdate Update);
 

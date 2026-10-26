@@ -137,6 +137,7 @@ public static class SessionFold
             Turn = state.Turn + 1,
             Position = message.Position,
             From = message.From,
+            Images = message.Images,
         };
         return Add(Advance(state), prompt);
     }
@@ -433,6 +434,22 @@ public static class SessionFold
         var request = state.Approvals.FirstOrDefault(open => open.ApprovalId == resolved.ApprovalId);
         if (request is not null)
             state = state with { Approvals = state.Approvals.Remove(request) };
+
+        // A6 fix: an approval outside any call (making or removing a worktree, a memory write) has no call to carry its
+        // verdict, so its answer stays in the transcript as an entry of its own, like any answered approval's.
+        if (request is { CallId: null } && IndexOf(state.Transcript, "approval:" + resolved.ApprovalId) < 0)
+        {
+            var approved = resolved.Outcome == ApprovalOutcome.Approved;
+            state = Add(state, new ToolEntry("approval:" + resolved.ApprovalId, "", request.Tool, ToolKind.Other, resolved.At)
+            {
+                Turn = state.Running ? CurrentTurn(state) : 0,
+                Status = approved ? ToolCallStatus.Completed : ToolCallStatus.Failed,
+                Outcome = approved ? ToolOutcome.Succeeded : ToolOutcome.Denied,
+                Summary = request.Text,
+                Verdict = new CallVerdict(Verdict(resolved)) { ApprovalId = resolved.ApprovalId, Rule = resolved.Rule, Detail = resolved.Reason },
+            });
+            return state;
+        }
 
         var transcript = state.Transcript;
         for (var i = transcript.Count - 1; i >= 0; i--)

@@ -17,9 +17,9 @@ comes next: [`docs/plan/ui-handoff.md`](../../docs/plan/ui-handoff.md); the rule
 dotnet build src/Corvid.App/Corvid.App.csproj -c Release
 # The engine (the default) over this machine's Corvid home; set HOME, CORVID_CONFIG and the XDG directories to try a
 # temporary one:
-dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll
+dotnet src/Corvid.App/bin/Release/net10.0-desktop/corvid-app.dll
 # The demo, as the mockups draw it:
-dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll --demo
+dotnet src/Corvid.App/bin/Release/net10.0-desktop/corvid-app.dll --demo
 # or, building as it goes:
 dotnet run --project src/Corvid.App -c Release -- --demo --page models --theme dark
 ```
@@ -36,15 +36,75 @@ dotnet build src/Corvid.App/Corvid.App.csproj -c Release -f net10.0-browserwasm 
 ```
 
 It builds with the workload (A3: `SelectableButtonAutomationPeer` skips the selection property event, which Uno 6.7 does not
-implement in the browser head) but has not been run in a browser yet; it runs on the demo services only, since the engine
-is desktop-only until attached mode (G-1).
+implement in the browser head; A6: the approval card's key repeat check reads no `KeyStatus` there) and runs in a browser
+(A6, headless Chromium): attached to the Corvid that serves it (below), or the demo with `?demo`. It does not call
+`AppLogging`, whose console logger provider throws in a browser and left the tab on its loading bar.
+
+## Attached mode (G-1)
+
+The window can show the sessions of a Corvid that runs elsewhere: `corvid serve --attach` serves the session seam
+(`ISessionService`, the engine's own `EngineSessionService`) over a WebSocket, and the app attaches with `--attach`. The
+Sessions page, the rail, approvals with the full card, questions and the queue work as in-process; the other areas say
+that they run on the engine's machine.
+
+```sh
+corvid serve --attach --no-openai                                  # unix:$XDG_RUNTIME_DIR/corvid/attach.sock
+corvid-app --attach unix:$XDG_RUNTIME_DIR/corvid/attach.sock       # the owner, on the same machine
+corvid serve --attach --listen ws://127.0.0.1:8737 --web <wasm publish>/wwwroot   # plus a loopback WebSocket and the browser app
+corvid serve pair                                                  # a one-time code (5 min) for another device
+corvid-app --attach ws://127.0.0.1:8737 --pair XXXXX-XXXXX         # pairs, keeps the device token, attaches
+# a browser: http://127.0.0.1:8737/#pair=XXXXX-XXXXX               # the code in the fragment, the token in localStorage
+corvid serve devices; corvid serve revoke <name>
+```
+
+- **Tokens.** Every connection needs one. The owner token is the Vault secret `Corvid:Serve:Attach:TokenSecret` names
+  (checked through Vault's scrubber, as `corvid serve`'s bearer token is; Corvid never holds it, so hand it to the app
+  with `CORVID_ATTACH_TOKEN`), or, without one, a token generated on first use in
+  `$XDG_STATE_HOME/corvid/attach/owner.token` (0600, in a 0700 directory; a file others can read is refused). A paired
+  device's token is kept on the server as a SHA-256 digest in `devices.json` (0600) and on the client in
+  `client-tokens.json` (0600) or the browser's localStorage. Pairing codes live in the server's memory only, redeem
+  once and expire after 5 minutes. Past 10 wrong codes or tokens a minute from one peer, that peer may not pair until the
+  minute ends, and past 100 a minute from the network as a whole no network peer may; the Unix socket is counted on its
+  own. A presented token is always checked (A6 review): a 256-bit token cannot be guessed, so a flood of wrong ones never
+  locks out a valid one. `corvid serve revoke <name>` refuses the device's next connection and closes the ones it has
+  open (at its next request, or within 5 seconds). The window sends the owner token (the file's, or
+  `CORVID_ATTACH_TOKEN`) on its own only over a Unix socket, on Linux, after the kernel says the server is the same user
+  (`SO_PEERCRED`); over `ws://`, loopback included, a window pairs like any device, since another local user could hold
+  the port. The state directory is protected state: the file tools refuse it, no command may write it, and the sandbox
+  hides it from every command.
+- **Where it listens.** A Unix socket (0600) by default; `--listen` adds a WebSocket, loopback only unless the owner token
+  is a Vault secret. On loopback only loopback host names are served (no DNS rebinding), beyond it only the address listened
+  on (any IP literal on `0.0.0.0`), and a browser is accepted only from the pages the server serves itself (`Origin`). A
+  socket directory you name must be yours and writable by nobody else. At most 32 connections may wait to authenticate
+  at once. Both ends ping every 20 s and drop a peer silent for 30 s; a request not answered in 2 minutes fails (except
+  `session/new`, compaction, recaps, forks and commands); a window that cannot attach within 15 s opens refused.
+  Requests from one connection run in the order sent (those long ones start in order and run beside the rest), and either
+  end may give one up with `$/cancelRequest`. There is no TLS: past loopback the owner token, device tokens and
+  pairing codes cross the network in cleartext, and they answer approvals, so `corvid serve` says so at start. Listen
+  beyond loopback only on a network you trust, or reach a loopback listener through an SSH tunnel or a TLS proxy. The
+  browser head sends a `#pair=` code only to the server that served the page, never to another `?attach=` address.
+- **Who sees what.** There is no guest: the owner and devices the owner paired get the seam, approvals included (F22);
+  anything else is closed before it sees a session. A device cannot make pairing codes.
+- **Disconnects.** A client that goes leaves the engine as it was: its approvals wait for another client or their deadline
+  (then denied), and once no client is left a question a turn asked inside the turn is put aside (the turn ends with it
+  open, and the next message answers it). The window shows a notice in each open session and its requests fail; open it
+  again to attach (no automatic reconnect yet).
+- **Images and workspaces (A6).** A message's images cross the wire base64 in `session/prompt` (at most 8, 40 MB
+  together), and thumbnails come back by digest (`_corvid/read_image`); the engine checks, strips and stores them as for
+  its own window. The server reads requests of up to 256 KB until a connection authenticates with the owner's or a paired
+  device's token, and up to 64 MB after (a pairing connection never gets more). A file dropped on an attached window is
+  read on that device, where the person dropped it, never on the engine's machine. `session/new` takes `workspace` (a
+  path on the engine's machine, which the engine checks), `worktree`, `worktreeName` and `askIn`; the worktree's approval
+  is the asking session's card, answered from the client. The capabilities say `canSendImages` and `canChooseWorkspace`.
 
 ## Command line
 
 | Option | Effect |
 | --- | --- |
 | `--engine` | The default (the option only says so): Corvid's engine in-process (it hosts the gateway and the scheduler only when asked: `Corvid:App:HostGateway`, `Corvid:App:HostScheduler`, or Start hosting on the Gateway and Jobs pages; U-8) (`Corvid.App.Engine`, desktop head only), over the same `corvid.json`, models and event log as the CLI; `CORVID_CONFIG` and `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR` move them (a test home sets them all, and `Corvid:Models:Cache`, to temporary directories). The host starts and the model cache is checked before the window opens; the models load in the background. With models missing it opens First run. Every area runs on the engine; a member the engine cannot honour yet refuses with the work item that brings it ("comes with U-6: …", shown as a red notice or a disabled action). Not with `--demo`. |
-| `--demo` | Demo services and the scripted scenario instead of the engine, with the clock frozen at 2026-10-24 14:05 local so every relative time and screenshot is stable. Every mockup comparison and screenshot of a mocked screen passes it; the browser head runs only the demo. |
+| `--demo` | Demo services and the scripted scenario instead of the engine, with the clock frozen at 2026-10-24 14:05 local so every relative time and screenshot is stable. Every mockup comparison and screenshot of a mocked screen passes it; the browser head opens it with `?demo`. |
+| `--attach <address>` | G-1: a Corvid elsewhere (`corvid serve --attach`) instead of the engine here: `unix:/path/attach.sock` or `ws://host:port`. The token is the one pairing kept for that address or, on this machine, the owner token (`$XDG_STATE_HOME/corvid/attach/owner.token`, or `$CORVID_ATTACH_TOKEN`). A refusal opens the window with every area saying why. Not with `--demo`, `--engine` or `--scene`. See Attached mode. |
+| `--pair <code>` | With `--attach`: pairs this window as a device with a code from `corvid serve pair` first, keeping its token (0600) for the next `--attach` to the address. |
 | `--theme light\|dark\|system` | The theme to start in; `system` by default. Settings switches it at run time. |
 | `--page <area>` | The area to open: `sessions`, `board`, `review`, `rewind`, `memory`, `skills`, `jobs`, `models`, `safety`, `mcp`, `gateway`, `secrets`, `audit`, `settings`, `first-run` (any case; `=` works too: `--page=models`). |
 | `--session <id>` | The session to select and open, such as `cli-9f2e`; with `--page`, it is selected and the page shows. |
@@ -73,6 +133,21 @@ are sent; a mark with nothing after it is refused with what to type, and the dra
 a space (`#`) or a space or a command word (`!`, `!!`: letters, digits and `_ . ~ / + -` up to a space), so `#123 is
 failing again`, `#include <stdio.h> not found` and `!important: keep the API stable` are sent as messages; `\#` or `\!`
 at the start sends any such line as a message, without the backslash.
+
+Images (A6, K-8, flow F19): a pasted bitmap or copied image file, an image file dropped on the composer, or a path typed
+in the composer's attach box becomes a chip above the composer (up to 8 per message, 20 MiB and 40 megapixels each; PNG,
+JPEG, GIF and WebP, read from the bytes, never from the name); a dropped file that is not an image becomes an `@`
+reference in the draft, and a dropped folder is refused with why. The engine checks the chips before the message is
+queued (a refusal gives the message and chips back), and the turn strips every image's metadata (EXIF, text chunks,
+location) and stores the stripped bytes in the media store (`<data>/media/sha256/`, content-addressed); the log's
+`user_message` carries only references (digest, type, size, dimensions, name) in an optional `images` field, so a binary
+older than A6 reads such a message as its text alone. The transcript draws them as bounded thumbnails (360 by 240 at
+most) with their captions, live and replayed. A generator that reads images (a remote model with `"Vision": true`) is
+sent them; any other is sent the vision slot's description of each, labelled as a model's reading of the image, or the
+message is refused when no vision model is set. A gated (cloud) model is sent no image unless its egress policy allows
+images (`Corvid:Privacy:Images`, or the model's own `Egress:Images`); otherwise the privacy gate keeps the turn local or
+refuses it with why. `corvid chat` takes `/image <path>` (stage, list, `clear`) and `@shot.png` in a message; ACP takes
+image content blocks (base64 `data`; a `uri` alone is refused) and advertises `promptCapabilities.image`.
 
 Titles, recaps, pins and drafts (A4, G-6 and G-7): a session's title is its rename, else the one the local generator
 wrote after its first exchange (never a cloud generator), else its first message; the header's ••• menu renames it, pins
@@ -116,6 +191,19 @@ Remove… asks to remove it, the question's Remove takes focus, and `Esc` stops 
 secret…'s name field starts the set, and `Esc` closes the picker. The rest of the keyboard map
 (`docs/plan/ui.md` §6) comes with the screens it drives.
 
+Workspaces (A6, G-4): on the engine a session keeps the workspace it was started in (a `WorkspaceBound` event in its
+log, the configured one when none was asked for, so a process started elsewhere resumes it where it began), and its
+approvals, sandboxed shell, file tools, checkpoints, Review and Rewind follow it; a log written before A6 records none
+and works in the configured one (`Corvid:Workspace`), as before. With sessions in several workspaces the rail groups
+them by workspace (the folder's name, its path where two share a name, and a worktree's branch). Ctrl+N and New session
+start in the workspace of the session in view; the Board's Open a workspace… starts one in a typed folder (`~/` is the
+home directory), in one the window already works in, or in a new git worktree of the session in view's repository (a
+branch `corvid/<name>` under `$XDG_STATE_HOME/corvid-worktrees`, `Corvid:Sessions:WorktreesDirectory`; each git step within `Corvid:Sessions:WorktreeTimeoutSeconds`), made only after
+the person approves it on that session's card, and refused for a repository whose configuration (or any file it
+includes) names a filter driver, which git would run outside the sandbox. `/workspace` does the same from the composer and the CLI (`list`,
+`open <path>`, `new [<name>]`, `remove <name>`), and `corvid chat --workspace <dir>` starts a chat session elsewhere. The
+demo keeps one workspace and the rail's Pinned and Recent.
+
 ## The harness check
 
 Every change to a screen is checked by running the app and looking at it next to its mockup (the approved artboards:
@@ -125,7 +213,7 @@ Main, Approval, Review, Rewind, Board, Models, Memory, Audit, FirstRun and Phone
 ```sh
 Xvfb :99 -screen 0 2560x1600x24 -nolisten tcp &
 export DISPLAY=:99 CORVID_APP_RENDERER=software
-dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll --demo --page models &
+dotnet src/Corvid.App/bin/Release/net10.0-desktop/corvid-app.dll --demo --page models &
 w=$(xdotool search --sync --onlyvisible --name '^Corvid$' | head -1)
 xdotool windowmove "$w" 0 0 windowsize "$w" 1440 900; sleep 2
 import -window root -crop 1440x900+0+0 +repage models-1440.png
@@ -322,7 +410,9 @@ heads and are unverified with a real screen reader.
 `tools/Corvid.Architecture` holds the app's rules, with tests in `tests/Corvid.Architecture.Tests`: Uno's packages
 appear in `Corvid.App` only, from an explicit list of what Uno.Sdk's implicit packages resolve (another list for the
 WebAssembly target); `Corvid.App.Core` takes no package but Markdig and no project but `Corvid.Abstractions`; only the
-head's desktop target and `Corvid.App.Engine` reach `Corvid.Host`, and the WebAssembly target never does. No
+head's desktop target and `Corvid.App.Engine` reach `Corvid.Host`, and the WebAssembly target never does. The CLI
+references `Corvid.App.Engine` (A6, G-1) so `corvid serve --attach` serves the engine's own session service: the remote
+seam is `ISessionService` itself, with no second copy of the approval, queue and question logic. No
 CommunityToolkit, MVUX, Uno.Extensions or Uno Toolkit: Hot Design (which brings them) and the in-app MCP endpoint are
 turned off in the project. The WebAssembly target pins `System.Security.Cryptography.Pkcs` and `.Xml` to the patched
 release over the 10.0.12 that Uno.Sdk's `Microsoft.Windows.Compatibility` brings (Directory.Packages.props); the desktop

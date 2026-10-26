@@ -4039,10 +4039,10 @@ Deferred:
   `IEventLog.Append` is synchronous and the turn appends under its lock (never across an await), while
   `VaultClient.ScrubAsync` is an async, rate-limited, audited RPC, and Kernel has no reference to `Corvid.Vault.Client`. It
   needs an async pre-append hook at the tool-result site and a budget for the oracle risk.
-- Scrubbing `UserMessage`: a user who deliberately hands the agent a key would lose it from the prompt. The intended route is
-  Vault (`corvid-vault set`, or a chat ingest that does not exist yet). A consequence: `Compacted` summaries, `GoalSet` and
-  `TodosSet` are not scrubbed (models write them, and for a tool-sourced value they only ever saw the marker), so a
-  credential the user pasted can be carried into one and indexed into `memory.db` with it.
+- (Done in A6, A6V2-06: `UserMessage.Text` and `UserSteered.Text` are scrubbed with the egress rules before they are
+  logged, so a pasted password or key reaches neither the log, the episodic index, prompt history nor the prompt rendered
+  from the log; the model reads the marker, and a key meant for a tool goes through Vault. `Compacted` summaries, `GoalSet`
+  and `TodosSet` still are not scrubbed, but a user's credential no longer reaches the models that write them.)
 - A retroactive scrub of existing `events.db` and `memory.db`: the log is append-only (UPDATE and DELETE triggers), so it
   needs an offline `corvid scrub` rewrite or a migration, and a rebuild of the episodic index.
 - A keyed (per-install HMAC) marker hash, so labelled values could carry a correlator too.

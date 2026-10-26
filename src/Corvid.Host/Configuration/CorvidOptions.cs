@@ -152,6 +152,19 @@ public sealed class SessionsSettings
     /// <c>--session</c>, the app opening it); 0 turns recaps on return off. <c>/recap</c> works either way.
     /// </summary>
     public int RecapAfterMinutes { get; set; } = 60;
+
+    /// <summary>
+    /// A6 (G-4): where the git worktrees Corvid makes for sessions go, one directory per repository below it. Outside every
+    /// workspace and the data directory (which the sandbox hides). Default <c>$XDG_STATE_HOME/corvid-worktrees</c>
+    /// (<c>~/.local/state/corvid-worktrees</c>).
+    /// </summary>
+    public string? WorktreesDirectory { get; set; }
+
+    /// <summary>
+    /// A6 review: seconds each git command that makes, lists or removes a worktree may take (checking a large repository
+    /// out takes the longest); one that takes longer is stopped and what it made is undone. 1 to 3600, default 60.
+    /// </summary>
+    public int WorktreeTimeoutSeconds { get; set; } = 60;
 }
 
 public sealed class DetectionSettings
@@ -276,6 +289,9 @@ public sealed class ServeSettings
     /// <summary>The largest request body accepted.</summary>
     public int MaxRequestBytes { get; set; } = 1024 * 1024;
 
+    /// <summary>Attached mode (G-1, <c>corvid serve --attach</c>): the app's session seam for a window elsewhere.</summary>
+    public AttachSettings Attach { get; set; } = new();
+
     /// <summary>Whether <see cref="Url"/> names a loopback host (<c>127.0.0.0/8</c>, <c>::1</c> or <c>localhost</c>).</summary>
     public static bool IsLoopback(Uri url)
     {
@@ -283,6 +299,29 @@ public sealed class ServeSettings
         return url.IsLoopback || url.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
             || System.Net.IPAddress.TryParse(url.Host.Trim('[', ']'), out var address) && System.Net.IPAddress.IsLoopback(address);
     }
+}
+
+/// <summary>
+/// Attached mode (G-1): where <c>corvid serve --attach</c> serves the app's session seam, and whose token opens it. Every
+/// connection needs a token: the owner's (this Vault secret when <see cref="TokenSecret"/> names one, else a token generated
+/// in a 0600 file under <c>$XDG_STATE_HOME/corvid/attach</c>) or a paired device's.
+/// </summary>
+public sealed class AttachSettings
+{
+    /// <summary>The Unix socket to listen on; empty for <c>$XDG_RUNTIME_DIR/corvid/attach.sock</c>, <c>off</c> for none.</summary>
+    public string? Socket { get; set; }
+
+    /// <summary>
+    /// A WebSocket address to listen on as well (<c>ws://127.0.0.1:8737</c>), for a browser or another machine; empty for none.
+    /// Anything other than a loopback address needs <see cref="TokenSecret"/>.
+    /// </summary>
+    public string? Listen { get; set; }
+
+    /// <summary>The Vault secret that is the owner token. Without it the owner token is generated in a 0600 file.</summary>
+    public string? TokenSecret { get; set; }
+
+    /// <summary>A directory of static files served beside the socket on <see cref="Listen"/>: the app's WebAssembly build.</summary>
+    public string? Web { get; set; }
 }
 
 /// <summary>
@@ -498,6 +537,13 @@ public sealed class TurnSettings
     public int DualShortlistStateTokens { get; set; } = Kernel.Turns.TurnOptions.DefaultDualShortlistStateTokens;
 
     /// <summary>
+    /// K-8 (A6 review): how many of the latest user messages send their images to the model again (1 to 64; default 2). An
+    /// older message's images are a one-line stub naming each (<c>[image: shot.png, 1280×720; shown in an earlier turn]</c>),
+    /// so a picture is not read and paid for on every later model call.
+    /// </summary>
+    public int ImageTurns { get; set; } = Kernel.Turns.TurnOptions.DefaultImageTurns;
+
+    /// <summary>
     /// Fewer decider questions per turn (C-030, spike S1 decision 2): step checkpoints ask at most two questions (done, stuck,
     /// tool in that order) and pre_execute skips <c>risk</c> where the outcome is ask whatever it says. <see cref="ReducedCheckpoints.Auto"/>
     /// reduces only when Kev runs on the CPU.
@@ -662,6 +708,13 @@ public sealed class RemoteModelSettings
 
     /// <summary>This model's egress policy, over <see cref="CorvidOptions.Privacy"/>.</summary>
     public EgressSettings? Egress { get; set; }
+
+    /// <summary>
+    /// K-8 (A6): the model reads images, so a message's images are sent to it as images. A model listed for the
+    /// <c>vision</c> slot reads them by definition. Whether a gated model may be sent any is the egress policy's
+    /// <see cref="EgressSettings.Images"/>, off unless allowed.
+    /// </summary>
+    public bool Vision { get; set; }
 }
 
 /// <summary>The privacy egress gate (plan §10.4) for every model this process binds.</summary>
@@ -684,6 +737,12 @@ public sealed class PrivacySettings
 
     /// <summary>Minimum span confidence; lower is stricter.</summary>
     public float Threshold { get; set; } = EgressPolicy.Default.Threshold;
+
+    /// <summary>
+    /// K-8 (A6): whether a gated model (every cloud model, and local servers when gated) may be sent images at all. Off by
+    /// default: the PII scan cannot read a picture. A model's own <c>Egress:Images</c> overrides it.
+    /// </summary>
+    public bool Images { get; set; }
 
     /// <summary>How long the egress ledger (G-9, <c>egress.db</c>) keeps the requests it recorded.</summary>
     public EgressLedgerSettings Ledger { get; set; } = new();
@@ -717,4 +776,7 @@ public sealed class EgressSettings
     public List<string> ExtraLabels { get; set; } = [];
 
     public float? Threshold { get; set; }
+
+    /// <summary>K-8 (A6): whether this model may be sent images, over <see cref="PrivacySettings.Images"/>.</summary>
+    public bool? Images { get; set; }
 }

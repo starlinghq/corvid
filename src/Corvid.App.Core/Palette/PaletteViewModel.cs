@@ -18,6 +18,15 @@ public sealed record PaletteHost(ShellViewModel Shell, KeyMap Keys, TimeProvider
 
     public IPromptHistory? History { get; init; }
 
+    /// <summary>G-5: search over what was said in every session (the engine's episodic index); null where there is none (the demo).</summary>
+    public ISessionSearch? Search { get; init; }
+
+    /// <summary>How long typing pauses before the search runs; each key typed meanwhile starts the wait again.</summary>
+    public TimeSpan SearchDelay { get; init; } = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>Asks the Sessions page to open a session at a log position (a search's matched turn).</summary>
+    public Action<string, long>? RevealAt { get; init; }
+
     public ISessionService? Sessions { get; init; }
 
     public Func<IModelService>? Models { get; init; }
@@ -103,7 +112,11 @@ public sealed class PaletteViewModel : ObservableObject
         get => _query;
         set
         {
-            if (SetProperty(ref _query, value ?? ""))
+            if (!SetProperty(ref _query, value ?? ""))
+                return;
+            if (_mode == PaletteMode.Search && _host.Search is { } search)
+                SearchContent(search);
+            else
                 Refilter();
         }
     }
@@ -259,9 +272,13 @@ public sealed class PaletteViewModel : ObservableObject
             case PaletteMode.Find:
                 OpenFind();
                 break;
+            case PaletteMode.Search when _host.Search is not null:
+                // G-5: what was said, through the episodic index, as the person types.
+                Present("Search sessions", "Search what was said in your sessions…", TypeToSearch, []);
+                break;
             case PaletteMode.Search:
                 Present("Search sessions", "Search every session…", "No session matches.", []);
-                Note = "This searches titles, previews and ids. Searching what was said comes with the episodic index (G-5).";
+                Note = "There is no episodic index here, so this searches titles, previews and ids; the engine searches what was said.";
                 Load(LoadSearchAsync);
                 break;
             case PaletteMode.Help:
@@ -358,7 +375,8 @@ public sealed class PaletteViewModel : ObservableObject
 
         items.Add(Command("Switch session…", "The sessions, most recent first", KeyCommands.SessionSwitcher, IconKind.Chat));
         items.Add(Command("Find in the session…", "Words in the open session's transcript", KeyCommands.Find, IconKind.Search));
-        items.Add(Command("Search across sessions…", "Titles, previews and ids", KeyCommands.Search, IconKind.Search));
+        items.Add(Command("Search across sessions…", _host.Search is null ? "Titles, previews and ids" : "What was said in every session",
+            KeyCommands.Search, IconKind.Search));
         items.Add(Command("Prompt history…", "Prompts sent in this workspace", KeyCommands.History, IconKind.Lines));
         items.Add(Command("Switch the generator…", "Without leaving the composer", KeyCommands.SwitchGenerator, IconKind.Chip));
         items.Add(Command("New session", _host.NewSession is null ? "Comes with the engine (A3)" : "An empty session in the window's workspace",
@@ -544,6 +562,78 @@ public sealed class PaletteViewModel : ObservableObject
         Refilter();
     }
 
+    // A6 review: the engine searches the person's own sessions; gateway chats and job runs are left out, as in prompt history.
+    private const string TypeToSearch = "Type to search what was said in your sessions. Gateway chats (other people's messages) and scheduled job runs are left out.";
+
+    /// <summary>
+    /// G-5: runs the search for what is typed, once typing pauses (<see cref="PaletteHost.SearchDelay"/>); a newer query, or
+    /// Esc, cancels a search still running, so the list is always the latest query's.
+    /// </summary>
+    private void SearchContent(ISessionSearch search)
+    {
+        var query = _query.Trim();
+        if (query.Length == 0)
+        {
+            Cancel();
+            IsLoading = false;
+            EmptyText = TypeToSearch;
+            _source = [];
+            Refilter();
+            return;
+        }
+
+        Load(async cancellationToken =>
+        {
+            if (_host.SearchDelay > TimeSpan.Zero)
+                await Task.Delay(_host.SearchDelay, _host.Time, cancellationToken);
+            var found = await search.SearchAsync(query, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (found.Unavailable is { } why)
+            {
+                _source = [];
+                EmptyText = "";
+                Show($"No search: {SafeText.Clean(why)}.", Tone.Amber);
+                Refilter();
+                return;
+            }
+
+            Note = "";
+            EmptyText = "Nothing said in any session matches.";
+            _source = [.. found.Matches.Select(Match)];
+            Refilter();
+        });
+    }
+
+    private PaletteItem Match(SessionMatch match)
+    {
+        var shell = _host.Shell;
+        var zone = _host.Time.LocalTimeZone;
+        var today = TimeZoneInfo.ConvertTime(_host.Time.GetUtcNow(), zone).Date;
+        var local = TimeZoneInfo.ConvertTime(match.At, zone);
+        var when = local.Date == today ? local.ToString("HH:mm", CultureInfo.InvariantCulture) : local.ToString("d MMM HH:mm", CultureInfo.InvariantCulture);
+        var title = SafeText.Clean(match.Title ?? "");
+        var turn = match.Turn > 0 ? $"turn {match.Turn.ToString(CultureInfo.InvariantCulture)}" : "";
+        var detail = string.Join(" · ", new[] { title.Length > 0 ? title : SafeText.Clean(match.SessionId), turn, SafeText.Clean(match.Who), when }
+            .Where(part => part.Length > 0));
+        var (id, position) = (match.SessionId, match.TurnPosition);
+        return new PaletteItem(TranscriptText.Snippet(SafeText.Clean(match.Snippet), _query.Trim(), 120), detail, () =>
+        {
+            if (shell.FindSession(id) is null)
+            {
+                Show($"{SafeText.Clean(id)} is not in the rail's list, so it cannot open here yet.", Tone.Amber);
+                return;
+            }
+
+            // Asked before the session opens, so the page lands on the turn as it first draws the session.
+            _host.RevealAt?.Invoke(id, position);
+            Close();
+            shell.OpenSession(id);
+        }, "", "", IconKind.Search)
+        {
+            Keywords = SafeText.Clean(id),
+        };
+    }
+
     /// <summary>The Alt+P list's two groups (A5): a pick in the first switches the open session, in the second the default for new sessions.</summary>
     public const string ThisSessionGroup = "This session";
 
@@ -696,6 +786,11 @@ public sealed class PaletteViewModel : ObservableObject
         if (_mode == PaletteMode.Find)
         {
             matched = FindInSession();
+        }
+        else if (_mode == PaletteMode.Search && _host.Search is not null)
+        {
+            // G-5: the index has matched and ranked them already.
+            matched = _source;
         }
         else if (_query.Trim().Length == 0)
         {

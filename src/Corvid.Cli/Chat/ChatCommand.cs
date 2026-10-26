@@ -3,6 +3,7 @@ using Corvid.Abstractions.Events;
 using Corvid.Abstractions.Sessions;
 using Corvid.Host.Commands;
 using Corvid.Host.Composition;
+using Corvid.Host.Configuration;
 using Corvid.Host.Sessions;
 using Corvid.Kernel.Jobs;
 using Corvid.Kernel.Sessions;
@@ -57,7 +58,17 @@ internal static class ChatCommand
             }
             try
             {
-                session = runtime.OpenSession(arguments.Option("--session"), "cli");
+                // A6 (G-4): --workspace starts the session in that directory (a resumed one must already work there).
+                var workspace = arguments.Option("--workspace") is { Length: > 0 } directory
+                    ? Path.GetFullPath(CorvidPaths.ExpandHome(directory))
+                    : null;
+                session = runtime.OpenSession(arguments.Option("--session"), "cli",
+                    workspace is null ? null : new SessionSettings { Workspace = workspace });
+            }
+            catch (WorkspaceUnavailableException exception)
+            {
+                console.MarkupLine($"[red]{Markup.Escape(exception.Message)}[/]");
+                return ExitCodes.Failure;
             }
             catch (SessionHeldException exception)
             {
@@ -87,9 +98,14 @@ internal static class ChatCommand
             void OnJob(ScheduledJob job, JobRun run) =>
                 renderer.Notice($"[grey]⏰ job {Markup.Escape(job.Name)}: {Markup.Escape(run.Status)} (session {Markup.Escape(run.SessionId)})[/]");
             renderer.Banner(session.Id, session.Slots.Current(ModelSlots.Generator).Profile.Id, runtime.Tools.List().Count);
+            // A6: a session elsewhere than the configured workspace says where.
+            if (!session.Workspace.IsDefault)
+                renderer.Notice($"[grey]Workspace: {Markup.Escape(TerminalText.Visible(session.Workspace.Root))}" +
+                    (runtime.WorkspaceOf(session.Id).Branch is { } branch ? $" (worktree, branch {Markup.Escape(TerminalText.Visible(branch))})" : "") + "[/]");
             foreach (var notice in runtime.DeciderNotices)
                 renderer.Notice($"[yellow]{Markup.Escape(notice)}[/]");
-            if (session.Snapshot().Head > 0)
+            // A6: a new session's first event may be where it works (WorkspaceBound); only more than that is resumed.
+            if (session.Snapshot().Head > (runtime.WorkspaceOf(session.Id).IsDefault ? 0 : 1))
                 await ResumeAsync(runtime, session, renderer, console, cancellationToken).ConfigureAwait(false);
             // G-7: seen now, so a recap on the next return covers only what happens after.
             Shared(() => runtime.UiState.MarkSeen(session.Id, runtime.Log.GetHead(session.Id), DateTimeOffset.UtcNow));
@@ -170,6 +186,8 @@ internal static class ChatCommand
                 string? next = null;
                 // K-6: the question the last turn ended on; the next message answers it, a number picking one of its choices.
                 ClarifyingQuestion? question = null;
+                // K-8 (A6): images /image named, sent with the next message.
+                var staged = new List<Abstractions.Media.ImageInput>();
                 while (true)
                 {
                     string? line;
@@ -186,6 +204,13 @@ internal static class ChatCommand
                     }
                     if (string.IsNullOrWhiteSpace(line))
                         continue;
+
+                    // K-8 (A6): /image <path> stages an image for the next message (the chat's own; the app attaches by drop or paste).
+                    if (ImageCommand.Matches(line))
+                    {
+                        renderer.Notice(ImageCommand.Run(line, staged, ImageAttachments.EnvironmentFor(runtime, session.Id)));
+                        continue;
+                    }
 
                     if (SlashCommandRegistry.IsCommand(line))
                     {
@@ -235,15 +260,45 @@ internal static class ChatCommand
                     // A \# or \! line is a message, sent without its backslash.
                     if (mode is null)
                         line = ComposerLine.MessageText(line);
+                    // K-8 (A6): @path names an image in the workspace; with /image's, it goes with this message.
+                    var images = new List<Abstractions.Media.ImageInput>();
+                    if (mode is null)
+                    {
+                        var (named, problems) = ImageAttachments.FromReferences(line, ImageAttachments.EnvironmentFor(runtime, session.Id));
+                        if (!problems.IsEmpty)
+                        {
+                            foreach (var problem in problems)
+                                renderer.Notice($"[yellow]{Markup.Escape(TerminalText.Visible(problem))}[/]");
+                            renderer.Notice("[yellow]Nothing was sent; fix the reference or leave the @ off.[/]");
+                            continue;
+                        }
+                        images.AddRange(staged);
+                        images.AddRange(named);
+                        // Asked before the turn, so a refusal keeps the line unsent and the staged images staged.
+                        if (images.Count > 0 && session.CheckImages(images) is { } refusal)
+                        {
+                            renderer.Notice($"[yellow]{Markup.Escape(TerminalText.Visible(refusal))}[/]");
+                            continue;
+                        }
+                    }
+                    else if (staged.Count > 0)
+                    {
+                        renderer.Notice("[yellow]A shell line cannot carry images; they stay staged for your next message.[/]");
+                    }
                     line = ChatRenderer.Answer(question, line);
                     question = null;
+                    if (images.Count > 0)
+                    {
+                        renderer.Notice(ImageCommand.Sending(images));
+                        staged.Clear();
+                    }
 
                     renderer.BeginTurn();
                     // A ! line reports its own turn's result only (security L1): the log's head before the line is posted.
                     var before = mode is ComposerLine.Shell ? session.Snapshot().Head : 0;
                     var turn = mode is ComposerLine.Shell shell
                         ? await session.PostShellAsync(line.Trim(), new ShellLine(shell.Command, shell.LocalOnly), cancellationToken).ConfigureAwait(false)
-                        : session.SendAsync(line, cancellationToken);
+                        : images.Count > 0 ? session.SendAsync(line, images, cancellationToken) : session.SendAsync(line, cancellationToken);
                     Volatile.Write(ref running, turn);
                     Delivery delivery;
                     // A5: /model typed while the turn runs switches this session; the turn takes it at its next step.

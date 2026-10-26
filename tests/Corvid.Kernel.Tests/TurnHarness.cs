@@ -298,14 +298,14 @@ internal sealed class TurnHarness : IDisposable
         ToolCallSupport toolCalls = ToolCallSupport.TemplateRendered, Action<ToolRegistry>? tools = null, DecisionPolicy? policy = null,
         int generatorContext = 8_192, IChatClient? summarizer = null, int summarizerContext = 8_192,
         IChatClient? summarizerEscalation = null, int summarizerEscalationContext = 32_768, string? workspace = null,
-        CheckpointReduction? reduction = null)
+        CheckpointReduction? reduction = null, bool generatorVision = false, IChatClient? vision = null)
     {
         policy ??= DecisionPolicy.Default;
         Log = new SqliteEventLog(Path.Combine(_root, "events.db"));
         Generator = generator;
         Escalation = escalation;
         Embedder = new KeywordEmbedder(Keywords);
-        GeneratorBinding = new ModelBinding(Profile("gen-small", toolCalls, generatorContext), generator);
+        GeneratorBinding = new ModelBinding(Profile("gen-small", toolCalls, generatorContext) with { Vision = generatorVision }, generator);
         EscalationBinding = escalation is null ? null : new ModelBinding(Profile("gen-large", ToolCallSupport.Native, 32_768), escalation);
         Registry = new ModelSlotRegistry()
             .Bind(ModelSlots.Generator, GeneratorBinding, EscalationBinding is null ? null : [EscalationBinding])
@@ -317,6 +317,10 @@ internal sealed class TurnHarness : IDisposable
                 : new ModelBinding(Profile("summarizer-large", ToolCallSupport.None, summarizerEscalationContext), summarizerEscalation);
             Registry.Bind(ModelSlots.Summarizer, SummarizerBinding, SummarizerEscalationBinding is null ? null : [SummarizerEscalationBinding]);
         }
+        // K-8 (A6): a vision slot to describe images for a generator that cannot read them.
+        if (vision is not null)
+            Registry.Bind(ModelSlots.Vision, new ModelBinding(Profile("vision", ToolCallSupport.None, 8_192) with { Vision = true }, vision));
+        Media = new Corvid.Kernel.Media.MediaStore(Path.Combine(_root, "media"));
         if (extractor is not null)
             Registry.Bind(ModelSlots.Extractor, new ModelBinding(Profile("fake-extractor", ToolCallSupport.None, 512), extractor));
         Slots = new SessionModelSlots(Registry, Log, Session);
@@ -332,6 +336,17 @@ internal sealed class TurnHarness : IDisposable
     }
 
     public SqliteEventLog Log { get; }
+
+    /// <summary>K-8 (A6): the media store the turn keeps images in; left out of <see cref="Services"/> when <see cref="NoMedia"/>.</summary>
+    public Corvid.Kernel.Media.MediaStore Media { get; }
+
+    public bool NoMedia { get; init; }
+
+    /// <summary>A6 review: a store the turn uses in place of <see cref="Media"/> (one that counts its reads, say).</summary>
+    public Corvid.Abstractions.Media.IMediaStore? MediaStore { get; init; }
+
+    /// <summary>A6 review: the egress gate's policy per model, for the turn's image checks.</summary>
+    public Func<ModelProfile, Corvid.Models.Privacy.EgressPolicy?>? EgressPolicyFor { get; init; }
 
     public FakeGenerator Generator { get; }
 
@@ -400,6 +415,8 @@ internal sealed class TurnHarness : IDisposable
         Retriever = Retriever,
         CoreBlocks = CoreBlocks,
         Options = Options,
+        Media = NoMedia ? null : MediaStore ?? Media,
+        EgressPolicyFor = EgressPolicyFor,
     };
 
     public TurnRunner Runner() => new(Session, Services());

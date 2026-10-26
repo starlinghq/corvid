@@ -180,7 +180,29 @@
         </Border.ContextFlyout>
         <StackPanel Spacing="4">
           <TextBlock Text="{x:Bind Who, Mode=OneWay}" Style="{StaticResource WhoText}" />
-          <TextBlock Text="{x:Bind Text, Mode=OneWay}" Style="{StaticResource CorvidBodyText}" IsTextSelectionEnabled="True" />
+          <TextBlock Text="{x:Bind Text, Mode=OneWay}" Style="{StaticResource CorvidBodyText}" IsTextSelectionEnabled="True"
+                     Visibility="{x:Bind ui:Ui.VisibleIfText(Text), Mode=OneWay}" />
+          <!-- K-8 (A6): the message's images, bounded thumbnails (360 by 240 at most) with their captions. -->
+          <ItemsControl ItemsSource="{x:Bind Images, Mode=OneWay}" IsTabStop="False" Margin="0,4,0,0"
+                        Visibility="{x:Bind ui:Ui.VisibleIf(HasImages), Mode=OneWay}">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate>
+                <controls:WrapRowPanel Spacing="8" LineSpacing="8" />
+              </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="sessions:ImageView">
+                <StackPanel Spacing="4" AutomationProperties.Name="{x:Bind AutomationName}">
+                  <Border BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1" CornerRadius="6" Background="{ThemeResource CorvidBg}"
+                          HorizontalAlignment="Left">
+                    <controls:ImageThumb View="{x:Bind}" />
+                  </Border>
+                  <TextBlock Text="{x:Bind Caption}" FontSize="12" Foreground="{ThemeResource CorvidText2}" TextTrimming="CharacterEllipsis"
+                             TextWrapping="NoWrap" MaxWidth="360" />
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
         </StackPanel>
       </Border>
     </DataTemplate>
@@ -1105,8 +1127,34 @@
 
     <!-- .composer: 10px 24px 12px, a line above; the text area (min 60, radius 8), then the bar. On the phone (Phone.png) one
          line, 44 high, with a 44 px send button beside it and no bar. -->
-    <Border x:Name="ComposerArea" Grid.Row="3" Padding="24,10,24,12" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,1,0,0">
+    <Border x:Name="ComposerArea" Grid.Row="3" Padding="24,10,24,12" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,1,0,0"
+            AllowDrop="True" DragOver="OnComposerDragOver" Drop="OnComposerDrop">
       <StackPanel Spacing="8">
+        <!-- K-8 (A6), F19: images for the next message (pasted, dropped or attached), each a chip with its ×. -->
+        <ItemsControl x:Name="AttachmentChips" ItemsSource="{x:Bind ViewModel.Session.Attachments, Mode=OneWay}" IsTabStop="False"
+                      AutomationProperties.Name="Images to send"
+                      Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.Session.HasAttachments), Mode=OneWay, FallbackValue=Collapsed}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <controls:WrapRowPanel Spacing="6" LineSpacing="4" />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="sessions:AttachmentChip">
+              <Border Height="24" Padding="8,0,4,0" CornerRadius="12" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1"
+                      Background="{ThemeResource CorvidBg2}" AutomationProperties.Name="{x:Bind AutomationName}">
+                <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                  <TextBlock Text="image" FontSize="12.5" Foreground="{ThemeResource CorvidText2}" VerticalAlignment="Center" />
+                  <TextBlock Text="{x:Bind Label}" FontSize="12.5" VerticalAlignment="Center" MaxWidth="320" TextTrimming="CharacterEllipsis" />
+                  <Button Command="{x:Bind RemoveCommand}" Width="20" Height="20" Padding="0" CornerRadius="10" Background="Transparent" BorderThickness="0"
+                          AutomationProperties.Name="{x:Bind RemoveName}" ToolTipService.ToolTip="{x:Bind RemoveName}">
+                    <TextBlock Text="×" FontSize="13" Foreground="{ThemeResource CorvidText2}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                  </Button>
+                </StackPanel>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
         <Grid ColumnSpacing="8">
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*" />
@@ -1134,8 +1182,24 @@
             <ColumnDefinition Width="Auto" />
             <ColumnDefinition Width="Auto" />
           </Grid.ColumnDefinitions>
-          <controls:IconButton Icon="Paperclip" IsEnabled="False" AutomationProperties.Name="Attach a file"
-                               ToolTipService.ToolTip="Attach a file (@ in the composer names one)" />
+          <!-- K-8 (A6): attach an image by its path (or paste one, or drop a file on the composer). -->
+          <controls:IconButton x:Name="AttachButton" Icon="Paperclip" AutomationProperties.Name="Attach an image"
+                               IsEnabled="{x:Bind ViewModel.Session.CanAttachImages, Mode=OneWay, FallbackValue=False}"
+                               ToolTipService.ToolTip="Attach an image: paste one, drop a file here, or name its path (@ in the composer names a file)">
+            <controls:IconButton.Flyout>
+              <Flyout x:Name="AttachFlyout" Placement="TopEdgeAlignedLeft">
+                <StackPanel Spacing="8" Width="360">
+                  <TextBlock Text="Attach an image" FontWeight="SemiBold" />
+                  <TextBlock Text="A PNG, JPEG, GIF or WebP file; its metadata (location, camera) is removed before it is sent."
+                             Style="{StaticResource CorvidSmallText}" TextWrapping="Wrap" />
+                  <TextBox x:Name="AttachPath" PlaceholderText="~/Pictures/screenshot.png" AutomationProperties.Name="Image path"
+                           KeyDown="OnAttachPathKeyDown" />
+                  <controls:CorvidButton Variant="Primary" Content="Attach" HorizontalAlignment="Right" Click="OnAttachClick"
+                                         AutomationProperties.Name="Attach the image" />
+                </StackPanel>
+              </Flyout>
+            </controls:IconButton.Flyout>
+          </controls:IconButton>
           <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.Session.DraftNote, Mode=OneWay, FallbackValue=''}" Style="{StaticResource CorvidSmallText}"
                      VerticalAlignment="Center" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
           <TextBlock Grid.Column="2" Text="{x:Bind ViewModel.Session.TokenEstimate, Mode=OneWay, FallbackValue=''}" Style="{StaticResource CorvidSmallText}"

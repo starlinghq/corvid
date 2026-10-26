@@ -63,7 +63,8 @@ public sealed class SessionUpdateReporter : ITurnObserver
         ArgumentNullException.ThrowIfNull(emit);
         _runtime = runtime;
         _sessionId = sessionId;
-        _tools = tools;
+        // A6 (G-4): calls are shown in the workspace the session works in.
+        _tools = tools.ForSessionOrSelf(sessionId);
         _read = head;
         _emit = emit;
         _log = log;
@@ -351,7 +352,7 @@ public sealed class SessionUpdateReporter : ITurnObserver
                     switch (item.Payload)
                     {
                         case UserMessage user:
-                            _fromLog.Add(new PromptSent(user.Text, item.Sequence) { At = item.RecordedAt, From = user.From });
+                            _fromLog.Add(new PromptSent(user.Text, item.Sequence) { At = item.RecordedAt, From = user.From, Images = user.Images ?? [] });
                             break;
                         // K-3: a steer the step checkpoint took; K-6: the question a clarifying turn ended on.
                         case UserSteered steer:

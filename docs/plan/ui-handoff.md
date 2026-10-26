@@ -21,6 +21,7 @@ pull request starlinghq/corvid#71.
 | A3 `Corvid.App.Engine`: the real runtime behind the services | done behind `--engine`, verified end to end in three rounds, PR review fixed (§1.4) | PR #77 |
 | A4 the gaps A3 left: the running turn, records, egress, hosting, parity; the engine becomes the default | done, verified end to end in three rounds (§1.5) | branch `a4/engine` |
 | A5 model switching at any time, subagents with a model mix, G-15 forks mid-turn, the A4 leftovers | done, verified end to end in two rounds (§1.6) | branch `a5/engine` |
+| A6 attached mode (G-1), workspaces and worktrees per session (G-4), images (K-8, F19), search across sessions (G-5), the `corvid-app` binary and its tarball (U-7, U-9), the A5 leftovers | done, verified end to end in two rounds (§1.7) | branch `a6/engine` |
 
 The build ran as a workflow in a cloud container: one agent per step, each building, launching the app on a virtual
 display, screenshotting it and comparing it with the mockup renders, then an independent verifier. It was stopped during
@@ -438,8 +439,8 @@ New on the wire: `clarification_answered`, plus the optional `generator` and `us
 as before); it ignores the new fields.
 
 Still refused on the engine, each with its message: memory consolidation (plan §9.5), opening a terminal or the Vault
-helper (U-6), the Vault policy, role, budget and daily counts (V-n), media memory (plan §9.4) and images in prompts
-(K-8). Attached mode, worktrees per session, images and packaging wait for A6.
+helper (U-6), the Vault policy, role, budget and daily counts (V-n) and media memory (plan §9.4). (Images in prompts,
+K-8, attached mode, worktrees per session and packaging came in A6: §1.7.)
 
 Left:
 
@@ -558,6 +559,203 @@ concurrency place while a tool that ignores cancellation still runs (its driver 
 a pinned slot is logged without the pin, so replay shows it unpinned; a tainted child's answer is labelled with a
 prefix, not enclosed, so the injection checkpoint is the defence against text after it.
 
+### 1.7 Attached mode, workspaces, images, search and packaging (A6)
+
+Four groups in parallel worktrees, merged one at a time by an integrator (`a6/int`: attached, workspaces, media, ship),
+building the projects each merge touched and running their tests, then the whole solution, the checker and every test
+project, and tests where the groups meet (`tests/Corvid.Host.Tests/A6MeetingTests.cs`,
+`tests/Corvid.App.Engine.Tests/EngineAttachedMeetingTests.cs`, `tests/Corvid.App.Core.Tests/AttachedLimitTests.cs` and
+`AttachedForwardingTests.cs`):
+
+- **Attached mode, G-1 (`a6/attached`).** `corvid serve --attach` serves the session seam (`ISessionService`, the engine's
+  own `EngineSessionService`) as JSON-RPC over a WebSocket on a Unix socket (0600) and, with `--listen`, loopback TCP
+  (Host and Origin checked, the WebAssembly build served beside it with `--web`); `--no-openai` leaves out the OpenAI
+  endpoint. Every connection authenticates first with the owner token (a Vault secret, or one generated in
+  `$XDG_STATE_HOME/corvid/attach/owner.token`, 0600) or a paired device's token (`corvid serve pair`, `devices`,
+  `revoke`); there is no guest. The app attaches with `--attach` and `--pair`; the WebAssembly head attaches to the Corvid
+  that serves it and pairs from `#pair=`. Approvals and questions are the engine's own cards. A client that drops leaves
+  the engine as it was (approvals fall back to their deadline, in-turn questions are put aside once no client is left).
+  `corvid serve` now stops on SIGTERM and deletes only a socket it bound itself. Attached windows skip `ui.db`.
+- **Workspaces per session, G-4 (`a6/workspaces`).** A session records its workspace (`WorkspaceBound`) and its approvals,
+  sandbox, file tools, checkpoints, Review and Rewind follow it; the rail groups sessions by workspace; the Board's Open a
+  workspace starts one elsewhere or in a new git worktree (under `$XDG_STATE_HOME/corvid-worktrees`), the worktree only
+  after the person approves it on the asking session's card, also outside a turn. `/workspace`, `corvid chat
+  --workspace` and `delegate_task`'s `isolation: worktree` (a child in a worktree of its own) do the same elsewhere.
+- **Images, K-8 and F19 (`a6/media`).** Paste, drop and the attach box make chips; the engine checks them before queueing,
+  the turn strips their metadata and stores them content-addressed (`<data>/media/sha256/`), the log keeps references,
+  the transcript draws bounded thumbnails live and on replay. A generator that reads images gets them; otherwise the
+  vision slot describes them, or the message is refused. A gated model gets no image unless egress allows images.
+  `corvid chat` has `/image` and `@path`; ACP takes image blocks and advertises `promptCapabilities.image` (its two
+  exchanges were re-recorded for that field alone).
+- **Search, packaging and the A5 leftovers (`a6/ship`).** G-5: `CorvidRuntime.SearchSessions` over the episodic index,
+  `/search`, and `Ctrl+Shift+F` in the app, which opens the session at the matched turn. U-7 and U-9: the app's binary is
+  `corvid-app` with the Corvid mark as its window icon, a tarball target (`CorvidAppTarball`), `install.sh --app` with a
+  desktop entry, the release workflow publishing it, and an Info-only app check in `corvid doctor`. The A5 leftovers: an
+  abandoned child keeps its concurrency place until its tool returns; a tainted child's answer is enclosed between
+  markers its text cannot forge (`EncloseOutside`); the credential detector turns away a plain-word password in labelled
+  prose; a reset on a pinned slot logs its pin.
+
+Decisions taken while merging:
+
+- **The CLI references `Corvid.App.Engine`** (and through it `Corvid.App.Core` and Markdig), recorded in the checker's
+  tables with the reason: `corvid serve --attach` hosts the engine's own session service, so the remote seam is
+  `ISessionService` itself and the approval card, queue and questions are the window's code, never a second copy.
+  `Corvid.Http` and `Corvid.Acp` still reference neither; `Corvid.Host` references no App project.
+- **Images cross the attached wire.** `session/prompt` takes `images` (base64, at most 8, 40 MB together) and
+  `_corvid/read_image` returns a thumbnail's bytes by digest. The server reads requests of up to 256 KB until a connection
+  authenticates with the owner's or a paired device's token, and up to 64 MB after (`IMessageChannel.AllowMessagesUpTo`);
+  a pairing connection never gets more. A file dropped on an attached window is read on that device by its full path
+  (`~` is that device's home; a relative path is refused), never on the engine's machine: a paired device reads none of
+  the engine's files this way, and the engine checks the bytes as it checks a paste.
+- **Workspaces cross the attached wire.** `session/new` takes `workspace`, `worktree`, `worktreeName` and `askIn`; the
+  path is the engine machine's and the engine checks it. The capabilities carry `canSendImages` and `canChooseWorkspace`.
+- **Every member of the seam forwards.** Running the attached app showed images refused ("come with the engine") and
+  thumbnails "not stored": the head's `RemoteAppServices` wraps the connection in a view that forwarded only the members
+  it was written with, so the A6 default members answered for the window. It forwards them now, and
+  `AttachedForwardingTests` fails if any `ISessionService` member of the remote seam is left to its default.
+- **A session's named images are its workspace's.** `@shot.png`, a relative `/image` path and a drop in a session that
+  works elsewhere resolve in that session's workspace (`ImageAttachments.EnvironmentFor`), in the app and in `corvid
+  chat`; before, they read the configured workspace.
+- **A close sends its answer and reason before reading stops.** `AttachEndpointTests.TheUnixSocketIsTheOwnersAndStillNeedsTheToken`
+  failed in one full Cli run and in 6 of 6 runs under parallel load: the writer finishing cancelled the reading, and
+  cancelling a WebSocket's read aborts the socket, which dropped the refusal's answer and the close with its reason. The
+  peer now sends the channel's close, then waits up to 2 s for the other end to close back before it stops reading, and
+  an end the other closed closes back. A peer that never closes back costs a disposal up to 2 s.
+- ACP's `available_commands` leave out `/workspace` and `/search` (one filter), so the recorded exchanges are unchanged
+  but for media's `promptCapabilities.image`.
+
+The integrator ran the merged app on the engine in a temporary home with one scripted vision server: an image attached
+through the attach box reached the generator stripped (the server saw `image/png`, metadata gone) and showed as a
+thumbnail; `Ctrl+Shift+F` found the message and the answer. Attached over the Unix socket to `corvid serve --attach`
+from the same home, the earlier thumbnail loaded by digest, a 352 KB image (above the 256 KB read before authentication)
+crossed the socket and reached the generator, and Open a workspace on the Board started a session in a second folder,
+which the rail grouped under its own workspace. `corvid serve` stopped on SIGTERM and removed its socket. `--demo` drew
+the main scene. Screenshots are in `ui-shots/a6int-*.png` (git-ignored).
+
+The end-to-end pass ran the merged branch in a temporary home with scripted servers (a vision-capable generator, a
+text-only model and a gated "cloud" model with `Egress: { Action: Send, Tainted: Refuse, Images: true }`) and GLiNER2 for
+the gate. It fixed three things: the WebAssembly head did not publish (the linker config still named the assembly
+`Corvid.App`, and an attached image prompt used the trim-unsafe `JsonArray.Add<T>`); a copied image or copied files did
+not paste on X11 (Uno raises no `Paste` for a clipboard without text, and lists a copied PNG as `image/png`, not as the
+Bitmap format: Ctrl+V now takes them, `ImageSignature.ClipboardImageFormat`); and `corvid serve`'s pairing hint named
+`Corvid.App`. Seen working: `corvid serve --attach --listen` with the app attached over the Unix socket (a turn, an
+approval and a question answered there, an approval still pending at the engine after the window dropped and answered
+after it attached again), a wrong token, a request before authenticating and an oversized first request refused and
+closed, a tokenless initialize refused and the connection left to the authentication window (any next request closes it), a
+foreign Host (421) and Origin (403) refused, a used pairing code refused, the app paired over loopback TCP and the
+published WebAssembly head paired from `#pair=`; two workspaces in one window with a session and a file write in each; a
+session's worktree from the Board and a child's from `isolation: worktree`, both removed with `/workspace remove` in
+`corvid chat`; an image pasted in the app (also attached) and given with `/image` and `@path` in the CLI, sent stripped to
+the vision model, refused for the text-only one with the draft kept, shown on replay, sent to the gated model untainted
+and refused to it once a `web_fetch` tainted the turn (the turn stayed local); `install.sh --app` into a temporary prefix,
+the installed `corvid-app` running on the engine and `corvid doctor` finding it; `Ctrl+Shift+F` and `/search` across
+sessions; the plain-word password reaching the gated model as `<CREDENTIAL_1>`; a tainted child's answer enclosed between
+`outside-content` markers. Screenshots are in `ui-shots/a6e2e-*.png` (git-ignored).
+
+The fix round after the verifier's pass (A6V1-01 to 11) and the end-to-end pass:
+
+- **A scheduled job runs where it was made (A6V1-01).** A job's runs work in the workspace of the session that created
+  it (`ScheduledJob.OriginSession`; `CorvidRuntime.Jobs.cs`): the pre-run script in that workspace's sandbox under its
+  approvals, the agent turn with its tools, and the run's session records the workspace. When that workspace is gone (a
+  removed worktree), the script is refused and the run fails with why; nothing runs in the configured workspace instead.
+  A job made in a chat, on the Jobs page or with no origin runs in the configured workspace, as before.
+- **Removing a worktree from the app (e2e).** The window tells the runtime which sessions it views
+  (`CorvidRuntime.AddViewer`), and `RemoveWorktreeAsync` first lets go of an idle session held there that no surface
+  views (the one the Board made); a viewed or running one still refuses. Review's per-workspace copy is replaced when the
+  runtime's services for that directory are new (A6V1-09), and an approval answered outside any call (a worktree's) stays
+  in the transcript with its verdict (A6V1-09). The chooser opens with empty boxes, and `/workspace` says how to remove.
+- **Attached mode (A6V1-04 to 06).** Wrong tokens and codes are counted per peer (10 a minute) and for the network as a
+  whole (100), never against the Unix socket, so the LAN cannot lock the owner out; pairing writes the devices file
+  outside the authenticator's gate. A revoked device's live connections close at their next request or within 5 s
+  (`IAttachedAuthenticator.IsCurrentAsync`, `AttachedProtocol.RevocationCheck`). `corvid serve` warns that `ws://` past
+  loopback is cleartext, and the README says so; there is no TLS (U-12). The browser head sends a `#pair=` code only to
+  the server that served the page. Attached mode's scope in A6 is recorded as U-12: Sessions and the Board (A6V1-02).
+- **Attached mode after PR #81's review.** `$XDG_STATE_HOME/corvid/attach` is protected state (`ProtectedPaths` safety
+  configuration from `BuiltInDenials.AttachStateDirectories`, and a launcher mask): the file tools refuse it, no command
+  writes it, the sandbox hides it. A presented token is always checked; failures still count against pairing. The owner
+  token goes on its own only over a Unix socket, on Linux, after `SO_PEERCRED` says the server is this user's
+  (`UnixPeers`); over `ws://` a window pairs (challenge-response was not possible: a Vault-held owner token is only
+  verified through Vault, and devices are kept as digests). Requests run in the order sent, with `session/new`,
+  compaction, recaps, forks and commands started in order but run beside the rest (`AttachedProtocol.RunsLong`);
+  `$/cancelRequest` both ways; keep-alive pings (20 s, dropped after 30 s silent) on both ends; a 2-minute request
+  timeout except for the long ones; a 15 s attach timeout in both heads. Joining happens under the connection's gate;
+  a history too large for the client fails alone; an unexpected exception reaches the client as a generic error and the
+  server's log in full; at most 32 connections wait to authenticate; beyond loopback only the listen address is served
+  as Host; a named socket directory must be the user's and not group- or world-writable; a second SIGTERM ends serve;
+  the browser drops `#pair=` with `history.replaceState`; the devices file is read again only when it changed.
+- **Smaller ones.** `install.sh` without `--app` keeps an app of the same release and removes a stale app's link, desktop
+  entry and icon with a note (A6V1-03). A slot left pinned after its choice was reset is pinned again on reopen
+  (A6V1-07, `SessionModelSlots.RestorePin`). A tainted child's schema-checked output is enclosed as outside content
+  (A6V1-08). A chat notice starts on its own line (A6V1-10). The approval-deadline test runs on a test clock
+  (`CorvidRuntimeFactory` takes a registered `TimeProvider` for the approvals), and the Secrets tests' absent socket is
+  short whatever `TMPDIR` is (A6V1-11).
+
+The review of #81, images, search, the detector and packaging:
+
+- **Images (M5).** A turn reads each image from the store once (`_imageBytes`, by digest), however many model calls it
+  makes. Only the latest `Corvid:Turn:ImageTurns` user messages (default 2, 1 to 64) send their images; an older one's are a
+  stub, `[image: shot.png, 1280×720; shown in an earlier turn]` (a paste: `a pasted PNG`). The token estimate has no upper
+  cap (pixels / 750, at least 85), and a compaction line names a message's images (`[image: shot.png]`). An image goes only
+  to a model whose egress policy allows images: `ImageRefusal` runs the gate's check on the generator and the vision slot
+  (`TurnServices.EgressPolicyFor`), and a gated generator with `Images: false` gets the vision slot's description.
+- **Files.** `@path`, `/image` and a drop follow links in every component (`RealPaths.Resolve`) before the protected check,
+  and read only a file with a size (a FIFO, socket or device reports none and is refused unopened), with a bound. JPEG
+  stripping walks every segment to EOI (an APPn or comment between progressive scans goes, as do bytes after EOI); ICC
+  profiles go in every format (they can name the device; vision models read sRGB, so a Display P3 picture shows slightly
+  duller); WebP keeps only VP8X, VP8, VP8L, ALPH, ANIM and ANMF (and inside a frame ALPH, VP8, VP8L); a GIF frame past
+  the size limits is refused whatever the screen says; the media store rewrites a file whose bytes do not match its name.
+- **Search (M2, M4, L5).** `/search` answers only in a direct message on a gateway. A search reads the log's heads and the
+  index's marks in one query each and catches up only sessions that moved; each session's hidden ranges, turn starts and
+  title are kept per head (`SessionSearchCache`), so a search over an unchanged log reads nothing from it. `/search` and the
+  palette cover the person's own sessions only (`CorvidRuntime.IsSearchable`): gateway chats and job runs are left out, and
+  both say so.
+- **A pasted password (A6V2-06).** `UserMessage` and `UserSteered` text is scrubbed with the egress rules before it is
+  logged (`EventScrubber`), so the log, the index, prompt history and the prompt rendered from the log hold the marker
+  (`[REDACTED:prose-value]`); the composer keeps what was typed until it is sent. The detector's prose rule turns away
+  evaluative adjectives, their comparatives and their `in-`/`un-` forms ("incorrect", "stronger", "gibberish").
+- **install.sh.** `Exec=` is escaped per the Desktop Entry spec (`%%`, and `" ` $ \` inside the quotes), `TryExec=` and
+  `Icon=` escape the backslash; `--from` with `--app` needs `--from-app`; a tarball holding anything but files and
+  directories is refused before it is unpacked. There is no uninstall path to extend.
+
+New on the wire: `workspace_bound`; the optional `images` on `user_message`; attached mode's protocol (version 1). A
+binary older than A6 cannot read a log that holds `workspace_bound` (the same one-way step as before) and reads a message
+with images as its text alone.
+
+Still refused on the engine, each with its message: memory consolidation (plan §9.5), opening a terminal or the Vault
+helper (U-6), the Vault policy, role, budget and daily counts (V-n) and media memory (plan §9.4). An attached window's
+areas other than Sessions and the Board say they run on the engine's machine.
+
+Left:
+
+- Attached mode: an owner UI in the app for `CreatePairingCodeAsync` (pairing codes come from `corvid serve pair`); a
+  pairing box in the browser instead of `#pair=`; reconnecting after a drop (opening the window again attaches); TLS on
+  the listener (U-12); the other areas over the wire (U-12); an attached badge in the status bar (the Board's status bar says "engine unreachable" when attached). A paired device
+  may hold up to 16 requests of 64 MB at once (it is trusted with the engine already).
+- Images: a browser drop gives no path, so a browser attaches by paste only. A drop on the desktop head was not driven
+  (the harness has no drag source).
+- Seen in the end-to-end pass and not fixed: Open a workspace offers worktrees already removed (from the sessions
+  recorded there); the cron_create card does not say which workspace the job will run in; an approval card that arrives outside a turn at the end of a long transcript is cut off at the
+  bottom and the wheel cannot scroll to its buttons (Enter from the composer brings it into view); a child that answered
+  from one model call shows "0 steps"; on replay a model switch between turns is folded into the turn before it ("the
+  running turn takes it at its next step").
+- Packaging: Flatpak (U-9) not started.
+- From §1.6, still: a steer's position in the report; the Board's Take over; the lock files under `drivers/`; a job's
+  message read as the user's on replay; a gateway adapter needs Vault for its token; delegation's same-round calls run one
+  after another; the live step's model is inferred until `StepStarted` carries it.
+- Real models: the integration pass used scripted servers only; the GPU tests (`Category=Gpu`) were not run here.
+
+The PR review (two agents and a security review) found two high defects, both fixed with the rest: git filters a
+conditional include (`onbranch:corvid/**`, `gitdir:**/worktrees/**`) brings in could run outside the sandbox when a
+worktree was made or removed (now refused, checked inside the new worktree before checkout and before removal), and
+attached mode's token files were readable by sandboxed commands (now protected state everywhere Corvid protects its
+own). Decisions in that round: the owner token goes only over a Unix socket whose peer is the same user (a `ws://`
+window pairs as a device); a pasted credential is scrubbed from the message before it is logged, so the model sees the
+marker too (secrets belong in Vault); only the latest `Corvid:Turn:ImageTurns` messages (default 2) send their images.
+Left from the review: the WebAssembly head's `#pair=` cleanup compiled but was not run (its link was killed for memory);
+a fork or command started over attached mode is not waited for, so a prompt sent right after can overtake it; tests
+that run the real sandbox with the account's HOME create Corvid's empty 0700 `~/.local/state/corvid/attach` mask
+directory, as the launcher does in use.
+
 ### What the running app shows today
 
 
@@ -573,8 +771,8 @@ page with its title. The scaffold's report lists these remaining differences:
 - Badge counts use Inter SemiBold where the CSS asks for bold, since only weights 400, 500 and 600 are embedded.
 - Popups and tooltips follow the application theme, not a theme switched at run time.
 - The status bar items are not click targets yet, and Board, Audit and First run do not have their own variants yet.
-- No app or window icon yet. The assembly is `Corvid.App`, not `corvid-app` (U-7).
-- The WebAssembly head has never been built, for want of the `wasm-tools` workload.
+- The window carries the Corvid mark as its icon and the binary is `corvid-app` (U-7, A6).
+- The WebAssembly head builds with `-p:CorvidAppWasm=true` and attaches to the Corvid that serves it; the end-to-end pass published it and ran it paired in headless Chromium (A6, §1.7).
 
 ## 2. Picking it up on another machine
 
@@ -582,11 +780,11 @@ page with its title. The scaffold's report lists these remaining differences:
 git fetch origin && git checkout claude/zen-allen-puw590
 dotnet --version                      # 10.0.401 or a later 10.0.4xx (global.json)
 dotnet build Corvid.slnx -c Release   # restores Uno.Sdk 6.7.30 from NuGet; no workload needed
-dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll --demo
-dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll --demo --scene approval --theme dark --page sessions
+dotnet src/Corvid.App/bin/Release/net10.0-desktop/corvid-app.dll --demo
+dotnet src/Corvid.App/bin/Release/net10.0-desktop/corvid-app.dll --demo --scene approval --theme dark --page sessions
 # The engine is the default: with no --demo the app runs on this machine's Corvid home (corvid.json, models, event log).
 # Point HOME, CORVID_CONFIG and the XDG directories at a temporary home to try it without touching yours.
-dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll
+dotnet src/Corvid.App/bin/Release/net10.0-desktop/corvid-app.dll
 dotnet test --project tests/Corvid.App.Core.Tests/Corvid.App.Core.Tests.csproj -c Release
 dotnet run --project tools/Corvid.Architecture -c Release --no-build -- .
 ```

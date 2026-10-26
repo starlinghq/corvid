@@ -48,6 +48,22 @@ public sealed class EpisodicIndex
     }
 
     /// <summary>
+    /// Every session's high-water mark, in one query (A6 review: a search compares them with the log's heads and catches up
+    /// only the sessions that moved). A session never indexed is absent.
+    /// </summary>
+    public IReadOnlyDictionary<string, long> IndexedMarks()
+    {
+        using var connection = _database.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT session_id, through_sequence FROM episode_index_state;";
+        using var reader = command.ExecuteReader();
+        var marks = new Dictionary<string, long>(StringComparer.Ordinal);
+        while (reader.Read())
+            marks[reader.GetString(0)] = reader.GetInt64(1);
+        return marks;
+    }
+
+    /// <summary>
     /// Indexes the session's events after the high-water mark, a page per transaction, and returns the episodes added. Events
     /// with no searchable text (decisions, model switches) advance the mark without a row.
     /// </summary>

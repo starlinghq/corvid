@@ -8,4 +8,7 @@
     <Using Include="Xunit" />
     <ProjectReference Include="../../src/Corvid.App.Core/Corvid.App.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../Shared/TestImages.cs" Link="TestImages.cs" />
+  </ItemGroup>
 </Project>

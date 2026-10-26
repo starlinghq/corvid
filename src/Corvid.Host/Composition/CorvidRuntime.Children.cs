@@ -166,6 +166,19 @@ public sealed partial class CorvidRuntime
             Clamp(request.MaxTokens, agents.MaxTokens, agents.MaxTokens),
             Clamp(request.MaxSeconds, agents.MaxSeconds, agents.MaxSeconds));
         var (functions, dropped) = ChildToolset(parent, request);
+        if (request.Isolation is { } isolation)
+        {
+            if (isolation != Isolations.Worktree)
+                throw new ChildRefusedException($"A child's isolation is \"{Isolations.Worktree}\" or none, not \"{TerminalText.Visible(isolation)}\".");
+            try
+            {
+                await RepositoryOfAsync(parentId).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is Corvid.Kernel.Workspaces.WorktreeException or WorkspaceUnavailableException)
+            {
+                throw new ChildRefusedException("The child cannot have a worktree: " + exception.Message);
+            }
+        }
 
         var mix = ModelMix.Empty;
         try
@@ -196,6 +209,7 @@ public sealed partial class CorvidRuntime
             CallId = request.CallId,
             Configurations = configurations,
             Functions = functions,
+            Isolation = request.Isolation,
         };
 
         static int Clamp(int? asked, int fallback, int ceiling) => Math.Clamp(asked ?? fallback, 1, Math.Max(1, ceiling));
@@ -227,7 +241,16 @@ public sealed partial class CorvidRuntime
         try
         {
             JsonElement? mix = plan.Mix is { } resolved ? Json(resolved.ToString()) : null;
-            Log.Append(id, 0, [EventData.Create(new ChildOf(plan.ParentId, plan.Depth, plan.Goal, plan.Tools, plan.Budget, mix))]);
+            // A6: a child works in its parent's workspace, or in the worktree made for it, recorded after ChildOf; its tools
+            // are then the worktree's.
+            var bound = plan.Worktree is { } worktree ? new WorkspaceBound(worktree.Path, worktree.Repository, worktree.Branch) : ChildBinding(plan.ParentId);
+            if (plan.Worktree is { } own)
+            {
+                var tools = WorkspaceAt(own.Path).Tools;
+                plan = plan with { Functions = [.. plan.Tools.Select(name => tools.TryGet(name, out var tool) ? tool : null).OfType<Corvid.Tools.ToolFunction>()] };
+            }
+            Log.Append(id, 0, [EventData.Create(new ChildOf(plan.ParentId, plan.Depth, plan.Goal, plan.Tools, plan.Budget, mix)),
+                EventData.Create(bound)]);
             var spawned = new ChildSpawned(id, plan.Goal, plan.Tools, plan.Budget, plan.By, plan.Tainted, mix, plan.OutputSchema, plan.CallId);
             var sequence = AppendTo(plan.ParentId, spawned);
             _childPlans[id] = plan;
@@ -382,8 +405,10 @@ public sealed partial class CorvidRuntime
         }
         finally
         {
-            ForgetChild(child.Id, plan.ParentId);
-            await LetGoAsync(child, abandoned).ConfigureAwait(false);
+            // A6 (A5 left): a child given up on while its tool ignores cancellation keeps its concurrency place until its
+            // turn stops (its actor goes idle), so a tool that never stops cannot let the parent start more children than allowed.
+            ForgetChild(child.Id, plan.ParentId, freePlace: !abandoned);
+            await LetGoAsync(child, abandoned, abandoned ? () => FreePlace(plan.ParentId) : null).ConfigureAwait(false);
         }
         // M1 (A5 review): a handler that throws never fails the call or loses the other children's results.
         RaiseChildChanged(plan.ParentId, ended!);
@@ -427,35 +452,50 @@ public sealed partial class CorvidRuntime
     /// <summary>
     /// Lets a finished child go (its driver lock and actor): at once when its actor settles within <see cref="ChildSettle"/>,
     /// else (or when its turn was given up on) once it goes idle, tracked so the runtime's end waits for it.
+    /// <paramref name="idled"/> runs once the actor is idle (or the runtime ends): an abandoned child's place is freed there.
     /// </summary>
-    private async Task LetGoAsync(CorvidSession child, bool abandoned)
+    private async Task LetGoAsync(CorvidSession child, bool abandoned, Action? idled = null)
     {
         // The delivery comes before the actor marks the turn finished: let it settle, then let the child go.
         var idle = child.Actor.IdleAsync(_lifetime.Token);
         if (!abandoned)
             await idle.WaitAsync(ChildSettle).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         if (idle.IsCompletedSuccessfully && await ReleaseDriverAsync(child.Id).ConfigureAwait(false))
+        {
+            idled?.Invoke();
             return;
+        }
         if (_lifetime.IsCancellationRequested)
+        {
+            idled?.Invoke();
             return;
-        var release = ReleaseWhenIdleAsync(child.Id, idle);
+        }
+        var release = ReleaseWhenIdleAsync(child.Id, idle, idled);
         _childReleases[child.Id] = release;
         _ = release.ContinueWith(_ => _childReleases.TryRemove(KeyValuePair.Create(child.Id, release)), CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
-    private async Task ReleaseWhenIdleAsync(string childId, Task idle)
+    private async Task ReleaseWhenIdleAsync(string childId, Task idle, Action? idled)
     {
         await Task.Yield();
-        // Idle again after each try: a release refused while the actor was still busy tries once more when it settles.
-        for (var tries = 0; tries < 8 && !_lifetime.IsCancellationRequested; tries++)
+        try
         {
-            await idle.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
-            if (!idle.IsCompletedSuccessfully || await ReleaseDriverAsync(childId).ConfigureAwait(false))
-                return;
-            if (!TryGetSession(childId, out var session))
-                return;
-            idle = session.Actor.IdleAsync(_lifetime.Token);
+            // Idle again after each try: a release refused while the actor was still busy tries once more when it settles.
+            for (var tries = 0; tries < 8 && !_lifetime.IsCancellationRequested; tries++)
+            {
+                await idle.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+                if (!idle.IsCompletedSuccessfully || await ReleaseDriverAsync(childId).ConfigureAwait(false))
+                    return;
+                if (!TryGetSession(childId, out var session))
+                    return;
+                idle = session.Actor.IdleAsync(_lifetime.Token);
+            }
+        }
+        finally
+        {
+            // Whether or not the lock could be let go, the turn has stopped (or the runtime is ending): the place is free.
+            idled?.Invoke();
         }
     }
 
@@ -538,13 +578,20 @@ public sealed partial class CorvidRuntime
             RaiseChildChanged(plan.ParentId, ended);
     }
 
-    private void ForgetChild(string childId, string parentId)
+    private void ForgetChild(string childId, string parentId, bool freePlace = true)
     {
         _childPlans.TryRemove(childId, out _);
         _childUsage.TryRemove(childId, out _);
         // A stop that raced the child's end (StopChild between its check and its write) leaves nothing behind.
         _stoppedChildren.TryRemove(childId, out _);
         _prompters.Forget(childId);
+        if (freePlace)
+            FreePlace(parentId);
+    }
+
+    /// <summary>Gives back one of the parent's <c>Corvid:Agents:MaxConcurrent</c> places.</summary>
+    private void FreePlace(string parentId)
+    {
         lock (_childGate)
         {
             if (_childCounts.TryGetValue(parentId, out var running))

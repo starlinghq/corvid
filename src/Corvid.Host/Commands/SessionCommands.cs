@@ -96,7 +96,7 @@ internal static class SessionCommands
         if (!off && invocation.Arguments.Length > 0)
             return ValueTask.FromResult(CommandOutput.Error("Usage: /pin [off]."));
         // A4V2-8: a session with nothing in the log is listed nowhere (/sessions, the app's rail), so a pin would keep nothing.
-        if (!off && context.Runtime.Log.GetHead(context.Session.Id, cancellationToken) == 0)
+        if (!off && SessionCatalogue.Describe(context.Runtime.Log, context.Session.Id, cancellationToken) is null)
             return ValueTask.FromResult(CommandOutput.Warning("Nothing to pin yet: this session has no messages. Send one, then /pin."));
         try
         {
@@ -110,6 +110,48 @@ internal static class SessionCommands
             ? "Unpinned."
             : "Pinned: the app keeps this session at the top of its rail, and /sessions lists it first. /pin off unpins it."));
     }
+
+    internal const string SearchUsage = "<words>";
+
+    /// <summary>
+    /// G-5: <c>/search &lt;words&gt;</c> finds what was said across sessions through the episodic index, best match first, with
+    /// each hit's session, turn and a snippet; <c>corvid chat --session &lt;id&gt;</c> resumes one. It covers the person's own
+    /// sessions (<see cref="CorvidRuntime.IsSearchable"/>): gateway chats and scheduled job runs are left out, and it says so.
+    /// </summary>
+    public static async ValueTask<CommandOutput> SearchAsync(SlashCommandContext context, SlashInvocation invocation, CancellationToken cancellationToken)
+    {
+        if (invocation.Text.Trim().Length == 0)
+            return CommandOutput.Error("Usage: /search <words>. It searches what was said in " + CorvidRuntime.SearchScope + ".");
+        var runtime = context.Runtime;
+        var query = invocation.Text.Trim();
+        // SQLite, read synchronously: off the caller's thread, as the app's search is.
+        var found = await Task.Run(() => runtime.SearchSessions(query, Searched, cancellationToken: cancellationToken), cancellationToken)
+            .ConfigureAwait(false);
+        if (found.Unavailable is { } why)
+            return CommandOutput.Warning("No search: " + why + ".");
+        if (found.Hits.Count == 0)
+            return CommandOutput.Text($"Nothing said in your sessions matches \"{SessionCatalogue.Line(query)}\" (it searched {CorvidRuntime.SearchScope}).");
+        var zone = TimeZoneInfo.Local;
+        return new CommandOutput
+        {
+            Title = "Search",
+            Lines =
+            [
+                (found.Hits.Count == Searched ? $"The {Searched} best matches" : found.Hits.Count == 1 ? "One match" : $"{found.Hits.Count} matches")
+                    + ", best first, in " + CorvidRuntime.SearchScope + ". Resume a session with corvid chat --session <id>.",
+            ],
+            Table = CommandTable.Of(["session", "title", "where", "said"], found.Hits.Select(hit => new[]
+            {
+                (hit.SessionId == context.Session.Id ? "this: " : "") + hit.SessionId,
+                SessionCatalogue.Line(hit.Title) ?? "",
+                SessionSearch.Where(hit, zone),
+                hit.Snippet,
+            })),
+        };
+    }
+
+    /// <summary>How many hits <c>/search</c> lists.</summary>
+    public const int Searched = 20;
 
     /// <summary>Conversations a person had, not scheduled runs or the logs Corvid keeps for itself.</summary>
     internal static bool IsConversation(string id) =>

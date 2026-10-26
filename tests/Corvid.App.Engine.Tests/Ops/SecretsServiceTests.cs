@@ -18,6 +18,9 @@ public sealed class SecretsServiceTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
+    // A socket nobody listens on, short enough for a Unix socket path whatever TMPDIR is (108 bytes at most).
+    private static string Absent() => Corvid.Tests.ShortTemp.Name("cv-absent-") + ".sock";
+
     private static Dictionary<string, string?> Settings(string socket) => new()
     {
         ["Corvid:Vault:SocketPath"] = socket,
@@ -28,13 +31,14 @@ public sealed class SecretsServiceTests
     [Fact]
     public async Task WithoutVaultEveryFeatureWaitsAndNothingIsListed()
     {
-        await using var fixture = await OpsFixture.StartAsync(Settings("{root}/absent.sock"));
+        var absent = Absent();
+        await using var fixture = await OpsFixture.StartAsync(Settings(absent));
         using var service = new EngineSecretsService(fixture.Engine, new InlineDispatcher(), fixture.Time);
 
         var snapshot = await service.LoadAsync(Token);
 
         Assert.Equal(VaultState.Absent, snapshot.Vault.State);
-        Assert.Equal(Path.Combine(fixture.Host.Root, "absent.sock"), snapshot.Vault.Socket);
+        Assert.Equal(absent, snapshot.Vault.Socket);
         Assert.Equal(EngineSecretsService.NoCounts, snapshot.Vault.AuditSummary);
         Assert.Empty(snapshot.Secrets);
         var telegram = Assert.Single(snapshot.Consumers);
@@ -76,7 +80,7 @@ public sealed class SecretsServiceTests
     [Fact]
     public async Task SettingASecretNeverPassesThroughTheAppItGivesTheCommand()
     {
-        await using var fixture = await OpsFixture.StartAsync(Settings("{root}/absent.sock"));
+        await using var fixture = await OpsFixture.StartAsync(Settings(Absent()));
         using var service = new EngineSecretsService(fixture.Engine, new InlineDispatcher(), fixture.Time);
 
         var launch = await service.StartSetAsync("gemini.key", Token);
@@ -146,7 +150,7 @@ public sealed class SecretsServiceTests
     [Fact]
     public async Task TheCompositionMakesTheEnginesSecretsWhichWorkWhileTheRuntimeIsDown()
     {
-        await using var host = EngineHosts.Create(new Corvid.Host.Tests.FakeModels(generatorReady: false), Settings("{root}/absent.sock"));
+        await using var host = EngineHosts.Create(new Corvid.Host.Tests.FakeModels(generatorReady: false), Settings(Absent()));
         await using var engine = await AppEngine.StartAsync(host.Host, ownsHost: false, cancellationToken: Token);
         using var composition = new AppComposition(new AppOptions { Demo = false }, new InlineDispatcher(), Corvid.App.Core.Tests.ManualTimeProvider.Demo(),
             new EngineAppServices(engine, host.Root, _ => null));

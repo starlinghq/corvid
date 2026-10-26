@@ -405,7 +405,8 @@ come later, on the same substrate.
 Attached mode over loopback comes first. The WebAssembly build, served by the engine on the LAN after a pairing code
 shown on the desktop, lets the owner read sessions, answer approvals and questions with the full card, and send messages
 from a phone. Push notification goes through a channel Vault holds the key for (vault.md §7 names ntfy). Native iOS and
-Android heads compile from the same code once the remote client has served a phone for a release.
+Android heads compile from the same code once the remote client has served a phone for a release. In A6 an attached
+window has Sessions and the Board; the other areas say they run on the engine's machine (U-12).
 
 ### 4.15 Accessibility, themes and keyboard
 
@@ -618,11 +619,11 @@ structured questions, rule removal, images, titles and `SessionUpdates`. New:
 
 | Id | Change | Needed by |
 | --- | --- | --- |
-| G-1 | the update stream and session methods over a local socket or WebSocket, with Vault-held tokens and owner pairing | attached mode, WebAssembly, phone |
+| G-1 | the update stream and session methods over a local socket or WebSocket, with Vault-held tokens and owner pairing (built in A6: `corvid serve --attach`, `--attach` and `--pair`, the WebAssembly head attached to the Corvid that serves it; images and workspaces cross it too) | attached mode, WebAssembly, phone |
 | G-2 | the approval assessment on the stream for calls that ran unasked | "why it ran unasked" on every card |
 | G-3 | restore of one file, later one hunk, from the ledger | revert in Review |
-| G-4 | a workspace per session or per runtime instance, and worktree creation | several workspaces in one window, worktree isolation |
-| G-5 | a search API over sessions through the episodic index | cross-session search |
+| G-4 | a workspace per session or per runtime instance, and worktree creation (built in A6: `WorkspaceBound`, Open a workspace on the Board, `/workspace`, `--workspace`, `delegate_task` `isolation: worktree`) | several workspaces in one window, worktree isolation |
+| G-5 | a search API over sessions through the episodic index (built in A6: `CorvidRuntime.SearchSessions`, `/search`, `Ctrl+Shift+F`) | cross-session search |
 | G-6 | user titles and recaps as events (extends K-9) | rename, recap |
 | G-7 | the `ui.db` conventions in the host, so the CLI and the app share drafts and pins | drafts, pins, layouts |
 | G-8 | correct-then-approve for staged memory | memory review |
@@ -649,7 +650,7 @@ K-3, K-5, K-7, K-9, G-3, G-5, G-6, G-8 to G-14.
 
 **A2, reach.** Attached mode and the daemon, the WebAssembly client with pairing, phone notifications through Vault,
 subagent views, worktrees per session, images, voice. G-1, G-4, G-15, K-8. (Subagent views and G-15 were built in the
-A5 phase, before attached mode, worktrees, images and packaging, which A6 takes.)
+A5 phase; attached mode, worktrees, images, search and packaging in A6. Voice and phone notifications remain.)
 
 ## 11. Open decisions
 
@@ -661,11 +662,12 @@ A5 phase, before attached mode, worktrees, images and packaging, which A6 takes.
 | U-4 | Windows head: Skia desktop or WinAppSDK | Skia desktop first, one renderer everywhere; a WinAppSDK head if notifications or accessibility need it |
 | U-5 | Markdown through native text blocks or a WebView | native blocks |
 | U-6 | Secret entry through a separate Vault helper process | yes; a terminal hand-off until it exists |
-| U-7 | The app's name and binary | the window is "Corvid"; the binary `corvid-app`, installed by `install.sh --app` |
+| U-7 | The app's name and binary | the window is "Corvid"; the binary `corvid-app`, installed by `install.sh --app` (done in A6, with the Corvid mark as its icon) |
 | U-8 | Whether the app hosts the scheduler and the gateway when it is the engine | only when the person asks: off by default (`Corvid:App:HostGateway`, `Corvid:App:HostScheduler`, or Start hosting on the Gateway and Jobs pages, which asks once and names what it does), then under the existing one-lock rule, taken over on the engine's own timer while another process holds the lock; the status bar says so whenever the app hosts either |
-| U-9 | Linux packaging | tarball and `.desktop` through `install.sh`; Flatpak later, once bubblewrap inside a Flatpak sandbox is understood |
+| U-9 | Linux packaging | tarball and `.desktop` through `install.sh`; Flatpak later, once bubblewrap inside a Flatpak sandbox is understood (the tarball and `install.sh --app` done in A6; Flatpak not yet) |
 | U-10 | When the mobile heads start | after the WebAssembly client has served a phone for a release |
 | U-11 | A tab strip for sessions, and shared theme and keybinding files with the TUI | no tab strip in v1; shared files |
+| U-12 | What attached mode covers in A6 | Sessions and the Board only, decided in A6's fix round (A6V1-02): the session seam (`ISessionService`) crosses the wire with approvals, questions, the queue, images and workspaces, and every other area (Review, Rewind, Models, Memory, Audit, Safety, Skills, Jobs, MCP, Gateway, Secrets, Settings) says that it runs on the engine's machine; Ctrl+Shift+F searches titles, previews and ids. Each area's service crosses later, Review and Rewind first (a phone answering an approval wants the diff behind it). No TLS on the listener: past loopback the tokens cross in cleartext, `corvid serve` warns at start, and an SSH tunnel or a TLS proxy is the way across an untrusted network |
 
 ## 12. Sources
 
@@ -693,3 +695,5 @@ A5 phase, before attached mode, worktrees, images and packaging, which A6 takes.
 | Version | Date | Change |
 | --- | --- | --- |
 | 0.1 | 2026-10-23 | First draft: the feature catalogue and the flows, before mockups. |
+| 0.2 | 2026-10-25 | A6: G-1, G-4, G-5, K-8, U-7 and U-9 marked built (docs/plan/ui-handoff.md §1.7). |
+| 0.3 | 2026-10-25 | A6 fix round: U-12, attached mode's scope in A6 (Sessions and the Board) and its cleartext listener. |

@@ -17,6 +17,25 @@ public sealed partial class EngineSessionService
     /// </summary>
     internal bool QuestionsInTurn { get; set; } = true;
 
+    /// <summary>
+    /// G-1: whether anyone is there to answer a question inside the turn. A head with a window leaves it null (the window is
+    /// there); <c>corvid serve --attach</c> sets it to "an attached client is connected", so with none a turn's
+    /// <c>ask_user</c> takes K-6's path (the turn ends, the question stays open for the next message) instead of waiting.
+    /// </summary>
+    public Func<bool>? AnswererPresent { get; set; }
+
+    /// <summary>
+    /// G-1: the last attached client went. Every question a turn waits on inside the turn is put aside: the call returns
+    /// with no answer, the turn ends with the question open (K-6), and the next message answers it. Approvals are left to
+    /// their deadline, which the pipeline keeps.
+    /// </summary>
+    public void PutAsideInTurnQuestions()
+    {
+        foreach (var channel in _channels.Values)
+            lock (channel.Gate)
+                (channel.AskedInTurn ?? Volatile.Read(ref channel.Expected))?.Answer.TrySetResult(null);
+    }
+
     /// <summary>Tests only: awaited as the asker is asked, before it looks at the window (an interrupt's race).</summary>
     internal Func<Task>? AskEntering { get; set; }
 
@@ -41,7 +60,7 @@ public sealed partial class EngineSessionService
     {
         public bool CanAsk(string sessionId)
         {
-            if (service._disposed || !service.QuestionsInTurn)
+            if (service._disposed || !service.QuestionsInTurn || service.AnswererPresent?.Invoke() == false)
                 return false;
             lock (channel.Gate)
                 return !channel.Closed && !channel.ReadOnly && !channel.Cancelling && ReferenceEquals(channel.Reporter, reporter);
@@ -73,6 +92,10 @@ public sealed partial class EngineSessionService
                 // would leave the question for the next message: the wait below ends with the token, and the kernel withdraws
                 // the question with the turn. AnswerQuestionAsync refuses an answer meanwhile.
                 channel.AskedInTurn = waiting;
+                // G-1: the last client left between CanAsk and here; PutAsideInTurnQuestions takes this lock, so either it
+                // sees this question or this sees no one there.
+                if (service.AnswererPresent?.Invoke() == false)
+                    waiting.Answer.TrySetResult(null);
             }
             service.AskWaiting?.Invoke();
             try

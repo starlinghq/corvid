@@ -21,7 +21,17 @@ public sealed partial class EngineSessionService
     /// </summary>
     private async Task<ChangesUpdate> ChangesAsync(CorvidRuntime runtime, string sessionId, CancellationToken cancellationToken)
     {
-        var texts = _texts ??= new LedgerTexts(runtime);
+        LedgerTexts texts;
+        try
+        {
+            // A6 (G-4): counted in the session's own workspace and its checkpoints.
+            texts = (_texts ??= new LedgerTexts(runtime)).For(sessionId);
+        }
+        catch (InvalidOperationException)
+        {
+            // Its workspace is gone (a removed worktree): the transcript still opens, with no changes to count.
+            return new ChangesUpdate { Turn = [], Session = [], SinceTurn = 1, At = _time.GetUtcNow() };
+        }
         var ledger = SessionLedger.Load(runtime, sessionId, cancellationToken);
         var finished = ledger.Entries.Where(entry => entry.After is not null).ToList();
         var session = await CountAsync(texts, finished, cancellationToken).ConfigureAwait(false);

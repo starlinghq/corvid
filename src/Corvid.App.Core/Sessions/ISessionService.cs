@@ -13,6 +13,12 @@ public sealed record SessionSummary(string Id, string Title)
 
     public string Branch { get; init; } = "";
 
+    /// <summary>
+    /// A6V2-05: <see cref="Workspace"/> is no longer a directory on the engine's machine (a removed worktree), so nothing new
+    /// can start there; the session is still listed.
+    /// </summary>
+    public bool WorkspaceGone { get; init; }
+
     /// <summary>Where it was started: cli, acp, http, gateway or job.</summary>
     public string Surface { get; init; } = "cli";
 
@@ -179,6 +185,32 @@ public interface ISessionService
     /// <summary>Queues a message behind the running turn (Enter while it runs); it is sent when the turn ends.</summary>
     Task<QueuedMessage> QueueAsync(string sessionId, string text, CancellationToken cancellationToken = default);
 
+    /// <summary>Whether messages here can carry images (K-8, A6 default member: false; the engine's can).</summary>
+    bool CanSendImages => false;
+
+    /// <summary>
+    /// K-8 (A6): sends a message with images (pasted, dropped or attached), queued behind a running turn as Enter does. The
+    /// engine checks, strips and stores the images, or refuses the message with why. A default member: without images it
+    /// is <see cref="SendAsync(string, string, CancellationToken)"/>; with any, a service without image support refuses.
+    /// </summary>
+    Task SendAsync(string sessionId, string text, IReadOnlyList<ImageAttachment> images, CancellationToken cancellationToken = default) =>
+        images is null || images.Count == 0 ? SendAsync(sessionId, text, cancellationToken)
+            : Task.FromException(new Composition.ServiceUnavailableException("Images in messages come with the engine (K-8)."));
+
+    /// <summary>
+    /// K-8 (A6): an image file the person dropped or named in the attach box, read under the engine's rules (no credential
+    /// file, no protected location, size checked before reading). A default member: refused without image support.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Why it was not read, for the person.</exception>
+    Task<ImageAttachment> ReadImageFileAsync(string sessionId, string path, CancellationToken cancellationToken = default) =>
+        Task.FromException<ImageAttachment>(new Composition.ServiceUnavailableException("Images in messages come with the engine (K-8)."));
+
+    /// <summary>
+    /// K-8 (A6): a message's image bytes by digest, for its thumbnail; null when none are stored (or the service keeps none).
+    /// The bytes are untrusted: drawn bounded, never opened by anything else.
+    /// </summary>
+    Task<byte[]?> ReadImageAsync(string sessionId, string digest, CancellationToken cancellationToken = default) => Task.FromResult<byte[]?>(null);
+
     /// <summary>Removes a queued message unsent (the chip's ×).</summary>
     Task RemoveQueuedAsync(string sessionId, string queuedId, CancellationToken cancellationToken = default);
 
@@ -283,4 +315,39 @@ public interface ISessionService
     Task<string> CreateAsync(CancellationToken cancellationToken = default) =>
         Task.FromException<string>(new Composition.ServiceUnavailableException(
             "New sessions come with the engine, which opens one in the window's workspace."));
+
+    /// <summary>
+    /// A6 (G-4): whether <see cref="CreateAsync(NewSessionRequest, CancellationToken)"/> starts a session in a workspace the
+    /// person picks, or in a new git worktree. A default member (false): the demo's scenario has one workspace.
+    /// </summary>
+    bool CanChooseWorkspace => false;
+
+    /// <summary>
+    /// A6 (G-4): starts a new, empty session where <paramref name="request"/> says and returns its id. A session keeps its
+    /// workspace for its life. A worktree is made only after the person approves it on <see cref="NewSessionRequest.AskIn"/>'s
+    /// card, since it writes outside the workspace; a refusal throws with why. The default member starts one in the
+    /// window's workspace when the request names none, and refuses otherwise.
+    /// </summary>
+    Task<string> CreateAsync(NewSessionRequest request, CancellationToken cancellationToken = default) =>
+        request is { Workspace: null, Worktree: false }
+            ? CreateAsync(cancellationToken)
+            : Task.FromException<string>(new Composition.ServiceUnavailableException(
+                "Sessions in other workspaces come with the engine (G-4), which keeps a workspace per session."));
+}
+
+/// <summary>
+/// A6 (G-4): where a new session works. <see cref="Workspace"/> null is the window's configured workspace;
+/// <see cref="Worktree"/> makes a new git worktree of <see cref="AskIn"/>'s workspace and starts the session in it.
+/// </summary>
+/// <param name="Workspace">An absolute path of an existing directory, or null.</param>
+public sealed record NewSessionRequest(string? Workspace = null)
+{
+    /// <summary>Make a new git worktree (of <see cref="AskIn"/>'s workspace) and start the session there.</summary>
+    public bool Worktree { get; init; }
+
+    /// <summary>The worktree's name (its branch is <c>corvid/&lt;name&gt;</c>); one from the time when null.</summary>
+    public string? WorktreeName { get; init; }
+
+    /// <summary>The session whose card asks the person to approve the worktree, and whose repository it is of.</summary>
+    public string? AskIn { get; init; }
 }

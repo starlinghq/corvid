@@ -138,6 +138,19 @@ internal sealed partial record SandboxPlan
             denied.Add(vault);
         }
 
+        // Attached mode's tokens (A6 review H2): made like Vault's when missing, so a token written while a command runs is
+        // hidden too.
+        denied.AddRange(homes.Skip(1).SelectMany(home => AttachStateDirectories(_ => null, home)));
+        foreach (string attach in AttachStateDirectories(environment, homes[0]))
+        {
+            if (!Directory.Exists(attach) && !File.Exists(attach))
+            {
+                Directory.CreateDirectory(attach, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+
+            denied.Add(attach);
+        }
+
         foreach (string home in homes)
         {
             denied.AddRange(SecretDirectories.Select(relative => Path.Combine(home, relative)));
@@ -462,6 +475,21 @@ internal sealed partial record SandboxPlan
         if (environment("XDG_CONFIG_HOME") is { } config && Path.IsPathFullyQualified(config))
         {
             dirs.Add(Path.Combine(config, "corvid-vault"));
+        }
+
+        return dirs.Distinct(StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Where Corvid's attached mode keeps its owner token, paired devices and device tokens (G-1):
+    /// <c>~/.local/state/corvid/attach</c>, and the same under <c>$XDG_STATE_HOME</c> when set.
+    /// </summary>
+    internal static IEnumerable<string> AttachStateDirectories(Func<string, string?> environment, string home)
+    {
+        var dirs = new List<string> { Path.Combine(home, ".local", "state", "corvid", "attach") };
+        if (environment("XDG_STATE_HOME") is { } state && Path.IsPathFullyQualified(state))
+        {
+            dirs.Add(Path.Combine(state, "corvid", "attach"));
         }
 
         return dirs.Distinct(StringComparer.Ordinal);

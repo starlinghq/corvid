@@ -9,13 +9,19 @@ namespace Corvid.App.Core;
 public sealed record AppOptions
 {
     public const string Usage = """
-        Usage: Corvid.App [--demo | --engine] [--theme light|dark|system] [--page <area>] [--session <id>]
-                          [--scene main|approval]
+        Usage: Corvid.App [--demo | --engine | --attach <address> [--pair <code>]] [--theme light|dark|system]
+                          [--page <area>] [--session <id>] [--scene main|approval]
 
           --engine            Corvid's engine in-process, over the configuration, models and event log the CLI
                               uses (corvid.json; CORVID_CONFIG and the XDG directories move them): the default
           --demo              demo services and the scripted scenario, with the clock frozen at 2026-10-24 14:05
                               local, instead of the engine
+          --attach <address>  a Corvid that runs elsewhere (corvid serve --attach) instead of the engine here:
+                              unix:/path/to/attach.sock, or ws://host:port; its sessions, approvals and questions
+                              in this window. Over the Unix socket the owner token is read from
+                              $XDG_STATE_HOME/corvid/attach/owner.token (or $CORVID_ATTACH_TOKEN); over ws://, pair
+          --pair <code>       with --attach: pair this window as a device with a code from corvid serve pair;
+                              its token is kept for the next --attach to that address
           --theme <theme>     light, dark or system (the default)
           --page <area>       the area to open: sessions, board, review, rewind, memory, skills, jobs, models,
                               safety, mcp, gateway, secrets, audit, settings or first-run
@@ -30,6 +36,12 @@ public sealed record AppOptions
     /// <c>--engine</c>, which says the default out loud): the engine runs in-process (Corvid.App.Engine) on the system clock.
     /// </summary>
     public bool Demo { get; init; }
+
+    /// <summary>G-1: the address of a Corvid elsewhere to attach to (<c>--attach</c>), instead of the in-process engine.</summary>
+    public string? Attach { get; init; }
+
+    /// <summary>G-1: a pairing code to redeem at <see cref="Attach"/> before attaching (<c>--pair</c>).</summary>
+    public string? Pair { get; init; }
 
     public AppTheme Theme { get; init; } = AppTheme.System;
 
@@ -111,6 +123,25 @@ public sealed record AppOptions
 
                     options = options with { Page = area };
                     break;
+                case "--attach" or "--pair":
+                    if (!TakeValue(args, ref i, name, inline, out var given, out error))
+                        return false;
+                    if (name == "--attach")
+                    {
+                        if (!Remote.AttachedAddress.TryParse(given, out _, out var wrong))
+                        {
+                            error = wrong!;
+                            return false;
+                        }
+
+                        options = options with { Attach = given };
+                    }
+                    else
+                    {
+                        options = options with { Pair = given };
+                    }
+
+                    break;
                 case "--session":
                     if (!TakeValue(args, ref i, name, inline, out var session, out error))
                         return false;
@@ -134,6 +165,19 @@ public sealed record AppOptions
                     error = $"Unknown argument \"{args[i]}\".";
                     return false;
             }
+        }
+
+        // Attached is a third engine: never with the demo's (or this machine's) on top of it.
+        if (options.Attach is not null && (demo is not null || sceneGiven))
+        {
+            error = "--attach runs against another Corvid, so it cannot be used with --demo, --engine or --scene.";
+            return false;
+        }
+
+        if (options.Pair is not null && options.Attach is null)
+        {
+            error = "--pair needs --attach: the address the code is for.";
+            return false;
         }
 
         // A scene is the demo's: --scene alone opens the demo (it never runs the engine on this machine's home), and with

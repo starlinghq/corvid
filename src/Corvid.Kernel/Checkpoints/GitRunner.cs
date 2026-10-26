@@ -27,7 +27,7 @@ internal sealed class GitRunner
         "core.symlinks=true", "core.filemode=true", "core.quotePath=false", "core.splitIndex=false",
         "core.excludesFile=/dev/null", "core.attributesFile=/dev/null", "core.pager=cat", "core.editor=false",
         "core.askPass=false", "credential.helper=", "commit.gpgSign=false", "gc.auto=0", "maintenance.auto=false",
-        "protocol.allow=never", "advice.detachedHead=false", "init.defaultBranch=checkpoints",
+        "protocol.allow=never", "submodule.recurse=false","advice.detachedHead=false", "init.defaultBranch=checkpoints",
     ];
 
     private readonly string _git;
@@ -37,6 +37,9 @@ internal sealed class GitRunner
     private readonly TimeSpan _timeout;
     private readonly bool _discovery;
     private readonly string? _ceiling;
+
+    /// <summary>The directory git runs in.</summary>
+    public string WorkingDirectory => _workTree;
 
     public GitRunner(string git, string gitDirectory, string workTree, string home, TimeSpan timeout)
     {

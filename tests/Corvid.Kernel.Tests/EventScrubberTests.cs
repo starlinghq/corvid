@@ -119,12 +119,39 @@ public sealed class EventScrubberTests : IDisposable
         Assert.Equal((0.9, 0.8, "acted", true), (scrubbed.Confidence, scrubbed.Threshold, scrubbed.Action, scrubbed.Calibrated!.Value));
     }
 
+    // A6V2-06 (it was not scrubbed before): a credential pasted into the composer is replaced before the message is logged;
+    // its sender, flags and images are kept, and a message without one keeps its instance.
     [Fact]
-    public void A_user_message_is_a_recorded_decision_and_is_not_scrubbed()
+    public void A_user_message_and_a_steer_are_scrubbed_of_credentials_and_keep_everything_else()
     {
-        var message = new UserMessage($"here is my token {Token}");
+        var image = new Corvid.Abstractions.Media.ImageRef(new string('a', 64), "image/png", 10, 4, 3, "shot.png");
+        var message = new UserMessage($"here is my token {Token}", From: "telegram guest dana (1001)", Images: [image]);
+        var plain = new UserMessage("nothing secret here");
 
-        Assert.Same(message, EventScrubber.Scrub(message));
+        var scrubbed = Assert.IsType<UserMessage>(EventScrubber.Scrub(message));
+        var steer = Assert.IsType<UserSteered>(EventScrubber.Scrub(new UserSteered("my wifi password is sunshinerainbow")));
+
+        Assert.StartsWith("here is my token " + Marker, scrubbed.Text, StringComparison.Ordinal);
+        Assert.Equal(("telegram guest dana (1001)", image), (scrubbed.From, Assert.Single(scrubbed.Images!.Value)));
+        Assert.Equal("my wifi password is [REDACTED:prose-value]", steer.Text);
+        Assert.Same(plain, EventScrubber.Scrub(plain));
+        Assert.Equal(scrubbed.Text, EventScrubber.UserText(message.Text));
+    }
+
+    // A6V2-06: the log and the episodic index derived from it (search) hold the marker only.
+    [Fact]
+    public void A_password_pasted_into_a_message_reaches_neither_the_log_nor_the_episodic_index()
+    {
+        var log = new SqliteEventLog(Path.Combine(_root, "events.db"));
+        log.Append("s-1", 0, [EventData.Create(new UserMessage("my wifi password is sunshinerainbow, set up the guest network"))], TestContext.Current.CancellationToken);
+        var index = new Corvid.Memory.EpisodicIndex(new Corvid.Memory.MemoryDatabase(Path.Combine(_root, "memory.db")));
+
+        var episode = Assert.Single(index.CatchUp(log, "s-1", TestContext.Current.CancellationToken));
+
+        var stored = Assert.IsType<UserMessage>(Assert.Single(log.Read("s-1", cancellationToken: TestContext.Current.CancellationToken)).Payload);
+        Assert.Equal("my wifi password is [REDACTED:prose-value], set up the guest network", stored.Text);
+        Assert.DoesNotContain("sunshinerainbow", episode.Text, StringComparison.Ordinal);
+        Assert.Empty(index.Search("sunshinerainbow"));
     }
 
     [Fact]

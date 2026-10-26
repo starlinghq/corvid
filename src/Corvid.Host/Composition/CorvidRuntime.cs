@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using Corvid.Abstractions.Events;
 using Corvid.Abstractions.IO;
+using Corvid.Abstractions.Media;
 using Corvid.Abstractions.Sessions;
 using Corvid.Abstractions.Tokens;
 using Corvid.Approvals;
@@ -107,6 +108,7 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         _deciders = new SessionDeciders(fabric, registry);
         Approvals = approvals;
         _prompters = prompters;
+        _prompters.Annotate = AnnotateJobWorkspace;
         Tools = tools;
         Memory = memory;
         Counter = counter;
@@ -209,6 +211,14 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     public TurnFeed Feed { get; }
 
     public SqliteEventLog Log { get; }
+
+    /// <summary>
+    /// K-8 (A6): the images messages carried, by digest (<c>media/</c> in the data directory), for the turn and for surfaces
+    /// that show them (the app's transcript, ACP's replay).
+    /// </summary>
+    public Kernel.Media.MediaStore Media => _media ??= new Kernel.Media.MediaStore(Path.Combine(CorvidPaths.DataDirectory(Options), "media"));
+
+    private Kernel.Media.MediaStore? _media;
 
     public ModelSlotRegistry Registry { get; }
 
@@ -429,6 +439,14 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         // HTTP API, a terminal) it would be an ordinary session with the full toolset. Every surface shows it read-only.
         RefuseChildSession(id);
         TakeDriver(id);
+        // A6 (G-4): a new session records the workspace it was asked for; an existing one must already work there.
+        // A6 review: a new session with none asked for records the configured one, so resumed by a process started elsewhere
+        // it still works where it began; only a log written before A6 has no record and follows the configured workspace.
+        if (settings?.Workspace is { } workspace)
+            BindWorkspace(id, workspace, settings.Worktree);
+        else
+            // A session whose workspace is gone fails here, with why, rather than in its actor.
+            BindDefaultWorkspace(id);
         if (settings is not null)
             _settings.TryAdd(id, settings);
         Sessions.GetOrCreate(id);
@@ -465,7 +483,9 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(checkpointId);
-        return CheckpointService.PlanRollbackTo(SessionProjection.Load(Log, sessionId, cancellationToken: cancellationToken), checkpointId, ChangesFiles);
+        var workspace = WorkspaceServicesOf(sessionId);
+        return CheckpointService.PlanRollbackTo(SessionProjection.Load(Log, sessionId, cancellationToken: cancellationToken), checkpointId,
+            call => ChangesFiles(call, workspace));
     }
 
     /// <summary>
@@ -476,21 +496,26 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     /// </summary>
     public async Task<RestoreDraft?> DraftRollbackToAsync(string sessionId, string checkpointId, IReadOnlyCollection<string>? only = null,
         CancellationToken cancellationToken = default) =>
-        PlanRollbackTo(sessionId, checkpointId, cancellationToken) is { } plan && Checkpoints is { } checkpoints
+        PlanRollbackTo(sessionId, checkpointId, cancellationToken) is { } plan && WorkspaceServicesOf(sessionId).Checkpoints is { } checkpoints
             ? await checkpoints.DraftAsync(plan, only, cancellationToken).ConfigureAwait(false)
             : null;
 
-    /// <summary>A call that would have taken a checkpoint: a tool that changes files, running something other than a read-only command.</summary>
-    internal bool ChangesFiles(ToolCallIssued call)
+    /// <summary>
+    /// A call that would have taken a checkpoint: a tool that changes files, running something other than a read-only
+    /// command, judged in the workspace the call ran in (A6).
+    /// </summary>
+    internal bool ChangesFiles(ToolCallIssued call, WorkspaceServices? workspace = null)
     {
+        workspace ??= DefaultWorkspace;
         // A tool no longer registered cannot be analysed, so its call counts as one that may have changed files (fail closed).
-        if (Tools.List().FirstOrDefault(tool => tool.Name == call.ToolName) is not { } descriptor)
+        if (!workspace.Tools.TryGet(call.ToolName, out var tool))
             return true;
+        var descriptor = tool.Descriptor;
         if (!descriptor.Risk.SideEffects.HasFlag(SideEffects.Filesystem))
             return false;
         try
         {
-            return CheckpointService.Covers(descriptor, Approvals.Analyze(new ToolAction(descriptor, call.Arguments)));
+            return CheckpointService.Covers(descriptor, workspace.Approvals.Analyze(new ToolAction(descriptor, call.Arguments)));
         }
         catch (ArgumentException)
         {
@@ -578,9 +603,10 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     internal static string NewSessionId(string surface) =>
         string.Create(CultureInfo.InvariantCulture, $"{surface}-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}");
 
-    internal async Task<Delivery> SendAsync(CorvidSession session, string text, EnvelopeOrigin origin, CancellationToken cancellationToken)
+    internal async Task<Delivery> SendAsync(CorvidSession session, string text, EnvelopeOrigin origin, CancellationToken cancellationToken,
+        ImmutableArray<ImageInput> images = default)
     {
-        var delivery = await PostAsync(session, text, origin, null, cancellationToken).ConfigureAwait(false);
+        var delivery = await PostAsync(session, text, origin, null, cancellationToken, images: images).ConfigureAwait(false);
         return await delivery.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -589,14 +615,14 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     /// turns finish (the gateway) keeps each chat's order without waiting for answers.
     /// </summary>
     internal async Task<Task<Delivery>> PostAsync(CorvidSession session, string text, EnvelopeOrigin origin, GuestScope? guest,
-        CancellationToken cancellationToken, ShellLine? shell = null)
+        CancellationToken cancellationToken, ShellLine? shell = null, ImmutableArray<ImageInput> images = default)
     {
         var messageId = Guid.NewGuid().ToString("N");
         var waiter = new TaskCompletionSource<Delivery>(TaskCreationOptions.RunContinuationsAsynchronously);
         _waiting[messageId] = waiter;
         try
         {
-            await Sessions.PostAsync(new Envelope(session.Id, session.Surface, text, origin, messageId) { Guest = guest, Shell = shell },
+            await Sessions.PostAsync(new Envelope(session.Id, session.Surface, text, origin, messageId) { Guest = guest, Shell = shell, Images = images.IsDefault ? [] : images },
                 cancellationToken).ConfigureAwait(false);
         }
         catch
@@ -630,14 +656,17 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         // A5: a session opened again keeps the models the person chose for it (CorvidRuntime.Models.cs).
         if (child is null)
             RestoreModelChoices(sessionId, slots);
-        var tools = child is not null ? ChildTools(child) : settings.Tools ? Tools : new ToolRegistry();
-        var runner = new TurnRunner(sessionId, Services(slots, settings.Interactive, tools, settings, child));
+        // A6 (G-4): the session's own workspace: its approvals, shell, file tools, checkpoints and project.
+        var workspace = WorkspaceServicesOf(sessionId);
+        var tools = child is not null ? ChildTools(child) : settings.Tools ? workspace.Tools : new ToolRegistry();
+        var runner = new TurnRunner(sessionId, Services(slots, settings.Interactive, tools, settings, child, workspace));
         var actor = new SessionActor(runner, slots, new Sink(this), new SessionActorOptions { EmbedderSwap = _swap });
         _sessions[sessionId] = new CorvidSession(this, sessionId, slots, runner, actor)
         {
             Interactive = settings.Interactive,
             Tools = tools,
             Child = child,
+            Workspace = workspace,
         };
         return actor;
     }
@@ -648,8 +677,10 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
 
     /// <summary>One session's turn services over the shared ones. Scheduled runs are not interactive: nobody can be asked.</summary>
     private TurnServices Services(SessionModelSlots slots, bool interactive, ToolRegistry? tools = null, SessionSettings? session = null,
-        ChildPlan? child = null)
+        ChildPlan? child = null, WorkspaceServices? workspace = null)
     {
+        // A scheduled run passes its job's workspace (CorvidRuntime.Jobs.cs); none given is the configured one.
+        workspace ??= DefaultWorkspace;
         var turn = Options.Turn;
         var prompt = turn.SystemPrompt is { Length: > 0 } configured ? configured : TurnOptions.DefaultSystemPrompt;
         if (session?.Persona is { Length: > 0 } persona)
@@ -665,11 +696,11 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
             Fabric = Fabric,
             // A5: the session's own decider (its mix's, or a person's switch), else the shared one.
             Deciders = _deciders,
-            Tools = tools ?? Tools,
-            Approvals = Approvals,
+            Tools = tools ?? workspace.Tools,
+            Approvals = workspace.Approvals,
             Memory = child is null ? Memory?.Writer : null,
             Retriever = Memory?.Retriever,
-            Checkpoints = Checkpoints,
+            Checkpoints = workspace.Checkpoints,
             // Frozen per session (plan §9.1): an edit made during the session shows from the next one.
             CoreBlocks = Memory?.Blocks.Snapshot(),
             Shortlist = _shortlist,
@@ -677,15 +708,21 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
             // Unattended job turns are not distilled into skills: nobody saw them.
             SkillLearning = learns ? Skills.Learner : null,
             // C-025: the project scopes recall and lessons; unattended turns draft none, as for skills.
-            Project = Memory?.Lessons is null ? null : Project,
+            Project = Memory?.Lessons is null ? null : workspace.Project,
             LessonLearning = learns ? Memory?.LessonLearner : null,
             SkillShortlist = _skillShortlist,
             // Turn progress and K-2's running tails, to whichever surface watches the session.
             Listener = Feed.Listener,
             // A5: a question asked inside the turn, where a surface can answer it now.
             Questions = _questions,
+            // K-8 (A6): images beside the event log, by digest.
+            Media = Media,
+            // A6 review: an image goes only to a model whose egress policy allows images.
+            EgressPolicyFor = Egress.PolicyFor,
             Options = new TurnOptions
             {
+                // A6 review: only the latest messages' images are sent again; older ones are stubs.
+                ImageTurns = turn.ImageTurns,
                 SystemPrompt = prompt,
                 // A gateway chat can be answered elsewhere: in a thread, the home channel, or not at all (C-020).
                 AskDeliver = child is null && (session?.AskDeliver ?? false),
@@ -808,8 +845,9 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
             SchedulerState = SchedulerElsewhere;
             return;
         }
-        var scripts = new SandboxedScriptRunner(Builtin.Shell, Approvals, Options.Approvals.Mode);
-        var agent = RecordingTaint(new TurnJobAgent(sessionId => Services(NewSlots(sessionId), interactive: false)));
+        // A6 (G-4): each run works in the workspace of the session that created its job (CorvidRuntime.Jobs.cs).
+        var scripts = JobScripts();
+        var agent = RecordingTaint(JobAgent());
         var scheduler = new JobScheduler(Builtin.Jobs, Fabric, scripts, agent,
             options: new JobSchedulerOptions { Generator = Registry.Get(ModelSlots.Generator).Default.Profile.Id })
         {
@@ -955,6 +993,15 @@ internal sealed class TaintRecordingJobAgent(IJobAgent inner, ConcurrentDictiona
 public sealed record SessionSettings(bool Interactive = true, bool Tools = true, string? Persona = null, bool AskDeliver = false)
 {
     public static SessionSettings Default { get; } = new();
+
+    /// <summary>
+    /// A6 (G-4): the directory a new session works in (absolute, existing), recorded in its log; null for the configured
+    /// workspace. Opening an existing session with one checks that it works there, and refuses otherwise.
+    /// </summary>
+    public string? Workspace { get; init; }
+
+    /// <summary>A6: the worktree <see cref="Workspace"/> is, when Corvid created it for the session (recorded with it).</summary>
+    internal SessionWorkspace? Worktree { get; init; }
 }
 
 /// <summary>One conversation: its slots, its turn runner and its actor. Surfaces talk to it through this handle.</summary>
@@ -987,6 +1034,11 @@ public sealed class CorvidSession
 
     /// <summary>The tools the session's turns may be offered (A5: a child's explicit toolset is its own registry).</summary>
     public ToolRegistry Tools { get; internal init; } = new();
+
+    /// <summary>A6 (G-4): the workspace the session works in, with its approvals, shell, checkpoints and project.</summary>
+    public WorkspaceServices Workspace { get => _workspace ?? _runtime.DefaultWorkspace; internal init => _workspace = value; }
+
+    private readonly WorkspaceServices? _workspace;
 
     /// <summary>A5: what this child session was started with, or null for a top-level session.</summary>
     public ChildPlan? Child { get; internal init; }
@@ -1046,6 +1098,51 @@ public sealed class CorvidSession
     /// <summary>Runs one turn and waits for its delivery.</summary>
     public Task<Delivery> SendAsync(string text, CancellationToken cancellationToken = default) =>
         _runtime.SendAsync(this, text, EnvelopeOrigin.User, cancellationToken);
+
+    /// <summary>
+    /// K-8 (A6): runs one turn on a message with images (the person's own: a paste, a drop, <c>/image</c>, <c>@path</c>, an
+    /// ACP image block) and waits for its delivery. The turn checks, strips and stores them, or fails with why.
+    /// </summary>
+    public Task<Delivery> SendAsync(string text, IReadOnlyList<ImageInput> images, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(images);
+        return _runtime.SendAsync(this, text, EnvelopeOrigin.User, cancellationToken, [.. images]);
+    }
+
+    /// <summary>
+    /// K-8 (A6): why this session would refuse these images now (no model could read them, or one is not an image, too
+    /// large, or there are too many), or null when the turn would take them. A surface asks before posting so the person
+    /// keeps their message; the turn checks again, then strips and stores them.
+    /// </summary>
+    public string? CheckImages(IReadOnlyList<ImageInput> images)
+    {
+        ArgumentNullException.ThrowIfNull(images);
+        if (images.Count == 0)
+            return null;
+        if (TurnRunner.ImageRefusal(Slots, _runtime.Media, _runtime.Egress.PolicyFor) is { } refusal)
+            return refusal;
+        if (images.Count > Corvid.Models.Images.ImageFiles.MaxPerMessage)
+            return $"The message was not sent: a message may carry at most {Corvid.Models.Images.ImageFiles.MaxPerMessage} images; this one has {images.Count}.";
+        foreach (var image in images)
+        {
+            try
+            {
+                Corvid.Models.Images.ImageFiles.Prepare(image.Data, image.Name);
+            }
+            catch (ImageRefusedException refused)
+            {
+                return "The message was not sent: " + refused.Message;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>K-8 (A6): queues a message with images, as <see cref="SendAsync(string, IReadOnlyList{ImageInput}, CancellationToken)"/> does.</summary>
+    public Task<Task<Delivery>> PostAsync(string text, IReadOnlyList<ImageInput> images, EnvelopeOrigin origin, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(images);
+        return _runtime.PostAsync(this, text, origin, null, cancellationToken, images: [.. images]);
+    }
 
     /// <summary>
     /// Queues a message and returns once it is queued, with a task for its delivery. <see cref="EnvelopeOrigin.External"/>
@@ -1136,7 +1233,7 @@ public sealed class CorvidSession
         {
             if (plan(SessionProjection.Load(_runtime.Log, Id, cancellationToken: token)) is not { } chosen)
                 return null;
-            return _runtime.Checkpoints is { } checkpoints
+            return Workspace.Checkpoints is { } checkpoints
                 ? await checkpoints.RestoreAsync(_runtime.Log, Id, chosen, token).ConfigureAwait(false)
                 : CheckpointService.Rewind(_runtime.Log, Id, chosen, token);
         }, cancellationToken);
@@ -1154,7 +1251,7 @@ public sealed class CorvidSession
     /// </summary>
     public async Task<RestoreDraft?> DraftRollbackToAsync(string checkpointId, IReadOnlyCollection<string>? only = null,
         CancellationToken cancellationToken = default) =>
-        PlanRollbackTo(checkpointId) is { } plan && _runtime.Checkpoints is { } checkpoints
+        PlanRollbackTo(checkpointId) is { } plan && Workspace.Checkpoints is { } checkpoints
             ? await checkpoints.DraftAsync(plan, only, cancellationToken).ConfigureAwait(false)
             : null;
 
@@ -1171,7 +1268,7 @@ public sealed class CorvidSession
         {
             if (CheckpointService.PlanRollbackTo(SessionProjection.Load(_runtime.Log, Id, cancellationToken: token), checkpointId, ChangesFiles) is not { } plan)
                 return null;
-            if (_runtime.Checkpoints is { } checkpoints)
+            if (Workspace.Checkpoints is { } checkpoints)
                 return await checkpoints.RestoreAsync(_runtime.Log, Id, plan, scope, only, token).ConfigureAwait(false);
             // Without checkpoints only the transcript can move.
             return scope switch
@@ -1183,7 +1280,7 @@ public sealed class CorvidSession
         }, cancellationToken);
     }
 
-    private bool ChangesFiles(ToolCallIssued call) => _runtime.ChangesFiles(call);
+    private bool ChangesFiles(ToolCallIssued call) => _runtime.ChangesFiles(call, Workspace);
 
     /// <summary>
     /// Starts an empty session with a conversation held elsewhere (an HTTP client that sends its whole history): the user's
@@ -1196,9 +1293,13 @@ public sealed class CorvidSession
         if (messages.Count == 0)
             return;
         var events = messages.Select(message => EventData.Create(message.FromUser ? new UserMessage(message.Text) : new AssistantMessage(message.Text))).ToList();
+        // A6: every new session's log starts with its workspace binding, so "no history yet" means nothing but that.
+        var head = _runtime.Log.GetHead(Id);
+        if (_runtime.Log.Read(Id).Any(item => item.Payload is not WorkspaceBound))
+            throw new InvalidOperationException($"Session '{Id}' already has a history.");
         try
         {
-            _runtime.Log.Append(Id, 0, events);
+            _runtime.Log.Append(Id, head, events);
         }
         catch (EventLogConflictException)
         {
@@ -1246,10 +1347,13 @@ internal sealed class ApprovalRouter : IApprovalPrompter
 
     public void Forget(string childId) => _parents.TryRemove(childId, out _);
 
+    /// <summary>What the runtime adds to a prompt before a surface shows it (a job's workspace on <c>cron_create</c>'s, A6V2-04).</summary>
+    public Func<ApprovalPrompt, ApprovalPrompt>? Annotate { get; set; }
+
     public ValueTask<ApprovalAnswer> AskAsync(ApprovalPrompt prompt, CancellationToken cancellationToken) =>
         _prompters.TryGetValue(prompt.SessionId, out var prompter)
         || _parents.TryGetValue(prompt.SessionId, out var parent) && _prompters.TryGetValue(parent, out prompter)
-            ? prompter.AskAsync(prompt, cancellationToken)
+            ? prompter.AskAsync(Annotate is { } annotate ? annotate(prompt) : prompt, cancellationToken)
             : throw new InvalidOperationException($"No surface is attached to session '{prompt.SessionId}' to answer the approval.");
 
     private sealed class Detach(ApprovalRouter router, string sessionId, IApprovalPrompter prompter) : IDisposable

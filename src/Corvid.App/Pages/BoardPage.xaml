@@ -141,10 +141,10 @@
                      AutomationProperties.Name="{x:Bind AutomationName}" />
           <StackPanel Orientation="Horizontal" Spacing="8">
             <controls:CorvidButton Content="New session" Style="{StaticResource CorvidSmallButton}" Command="{x:Bind NewSessionCommand}"
-                                   ToolTipService.ToolTip="Starting a session comes with the engine (Corvid.App.Engine)" />
+                                   ToolTipService.ToolTip="A new session in the workspace of the session in view (the engine)" />
             <controls:CorvidButton Content="Open a workspace…" Style="{StaticResource CorvidSmallButton}" Variant="Ghost"
                                    Command="{x:Bind OpenWorkspaceCommand}"
-                                   ToolTipService.ToolTip="Opening a workspace comes with the engine (Corvid.App.Engine)" />
+                                   ToolTipService.ToolTip="A session in another folder or a new git worktree (the engine)" />
           </StackPanel>
         </StackPanel>
       </Grid>
@@ -196,6 +196,66 @@
     <!-- .page-body: 18px 24px; .cards: two equal columns 14 apart, one under 600 px of content. -->
     <ScrollViewer x:Name="Body" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled">
       <StackPanel x:Name="BodyPanel" Padding="24,18,24,18" Spacing="18">
+        <!-- A6 (G-4): Open a workspace…: a folder, one of the window's workspaces, or a new git worktree of the session in view. -->
+        <Border x:Name="WorkspaceChooser" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.Chooser.IsOpen), Mode=OneWay}"
+                BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1" CornerRadius="10" Padding="14,12"
+                AutomationProperties.Name="Open a workspace">
+          <StackPanel Spacing="10">
+            <TextBlock Text="Open a workspace" FontWeight="SemiBold" AutomationProperties.HeadingLevel="Level2" />
+            <TextBlock Style="{StaticResource CorvidMutedText}" TextWrapping="Wrap"
+                       Text="A new session works in the folder you pick for its whole life: its approvals, sandbox, file tools, checkpoints, Review and Rewind follow it." />
+            <Grid ColumnSpacing="8">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+              </Grid.ColumnDefinitions>
+              <TextBox x:Name="WorkspacePath" Text="{x:Bind ViewModel.Chooser.Path, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                       PlaceholderText="/home/you/src/project" FontFamily="{StaticResource CorvidMono}" FontSize="12.5"
+                       Foreground="{ThemeResource CorvidText}" Background="{ThemeResource CorvidBg}" BorderBrush="{ThemeResource CorvidLine}"
+                       BorderThickness="1" CornerRadius="6" Padding="10,6" MinHeight="32" VerticalAlignment="Center"
+                       AutomationProperties.Name="Workspace folder" />
+              <controls:CorvidButton Grid.Column="1" Content="Start a session here" Style="{StaticResource CorvidSmallButton}" Variant="Primary"
+                                     Command="{x:Bind ViewModel.Chooser.StartCommand}" ToolTipService.ToolTip="A new session in this folder" />
+            </Grid>
+            <StackPanel Spacing="6" Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.Chooser.HasKnown), Mode=OneWay}">
+              <TextBlock Style="{StaticResource CorvidMutedText}" Text="Or one this window works in:" />
+              <ItemsControl ItemsSource="{x:Bind ViewModel.Chooser.Known}" IsTabStop="False" AutomationProperties.Name="Workspaces">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <controls:WrapRowPanel Spacing="8" LineSpacing="6" />
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="mvvm:Choice">
+                    <controls:CorvidButton Content="{x:Bind Label}" Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Command="{x:Bind Choose}"
+                                           ToolTipService.ToolTip="{x:Bind Description}" AutomationProperties.HelpText="{x:Bind Description}" />
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+            <Grid ColumnSpacing="8">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="160" />
+                <ColumnDefinition Width="Auto" />
+              </Grid.ColumnDefinitions>
+              <TextBlock Style="{StaticResource CorvidMutedText}" TextWrapping="Wrap" VerticalAlignment="Center"
+                         Text="{x:Bind ViewModel.Chooser.WorktreeText, Mode=OneWay}" />
+              <TextBox Grid.Column="1" Text="{x:Bind ViewModel.Chooser.WorktreeName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                       PlaceholderText="name (optional)" FontFamily="{StaticResource CorvidMono}" FontSize="12.5"
+                       Foreground="{ThemeResource CorvidText}" Background="{ThemeResource CorvidBg}" BorderBrush="{ThemeResource CorvidLine}"
+                       BorderThickness="1" CornerRadius="6" Padding="10,6" MinHeight="32" VerticalAlignment="Center"
+                       AutomationProperties.Name="Worktree name" />
+              <controls:CorvidButton Grid.Column="2" Content="New worktree…" Style="{StaticResource CorvidSmallButton}"
+                                     Command="{x:Bind ViewModel.Chooser.WorktreeCommand}"
+                                     ToolTipService.ToolTip="Makes a git worktree outside the workspace on a new branch, after you approve it" />
+            </Grid>
+            <TextBlock Text="{x:Bind ViewModel.Chooser.Error, Mode=OneWay}" Foreground="{ThemeResource CorvidRed}" TextWrapping="Wrap"
+                       Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.Chooser.HasError), Mode=OneWay}" />
+            <controls:CorvidButton Content="Cancel" Style="{StaticResource CorvidSmallButton}" Variant="Ghost" HorizontalAlignment="Left"
+                                   Command="{x:Bind ViewModel.Chooser.CancelCommand}" />
+          </StackPanel>
+        </Border>
         <!-- On a phone the dock is gone: the tray's items lead the page (the bottom bar's Attention lands here). -->
         <StackPanel x:Name="PhoneAttention" Visibility="Collapsed" Spacing="8">
           <TextBlock Text="{x:Bind ViewModel.AttentionHead, Mode=OneWay}" FontWeight="SemiBold" AutomationProperties.HeadingLevel="Level2" />

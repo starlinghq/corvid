@@ -26,6 +26,15 @@ public sealed class DelegateTaskToolTests
         Assert.Equal(30, two[1].MaxSeconds);
     }
 
+    [Fact]
+    public void A_child_can_ask_for_a_worktree_of_its_own()
+    {
+        Assert.True(DelegateTaskTool.TryRead(Json("""{"tasks":[{"goal":"a","isolation":"worktree"},{"goal":"b","isolation":"none"},{"goal":"c"}]}"""),
+            out var tasks, out _));
+        Assert.Equal([Isolations.Worktree, null, null], tasks.Select(task => task.Isolation));
+        Assert.Contains("\"isolation\"", DelegateTaskTool.Schema, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("""{}""", "'goal' is required")]
     [InlineData("""{"goal":"x","tasks":[{"goal":"y"}]}""", "not both")]
@@ -35,6 +44,7 @@ public sealed class DelegateTaskToolTests
     [InlineData("""{"goal":"x","tools":"a"}""", "array of tool names")]
     [InlineData("""{"goal":"x","mix":{"nope":"m"}}""", "'mix'")]
     [InlineData("""{"goal":"x","output_schema":"object"}""", "JSON Schema object")]
+    [InlineData("""{"goal":"x","isolation":"container"}""", "\"none\" or \"worktree\"")]
     public void A_malformed_call_says_what_is_wrong(string arguments, string expected)
     {
         Assert.False(DelegateTaskTool.TryRead(Json(arguments), out _, out var error));

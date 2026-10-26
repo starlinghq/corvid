@@ -22,6 +22,8 @@
     <!-- The surfaces (C-019): only the CLI references them. -->
     <ProjectReference Include="../Corvid.Acp/Corvid.Acp.csproj" />
     <ProjectReference Include="../Corvid.Http/Corvid.Http.csproj" />
+    <!-- A6 (G-1): corvid serve with attach on hosts the app engine's session service for attached clients. -->
+    <ProjectReference Include="../Corvid.App.Engine/Corvid.App.Engine.csproj" />
     <InternalsVisibleTo Include="Corvid.Cli.Tests" />
   </ItemGroup>
 </Project>

@@ -123,7 +123,13 @@ public sealed class UserMessageBlock : TranscriptBlock
     /// <summary>The message's log position, the fork point for "edit and resend" and "branch from here".</summary>
     public long? Position { get; private set; }
 
-    public string AutomationName => $"{Who}: {Text}";
+    /// <summary>K-8 (A6): the message's images, as bounded thumbnails with captions under its text.</summary>
+    public IReadOnlyList<ImageView> Images { get; private set; } = [];
+
+    public bool HasImages => Images.Count > 0;
+
+    public string AutomationName => Images.Count == 0 ? $"{Who}: {Text}"
+        : $"{Who}: {Text} ({SessionText.Plural(Images.Count, "image")}: {string.Join(", ", Images.Select(image => image.Caption))})";
 
     internal override void Apply(TranscriptEntry entry, BlockContext context)
     {
@@ -135,6 +141,12 @@ public sealed class UserMessageBlock : TranscriptBlock
         Text = SafeText.Clean(user.Text);
         IsSteer = user.Steered;
         Position = user.Position;
+        if (Images.Count != user.Images.Length)
+        {
+            Images = [.. user.Images.Select(image => new ImageView(image, token => context.Session.ReadImageAsync(image.Digest, token)))];
+            OnPropertyChanged(nameof(Images));
+            OnPropertyChanged(nameof(HasImages));
+        }
         OnPropertyChanged(nameof(AutomationName));
     }
 }
