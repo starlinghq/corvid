@@ -21,7 +21,9 @@ public sealed class CodeRunChatTests
         // The JSON escape puts a right-to-left override in the script; the card must show it as a code.
         using var run = new CliRun(new FakeModels(new FakeGenerator(
             Reply.Call("execute_code", """{"language":"python","code":"import corvid_tools as t\nprint(t.list_notes())  # \u202e"}"""),
-            Reply.Say("The script listed your notes."))))
+            Reply.Say("The script listed your notes.")),
+            // Code mode is offered only to a generator outside this process (plan §15).
+            generatorPrivacy: Corvid.Models.PrivacyClass.LocalServer))
         {
             Services = services => services.AddSingleton<IToolProvider>(new Tools(new FakeCodeTool(("list_notes", "{}")))),
         };

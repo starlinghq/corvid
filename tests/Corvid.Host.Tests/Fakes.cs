@@ -280,11 +280,16 @@ internal sealed class FakeModels
 {
     public static readonly string[] Keywords = ["list", "note", "add", "weather", "fetch", "page", "send"];
 
-    public FakeModels(FakeGenerator? generator = null, bool generatorReady = true, bool kevReady = true, bool kevLargeReady = true)
+    /// <param name="generatorPrivacy">
+    /// Where <c>fake-gen</c> claims to run. A7: code mode is offered only to a generator outside this process, so a test of a
+    /// code run passes <see cref="PrivacyClass.LocalServer"/>.
+    /// </param>
+    public FakeModels(FakeGenerator? generator = null, bool generatorReady = true, bool kevReady = true, bool kevLargeReady = true,
+        PrivacyClass generatorPrivacy = PrivacyClass.Local)
     {
         Generator = generator ?? new FakeGenerator(Reply.Say("Hello from the fake generator."));
         Provider = new FakeModelProvider()
-            .Add("fake-gen", [ModelSlots.Generator, ModelSlots.Summarizer], () => Generator, ready: generatorReady)
+            .Add("fake-gen", [ModelSlots.Generator, ModelSlots.Summarizer], () => Generator, ready: generatorReady, privacy: generatorPrivacy)
             .Add("fake-gen-large", [ModelSlots.Generator], () => Larger, context: 32_768, tools: ToolCallSupport.Native)
             .Add("fake-embed", [ModelSlots.TextEmbedder], () => Embedder, context: 512, tools: ToolCallSupport.None)
             .Add("fake-embed-alt", [ModelSlots.TextEmbedder], () => new KeywordEmbedder(Keywords), context: 512, tools: ToolCallSupport.None)

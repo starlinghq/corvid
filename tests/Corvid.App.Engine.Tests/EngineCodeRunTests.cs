@@ -25,7 +25,9 @@ public sealed class EngineCodeRunTests
         // The JSON escape puts a right-to-left override in the script.
         var models = new FakeModels(new FakeGenerator(
             Reply.Call("execute_code", """{"language":"python","code":"import corvid_tools as t\nprint(t.list_notes())  # \u202e"}"""),
-            Reply.Say("The script listed your notes.")));
+            Reply.Say("The script listed your notes.")),
+            // Code mode is offered only to a generator outside this process (plan §15).
+            generatorPrivacy: Corvid.Models.PrivacyClass.LocalServer);
         await using var engine = await CustomEngine.StartAsync(models, new Dictionary<string, string?> { ["Corvid:Approvals:Mode"] = "Manual" },
             services => services.AddSingleton<IToolProvider>(new Tools(new FakeCodeTool(("list_notes", "{}")))));
         var id = engine.Runtime.OpenSession(surface: "app").Id;

@@ -29,7 +29,9 @@ public sealed class AcpCodeRunTests
     {
         var models = new FakeModels(new FakeGenerator(
             Reply.Call("execute_code", """{"language":"python","code":"import corvid_tools as t\nprint(t.list_notes())"}"""),
-            Reply.Say("The script listed your notes.")));
+            Reply.Say("The script listed your notes.")),
+            // Code mode is offered only to a generator outside this process (plan §15).
+            generatorPrivacy: Corvid.Models.PrivacyClass.LocalServer);
         var code = new FakeCodeTool(("list_notes", "{}"));
         await using var client = AcpClient.Start(TestHost.Create(models, new Dictionary<string, string?> { ["Corvid:Approvals:Mode"] = "Manual" },
             services => services.AddSingleton<IToolProvider>(new Tools(code))));
