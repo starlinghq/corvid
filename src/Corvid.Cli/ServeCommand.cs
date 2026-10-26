@@ -165,6 +165,12 @@ internal static class ServeCommand
                         where.Add($"ws://{tcp.Authority}{AttachedProtocol.Path}" + (plan.Web is null ? "" : $" (the app at http://{tcp.Authority}/)"));
                     console.MarkupLine($"[bold]attached mode[/] on [bold]{Markup.Escape(string.Join(", ", where))}[/]; owner token: {Markup.Escape(plan.TokenSource)}. " +
                         "Pair another device with [bold]corvid serve pair[/].");
+                    // A6 fix: no TLS here. Past loopback the tokens and pairing codes, which carry approval authority, cross
+                    // the network as they are; say so every time, as the README does.
+                    if (plan.Listen is { } listened && !AttachEndpoint.IsLoopback(listened))
+                        console.MarkupLine("[yellow]Attached mode speaks plain ws:// (no TLS): the owner token, device tokens and pairing codes cross " +
+                            "the network readable by anyone on the path, and they answer approvals. Listen beyond loopback only on a network you trust, " +
+                            "or put a TLS proxy or an SSH tunnel in front.[/]");
                 }
                 foreach (var notice in runtime.DeciderNotices)
                     console.MarkupLine($"[yellow]{Markup.Escape(notice)}[/]");

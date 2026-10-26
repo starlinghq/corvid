@@ -63,10 +63,16 @@ corvid serve devices; corvid serve revoke <name>
   `$XDG_STATE_HOME/corvid/attach/owner.token` (0600, in a 0700 directory; a file others can read is refused). A paired
   device's token is kept on the server as a SHA-256 digest in `devices.json` (0600) and on the client in
   `client-tokens.json` (0600) or the browser's localStorage. Pairing codes live in the server's memory only, redeem
-  once, expire after 5 minutes and, past 10 wrong codes or tokens a minute, nothing is accepted until the minute ends.
+  once and expire after 5 minutes. Past 10 wrong codes or tokens a minute from one peer, that peer is refused until the
+  minute ends, and past 100 a minute from the network as a whole every network peer is; the Unix socket is counted on its
+  own, so guesses from the network never lock the owner out of their own machine. `corvid serve revoke <name>` refuses
+  the device's next connection and closes the ones it has open (at its next request, or within 5 seconds).
 - **Where it listens.** A Unix socket (0600) by default; `--listen` adds a WebSocket, loopback only unless the owner token
   is a Vault secret. On loopback only loopback host names are served (no DNS rebinding), and a browser is accepted only
-  from the pages the server serves itself (`Origin`).
+  from the pages the server serves itself (`Origin`). There is no TLS: past loopback the owner token, device tokens and
+  pairing codes cross the network in cleartext, and they answer approvals, so `corvid serve` says so at start. Listen
+  beyond loopback only on a network you trust, or reach a loopback listener through an SSH tunnel or a TLS proxy. The
+  browser head sends a `#pair=` code only to the server that served the page, never to another `?attach=` address.
 - **Who sees what.** There is no guest: the owner and devices the owner paired get the seam, approvals included (F22);
   anything else is closed before it sees a session. A device cannot make pairing codes.
 - **Disconnects.** A client that goes leaves the engine as it was: its approvals wait for another client or their deadline

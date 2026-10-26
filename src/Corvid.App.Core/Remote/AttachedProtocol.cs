@@ -25,6 +25,9 @@ public static class AttachedProtocol
     /// <summary>How long a connection may take to authenticate before it is closed.</summary>
     public static readonly TimeSpan AuthenticationWindow = TimeSpan.FromSeconds(10);
 
+    /// <summary>How often a paired device's connection checks that the device is still paired (<c>corvid serve revoke</c>).</summary>
+    public static readonly TimeSpan RevocationCheck = TimeSpan.FromSeconds(5);
+
     /// <summary>The largest message the server reads: requests are small, so anything bigger is refused and closes the connection.</summary>
     public const int MaxRequestBytes = 256 * 1024;
 

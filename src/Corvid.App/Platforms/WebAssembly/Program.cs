@@ -35,6 +35,14 @@ public static class Program
             var code = Fragment(page, "pair");
             if (code is not null)
                 location!.SetProperty("hash", "");
+            // A6 fix: a pairing code goes only to the server that served this page, so a crafted ?attach= link cannot carry
+            // it to another one.
+            if (code is not null && (!Uri.TryCreate(address, UriKind.Absolute, out var target)
+                || !string.Equals(target.Authority, page.Authority, StringComparison.OrdinalIgnoreCase)))
+            {
+                Console.WriteLine("corvid app: a pairing code is sent only to the server of this page, not to " + address);
+                code = null;
+            }
             dispatcher = new LateDispatcher();
             var attached = await AttachedStartup.ConnectAsync(address, code, "a browser", dispatcher, new BrowserTokenStore(), ownerTokenFile: null);
             Console.WriteLine("corvid app: " + attached.Report);

@@ -14,7 +14,8 @@ public sealed record PairedDevice(string Name, string Digest, DateTimeOffset Pai
 /// secret <c>Corvid:Serve:Attach:TokenSecret</c> names when one is configured (Corvid never holds its value), or else the
 /// token generated in <see cref="AttachedPaths.OwnerTokenFile"/> (0600). Paired devices' tokens are kept as SHA-256 digests in
 /// <see cref="AttachedPaths.DevicesFile"/> (0600), read again at each check, so <c>corvid serve revoke</c> refuses a device's
-/// next connection. Pairing codes live in this process only: one the owner made (<see cref="CreatePairingCode"/>, from the
+/// next connection and closes the ones it has open (<see cref="IsCurrentAsync"/>). Pairing codes live in this process
+/// only: one the owner made (<see cref="CreatePairingCode"/>, from the
 /// desktop or <c>corvid serve pair</c>) redeems once before it expires. Past <see cref="FailuresPerMinute"/> wrong codes or
 /// tokens in a minute from one peer, that peer is refused everything until the minute is over, and past
 /// <see cref="NetworkFailuresPerMinute"/> from the network as a whole every network peer is, so a code cannot be guessed.
@@ -132,6 +133,17 @@ public sealed class AttachedAuthenticator(Func<string, CancellationToken, ValueT
             return (token, new AttachedIdentity(AttachedRole.Device, name));
         });
         return ValueTask.FromResult(paired);
+    }
+
+    /// <summary>A device is current while its token's digest is in the devices file; the owner always is.</summary>
+    public ValueTask<bool> IsCurrentAsync(AttachedIdentity identity, string token, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        ArgumentNullException.ThrowIfNull(token);
+        if (identity.Role == AttachedRole.Owner)
+            return ValueTask.FromResult(true);
+        var digest = AttachedSecrets.Digest(token);
+        return ValueTask.FromResult(ReadDevices(devicesFile).Any(device => AttachedSecrets.FixedTimeEquals(device.Digest, digest)));
     }
 
     /// <summary>The paired devices in the file; none when it does not exist.</summary>

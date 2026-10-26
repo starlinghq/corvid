@@ -32,6 +32,13 @@ public interface IAttachedAuthenticator
     ValueTask<AttachedIdentity?> AuthenticateAsync(string token, string peer, CancellationToken cancellationToken) =>
         AuthenticateAsync(token, cancellationToken);
 
+    /// <summary>
+    /// Whether a connection that authenticated as <paramref name="identity"/> with <paramref name="token"/> may go on: false
+    /// once the device is revoked, and the server closes it. Asked before each request and every
+    /// <see cref="AttachedProtocol.RevocationCheck"/>.
+    /// </summary>
+    ValueTask<bool> IsCurrentAsync(AttachedIdentity identity, string token, CancellationToken cancellationToken) => ValueTask.FromResult(true);
+
     /// <summary><see cref="PairAsync(string, string, CancellationToken)"/> for a connection from <paramref name="peer"/>.</summary>
     ValueTask<(string Token, AttachedIdentity Identity)?> PairAsync(string code, string device, string peer, CancellationToken cancellationToken) =>
         PairAsync(code, device, cancellationToken);
@@ -91,13 +98,34 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
                 if (!connection.Authenticated)
                     _ = rpc.CloseAsync("not authenticated in time").AsTask();
             });
+            using var watching = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var watch = WatchRevocationAsync(connection, rpc, watching.Token);
             try
             {
                 await rpc.Closed.ConfigureAwait(false);
             }
             finally
             {
+                await watching.CancelAsync().ConfigureAwait(false);
+                await watch.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
                 connection.Close();
+            }
+        }
+    }
+
+    /// <summary>
+    /// A6 fix: a device revoked while it is attached (<c>corvid serve revoke</c>, another process) is closed within
+    /// <see cref="AttachedProtocol.RevocationCheck"/>, so it keeps neither the seam nor its approvals until it drops.
+    /// </summary>
+    private async Task WatchRevocationAsync(Connection connection, JsonRpcPeer rpc, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            await Task.Delay(AttachedProtocol.RevocationCheck, _time, cancellationToken).ConfigureAwait(false);
+            if (!await connection.IsCurrentAsync(cancellationToken).ConfigureAwait(false))
+            {
+                await rpc.CloseAsync("this device was revoked").ConfigureAwait(false);
+                return;
             }
         }
     }
@@ -126,6 +154,8 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
         private readonly Lock _gate = new();
         private int _authenticating;
         private volatile bool _authenticated;
+        private AttachedIdentity? _identity;
+        private string? _token;
         private bool _closed;
 
         public JsonRpcPeer Peer { get; set; } = null!;
@@ -166,10 +196,34 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
                 server.Left(this);
         }
 
+        /// <summary>
+        /// Whether the connection may go on: true until it authenticates and for the owner; for a device, while it is
+        /// still paired. A check that fails (the devices file cannot be read) refuses, as a revocation does.
+        /// </summary>
+        public async ValueTask<bool> IsCurrentAsync(CancellationToken cancellationToken)
+        {
+            if (!_authenticated || _identity is not { Role: AttachedRole.Device } identity || _token is not { } token)
+                return true;
+            try
+            {
+                if (await server._authenticator.IsCurrentAsync(identity, token, cancellationToken).ConfigureAwait(false))
+                    return true;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                // Refused below.
+            }
+            server.Log?.Invoke($"attach: {Who} is no longer paired; closing its connection");
+            return false;
+        }
+
         public async Task<JsonNode?> HandleAsync(string method, JsonObject? parameters, CancellationToken cancellationToken)
         {
             if (!_authenticated)
                 return await AuthenticateAsync(method, parameters, cancellationToken).ConfigureAwait(false);
+            // A6 fix: a revoked device is answered by nothing more, approvals included.
+            if (!await IsCurrentAsync(cancellationToken).ConfigureAwait(false))
+                throw Refuse("this device was revoked");
             if (!AttachedProtocol.SessionMethods.Contains(method))
                 throw new JsonRpcException(AttachedProtocol.Errors.MethodNotFound, "No such method in attached mode.");
             var p = new Params(parameters);
@@ -290,6 +344,7 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
             var device = Name(p.OptionalText("device"));
             AttachedIdentity? identity;
             string? token = null;
+            string? presented = null;
             if (method == AttachedProtocol.Pair)
             {
                 var paired = await server._authenticator.PairAsync(p.Text("code", 64), device, From, cancellationToken).ConfigureAwait(false);
@@ -298,7 +353,8 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
             }
             else
             {
-                identity = await server._authenticator.AuthenticateAsync(p.Text("token", 4096), From, cancellationToken).ConfigureAwait(false);
+                presented = p.Text("token", 4096);
+                identity = await server._authenticator.AuthenticateAsync(presented, From, cancellationToken).ConfigureAwait(false);
             }
             if (identity is null)
             {
@@ -316,6 +372,8 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
             {
                 if (_closed)
                     throw new JsonRpcException(AttachedProtocol.Errors.Unauthorized, "closed");
+                _identity = identity;
+                _token = presented;
                 _authenticated = true;
                 Who = identity.Role == AttachedRole.Owner ? "the owner" : $"device '{identity.Device}'";
                 Role = identity.Role;

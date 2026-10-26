@@ -175,6 +175,46 @@ public sealed class AttachedAuthenticatorTests : IDisposable
     }
 
     [Fact]
+    public async Task RevokingADeviceClosesTheConnectionsItHasOpen()
+    {
+        // A6 fix: `corvid serve revoke` refused only the next connection; a live one kept the seam and its approvals.
+        var time = ManualTimeProvider.Demo();
+        var authenticator = Create(time);
+        var engine = new DemoSessionService(new InlineDispatcher(), ManualTimeProvider.Demo());
+        var server = new AttachedServer(engine, authenticator, time);
+        using var stop = new CancellationTokenSource();
+        var token = (await authenticator.PairAsync(authenticator.CreatePairingCode().Code, "phone", Ct))!.Value.Token;
+
+        async Task<(RemoteSessionService Client, Task Served)> Connect(string with)
+        {
+            var (client, end) = InMemoryMessageChannel.CreatePair();
+            var served = server.ServeAsync(end, "test", stop.Token);
+            return (await RemoteSessionService.ConnectAsync(client, with, "test", new InlineDispatcher(), Ct), served);
+        }
+
+        var (asking, _) = await Connect(token);
+        var (watching, served) = await Connect(token);
+        var (owner, ownerServed) = await Connect(Owner);
+        await using (asking)
+        await using (watching)
+        await using (owner)
+        {
+            Assert.NotEmpty(await asking.ListAsync(Ct));
+            Assert.True(AttachedAuthenticator.Revoke(Devices, "phone"));
+
+            // Its next request is refused, and a connection that sends none is closed at the next check.
+            await Assert.ThrowsAnyAsync<Exception>(() => asking.ListAsync(Ct));
+            Assert.False(served.IsCompleted);
+            time.Advance(AttachedProtocol.RevocationCheck);
+            await served.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+            // The owner is never revoked this way.
+            Assert.False(ownerServed.IsCompleted);
+            Assert.NotEmpty(await owner.ListAsync(Ct));
+        }
+        await stop.CancelAsync();
+    }
+
+    [Fact]
     public async Task AnOpenSessionSaysSoWhenTheConnectionEnds()
     {
         var engine = new DemoSessionService(new InlineDispatcher(), ManualTimeProvider.Demo());
