@@ -283,12 +283,10 @@ public sealed class AttachedReviewTests
         await stop.CancelAsync();
     }
 
-    /// <summary>A session service whose SessionChanged subscription the test holds at a gate; everything else is the demo's.</summary>
+    /// <summary>The demo's session service, with the SessionChanged handlers subscribed to it kept count of.</summary>
     public class GatedSessions : DispatchProxy
     {
         public ISessionService Inner { get; set; } = null!;
-
-        public Action? Subscribing { get; set; }
 
         /// <summary>The SessionChanged handlers subscribed now (a removal of one not subscribed changes nothing, as for an event).</summary>
         public HashSet<object> Subscribed { get; } = [];
@@ -297,7 +295,6 @@ public sealed class AttachedReviewTests
         {
             if (targetMethod!.Name == "add_SessionChanged")
             {
-                Subscribing?.Invoke();
                 lock (Subscribed)
                     Subscribed.Add(args![0]!);
             }
@@ -327,19 +324,20 @@ public sealed class AttachedReviewTests
         var gated = (GatedSessions)(object)proxy;
         gated.Inner = engine;
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
-        using var closing = new ManualResetEventSlim();
+        using var closed = new ManualResetEventSlim();
         var noneLeft = 0;
+        // Once the connection has authenticated and let go of its gate, the server stops, and the authentication goes on
+        // only once the connection's close has finished. Before the fix the join came after this point, so the close's
+        // Left ran first; now the join is done under the gate before it.
         var server = new AttachedServer(proxy, new Authenticator(), ManualTimeProvider.Demo())
         {
             NoClientsLeft = () => Interlocked.Increment(ref noneLeft),
-            Closing = closing.Set,
-        };
-        // The join stops while it subscribes: the server is stopped then, and the join goes on only once the close began.
-        gated.Subscribing = () =>
-        {
-            gated.Subscribing = null;
-            stop.Cancel();
-            Assert.True(closing.Wait(TimeSpan.FromSeconds(10)));
+            Authenticated = () =>
+            {
+                stop.Cancel();
+                Assert.True(closed.Wait(TimeSpan.FromSeconds(10)));
+            },
+            ClosedConnection = closed.Set,
         };
         var (client, end) = InMemoryMessageChannel.CreatePair();
         var served = server.ServeAsync(end, "test", stop.Token);

@@ -88,8 +88,11 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
     /// </summary>
     public Action? NoClientsLeft { get; init; }
 
-    /// <summary>Tests: a connection's close has begun (before it takes the connection's gate).</summary>
-    internal Action? Closing { get; init; }
+    /// <summary>Tests: a connection has authenticated and let go of its gate.</summary>
+    internal Action? Authenticated { get; init; }
+
+    /// <summary>Tests: a connection's close has finished.</summary>
+    internal Action? ClosedConnection { get; init; }
 
     /// <summary>The host name the server gives itself in <see cref="AttachedProtocol.Initialize"/>.</summary>
     public string HostName { get; init; } = Environment.MachineName;
@@ -214,7 +217,6 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
 
         public void Close()
         {
-            server.Closing?.Invoke();
             LeaveUnauthenticated();
             bool wasIn;
             lock (_gate)
@@ -232,6 +234,7 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
             _viewing.Clear();
             if (wasIn)
                 server.Left(this);
+            server.ClosedConnection?.Invoke();
         }
 
         /// <summary>
@@ -425,6 +428,7 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
                 // never a handler left subscribed, a client counted that went, or NoClientsLeft raised while one remains.
                 server.Joined(this);
             }
+            server.Authenticated?.Invoke();
             LeaveUnauthenticated();
             // The owner or a paired device may send prompts with images (A6, K-8); an unauthenticated one only small requests.
             channel.AllowMessagesUpTo(AttachedProtocol.MaxAuthenticatedRequestBytes);
