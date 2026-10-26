@@ -205,14 +205,27 @@ public sealed class SessionModelTests
             // Pinned, the reset leaves the slot where it is, and is logged all the same.
             Assert.Equal(SwitchStatus.Unchanged, (await session.ClearModelChoiceAsync(ModelSlots.Generator, Ct))!.Status);
             Assert.False(session.Slots.HasSessionChoice(ModelSlots.Generator));
+            Assert.True(session.Slots.IsPinned(ModelSlots.Generator));
         }
 
-        await using var fourth = await host.StartAsync();
-        var reopened = fourth.OpenSession(id);
-        Assert.False(reopened.Slots.HasSessionChoice(ModelSlots.Generator));
-        Assert.False(reopened.Slots.IsPinned(ModelSlots.Generator));
-        Assert.Equal("fake-gen@cpu", reopened.Slots.Current(ModelSlots.Generator).Profile.Id);
-        Assert.Empty(fourth.ModelChoices(id));
+        // A6 fix (A5 left): opened again, the slot is as it was live: pinned where it was, with no choice.
+        await using (var fourth = await host.StartAsync())
+        {
+            var reopened = fourth.OpenSession(id);
+            Assert.False(reopened.Slots.HasSessionChoice(ModelSlots.Generator));
+            Assert.True(reopened.Slots.IsPinned(ModelSlots.Generator));
+            Assert.Equal("fake-gen-large@cpu", reopened.Slots.Current(ModelSlots.Generator).Profile.Id);
+            Assert.Empty(fourth.ModelChoices(id));
+            Assert.Equal("fake-gen-large@cpu", fourth.ModelPinsWithoutChoice(id)[ModelSlots.Generator]);
+            // Unpinned, it is forgotten for the next open.
+            Assert.True(await reopened.Slots.UnpinAsync(ModelSlots.Generator, Ct));
+        }
+
+        await using var fifth = await host.StartAsync();
+        var last = fifth.OpenSession(id);
+        Assert.False(last.Slots.IsPinned(ModelSlots.Generator));
+        Assert.Equal("fake-gen@cpu", last.Slots.Current(ModelSlots.Generator).Profile.Id);
+        Assert.Empty(fifth.ModelPinsWithoutChoice(id));
     }
 
     [Fact]

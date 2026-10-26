@@ -157,6 +157,22 @@ public sealed class SessionModelSlots
         }
     }
 
+    /// <summary>
+    /// A6 fix: puts back a pin the slot kept after its choice was reset, before the session was opened again: the slot uses
+    /// <paramref name="binding"/>, pinned, with no session choice (a turn's end leaves a pinned slot where it is). Nothing is
+    /// logged and no one is told; call it as the session opens, as <see cref="RestoreSessionDefault"/>.
+    /// </summary>
+    public void RestorePin(string slot, ModelBinding binding)
+    {
+        ModelSlots.Check(slot, binding);
+        lock (_state)
+        {
+            _chosen.Remove(slot);
+            _current[slot] = binding;
+            _pinned.Add(slot);
+        }
+    }
+
     /// <summary>Whether the person chose the slot's model for this session (<see cref="SetSessionDefaultAsync"/>).</summary>
     public bool HasSessionChoice(string slot)
     {
