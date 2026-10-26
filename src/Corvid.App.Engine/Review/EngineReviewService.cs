@@ -49,6 +49,14 @@ public sealed class EngineReviewService : IReviewService, IDisposable
     private readonly Func<string, string?> _environment;
     private readonly Func<ProcessStartInfo, Process?> _start;
     private readonly Lazy<Task<LedgerTexts>> _texts;
+
+    // A6 (G-4): the texts of the session's own workspace; finding it may read the log and build the workspace's services
+    // (its project and checkpoints), so off the caller's thread.
+    private async Task<LedgerTexts> TextsAsync(string sessionId)
+    {
+        var texts = await _texts.Value.ConfigureAwait(false);
+        return await Task.Run(() => texts.For(sessionId)).ConfigureAwait(false);
+    }
     /// <summary>Files put back from here, by session: the checkpoint each went back to.</summary>
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, string>> _reverted = new(StringComparer.Ordinal);
 
@@ -75,7 +83,7 @@ public sealed class EngineReviewService : IReviewService, IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
-        var texts = await _texts.Value.ConfigureAwait(false);
+        var texts = await TextsAsync(sessionId).ConfigureAwait(false);
         return await Task.Run(async () =>
         {
             var ledger = SessionLedger.Load(runtime, sessionId, cancellationToken);
@@ -155,7 +163,7 @@ public sealed class EngineReviewService : IReviewService, IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentException.ThrowIfNullOrWhiteSpace(checkpointId);
         var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
-        var texts = await _texts.Value.ConfigureAwait(false);
+        var texts = await TextsAsync(sessionId).ConfigureAwait(false);
         if (!texts.Readable(path))
             return new FileRevertResult(path, checkpointId, false, true, "Corvid may not open it, so it cannot be put back from here");
         CorvidSession session;
@@ -191,7 +199,17 @@ public sealed class EngineReviewService : IReviewService, IDisposable
         return new FileRevertResult(path, checkpointId, result.Merged.Contains(path), false);
     }
 
-    public async Task<string> OpenInEditorAsync(string path, int line, CancellationToken cancellationToken = default)
+    public Task<string> OpenInEditorAsync(string path, int line, CancellationToken cancellationToken = default) =>
+        OpenAsync(null, path, line);
+
+    /// <summary>A6 (G-4): the path resolved in the session's own workspace.</summary>
+    public Task<string> OpenInEditorAsync(string sessionId, string path, int line, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        return OpenAsync(sessionId, path, line);
+    }
+
+    private async Task<string> OpenAsync(string? sessionId, string path, int line)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var editor = (_environment("VISUAL") is { Length: > 0 } visual ? visual : _environment("EDITOR"))?.Trim();
@@ -205,7 +223,14 @@ public sealed class EngineReviewService : IReviewService, IDisposable
         string full;
         try
         {
-            full = Workspace.For(runtime.Builtin.Environment).Resolve(path);
+            // A6: under the file tools' rules of the workspace the session works in.
+            var environment = sessionId is null ? runtime.DefaultWorkspace.Environment
+                : await Task.Run(() => runtime.WorkspaceServicesOf(sessionId).Environment).ConfigureAwait(false);
+            full = Workspace.For(environment).Resolve(path);
+        }
+        catch (WorkspaceUnavailableException exception)
+        {
+            throw new InvalidOperationException(exception.Message);
         }
         catch (ToolArgumentException exception)
         {

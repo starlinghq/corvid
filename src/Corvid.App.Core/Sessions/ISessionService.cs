@@ -283,4 +283,39 @@ public interface ISessionService
     Task<string> CreateAsync(CancellationToken cancellationToken = default) =>
         Task.FromException<string>(new Composition.ServiceUnavailableException(
             "New sessions come with the engine, which opens one in the window's workspace."));
+
+    /// <summary>
+    /// A6 (G-4): whether <see cref="CreateAsync(NewSessionRequest, CancellationToken)"/> starts a session in a workspace the
+    /// person picks, or in a new git worktree. A default member (false): the demo's scenario has one workspace.
+    /// </summary>
+    bool CanChooseWorkspace => false;
+
+    /// <summary>
+    /// A6 (G-4): starts a new, empty session where <paramref name="request"/> says and returns its id. A session keeps its
+    /// workspace for its life. A worktree is made only after the person approves it on <see cref="NewSessionRequest.AskIn"/>'s
+    /// card, since it writes outside the workspace; a refusal throws with why. The default member starts one in the
+    /// window's workspace when the request names none, and refuses otherwise.
+    /// </summary>
+    Task<string> CreateAsync(NewSessionRequest request, CancellationToken cancellationToken = default) =>
+        request is { Workspace: null, Worktree: false }
+            ? CreateAsync(cancellationToken)
+            : Task.FromException<string>(new Composition.ServiceUnavailableException(
+                "Sessions in other workspaces come with the engine (G-4), which keeps a workspace per session."));
+}
+
+/// <summary>
+/// A6 (G-4): where a new session works. <see cref="Workspace"/> null is the window's configured workspace;
+/// <see cref="Worktree"/> makes a new git worktree of <see cref="AskIn"/>'s workspace and starts the session in it.
+/// </summary>
+/// <param name="Workspace">An absolute path of an existing directory, or null.</param>
+public sealed record NewSessionRequest(string? Workspace = null)
+{
+    /// <summary>Make a new git worktree (of <see cref="AskIn"/>'s workspace) and start the session there.</summary>
+    public bool Worktree { get; init; }
+
+    /// <summary>The worktree's name (its branch is <c>corvid/&lt;name&gt;</c>); one from the time when null.</summary>
+    public string? WorktreeName { get; init; }
+
+    /// <summary>The session whose card asks the person to approve the worktree, and whose repository it is of.</summary>
+    public string? AskIn { get; init; }
 }

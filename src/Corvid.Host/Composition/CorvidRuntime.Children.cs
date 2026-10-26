@@ -166,6 +166,19 @@ public sealed partial class CorvidRuntime
             Clamp(request.MaxTokens, agents.MaxTokens, agents.MaxTokens),
             Clamp(request.MaxSeconds, agents.MaxSeconds, agents.MaxSeconds));
         var (functions, dropped) = ChildToolset(parent, request);
+        if (request.Isolation is { } isolation)
+        {
+            if (isolation != Isolations.Worktree)
+                throw new ChildRefusedException($"A child's isolation is \"{Isolations.Worktree}\" or none, not \"{TerminalText.Visible(isolation)}\".");
+            try
+            {
+                await RepositoryOfAsync(parentId).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is Corvid.Kernel.Workspaces.WorktreeException or WorkspaceUnavailableException)
+            {
+                throw new ChildRefusedException("The child cannot have a worktree: " + exception.Message);
+            }
+        }
 
         var mix = ModelMix.Empty;
         try
@@ -196,6 +209,7 @@ public sealed partial class CorvidRuntime
             CallId = request.CallId,
             Configurations = configurations,
             Functions = functions,
+            Isolation = request.Isolation,
         };
 
         static int Clamp(int? asked, int fallback, int ceiling) => Math.Clamp(asked ?? fallback, 1, Math.Max(1, ceiling));
@@ -227,7 +241,16 @@ public sealed partial class CorvidRuntime
         try
         {
             JsonElement? mix = plan.Mix is { } resolved ? Json(resolved.ToString()) : null;
-            Log.Append(id, 0, [EventData.Create(new ChildOf(plan.ParentId, plan.Depth, plan.Goal, plan.Tools, plan.Budget, mix))]);
+            // A6: a child works in its parent's workspace, or in the worktree made for it, recorded after ChildOf; its tools
+            // are then the worktree's.
+            var bound = plan.Worktree is { } worktree ? new WorkspaceBound(worktree.Path, worktree.Repository, worktree.Branch) : ChildBinding(plan.ParentId);
+            if (plan.Worktree is { } own)
+            {
+                var tools = WorkspaceAt(own.Path).Tools;
+                plan = plan with { Functions = [.. plan.Tools.Select(name => tools.TryGet(name, out var tool) ? tool : null).OfType<Corvid.Tools.ToolFunction>()] };
+            }
+            Log.Append(id, 0, [EventData.Create(new ChildOf(plan.ParentId, plan.Depth, plan.Goal, plan.Tools, plan.Budget, mix)),
+                .. bound is not null ? [EventData.Create(bound)] : Array.Empty<EventData>()]);
             var spawned = new ChildSpawned(id, plan.Goal, plan.Tools, plan.Budget, plan.By, plan.Tainted, mix, plan.OutputSchema, plan.CallId);
             var sequence = AppendTo(plan.ParentId, spawned);
             _childPlans[id] = plan;

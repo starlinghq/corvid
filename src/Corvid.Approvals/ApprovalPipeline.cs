@@ -46,6 +46,13 @@ public sealed record ApprovalContext(string SessionId, ApprovalMode Mode, TurnSt
     /// uses the pipeline's own. It shares the pipeline's policy and log, so floors and calibration are unchanged.
     /// </summary>
     public DecisionFabric? Fabric { get; init; }
+
+    /// <summary>
+    /// A6: why this action asks the person whatever the mode, the <c>risk</c> answer or a remembered rule says (creating or
+    /// removing a git worktree, which writes outside the workspace); null for none. Offered once only, like any forced reason;
+    /// the hardline list still applies first, and with nobody to ask it is denied.
+    /// </summary>
+    public string? AlwaysAsk { get; init; }
 }
 
 public enum ApprovalOutcome
@@ -205,6 +212,8 @@ public sealed class ApprovalPipeline
     private readonly ConcurrentDictionary<string, ImmutableArray<ApprovalRule>> _session = new(StringComparer.Ordinal);
     // Rules already recorded per session, beside the DetectionMatched events in the inline window (C-023).
     private readonly ConcurrentDictionary<(string Session, string Rule), byte> _detected = new();
+    // A6 (G-4): the pipeline a workspace view was made from, whose options (the deadline Settings changes) it reads.
+    private readonly ApprovalPipeline? _root;
 
     public ApprovalPipeline(ApprovalEnvironment environment, DecisionFabric fabric, IEventLog log, IApprovalPrompter? prompter = null,
         IApprovalRuleStore? alwaysRules = null, ApprovalOptions? options = null, TimeProvider? timeProvider = null)
@@ -225,9 +234,35 @@ public sealed class ApprovalPipeline
         _time = timeProvider ?? TimeProvider.System;
     }
 
+    // A6: a view of root over another workspace; everything but the environment is root's own.
+    private ApprovalPipeline(ApprovalPipeline root, ApprovalEnvironment environment)
+    {
+        Environment = environment;
+        _root = root;
+        _fabric = root._fabric;
+        _log = root._log;
+        _prompter = root._prompter;
+        _always = root._always;
+        _time = root._time;
+        _session = root._session;
+        _detected = root._detected;
+    }
+
+    /// <summary>
+    /// A6 (G-4): this pipeline over another workspace: paths are judged against <paramref name="environment"/> (what is
+    /// inside the workspace, what is protected), and everything else is this pipeline's own, shared live: the "always" rules,
+    /// the rules remembered per session, the prompter, the fabric, the log and the options (a deadline changed here applies
+    /// to the view too). A session in another workspace is assessed through its view.
+    /// </summary>
+    public ApprovalPipeline ForWorkspace(ApprovalEnvironment environment)
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+        return new ApprovalPipeline(_root ?? this, environment);
+    }
+
     public ApprovalEnvironment Environment { get; }
 
-    public ApprovalOptions Options { get => Volatile.Read(ref _options); private init => _options = value; }
+    public ApprovalOptions Options { get => _root is { } root ? root.Options : Volatile.Read(ref _options); private init => _options = value; }
 
     private ApprovalOptions _options = ApprovalOptions.Default;
 
@@ -238,6 +273,11 @@ public sealed class ApprovalPipeline
     public void SetTimeout(TimeSpan timeout)
     {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
+        if (_root is { } root)
+        {
+            root.SetTimeout(timeout);
+            return;
+        }
         ApprovalOptions current, next;
         do
         {
@@ -315,6 +355,8 @@ public sealed class ApprovalPipeline
         ImmutableArray<ApprovalReason> detected, CancellationToken cancellationToken)
     {
         var forced = Forced(analysis, action, context).AddRange(detected);
+        if (context.AlwaysAsk is { Length: > 0 } required)
+            forced = forced.Add(new(ApprovalReasons.Required, required));
         var parsed = analysis.Unsupported is null;
         // A tool declared read-only (C-005) needs no approval even when it reads the network; taint is a forced reason.
         var sideEffecting = action is ToolAction { Tool.Risk.ReadOnly: true }

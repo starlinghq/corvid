@@ -28,4 +28,11 @@ public interface IReviewService
 
     /// <summary>Opens the file at a line in the person's editor (<c>$EDITOR</c>, <c>xdg-open</c> or <c>code --goto</c>); returns what ran.</summary>
     Task<string> OpenInEditorAsync(string path, int line, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// A6 (G-4): <see cref="OpenInEditorAsync(string, int, CancellationToken)"/> for a path of a session's changes, resolved in
+    /// the workspace that session works in. A default member: a service with one workspace resolves it there.
+    /// </summary>
+    Task<string> OpenInEditorAsync(string sessionId, string path, int line, CancellationToken cancellationToken = default) =>
+        OpenInEditorAsync(path, line, cancellationToken);
 }

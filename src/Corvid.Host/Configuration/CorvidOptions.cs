@@ -152,6 +152,13 @@ public sealed class SessionsSettings
     /// <c>--session</c>, the app opening it); 0 turns recaps on return off. <c>/recap</c> works either way.
     /// </summary>
     public int RecapAfterMinutes { get; set; } = 60;
+
+    /// <summary>
+    /// A6 (G-4): where the git worktrees Corvid makes for sessions go, one directory per repository below it. Outside every
+    /// workspace and the data directory (which the sandbox hides). Default <c>$XDG_STATE_HOME/corvid-worktrees</c>
+    /// (<c>~/.local/state/corvid-worktrees</c>).
+    /// </summary>
+    public string? WorktreesDirectory { get; set; }
 }
 
 public sealed class DetectionSettings

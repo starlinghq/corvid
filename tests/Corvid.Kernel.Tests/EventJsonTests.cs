@@ -46,7 +46,19 @@ public sealed class EventJsonTests
         [typeof(ChildSpawned)] = "child_spawned",
         [typeof(ChildFinished)] = "child_finished",
         [typeof(ChildOf)] = "child_of",
+        [typeof(WorkspaceBound)] = "workspace_bound",
     };
+
+    [Fact]
+    public void The_a6_workspace_event_has_its_documented_persisted_form()
+    {
+        Assert.Equal("""
+            {"type":"workspace_bound","path":"/home/a/work"}
+            """, EventJson.Serialize(new WorkspaceBound("/home/a/work")));
+        Assert.Equal("""
+            {"type":"workspace_bound","path":"/s/wt/fix","repository":"/home/a/work","branch":"corvid/fix"}
+            """, EventJson.Serialize(new WorkspaceBound("/s/wt/fix", "/home/a/work", "corvid/fix")));
+    }
 
     [Fact]
     public void The_a5_child_events_have_their_documented_persisted_form()

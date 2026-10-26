@@ -3,6 +3,7 @@ using Corvid.Abstractions.Events;
 using Corvid.Abstractions.Sessions;
 using Corvid.Host.Commands;
 using Corvid.Host.Composition;
+using Corvid.Host.Configuration;
 using Corvid.Host.Sessions;
 using Corvid.Kernel.Jobs;
 using Corvid.Kernel.Sessions;
@@ -57,7 +58,17 @@ internal static class ChatCommand
             }
             try
             {
-                session = runtime.OpenSession(arguments.Option("--session"), "cli");
+                // A6 (G-4): --workspace starts the session in that directory (a resumed one must already work there).
+                var workspace = arguments.Option("--workspace") is { Length: > 0 } directory
+                    ? Path.GetFullPath(CorvidPaths.ExpandHome(directory))
+                    : null;
+                session = runtime.OpenSession(arguments.Option("--session"), "cli",
+                    workspace is null ? null : new SessionSettings { Workspace = workspace });
+            }
+            catch (WorkspaceUnavailableException exception)
+            {
+                console.MarkupLine($"[red]{Markup.Escape(exception.Message)}[/]");
+                return ExitCodes.Failure;
             }
             catch (SessionHeldException exception)
             {
@@ -87,9 +98,14 @@ internal static class ChatCommand
             void OnJob(ScheduledJob job, JobRun run) =>
                 renderer.Notice($"[grey]⏰ job {Markup.Escape(job.Name)}: {Markup.Escape(run.Status)} (session {Markup.Escape(run.SessionId)})[/]");
             renderer.Banner(session.Id, session.Slots.Current(ModelSlots.Generator).Profile.Id, runtime.Tools.List().Count);
+            // A6: a session elsewhere than the configured workspace says where.
+            if (!session.Workspace.IsDefault)
+                renderer.Notice($"[grey]Workspace: {Markup.Escape(TerminalText.Visible(session.Workspace.Root))}" +
+                    (runtime.WorkspaceOf(session.Id).Branch is { } branch ? $" (worktree, branch {Markup.Escape(TerminalText.Visible(branch))})" : "") + "[/]");
             foreach (var notice in runtime.DeciderNotices)
                 renderer.Notice($"[yellow]{Markup.Escape(notice)}[/]");
-            if (session.Snapshot().Head > 0)
+            // A6: a new session's first event may be where it works (WorkspaceBound); only more than that is resumed.
+            if (session.Snapshot().Head > (runtime.WorkspaceOf(session.Id).IsDefault ? 0 : 1))
                 await ResumeAsync(runtime, session, renderer, console, cancellationToken).ConfigureAwait(false);
             // G-7: seen now, so a recap on the next return covers only what happens after.
             Shared(() => runtime.UiState.MarkSeen(session.Id, runtime.Log.GetHead(session.Id), DateTimeOffset.UtcNow));

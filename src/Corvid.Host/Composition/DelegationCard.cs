@@ -74,6 +74,9 @@ public static class DelegationCard
         lines.Add($"  approvals: {plan.ApprovalMode.ToString().ToLowerInvariant()}" + (plan.Tainted ? "; starts holding outside content (tainted)" : ""));
         if (plan.OutputSchema is not null)
             lines.Add("  answer: a JSON object checked against the output schema");
+        // A6 (G-4): the worktree is asked for on its own once this is approved, since it writes outside the workspace.
+        if (plan.Isolation == Corvid.Kernel.Turns.Isolations.Worktree)
+            lines.Add("  workspace: a new git worktree of this one (you are asked before it is made)");
         return lines;
     }
 

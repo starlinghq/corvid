@@ -40,6 +40,14 @@ public sealed class EngineRewindService : IRewindService, IDisposable
     private readonly ConcurrentDictionary<string, (RestoreOutcome Outcome, long Head)> _unrecorded = new(StringComparer.Ordinal);
     private readonly Lazy<Task<LedgerTexts>> _texts;
 
+    // A6 (G-4): the texts of the session's own workspace; finding it may read the log and build the workspace's services
+    // (its project and checkpoints), so off the caller's thread.
+    private async Task<LedgerTexts> TextsAsync(string sessionId)
+    {
+        var texts = await _texts.Value.ConfigureAwait(false);
+        return await Task.Run(() => texts.For(sessionId)).ConfigureAwait(false);
+    }
+
     internal EngineRewindService(AppEngine engine, TimeProvider time, HistorySignals signals)
     {
         ArgumentNullException.ThrowIfNull(engine);
@@ -58,7 +66,7 @@ public sealed class EngineRewindService : IRewindService, IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
-        var texts = await _texts.Value.ConfigureAwait(false);
+        var texts = await TextsAsync(sessionId).ConfigureAwait(false);
         return await Task.Run(async () =>
         {
             var ledger = SessionLedger.Load(runtime, sessionId, cancellationToken);
@@ -92,7 +100,7 @@ public sealed class EngineRewindService : IRewindService, IDisposable
     public async Task<AppPlan> PlanAsync(string sessionId, string checkpointId, CancellationToken cancellationToken = default)
     {
         var (ledger, entry, runtime) = await FindAsync(sessionId, checkpointId, cancellationToken).ConfigureAwait(false);
-        var texts = await _texts.Value.ConfigureAwait(false);
+        var texts = await TextsAsync(sessionId).ConfigureAwait(false);
         // Planned from the log, without opening the session: only a restore opens it.
         var midTurn = runtime.IsTurnRunning(sessionId);
         var plan = runtime.PlanRollbackTo(sessionId, checkpointId, cancellationToken) ?? throw Missing(sessionId, checkpointId);
@@ -155,7 +163,7 @@ public sealed class EngineRewindService : IRewindService, IDisposable
     public async Task<IReadOnlyList<RestorePreviewFile>> PreviewAsync(string sessionId, string checkpointId, CancellationToken cancellationToken = default)
     {
         var (_, _, runtime) = await FindAsync(sessionId, checkpointId, cancellationToken).ConfigureAwait(false);
-        var texts = await _texts.Value.ConfigureAwait(false);
+        var texts = await TextsAsync(sessionId).ConfigureAwait(false);
         var plan = runtime.PlanRollbackTo(sessionId, checkpointId, cancellationToken) ?? throw Missing(sessionId, checkpointId);
         var draft = await runtime.DraftRollbackToAsync(sessionId, checkpointId, null, cancellationToken).ConfigureAwait(false);
         if (draft is null || draft.Detail is not null)

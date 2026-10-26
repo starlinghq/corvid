@@ -240,6 +240,12 @@ public sealed class GatewayHost : IAsyncDisposable
                 Queue(message, "/sessions lists every conversation's title, so it answers only in a direct message with this bot.", "notice");
                 return;
             }
+            // A6: /workspace shows the owner's directories and makes worktrees; likewise only in a direct message.
+            if (!message.Direct && IsCommandNamed(text, "workspace"))
+            {
+                Queue(message, "/workspace shows and changes where this agent works, so it answers only in a direct message with this bot.", "notice");
+                return;
+            }
             // Off the receive loop: /undo waits for a running turn, which may itself wait for an /approve still to come.
             Track(RunCommandAsync(message, sessionId, text));
             return;

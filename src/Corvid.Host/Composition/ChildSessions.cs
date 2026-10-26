@@ -54,6 +54,12 @@ public sealed record ChildRequest(string Goal)
 
     /// <summary>The parent's <c>delegate_task</c> call, recorded on <c>ChildSpawned</c>.</summary>
     public string? CallId { get; init; }
+
+    /// <summary>
+    /// A6 (G-4): <see cref="Corvid.Kernel.Turns.Isolations.Worktree"/> runs the child in a new git worktree of the parent's
+    /// workspace (made after the person approves it); null runs it in the parent's workspace.
+    /// </summary>
+    public string? Isolation { get; init; }
 }
 
 /// <summary>A tool asked for and left out of a child's toolset, and why.</summary>
@@ -87,6 +93,12 @@ public sealed record ChildPlan(string ParentId, string Goal, ImmutableArray<stri
 
     /// <summary>The tools of <see cref="Tools"/>, as the parent session had them.</summary>
     internal ImmutableArray<Corvid.Tools.ToolFunction> Functions { get; init; } = [];
+
+    /// <summary>A6: <see cref="Corvid.Kernel.Turns.Isolations.Worktree"/> when the child gets a worktree of its own, else null.</summary>
+    public string? Isolation { get; init; }
+
+    /// <summary>A6: the worktree made for the child once approved (<see cref="CorvidRuntime.OpenChildSession"/> starts it there).</summary>
+    public SessionWorkspace? Worktree { get; internal init; }
 }
 
 /// <summary>A child's end, as <c>ChildFinished</c> records it in the parent's log.</summary>

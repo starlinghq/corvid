@@ -64,7 +64,7 @@ public static class CorvidCli
         usage: corvid [command] [options]
 
         commands:
-          chat                       talk to Corvid (the default)      [--session <id>] [--verbose]
+          chat                       talk to Corvid (the default)      [--session <id>] [--workspace <dir>] [--verbose]
           model [list]               models, their slots and whether they are in the cache
           model switch <slot> <model>  bind a slot by default (written to the user config file)
           model download <model>...  fetch models explicitly (--all for every model); the only command that downloads
@@ -224,6 +224,11 @@ public sealed record CliArguments(string Command, IReadOnlyList<string> Argument
                     break;
                 // Chat's option may come without the command (`corvid --session x` resumes a chat).
                 case "--session" when command is null or "chat":
+                    rest.Add(arg);
+                    rest.Add(Value(args, ref i, arg));
+                    break;
+                // A6 (G-4): the directory a new chat session works in.
+                case "--workspace" when command is null or "chat":
                     rest.Add(arg);
                     rest.Add(Value(args, ref i, arg));
                     break;

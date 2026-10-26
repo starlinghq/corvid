@@ -31,22 +31,53 @@ public sealed record FileDiff(string Path, string? OldText, string NewText);
 /// file read here goes through the file tools' own <see cref="Workspace"/> rules first, so a path the tools may not open
 /// (outside the workspace, a protected location, a credential file) is never read or shown.
 /// </summary>
-public sealed class ToolPresentation(CorvidRuntime runtime)
+/// <param name="runtime">The runtime whose tools are presented.</param>
+/// <param name="scope">A6 (G-4): the workspace the calls ran in; the runtime's configured one when null.</param>
+public sealed class ToolPresentation(CorvidRuntime runtime, WorkspaceServices? scope = null)
 {
+    private readonly WorkspaceServices _scope = scope ?? runtime.DefaultWorkspace;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ToolPresentation> _others = new(StringComparer.Ordinal);
+
+    /// <summary>A6 (G-4): the presentation of calls that ran in <paramref name="workspace"/> (this one when it is the same).</summary>
+    public ToolPresentation In(WorkspaceServices workspace)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        return workspace.Root == _scope.Root ? this : _others.GetOrAdd(workspace.Root, _ => new ToolPresentation(runtime, workspace));
+    }
+
+    /// <summary>A6: the presentation of a session's calls, in the workspace it works in.</summary>
+    public ToolPresentation ForSession(string sessionId) => In(runtime.WorkspaceServicesOf(sessionId));
+
+    /// <summary>
+    /// As <see cref="ForSession"/>, or this presentation when the session's workspace cannot be used now (a removed
+    /// worktree): its calls are still listed, and paths outside this workspace are not read.
+    /// </summary>
+    public ToolPresentation ForSessionOrSelf(string sessionId)
+    {
+        try
+        {
+            return ForSession(sessionId);
+        }
+        catch (WorkspaceUnavailableException)
+        {
+            return this;
+        }
+    }
+
     /// <summary>A surface shows a diff of the whole file; past this size, or for binary content, the call reports text only.</summary>
     public const int MaxDiffBytes = 256 * 1024;
     private const int MaxTitle = 160;
     private const int MaxResultText = 8 * 1024;
     private const int MaxDiffFiles = 16;
 
-    private readonly Workspace _workspace = Workspace.For(runtime.Builtin.Environment);
+    private readonly Workspace _workspace = Workspace.For((scope ?? runtime.DefaultWorkspace).Environment);
 
     /// <summary>The workspace the tools work in, as an absolute path.</summary>
     public string WorkspaceRoot => _workspace.Root;
 
     public string Kind(string tool)
     {
-        if (!runtime.Tools.TryGet(tool, out var function))
+        if (!_scope.Tools.TryGet(tool, out var function))
             return ToolCallKinds.Other;
         var risk = function.Descriptor.Risk;
         return tool switch
@@ -62,7 +93,7 @@ public sealed class ToolPresentation(CorvidRuntime runtime)
     }
 
     /// <summary>The tool reads the network: its result is outside content, which taints the session (plan §10.3).</summary>
-    public bool Network(string tool) => runtime.Tools.TryGet(tool, out var function) && function.Descriptor.Risk.Network;
+    public bool Network(string tool) => _scope.Tools.TryGet(tool, out var function) && function.Descriptor.Risk.Network;
 
     /// <summary>What a call acts on, in a line: its command line, path, URL, query or name; null when it names none.</summary>
     public static string? Target(JsonElement? arguments) =>
@@ -129,7 +160,7 @@ public sealed class ToolPresentation(CorvidRuntime runtime)
     /// </summary>
     public async Task<IReadOnlyList<FileDiff>> LedgerDiffsAsync(string beforeRevision, string afterRevision, IReadOnlyList<string> paths)
     {
-        if (runtime.Checkpoints is not { Store: { IsAvailable: true } store })
+        if (_scope.Checkpoints is not { Store: { IsAvailable: true } store })
             return [];
         var diffs = new List<FileDiff>();
         foreach (var relative in paths.Take(MaxDiffFiles))

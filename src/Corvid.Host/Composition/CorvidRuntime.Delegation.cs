@@ -98,6 +98,7 @@ public sealed partial class CorvidRuntime
             OutputSchema = task.OutputSchema,
             By = by,
             CallId = callId,
+            Isolation = task.Isolation,
         };
     }
 
@@ -137,6 +138,26 @@ public sealed partial class CorvidRuntime
                 if (tasks.Length == 1)
                     throw;
                 outcomes[i] = Refused(exception.Message);
+            }
+        }
+        // A6 (G-4): a child that asked for a worktree gets one, each after the person approves it (it writes outside the
+        // workspace), before any child opens; a refusal refuses that child only.
+        for (var p = 0; p < plans.Count; p++)
+        {
+            if (plans[p].Plan.Isolation != Isolations.Worktree)
+                continue;
+            try
+            {
+                var workspace = await CreateWorktreeAsync(context.SessionId, "child-" + Guid.NewGuid().ToString("N")[..8], context.CallId,
+                    cancellationToken).ConfigureAwait(false);
+                plans[p] = (plans[p].Index, plans[p].Plan with { Worktree = workspace });
+            }
+            catch (Exception exception) when (exception is WorktreeRefusedException or Corvid.Kernel.Workspaces.WorktreeException)
+            {
+                if (tasks.Length == 1)
+                    throw new ChildRefusedException("No worktree for the child: " + exception.Message);
+                outcomes[plans[p].Index] = Refused("no worktree for the child: " + exception.Message);
+                plans.RemoveAt(p--);
             }
         }
         var started = new List<(int Index, CorvidSession Child)>();
