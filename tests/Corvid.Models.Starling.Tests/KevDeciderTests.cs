@@ -210,6 +210,22 @@ public sealed class KevDeciderTests
     }
 
     [Fact]
+    public async Task A_refusal_naming_no_pending_question_is_a_failure_not_an_exception()
+    {
+        var runner = new FakeKevRunner
+        {
+            Refuse = _ => new KevInputTooLongException("row") { TokenCount = 9_000, MaxTokens = 8_192, QuestionIndex = 5 },
+        };
+
+        var result = Assert.IsType<DeciderUnavailable>(await Kev(runner).DecideAsync(Request(("needs_tools", Noul()), ("tool", Tools())), Ct));
+
+        Assert.Equal(DeciderUnavailableReason.Failed, result.Reason);
+        Assert.Contains("question 5 of 2", result.Detail, StringComparison.Ordinal);
+        Assert.Single(runner.Encoded);
+        Assert.Empty(runner.Ran);
+    }
+
+    [Fact]
     public async Task A_question_kev_cannot_take_is_declined()
     {
         var runner = new FakeKevRunner();

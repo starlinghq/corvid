@@ -22,13 +22,18 @@ public enum StarlingModel
 /// <param name="Name">The name shown to the user and accepted on the command line, for example <c>gliner2-base-v1</c>.</param>
 /// <param name="StarlingProfile">The Starling registry profile whose contract applies (the CPU profile).</param>
 /// <param name="Lock">Repository, commit and every file's size and SHA-256. Shipped inside the Starling package.</param>
+/// <param name="HostingRepository">
+/// The repository the files are downloaded from when it is not <see cref="ModelAssetLock.Repository"/> (Kev: the lock
+/// names the checkpoint, the bytes come from Starling's hosting repository); null when the lock's repository hosts them.
+/// </param>
 public sealed record StarlingModelInfo(
     StarlingModel Model,
     string Name,
     string Slot,
     string StarlingProfile,
     ModelProfile Profile,
-    ModelAssetLock Lock)
+    ModelAssetLock Lock,
+    string? HostingRepository = null)
 {
     public long DownloadBytes => Lock.TotalSize;
 }
@@ -52,14 +57,15 @@ public static class StarlingModels
 
     /// <summary>
     /// Kev-0.8B, the default <c>decider</c> (plan §5): an Experimental profile in Starling 0.3.0, about 3.1 GB, hosted at
-    /// <c>Starlinghq/kev-0.8b-onnx</c>. The lock names the checkpoint's repository; the files come from the hosting one.
+    /// <c>Starlinghq/kev-0.8b-onnx</c>. The lock names the checkpoint's repository; the files come from the hosting one
+    /// (<see cref="KevModelAssets.Kev08BHostingRepository"/>).
     /// </summary>
     public static StarlingModelInfo Kev08B { get; } = new(StarlingModel.Kev08B, KevDecider.NameOf(KevModel.Kev08B), ModelSlots.Decider,
-        KevModelProfile.Kev08B.Id, StarlingProfiles.Kev08B, KevModelAssets.Kev08BLock);
+        KevModelProfile.Kev08B.Id, StarlingProfiles.Kev08B, KevModelAssets.Kev08BLock, KevModelAssets.Kev08BHostingRepository);
 
     /// <summary>Kev-4B, the optional second tier for gates below their floor (§5.5): about 17 GB, and 18 GB resident on the CPU.</summary>
     public static StarlingModelInfo Kev4B { get; } = new(StarlingModel.Kev4B, KevDecider.NameOf(KevModel.Kev4B), ModelSlots.Decider,
-        KevModelProfile.Kev4B.Id, StarlingProfiles.Kev4B, KevModelAssets.Kev4BLock);
+        KevModelProfile.Kev4B.Id, StarlingProfiles.Kev4B, KevModelAssets.Kev4BLock, KevModelAssets.Kev4BHostingRepository);
 
     public static ImmutableArray<StarlingModelInfo> All { get; } = [Qwen35, Gliner2, EmbeddingGemma2, E5, Kev08B, Kev4B];
 

@@ -37,8 +37,10 @@ public sealed record StarlingModelStatus(
     public string Describe()
     {
         var model = $"Model '{Model.Name}' ({Model.Slot})";
+        // Kev's lock names the checkpoint's repository while its bytes come from a hosting one (StarlingModels.Kev08B); say both.
+        var hosted = Model.HostingRepository is { } hosting && hosting != Model.Lock.Repository ? $", files hosted at {hosting}" : "";
         var download = $"Download it explicitly ({StarlingModelStore.FormatBytes(Model.DownloadBytes)} for {Model.Lock.Files.Count} files from " +
-            $"{Model.Lock.Repository}@{Model.Lock.Revision[..8]}), or set {ModelAcquisitionOptions.CacheDirectoryEnvironmentVariable} " +
+            $"{Model.Lock.Repository}@{Model.Lock.Revision[..8]}{hosted}), or set {ModelAcquisitionOptions.CacheDirectoryEnvironmentVariable} " +
             "to a model cache that has it.";
         return State switch
         {
@@ -119,12 +121,19 @@ public sealed class StarlingModelStore(string? cacheDirectory = null, HttpClient
         foreach (var file in Directory.EnumerateFiles(downloads, "*" + PartialSuffix, SearchOption.AllDirectories).ToList())
         {
             // Starling writes <file>.partial while it holds <file>.lock (an exclusive open: flock on Unix). A file whose lock
-            // another download holds (another process fetching the model) is still being written and is left alone.
+            // another download holds (another process fetching the model) is still being written and is left alone. A partial
+            // with no lock file beside it is held by nobody; the lock is only ever opened, never created, so this leaves no
+            // empty .lock files behind.
             var lockPath = file[..^PartialSuffix.Length] + LockSuffix;
-            FileStream held;
+            FileStream? held = null;
             try
             {
-                held = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1);
+                if (File.Exists(lockPath))
+                    held = new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None, 1);
+            }
+            catch (FileNotFoundException)
+            {
+                // Removed between the check and the open: not held.
             }
             catch (IOException)
             {
@@ -195,6 +204,12 @@ public sealed class StarlingModelStore(string? cacheDirectory = null, HttpClient
                 $"; the lock expects {exception.ExpectedSize.ToString(CultureInfo.InvariantCulture)} bytes" +
                 (exception.ExpectedSha256 is { } expected ? $", SHA-256 {expected}." : ".");
             return (new StarlingModelStatus(model, StarlingModelState.Corrupt, directory, [], problem), null, exception);
+        }
+        catch (ModelAcquisitionException exception)
+        {
+            // Check is documented as never throwing. Starling 0.3.0's OpenLocal throws only the two subtypes above offline
+            // (the others are download failures), so this is for a later Starling adding one, not a case a test can provoke.
+            return (new StarlingModelStatus(model, StarlingModelState.Unreadable, directory, [], exception.Message), null, exception);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {

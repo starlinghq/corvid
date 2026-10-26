@@ -30,9 +30,10 @@ var warmup = int.Parse(arguments.Get("warmup", "5"), CultureInfo.InvariantCultur
 var cellFilter = arguments.Get("cells", "all");
 var outPath = arguments.Get("out", $"s1-{arguments.Get("model", "0.8b")}-{device}.jsonl");
 var tokenizerPath = arguments.Get("qwen-tokenizer", "");
+// The cache root as StarlingModelStore resolves it: $STARLING_MODELS, else ~/.cache/starlings/models.
 if (tokenizerPath.Length == 0)
-    tokenizerPath = Directory.GetFiles(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-        ".cache/starlings/models/Qwen/Qwen3.5-0.8B"), "tokenizer.json", SearchOption.AllDirectories).Single();
+    tokenizerPath = Directory.GetFiles(Path.Combine(new Starlings.Acquisition.ModelAcquisitionOptions().ResolveCacheDirectory(), "Qwen/Qwen3.5-0.8B"),
+        "tokenizer.json", SearchOption.AllDirectories).Single();
 
 var counter = Qwen35TokenCounter.FromFile(tokenizerPath);
 Log($"Qwen3.5 token counter: {tokenizerPath}");
@@ -54,9 +55,9 @@ var model = KevDecisionModel.Create(files, kevOptions);
 loadWatch.Stop();
 Log($"loaded {model.ProfileId} in {loadWatch.Elapsed.TotalSeconds:F2} s; serialized native calls: {model.SerializesNativeCalls}");
 
-// KevDecider.Create is CPU-only (C-004b deferred CUDA placement), so the spike constructs the adapter through its internal
-// constructor with a runner over the same KevDecisionModel. Create does exactly this for the CPU (ModelRunner), minus the
-// provider guard; the Decide logic is the adapter's own code.
+// The adapter is constructed through its internal constructor with a timed runner over the same KevDecisionModel, so each
+// native call is measured; the Decide logic is the adapter's own code. When this spike ran, KevDecider.Create was CPU-only
+// (C-004b deferred CUDA placement); it accepts CUDA since C-029, and this path is kept so the results stay reproducible.
 var runner = new TimedRunner(model);
 using var kev = new KevDecider(KevDecider.NameOf(kevModel), runner, model);
 var timedKev = new TimedDecider(kev);

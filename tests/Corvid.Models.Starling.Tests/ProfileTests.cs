@@ -61,6 +61,9 @@ public sealed class ProfileTests
         Assert.Equal("jaredpalmer/kev-4b", StarlingModels.Kev4B.Lock.Repository);
         Assert.All(StarlingModels.Kev08B.Lock.Files, file => Assert.StartsWith("https://huggingface.co/Starlinghq/kev-0.8b-onnx/", file.Source!.ToString(), StringComparison.Ordinal));
         Assert.All(StarlingModels.Kev4B.Lock.Files, file => Assert.StartsWith("https://huggingface.co/Starlinghq/kev-4b-onnx/", file.Source!.ToString(), StringComparison.Ordinal));
+        Assert.Equal("Starlinghq/kev-0.8b-onnx", StarlingModels.Kev08B.HostingRepository);
+        Assert.Equal("Starlinghq/kev-4b-onnx", StarlingModels.Kev4B.HostingRepository);
+        Assert.All(StarlingModels.All.Where(m => m.Slot != ModelSlots.Decider), m => Assert.Null(m.HostingRepository));
         Assert.All(StarlingModels.All, m =>
         {
             Assert.Same(m, StarlingModels.Get(m.Model));

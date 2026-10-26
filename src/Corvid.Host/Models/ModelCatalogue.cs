@@ -92,16 +92,21 @@ public sealed class ModelCatalogue
                 throw new InvalidOperationException($"Two model providers name a model '{model.Name}'.");
     }
 
-    public IReadOnlyList<ModelDescriptor> Models => [.. _models.Values.Select(entry => entry.Model).OrderBy(model => model.Name, StringComparer.Ordinal)];
+    public IReadOnlyList<ModelDescriptor> Models => [.. _models.Values.Select(Current).OrderBy(model => model.Name, StringComparer.Ordinal)];
 
     public bool TryFind(string name, out ModelDescriptor model)
     {
         model = null!;
         if (string.IsNullOrWhiteSpace(name) || !_models.TryGetValue(name, out var entry))
             return false;
-        model = entry.Model;
+        model = Current(entry);
         return true;
     }
+
+    // A provider's descriptor can change after a load (C-029: Kev configured on CUDA that fell back to the CPU is listed
+    // on the CPU), so it is read from the provider each time, not from the copy taken at construction.
+    private static ModelDescriptor Current((IModelProvider Provider, ModelDescriptor Model) entry) =>
+        entry.Provider.Models.FirstOrDefault(model => string.Equals(model.Name, entry.Model.Name, StringComparison.OrdinalIgnoreCase)) ?? entry.Model;
 
     public ModelDescriptor Find(string name) =>
         TryFind(name, out var model) ? model : throw new ArgumentException($"No model is named '{name}'. Run `corvid model` to list them.", nameof(name));
