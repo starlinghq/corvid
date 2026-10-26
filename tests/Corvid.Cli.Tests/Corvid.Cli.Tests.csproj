@@ -15,4 +15,7 @@
     <!-- The in-process MCP server, so `corvid mcp diff|accept|allow` run end to end (C-033). -->
     <Compile Include="../Corvid.Mcp.Tests/FakeMcpServer.cs" Link="FakeMcpServer.cs" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../Shared/TestImages.cs" Link="TestImages.cs" />
+  </ItemGroup>
 </Project>

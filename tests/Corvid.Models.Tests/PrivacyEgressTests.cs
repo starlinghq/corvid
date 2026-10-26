@@ -282,7 +282,8 @@ public sealed class PrivacyEgressTests
     public async Task Content_the_extractor_cannot_read_is_refused_unless_the_policy_sends_as_is()
     {
         var provider = new ScriptedChatClient(_ => new ChatResponse(new ChatMessage(ChatRole.Assistant, "ok")));
-        List<ChatMessage> image = [new(ChatRole.User, [new TextContent("what is this?"), new DataContent(new byte[] { 1, 2, 3 }, "image/png")])];
+        // K-8 (A6): audio here, since an image is refused under every action unless the policy allows images (ImageEgressTests).
+        List<ChatMessage> image = [new(ChatRole.User, [new TextContent("what is this?"), new DataContent(new byte[] { 1, 2, 3 }, "audio/wav")])];
 
         var redacting = new PrivacyEgressChatClient(provider, Cloud, Egress(Pii));
         var refused = await Assert.ThrowsAsync<PrivacyEgressRefusedException>(() => redacting.GetResponseAsync(image, Session("s1"), Ct));
@@ -545,7 +546,7 @@ public sealed class PrivacyEgressTests
     {
         var provider = new ScriptedChatClient(_ => throw new InvalidOperationException("must not be called"));
         var client = new PrivacyEgressChatClient(provider, Cloud, Egress(new FakePiiExtractor(), EgressPolicy.Default with { Action = EgressAction.Send }));
-        List<ChatMessage> image = [new(ChatRole.User, [new TextContent($"token {GitHubToken}"), new DataContent(new byte[] { 1, 2, 3 }, "image/png")])];
+        List<ChatMessage> image = [new(ChatRole.User, [new TextContent($"token {GitHubToken}"), new DataContent(new byte[] { 1, 2, 3 }, "audio/wav")])];
 
         var refused = await Assert.ThrowsAsync<PrivacyEgressRefusedException>(() => client.GetResponseAsync(image, Session("s1"), Ct));
 

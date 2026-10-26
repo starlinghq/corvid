@@ -10,4 +10,7 @@
     <!-- The real event log and projection, so tests assert what a session persists and replays. -->
     <ProjectReference Include="../../src/Corvid.Kernel/Corvid.Kernel.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../Shared/TestImages.cs" Link="TestImages.cs" />
+  </ItemGroup>
 </Project>
