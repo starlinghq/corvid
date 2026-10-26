@@ -817,6 +817,13 @@ New on the wire: the optional `plan` on `assistant_message`, the switch reason `
 with the code mode foundation before A7's groups). A binary older than A7 cannot read a log that holds `memory_job_ran`
 (the same one-way step as before).
 
+The app was run once on the merged engine (display :276, a temporary home, a scripted OpenAI-compatible server as the
+generator): a Python run's approval card showed the language, the limits, the hidden-character note and the whole script
+with only Allow once; approved, its generated client's `list_files` and `read_file` ran unasked (read-only) and its
+`write_file` asked on its own card; the run's card then read "Python · 4 lines · 3 of 50 tool calls · exit 0" with the
+three calls indented under it, and the file was written. The session's title was the scripted server's reply to the
+title request, an artifact of that server.
+
 Still refused on the engine, each with its message: opening a terminal or the Vault helper (U-6), the Vault policy, role,
 budget and daily counts (V-n) and media memory (plan §9.4). Memory consolidation is no longer refused. Code mode is not
 offered to an in-process generator or editor (a call to it is refused as not offered), and a C# script's `#:` directive is
