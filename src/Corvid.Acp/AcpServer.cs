@@ -408,7 +408,8 @@ internal sealed partial class AcpAgent : IJsonRpcHandler, IAsyncDisposable
             // Leaving is the editor's business; forking is session/fork's (G-15), which opens the fork for the editor.
             .Where(command => command.Name is not ("exit" or "quit" or "fork"))
             // A5: /agents and /delegate run when typed; the editor's list keeps its recorded set (they are the chat's and the app's).
-            .Where(command => command.Name is not ("agents" or "delegate"))
+            // A6: so does /search (G-5).
+            .Where(command => command.Name is not ("agents" or "delegate" or "search"))
             .Select(command => new AvailableCommand(command.Name, command.Summary)
             {
                 Input = command.Usage.Contains(' ', StringComparison.Ordinal) ? new AvailableCommandInput(command.Usage) : null,
