@@ -4332,14 +4332,15 @@ project: the generators are in `Corvid.Tools.CodeMode` (`CodeModeClients`), the 
 (`CodeRunPresentation`, `CodeRunCard`), and each surface reads them.
 
 - **Clients** (`CodeModeClients`), generated per run from the run's tools (`CodeModeCatalog.Describe`, or a descriptor
-  read back with `FromJson`): one typed wrapper per tool (required parameters positional, optional ones named; strings,
-  integers, numbers, booleans and arrays of them typed, anything else JSON), the socket and token found in
+  read back with `FromJson`): one typed wrapper per tool (arguments by position, required then optional in the schema's
+  order, or by name; in JavaScript by name means the required ones then one object of optional ones, or one object of
+  all of them; strings, integers, numbers, booleans and arrays of them typed, anything else JSON), the socket and token found in
   `CORVID_TOOLS_SOCKET` and `CORVID_TOOLS_TOKEN_FILE`, the hello, one request at a time, and an error answer raised as an
   exception carrying `code`, `message`, `detail` and `tainted`; `limits()` and the last call's taint are readable. Standard
   library only, no package.
   - **Python**: `CorvidToolError`; `corvid.read_file(path)` (also `import corvid_tools`), `call(tool, args)`,
     `limits()`, `last_call_tainted()`. Synchronous.
-  - **JavaScript** (Node, an ES module): `CorvidToolError`; `await corvid.read_file(path, { optional })`,
+  - **JavaScript** (Node, an ES module): `CorvidToolError`; `await corvid.read_file(path, { start_line: 10 })`,
     `corvid.call(tool, args)`, `corvid.limits()`, `corvid.lastCallTainted()`. An idle socket does not keep the script alive.
   - **C#** (a file-based app): `CorvidTools.ReadFileAsync(path, …, cancellationToken)` returning the result as a
     `JsonElement`, `CorvidTools.CallAsync`, `Limits`, `LastCallTainted`, `CorvidToolException`; global namespace, every type
