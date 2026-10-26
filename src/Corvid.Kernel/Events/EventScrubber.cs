@@ -17,9 +17,14 @@ namespace Corvid.Kernel.Events;
 /// <see cref="ClarificationAsked"/>'s text and options, <see cref="ApprovalRequested.Action"/> and <see cref="ApprovalRequested.Reason"/>, <see cref="Decision.State"/> and
 /// <see cref="AskedQuestion.Instructions"/> (a pre_execute or memory_op question carries arguments and text), <see cref="ApprovalAssessed"/>'s reasons and rule,
 /// <see cref="SessionTitled.Title"/> and <see cref="SessionRecapped.Text"/>, <see cref="EgressRecorded.Reason"/> and <see cref="EgressRecorded.Unkept"/>, and
-/// <see cref="DeliveryQueued.Text"/>. Not scrubbed: <see cref="UserMessage"/> and <see cref="UserSteered"/> (what the user said is a recorded decision; a
-/// key the user hands over goes through Vault), and ids, sequences, revisions and paths. Only the egress rules run, never the
-/// encoded-blob rules, so commit SHAs and digests in shell output survive.
+/// <see cref="DeliveryQueued.Text"/>, and since A6 (verification round 2, A6V2-06) <see cref="UserMessage.Text"/> and <see cref="UserSteered.Text"/>:
+/// a password or key pasted into the composer is replaced by its marker before the message is logged, so neither the log,
+/// the episodic index (and so <c>/search</c> and the palette's search) nor prompt history keeps it, and the prompt rendered
+/// from the log shows the model the marker (<c>[REDACTED:prose-value]</c>, <c>ghp_[REDACTED:github-token:…]</c>), as the
+/// egress gate would for a gated model. A user message's sender, flags and image references are not text and are kept.
+/// What the person typed stays in their composer until it is sent; a key meant for a tool goes through Vault. Not
+/// scrubbed: ids, sequences, revisions and paths. Only the egress rules run, never the encoded-blob rules, so commit SHAs
+/// and digests in shell output survive.
 /// </remarks>
 public static class EventScrubber
 {
@@ -34,6 +39,9 @@ public static class EventScrubber
             ToolCallIssued call when Json(call.Arguments) is { } arguments => call with { Arguments = arguments },
             ToolResult result when Json(result.Result) is { } value => result with { Result = value },
             AssistantMessage message when Text(message.Text) is { } text => message with { Text = text },
+            // A6V2-06: what the person typed or steered with, as the egress gate would see it.
+            UserMessage user when Text(user.Text) is { } text => user with { Text = text },
+            UserSteered steer when Text(steer.Text) is { } text => steer with { Text = text },
             // The model's question (K-6), like its answer; the options are its words too.
             ClarificationAsked question => Clarification(question),
             ApprovalRequested approval => Approval(approval),
@@ -99,6 +107,16 @@ public static class EventScrubber
             State = state ?? decision.State,
             Question = instructions is { } scrubbed ? decision.Question! with { Instructions = scrubbed } : decision.Question,
         };
+    }
+
+    /// <summary>
+    /// A6V2-06: a user's message text as the log keeps it (credential values replaced by their markers), so a surface that
+    /// matches its own sent text against the log's compares like with like.
+    /// </summary>
+    public static string UserText(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        return Text(text) ?? text;
     }
 
     // Null when nothing changed, so an unchanged event keeps its instance and its persisted form.
