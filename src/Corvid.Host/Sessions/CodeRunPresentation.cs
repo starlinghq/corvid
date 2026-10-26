@@ -51,9 +51,20 @@ public static class CodeRunPresentation
     public static string Usage(int nestedCalls, JsonElement? result = null, CodeModeLimits? limits = null)
     {
         limits ??= CodeModeLimits.Default;
-        var parts = new List<string>();
         var calls = Integer(result, "calls", "tool_calls") ?? nestedCalls;
-        parts.Add(string.Create(CultureInfo.InvariantCulture, $"{calls} of {limits.MaxCalls} tool call{(limits.MaxCalls == 1 ? "" : "s")}"));
+        var used = string.Create(CultureInfo.InvariantCulture, $"{calls} of {limits.MaxCalls} tool call{(limits.MaxCalls == 1 ? "" : "s")}");
+        var outcome = Outcome(result, limits);
+        return outcome.Length == 0 ? used : used + " · " + outcome;
+    }
+
+    /// <summary>
+    /// How a run ended, from its result when it says: "12 KB of 8 MB results · exit 1 · timed out"; empty when it says
+    /// none of these (<c>response_bytes</c>, <c>exit_code</c>, <c>timed_out</c>).
+    /// </summary>
+    public static string Outcome(JsonElement? result, CodeModeLimits? limits = null)
+    {
+        limits ??= CodeModeLimits.Default;
+        var parts = new List<string>();
         if (Integer(result, "response_bytes", "output_bytes") is { } bytes)
             parts.Add($"{Size(bytes)} of {Size(limits.MaxTotalResponseBytes)} results");
         if (Integer(result, "exit_code", "exitCode") is { } exit)

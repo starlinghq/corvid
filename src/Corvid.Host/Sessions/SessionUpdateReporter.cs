@@ -263,7 +263,16 @@ public sealed class SessionUpdateReporter : ITurnObserver
         {
             Tool = tool,
             ParentCallId = parentCallId,
+            // A7: a code mode run is announced with its script (issued to the log before it runs, and read by the catch-up
+            // just before), so a surface shows the source while it runs. Other calls stay announced without their input.
+            Input = CodeRunPresentation.IsCodeRun(tool) ? IssuedArguments(callId) : null,
         });
+    }
+
+    private System.Text.Json.JsonElement? IssuedArguments(string callId)
+    {
+        lock (_calls)
+            return _calls.GetValueOrDefault(callId)?.Arguments;
     }
 
     private void Emit(SessionStreamUpdate update) => _emit(update with { At = update.At == default ? _time.GetUtcNow() : update.At });
