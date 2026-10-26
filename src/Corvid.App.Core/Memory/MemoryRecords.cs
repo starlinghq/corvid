@@ -81,7 +81,7 @@ public sealed record StagedBlockUpdate(string Id, string Block)
 
     public int Budget { get; init; }
 
-    /// <summary>The fill (0 to 1) from which "Consolidate the block…" is offered: 0.9.</summary>
+    /// <summary>The fill (0 to 1) from which "Consolidate the block…" is offered: the configured threshold, 0.9 by default.</summary>
     public double ConsolidateAt { get; init; } = 0.9;
 
     /// <summary>
@@ -125,6 +125,12 @@ public sealed record CoreBlock(string Name, int Tokens, int Budget)
 
     /// <summary>The block's text, as the prompt carries it.</summary>
     public string Text { get; init; } = "";
+
+    /// <summary>
+    /// A7V1-5: the fill (0 to 1) from which consolidation is offered: the block rewrite job's threshold
+    /// (<c>Corvid:Memory:Consolidation:Threshold</c>), 0.9 by default.
+    /// </summary>
+    public double ConsolidateAt { get; init; } = 0.9;
 }
 
 /// <summary>A stored fact with its bi-temporal fields: valid from, valid until (when it stopped holding), recorded at.</summary>

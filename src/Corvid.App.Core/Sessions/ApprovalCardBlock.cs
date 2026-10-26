@@ -411,6 +411,12 @@ public sealed class ApprovalCardBlock : TranscriptBlock
     /// <summary>A7: the card is a code mode run's: it shows the whole script and <see cref="CodeNote"/>.</summary>
     public bool HasCode { get; private set; }
 
+    /// <summary>A7V1-6: the call waiting is one a code run's script made (its title says so).</summary>
+    public bool IsNested { get; private set; }
+
+    /// <summary>A7V1-6: what a nested call's title adds.</summary>
+    public const string NestedNote = "(called by a code run's script)";
+
     /// <summary>A7: "Code run: Python · 12 lines; at most 50 tool calls, …; no network".</summary>
     public string CodeHeader { get; private set; } = "";
 
@@ -512,7 +518,10 @@ public sealed class ApprovalCardBlock : TranscriptBlock
             Build(card);
         }
 
-        Title = card.Count > 1 ? $"Approval {card.Position} of {card.Count} · {Tool}" : $"Approval · {Tool}";
+        // A7V1-6: a call a code run's script made says so, on the card and to a screen reader.
+        IsNested = card.ParentCallId is not null;
+        var made = IsNested ? " " + NestedNote : "";
+        Title = (card.Count > 1 ? $"Approval {card.Position} of {card.Count} · {Tool}" : $"Approval · {Tool}") + made;
         PhoneTitle = card.Count > 1 ? $"Approval {card.Position} of {card.Count}" : "Approval";
         if (card.Next is { } next)
         {
@@ -544,11 +553,15 @@ public sealed class ApprovalCardBlock : TranscriptBlock
     private void Build(TranscriptEntry entry)
     {
         var request = ((ApprovalEntry)entry).Request;
-        CommandText = SafeText.Reveal(request.Tool == "shell" || request.Text.StartsWith(request.Tool, StringComparison.Ordinal)
-            ? request.Text
-            : $"{request.Tool} {request.Text}");
-        Unparsed = SafeText.Clean(request.Unparsed);
-        Commands = [.. request.Commands.Select(ParsedCommandView.From)];
+        // A7V1-6: a code run's script is shown once, whole, in its own block (CodeSource); the command line and the parsed
+        // commands would show it again.
+        CommandText = request.Code is { } script
+            ? SafeText.Reveal($"{request.Tool} · {script.Language}")
+            : SafeText.Reveal(request.Tool == "shell" || request.Text.StartsWith(request.Tool, StringComparison.Ordinal)
+                ? request.Text
+                : $"{request.Tool} {request.Text}");
+        Unparsed = request.Code is null ? SafeText.Clean(request.Unparsed) : "";
+        Commands = request.Code is null ? [.. request.Commands.Select(ParsedCommandView.From)] : [];
         Reasons = [.. request.Reasons.Select(reason => new ReasonView(reason.Label, SessionText.Runs(reason.Detail), SessionText.Runs(reason.Short ?? reason.Detail)))];
         ProposedDiff = request.ProposedDiff is { } diff ? new FileDiffView(diff) : null;
         Detections = [.. request.Detections.Select(detection => new DetectionView($"detection: {SafeText.Clean(detection.RuleId)}",

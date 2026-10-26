@@ -129,6 +129,9 @@ public sealed record ToolEntry(string Id, string CallId, string Tool, ToolKind K
 public sealed record ApprovalEntry(string Id, ApprovalRequested Request, int Position, int Count) : TranscriptEntry(Id)
 {
     public ApprovalRequested? Next { get; init; }
+
+    /// <summary>A7V1-6: the code run whose script made the call waiting on this prompt; null for the model's own call.</summary>
+    public string? ParentCallId { get; init; }
 }
 
 /// <summary>Taint started or cleared.</summary>

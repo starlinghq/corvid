@@ -56,7 +56,10 @@ public sealed class MemoryTab : ObservableObject
     public RelayCommand Open { get; }
 }
 
-/// <summary>A core block with its meter: "user", "318 / 350", amber from 90%, and "local-only · revision 14 · updated 14:02".</summary>
+/// <summary>
+/// A core block with its meter: "user", "318 / 350", amber from the consolidation threshold (90% by default), and
+/// "local-only · revision 14 · updated 14:02".
+/// </summary>
 public sealed class CoreBlockView(CoreBlock block, TimeProvider time)
 {
     public CoreBlock Block { get; } = block;
@@ -67,8 +70,8 @@ public sealed class CoreBlockView(CoreBlock block, TimeProvider time)
 
     public double Fraction => Block.Budget <= 0 ? 0 : (double)Block.Tokens / Block.Budget;
 
-    /// <summary>At or past 90% of its budget, where consolidation is offered.</summary>
-    public bool IsNearBudget => Fraction >= 0.9;
+    /// <summary>At or past the consolidation threshold of its budget (<see cref="CoreBlock.ConsolidateAt"/>), where consolidation is offered.</summary>
+    public bool IsNearBudget => Fraction >= Block.ConsolidateAt;
 
     public string Detail { get; } = MemoryText.BlockDetail(block, time);
 

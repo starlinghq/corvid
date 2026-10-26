@@ -105,15 +105,25 @@ public sealed class ConsolidationCommandTests
             var provider = new FakeGenerator(Reply.Say(Rewrite), Reply.Say(Rewrite));
             // The background generator bound to a cloud model, behind the egress gate as the composer binds it.
             var cloud = new PrivacyEgressChatClient(provider, Cloud, new PrivacyEgress(models.Extractor, new PrivacyEgressOptions { PolicyFor = _ => EgressPolicy.Default }));
-            var job = new BlockConsolidator(blocks, writer, cloud, log, CorvidRuntimeFactory.ConsolidationRequest);
+            var job = new BlockConsolidator(blocks, writer, cloud, log, CorvidRuntimeFactory.ConsolidationRequest)
+            {
+                IsEgressRefusal = CorvidRuntimeFactory.EgressRefusal,
+            };
             Assert.True(blocks.Get("agent").LocalOnly);
 
             var refused = await job.StageAsync("s-1", "agent", "cli", TestContext.Current.CancellationToken);
 
-            Assert.Equal(BlockRewriteStatus.Failed, refused.Status);
+            Assert.Equal(BlockRewriteStatus.Refused, refused.Status);
+            Assert.True(refused.EgressRefused);
             Assert.Contains("local-only memory", refused.Detail, StringComparison.Ordinal);
             Assert.Empty(provider.Calls);
             Assert.Empty(writer.ListPending());
+            // A7V1-5: remembered for this revision while the block stays local-only: the idle pass does not try again, and
+            // memory-jobs gets no "failed" event at every turn.
+            var jobs = log.Read(MemoryJobs.Session, cancellationToken: TestContext.Current.CancellationToken).Count();
+            Assert.Empty(await job.RunOnceAsync(cancellationToken: TestContext.Current.CancellationToken));
+            Assert.Empty(await job.RunOnceAsync(cancellationToken: TestContext.Current.CancellationToken));
+            Assert.Equal(jobs, log.Read(MemoryJobs.Session, cancellationToken: TestContext.Current.CancellationToken).Count());
 
             // Marked shareable by its owner, the same block may go to the cloud generator.
             blocks.SetLocalOnly("agent", false);

@@ -831,7 +831,10 @@ refused before anything runs.
 
 Left:
 
-- Code mode: a Settings-catalogue entry for `Corvid:Tools:Code` in the app; syntax colouring of the script; `<workspace>/.corvid/code`
+- Code mode: the A7 fix round added the Settings page's "Code mode" group (on/off, time limit, calls per run, output
+  kept; the runtimes and the allowlist stay in `corvid.json`), approvals of a script's calls that close when the run ends
+  (the card counts down to it; the clock does not pause), the tool filter at every step, and the private socket root.
+  Left: syntax colouring of the script; `<workspace>/.corvid/code`
   (the SDK caches) is writable by any sandboxed script or shell command, so it has the workspace's trust, as the shell's
   does.
 - Architect/editor: choosing the planner other than by the escalation ladder, a per-session editor choice, a calibrated

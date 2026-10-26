@@ -40,6 +40,20 @@ public static class SettingsCatalogue
         new("Detections:Enforce", "Devices and tools", "Enforce detections", "A matched detection forces an ask; off, it is recorded only.", SettingKind.Toggle, SettingApplies.Restart, "true"),
         new("Checkpoints:MaxFiles", "Devices and tools", "Checkpoint file limit", "The most files a checkpoint snapshots.", SettingKind.Number, SettingApplies.Restart, "50000"),
 
+        // A7V1-1: code mode (plan §15). Off by default; its runtimes and allowlist stay in corvid.json.
+        new("Tools:Code:Enabled", "Code mode", "Code mode (execute_code)",
+            "Lets a cloud or local-server model write a short Python, JavaScript or C# script that calls Corvid's tools, instead of one call per step. You approve each script, shown whole; each tool it calls is asked for on its own, with taint and egress as usual. Scripts run in the sandbox with no network. Never offered to an in-process model. corvid doctor lists the runtimes.",
+            SettingKind.Toggle, SettingApplies.Restart, "false"),
+        new("Tools:Code:TimeoutSeconds", "Code mode", "Run time limit (seconds)",
+            "A script is stopped after this long, time waiting for its tools' approvals included; an approval still open then is denied.",
+            SettingKind.Number, SettingApplies.Restart, "300"),
+        new("Tools:Code:MaxCalls", "Code mode", "Tool calls per run", "The most tool calls one script may make; later calls are refused.",
+            SettingKind.Number, SettingApplies.Restart, "50"),
+        new("Tools:Code:MaxStdoutBytes", "Code mode", "Output kept (bytes)", "How much of a script's standard output its result keeps.",
+            SettingKind.Number, SettingApplies.Restart, "50000"),
+        new("Tools:Code:MaxStderrBytes", "Code mode", "Errors kept (bytes)", "How much of a script's standard error its result keeps.",
+            SettingKind.Number, SettingApplies.Restart, "10000"),
+
         // U-8: what the app hosts for the machine, off by default; the Gateway and Jobs pages' Start hosting sets them too.
         new("App:HostGateway", "Hosting", "Host the gateway in this app",
             "Connects every enabled adapter (Telegram, Discord, Slack) with its token from the Vault while the app is open, under the one-lock rule; their chats run turns here.",
@@ -145,6 +159,18 @@ public static class SettingsCatalogue
             Add("Telemetry:ServiceName", "Corvid:Telemetry:ServiceName cannot be empty.");
         if (Whole("Checkpoints:MaxFiles", out var files) && files < 1)
             Add("Checkpoints:MaxFiles", "Corvid:Checkpoints:MaxFiles must be positive.");
+        // A7V1-1: code mode's limits, in the host validator's words.
+        if (Whole("Tools:Code:TimeoutSeconds", out var codeTimeout) && codeTimeout is < 1 or > 3600)
+            Add("Tools:Code:TimeoutSeconds", "Corvid:Tools:Code:TimeoutSeconds must be between 1 and 3600.");
+        if (Whole("Tools:Code:MaxCalls", out var codeCalls) && codeCalls is < 1 or > 1000)
+            Add("Tools:Code:MaxCalls", "Corvid:Tools:Code:MaxCalls must be between 1 and 1000.");
+        var stdoutWhole = Whole("Tools:Code:MaxStdoutBytes", out var stdoutBytes);
+        var stderrWhole = Whole("Tools:Code:MaxStderrBytes", out var stderrBytes);
+        foreach (var (key, whole, bytes) in new[] { ("Tools:Code:MaxStdoutBytes", stdoutWhole, stdoutBytes), ("Tools:Code:MaxStderrBytes", stderrWhole, stderrBytes) })
+        {
+            if (whole && bytes is < 1024 or > 1024 * 1024)
+                Add(key, "Corvid:Tools:Code:MaxStdoutBytes and MaxStderrBytes must be between 1024 and 1048576.");
+        }
         foreach (var key in new[] { "DataDirectory", "Workspace" })
         {
             var path = Get(key).Trim();

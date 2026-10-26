@@ -553,6 +553,12 @@ public sealed class CorvidRuntimeFactory(
             })
         {
             Deduplicator = new FactDeduplicator(facts, writer, log),
+            // A7V1-5: a local-only block the gate will not send to a cloud generator is refused once, not failed at every pass.
+            IsEgressRefusal = EgressRefusal,
         };
     }
+
+    /// <summary>A7V1-5: the egress gate refused to send a request (a local-only block to a cloud model).</summary>
+    internal static bool EgressRefusal(Exception exception) =>
+        exception is Corvid.Models.Privacy.PrivacyEgressRefusedException || exception.InnerException is Corvid.Models.Privacy.PrivacyEgressRefusedException;
 }

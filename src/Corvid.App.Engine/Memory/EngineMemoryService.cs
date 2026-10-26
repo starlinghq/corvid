@@ -142,7 +142,7 @@ public sealed class EngineMemoryService : IMemoryService, IDisposable
             // Unchanged, the staged content is written exactly (not rebuilt around the line) and the decision is not corrected.
             var corrected = unchanged ? null : replacesBlock || added is null ? edited : Join(current.Content, edited);
             var result = await writer.ApproveAsync(id, null, null, corrected, cancellationToken).ConfigureAwait(false);
-            return Block(memory.Blocks, result.Block ?? memory.Blocks.Get(proposal.Block!));
+            return Block(memory, result.Block ?? memory.Blocks.Get(proposal.Block!));
         }, cancellationToken).ConfigureAwait(false);
     }
 
@@ -189,7 +189,7 @@ public sealed class EngineMemoryService : IMemoryService, IDisposable
             var rewrite = await job.StageAsync(MemoryJobs.Session, block, "app", cancellationToken).ConfigureAwait(false);
             return rewrite switch
             {
-                { Status: BlockRewriteStatus.Staged, Pending: { } staged } => Update(memory.Blocks, staged),
+                { Status: BlockRewriteStatus.Staged, Pending: { } staged } => Update(memory, staged),
                 { Status: BlockRewriteStatus.NotNeeded } => throw new InvalidOperationException(
                     $"A consolidation of the {block} block already waits in Review."),
                 _ => throw new InvalidOperationException("The block rewrite job staged nothing: " + rewrite.Detail + "."),
@@ -333,9 +333,9 @@ public sealed class EngineMemoryService : IMemoryService, IDisposable
         return new MemorySnapshot
         {
             StagedFacts = stagedFacts,
-            BlockUpdates = [.. pending.Where(write => write.Kind == PendingKind.Block).Select(write => Update(memory.Blocks, write))],
+            BlockUpdates = [.. pending.Where(write => write.Kind == PendingKind.Block).Select(write => Update(memory, write))],
             // In the store's order of importance (user, agent, persona), as the page lists them.
-            Blocks = [.. blocks.OrderBy(block => CoreBlockNames.All.IndexOf(block.Name)).Select(block => Block(memory.Blocks, block))],
+            Blocks = [.. blocks.OrderBy(block => CoreBlockNames.All.IndexOf(block.Name)).Select(block => Block(memory, block))],
             Facts = [.. facts.Recent(FactLimit).Select(Record)],
             PendingLessons = [.. lessons.Where(lesson => lesson.State == LessonStates.Candidate).Select(lesson => Candidate(project!, lesson))],
             Lessons = [.. lessons.Where(lesson => lesson.State is LessonStates.Approved or LessonStates.Superseded)
@@ -388,8 +388,12 @@ public sealed class EngineMemoryService : IMemoryService, IDisposable
         };
     }
 
-    private static StagedBlockUpdate Update(CoreBlockStore store, PendingWrite write)
+    /// <summary>A7V1-5: where consolidation is offered: the block rewrite job's configured threshold (0.9 without the job).</summary>
+    private static double ConsolidateAt(MemoryServices memory) => memory.Consolidator?.Options.Threshold ?? BlockConsolidatorOptions.Default.Threshold;
+
+    private static StagedBlockUpdate Update(MemoryServices memory, PendingWrite write)
     {
+        var store = memory.Blocks;
         var proposal = write.Proposal;
         var current = store.Get(proposal.Block!);
         var proposed = proposal.Content ?? "";
@@ -413,6 +417,7 @@ public sealed class EngineMemoryService : IMemoryService, IDisposable
             TokensNow = store.CountTokens(current.Content),
             TokensAfter = store.CountTokens(proposed),
             Budget = current.BudgetTokens,
+            ConsolidateAt = ConsolidateAt(memory),
         };
     }
 
@@ -430,8 +435,9 @@ public sealed class EngineMemoryService : IMemoryService, IDisposable
     private static string LastLine(string text) =>
         text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault() ?? "";
 
-    private static AppCoreBlock Block(CoreBlockStore store, EngineCoreBlock block) => new(block.Name, store.CountTokens(block.Content), block.BudgetTokens)
+    private static AppCoreBlock Block(MemoryServices memory, EngineCoreBlock block) => new(block.Name, memory.Blocks.CountTokens(block.Content), block.BudgetTokens)
     {
+        ConsolidateAt = ConsolidateAt(memory),
         Revision = (int)Math.Min(block.Revision, int.MaxValue),
         LocalOnly = block.LocalOnly,
         UpdatedAt = block.UpdatedAt,

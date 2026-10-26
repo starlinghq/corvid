@@ -74,18 +74,43 @@ public sealed class CodeRunViewTests
     {
         var (session, service, time) = await ModelSwitchViewTests.Open();
         service.Push(new ToolCall("c9", "execute_code", ToolKind.Execute, ToolCallStatus.Pending) { At = time.GetUtcNow(), Code = Script });
-        service.Push(new ApprovalRequested("a-9", "execute_code", "execute_code", time.GetUtcNow().AddMinutes(5))
+        // The pipeline states the action as the script itself, and parses it as a command too.
+        service.Push(new ApprovalRequested("a-9", "execute_code", Script.Source, time.GetUtcNow().AddMinutes(5))
         {
             At = time.GetUtcNow(),
             CallId = "c9",
             Code = Script,
+            Commands = [new ParsedCommand("import corvid_tools", "import")],
         });
 
         var card = session.Blocks.OfType<ApprovalCardBlock>().Last();
+        // A7V1-6: the source is shown once, in its own block; the command line names the run, and nothing is parsed out of it.
+        Assert.Equal("execute_code · Python", card.CommandText);
+        Assert.Empty(card.Commands);
+        Assert.Equal("", card.Unparsed);
+        Assert.DoesNotContain("corvid_tools", card.AutomationName, StringComparison.Ordinal);
+        Assert.False(card.IsNested);
         Assert.True(card.HasCode);
         Assert.True(card.CodeHasHidden);
         Assert.Equal("Code run: Python · 2 lines; at most 50 tool calls; no network", card.CodeHeader);
         Assert.Equal("import corvid_tools as t\nprint(t.list_notes())  # ⟨U+202E⟩", card.CodeSource);
         Assert.Contains("Each tool it calls is asked for on its own", ApprovalCardBlock.CodeNote, StringComparison.Ordinal);
+    }
+
+    // A7V1-6: a call a script made says so on its approval card, and to a screen reader.
+    [Fact]
+    public async Task A_nested_calls_approval_card_says_a_code_run_made_it()
+    {
+        var (session, service, time) = await ModelSwitchViewTests.Open();
+        service.Push(new ToolCall("c9", "execute_code", ToolKind.Execute, ToolCallStatus.InProgress) { At = time.GetUtcNow(), Code = Script });
+        service.Push(new ToolCall("c9.1", "write_file", ToolKind.Edit, ToolCallStatus.Pending) { At = time.GetUtcNow(), ParentCallId = "c9", Target = "out.txt" });
+        service.Push(new ApprovalRequested("a-10", "write_file", "write_file out.txt", time.GetUtcNow().AddMinutes(5)) { At = time.GetUtcNow(), CallId = "c9.1" });
+
+        var card = session.Blocks.OfType<ApprovalCardBlock>().Last();
+
+        Assert.True(card.IsNested);
+        Assert.Equal("Approval · write_file " + ApprovalCardBlock.NestedNote, card.Title);
+        Assert.Contains("code run", card.AutomationName, StringComparison.Ordinal);
+        Assert.Equal("write_file out.txt", card.CommandText);
     }
 }

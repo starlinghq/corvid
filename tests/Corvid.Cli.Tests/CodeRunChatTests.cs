@@ -38,6 +38,8 @@ public sealed class CodeRunChatTests
         Assert.Contains("  import corvid_tools as t", output, StringComparison.Ordinal);
         Assert.Contains("  print(t.list_notes())  # \\u202E", output, StringComparison.Ordinal);
         Assert.DoesNotContain("\u202e", output, StringComparison.Ordinal);
+        // A7V1-6: the box shows the source once, in its own lines; its heading names the run.
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(output, System.Text.RegularExpressions.Regex.Escape("print(t.list_notes())")));
         // The script's call, indented under the run, and the run's line counting it.
         var lines = output.Split('\n');
         var nested = Array.FindIndex(lines, line => line.StartsWith("    ↳ ✓ list_notes succeeded", StringComparison.Ordinal));

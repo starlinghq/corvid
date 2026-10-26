@@ -51,7 +51,11 @@ public enum BlockRewriteStatus
 /// <param name="Revision">The block revision the rewrite was made from.</param>
 /// <param name="Detail">Why, in words, with sizes; never the block's text.</param>
 public sealed record BlockRewrite(BlockRewriteStatus Status, string Block, string? Text, int TokensBefore, int TokensAfter, int Budget,
-    long Revision, string Detail, PendingWrite? Pending = null);
+    long Revision, string Detail, PendingWrite? Pending = null)
+{
+    /// <summary>A7V1-5: refused because the egress gate would not send the block (it is local-only) to the generator.</summary>
+    public bool EgressRefused { get; init; }
+}
 
 /// <summary>
 /// The block rewrite job (plan §9.5, §9.2 step 4): asks the background generator to rewrite a core block that is over its
@@ -95,6 +99,9 @@ public sealed class BlockConsolidator
     private readonly SemaphoreSlim _running = new(1, 1);
     // Rewrites declined or refused in this process, by block, revision and folded edit: not asked for again until it changes.
     private readonly HashSet<(string Block, long Revision, string? Supersedes)> _declined = [];
+    // A7V1-5: rewrites of a local-only block the egress gate refused to send: not asked for again while the block is the same
+    // and still local-only (marked shareable, it may go). Under _declined's lock.
+    private readonly HashSet<(string Block, long Revision, string? Supersedes)> _egressRefused = [];
 
     /// <param name="generator">The background generator, at background device priority.</param>
     /// <param name="log">The event log <see cref="MemoryJobRan"/> is appended to.</param>
@@ -120,6 +127,13 @@ public sealed class BlockConsolidator
     }
 
     public BlockConsolidatorOptions Options => _options;
+
+    /// <summary>
+    /// A7V1-5: whether a generator's exception is a refusal to send (the host's egress gate refusing a local-only block to a
+    /// cloud model) rather than a failure. Such a rewrite is recorded as refused and not asked for again until the block
+    /// changes or is marked shareable; any other exception is a failure, tried again at the next pass. Null: none is.
+    /// </summary>
+    public Func<Exception, bool>? IsEgressRefusal { get; init; }
 
     /// <summary>The fact dedupe (plan §9.5) each <see cref="RunOnceAsync"/> pass runs after the blocks; none when null.</summary>
     public FactDeduplicator? Deduplicator { get; init; }
@@ -199,7 +213,7 @@ public sealed class BlockConsolidator
             foreach (var name in Blocks)
             {
                 var block = _blocks.Get(name);
-                if (Needs(block) && Fresh(block.Name, block.Revision, null))
+                if (Needs(block) && Fresh(block.Name, block.Revision, null, block.LocalOnly))
                     results.Add(await RewriteAndStageAsync(MemoryJobs.Session, block, block.Content, null, trigger, cancellationToken)
                         .ConfigureAwait(false));
             }
@@ -209,7 +223,7 @@ public sealed class BlockConsolidator
                 if (edit.Proposal is not { Block: { } name, Content: { } content, BlockRevision: { } revision } || !Blocks.Contains(name))
                     continue;
                 var block = _blocks.Get(name);
-                if (block.Revision != revision || _blocks.CountTokens(content) <= block.BudgetTokens || !Fresh(name, revision, edit.PendingId))
+                if (block.Revision != revision || _blocks.CountTokens(content) <= block.BudgetTokens || !Fresh(name, revision, edit.PendingId, block.LocalOnly))
                     continue;
                 results.Add(await RewriteAndStageAsync(MemoryJobs.Session, block, content, edit.PendingId, trigger, cancellationToken)
                     .ConfigureAwait(false));
@@ -291,12 +305,12 @@ public sealed class BlockConsolidator
 
     private static TaskCompletionSource NewWake() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    private bool Fresh(string block, long revision, string? supersedes)
+    private bool Fresh(string block, long revision, string? supersedes, bool localOnly)
     {
         if (_writer.PendingConsolidation(block) is not null || _writer.ConsolidationRejected(block, revision, supersedes))
             return false;
         lock (_declined)
-            return !_declined.Contains((block, revision, supersedes));
+            return !_declined.Contains((block, revision, supersedes)) && !(localOnly && _egressRefused.Contains((block, revision, supersedes)));
     }
 
     private async Task<BlockRewrite> RewriteAndStageAsync(string sessionId, CoreBlock block, string content, string? supersedes, string trigger,
@@ -322,7 +336,7 @@ public sealed class BlockConsolidator
         }
         if (rewrite.Status is BlockRewriteStatus.Declined or BlockRewriteStatus.Refused)
             lock (_declined)
-                _declined.Add((block.Name, block.Revision, supersedes));
+                (rewrite.EgressRefused ? _egressRefused : _declined).Add((block.Name, block.Revision, supersedes));
         Record(sessionId, rewrite, trigger);
         return rewrite;
     }
@@ -360,6 +374,8 @@ public sealed class BlockConsolidator
             }
             catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
             {
+                if (IsEgressRefusal?.Invoke(exception) == true)
+                    return Result(BlockRewriteStatus.Refused, "the egress gate refused to send it: " + exception.Message) with { EgressRefused = true };
                 return Result(BlockRewriteStatus.Failed, "the generator failed: " + exception.Message);
             }
             var text = Clean(response.Text);

@@ -4376,8 +4376,13 @@ nested-call path.
   the workspace) as it checks the CA, and refuses a missing socket. The launcher itself sets `CORVID_TOOLS_SOCKET` and
   `CORVID_TOOLS_TOKEN_FILE`; an `--env` or `--setenv` of either is refused. The socket adds no network (the namespace stays
   private; a host abstract socket stays unreachable); code mode's "no network" is its own policy (neither `Network` nor
-  `Proxy`), not the launcher's. The caller keeps the socket in a 0700 directory and lists that directory in
-  `DeniedPaths` when it is not under `/tmp` or `/run`. `SandboxPolicy.EnvironmentValues` (`--setenv NAME=VALUE`) sets
+  `Proxy`), not the launcher's. A7 fix (A7V1-2): the run's status directory (its token, its proxy CA) and code mode's
+  socket directory are 0700 directories under one root, `SandboxScratch`: `$XDG_RUNTIME_DIR/corvid-runs` when the runtime
+  directory is set (the launcher hides the whole runtime directory from every command), else `corvid-runs-<user>` in
+  `TMPDIR`, which `BubblewrapSandbox` denies to every command it launches unless it is under `/tmp` or `/run` (replaced
+  anyway). So no other sandbox's command can list or read them, whatever `TMPDIR` is; the root is set to 0700 on every
+  use, which fails unless this user owns it. Commands Vault launches with the launcher itself do not deny the fallback
+  root. Test: `ConfinementTests.Another_runs_private_directory_cannot_be_seen_with_TMPDIR_outside_tmp`. `SandboxPolicy.EnvironmentValues` (`--setenv NAME=VALUE`) sets
   values, under `--env`'s name rules (secret-like names refused, no name both passed and set, no proxy or tools name),
   at most 32 KiB, no NUL; values are on the launcher's command line, so never secrets. `Prepare` (long-lived launches)
   refuses `Tools`. Tests: `ToolsSocketTests` (confinement: the script reaches the mounted socket with the token, and not
@@ -4509,8 +4514,9 @@ project: the generators are in `Corvid.Tools.CodeMode` (`CodeModeClients`), the 
     `JsonElement`, `CorvidTools.CallAsync`, `Limits`, `LastCallTainted`, `CorvidToolException`; global namespace, every type
     fully qualified (no `using` can follow top-level statements), no reflection-based serialization.
   - **Forms.** `Inline(language, tools)` gives the text around a script run as one file (the code tool reads the script
-    from standard input): Python's definitions before the script (so a `from __future__` import, which must come first,
-    cannot be used), JavaScript's one constant `corvid` before the script (the client's other names live inside it, so a
+    from standard input): Python's definitions before the script (the code tool moves a script's leading
+    `from __future__` imports above them, since they must come first: `CodeRunner.Compose`; one after a leading
+    docstring is not moved), JavaScript's one constant `corvid` before the script (the client's other names live inside it, so a
     script's own `call` or `tools` cannot collide), C#'s classes after the top-level statements. `Generate` gives the
     module forms (`corvid_tools.py`, `corvid_tools.mjs`) for a script that imports a file beside it.
   - **Untrusted text.** Descriptions and parameter names come from the descriptor (an MCP server may have written them).

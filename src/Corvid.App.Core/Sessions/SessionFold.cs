@@ -809,6 +809,7 @@ public static class SessionFold
         {
             Turn = turn,
             Next = state.Approvals.Count > 1 ? state.Approvals[1] : null,
+            ParentCallId = toolIndex >= 0 && without[toolIndex] is ToolEntry tool ? tool.ParentCallId : null,
         };
         var index = toolIndex >= 0 ? toolIndex + 1 : FootIndex(without, turn);
         if (existing == index)

@@ -309,11 +309,15 @@ internal sealed class ChatRenderer : ITurnObserver
             StopPanel();
             EndText();
             // A7: the action as the pipeline states it holds model text (a script, a command line): hidden characters as escapes.
-            var body = new List<IRenderable> { new Markup($"[bold]{Markup.Escape(TerminalText.Choice(prompt.Analysis.Text))}[/]") };
+            // A7V1-6: a code run's script is shown once, whole, in the card's own lines (CodeRunCard), so the heading names the
+            // tool and the parsed commands are left out.
+            var code = Corvid.Host.Composition.CodeRunCard.IsCodeRun(prompt);
+            var heading = code ? Corvid.Host.Sessions.CodeRunPresentation.ToolName : TerminalText.Choice(prompt.Analysis.Text);
+            var body = new List<IRenderable> { new Markup($"[bold]{Markup.Escape(heading)}[/]") };
             // A5: a spawn's children, or the child that asks (already shown with hidden characters escaped).
             foreach (var line in details ?? [])
                 body.Add(new Markup($"[cyan]{Markup.Escape(line)}[/]"));
-            foreach (var command in prompt.Analysis.Commands)
+            foreach (var command in prompt.Analysis.Commands.Where(_ => !code))
             {
                 var targets = command.Targets.IsDefaultOrEmpty ? "" : " → " + string.Join(", ", command.Targets.Select(target => target.Value));
                 body.Add(new Markup($"[grey]{Markup.Escape(command.Verb + (command.Subcommand is { } sub ? " " + sub : ""))}: " +

@@ -167,6 +167,27 @@ public sealed class MemoryServiceTests
         Assert.Empty(writer.ListPending());
     }
 
+    // A7V1-5: the page offers consolidation from the configured threshold, as the job runs from it, not a fixed 90%.
+    [Fact]
+    public async Task TheMemoryPageOffersConsolidationFromTheConfiguredThreshold()
+    {
+        await using var fixture = await EngineFixture.StartAsync(Rewriting(), new Dictionary<string, string?>
+        {
+            ["Corvid:Memory:Consolidation:Background"] = "false",
+            ["Corvid:Memory:Consolidation:Threshold"] = "0.5",
+        });
+        var blocks = Memory(fixture).Blocks;
+        blocks.SetBudget("agent", 100);
+        blocks.Set("agent", string.Join(' ', Enumerable.Repeat("word", 60)));
+        var fill = (double)blocks.CountTokens(blocks.Get("agent").Content) / 100;
+        Assert.InRange(fill, 0.5, 0.89);
+
+        var block = (await Service(fixture).LoadAsync(Ct)).Blocks.Single(item => item.Name == "agent");
+
+        Assert.Equal(0.5, block.ConsolidateAt);
+        Assert.True(new CoreBlockView(block, TimeProvider.System).IsNearBudget);
+    }
+
     [Fact]
     public async Task ASleepTimePassThatStagesTellsTheMemoryPage()
     {
