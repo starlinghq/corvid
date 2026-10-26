@@ -216,6 +216,12 @@ public sealed class TurnServices
     /// attached) ends the turn on the question, as K-6 does.
     /// </summary>
     public IQuestionAsker? Questions { get; init; }
+
+    /// <summary>
+    /// K-8 (A6): where a message's images are stored and read back for the generator. Null takes no images: a message that
+    /// carries any is refused with why.
+    /// </summary>
+    public Abstractions.Media.IMediaStore? Media { get; init; }
 }
 
 /// <summary>

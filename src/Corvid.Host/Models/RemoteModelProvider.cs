@@ -246,6 +246,9 @@ public sealed class RemoteModelProvider : IModelProvider
             settings.ToolCalls, settings.StructuredOutput, caching, new ModelCost(settings.InputCost, settings.OutputCost, settings.CachedInputCost),
             privacy, endpoint.Authority).Validate();
         var slots = settings.Slots.Count == 0 ? [ModelSlots.Generator, ModelSlots.Summarizer] : settings.Slots.Distinct(StringComparer.Ordinal).ToImmutableArray();
+        // K-8 (A6): a model that says it reads images, or serves the vision slot, is sent images.
+        if (settings.Vision || slots.Contains(ModelSlots.Vision))
+            profile = profile with { Vision = true };
         SecretRef? secret = settings.Secret is { Length: > 0 } secretName ? new SecretRef(secretName) : null;
         return new Entry(new ModelDescriptor(name, slots, profile, ProviderName), settings, kind, endpoint, secret);
     }

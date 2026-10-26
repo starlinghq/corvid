@@ -37,7 +37,8 @@ public sealed class AcpTests
         Assert.Equal(1, result["protocolVersion"]!.GetValue<int>());
         var capabilities = result["agentCapabilities"]!;
         Assert.True(capabilities["loadSession"]!.GetValue<bool>());
-        Assert.False(capabilities["promptCapabilities"]!["image"]!.GetValue<bool>());
+        // K-8 (A6): image blocks are taken (re-recorded in both exchanges).
+        Assert.True(capabilities["promptCapabilities"]!["image"]!.GetValue<bool>());
         Assert.False(capabilities["promptCapabilities"]!["embeddedContext"]!.GetValue<bool>());
         foreach (var name in new[] { "list", "resume", "fork", "close" })
             Assert.NotNull(capabilities["sessionCapabilities"]![name]);
@@ -427,8 +428,8 @@ public sealed class AcpTests
 
         var unknown = await client.RequestAsync("session/set_mode", new { sessionId = session, modeId = "x" });
         Assert.Equal(-32601, unknown["error"]!["code"]!.GetValue<int>());
-        var image = await client.RequestAsync("session/prompt", new { sessionId = session, prompt = new object[] { new { type = "image", data = "AA==", mimeType = "image/png" } } });
-        Assert.Equal(-32602, image["error"]!["code"]!.GetValue<int>());
+        var audio = await client.RequestAsync("session/prompt", new { sessionId = session, prompt = new object[] { new { type = "audio", data = "AA==", mimeType = "audio/wav" } } });
+        Assert.Equal(-32602, audio["error"]!["code"]!.GetValue<int>());
         var missing = await client.RequestAsync("session/prompt", new { sessionId = session });
         Assert.Equal(-32602, missing["error"]!["code"]!.GetValue<int>());
         var closed = await client.RequestAsync("session/prompt", Prompt("acp-unknown", "hi"));

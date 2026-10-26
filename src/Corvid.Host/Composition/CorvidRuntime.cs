@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using Corvid.Abstractions.Events;
 using Corvid.Abstractions.IO;
+using Corvid.Abstractions.Media;
 using Corvid.Abstractions.Sessions;
 using Corvid.Abstractions.Tokens;
 using Corvid.Approvals;
@@ -209,6 +210,14 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     public TurnFeed Feed { get; }
 
     public SqliteEventLog Log { get; }
+
+    /// <summary>
+    /// K-8 (A6): the images messages carried, by digest (<c>media/</c> in the data directory), for the turn and for surfaces
+    /// that show them (the app's transcript, ACP's replay).
+    /// </summary>
+    public Kernel.Media.MediaStore Media => _media ??= new Kernel.Media.MediaStore(Path.Combine(CorvidPaths.DataDirectory(Options), "media"));
+
+    private Kernel.Media.MediaStore? _media;
 
     public ModelSlotRegistry Registry { get; }
 
@@ -578,9 +587,10 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     internal static string NewSessionId(string surface) =>
         string.Create(CultureInfo.InvariantCulture, $"{surface}-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}");
 
-    internal async Task<Delivery> SendAsync(CorvidSession session, string text, EnvelopeOrigin origin, CancellationToken cancellationToken)
+    internal async Task<Delivery> SendAsync(CorvidSession session, string text, EnvelopeOrigin origin, CancellationToken cancellationToken,
+        ImmutableArray<ImageInput> images = default)
     {
-        var delivery = await PostAsync(session, text, origin, null, cancellationToken).ConfigureAwait(false);
+        var delivery = await PostAsync(session, text, origin, null, cancellationToken, images: images).ConfigureAwait(false);
         return await delivery.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -589,14 +599,14 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     /// turns finish (the gateway) keeps each chat's order without waiting for answers.
     /// </summary>
     internal async Task<Task<Delivery>> PostAsync(CorvidSession session, string text, EnvelopeOrigin origin, GuestScope? guest,
-        CancellationToken cancellationToken, ShellLine? shell = null)
+        CancellationToken cancellationToken, ShellLine? shell = null, ImmutableArray<ImageInput> images = default)
     {
         var messageId = Guid.NewGuid().ToString("N");
         var waiter = new TaskCompletionSource<Delivery>(TaskCreationOptions.RunContinuationsAsynchronously);
         _waiting[messageId] = waiter;
         try
         {
-            await Sessions.PostAsync(new Envelope(session.Id, session.Surface, text, origin, messageId) { Guest = guest, Shell = shell },
+            await Sessions.PostAsync(new Envelope(session.Id, session.Surface, text, origin, messageId) { Guest = guest, Shell = shell, Images = images.IsDefault ? [] : images },
                 cancellationToken).ConfigureAwait(false);
         }
         catch
@@ -684,6 +694,8 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
             Listener = Feed.Listener,
             // A5: a question asked inside the turn, where a surface can answer it now.
             Questions = _questions,
+            // K-8 (A6): images beside the event log, by digest.
+            Media = Media,
             Options = new TurnOptions
             {
                 SystemPrompt = prompt,
@@ -1046,6 +1058,23 @@ public sealed class CorvidSession
     /// <summary>Runs one turn and waits for its delivery.</summary>
     public Task<Delivery> SendAsync(string text, CancellationToken cancellationToken = default) =>
         _runtime.SendAsync(this, text, EnvelopeOrigin.User, cancellationToken);
+
+    /// <summary>
+    /// K-8 (A6): runs one turn on a message with images (the person's own: a paste, a drop, <c>/image</c>, <c>@path</c>, an
+    /// ACP image block) and waits for its delivery. The turn checks, strips and stores them, or fails with why.
+    /// </summary>
+    public Task<Delivery> SendAsync(string text, IReadOnlyList<ImageInput> images, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(images);
+        return _runtime.SendAsync(this, text, EnvelopeOrigin.User, cancellationToken, [.. images]);
+    }
+
+    /// <summary>K-8 (A6): queues a message with images, as <see cref="SendAsync(string, IReadOnlyList{ImageInput}, CancellationToken)"/> does.</summary>
+    public Task<Task<Delivery>> PostAsync(string text, IReadOnlyList<ImageInput> images, EnvelopeOrigin origin, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(images);
+        return _runtime.PostAsync(this, text, origin, null, cancellationToken, images: [.. images]);
+    }
 
     /// <summary>
     /// Queues a message and returns once it is queued, with a task for its delivery. <see cref="EnvelopeOrigin.External"/>

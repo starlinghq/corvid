@@ -30,6 +30,12 @@ public sealed record PromptSent(string Text, long Sequence) : SessionStreamUpdat
 
     /// <summary>Who wrote it when it is not the session's own user (a gateway guest, security M2); null for the user's own.</summary>
     public string? From { get; init; }
+
+    /// <summary>
+    /// K-8 (A6): the images the message carried, as the log refers to them (the bytes are in <see cref="Composition.CorvidRuntime.Media"/>
+    /// by digest); empty for a message without any.
+    /// </summary>
+    public ImmutableArray<Abstractions.Media.ImageRef> Images { get; init; } = [];
 }
 
 /// <summary>

@@ -138,6 +138,9 @@ public static class PromptRenderer
                     TextContent text => counter.CountTokens(text.Text),
                     FunctionCallContent call => counter.CountTokens(call.Name) + counter.CountTokens(JsonValues.Object(call.Arguments).GetRawText()),
                     FunctionResultContent result => counter.CountTokens(result.Result is JsonElement json ? JsonValues.Text(json) : result.Result?.ToString() ?? ""),
+                    Models.Images.ImageReferenceContent image => ImageTokens(image.Image.Width, image.Image.Height),
+                    DataContent data when data.HasTopLevelMediaType("image") =>
+                        Models.Images.ImageFiles.Inspect(data.Data.Span) is { } info ? ImageTokens(info.Width, info.Height) : 1_600,
                     _ => 0,
                 };
             }
@@ -210,10 +213,10 @@ public static class PromptRenderer
             {
                 // Security M2: a guest's message is outside content, quoted as theirs, never the owner's words or answer.
                 case UserMessage { From: { } from } guest:
-                    messages.Add(new ChatMessage(ChatRole.User, Quoted(from, guest.Text)));
+                    messages.Add(WithImages(Quoted(from, guest.Text), guest.Images));
                     break;
                 case UserMessage user:
-                    messages.Add(new ChatMessage(ChatRole.User, user.Text));
+                    messages.Add(WithImages(user.Text, user.Images));
                     break;
                 // K-3: a steer is the user's words, read where it was taken (after the results the turn had then).
                 case UserSteered steer:
@@ -246,6 +249,23 @@ public static class PromptRenderer
         }
         return messages;
     }
+
+    // K-8 (A6): a message's images follow its text as references; the turn reads their bytes (or describes them) per model.
+    private static ChatMessage WithImages(string text, ImmutableArray<Abstractions.Media.ImageRef>? images)
+    {
+        if (images is not { IsDefaultOrEmpty: false } list)
+            return new ChatMessage(ChatRole.User, text);
+        List<AIContent> contents = [new TextContent(text)];
+        contents.AddRange(list.Select((image, index) => new Models.Images.ImageReferenceContent(image, index + 1)));
+        return new ChatMessage(ChatRole.User, contents);
+    }
+
+    /// <summary>
+    /// K-8: what an image costs in the prompt, estimated from its size as vision models bill it (about one token per 750
+    /// pixels after scaling to fit, 85 at the least and 1,600 at the most); a stand-in note or description is counted as text.
+    /// </summary>
+    public static int ImageTokens(int width, int height) =>
+        (int)Math.Clamp((long)Math.Max(width, 1) * Math.Max(height, 1) / 750, 85, 1_600);
 
     /// <summary>Plan §8: <c>[cleared: web_extract of example.com, 14 KB; re-run or see event 812]</c>.</summary>
     internal static string Stub(ResultView view, string tool, ToolResult result, long sequence)

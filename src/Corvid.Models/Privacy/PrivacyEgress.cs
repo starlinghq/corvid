@@ -473,8 +473,17 @@ public sealed partial class PrivacyEgress
             return new(new(EgressOutcome.NotGated, null, "not gated", ImmutableSortedDictionary<string, int>.Empty), messages, null);
         var action = policy.EffectiveAction(context.Tainted);
 
-        // Images, audio and files cannot be read by the extractor, so only a plain send may carry them.
-        var opaque = messages.SelectMany(message => message.Contents).FirstOrDefault(content => !IsReadable(content));
+        // K-8 (A6): an image goes to a gated model only when its policy allows images, whatever the action: the extractor
+        // cannot read one, and a plain send is not a choice to send pictures.
+        if (messages.SelectMany(message => message.Contents).FirstOrDefault(Images.ImageContents.IsImage) is { } image && !policy.Images)
+            return new(new(EgressOutcome.Refused, action,
+                $"the request holds {Images.ImageContents.LabelOf(image)}, and this model's egress policy does not allow images "
+                + "(Corvid:Privacy:Images, or the model's own Egress:Images)", ImmutableSortedDictionary<string, int>.Empty), messages, null);
+
+        // Audio and files (and images, unless the policy allows them) cannot be read by the extractor, so only a plain send
+        // may carry them.
+        var opaque = messages.SelectMany(message => message.Contents)
+            .FirstOrDefault(content => !IsReadable(content) && !(policy.Images && Images.ImageContents.IsImage(content)));
         if (opaque is not null && action != EgressAction.Send)
             return new(new(EgressOutcome.Refused, action, $"the request holds {opaque.GetType().Name}, which the PII extractor cannot read",
                 ImmutableSortedDictionary<string, int>.Empty), messages, null);

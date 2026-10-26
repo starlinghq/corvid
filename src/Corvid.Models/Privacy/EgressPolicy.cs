@@ -46,6 +46,15 @@ public sealed record EgressPolicy
     /// </summary>
     public EgressAction Tainted { get; init; } = EgressAction.Redact;
 
+    /// <summary>
+    /// K-8 (A6): whether images may go to the model at all. Off by default: the PII extractor cannot read an image (a
+    /// screenshot of a mail, a photographed letter), so a gated model is sent one only when the person allowed it for that
+    /// model or for every gated one (<c>Corvid:Privacy:Images</c>). When allowed, an image passes beside the request's text
+    /// whatever <see cref="Action"/> does to that text; when not, a request holding one is refused, so the turn stays local
+    /// or fails with why. Images reach a model stripped of their metadata either way.
+    /// </summary>
+    public bool Images { get; init; }
+
     public ImmutableArray<string> AllLabels =>
         [.. (Labels.IsDefault ? [] : Labels).Concat(ExtraLabels.IsDefault ? [] : ExtraLabels)
             .Where(label => !string.IsNullOrWhiteSpace(label)).Select(label => label.Trim()).Distinct(StringComparer.OrdinalIgnoreCase)];

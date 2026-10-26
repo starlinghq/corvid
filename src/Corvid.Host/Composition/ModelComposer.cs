@@ -9,6 +9,7 @@ using Corvid.Host.Telemetry;
 using Corvid.Kernel.Scheduling;
 using Corvid.Memory;
 using Corvid.Models;
+using Corvid.Models.Images;
 using Corvid.Models.Privacy;
 using Microsoft.Extensions.AI;
 
@@ -183,7 +184,7 @@ public sealed class ModelComposer : IDisposable
                     [
                         prompt, Fabric.DegradedDecider.SystemPrompt, Sessions.SessionTitler.TitlePrompt, Sessions.SessionTitler.RecapPrompt,
                         Skills.SkillLearner.SystemPrompt, Kernel.Lessons.LessonLearner.SystemPrompt,
-                        CorvidRuntime.ChildSystemPrompt, CorvidRuntime.ChildSchemaPrompt,
+                        CorvidRuntime.ChildSystemPrompt, CorvidRuntime.ChildSchemaPrompt, Kernel.Turns.TurnRunner.DescribePrompt,
                     ],
                 });
             }
@@ -211,6 +212,7 @@ public sealed class ModelComposer : IDisposable
             ExtraLabels = [.. privacy.ExtraLabels, .. own?.ExtraLabels ?? []],
             Threshold = own?.Threshold ?? privacy.Threshold,
             Tainted = own?.Tainted ?? privacy.Tainted,
+            Images = own?.Images ?? privacy.Images,
         };
     }
 
@@ -339,8 +341,9 @@ public sealed class ModelComposer : IDisposable
         var latency = _metrics.For(slot, profile.Id);
         return raw.Service switch
         {
-            IChatClient chat => new InstrumentedChatClient(Gate(device is null ? chat : chat.Schedule(device, priority), profile, slot), profile, slot,
-                latency, stream),
+            // K-8 (A6): outside the egress gate, so the gate sees what is sent: no image to a model that cannot read one.
+            IChatClient chat => new InstrumentedChatClient(new ImageCapabilityChatClient(
+                Gate(device is null ? chat : chat.Schedule(device, priority), profile, slot), profile), profile, slot, latency, stream),
             IEmbeddingGenerator<string, Embedding<float>> embedder =>
                 new InstrumentedEmbeddingGenerator(device is null ? embedder : embedder.Schedule(device, priority), latency),
             // Extractors take the device's TaskScheduler when they are loaded (ModelLoadContext); wrapping again would nest.

@@ -1,16 +1,19 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using Corvid.Abstractions.Events;
+using Corvid.Abstractions.Media;
 using Corvid.Host.Commands;
 using Corvid.Host.Composition;
 using Corvid.Host.Sessions;
 using Corvid.Kernel.Events;
 using Corvid.Kernel.Sessions;
 using Corvid.Kernel.Turns;
+using Corvid.Models.Images;
 using Corvid.Tools.Builtin;
 
 namespace Corvid.Acp;
@@ -241,8 +244,9 @@ internal sealed partial class AcpAgent : IJsonRpcHandler, IAsyncDisposable
         new(AcpServer.ProtocolVersion,
             new AgentCapabilities(
                 LoadSession: true,
-                // Text and resource links only: images and audio need the vision slot, and embedded resources a size policy.
-                new PromptCapabilities(Image: false, Audio: false, EmbeddedContext: false),
+                // K-8 (A6): text, resource links and images (a turn refuses them, with why, when no model can read them); audio
+                // needs a model that hears, and embedded resources a size policy.
+                new PromptCapabilities(Image: true, Audio: false, EmbeddedContext: false),
                 // Corvid connects only its own configured MCP servers (C-018); a client's are not (and said so on standard error).
                 new McpCapabilities(Http: false, Sse: false),
                 new SessionCapabilities { List = new Supported(), Resume = new Supported(), Fork = new Supported(), Close = new Supported() }),
@@ -345,14 +349,14 @@ internal sealed partial class AcpAgent : IJsonRpcHandler, IAsyncDisposable
         var runtime = await RuntimeAsync().ConfigureAwait(false);
         if (!_sessions.TryGetValue(request.SessionId, out var state))
             throw new AcpException(AcpErrors.ResourceNotFound, $"Session '{request.SessionId}' is not open; create, load or resume it first.");
-        var text = PromptText(request.Prompt);
+        var (text, images) = PromptContent(request.Prompt);
         if (!state.TryBegin())
             throw new AcpException(AcpErrors.InvalidRequest, "A prompt is already running in this session; cancel it or wait for its answer.");
         // Cancelled by session/cancel (or $/cancel_request) for this prompt only: TryBegin made a fresh one.
         var cancelled = state.TurnCancelled;
         try
         {
-            if (SlashCommandRegistry.IsCommand(text))
+            if (images.IsEmpty && SlashCommandRegistry.IsCommand(text))
             {
                 var output = await _commands.ExecuteAsync(text, new SlashCommandContext(runtime, state.Session, _commands), cancellationToken)
                     .ConfigureAwait(false);
@@ -366,7 +370,9 @@ internal sealed partial class AcpAgent : IJsonRpcHandler, IAsyncDisposable
             using (runtime.Feed.Subscribe(state.Session.Id, reporter))
             // $/cancel_request on the prompt cancels the turn as session/cancel does; the answer still arrives.
             using (cancellationToken.Register(state.Cancel))
-                delivery = await state.Session.SendAsync(text, _context.Connection.Closed).ConfigureAwait(false);
+                delivery = images.IsEmpty
+                    ? await state.Session.SendAsync(text, _context.Connection.Closed).ConfigureAwait(false)
+                    : await state.Session.SendAsync(text, images, _context.Connection.Closed).ConfigureAwait(false);
             await reporter.DrainAsync().ConfigureAwait(false);
             if (delivery.Error is { } error)
                 throw new AcpException(AcpErrors.InternalError, "The turn failed: " + error.Message);
@@ -421,8 +427,15 @@ internal sealed partial class AcpAgent : IJsonRpcHandler, IAsyncDisposable
         var history = await SessionReplay.ReadAsync(runtime, sessionId, _context.Tools ?? new ToolPresentation(runtime), ReplayOptions.Transcript)
             .ConfigureAwait(false);
         foreach (var update in history.Updates)
+        {
             if (TurnReporter.Replayed(update) is { } notification)
                 _context.Update(sessionId, notification);
+            // K-8 (A6): a message's images follow its text, as the image blocks they came as; one no longer stored is left out.
+            if (update is PromptSent { Images.IsEmpty: false } prompt)
+                foreach (var image in prompt.Images)
+                    if (runtime.Media.Read(image.Digest) is { } bytes)
+                        _context.Update(sessionId, new UserMessageChunk(new ImageContent(Convert.ToBase64String(bytes), image.MediaType)));
+        }
     }
 
     private static (SessionInfo Info, DateTimeOffset Updated)? Describe(CorvidRuntime runtime, string id, string workspace)
@@ -471,28 +484,60 @@ internal sealed partial class AcpAgent : IJsonRpcHandler, IAsyncDisposable
         }
     }
 
-    /// <summary>The prompt as one message: text as written, resource links as Markdown links. Other blocks were not offered.</summary>
-    internal static string PromptText(JsonElement[] blocks)
+    /// <summary>
+    /// The prompt as one message and its images (K-8, A6): text as written, resource links as Markdown links, image blocks as
+    /// their decoded bytes (base64 <c>data</c>; a <c>uri</c> alone is refused, since Corvid never fetches an image). The turn
+    /// reads each image's format from its bytes, strips its metadata and stores it, or refuses the prompt with why.
+    /// </summary>
+    internal static (string Text, ImmutableArray<ImageInput> Images) PromptContent(JsonElement[] blocks)
     {
         var text = new StringBuilder();
+        var images = ImmutableArray.CreateBuilder<ImageInput>();
         foreach (var block in blocks)
         {
             var type = block.ValueKind == JsonValueKind.Object && block.TryGetProperty("type", out var kind) && kind.ValueKind == JsonValueKind.String
                 ? kind.GetString() : null;
+            if (type == "image")
+            {
+                images.Add(Image(block, images.Count));
+                continue;
+            }
             var piece = type switch
             {
                 "text" when String(block, "text") is { } value => value,
                 "resource_link" when String(block, "uri") is { } uri => $"[{String(block, "name") ?? uri}]({uri})",
                 _ => throw new AcpException(AcpErrors.InvalidParams,
-                    $"Corvid accepts text and resource links in a prompt, not '{type ?? "an unknown block"}'."),
+                    $"Corvid accepts text, resource links and images in a prompt, not '{type ?? "an unknown block"}'."),
             };
             if (text.Length > 0)
                 text.Append('\n');
             text.Append(piece);
         }
-        if (string.IsNullOrWhiteSpace(text.ToString()))
+        if (string.IsNullOrWhiteSpace(text.ToString()) && images.Count == 0)
             throw new AcpException(AcpErrors.InvalidParams, "The prompt is empty.");
-        return text.ToString();
+        return (text.ToString(), images.ToImmutable());
+    }
+
+    private static ImageInput Image(JsonElement block, int index)
+    {
+        if (index >= ImageFiles.MaxPerMessage)
+            throw new AcpException(AcpErrors.InvalidParams, $"A prompt may carry at most {ImageFiles.MaxPerMessage} images.");
+        if (String(block, "data") is not { Length: > 0 } data)
+            throw new AcpException(AcpErrors.InvalidParams, "An image block needs its base64 data: Corvid never fetches an image by its uri.");
+        // Base64 is 4/3 the size: a block past the limit is refused before it is decoded.
+        if (data.Length > (ImageFiles.MaxBytes / 3 + 1) * 4)
+            throw new AcpException(AcpErrors.InvalidParams, $"An image may be at most {ImageFiles.Size(ImageFiles.MaxBytes)}.");
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromBase64String(data);
+        }
+        catch (FormatException)
+        {
+            throw new AcpException(AcpErrors.InvalidParams, "An image block's data is not base64.");
+        }
+        var uri = String(block, "uri");
+        return new ImageInput(bytes, uri is { Length: > 0 } ? Path.GetFileName(uri) : null);
     }
 
     private static string? String(JsonElement element, string name) =>

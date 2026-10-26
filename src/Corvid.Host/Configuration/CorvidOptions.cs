@@ -662,6 +662,13 @@ public sealed class RemoteModelSettings
 
     /// <summary>This model's egress policy, over <see cref="CorvidOptions.Privacy"/>.</summary>
     public EgressSettings? Egress { get; set; }
+
+    /// <summary>
+    /// K-8 (A6): the model reads images, so a message's images are sent to it as images. A model listed for the
+    /// <c>vision</c> slot reads them by definition. Whether a gated model may be sent any is the egress policy's
+    /// <see cref="EgressSettings.Images"/>, off unless allowed.
+    /// </summary>
+    public bool Vision { get; set; }
 }
 
 /// <summary>The privacy egress gate (plan §10.4) for every model this process binds.</summary>
@@ -684,6 +691,12 @@ public sealed class PrivacySettings
 
     /// <summary>Minimum span confidence; lower is stricter.</summary>
     public float Threshold { get; set; } = EgressPolicy.Default.Threshold;
+
+    /// <summary>
+    /// K-8 (A6): whether a gated model (every cloud model, and local servers when gated) may be sent images at all. Off by
+    /// default: the PII scan cannot read a picture. A model's own <c>Egress:Images</c> overrides it.
+    /// </summary>
+    public bool Images { get; set; }
 
     /// <summary>How long the egress ledger (G-9, <c>egress.db</c>) keeps the requests it recorded.</summary>
     public EgressLedgerSettings Ledger { get; set; } = new();
@@ -717,4 +730,7 @@ public sealed class EgressSettings
     public List<string> ExtraLabels { get; set; } = [];
 
     public float? Threshold { get; set; }
+
+    /// <summary>K-8 (A6): whether this model may be sent images, over <see cref="PrivacySettings.Images"/>.</summary>
+    public bool? Images { get; set; }
 }

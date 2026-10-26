@@ -41,6 +41,13 @@ public sealed record Envelope(string SessionId, string Surface, string Text, Env
     /// the session's own user may send one. <see cref="Text"/> is the line as typed, which the log keeps as the message.
     /// </summary>
     public ShellLine? Shell { get; init; }
+
+    /// <summary>
+    /// K-8 (A6): images the message carries (a paste, a drop, a named file, an ACP image block), unchecked: the turn reads
+    /// their format from the bytes, strips their metadata and stores them before the message is logged, or refuses the
+    /// message. On an <see cref="EnvelopeOrigin.External"/> envelope they are outside content like its text.
+    /// </summary>
+    public ImmutableArray<Media.ImageInput> Images { get; init; } = [];
 }
 
 /// <summary>A shell command the user typed after <c>!</c> (or <c>!!</c>, <see cref="LocalOnly"/>).</summary>
