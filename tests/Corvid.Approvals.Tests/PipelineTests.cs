@@ -72,6 +72,42 @@ public sealed class PipelineTests
         Assert.Contains(snapshot.Decisions.Values, d => d.Outcome == "approval_timed_out");
     }
 
+    // A7V1-3: a code run's nested call is denied when its run ends, and its card's deadline says so; never later than usual.
+    [Fact]
+    public async Task A_prompt_with_an_earlier_end_is_denied_then_and_its_deadline_is_that_end()
+    {
+        using var db = new TempLog();
+        var prompter = ScriptedPrompter.Silent();
+        var pipeline = Fixtures.Pipeline(db, prompter: prompter);
+        var notAfter = DateTimeOffset.UtcNow.AddMilliseconds(200);
+
+        var result = await pipeline.AuthorizeAsync(Fixtures.Context() with { NotAfter = notAfter }, new ShellAction("rm -rf build"), Ct);
+
+        Assert.False(result.Allowed);
+        Assert.Equal(ApprovalResolution.TimedOut, result.Resolution);
+        Assert.Equal(notAfter, Assert.Single(prompter.Prompts).Deadline);
+        Assert.Contains("the run it was made from ended", Assert.IsType<ApprovalResolved>(Events(db).Single(e => e is ApprovalResolved)).Reason,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_later_end_never_extends_the_deadline_and_a_past_one_asks_nobody()
+    {
+        using var db = new TempLog();
+        var prompter = ScriptedPrompter.Silent();
+        var pipeline = Fixtures.Pipeline(db, prompter: prompter, options: new ApprovalOptions { Timeout = TimeSpan.FromMilliseconds(100) });
+
+        var later = await pipeline.AuthorizeAsync(Fixtures.Context() with { NotAfter = DateTimeOffset.UtcNow.AddHours(1) }, new ShellAction("rm -rf build"), Ct);
+        var past = await pipeline.AuthorizeAsync(Fixtures.Context() with { NotAfter = DateTimeOffset.UtcNow.AddSeconds(-1) }, new ShellAction("rm -rf dist"), Ct);
+
+        Assert.Equal(ApprovalResolution.TimedOut, later.Resolution);
+        Assert.True(Assert.Single(prompter.Prompts).Deadline < DateTimeOffset.UtcNow.AddMinutes(1));
+        Assert.False(past.Allowed);
+        Assert.Equal(ApprovalResolution.TimedOut, past.Resolution);
+        Assert.Single(prompter.Prompts);
+        Assert.Equal(2, Events(db).OfType<ApprovalResolved>().Count(resolved => !resolved.Approved && resolved.Reason.StartsWith("timeout", StringComparison.Ordinal)));
+    }
+
     [Fact]
     public async Task Hardline_and_non_interactive_denials_ask_nobody()
     {

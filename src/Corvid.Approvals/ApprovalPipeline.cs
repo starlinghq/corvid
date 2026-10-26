@@ -53,6 +53,12 @@ public sealed record ApprovalContext(string SessionId, ApprovalMode Mode, TurnSt
     /// the hardline list still applies first, and with nobody to ask it is denied.
     /// </summary>
     public string? AlwaysAsk { get; init; }
+
+    /// <summary>
+    /// A7V1-3: a prompt for this action is denied by then if unanswered, when that comes before the usual deadline (a code
+    /// run's nested call: its run ends then). Only ever an earlier denial; null for the usual deadline.
+    /// </summary>
+    public DateTimeOffset? NotAfter { get; init; }
 }
 
 public enum ApprovalOutcome
@@ -442,7 +448,16 @@ public sealed class ApprovalPipeline
         var approvalId = Guid.NewGuid().ToString("N");
         // Read once: a deadline changed while this prompt waits (SetTimeout) applies from the next prompt.
         var wait = Options.Timeout;
-        var deadline = _time.GetUtcNow() + wait;
+        var now = _time.GetUtcNow();
+        var deadline = now + wait;
+        var unanswered = "timeout: unanswered after " + wait;
+        if (context.NotAfter is { } notAfter && notAfter < deadline)
+        {
+            // A7V1-3: the card counts down to when the run it belongs to ends; an earlier denial, never a grant.
+            deadline = notAfter;
+            wait = notAfter > now ? notAfter - now : TimeSpan.Zero;
+            unanswered = "timeout: unanswered when the run it was made from ended";
+        }
         Append(context.SessionId, new ApprovalRequested(approvalId,
             ActionDocuments.Json(assessment.Analysis, context.Tainted, context.Reversible), assessment.Summary, context.CallId), cancellationToken);
 
@@ -451,6 +466,8 @@ public sealed class ApprovalPipeline
             CallId = context.CallId,
             Action = action,
         };
+        if (wait <= TimeSpan.Zero)
+            return Resolve(context, assessment, approvalId, ApprovalResolution.TimedOut, unanswered);
         ApprovalAnswer answer;
         using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
         {
@@ -461,7 +478,7 @@ public sealed class ApprovalPipeline
             catch (TimeoutException)
             {
                 await timeout.CancelAsync();
-                return Resolve(context, assessment, approvalId, ApprovalResolution.TimedOut, "timeout: unanswered after " + wait);
+                return Resolve(context, assessment, approvalId, ApprovalResolution.TimedOut, unanswered);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {

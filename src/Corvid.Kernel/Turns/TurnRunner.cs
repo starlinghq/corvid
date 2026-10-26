@@ -493,7 +493,11 @@ public sealed partial class TurnRunner
     /// <param name="Spans">Extracted spans the arguments did not match: hints if the tool's binding refuses one of those arguments.</param>
     /// <param name="ParentCallId">A7: the running call this nested one was made from (code mode); null for the model's own.</param>
     private sealed record ValidCall(string CallId, Offered Tool, JsonElement Arguments, bool Ask, IReadOnlyList<SlotDisagreement> Spans,
-        string? ParentCallId = null);
+        string? ParentCallId = null)
+    {
+        /// <summary>A7V1-3: a nested call's approval is denied by then (its parent run's end); null for no limit.</summary>
+        public DateTimeOffset? NotAfter { get; init; }
+    }
 
     private enum CallOutcome
     {
@@ -525,6 +529,8 @@ public sealed partial class TurnRunner
         private readonly HashSet<string> _taintedResults = new(StringComparer.Ordinal);
         private ImmutableSortedDictionary<string, ImmutableArray<string>> _entities = ImmutableSortedDictionary<string, ImmutableArray<string>>.Empty;
         private ImmutableArray<Offered> _shortlist = [];
+        // A7V1-7: the tools the filter withheld when the shortlist was built.
+        private readonly HashSet<string> _withheldAtStart = new(StringComparer.Ordinal);
         private ImmutableArray<RetrievedItem> _recalled = [];
         private ImmutableArray<SkillOption> _skills = [];
         private string _skillNote = "";
@@ -799,7 +805,11 @@ public sealed partial class TurnRunner
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var budgetSpent = _steps >= _options.MaxSteps;
-                var tools = finishing || budgetSpent ? [] : offered;
+                // A7V1-7: the filter again at every step, not only when the shortlist was built, so a tool it withholds from
+                // the generator now (code mode after a fallback or privacy retreat to an in-process model) is not offered.
+                var tools = finishing || budgetSpent ? [] : Filtered(offered);
+                if (required is not null && !tools.Any(tool => tool.Function.Name == required))
+                    required = null;
                 var nudge = budgetSpent && !finishing ? NudgeBudget : finishing ? NudgeFinish : null;
                 if (budgetSpent && status == TurnStatus.Answered)
                     status = TurnStatus.StepBudgetExhausted;
@@ -883,6 +893,16 @@ public sealed partial class TurnRunner
                     finishing = true;
                 offered = OfferFrom(step, "tool") ?? _shortlist;
             }
+        }
+
+        // Drops a tool the filter passed when the shortlist was built and withholds now; one it withheld then and the turn
+        // offers anyway (a confident delegate's delegate_task) stays.
+        private ImmutableArray<Offered> Filtered(ImmutableArray<Offered> tools)
+        {
+            if (_options.ToolFilter is not { } filter)
+                return tools;
+            bool Keeps(Offered tool) => _withheldAtStart.Contains(tool.Function.Name) || filter(tool.Descriptor);
+            return tools.All(Keeps) ? tools : [.. tools.Where(Keeps)];
         }
 
         // ---- generator ----
@@ -1342,7 +1362,7 @@ public sealed partial class TurnRunner
                     text => listener.ToolOutput(runner.SessionId, call.CallId, descriptor.Name, text))
                 : null;
             // A7: a top-level call may make nested calls through the turn's own path (depth 1: a nested call cannot).
-            using var nested = call.ParentCallId is null ? new NestedCalls(call, cancellationToken) : null;
+            using var nested = call.ParentCallId is null ? new NestedCalls(call, _services.Time.GetUtcNow(), cancellationToken) : null;
             using (running)
             {
                 try
@@ -1443,6 +1463,7 @@ public sealed partial class TurnRunner
                 Reversible = await ReversibleAsync(approvals, action).ConfigureAwait(false),
                 // A5: the session's own decider answers its risk question too.
                 Fabric = _services.Deciders is null ? null : _services.CurrentFabric(),
+                NotAfter = call.NotAfter,
             };
             ApprovalResult result;
             try
@@ -2120,6 +2141,8 @@ public sealed partial class TurnRunner
                         // A5: a guest never starts child sessions, whatever its allowlist says.
                         && function.Name != DelegateTaskTool.ToolName))
                     _catalogue[function.Name] = new Offered(function, descriptor);
+            if (_options.ToolFilter is { } withholds)
+                _withheldAtStart.UnionWith(_catalogue.Values.Where(tool => !withholds(tool.Descriptor)).Select(tool => tool.Function.Name));
             if (_catalogue.Count == 0 || !_services.Slots.TryCurrent(ModelSlots.TextEmbedder, out var binding)
                 || binding.Service is not IEmbeddingGenerator<string, Embedding<float>> embedder)
             {

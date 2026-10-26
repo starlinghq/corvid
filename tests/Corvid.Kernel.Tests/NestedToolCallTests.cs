@@ -173,6 +173,26 @@ public sealed class NestedToolCallTests
         Assert.Single(prompter.Prompts);
     }
 
+    // A7V1-3: a nested call's approval closes when the run it was made from would be stopped, not five minutes later.
+    [Fact]
+    public async Task A_nested_calls_prompt_is_due_when_its_parents_time_limit_ends()
+    {
+        var prompter = FakePrompter.Always(approve: false);
+        var started = DateTimeOffset.UtcNow;
+        var script = Script(async (context, token) =>
+        {
+            context.NestedTimeLimit = TimeSpan.FromSeconds(30);
+            await context.InvokeToolAsync("add_note", Json("""{"text":"never"}"""), token);
+            return "script done";
+        });
+        using var harness = Harness(Generator(), prompter, tools => tools.Add(script));
+
+        await harness.RunAsync("run the weather script");
+
+        var deadline = Assert.Single(prompter.Prompts).Deadline;
+        Assert.InRange(deadline, started, DateTimeOffset.UtcNow.AddSeconds(30));
+    }
+
     [Fact]
     public async Task A_denied_nested_call_comes_back_as_an_error_and_changes_nothing()
     {

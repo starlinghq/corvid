@@ -12,8 +12,14 @@ public sealed partial class TurnRunner
     /// A7: the nested calls one running call makes (code mode's script calling tools). They run one at a time; after the
     /// parent's tool returns they are cancelled and no new one is accepted, so each has its result before the parent's.
     /// </summary>
-    private sealed class NestedCalls(ValidCall parent, CancellationToken parentToken) : IDisposable
+    private sealed class NestedCalls(ValidCall parent, DateTimeOffset startedAt, CancellationToken parentToken) : IDisposable
     {
+        /// <summary>When the parent's tool was started, by the turn's clock.</summary>
+        public DateTimeOffset StartedAt => startedAt;
+
+        /// <summary>A7V1-3: when the parent stops its nested calls (<see cref="ToolCallContext.NestedTimeLimit"/>); null for no limit.</summary>
+        public DateTimeOffset? NotAfter => Context?.NestedTimeLimit is { } limit ? startedAt + limit : null;
+
         private readonly CancellationTokenSource _stop = CancellationTokenSource.CreateLinkedTokenSource(parentToken);
         private volatile bool _closing;
 
@@ -124,7 +130,8 @@ public sealed partial class TurnRunner
                         var ask = !risk.ReadOnly || risk.Network && (tainted
                             || _services.Approvals is { } approvals && approvals.Detects(runner.SessionId, callId,
                                 new ToolAction(tool.Descriptor, input), [], token));
-                        outcome = await ExecuteAsync(new ValidCall(callId, tool, input, ask, [], parentId), token).ConfigureAwait(false);
+                        outcome = await ExecuteAsync(new ValidCall(callId, tool, input, ask, [], parentId) { NotAfter = nested.NotAfter }, token)
+                            .ConfigureAwait(false);
                     }
                     ToolResult logged;
                     bool outside;

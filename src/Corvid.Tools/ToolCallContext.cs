@@ -57,6 +57,13 @@ public sealed record ToolCallContext(string SessionId, string CallId)
     public string? ParentCallId { get; init; }
 
     /// <summary>
+    /// A7V1-3: how long, from when this call started, its nested calls may still be answered (code mode's run time limit,
+    /// after which the run is stopped). Set by the tool before its first nested call; an approval a nested call waits on is
+    /// denied by then rather than outliving the run, so its card counts down to when the run ends. Null: no limit.
+    /// </summary>
+    public TimeSpan? NestedTimeLimit { get; set; }
+
+    /// <summary>
     /// A7: runs a nested tool call through the turn's own call path, as if the model had made it: the tool must be one the
     /// turn may offer (<see cref="OfferedTools"/>), its arguments are validated against its schema, it goes through the
     /// approval pipeline (blocking until answered), takes its checkpoint, its lease, its credential scrub and its taint, and is

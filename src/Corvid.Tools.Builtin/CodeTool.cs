@@ -111,7 +111,9 @@ public sealed record CodeToolOptions
 
     /// <summary>
     /// The run's time limit, wall clock, including time a tool call waits for its approval. Enforced by the sandbox the tool
-    /// is given (its <see cref="SandboxOptions.Timeout"/>, which the host sets to this); here for the result's wording.
+    /// is given (its <see cref="SandboxOptions.Timeout"/>, which the host sets to this); here for the result's wording, and
+    /// as the nested calls' limit (<see cref="ToolCallContext.NestedTimeLimit"/>): an approval a call waits on is denied when
+    /// the run would be stopped, and its card counts down to then (A7V1-3).
     /// </summary>
     public TimeSpan Timeout { get; init; } = TimeSpan.FromSeconds(300);
 
@@ -348,6 +350,8 @@ public sealed class CodeRunner
         var tools = CodeModeCatalog.Describe(registry, context.OfferedTools, Options.Tools);
         var calls = new List<CodeCall>();
         var invoke = context.Invoker ?? throw new InvalidOperationException("A script's tool calls need the turn's call path.");
+        // A7V1-3: a nested call's approval closes when the run would be stopped, so its card counts down to the run's end.
+        context.NestedTimeLimit = Options.Timeout;
         async Task<NestedToolResult> Record(string tool, System.Text.Json.JsonElement arguments, CancellationToken token)
         {
             var result = await invoke(tool, arguments, token).ConfigureAwait(false);
