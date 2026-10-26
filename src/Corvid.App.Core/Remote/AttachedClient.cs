@@ -227,5 +227,22 @@ public sealed class RemoteAppServices(RemoteSessionService sessions, AttachedAdd
         public Task RecapAsync(string sessionId, CancellationToken cancellationToken = default) => inner.RecapAsync(sessionId, cancellationToken);
 
         public Task<string> CreateAsync(CancellationToken cancellationToken = default) => inner.CreateAsync(cancellationToken);
+
+        // A6: every member forwards, default ones too (images, K-8; workspaces, G-4); one left to its default would answer
+        // for the window instead of the engine (AttachedForwardingTests checks the whole interface).
+        public bool CanSendImages => inner.CanSendImages;
+
+        public Task SendAsync(string sessionId, string text, IReadOnlyList<ImageAttachment> images, CancellationToken cancellationToken = default) =>
+            inner.SendAsync(sessionId, text, images, cancellationToken);
+
+        public Task<ImageAttachment> ReadImageFileAsync(string sessionId, string path, CancellationToken cancellationToken = default) =>
+            inner.ReadImageFileAsync(sessionId, path, cancellationToken);
+
+        public Task<byte[]?> ReadImageAsync(string sessionId, string digest, CancellationToken cancellationToken = default) =>
+            inner.ReadImageAsync(sessionId, digest, cancellationToken);
+
+        public bool CanChooseWorkspace => inner.CanChooseWorkspace;
+
+        public Task<string> CreateAsync(NewSessionRequest request, CancellationToken cancellationToken = default) => inner.CreateAsync(request, cancellationToken);
     }
 }

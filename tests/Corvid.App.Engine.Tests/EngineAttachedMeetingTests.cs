@@ -127,6 +127,8 @@ public sealed class EngineAttachedMeetingTests
             var notImage = await Assert.ThrowsAsync<InvalidOperationException>(() => client.ReadImageFileAsync(id, Path.Combine(here, "fake.png"), Ct));
             Assert.Contains("not a PNG, JPEG, GIF or WebP image", notImage.Message, StringComparison.Ordinal);
             await Assert.ThrowsAsync<InvalidOperationException>(() => client.ReadImageFileAsync(id, Path.Combine(here, "missing.png"), Ct));
+            var relative = await Assert.ThrowsAsync<InvalidOperationException>(() => client.ReadImageFileAsync(id, "drop.png", Ct));
+            Assert.Contains("not a full path", relative.Message, StringComparison.Ordinal);
         }
         finally
         {

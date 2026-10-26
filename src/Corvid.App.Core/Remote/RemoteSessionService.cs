@@ -225,7 +225,13 @@ public sealed class RemoteSessionService : ISessionService, IAsyncDisposable, ID
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         if (!CanSendImages)
             throw new ServiceUnavailableException("The attached Corvid does not take images in messages (K-8).");
+        path = path.Trim().Trim('"');
         var name = SafeText.Clean(Path.GetFileName(path));
+        // "~" is this device's home; a relative path has no workspace here to be relative to.
+        if (path == "~" || path.StartsWith("~/", StringComparison.Ordinal))
+            path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), path.Length > 1 ? path[2..] : "");
+        if (!Path.IsPathFullyQualified(path))
+            throw new InvalidOperationException($"'{SafeText.Clean(path)}' is not a full path; name the image's full path on this device.");
         FileInfo file;
         try
         {
