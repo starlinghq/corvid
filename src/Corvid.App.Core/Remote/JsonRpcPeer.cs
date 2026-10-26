@@ -111,7 +111,7 @@ public sealed class JsonRpcPeer : IAsyncDisposable
         _outgoing.Writer.TryComplete();
         // What was queued before the close (an error answer) goes out first, briefly.
         if (_writing is { } writing)
-            await writing.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+            await writing.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         await _channel.CloseAsync(reason, CancellationToken.None).ConfigureAwait(false);
         Finish();
     }

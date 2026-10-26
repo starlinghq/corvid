@@ -22,6 +22,9 @@ public interface IMessageChannel : IAsyncDisposable
 
     /// <summary>Closes the connection, telling the other end why when it can.</summary>
     ValueTask CloseAsync(string reason, CancellationToken cancellationToken);
+
+    /// <summary>The reason the other end gave when it closed the connection, once it has; untrusted text.</summary>
+    string? ClosedBecause => null;
 }
 
 /// <summary>A WebSocket as an <see cref="IMessageChannel"/>: text messages, each read whole up to a size limit.</summary>
@@ -30,6 +33,8 @@ public sealed class WebSocketMessageChannel(WebSocket socket, int maxMessageByte
     private readonly SemaphoreSlim _sending = new(1, 1);
 
     public WebSocket Socket { get; } = socket;
+
+    public string? ClosedBecause { get; private set; }
 
     public async ValueTask SendAsync(string message, CancellationToken cancellationToken)
     {
@@ -67,7 +72,10 @@ public sealed class WebSocketMessageChannel(WebSocket socket, int maxMessageByte
                     return null;
                 }
                 if (result.MessageType == WebSocketMessageType.Close)
+                {
+                    ClosedBecause = Socket.CloseStatusDescription;
                     return null;
+                }
                 if (result.MessageType != WebSocketMessageType.Text)
                     throw new InvalidDataException("Attached mode speaks text messages only.");
                 if (message.Length + result.Count > maxMessageBytes)

@@ -95,6 +95,13 @@ public sealed class RemoteSessionService : ISessionService, IAsyncDisposable, ID
             service.Capabilities = ReadCapabilities(result as JsonObject);
             return service;
         }
+        catch (IOException exception) when (channel.ClosedBecause is { Length: > 0 } reason)
+        {
+            // The engine closed the connection with its reason before its refusal's answer was read (a busy machine): a
+            // close before the start is answered is a refusal, and says why.
+            await service.DisposeAsync().ConfigureAwait(false);
+            throw new UnauthorizedAccessException("The attached Corvid refused this connection: " + SafeText.Clean(reason), exception);
+        }
         catch
         {
             await service.DisposeAsync().ConfigureAwait(false);
@@ -129,6 +136,10 @@ public sealed class RemoteSessionService : ISessionService, IAsyncDisposable, ID
             catch (JsonRpcException error)
             {
                 throw JsonRpcPeer.Raise(error);
+            }
+            catch (IOException exception) when (channel.ClosedBecause is { Length: > 0 } reason)
+            {
+                throw new UnauthorizedAccessException("The attached Corvid refused the code: " + SafeText.Clean(reason), exception);
             }
         }
     }
