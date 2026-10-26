@@ -24,7 +24,7 @@ public sealed class Gliner2Extractor : IExtractor, IDisposable
         _scheduler = scheduler ?? TaskScheduler.Default;
     }
 
-    /// <summary>Loads the model on the CPU (this adapter ships CPU natives only).</summary>
+    /// <summary>Loads the model on the CPU. CUDA placement is built for Kev only (C-029), so a CUDA session is refused in every build.</summary>
     /// <remarks>On Linux, Starling requires the process to start with <c>MALLOC_MMAP_THRESHOLD_=65536</c> for this model.</remarks>
     public static Gliner2Extractor Create(Gliner2ModelFiles files, Gliner2ExtractorOptions? options = null, TaskScheduler? scheduler = null)
     {

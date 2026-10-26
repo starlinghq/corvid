@@ -50,7 +50,11 @@ public sealed class AcquisitionTests : IDisposable
 
         Assert.Empty(Directory.EnumerateFiles(downloads, "*.partial", SearchOption.AllDirectories));
         Assert.True(File.Exists(Path.Combine(downloads, "tokenizer.json.lock")));
+        // A partial without a lock is held by nobody; checking that creates no lock beside it.
+        Assert.False(File.Exists(Path.Combine(downloads, "onnx", "model.onnx.lock")));
+        Assert.Equal([Path.Combine(downloads, "tokenizer.json.lock")], Directory.EnumerateFiles(downloads, "*.lock", SearchOption.AllDirectories));
         Assert.True(File.Exists(Path.Combine(other, "model.onnx.partial")));
+        Assert.Empty(Directory.EnumerateFiles(other, "*.lock", SearchOption.AllDirectories));
         Assert.Equal(StarlingModelState.Missing, store.Check(StarlingModel.Gliner2, CacheVerification.Size).State);
         Assert.Equal(0, store.RemovePartialDownloads(StarlingModel.Qwen35));
     }
@@ -78,6 +82,24 @@ public sealed class AcquisitionTests : IDisposable
 
         Assert.Equal(1, store.RemovePartialDownloads(StarlingModel.Gliner2));
         Assert.False(File.Exists(writing));
+        // The lock Starling left is opened, not replaced, and still there afterwards.
+        Assert.True(File.Exists(Path.Combine(downloads, "model.onnx.lock")));
+    }
+
+    [Fact]
+    public void A_missing_models_description_names_where_kevs_files_are_hosted()
+    {
+        var store = new StarlingModelStore(_cache);
+
+        var kev = store.Check(StarlingModel.Kev08B, CacheVerification.Size);
+        var gliner = store.Check(StarlingModel.Gliner2, CacheVerification.Size);
+
+        Assert.Equal(StarlingModelState.Missing, kev.State);
+        Assert.Contains("from jaredpalmer/kev-0.8b@", kev.Describe(), StringComparison.Ordinal);
+        Assert.Contains(", files hosted at Starlinghq/kev-0.8b-onnx)", kev.Describe(), StringComparison.Ordinal);
+        Assert.Contains("files hosted at Starlinghq/kev-4b-onnx", store.Check(StarlingModel.Kev4B, CacheVerification.Size).Describe(), StringComparison.Ordinal);
+        // The others download from the repository their lock names.
+        Assert.DoesNotContain("hosted at", gliner.Describe(), StringComparison.Ordinal);
     }
 
     [Fact]

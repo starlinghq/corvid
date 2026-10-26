@@ -213,6 +213,13 @@ public sealed class KevDecider : IDecider, IDisposable
                 declined[pending[index].Key] = RowOverBudget;
                 pending.RemoveAt(index);
             }
+            catch (KevInputTooLongException exception)
+            {
+                // An index that names no pending question is a malformed refusal, reported like any other failed run rather
+                // than thrown through the fabric.
+                return new DeciderUnavailable(Name, DeciderUnavailableReason.Failed,
+                    $"Kev refused question {exception.QuestionIndex} of {pending.Count}: {exception.Message}");
+            }
         }
 
         if (encoding.Rows.Count != pending.Count)

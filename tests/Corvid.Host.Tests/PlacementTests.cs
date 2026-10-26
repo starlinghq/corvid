@@ -114,6 +114,39 @@ public sealed class PlacementTests
     }
 
     [Fact]
+    public void After_a_cpu_fallback_the_model_is_listed_on_the_cpu()
+    {
+        var provider = Stubbed(Placement("kev-0.8b", "cuda", PlacementFallback.Cpu), cudaWorks: false, out _);
+        var catalogue = new ModelCatalogue([provider]);
+        Assert.Equal("kev-0.8b@cuda:0", provider.Models.Single(model => model.Name == "kev-0.8b").Profile.Id);
+        Assert.Equal("kev-0.8b@cuda:0", catalogue.Find("kev-0.8b").Profile.Id);
+
+        var binding = provider.Load("kev-0.8b", new ModelLoadContext(ModelSlots.Decider, TaskScheduler.Default));
+
+        // The descriptor follows the binding: the provider's, the catalogue's and the one a check reports.
+        var listed = provider.Models.Single(model => model.Name == "kev-0.8b");
+        Assert.Equal(binding.Profile, listed.Profile);
+        Assert.Equal(("kev-0.8b@cpu", "cpu"), (listed.Profile.Id, listed.Profile.Placement));
+        Assert.Equal([ModelSlots.Decider], listed.Slots);
+        Assert.Equal((StarlingModelProvider.ProviderName, StarlingModels.Kev08B.DownloadBytes), (listed.Provider, listed.DownloadBytes));
+        Assert.Equal("kev-0.8b@cpu", catalogue.Find("kev-0.8b").Profile.Id);
+        Assert.Equal("kev-0.8b@cpu", catalogue.Models.Single(model => model.Name == "kev-0.8b").Profile.Id);
+        Assert.Equal("cpu", provider.Check("kev-0.8b").Model.Profile.Placement);
+        Assert.Equal("kev-4b@cpu", provider.Models.Single(model => model.Name == "kev-4b").Profile.Id);
+    }
+
+    [Fact]
+    public void A_load_on_the_configured_device_keeps_the_placed_profile()
+    {
+        var provider = Stubbed(Placement("kev-0.8b", "cuda:1", PlacementFallback.Cpu), cudaWorks: true, out _);
+
+        var binding = provider.Load("kev-0.8b", new ModelLoadContext(ModelSlots.Decider, TaskScheduler.Default));
+
+        Assert.Equal("cuda:1", binding.Profile.Placement);
+        Assert.Equal("kev-0.8b@cuda:1", provider.Models.Single(model => model.Name == "kev-0.8b").Profile.Id);
+    }
+
+    [Fact]
     public void Fallback_fail_propagates_without_a_cpu_retry()
     {
         var provider = Stubbed(Placement("kev-0.8b", "cuda:1"), cudaWorks: false, out var tried);

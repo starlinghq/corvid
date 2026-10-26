@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Corvid.Host.Configuration;
 using Corvid.Models;
 using Corvid.Models.Starling;
@@ -16,6 +17,7 @@ public sealed class StarlingModelProvider : IModelProvider
     public const string ProviderName = "starling";
 
     private readonly IReadOnlyDictionary<string, ModelPlacementSettings> _placement;
+    private ImmutableArray<ModelDescriptor> _models;
 
     /// <param name="placement">
     /// <c>Corvid:Models:Placement</c>, read leniently: entries the validator refuses (an unknown model, a bad device, CUDA
@@ -26,8 +28,9 @@ public sealed class StarlingModelProvider : IModelProvider
         Store = store ?? throw new ArgumentNullException(nameof(store));
         _placement = placement ?? new Dictionary<string, ModelPlacementSettings>(StringComparer.OrdinalIgnoreCase);
         // Qwen can also summarize (plan §4.1: the summarizer defaults to the generator's model). A placed model's descriptor
-        // carries its placed profile (kev-0.8b@cuda:0), so the composer loads it with that device's scheduler.
-        Models = [.. StarlingModels.All.Select(model => new ModelDescriptor(model.Name,
+        // carries its placed profile (kev-0.8b@cuda:0), so the composer loads it with that device's scheduler; after a load
+        // it carries the binding's profile (Load), so a CPU fallback is listed as cpu.
+        _models = [.. StarlingModels.All.Select(model => new ModelDescriptor(model.Name,
             model.Slot == ModelSlots.Generator ? [ModelSlots.Generator, ModelSlots.Summarizer] : [model.Slot],
             StarlingProfiles.For(model.Model, PlacementOf(model).Device), ProviderName, model.DownloadBytes))];
         Loader = LoadOn;
@@ -37,7 +40,11 @@ public sealed class StarlingModelProvider : IModelProvider
 
     public StarlingModelStore Store { get; }
 
-    public IReadOnlyList<ModelDescriptor> Models { get; }
+    /// <summary>
+    /// The configured placement until a model is loaded, then where it runs: a model that fell back to the CPU
+    /// (<see cref="Load"/>) is listed with its CPU profile, not the configured <c>cuda:N</c> one.
+    /// </summary>
+    public IReadOnlyList<ModelDescriptor> Models => _models;
 
     /// <summary>Loads a model on a placement (<c>cpu</c> or <c>cuda:N</c>). Tests replace it to exercise the fallback without a model.</summary>
     internal Func<StarlingModel, string, ModelLoadContext, ModelBinding> Loader { get; set; }
@@ -63,7 +70,8 @@ public sealed class StarlingModelProvider : IModelProvider
     /// <summary>
     /// Loads on the configured placement. When the GPU is not usable (<see cref="ModelPlacementUnavailableException"/>),
     /// <see cref="PlacementFallback.Cpu"/> loads on the CPU instead and reports it through <see cref="ModelLoadContext.Notice"/>;
-    /// the binding's CPU profile is what the composer schedules by. <see cref="PlacementFallback.Fail"/> lets it propagate.
+    /// the binding's CPU profile is what the composer schedules by, and the model's descriptor in <see cref="Models"/> takes
+    /// it too, so listings say where it runs. <see cref="PlacementFallback.Fail"/> lets it propagate.
     /// </summary>
     public ModelBinding Load(string model, ModelLoadContext context)
     {
@@ -74,11 +82,11 @@ public sealed class StarlingModelProvider : IModelProvider
         {
             try
             {
-                return Loader(info.Model, device, context);
+                return Placed(info, Loader(info.Model, device, context));
             }
             catch (ModelPlacementUnavailableException exception) when (fallback == PlacementFallback.Cpu && device != ModelPlacement.Cpu)
             {
-                var binding = Loader(info.Model, ModelPlacement.Cpu, context);
+                var binding = Placed(info, Loader(info.Model, ModelPlacement.Cpu, context));
                 context.Notice?.Invoke($"{info.Name}: configured {device}, running on cpu: {exception.Message}" +
                     (info.Slot == ModelSlots.Decider ? " CPU checkpoints take over 1 s (spike S1)." : ""));
                 return binding;
@@ -88,6 +96,15 @@ public sealed class StarlingModelProvider : IModelProvider
         {
             throw new ModelUnavailableException(ToAvailability(exception.Status), exception);
         }
+    }
+
+    /// <summary>The model's descriptor follows the binding's actual placement (a CPU fallback replaces its placed profile).</summary>
+    private ModelBinding Placed(StarlingModelInfo info, ModelBinding binding)
+    {
+        ImmutableInterlocked.Update(ref _models, models => models.Select(descriptor =>
+            descriptor.Name == info.Name && descriptor.Profile != binding.Profile ? descriptor with { Profile = binding.Profile } : descriptor)
+            .ToImmutableArray());
+        return binding;
     }
 
     private ModelBinding LoadOn(StarlingModel model, string placement, ModelLoadContext context) => model switch
