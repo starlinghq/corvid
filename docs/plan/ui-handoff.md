@@ -677,6 +677,33 @@ The fix round after the verifier's pass (A6V1-01 to 11) and the end-to-end pass:
   (`CorvidRuntimeFactory` takes a registered `TimeProvider` for the approvals), and the Secrets tests' absent socket is
   short whatever `TMPDIR` is (A6V1-11).
 
+The review of #81, images, search, the detector and packaging:
+
+- **Images (M5).** A turn reads each image from the store once (`_imageBytes`, by digest), however many model calls it
+  makes. Only the latest `Corvid:Turn:ImageTurns` user messages (default 2, 1 to 64) send their images; an older one's are a
+  stub, `[image: shot.png, 1280×720; shown in an earlier turn]` (a paste: `a pasted PNG`). The token estimate has no upper
+  cap (pixels / 750, at least 85), and a compaction line names a message's images (`[image: shot.png]`). An image goes only
+  to a model whose egress policy allows images: `ImageRefusal` runs the gate's check on the generator and the vision slot
+  (`TurnServices.EgressPolicyFor`), and a gated generator with `Images: false` gets the vision slot's description.
+- **Files.** `@path`, `/image` and a drop follow links in every component (`RealPaths.Resolve`) before the protected check,
+  and read only a file with a size (a FIFO, socket or device reports none and is refused unopened), with a bound. JPEG
+  stripping walks every segment to EOI (an APPn or comment between progressive scans goes, as do bytes after EOI); ICC
+  profiles go in every format (they can name the device; vision models read sRGB, so a Display P3 picture shows slightly
+  duller); WebP keeps only VP8X, VP8, VP8L, ALPH, ANIM and ANMF (and inside a frame ALPH, VP8, VP8L); a GIF frame past
+  the size limits is refused whatever the screen says; the media store rewrites a file whose bytes do not match its name.
+- **Search (M2, M4, L5).** `/search` answers only in a direct message on a gateway. A search reads the log's heads and the
+  index's marks in one query each and catches up only sessions that moved; each session's hidden ranges, turn starts and
+  title are kept per head (`SessionSearchCache`), so a search over an unchanged log reads nothing from it. `/search` and the
+  palette cover the person's own sessions only (`CorvidRuntime.IsSearchable`): gateway chats and job runs are left out, and
+  both say so.
+- **A pasted password (A6V2-06).** `UserMessage` and `UserSteered` text is scrubbed with the egress rules before it is
+  logged (`EventScrubber`), so the log, the index, prompt history and the prompt rendered from the log hold the marker
+  (`[REDACTED:prose-value]`); the composer keeps what was typed until it is sent. The detector's prose rule turns away
+  evaluative adjectives, their comparatives and their `in-`/`un-` forms ("incorrect", "stronger", "gibberish").
+- **install.sh.** `Exec=` is escaped per the Desktop Entry spec (`%%`, and `" ` $ \` inside the quotes), `TryExec=` and
+  `Icon=` escape the backslash; `--from` with `--app` needs `--from-app`; a tarball holding anything but files and
+  directories is refused before it is unpacked. There is no uninstall path to extend.
+
 New on the wire: `workspace_bound`; the optional `images` on `user_message`; attached mode's protocol (version 1). A
 binary older than A6 cannot read a log that holds `workspace_bound` (the same one-way step as before) and reads a message
 with images as its text alone.
@@ -697,8 +724,7 @@ Left:
   recorded there); the cron_create card does not say which workspace the job will run in; an approval card that arrives outside a turn at the end of a long transcript is cut off at the
   bottom and the wheel cannot scroll to its buttons (Enter from the composer brings it into view); a child that answered
   from one model call shows "0 steps"; on replay a model switch between turns is folded into the turn before it ("the
-  running turn takes it at its next step"); the user's own message keeps a pasted password in the log and the search
-  index (the answer echoing it is scrubbed), since nothing moves it into Vault without one.
+  running turn takes it at its next step").
 - Packaging: Flatpak (U-9) not started.
 - From §1.6, still: a steer's position in the report; the Board's Take over; the lock files under `drivers/`; a job's
   message read as the user's on replay; a gateway adapter needs Vault for its token; delegation's same-round calls run one
