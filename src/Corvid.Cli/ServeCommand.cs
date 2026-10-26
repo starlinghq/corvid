@@ -340,7 +340,7 @@ internal static class ServeCommand
             var code = await client.CreatePairingCodeAsync(cancellationToken).ConfigureAwait(false);
             var minutes = Math.Max(1, (int)Math.Round((code.Expires - DateTimeOffset.UtcNow).TotalMinutes));
             console.MarkupLine($"Pairing code: [bold]{Markup.Escape(code.Code)}[/] (redeems once, within {minutes} min). " +
-                "Give it to the device: Corvid.App --attach <address> --pair <code>, or the app's page in a browser with #pair=<code> after its address.");
+                "Give it to the device: corvid-app --attach <address> --pair <code>, or the app's page in a browser with #pair=<code> after its address.");
             return ExitCodes.Success;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)

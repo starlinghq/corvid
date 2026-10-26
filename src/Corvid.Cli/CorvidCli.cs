@@ -88,7 +88,7 @@ public static class CorvidCli
           acp                        an Agent Client Protocol agent on stdin/stdout, for Zed, JetBrains and VS Code
           serve                      the OpenAI-compatible endpoint (/v1/chat/completions, /v1/models) on Corvid:Serve:Url,
                                      loopback only unless Corvid:Serve:TokenSecret names a Vault secret
-                                     --attach: also the app's sessions for an attached window (Corvid.App --attach), on
+                                     --attach: also the app's sessions for an attached window (corvid-app --attach), on
                                      a Unix socket [--socket <path>|off] and [--listen ws://127.0.0.1:8737] [--web <dir>];
                                      always behind a token (Vault's Corvid:Serve:Attach:TokenSecret, else a 0600 file)
                                      [--no-openai]
