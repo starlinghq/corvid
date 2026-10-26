@@ -744,6 +744,18 @@ Left:
   after another; the live step's model is inferred until `StepStarted` carries it.
 - Real models: the integration pass used scripted servers only; the GPU tests (`Category=Gpu`) were not run here.
 
+The PR review (two agents and a security review) found two high defects, both fixed with the rest: git filters a
+conditional include (`onbranch:corvid/**`, `gitdir:**/worktrees/**`) brings in could run outside the sandbox when a
+worktree was made or removed (now refused, checked inside the new worktree before checkout and before removal), and
+attached mode's token files were readable by sandboxed commands (now protected state everywhere Corvid protects its
+own). Decisions in that round: the owner token goes only over a Unix socket whose peer is the same user (a `ws://`
+window pairs as a device); a pasted credential is scrubbed from the message before it is logged, so the model sees the
+marker too (secrets belong in Vault); only the latest `Corvid:Turn:ImageTurns` messages (default 2) send their images.
+Left from the review: the WebAssembly head's `#pair=` cleanup compiled but was not run (its link was killed for memory);
+a fork or command started over attached mode is not waited for, so a prompt sent right after can overtake it; tests
+that run the real sandbox with the account's HOME create Corvid's empty 0700 `~/.local/state/corvid/attach` mask
+directory, as the launcher does in use.
+
 ### What the running app shows today
 
 
