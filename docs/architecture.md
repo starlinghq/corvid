@@ -205,7 +205,8 @@ mode in the kernel (`TurnRunner.Architect.cs`), not a child session; no new proj
 - **Security.** Nothing about the split touches approvals, taint, egress or leases: every edit is a call through the
   turn's own path. The planner's request passes the switch-time privacy hook and the egress gate inside its binding like
   any request; a refusal (a tainted session under `Tainted: Refuse`, say) is recorded as `{editor}: privacy` on the
-  turn's escalations, the slot goes to the editor, and the turn goes on locally, unplanned. A plan written from tainted
+  turn's escalations, the slot goes back to the editor logged with the switch reason `privacy` (not `editor`, so no
+  surface says a plan is being applied), and the turn goes on locally, unplanned. A plan written from tainted
   context is a model's text: every surface cleans it, and it grants nothing.
 - **Surfaces.** `TurnResult.Plans`; `ITurnListener.Planned` → `ITurnObserver.Planned`. The host stream's `TurnPlanned(Text,
   Plan, Sequence)`, live (the reporter reads it from the log, so it comes before the editor's calls) and on replay
