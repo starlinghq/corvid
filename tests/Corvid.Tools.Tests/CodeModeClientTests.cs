@@ -369,6 +369,51 @@ public sealed class CodeModeClientTests
         AssertReport(host, run);
     }
 
+    /// <summary>The arguments each of the three calls below sends: by position, with the optional ones by name, all by name.</summary>
+    private static readonly string[] ByPositionOrName =
+        ["""{"city":"Rome","days":3}""", """{"city":"Oslo","days":4,"units":"metric"}""", """{"city":"Bern"}"""];
+
+    private static void AssertArguments(FakeHost host, (int ExitCode, string Output, string Error) run)
+    {
+        Assert.True(run.ExitCode == 0, $"exit {run.ExitCode}\n{run.Output}\n{run.Error}");
+        var sent = host.Calls.Select(call => System.Text.Json.Nodes.JsonNode.Parse(call.Arguments)).ToList();
+        Assert.Equal(ByPositionOrName.Length, sent.Count);
+        for (var i = 0; i < sent.Count; i++)
+            Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(System.Text.Json.Nodes.JsonNode.Parse(ByPositionOrName[i]), sent[i]), sent[i]!.ToJsonString());
+    }
+
+    [Fact]
+    public async Task Python_optional_arguments_go_by_position_or_by_name()
+    {
+        Assert.SkipWhen(Find("python3") is null, "python3 is not installed");
+        await using var host = new FakeHost(Tools());
+        var (prefix, suffix) = CodeModeClients.Inline(CodeModeLanguage.Python, Tools());
+
+        var run = await host.RunAsync("python3", "-E -s -B -", host.Directory.FullName, TimeSpan.FromSeconds(60), prefix + """
+            corvid.get_weather("Rome", 3)
+            corvid.get_weather("Oslo", days=4, units="metric")
+            corvid.get_weather(city="Bern")
+            """ + suffix);
+
+        AssertArguments(host, run);
+    }
+
+    [Fact]
+    public async Task JavaScript_optional_arguments_go_by_position_or_by_name()
+    {
+        Assert.SkipWhen(Find("node") is null, "node is not installed");
+        await using var host = new FakeHost(Tools());
+        var (prefix, suffix) = CodeModeClients.Inline(CodeModeLanguage.JavaScript, Tools());
+
+        var run = await host.RunAsync("node", "--input-type=module -", host.Directory.FullName, TimeSpan.FromSeconds(60), prefix + """
+            await corvid.get_weather("Rome", 3);
+            await corvid.get_weather("Oslo", { days: 4, units: "metric" });
+            await corvid.get_weather({ city: "Bern" });
+            """ + suffix);
+
+        AssertArguments(host, run);
+    }
+
     [Fact]
     public void The_csharp_client_compiles_cleanly_with_hostile_descriptions_and_keyword_names()
     {

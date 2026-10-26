@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Corvid.Approvals;
 using Corvid.Host.Commands;
 using Corvid.Host.Sessions;
@@ -68,7 +67,4 @@ public static class CodeRunCard
         var code = Lines(prompt);
         return code.Count == 0 ? lines : [.. lines, .. code];
     }
-
-    /// <summary>For tests and surfaces holding the logged arguments: the lines for a run from its JSON arguments.</summary>
-    internal static CodeRunView? Read(JsonElement arguments) => CodeRunPresentation.Read(CodeRunPresentation.ToolName, arguments);
 }

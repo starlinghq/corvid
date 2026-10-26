@@ -285,13 +285,11 @@ public static class CodeModeClients
             var parameters = Parameters(tool);
             var names = new HashSet<string>(StringComparer.Ordinal) { "_corvid_args" };
             var named = parameters.Select(p => (Parameter: p, Name: Identifier(p.Wire, PythonKeywords, names))).ToList();
+            // Required first, then the optional ones, each by position or by name (a model writes list_files('.') as often
+            // as list_files(path='.')).
             var signature = new List<string>();
             signature.AddRange(named.Where(p => p.Parameter.Required).Select(p => p.Name));
-            if (named.Any(p => !p.Parameter.Required))
-            {
-                signature.Add("*");
-                signature.AddRange(named.Where(p => !p.Parameter.Required).Select(p => p.Name + "=None"));
-            }
+            signature.AddRange(named.Where(p => !p.Parameter.Required).Select(p => p.Name + "=None"));
             text.Append('\n').Append('\n');
             text.Append("def ").Append(function).Append('(').Append(string.Join(", ", signature)).Append("):\n");
             text.Append("    ").Append(Literal(Doc(tool, parameters))).Append('\n');
@@ -481,21 +479,15 @@ public static class CodeModeClients
             var function = Identifier(Unprivate(tool.Name), JavaScriptKeywords, functions);
             table.Add((tool.Name, function));
             var parameters = Parameters(tool);
-            var names = new HashSet<string>(StringComparer.Ordinal) { "__corvidArgs", "options" };
-            var required = parameters.Where(p => p.Required).Select(p => (Parameter: p, Name: Identifier(p.Wire, JavaScriptKeywords, names))).ToList();
-            var optional = parameters.Where(p => !p.Required).ToList();
-            var signature = required.Select(p => p.Name).ToList();
-            if (optional.Count > 0)
-                signature.Add("options = {}");
+            // Arguments by position (required, then optional, in the schema's order), or the required ones then one object
+            // of optional ones by name, or one object of them all by name: see __corvidNamed.
+            var wire = string.Join(", ", parameters.Select(p => Literal(p.Wire)));
+            var json = string.Join(", ", parameters.Select(p => p.Type == ValueType.Json ? "true" : "false"));
+            var requiredCount = parameters.Count(p => p.Required);
             text.Append('\n');
-            text.Append(export).Append("async function ").Append(function).Append('(').Append(string.Join(", ", signature)).Append(") {\n");
-            text.Append("  const __corvidArgs = {};\n");
-            foreach (var (parameter, name) in required)
-                text.Append("  __corvidArgs[").Append(Literal(parameter.Wire)).Append("] = ").Append(name).Append(";\n");
-            foreach (var parameter in optional)
-                text.Append("  if (options[").Append(Literal(parameter.Wire)).Append("] !== undefined && options[").Append(Literal(parameter.Wire))
-                    .Append("] !== null) __corvidArgs[").Append(Literal(parameter.Wire)).Append("] = options[").Append(Literal(parameter.Wire)).Append("];\n");
-            text.Append("  return call(").Append(Literal(tool.Name)).Append(", __corvidArgs);\n");
+            text.Append(export).Append("async function ").Append(function).Append("(...__corvidGiven) {\n");
+            text.Append("  return call(").Append(Literal(tool.Name)).Append(", __corvidNamed(__corvidGiven, [").Append(wire).Append("], ")
+                .Append(requiredCount.ToString(CultureInfo.InvariantCulture)).Append(", [").Append(json).Append("]));\n");
             text.Append("}\n");
             text.Append(function).Append(".description = ").Append(Literal(Doc(tool, parameters))).Append(";\n");
         }
@@ -644,6 +636,34 @@ public static class CodeModeClients
         }
 
         const __corvidClient = new __CorvidClient();
+
+        function __corvidPlain(value) {
+          return value !== null && typeof value === "object" && !Array.isArray(value);
+        }
+
+        function __corvidPick(object) {
+          const args = {};
+          for (const [name, value] of Object.entries(object)) if (value !== undefined && value !== null) args[name] = value;
+          return args;
+        }
+
+        // A wrapper's arguments by name: one plain object (when the first parameter takes no object) names them all; the
+        // required ones then one plain object (when that parameter takes no object) names the optional ones; otherwise each
+        // is by position. Null and undefined are left out.
+        function __corvidNamed(given, names, required, json) {
+          if (given.length === 1 && __corvidPlain(given[0]) && !json[0]) return __corvidPick(given[0]);
+          let named = {};
+          let positional = given;
+          if (given.length === required + 1 && required < names.length && __corvidPlain(given[required]) && !json[required]) {
+            named = __corvidPick(given[required]);
+            positional = given.slice(0, required);
+          }
+          const args = {};
+          for (let i = 0; i < positional.length && i < names.length; i++)
+            if (positional[i] !== undefined && positional[i] !== null) args[names[i]] = positional[i];
+          for (const [name, value] of Object.entries(named)) if (!(name in args)) args[name] = value;
+          return args;
+        }
 
         /** Calls a tool by its name with an object of arguments; resolves to its result or rejects with a CorvidToolError. */
         export function call(tool, args = {}) {
