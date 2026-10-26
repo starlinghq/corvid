@@ -120,6 +120,21 @@ public sealed class EventJsonTests
     }
 
     [Fact]
+    public void A_nested_call_carries_its_parent_and_older_calls_read_and_write_as_before()
+    {
+        // A7: an older stored call has no parent_call_id; it reads back with none and writes back unchanged.
+        const string stored = """{"type":"tool_call_issued","call_id":"c1","tool_name":"add_note","arguments":{"text":"x"},"round":1}""";
+        var older = Assert.IsType<ToolCallIssued>(EventJson.Deserialize(EventJson.Version, stored));
+        Assert.Null(older.ParentCallId);
+        Assert.Equal(stored, EventJson.Serialize(older));
+
+        var nested = new ToolCallIssued("c1.1", "add_note", Samples.Json("""{"text":"x"}"""), 1, false, ParentCallId: "c1");
+        var json = EventJson.Serialize(nested);
+        Assert.Equal("""{"type":"tool_call_issued","call_id":"c1.1","tool_name":"add_note","arguments":{"text":"x"},"round":1,"read_only":false,"parent_call_id":"c1"}""", json);
+        Assert.Equal("c1", Assert.IsType<ToolCallIssued>(EventJson.Deserialize(EventJson.Version, json)).ParentCallId);
+    }
+
+    [Fact]
     public void Project_bound_has_its_documented_persisted_form()
     {
         var json = EventJson.Serialize(new ProjectBound("abc", "checkout"));

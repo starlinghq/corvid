@@ -186,6 +186,7 @@ public static class SessionReplay
                         Input = call.Arguments,
                         Locations = tools.Locations(call.Arguments),
                         Generator = call.Generator,
+                        ParentCallId = call.ParentCallId,
                     }));
                     // No result in the log: the call never finished. A live turn closes it as cancelled when its turn is
                     // interrupted, and so does the replay.
@@ -195,6 +196,7 @@ public static class SessionReplay
                             At = at,
                             Tool = call.ToolName,
                             Kind = tools.Kind(call.ToolName),
+                            ParentCallId = call.ParentCallId,
                             Status = ToolCallState.Failed,
                             Outcome = "cancelled",
                         }));
@@ -216,6 +218,7 @@ public static class SessionReplay
                         CheckpointBefore = checkpoint,
                         At = at,
                         Tool = calls.GetValueOrDefault(result.CallId)?.ToolName,
+                        ParentCallId = calls.GetValueOrDefault(result.CallId)?.ParentCallId,
                         Kind = calls.GetValueOrDefault(result.CallId) is { } issued ? tools.Kind(issued.ToolName) : null,
                         Status = result.IsError ? ToolCallState.Failed : ToolCallState.Completed,
                         // A refused approval is a denied call, as the kernel's span says live; its result is the refusal.

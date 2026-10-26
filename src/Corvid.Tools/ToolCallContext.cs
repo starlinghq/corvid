@@ -1,6 +1,19 @@
+using System.Text.Json;
 using Microsoft.Extensions.AI;
 
 namespace Corvid.Tools;
+
+/// <summary>A7: runs one nested tool call for a running tool; see <see cref="ToolCallContext.Invoker"/>.</summary>
+/// <param name="tool">The tool's name.</param>
+/// <param name="arguments">A JSON object of the tool's arguments.</param>
+public delegate Task<NestedToolResult> ToolInvoker(string tool, JsonElement arguments, CancellationToken cancellationToken);
+
+/// <summary>A7: what a nested call returned, as the log holds it (credential-scrubbed).</summary>
+/// <param name="CallId">The nested call's id in the log: <c>{parent}.{n}</c>.</param>
+/// <param name="Result">The result, or for an error the kernel's error object (<c>{"error": kind, "details": [...]}</c>).</param>
+/// <param name="IsError">The call was refused, not run, or failed.</param>
+/// <param name="Tainted">The result is outside content (a network tool's, or one the tool marked); untrusted.</param>
+public sealed record NestedToolResult(string CallId, JsonElement Result, bool IsError, bool Tainted);
 
 /// <summary>
 /// What the turn loop knows about one tool call that its arguments do not carry: the session, the call, taint and the
@@ -39,6 +52,30 @@ public sealed record ToolCallContext(string SessionId, string CallId)
     /// a turn. A tool that hands work on (<c>delegate_task</c>) never grants more than this.
     /// </summary>
     public IReadOnlySet<string>? OfferedTools { get; init; }
+
+    /// <summary>A7: the call this one runs inside (a code-mode script's tool call); null for a call the model or user made.</summary>
+    public string? ParentCallId { get; init; }
+
+    /// <summary>
+    /// A7: runs a nested tool call through the turn's own call path, as if the model had made it: the tool must be one the
+    /// turn may offer (<see cref="OfferedTools"/>), its arguments are validated against its schema, it goes through the
+    /// approval pipeline (blocking until answered), takes its checkpoint, its lease, its credential scrub and its taint, and is
+    /// logged as its own call (<c>ToolCallIssued.ParentCallId</c> = <see cref="CallId"/>) with its own result. Null outside
+    /// a turn and on a nested call (depth 1). Set by the turn loop; tools call <see cref="InvokeToolAsync"/>.
+    /// </summary>
+    public ToolInvoker? Invoker { get; init; }
+
+    /// <summary>
+    /// A7: one nested call (see <see cref="Invoker"/>). Calls of one parent run one at a time, in order. A refusal (a tool
+    /// not offered, bad arguments, a denied approval) or a failure comes back as an error result, never an exception; a
+    /// cancellation throws. After the parent's tool returns, its sub-calls are cancelled and no new one is accepted. If any
+    /// sub-call's result is outside content, this call's result is marked tainted (<see cref="ResultTainted"/>).
+    /// </summary>
+    /// <exception cref="InvalidOperationException">This context has no invoker, or the parent call has finished.</exception>
+    public Task<NestedToolResult> InvokeToolAsync(string tool, JsonElement arguments, CancellationToken cancellationToken = default) =>
+        Invoker is { } invoker
+            ? invoker(tool, arguments, cancellationToken)
+            : throw new InvalidOperationException("This tool call cannot make nested calls: it runs outside a turn, or is itself nested.");
 
     private int _resultTainted;
 

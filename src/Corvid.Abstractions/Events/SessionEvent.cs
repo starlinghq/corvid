@@ -89,12 +89,18 @@ public sealed record ClarificationAnswered(string QuestionId, string Answer) : S
 // Generator (A5) is the profile id of the generator whose response asked for the call ("qwen3.5-0.8b@cuda0"), so a switch
 // mid-turn is placed exactly on replay; omitted when null (the user's own `!` call, and events written before it). Usage (A5)
 // is on the first call a generator response issued: the tokens of the calls since the previous record, as on AssistantMessage.
+// ParentCallId (A7) is set on a nested call: one a running tool (code mode's script) made through the turn's own call path
+// (ToolCallContext.InvokeToolAsync), logged between its parent's call and the parent's result, with its own approval,
+// checkpoints and result. The model never asked for it, so the prompt and summaries leave it out with its result (the
+// parent's result says what the script did); surfaces show it under its parent. Its id is "{parent}.{n}". Omitted when null,
+// so events written before it keep their persisted form.
 public sealed record ToolCallIssued(string CallId, string ToolName, JsonElement Arguments,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Round = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? ReadOnly = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? LocalOnly = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Generator = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] TokenUsage? Usage = null) : SessionEvent;
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] TokenUsage? Usage = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ParentCallId = null) : SessionEvent;
 // LocalOnly (A4) marks the result of a `!!` call, so a reader of one event (the episodic index) leaves it out without
 // finding its call; omitted when null.
 public sealed record ToolResult(string CallId, JsonElement Result, bool IsError = false,

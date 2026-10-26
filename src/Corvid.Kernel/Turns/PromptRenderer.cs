@@ -130,8 +130,28 @@ public static class PromptRenderer
     };
 
     /// <summary>Tool results in the visible transcript, oldest first, with the event sequence that holds each.</summary>
-    public static IReadOnlyList<(string CallId, long Sequence)> ResultsOldestFirst(SessionSnapshot snapshot) =>
-        [.. snapshot.Transcript.Where(entry => entry.Content is ToolResult).Select(entry => (((ToolResult)entry.Content).CallId, entry.FromSequence))];
+    /// <remarks>A7: nested calls' results are left out: they are never in the prompt, so there is nothing to clear.</remarks>
+    public static IReadOnlyList<(string CallId, long Sequence)> ResultsOldestFirst(SessionSnapshot snapshot)
+    {
+        var nested = NestedCallIds(snapshot.Transcript);
+        return [.. snapshot.Transcript.Where(entry => entry.Content is ToolResult && !IsNested(entry, nested))
+            .Select(entry => (((ToolResult)entry.Content).CallId, entry.FromSequence))];
+    }
+
+    /// <summary>
+    /// A7: the ids of the nested calls in a transcript (<see cref="ToolCallIssued.ParentCallId"/> set): calls a running tool
+    /// made, which the model never asked for. The prompt and summaries leave them and their results out.
+    /// </summary>
+    public static HashSet<string> NestedCallIds(IEnumerable<TranscriptEntry> transcript) =>
+        [.. transcript.Select(entry => entry.Content).OfType<ToolCallIssued>().Where(call => call.ParentCallId is not null).Select(call => call.CallId)];
+
+    /// <summary>A7: a nested call or its result (<paramref name="nested"/> from <see cref="NestedCallIds"/>).</summary>
+    public static bool IsNested(TranscriptEntry entry, IReadOnlySet<string> nested) => entry.Content switch
+    {
+        ToolCallIssued { ParentCallId: not null } => true,
+        ToolResult result => nested.Contains(result.CallId),
+        _ => false,
+    };
 
     public static int Count(IEnumerable<ChatMessage> messages, ITokenCounter counter)
     {
@@ -226,12 +246,16 @@ public static class PromptRenderer
         var messages = new List<ChatMessage> { new(ChatRole.System, systemPrompt) };
         var toolNames = new Dictionary<string, string>(StringComparer.Ordinal);
         var lastSummary = snapshot.Transcript.LastOrDefault(entry => entry.Content is Compacted);
+        var nested = NestedCallIds(snapshot.Transcript);
         foreach (var entry in snapshot.Transcript)
         {
             if (spokenOnlyBefore is { } cutoff && entry.FromSequence < cutoff && entry.Content is not (UserMessage or UserSteered or AssistantMessage))
                 continue;
             // A4: the composer's `!!` line ran a command for the user alone; its message, call and output never reach the model.
             if (entry.Content is UserMessage { LocalOnly: true } or ToolCallIssued { LocalOnly: true } or ToolResult { LocalOnly: true })
+                continue;
+            // A7: a nested call (code mode's script) was not the model's: its parent's result says what the script did.
+            if (IsNested(entry, nested))
                 continue;
             switch (entry.Content)
             {

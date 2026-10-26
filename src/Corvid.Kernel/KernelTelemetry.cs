@@ -34,6 +34,9 @@ public static class KernelTelemetry
     /// <summary>Set on <c>execute_tool</c> when the call went through the approval pipeline.</summary>
     public const string ToolApproval = "corvid.tool.approval";
 
+    /// <summary>A7: set on a nested call's <c>execute_tool</c> (code mode): the id of the call it was made from.</summary>
+    public const string ToolParentCallId = "corvid.tool.parent_call_id";
+
     /// <summary>Set on <c>execute_tool</c> when the call completed detection rule matches (C-023): their ids.</summary>
     public const string DetectionRules = "corvid.detection.rules";
 

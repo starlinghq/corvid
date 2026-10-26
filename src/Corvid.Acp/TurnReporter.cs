@@ -39,6 +39,8 @@ internal sealed class TurnReporter : ITurnObserver
 
     public void ToolStarted(string callId, string tool, bool approval) => _reporter.ToolStarted(callId, tool, approval);
 
+    public void ToolStarted(string callId, string tool, bool approval, string? parentCallId) => _reporter.ToolStarted(callId, tool, approval, parentCallId);
+
     public void ToolFinished(string callId, string tool, string outcome, TimeSpan elapsed) => _reporter.ToolFinished(callId, tool, outcome, elapsed);
 
     /// <summary>A5: a running call's output tail (K-2), as a <c>tool_call_update</c> whose content is the latest lines.</summary>

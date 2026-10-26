@@ -37,7 +37,7 @@ namespace Corvid.Kernel.Turns;
 /// Not thread-safe: the session actor runs one turn at a time. Every append re-reads the head, because the fabric, the
 /// approval pipeline and the memory writer append to the same log. Taint persists across turns until a user message.
 /// </remarks>
-public sealed class TurnRunner
+public sealed partial class TurnRunner
 {
     private const int MaxAppendAttempts = 8;
     private const string None = "none";
@@ -491,7 +491,9 @@ public sealed class TurnRunner
 
     /// <param name="Ask">Goes through the pre-execute checkpoint: a side effect, or a network read in a tainted session.</param>
     /// <param name="Spans">Extracted spans the arguments did not match: hints if the tool's binding refuses one of those arguments.</param>
-    private sealed record ValidCall(string CallId, Offered Tool, JsonElement Arguments, bool Ask, IReadOnlyList<SlotDisagreement> Spans);
+    /// <param name="ParentCallId">A7: the running call this nested one was made from (code mode); null for the model's own.</param>
+    private sealed record ValidCall(string CallId, Offered Tool, JsonElement Arguments, bool Ask, IReadOnlyList<SlotDisagreement> Spans,
+        string? ParentCallId = null);
 
     private enum CallOutcome
     {
@@ -502,7 +504,7 @@ public sealed class TurnRunner
     }
 
     /// <summary>One turn's state. Lives only while the turn runs.</summary>
-    private sealed class Turn(TurnRunner runner, Envelope envelope)
+    private sealed partial class Turn(TurnRunner runner, Envelope envelope)
     {
         private readonly TurnServices _services = runner._services;
         private readonly TurnOptions _options = runner.OptionsNow();
@@ -1219,7 +1221,7 @@ public sealed class TurnRunner
         private async Task<CallOutcome> ExecuteAsync(ValidCall call, CancellationToken cancellationToken)
         {
             // The span covers the approval wait too: that is where a side-effecting call spends its time.
-            using var activity = StartToolActivity(call.CallId, call.Tool.Function.Name, call.Ask);
+            using var activity = StartToolActivity(call.CallId, call.Tool.Function.Name, call.Ask, call.ParentCallId);
             try
             {
                 var outcome = await ExecuteCoreAsync(call, cancellationToken).ConfigureAwait(false);
@@ -1243,7 +1245,8 @@ public sealed class TurnRunner
         }
 
         // Tags given at creation, so a listener's ActivityStarted (the CLI's tool panel) already sees them.
-        private Activity? StartToolActivity(string callId, string tool, bool approval) =>
+        // A7: a nested call's span carries its parent's id too (and is the parent span's child, being started inside it).
+        private Activity? StartToolActivity(string callId, string tool, bool approval, string? parentCallId = null) =>
             KernelTelemetry.Source.StartActivity(ActivityKind.Internal, tags:
             [
                 new(KernelTelemetry.OperationName, "execute_tool"),
@@ -1252,6 +1255,7 @@ public sealed class TurnRunner
                 new(KernelTelemetry.ToolType, "function"),
                 new(KernelTelemetry.ConversationId, runner.SessionId),
                 new(KernelTelemetry.ToolApproval, approval),
+                .. parentCallId is null ? [] : (KeyValuePair<string, object?>[])[new(KernelTelemetry.ToolParentCallId, parentCallId)],
             ], name: KernelTelemetry.ExecuteToolPrefix + tool);
 
         private async Task<CallOutcome> ExecuteCoreAsync(ValidCall call, CancellationToken cancellationToken)
@@ -1327,6 +1331,8 @@ public sealed class TurnRunner
                 ? new ToolOutputTail(_services.Time, _options.OutputTailInterval, _options.OutputTailChars, _options.OutputTailLines,
                     text => listener.ToolOutput(runner.SessionId, call.CallId, descriptor.Name, text))
                 : null;
+            // A7: a top-level call may make nested calls through the turn's own path (depth 1: a nested call cannot).
+            using var nested = call.ParentCallId is null ? new NestedCalls(call, cancellationToken) : null;
             using (running)
             {
                 try
@@ -1341,9 +1347,23 @@ public sealed class TurnRunner
                         Output = tail is null ? null : tail.Write,
                         // A5: what the turn may be offered, the ceiling of a delegated child's toolset.
                         OfferedTools = new HashSet<string>(_catalogue.Keys, StringComparer.Ordinal),
+                        ParentCallId = call.ParentCallId,
+                        Invoker = nested is null ? null : (tool, input, token) => InvokeNestedAsync(nested, tool, input, token),
                     };
+                    if (nested is not null)
+                        nested.Context = context;
                     var arguments = context.AttachTo(JsonValues.ToArguments(call.Arguments));
-                    var value = await call.Tool.Function.InvokeAsync(arguments, cancellationToken).ConfigureAwait(false);
+                    object? value;
+                    try
+                    {
+                        value = await call.Tool.Function.InvokeAsync(arguments, cancellationToken).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        // Every nested call has its result before the parent's: the ones still running are cancelled.
+                        if (nested is not null)
+                            await nested.CloseAsync().ConfigureAwait(false);
+                    }
                     var result = JsonValues.ToElement(value);
                     await RecordAfterAsync().ConfigureAwait(false);
                     // The result is logged before the lease is released: a model switch refuses an issued call with no result.
@@ -1596,8 +1616,12 @@ public sealed class TurnRunner
             {
                 lock (_gate)
                 {
-                    runner.Append(new ToolCallIssued(call.CallId, call.Tool.Function.Name, call.Arguments, _steps, call.Tool.Descriptor.Risk.ReadOnly,
-                        _localOnly ? true : null, _generatorId, TakeUsage()));
+                    // A7: a nested call was asked for by a running tool, not by a generator response: no generator, no usage.
+                    runner.Append(call.ParentCallId is { } parent
+                        ? new ToolCallIssued(call.CallId, call.Tool.Function.Name, call.Arguments, _steps, call.Tool.Descriptor.Risk.ReadOnly,
+                            _localOnly ? true : null, ParentCallId: parent)
+                        : new ToolCallIssued(call.CallId, call.Tool.Function.Name, call.Arguments, _steps, call.Tool.Descriptor.Risk.ReadOnly,
+                            _localOnly ? true : null, _generatorId, TakeUsage()));
                     _open.Add(call.CallId);
                 }
             }
@@ -1734,14 +1758,20 @@ public sealed class TurnRunner
             return true;
         }
 
-        private void IssueRejected(string callId, string tool, JsonElement arguments, bool? readOnly, JsonElement error)
+        private void IssueRejected(string callId, string tool, JsonElement arguments, bool? readOnly, JsonElement error, string? parentCallId = null)
         {
             // A call that never ran still gets its span, so a trace shows the repair the next response is asked for.
-            using var activity = StartToolActivity(callId, tool, approval: false);
+            using var activity = StartToolActivity(callId, tool, approval: false, parentCallId);
             activity?.SetTag(KernelTelemetry.ToolOutcome, "invalid_arguments");
             activity?.SetStatus(ActivityStatusCode.Error);
             lock (_gate)
-                runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, readOnly, Generator: _generatorId, Usage: TakeUsage()), new ToolResult(callId, error, IsError: true));
+            {
+                var result = new ToolResult(callId, error, IsError: true, _localOnly && parentCallId is not null ? true : null);
+                runner.Append(parentCallId is null
+                    ? new ToolCallIssued(callId, tool, arguments, _steps, readOnly, Generator: _generatorId, Usage: TakeUsage())
+                    : new ToolCallIssued(callId, tool, arguments, _steps, readOnly, _localOnly ? true : null, ParentCallId: parentCallId), result);
+                KeepNestedResult(result);
+            }
         }
 
         // Read-only calls finish concurrently, so the shared turn state they touch is updated under the lock.
@@ -1749,7 +1779,9 @@ public sealed class TurnRunner
         {
             lock (_gate)
             {
-                runner.Append(new ToolResult(callId, result, isError, _localOnly ? true : null));
+                var logged = new ToolResult(callId, result, isError, _localOnly ? true : null);
+                runner.Append(logged);
+                KeepNestedResult(logged);
                 _open.Remove(callId);
                 if (lastToolResult is not null)
                     _lastToolResult = lastToolResult;
