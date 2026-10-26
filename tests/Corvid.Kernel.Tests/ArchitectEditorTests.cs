@@ -280,7 +280,8 @@ public sealed class ArchitectEditorTests
         Assert.Equal(["gen-cloud: difficulty", "gen-small: privacy"], tainted.Result.Escalations);
         Assert.Equal("Edited locally.", tainted.Result.Text);
         Assert.True(tainted.Result.Tainted);
-        Assert.Equal(["escalation", "editor"], tainted.Events.OfType<ModelSwitched>().Select(change => change.Reason));
+        // A7 e2e: the hand-back is a privacy retreat, not "editor": the app read "back to local: to apply the plan" with no plan.
+        Assert.Equal(["escalation", "privacy"], tainted.Events.OfType<ModelSwitched>().Select(change => change.Reason));
         Assert.Equal("gen-small", tainted.Events.OfType<ToolCallIssued>().Single().Generator);
         Assert.DoesNotContain(tainted.Events.OfType<AssistantMessage>(), message => message.Plan is not null);
     }

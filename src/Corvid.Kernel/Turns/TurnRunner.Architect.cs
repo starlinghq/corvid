@@ -160,7 +160,8 @@ public sealed partial class TurnRunner
                 // Plan §10.4: the gate refused the planner before anything was sent; the work stays local, unplanned.
                 // Named for the model the work stays on, as a slot's privacy retreat is.
                 _escalations.Add($"{editor.Profile.Id}: {PrivacyRetreat}");
-                await HandBackAsync(editor, cancellationToken).ConfigureAwait(false);
+                // A7 e2e: logged as the privacy retreat it is, so no surface says "back to apply the plan" when none was made.
+                await HandBackAsync(editor, cancellationToken, SwitchReason.Privacy).ConfigureAwait(false);
                 return;
             }
             catch (Exception exception) when (exception is not OperationCanceledException and not OutOfMemoryException)
@@ -190,16 +191,17 @@ public sealed partial class TurnRunner
         /// The generator slot goes to the editor, logged as <c>ModelSwitched</c> with the reason <c>editor</c>: not a
         /// de-escalation, so the person's choice for the session and a pin stay as they were (a reopened session reads its
         /// choices from the log's de-escalations). A refused or failed switch leaves the planner to edit, as an ordinary
-        /// escalation would.
+        /// escalation would. A planner the egress gate refused hands back with the reason <c>privacy</c> instead: no plan was
+        /// made, and the work stays local as a privacy retreat's does.
         /// </summary>
-        private async Task HandBackAsync(ModelBinding editor, CancellationToken cancellationToken)
+        private async Task HandBackAsync(ModelBinding editor, CancellationToken cancellationToken, SwitchReason reason = SwitchReason.Editor)
         {
             var slots = _services.Slots;
             if (ReferenceEquals(slots.Current(ModelSlots.Generator), editor))
                 return;
             try
             {
-                var result = await slots.SwitchAsync(ModelSlots.Generator, editor, SwitchReason.Editor, cancellationToken: cancellationToken)
+                var result = await slots.SwitchAsync(ModelSlots.Generator, editor, reason, cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
                 runner.NoteBudgetChange(result);
             }
