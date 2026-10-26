@@ -344,18 +344,20 @@ public static class BoundaryCheck
                         || desktopHead && (CorePackages.Contains(name) || CompositionPackages.Contains(name) || adapterPackages!.Contains(name)),
                     "package" when appCore => AppCorePackages.Contains(name),
                     "package" when composition => CorePackages.Contains(name) || CompositionPackages.Contains(name)
-                        || project == "Corvid.Cli" && CliPackages.Contains(name) || appEngine && AppCorePackages.Contains(name)
+                        || project == "Corvid.Cli" && CliPackages.Contains(name) || (appEngine || project == "Corvid.Cli") && AppCorePackages.Contains(name)
                         || adapterPackages!.Contains(name),
                     "package" when surface => CorePackages.Contains(name) || surfacePackages!.Contains(name),
                     "package" => buildTool
                         ? BuildToolPackages.Contains(name)
                         : !independent && !vault && (adapter || CorePackages.Contains(name)),
-                    // The app: nothing references the head; only the head's desktop target references the engine; only the
-                    // head and the engine reference the core, which references the contracts alone; the head's other
-                    // targets reference the core and what it does.
+                    // The app: nothing references the head; only the head's desktop target and the CLI reference the engine
+                    // (A6, G-1: `corvid serve --attach` hosts the engine's session service for attached clients, so the
+                    // remote seam is ISessionService itself and the approval card, queue and questions are the window's
+                    // own code, never a second copy); only the head, the engine and through it the CLI reference the
+                    // core, which references the contracts alone; the head's other targets reference the core and what it does.
                     "project" when name == AppHead => false,
-                    "project" when name == AppEngine => desktopHead,
-                    "project" when name == AppCore => appHead || appEngine,
+                    "project" when name == AppEngine => desktopHead || project == "Corvid.Cli",
+                    "project" when name == AppCore => appHead || appEngine || project == "Corvid.Cli",
                     "project" when appCore => AppCoreProjects.Contains(name),
                     "project" when appHead && !desktopHead => AppCoreProjects.Contains(name),
                     // Only the composition root composes a surface; a surface references core projects only.
@@ -380,8 +382,8 @@ public static class BoundaryCheck
                 if (!allowed)
                     errors.Add($"{project}: forbidden {type} dependency {dependency.Name} in {target.Name} (direct or transitive). " +
                         (type == "package" && !appHead && IsUnoPackage(name) ? "Uno's packages belong in Corvid.App alone; the core, the view models and the engine stay free of the UI framework."
-                        : type == "project" && (name is AppHead or AppEngine || appHead) ? "Only Corvid.App's desktop target references Corvid.App.Engine and, through it, the composition root; its other targets run attached and reference Corvid.App.Core alone. Nothing references Corvid.App."
-                        : type == "project" && name == AppCore ? "Only Corvid.App and Corvid.App.Engine reference Corvid.App.Core."
+                        : type == "project" && (name is AppHead or AppEngine || appHead) ? "Only Corvid.App's desktop target and the CLI (corvid serve --attach) reference Corvid.App.Engine and, through it, the composition root; the head's other targets run attached and reference Corvid.App.Core alone. Nothing references Corvid.App."
+                        : type == "project" && name == AppCore ? "Only Corvid.App, Corvid.App.Engine and the CLI (through the engine) reference Corvid.App.Core."
                         : appCore ? "Corvid.App.Core takes no package but Markdig and no project but Corvid.Abstractions, so the view models build and test without a UI framework or the engine."
                         : appHead ? "Corvid.App takes Uno.Sdk's implicit packages (AppHeadPackages, and AppHeadWasmPackages in its WebAssembly target) and, in its desktop target, what the composition root resolves; never CommunityToolkit, Uno.Extensions, Uno.Toolkit or Uno.Themes. Add a package after review."
                         : buildTool ? "Build tooling may use only Roslyn and its netstandard2.0 dependencies, and no projects."

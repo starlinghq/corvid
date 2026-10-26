@@ -722,7 +722,10 @@ public sealed partial class SessionsPage : Page, IDockProvider
         var digit = e.Key is (>= VirtualKey.Number1 and <= VirtualKey.Number5) or (>= VirtualKey.NumberPad1 and <= VirtualKey.NumberPad5);
         if ((e.Key == VirtualKey.Enter || digit) && !IsDown(VirtualKey.Menu))
         {
-            var repeated = e.KeyStatus.WasKeyDown || e.KeyStatus.RepeatCount > 1;
+            // The browser head has no KeyStatus (Uno0001); there the card's quiet window alone holds back a held key's repeats.
+#pragma warning disable Uno0001
+            var repeated = !OperatingSystem.IsBrowser() && (e.KeyStatus.WasKeyDown || e.KeyStatus.RepeatCount > 1);
+#pragma warning restore Uno0001
             switch (_cardKeys.Decide(digit, repeated))
             {
                 case CardKey.Ignore:

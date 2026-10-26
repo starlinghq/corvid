@@ -88,6 +88,12 @@ public static class CorvidCli
           acp                        an Agent Client Protocol agent on stdin/stdout, for Zed, JetBrains and VS Code
           serve                      the OpenAI-compatible endpoint (/v1/chat/completions, /v1/models) on Corvid:Serve:Url,
                                      loopback only unless Corvid:Serve:TokenSecret names a Vault secret
+                                     --attach: also the app's sessions for an attached window (Corvid.App --attach), on
+                                     a Unix socket [--socket <path>|off] and [--listen ws://127.0.0.1:8737] [--web <dir>];
+                                     always behind a token (Vault's Corvid:Serve:Attach:TokenSecret, else a 0600 file)
+                                     [--no-openai]
+          serve pair                 a one-time pairing code for another device, from the running server
+          serve devices              the paired devices;   serve revoke <name>   remove one
           scan                       the detection rules over the event log      [--session <id>] [--fail-on <severity>] [--json]
                                      exit 4 when a finding is at or above --fail-on (info, low, medium, high, critical)
           egress [list]              the egress ledger: each request to a gated (cloud) model, newest first   [--session <id>] [--limit <n>]
@@ -146,7 +152,7 @@ public static class CorvidCli
                 "evals" => await EvalsCommand.RunAsync(host, parsed, context, cancellationToken).ConfigureAwait(false),
                 "mcp" => await McpCommand.RunAsync(host, parsed, context, cancellationToken).ConfigureAwait(false),
                 "acp" => await AcpCommand.RunAsync(host, context, cancellationToken).ConfigureAwait(false),
-                "serve" => await ServeCommand.RunAsync(host, context, cancellationToken).ConfigureAwait(false),
+                "serve" => await ServeCommand.RunAsync(host, parsed, context, cancellationToken).ConfigureAwait(false),
                 "gateway" => await GatewayCommand.RunAsync(host, parsed, context, cancellationToken).ConfigureAwait(false),
                 "scan" => ScanCommand.Run(host, parsed, context, cancellationToken),
                 "egress" => EgressCommand.Run(host, parsed, context, cancellationToken),
