@@ -287,6 +287,14 @@ public sealed class CoreCommandTests
             Assert.Equal(OutputTone.Success, rejected.Tone);
             Assert.Empty(runtime.Memory.Writer.ListPending());
             Assert.Equal(OutputTone.Error, (await Run(runtime, session, commands, "/memory approve x bogus")).Tone);
+
+            // A7 e2e: an unknown id, or one already answered, is an error line, not an exception that ends the chat.
+            foreach (var line in new[] { "/memory approve pending:nope", "/memory reject pending:nope", $"/memory reject {row[0]}", $"/memory approve {row[0]}" })
+            {
+                var refused = await Run(runtime, session, commands, line);
+                Assert.Equal(OutputTone.Error, refused.Tone);
+                Assert.Contains("/memory pending", string.Join("\n", refused.Lines), StringComparison.Ordinal);
+            }
         }
     }
 

@@ -417,10 +417,25 @@ public static class CoreCommands
                 var operation = rest.FirstOrDefault();
                 if (operation is not null && operation is not (MemoryOperations.Add or MemoryOperations.Update or MemoryOperations.Invalidate or MemoryOperations.Noop))
                     return CommandOutput.Error("The operation is add, update, invalidate or noop.");
-                var result = await writer.ApproveAsync(id, operation, cancellationToken: cancellationToken).ConfigureAwait(false);
-                return CommandOutput.Success($"Approved {id}: {result.Operation ?? "written"} {result.MemoryId}.");
+                // A7 e2e: an unknown or already resolved id is the person's typo or a second answer, not a crash of the chat.
+                try
+                {
+                    var result = await writer.ApproveAsync(id, operation, cancellationToken: cancellationToken).ConfigureAwait(false);
+                    return CommandOutput.Success($"Approved {id}: {result.Operation ?? "written"} {result.MemoryId}.");
+                }
+                catch (Exception exception) when (exception is KeyNotFoundException or InvalidOperationException)
+                {
+                    return CommandOutput.Error(exception.Message + " /memory pending lists what waits.");
+                }
             case ["reject", var id]:
-                writer.Reject(id, cancellationToken: cancellationToken);
+                try
+                {
+                    writer.Reject(id, cancellationToken: cancellationToken);
+                }
+                catch (Exception exception) when (exception is KeyNotFoundException or InvalidOperationException)
+                {
+                    return CommandOutput.Error(exception.Message + " /memory pending lists what waits.");
+                }
                 return CommandOutput.Success($"Rejected {id}.");
             case ["consolidate", .. var blocks] when blocks.Count() <= 1:
                 return await ConsolidateAsync(context, blocks.FirstOrDefault(), cancellationToken).ConfigureAwait(false);
