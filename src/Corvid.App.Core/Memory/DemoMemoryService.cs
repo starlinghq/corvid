@@ -150,19 +150,24 @@ public sealed class DemoMemoryService : IMemoryService
         return Task.FromResult(_consolidation);
     }
 
-    /// <summary>The demo's block rewrite job: the block's distinct lines, the longest dropped, staged as an update replacing it.</summary>
+    /// <summary>
+    /// The demo's block rewrite job: the block's distinct sentences, one per line, the longest dropped, staged as an update
+    /// replacing it, with the lines kept, removed and added.
+    /// </summary>
     public Task<StagedBlockUpdate> ConsolidateBlockAsync(string block, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var current = _blocks.Find(b => b.Name == block) ?? throw new InvalidOperationException($"No block {block}.");
         if (_blockUpdates.Any(u => u.Block == block && u.Replaces))
             throw new InvalidOperationException($"A consolidation of the {block} block already waits in Review.");
-        var lines = current.Text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct().ToList();
+        var old = current.Text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var lines = old.SelectMany(line => line.Split(". ", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Select(sentence => sentence.EndsWith('.') ? sentence : sentence + ".").Distinct().ToList();
         if (lines.Count > 1)
             lines.Remove(lines.MaxBy(line => line.Length)!);
         var rewrite = string.Join("\n", lines);
+        var oldSet = old.ToHashSet(StringComparer.Ordinal);
         var kept = lines.ToHashSet(StringComparer.Ordinal);
-        var old = current.Text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var update = new StagedBlockUpdate($"b-{_nextId++}", block)
         {
             StagedAt = _time.GetUtcNow(),
@@ -173,7 +178,8 @@ public sealed class DemoMemoryService : IMemoryService
             TokensAfter = Count(rewrite),
             Budget = current.Budget,
             Replaces = true,
-            Diff = [.. old.Select(line => new BlockDiffRow(kept.Remove(line) ? BlockLineKind.Kept : BlockLineKind.Removed, line))],
+            Diff = [.. old.Select(line => new BlockDiffRow(kept.Contains(line) ? BlockLineKind.Kept : BlockLineKind.Removed, line)),
+                .. lines.Where(line => !oldSet.Contains(line)).Select(line => new BlockDiffRow(BlockLineKind.Added, line))],
         };
         _blockUpdates.Add(update);
         return Task.FromResult(update);

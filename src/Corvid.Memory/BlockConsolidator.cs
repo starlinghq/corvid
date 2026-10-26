@@ -238,11 +238,13 @@ public sealed class BlockConsolidator
                 await WaitAsync(busy ? _options.BusyRetry : _options.Interval, cancellationToken).ConfigureAwait(false);
                 if (_options.IdleDelay > TimeSpan.Zero)
                     await Task.Delay(_options.IdleDelay, _time, cancellationToken).ConfigureAwait(false);
-                busy = !isIdle();
-                if (busy)
-                    continue;
                 try
                 {
+                    // A host that cannot tell (a session going away mid-check) counts as busy: looked at again, never run.
+                    busy = true;
+                    busy = !isIdle();
+                    if (busy)
+                        continue;
                     await RunOnceAsync("idle", cancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)

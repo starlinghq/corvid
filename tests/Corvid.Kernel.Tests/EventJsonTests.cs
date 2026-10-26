@@ -47,7 +47,20 @@ public sealed class EventJsonTests
         [typeof(ChildFinished)] = "child_finished",
         [typeof(ChildOf)] = "child_of",
         [typeof(WorkspaceBound)] = "workspace_bound",
+        [typeof(MemoryJobRan)] = "memory_job_ran",
     };
+
+    [Fact]
+    public void The_a7_memory_job_event_has_its_documented_persisted_form()
+    {
+        Assert.Equal("""
+            {"type":"memory_job_ran","job":"consolidate_block","subject":"block:user","outcome":"staged","detail":"consolidation: 38 of 40 tokens rewritten to 17","trigger":"idle","pending_id":"pending:1"}
+            """, EventJson.Serialize(new MemoryJobRan(MemoryJobs.ConsolidateBlock, "block:user", "staged",
+                "consolidation: 38 of 40 tokens rewritten to 17", "idle", "pending:1")));
+        Assert.Equal("""
+            {"type":"memory_job_ran","job":"consolidate_block","subject":"block:agent","outcome":"declined","detail":"the rewrite was empty","trigger":"cli"}
+            """, EventJson.Serialize(new MemoryJobRan(MemoryJobs.ConsolidateBlock, "block:agent", "declined", "the rewrite was empty", "cli")));
+    }
 
     [Fact]
     public void The_a6_workspace_event_has_its_documented_persisted_form()

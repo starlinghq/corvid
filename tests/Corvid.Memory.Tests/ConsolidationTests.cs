@@ -331,6 +331,33 @@ public sealed class ConsolidationTests
     }
 
     [Fact]
+    public async Task The_loop_survives_an_idle_check_that_throws()
+    {
+        using var store = FullAgentBlock();
+        var writer = Writer(store);
+        var (job, _, _) = Job(store, writer, Rewrite);
+        var seen = System.Threading.Channels.Channel.CreateUnbounded<BlockRewrite>();
+        job.Processed += rewrite => seen.Writer.TryWrite(rewrite);
+        var checks = 0;
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var loop = job.RunAsync(() => Interlocked.Increment(ref checks) == 1 ? throw new InvalidOperationException("session going away") : true,
+            stop.Token);
+
+        job.Nudge();
+        var failed = await seen.Reader.ReadAsync(Ct);
+        Assert.Equal(BlockRewriteStatus.Failed, failed.Status);
+        Assert.Contains("session going away", failed.Detail, StringComparison.Ordinal);
+        Assert.Empty(writer.ListPending());
+
+        job.Nudge();
+        Assert.Equal(BlockRewriteStatus.Staged, (await seen.Reader.ReadAsync(Ct)).Status);
+        Assert.False(loop.IsCompleted);
+
+        await stop.CancelAsync();
+        await loop.WaitAsync(Ct);
+    }
+
+    [Fact]
     public async Task A_proposal_stages_nothing()
     {
         using var store = FullAgentBlock();

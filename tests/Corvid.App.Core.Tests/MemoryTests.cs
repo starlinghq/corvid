@@ -298,7 +298,7 @@ public sealed class MemoryViewModelTests
         Assert.True(update.ReplacesBlock);
         Assert.False(update.CanConsolidate);
         Assert.Contains(update.DiffLines, line => line.IsRemoved && line.Sign == "−");
-        Assert.Contains(update.DiffLines, line => !line.IsRemoved && !line.IsAdded);
+        Assert.Contains(update.DiffLines, line => line.IsAdded && line.Sign == "+" && line.AutomationName.StartsWith("added: ", StringComparison.Ordinal));
         Assert.Equal(before, memory.CoreBlocks[0].Block.Text);
         Assert.False(memory.CoreBlocks[0].CanConsolidateNow);
         Assert.StartsWith("Staged a consolidation of the user block for review", memory.Outcome, StringComparison.Ordinal);
