@@ -12,6 +12,8 @@
     <OutputType>Exe</OutputType>
     <UnoSingleProject>true</UnoSingleProject>
     <RootNamespace>Corvid.App</RootNamespace>
+    <!-- U-7: the window is "Corvid" and the binary corvid-app, beside corvid; install.sh installs it with its app option. -->
+    <AssemblyName>corvid-app</AssemblyName>
 
     <ApplicationTitle>Corvid</ApplicationTitle>
     <ApplicationId>com.starlinghq.corvid</ApplicationId>
@@ -59,6 +61,18 @@
       <_CorvidSandboxFiles Include="$(_CorvidSandboxDirectory)corvid-sandbox;$(_CorvidSandboxDirectory)corvid-sandbox.dll;$(_CorvidSandboxDirectory)corvid-sandbox.runtimeconfig.json;$(_CorvidSandboxDirectory)corvid-sandbox.deps.json" />
     </ItemGroup>
     <Copy SourceFiles="@(_CorvidSandboxFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- U-9: the release tarball install.sh installs with its app option (corvid-app-linux-x64.tar.gz): the published desktop app and a
+       VERSION file, without corvid-sandbox (install.sh copies the release's native one beside the app) or symbols.
+         dotnet publish src/Corvid.App/Corvid.App.csproj -c Release -f net10.0-desktop -r linux-x64 (self-contained) \
+           -p:Version=0.2.0 -p:CorvidAppTarball=$PWD/corvid-app-linux-x64.tar.gz -->
+  <Target Name="CorvidAppTarball" AfterTargets="Publish" Condition="'$(CorvidAppTarball)' != '' and $(TargetFramework.Contains('-desktop'))">
+    <Error Condition="!Exists('$(PublishDir)corvid-app')" Text="The publish has no corvid-app apphost; publish with -r linux-x64." />
+    <Error Condition="!Exists('$(PublishDir)Assets/Icons/Svg/corvid.svg')" Text="The publish has no Assets/Icons/Svg/corvid.svg for the desktop entry." />
+    <WriteLinesToFile File="$(PublishDir)VERSION" Lines="$(Version)" Overwrite="true" />
+    <Exec Command="tar -czf &quot;$(CorvidAppTarball)&quot; --exclude=./corvid-sandbox --exclude=./corvid-sandbox.dll --exclude=./corvid-sandbox.runtimeconfig.json --exclude=./corvid-sandbox.deps.json --exclude=*.pdb --exclude=*.dbg -C &quot;$(PublishDir)&quot; ." />
+    <Message Importance="high" Text="corvid-app tarball: $(CorvidAppTarball)" />
   </Target>
 
   <ItemGroup Condition="'$(IsBrowserWasm)' == 'true'">

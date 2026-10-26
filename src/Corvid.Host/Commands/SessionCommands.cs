@@ -111,6 +111,47 @@ internal static class SessionCommands
             : "Pinned: the app keeps this session at the top of its rail, and /sessions lists it first. /pin off unpins it."));
     }
 
+    internal const string SearchUsage = "<words>";
+
+    /// <summary>
+    /// G-5: <c>/search &lt;words&gt;</c> finds what was said across sessions through the episodic index, best match first, with
+    /// each hit's session, turn and a snippet; <c>corvid chat --session &lt;id&gt;</c> resumes one.
+    /// </summary>
+    public static async ValueTask<CommandOutput> SearchAsync(SlashCommandContext context, SlashInvocation invocation, CancellationToken cancellationToken)
+    {
+        if (invocation.Text.Trim().Length == 0)
+            return CommandOutput.Error("Usage: /search <words>. It searches what was said in every session, this one too.");
+        var runtime = context.Runtime;
+        var query = invocation.Text.Trim();
+        // SQLite, read synchronously: off the caller's thread, as the app's search is.
+        var found = await Task.Run(() => runtime.SearchSessions(query, Searched, cancellationToken: cancellationToken), cancellationToken)
+            .ConfigureAwait(false);
+        if (found.Unavailable is { } why)
+            return CommandOutput.Warning("No search: " + why + ".");
+        if (found.Hits.Count == 0)
+            return CommandOutput.Text($"Nothing said in any session matches \"{SessionCatalogue.Line(query)}\".");
+        var zone = TimeZoneInfo.Local;
+        return new CommandOutput
+        {
+            Title = "Search",
+            Lines =
+            [
+                (found.Hits.Count == Searched ? $"The {Searched} best matches" : found.Hits.Count == 1 ? "One match" : $"{found.Hits.Count} matches")
+                    + ", best first. Resume a session with corvid chat --session <id>.",
+            ],
+            Table = CommandTable.Of(["session", "title", "where", "said"], found.Hits.Select(hit => new[]
+            {
+                (hit.SessionId == context.Session.Id ? "this: " : "") + hit.SessionId,
+                SessionCatalogue.Line(hit.Title) ?? "",
+                SessionSearch.Where(hit, zone),
+                hit.Snippet,
+            })),
+        };
+    }
+
+    /// <summary>How many hits <c>/search</c> lists.</summary>
+    public const int Searched = 20;
+
     /// <summary>Conversations a person had, not scheduled runs or the logs Corvid keeps for itself.</summary>
     internal static bool IsConversation(string id) =>
         id is not (McpSessions.Pins or GatewaySessions.Ledger) && !id.StartsWith("job:", StringComparison.Ordinal);

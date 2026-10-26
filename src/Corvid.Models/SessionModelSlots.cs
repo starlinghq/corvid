@@ -312,7 +312,9 @@ public sealed class SessionModelSlots
             if (IsPinned(slot) || !ReferenceEquals(current, chosen) || ReferenceEquals(current, target))
             {
                 var profile = current?.Profile ?? ModelProfile.Unbound;
-                var sequence = AppendInPlace(slot, profile, SwitchReason.DeEscalation.ToWireName(), pinned: null, reset: true, cancellationToken);
+                // A6 (A5 left): a pinned slot's reset carries its pin, so a replay shows the slot still pinned.
+                var sequence = AppendInPlace(slot, profile, SwitchReason.DeEscalation.ToWireName(), pinned: IsPinned(slot) ? true : null,
+                    reset: true, cancellationToken);
                 lock (_state)
                     _chosen.Remove(slot);
                 return Notify(new SwitchResult(SwitchStatus.Unchanged, slot, profile, target?.Profile ?? ModelProfile.Unbound,

@@ -17,9 +17,9 @@ comes next: [`docs/plan/ui-handoff.md`](../../docs/plan/ui-handoff.md); the rule
 dotnet build src/Corvid.App/Corvid.App.csproj -c Release
 # The engine (the default) over this machine's Corvid home; set HOME, CORVID_CONFIG and the XDG directories to try a
 # temporary one:
-dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll
+dotnet src/Corvid.App/bin/Release/net10.0-desktop/corvid-app.dll
 # The demo, as the mockups draw it:
-dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll --demo
+dotnet src/Corvid.App/bin/Release/net10.0-desktop/corvid-app.dll --demo
 # or, building as it goes:
 dotnet run --project src/Corvid.App -c Release -- --demo --page models --theme dark
 ```
@@ -188,7 +188,7 @@ Main, Approval, Review, Rewind, Board, Models, Memory, Audit, FirstRun and Phone
 ```sh
 Xvfb :99 -screen 0 2560x1600x24 -nolisten tcp &
 export DISPLAY=:99 CORVID_APP_RENDERER=software
-dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll --demo --page models &
+dotnet src/Corvid.App/bin/Release/net10.0-desktop/corvid-app.dll --demo --page models &
 w=$(xdotool search --sync --onlyvisible --name '^Corvid$' | head -1)
 xdotool windowmove "$w" 0 0 windowsize "$w" 1440 900; sleep 2
 import -window root -crop 1440x900+0+0 +repage models-1440.png

@@ -68,6 +68,12 @@ public interface IAppServices
 
     IPromptHistory CreatePromptHistory(AppComposition app);
 
+    /// <summary>
+    /// G-5: search over what was said across sessions (the episodic index); null where there is none, and the palette's
+    /// Ctrl+Shift+F then searches titles, previews and ids.
+    /// </summary>
+    ISessionSearch? CreateSessionSearch(AppComposition app) => null;
+
     /// <summary>The app's hosting of the gateway and the scheduler (U-8); a window that hosts nothing by default.</summary>
     IHostingService CreateHostingService(AppComposition app) => new NoHostingService("This window does not host the gateway or the scheduler.");
 }

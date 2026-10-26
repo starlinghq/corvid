@@ -83,7 +83,7 @@ app and looking at it.
 
 Every change to a screen is checked on the running app, one of two ways:
 
-- **On a desktop, with computer use.** Run `dotnet src/Corvid.App/bin/Release/net10.0-desktop/Corvid.App.dll --demo
+- **On a desktop, with computer use.** Run `dotnet src/Corvid.App/bin/Release/net10.0-desktop/corvid-app.dll --demo
   --page <area>`, size the window to 1440x900, and take screenshots and click through computer use. One builder at a
   time per screen: parallel builders would fight over one display.
 - **Headless on Linux.** `tools/ui-harness.sh` runs the app on a private Xvfb display per builder: `launch <n> 1440x900

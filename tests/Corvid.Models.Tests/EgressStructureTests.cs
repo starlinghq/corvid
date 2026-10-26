@@ -193,6 +193,19 @@ public sealed class EgressStructureTests
         Assert.Equal("my wifi password is <CREDENTIAL_1>", Text(prepared.Messages[0]));
     }
 
+    [Fact]
+    public async Task A_plain_word_password_in_prose_is_redacted_when_the_extractor_labels_nothing()
+    {
+        // A6 (A5 left): with the real GLiNER2 nothing is labelled here, so only the credential detector's labelled-prose rule
+        // keeps the word from the model.
+        var egress = Egress(new EagerExtractor());
+        List<ChatMessage> messages = [new(ChatRole.User, "my wifi password is sunshinerainbow, can you write it on the card?")];
+
+        var prepared = await egress.PrepareAsync(Server, messages, new ModelRequestContext("s1", Tainted: false), Ct);
+
+        Assert.Equal("my wifi password is <CREDENTIAL_1>, can you write it on the card?", Text(prepared.Messages[0]));
+    }
+
     [Theory]
     [InlineData("API key", true)]
     [InlineData("password", true)]

@@ -54,6 +54,17 @@ corvid chat
 Optional: `corvid model download kev-4b`, a second decision tier for gates (about 17 GB, 18 GB of RAM). Without Kev
 downloaded, decisions run on the degraded tier and `corvid chat` says so.
 
+The windowed app, `corvid-app`, installs with `--app`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/starlinghq/corvid/main/install.sh | sh -s -- --app
+```
+
+It goes beside `corvid` in `~/.local/lib/corvid/<version>/app/` with its own copy of `corvid-sandbox`, is linked as
+`~/.local/bin/corvid-app`, and gets a desktop entry (`~/.local/share/applications/corvid-app.desktop`) and the Corvid mark
+as its icon, so it shows as Corvid in the applications menu. It runs on the same Corvid home as `corvid chat`, and opens
+on First run while models are missing. `corvid doctor` says whether it is installed.
+
 From a source checkout, use `dotnet run --project src/Corvid.Cli -- <command>` in place of `corvid`, or build the
 binaries yourself:
 
@@ -63,8 +74,9 @@ dotnet publish src/Corvid.Cli -c Release -r linux-x64 -p:UseCuda=true -o out-cli
                                                              # the CUDA variant, for Kev on an NVIDIA GPU
 ```
 
-Releases are cut by pushing a `v*` tag; [`release.yml`](.github/workflows/release.yml) builds both tarballs, installs
-each with `install.sh` as a smoke test, and publishes them.
+Releases are cut by pushing a `v*` tag; [`release.yml`](.github/workflows/release.yml) builds the CLI tarballs and the
+app's (`corvid-app-linux-x64.tar.gz`, from the `CorvidAppTarball` target in
+[`src/Corvid.App`](src/Corvid.App/README.md)), installs each with `install.sh` as a smoke test, and publishes them.
 
 ## What Corvid does
 
