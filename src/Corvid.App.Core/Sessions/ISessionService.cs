@@ -13,6 +13,12 @@ public sealed record SessionSummary(string Id, string Title)
 
     public string Branch { get; init; } = "";
 
+    /// <summary>
+    /// A6V2-05: <see cref="Workspace"/> is no longer a directory on the engine's machine (a removed worktree), so nothing new
+    /// can start there; the session is still listed.
+    /// </summary>
+    public bool WorkspaceGone { get; init; }
+
     /// <summary>Where it was started: cli, acp, http, gateway or job.</summary>
     public string Surface { get; init; } = "cli";
 

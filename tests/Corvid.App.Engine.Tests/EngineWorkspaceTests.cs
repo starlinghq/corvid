@@ -104,9 +104,9 @@ public sealed class EngineWorkspaceTests
         Assert.Equal(other, listed.Single(summary => summary.Id == elsewhere).Workspace);
         Assert.Equal(fixture.Runtime.DefaultWorkspace.Root, listed.Single(summary => summary.Id == home).Workspace);
         Assert.Equal(other, fixture.Runtime.WorkspaceOf(elsewhere).Path);
-        // The window's own workspace is the default: nothing is recorded for it, as before A6.
-        Assert.True(fixture.Runtime.WorkspaceOf(home).IsDefault);
-        Assert.DoesNotContain(fixture.Runtime.Log.Read(home, 0, long.MaxValue, 64, Ct), stored => stored.Payload is WorkspaceBound);
+        // A6 review: the window's own workspace is recorded too, so the session is resumed there from anywhere.
+        Assert.Equal(fixture.Runtime.DefaultWorkspace.Root, fixture.Runtime.WorkspaceOf(home).Path);
+        Assert.Contains(fixture.Runtime.Log.Read(home, 0, long.MaxValue, 64, Ct), stored => stored.Payload is WorkspaceBound);
     }
 
     [Fact]

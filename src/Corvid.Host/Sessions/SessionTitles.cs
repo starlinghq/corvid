@@ -47,6 +47,12 @@ public sealed record SessionDescription(string Id, long Head)
     public ClarificationAsked? OpenQuestion { get; init; }
 
     /// <summary>
+    /// The log holds something besides where the session works (<see cref="WorkspaceBound"/>, which every session records when
+    /// it is opened, A6 review): a session holding only that is listed nowhere, as one with no events is not.
+    /// </summary>
+    public bool HasContent { get; init; }
+
+    /// <summary>
     /// The title a list shows: the title event's, else the first message's first line, cut to <see cref="SessionCatalogue.TitleLength"/>;
     /// null for a session with neither. Model and user text: a surface cleans it of hidden characters before showing it.
     /// </summary>
@@ -84,15 +90,15 @@ public static class SessionCatalogue
         // A log whose head went back (a file replaced under the same instance) is read again from the start.
         var known = cache.TryGetValue(sessionId, out var cached) && cached.Head <= head ? cached : null;
         if (known?.Head == head)
-            return known;
+            return known.HasContent ? known : null;
         var described = Fold(known ?? new SessionDescription(sessionId, 0),
             SessionProjection.ReadRange(log, sessionId, known?.Head ?? 0, head, cancellationToken), head);
         cache[sessionId] = described;
-        return described;
+        return described.HasContent ? described : null;
     }
 
     /// <summary>Whether a person would call the event something that happened in the session (<see cref="SessionDescription.LastNews"/>).</summary>
-    public static bool IsNews(SessionEvent payload) => payload is not (SessionTitled or SessionRecapped or EgressRecorded or ApprovalAssessed);
+    public static bool IsNews(SessionEvent payload) => payload is not (SessionTitled or SessionRecapped or EgressRecorded or ApprovalAssessed or WorkspaceBound);
 
     // The description continued over the events after its head.
     private static SessionDescription Fold(SessionDescription from, IEnumerable<StoredEvent> events, long head)
@@ -104,8 +110,10 @@ public static class SessionCatalogue
         var turns = from.Turns;
         var last = from.LastActivity;
         var news = from.LastNews;
+        var content = from.HasContent;
         foreach (var item in events)
         {
+            content |= item.Payload is not WorkspaceBound;
             // A rename or a recap is about the session, not activity in it: the list's "time since activity" stays.
             if (item.Payload is not (SessionTitled or SessionRecapped) || last == default)
                 last = item.RecordedAt;
@@ -151,6 +159,7 @@ public static class SessionCatalogue
             LastNews = news,
             Recap = recap,
             OpenQuestion = question,
+            HasContent = content,
         };
     }
 

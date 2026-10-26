@@ -1,3 +1,4 @@
+using Corvid.Approvals;
 using Corvid.Kernel.Jobs;
 using Corvid.Tools.Builtin;
 
@@ -7,7 +8,8 @@ namespace Corvid.Host.Composition;
 /// A6 (G-4): a scheduled job runs in the workspace of the session that created it (<see cref="ScheduledJob.OriginSession"/>):
 /// its pre-run script in that workspace's sandbox, assessed by its approvals, and its agent turn with its tools. A job made
 /// in a worktree never reads or writes the configured workspace instead; when that workspace is gone (a removed worktree),
-/// the run is refused. A job with no origin, or one made in a chat or on the Jobs page, runs in the configured workspace.
+/// the run is refused. A job with no origin (made on the Jobs page), or one whose creating session's log predates A6 and
+/// records no workspace, runs in the configured workspace. Every run's session records where it ran.
 /// </summary>
 public sealed partial class CorvidRuntime
 {
@@ -19,13 +21,36 @@ public sealed partial class CorvidRuntime
     internal WorkspaceServices JobWorkspace(ScheduledJob job, string runSession)
     {
         ArgumentNullException.ThrowIfNull(job);
-        if (job.OriginSession is not { Length: > 0 } origin || string.IsNullOrWhiteSpace(origin))
-            return DefaultWorkspace;
+        // A6 review: the run records its workspace whichever it is, the configured one included, so the run's session
+        // resumed by a process started elsewhere still shows and rewinds the files it changed.
+        if (job.OriginSession is not { Length: > 0 } origin || string.IsNullOrWhiteSpace(origin) || WorkspaceOf(origin) is { IsDefault: true })
+            return BindWorkspace(runSession, DefaultWorkspace.Root);
         var recorded = WorkspaceOf(origin);
-        if (recorded.IsDefault)
-            return DefaultWorkspace;
         var scope = WorkspaceServicesOf(origin);
         return BindWorkspace(runSession, scope.Root, recorded);
+    }
+
+    /// <summary>The reason code of the line <c>cron_create</c>'s approval carries naming where the job will run.</summary>
+    public const string JobWorkspaceReason = "job_workspace";
+
+    /// <summary>
+    /// A6V2-04: <c>cron_create</c>'s approval says which workspace the job will run in, the asking session's (the job's
+    /// origin), so the person approves the job knowing where its script and turns will read and write.
+    /// </summary>
+    private ApprovalPrompt AnnotateJobWorkspace(ApprovalPrompt prompt)
+    {
+        if (prompt.Action is not ToolAction { Tool.Name: "cron_create" } || prompt.Reasons.Any(reason => reason.Code == JobWorkspaceReason))
+            return prompt;
+        string root;
+        try
+        {
+            root = WorkspaceOf(prompt.SessionId) is { IsDefault: false } recorded ? recorded.Path : DefaultWorkspace.Root;
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+        {
+            return prompt;
+        }
+        return prompt with { Reasons = prompt.Reasons.Add(new ApprovalReason(JobWorkspaceReason, $"the job will run in {root}, this session's workspace")) };
     }
 
     /// <summary>The scheduler's script runner: each job's script in its own workspace.</summary>

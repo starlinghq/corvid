@@ -86,7 +86,8 @@ public sealed class ImageHostTests
 
         Assert.Contains("its generator (fake-gen@cpu) does not read images", refusal, StringComparison.Ordinal);
         Assert.Null(session.CheckImages([]));
-        Assert.Equal(0, runtime.Log.GetHead(session.Id, Ct));
+        // Nothing posted: the log holds only where the session works.
+        Assert.Equal(1, runtime.Log.GetHead(session.Id, Ct));
     }
 
     [Fact]

@@ -15,7 +15,7 @@ public sealed class WorkspaceRailTests
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     /// <summary>The demo's sessions with absolute workspaces and a workspace per session; new sessions are recorded, not made.</summary>
-    private sealed class ChoosingService(DemoSessionService inner, Func<string, string>? workspaceOf = null) : ISessionService
+    private sealed class ChoosingService(DemoSessionService inner, Func<string, string>? workspaceOf = null, Func<string, bool>? gone = null) : ISessionService
     {
         public List<NewSessionRequest?> Created { get; } = [];
 
@@ -33,8 +33,11 @@ public sealed class WorkspaceRailTests
             return Refuse is { } refused ? Task.FromException<string>(refused) : Task.FromResult("app-" + Created.Count);
         }
 
-        private SessionSummary Absolute(SessionSummary summary) =>
-            summary with { Workspace = workspaceOf?.Invoke(summary.Id) ?? "/home/me/src/" + summary.Workspace };
+        private SessionSummary Absolute(SessionSummary summary)
+        {
+            var workspace = workspaceOf?.Invoke(summary.Id) ?? "/home/me/src/" + summary.Workspace;
+            return summary with { Workspace = workspace, WorkspaceGone = gone?.Invoke(workspace) ?? false };
+        }
 
         public event EventHandler<SessionSummary>? SessionChanged;
 
@@ -67,10 +70,11 @@ public sealed class WorkspaceRailTests
         public void Dispose() => Hub.Dispose();
     }
 
-    private static async Task<Rig> StartAsync(Func<string, string>? workspaceOf = null, string? select = DemoSessionService.ReleaseNotesSessionId)
+    private static async Task<Rig> StartAsync(Func<string, string>? workspaceOf = null, string? select = DemoSessionService.ReleaseNotesSessionId,
+        Func<string, bool>? gone = null)
     {
         var time = ManualTimeProvider.Demo();
-        var service = new ChoosingService(new DemoSessionService(new InlineDispatcher(), time), workspaceOf);
+        var service = new ChoosingService(new DemoSessionService(new InlineDispatcher(), time), workspaceOf, gone);
         var bar = new StatusBarViewModel();
         var shell = new ShellViewModel(bar);
         var hub = new SessionHub(service, new InlineDispatcher(), time, shell, bar);
@@ -159,6 +163,19 @@ public sealed class WorkspaceRailTests
         Assert.True(chooser.HasError);
         Assert.Contains("not a directory that exists", chooser.Error, StringComparison.Ordinal);
         Assert.DoesNotContain("‮", chooser.Error, StringComparison.Ordinal);
+    }
+
+    // A6V2-05: a removed worktree's sessions stay listed, but the chooser does not offer to start another there.
+    [Fact]
+    public async Task OpenAWorkspaceDoesNotOfferAWorkspaceThatIsGone()
+    {
+        using var rig = await StartAsync(gone: workspace => workspace.EndsWith("-vault", StringComparison.Ordinal));
+        var chooser = new WorkspaceChooserViewModel(rig.Hub, rig.Shell);
+
+        chooser.OpenCommand.Execute(null);
+
+        Assert.Equal(["/home/me/src/corvid"], chooser.Known.Select(choice => choice.Description));
+        Assert.Contains(rig.Hub.Summaries, summary => summary.WorkspaceGone);
     }
 
     [Fact]

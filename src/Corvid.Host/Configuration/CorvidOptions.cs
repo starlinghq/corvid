@@ -159,6 +159,12 @@ public sealed class SessionsSettings
     /// (<c>~/.local/state/corvid-worktrees</c>).
     /// </summary>
     public string? WorktreesDirectory { get; set; }
+
+    /// <summary>
+    /// A6 review: seconds each git command that makes, lists or removes a worktree may take (checking a large repository
+    /// out takes the longest); one that takes longer is stopped and what it made is undone. 1 to 3600, default 60.
+    /// </summary>
+    public int WorktreeTimeoutSeconds { get; set; } = 60;
 }
 
 public sealed class DetectionSettings

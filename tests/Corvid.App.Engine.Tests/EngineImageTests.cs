@@ -65,7 +65,8 @@ public sealed class EngineImageTests
 
         Assert.Contains("does not read images, and no model is set for the vision slot", refused.Message, StringComparison.Ordinal);
         await service.IdleAsync();
-        Assert.Equal(0, fixture.Runtime.Log.GetHead(id, Ct));
+        // Nothing queued or posted: the log holds only where the session works (WorkspaceBound, A6 review).
+        Assert.Equal(1, fixture.Runtime.Log.GetHead(id, Ct));
     }
 
     [Fact]
@@ -82,7 +83,8 @@ public sealed class EngineImageTests
 
         Assert.Contains("cannot carry images", shell.Message, StringComparison.Ordinal);
         Assert.Contains("'x.gif' is not a PNG, JPEG, GIF or WebP image", bad.Message, StringComparison.Ordinal);
-        Assert.Equal(0, fixture.Runtime.Log.GetHead(id, Ct));
+        // Nothing queued or posted: the log holds only where the session works (WorkspaceBound, A6 review).
+        Assert.Equal(1, fixture.Runtime.Log.GetHead(id, Ct));
     }
 
     [Fact]

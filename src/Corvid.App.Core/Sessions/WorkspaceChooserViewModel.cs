@@ -107,7 +107,8 @@ public sealed class WorkspaceChooserViewModel : ObservableObject
     private void Open()
     {
         Known.Clear();
-        foreach (var workspace in _hub.Summaries.Where(summary => summary.Workspace.Length > 0)
+        // A6V2-05: a removed worktree's sessions stay in the rail, but nothing new starts there, so it is not offered.
+        foreach (var workspace in _hub.Summaries.Where(summary => summary.Workspace.Length > 0 && !summary.WorkspaceGone)
                      .GroupBy(summary => summary.Workspace, StringComparer.Ordinal)
                      .OrderByDescending(group => group.Max(summary => summary.LastActivity))
                      .Select(group => group.Key))

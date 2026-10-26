@@ -133,6 +133,155 @@ public sealed class GitWorktreesTests : IDisposable
         Assert.False(Directory.Exists(worktrees.PathOf(repository, "filtered")));
     }
 
+    // A filter whose commands leave a marker, in a file outside the repository that its configuration includes.
+    private string EvilInclude(string marker)
+    {
+        var file = Path.Combine(_root, "evil-" + Guid.NewGuid().ToString("N")[..6] + ".inc");
+        File.WriteAllText(file, $"[filter \"evil\"]\n\tsmudge = touch {marker}; cat\n\tclean = touch {marker}; cat\n");
+        return file;
+    }
+
+    private static void CommitAttributes(string project)
+    {
+        File.WriteAllText(Path.Combine(project, ".gitattributes"), "* filter=evil\n");
+        CheckpointFixture.Git(project, "add", ".gitattributes");
+        CheckpointFixture.Git(project, "commit", "-q", "-m", "attributes");
+    }
+
+    // H1 (A6 review): conditions that hold only inside the new worktree (its branch corvid/<name>, its git directory under
+    // .git/worktrees) once brought a filter in that the check in the main checkout never saw, and git ran it on checkout.
+    [Theory]
+    [InlineData("includeIf.onbranch:corvid/**.path")]
+    [InlineData("includeIf.gitdir:**/worktrees/**.path")]
+    [InlineData("includeIf.gitdir/i:**/WORKTREES/**.path")]
+    [InlineData("includeIf.hasconfig:remote.*.url:https://example.com/**.path")]
+    [InlineData("includeIf.onbranch:no-such-branch.path")]
+    public async Task A_filter_any_include_brings_in_is_refused_and_nothing_is_left(string include)
+    {
+        var project = Repository();
+        CommitAttributes(project);
+        CheckpointFixture.Git(project, "remote", "add", "origin", "https://example.com/project.git");
+        var marker = Path.Combine(_root, "filter-ran");
+        CheckpointFixture.Git(project, "config", include, EvilInclude(marker));
+        var worktrees = Worktrees();
+        var repository = await worktrees.ResolveAsync(project);
+
+        var refused = await Assert.ThrowsAsync<WorktreeException>(() => worktrees.AddAsync(repository, "filtered"));
+
+        Assert.Contains("filter.evil.smudge", refused.Message, StringComparison.Ordinal);
+        Assert.False(File.Exists(marker));
+        Assert.False(Directory.Exists(worktrees.PathOf(repository, "filtered")));
+        Assert.Empty(await worktrees.ListAsync(repository));
+        Assert.DoesNotContain("corvid/", CheckpointFixture.Git(project, "branch", "--list"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Removing_is_refused_once_the_worktree_s_configuration_names_a_filter()
+    {
+        var project = Repository();
+        CommitAttributes(project);
+        var worktrees = Worktrees();
+        var repository = await worktrees.ResolveAsync(project);
+        var made = await worktrees.AddAsync(repository, "later");
+        var marker = Path.Combine(_root, "filter-ran");
+        // Written after the worktree was made, and active only there; its files' times changed, so git status rereads them.
+        CheckpointFixture.Git(project, "config", "includeIf.onbranch:corvid/**.path", EvilInclude(marker));
+        File.SetLastWriteTimeUtc(Path.Combine(made.Path, "README.md"), DateTime.UtcNow.AddMinutes(5));
+
+        var refused = await Assert.ThrowsAsync<WorktreeException>(() => worktrees.RemoveAsync(repository, "later"));
+
+        Assert.Contains("filter.evil.clean", refused.Message, StringComparison.Ordinal);
+        Assert.False(File.Exists(marker));
+        Assert.True(Directory.Exists(made.Path));
+    }
+
+    [Fact]
+    public async Task A_worktree_nothing_was_done_in_goes_with_its_branch_and_one_with_work_stays()
+    {
+        var project = Repository();
+        var worktrees = Worktrees();
+        var repository = await worktrees.ResolveAsync(project);
+        var unused = await worktrees.AddAsync(repository, "unused");
+        var committed = await worktrees.AddAsync(repository, "committed");
+        var dirty = await worktrees.AddAsync(repository, "dirty");
+        File.WriteAllText(Path.Combine(committed.Path, "new.txt"), "work\n");
+        CheckpointFixture.Git(committed.Path, "add", ".");
+        CheckpointFixture.Git(committed.Path, "commit", "-q", "-m", "work");
+        File.WriteAllText(Path.Combine(dirty.Path, "README.md"), "changed\n");
+
+        Assert.True(await worktrees.RemoveIfUnusedAsync(repository, unused));
+        Assert.False(await worktrees.RemoveIfUnusedAsync(repository, committed));
+        Assert.False(await worktrees.RemoveIfUnusedAsync(repository, dirty));
+
+        Assert.False(Directory.Exists(unused.Path));
+        Assert.Equal(["committed", "dirty"], (await worktrees.ListAsync(repository)).Select(worktree => worktree.Name));
+        var branches = CheckpointFixture.Git(project, "branch", "--list", "corvid/*");
+        Assert.DoesNotContain("corvid/unused", branches, StringComparison.Ordinal);
+        Assert.Contains("corvid/committed", branches, StringComparison.Ordinal);
+    }
+
+    // M3 (A6 review): an add that fails half way (here git's checkout outlasts the timeout) leaves no directory, record or branch.
+    [Fact]
+    public async Task An_add_that_times_out_leaves_nothing_behind()
+    {
+        var project = Repository();
+        var slow = Path.Combine(_root, "slow-git");
+        File.WriteAllText(slow, $"#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = reset ] && exec sleep 30; done\nexec {Git()} \"$@\"\n");
+        File.SetUnixFileMode(slow, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var worktrees = new GitWorktrees(slow, Path.Combine(_root, "state", "corvid-worktrees"), TimeSpan.FromSeconds(2));
+        var repository = await worktrees.ResolveAsync(project);
+
+        var failed = await Assert.ThrowsAsync<WorktreeException>(() => worktrees.AddAsync(repository, "slow"));
+
+        Assert.Contains("did not finish", failed.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(worktrees.PathOf(repository, "slow")));
+        Assert.Empty(await worktrees.ListAsync(repository));
+        Assert.DoesNotContain("corvid/slow", CheckpointFixture.Git(project, "branch", "--list"), StringComparison.Ordinal);
+        Assert.DoesNotContain("slow", CheckpointFixture.Git(project, "worktree", "list"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task An_existing_branch_of_the_name_is_refused_and_kept()
+    {
+        var project = Repository();
+        CheckpointFixture.Git(project, "branch", "corvid/taken");
+        var worktrees = Worktrees();
+        var repository = await worktrees.ResolveAsync(project);
+
+        var refused = await Assert.ThrowsAsync<WorktreeException>(() => worktrees.AddAsync(repository, "taken"));
+
+        Assert.Contains("already exists", refused.Message, StringComparison.Ordinal);
+        Assert.Contains("corvid/taken", CheckpointFixture.Git(project, "branch", "--list"), StringComparison.Ordinal);
+    }
+
+    // M4 (A6 review): reached through a symbolic link, the directory is its real path, as git lists the worktrees.
+    [Fact]
+    public async Task A_worktrees_directory_behind_a_symbolic_link_lists_and_removes_its_worktrees()
+    {
+        var project = Repository();
+        var real = Directory.CreateDirectory(Path.Combine(_root, "real-state")).FullName;
+        var link = Path.Combine(_root, "linked-state");
+        Directory.CreateSymbolicLink(link, real);
+        var worktrees = new GitWorktrees(Git(), Path.Combine(link, "corvid-worktrees"));
+        var repository = await worktrees.ResolveAsync(project);
+
+        var made = await worktrees.AddAsync(repository, "linked");
+
+        Assert.StartsWith(real, made.Path, StringComparison.Ordinal);
+        Assert.Equal([made], await worktrees.ListAsync(repository));
+        await worktrees.RemoveAsync(repository, "linked");
+        Assert.False(Directory.Exists(made.Path));
+    }
+
+    [Fact]
+    public void New_names_made_in_the_same_second_differ()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var names = Enumerable.Range(0, 20).Select(_ => GitWorktrees.NewName(now)).ToHashSet();
+        Assert.True(names.Count > 1);
+        Assert.All(names, name => Assert.Null(GitWorktrees.CheckName(name)));
+    }
+
     [Fact]
     public async Task A_directory_outside_any_repository_is_refused()
     {

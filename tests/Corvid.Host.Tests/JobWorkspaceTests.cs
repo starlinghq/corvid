@@ -74,7 +74,8 @@ public sealed class JobWorkspaceTests
 
         var result = Assert.Single(Events(runtime, run).OfType<ToolResult>());
         Assert.Contains("in the configured workspace", result.Result.GetRawText(), StringComparison.Ordinal);
-        Assert.DoesNotContain(Events(runtime, run), payload => payload is WorkspaceBound);
+        // A6 review: the run records the configured workspace, so it is resumed there from anywhere.
+        Assert.Equal(runtime.DefaultWorkspace.Root, Assert.IsType<WorkspaceBound>(Events(runtime, run)[0]).Path);
         Assert.Same(runtime.DefaultWorkspace, runtime.WorkspaceServicesOf(run));
         Assert.Equal(runtime.DefaultWorkspace.Root, Path.GetFullPath(home));
     }
@@ -98,5 +99,37 @@ public sealed class JobWorkspaceTests
         Assert.Contains(other, script.Refusal, StringComparison.Ordinal);
         Assert.Contains(other, refused.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(Events(runtime, "job-run-gone"), payload => payload is ToolResult);
+    }
+
+    private sealed class Keeping : Corvid.Approvals.IApprovalPrompter
+    {
+        public List<Corvid.Approvals.ApprovalPrompt> Prompts { get; } = [];
+
+        public ValueTask<Corvid.Approvals.ApprovalAnswer> AskAsync(Corvid.Approvals.ApprovalPrompt prompt, CancellationToken cancellationToken)
+        {
+            Prompts.Add(prompt);
+            return ValueTask.FromResult(Corvid.Approvals.ApprovalAnswer.Deny());
+        }
+    }
+
+    // A6V2-04: cron_create's approval names the workspace the job will run in, the asking session's.
+    [Fact]
+    public async Task Cron_create_s_approval_says_where_the_job_will_run()
+    {
+        await using var host = TestHost.Create(Reads(), FileTools);
+        var (other, _) = Workspaces(host);
+        await using var runtime = await host.StartAsync();
+        var creator = runtime.OpenSession(surface: "test", settings: new SessionSettings { Workspace = other });
+        var prompter = new Keeping();
+        using var attached = runtime.AttachPrompter(creator.Id, prompter);
+        Assert.True(runtime.Tools.TryGet("cron_create", out var cron));
+        using var arguments = System.Text.Json.JsonDocument.Parse("""{"name":"check","prompt":"look at where.txt","schedule":"in 1h"}""");
+        var state = new Corvid.Fabric.TurnStateBuilder().Build(new Corvid.Fabric.TurnStateInput("schedule it", "test", "fake"));
+
+        await creator.Workspace.Approvals.AuthorizeAsync(new Corvid.Approvals.ApprovalContext(creator.Id, Corvid.Approvals.ApprovalMode.Manual, state),
+            new Corvid.Approvals.ToolAction(cron.Descriptor, arguments.RootElement.Clone()), Ct);
+
+        var reason = Assert.Single(Assert.Single(prompter.Prompts).Reasons, item => item.Code == CorvidRuntime.JobWorkspaceReason);
+        Assert.Contains(other, reason.Detail, StringComparison.Ordinal);
     }
 }

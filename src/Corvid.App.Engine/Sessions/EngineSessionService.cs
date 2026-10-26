@@ -167,8 +167,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             }
             // G-12: what other processes write from here on reaches the list at the log's next look.
             Listed(heads, marker);
+            // A6 review: a new session's log holds where it works from the start; with nothing else it is still new.
             foreach (var (id, created) in _created)
-                if (runtime.Log.GetHead(id, cancellationToken) == 0)
+                if (SessionCatalogue.Describe(runtime.Log, id, cancellationToken) is null)
                     summaries.Add(Live(id, Empty(runtime, id, created)));
             return (IReadOnlyList<SessionSummary>)[.. summaries.OrderByDescending(summary => summary.LastActivity)];
         }, cancellationToken).ConfigureAwait(false);
@@ -1034,7 +1035,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             var id = channel.SessionId;
             Track(Task.Run(async () =>
             {
-                if (runtime.Log.GetHead(id) > 0 && !_channels.ContainsKey(id))
+                if (SessionCatalogue.Describe(runtime.Log, id) is not null && !_channels.ContainsKey(id))
                     await runtime.ReleaseDriverAsync(id).ConfigureAwait(false);
             }));
         }
@@ -1195,6 +1196,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             RunAt = job.Name is not null ? job.RunAt ?? last : null,
             // A6 (G-4): where this session works, with the branch of the worktree Corvid made for it.
             Workspace = runtime.WorkspaceOf(id).Path,
+            WorkspaceGone = !Directory.Exists(runtime.WorkspaceOf(id).Path),
             Branch = runtime.WorkspaceOf(id).Branch ?? "",
             Surface = SurfaceOf(id),
             State = IsJobRun(id) ? SessionState.Job : question is not null ? SessionState.Waiting : SessionState.Idle,
@@ -1237,6 +1239,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     {
         Pinned = Pins().Contains(id),
         Workspace = runtime.WorkspaceOf(id).Path,
+        WorkspaceGone = !Directory.Exists(runtime.WorkspaceOf(id).Path),
         Branch = runtime.WorkspaceOf(id).Branch ?? "",
         Surface = SurfaceOf(id),
         State = SessionState.Idle,

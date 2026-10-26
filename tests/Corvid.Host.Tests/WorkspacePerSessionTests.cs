@@ -64,14 +64,49 @@ public sealed class WorkspacePerSessionTests
         var bound = Assert.IsType<WorkspaceBound>(runtime.Log.Read(elsewhere.Id, 0, long.MaxValue, 1, Ct)[0].Payload);
         Assert.Equal(other, bound.Path);
         Assert.Equal(new SessionWorkspace(other), runtime.WorkspaceOf(elsewhere.Id));
-        Assert.True(runtime.WorkspaceOf(home.Id).IsDefault);
-        Assert.DoesNotContain(runtime.Log.Read(home.Id, 0, long.MaxValue, 256, Ct), stored => stored.Payload is WorkspaceBound);
+        // A6 review: a session started with none asked for records the configured workspace.
+        Assert.Equal(new SessionWorkspace(runtime.DefaultWorkspace.Root), runtime.WorkspaceOf(home.Id));
+        Assert.Equal(runtime.DefaultWorkspace.Root, Assert.IsType<WorkspaceBound>(runtime.Log.Read(home.Id, 0, long.MaxValue, 1, Ct)[0].Payload).Path);
         // Approvals judge the session's paths against its own workspace; rules and prompts stay the runtime's.
         Assert.Equal(other, elsewhere.Workspace.Approvals.Environment.Workspace);
         Assert.Same(runtime.Approvals.Options, elsewhere.Workspace.Approvals.Options);
         Assert.Equal(other, elsewhere.Workspace.Shell.Options.Workspace);
         Assert.Same(runtime.DefaultWorkspace, home.Workspace);
         Assert.Equal([runtime.DefaultWorkspace.Root, other], runtime.OpenWorkspaces.Select(workspace => workspace.Root));
+    }
+
+    // A6 review (M1): a session started with no workspace asked for records the configured one, so a process started in
+    // another directory resumes it where it began rather than in its own.
+    [Fact]
+    public async Task A_session_resumed_by_a_process_started_elsewhere_works_where_it_began()
+    {
+        await using var first = TestHost.Create(Writes("first"), FileTools);
+        var work = Path.Combine(first.Root, "work");
+        string id;
+        await using (var runtime = await first.StartAsync())
+        {
+            var session = runtime.OpenSession(surface: "test");
+            // Opened and nothing sent: listed nowhere, as before it recorded where it works.
+            Assert.Null(SessionCatalogue.Describe(runtime.Log, session.Id, Ct));
+            using (runtime.AttachPrompter(session.Id, new Approve()))
+                await session.SendAsync("write the notes", Ct);
+            id = session.Id;
+        }
+        var elsewhere = Other(first);
+        await using var second = TestHost.Create(Writes("again"), new Dictionary<string, string?>(FileTools)
+        {
+            ["Corvid:DataDirectory"] = Path.Combine(first.Root, "data"),
+            ["Corvid:Workspace"] = elsewhere,
+        });
+        await using var resumedRuntime = await second.StartAsync();
+
+        var resumed = resumedRuntime.OpenSession(id, "test");
+        using (resumedRuntime.AttachPrompter(id, new Approve()))
+            await resumed.SendAsync("write the notes again", Ct);
+
+        Assert.Equal(work, resumed.Workspace.Root);
+        Assert.Equal("again", await File.ReadAllTextAsync(Path.Combine(work, "notes.txt"), Ct));
+        Assert.False(File.Exists(Path.Combine(elsewhere, "notes.txt")));
     }
 
     [Fact]

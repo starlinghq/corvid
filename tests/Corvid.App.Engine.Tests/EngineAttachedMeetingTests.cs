@@ -68,7 +68,8 @@ public sealed class EngineAttachedMeetingTests
             client.SendAsync(id, "and this?", [new ImageAttachment("not an image at all"u8.ToArray(), "notes.png")], Ct));
         Assert.NotEmpty(notImage.Message);
         await served.Service.IdleAsync();
-        Assert.Equal(0, fixture.Runtime.Log.GetHead(id, Ct));
+        // Nothing queued or posted: the log holds only where the session works (WorkspaceBound, A6 review).
+        Assert.Equal(1, fixture.Runtime.Log.GetHead(id, Ct));
     }
 
     [Fact]

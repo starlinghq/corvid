@@ -266,7 +266,7 @@ public sealed class CompositionTests
         await using var runtime = await host.StartAsync();
         var session = runtime.OpenSession();
         var history = string.Concat(Enumerable.Repeat("a long earlier answer, ", 1_400));
-        runtime.Log.Append(session.Id, 0, [EventData.Create(new UserMessage("tell me everything")), EventData.Create(new AssistantMessage(history))],
+        runtime.Log.Append(session.Id, runtime.Log.GetHead(session.Id, TestContext.Current.CancellationToken), [EventData.Create(new UserMessage("tell me everything")), EventData.Create(new AssistantMessage(history))],
             TestContext.Current.CancellationToken);
         var observer = new RecordingObserver();
         using (runtime.Feed.Subscribe(session.Id, observer))
@@ -286,7 +286,7 @@ public sealed class CompositionTests
         await using var runtime = await host.StartAsync();
         var session = runtime.OpenSession();
         var history = string.Concat(Enumerable.Repeat("a long earlier answer, ", 1_400));
-        runtime.Log.Append(session.Id, 0, [EventData.Create(new UserMessage("tell me everything")), EventData.Create(new AssistantMessage(history))],
+        runtime.Log.Append(session.Id, runtime.Log.GetHead(session.Id, TestContext.Current.CancellationToken), [EventData.Create(new UserMessage("tell me everything")), EventData.Create(new AssistantMessage(history))],
             TestContext.Current.CancellationToken);
 
         var delivery = await session.SendAsync("and now?", TestContext.Current.CancellationToken);
