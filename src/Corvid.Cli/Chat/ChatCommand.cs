@@ -104,7 +104,8 @@ internal static class ChatCommand
                     (runtime.WorkspaceOf(session.Id).Branch is { } branch ? $" (worktree, branch {Markup.Escape(TerminalText.Visible(branch))})" : "") + "[/]");
             foreach (var notice in runtime.DeciderNotices)
                 renderer.Notice($"[yellow]{Markup.Escape(notice)}[/]");
-            if (session.Snapshot().Head > 0)
+            // A6: a new session's first event may be where it works (WorkspaceBound); only more than that is resumed.
+            if (session.Snapshot().Head > (runtime.WorkspaceOf(session.Id).IsDefault ? 0 : 1))
                 await ResumeAsync(runtime, session, renderer, console, cancellationToken).ConfigureAwait(false);
             // G-7: seen now, so a recap on the next return covers only what happens after.
             Shared(() => runtime.UiState.MarkSeen(session.Id, runtime.Log.GetHead(session.Id), DateTimeOffset.UtcNow));

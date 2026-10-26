@@ -31,6 +31,8 @@ public sealed class WorkspaceChatTests
         Assert.Equal(ExitCodes.Success, await run.RunAsync(["chat", "--workspace", other], "/workspace", "/exit"));
         Assert.Contains($"Workspace: {other}", run.Output, StringComparison.Ordinal);
         Assert.Contains($"This session works in {other}.", run.Output, StringComparison.Ordinal);
+        // A new session is not one resumed: its only event so far is where it works.
+        Assert.DoesNotContain("Resumed:", run.Output, StringComparison.Ordinal);
 
         using var missing = new CliRun(new FakeModels());
         Assert.Equal(ExitCodes.Failure, await missing.RunAsync(["chat", "--workspace", Path.Combine(missing.Root, "nowhere")], "/exit"));
