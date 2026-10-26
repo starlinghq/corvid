@@ -181,7 +181,9 @@ public sealed partial class CodeTool
 
     [Tool(ToolName, Description = "Run a short program (language: python, javascript or csharp) that calls Corvid's tools, for work " +
         "that needs a loop or several tool calls: processing many files, combining results, computing over data. It runs sandboxed in the " +
-        "workspace with no network; its tool calls are approved one by one like your own. Returns its output and a log of its calls.")]
+        "workspace with no network; its tool calls are approved one by one like your own. Returns its output and a log of its calls. " +
+        "Call a tool by its name: in Python corvid.read_file(path='x') (errors raise corvid.CorvidToolError); in JavaScript, an ES module, " +
+        "await corvid.read_file({ path: 'x' }); in C# await CorvidTools.ReadFileAsync(\"x\"), which returns a JsonElement.")]
     [SideEffect(SideEffects.Process | SideEffects.Filesystem)]
     [Destructive]
     public async Task<JsonNode> RunAsync(

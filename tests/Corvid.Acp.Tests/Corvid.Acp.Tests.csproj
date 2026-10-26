@@ -9,6 +9,7 @@
     <ProjectReference Include="../../src/Corvid.Acp/Corvid.Acp.csproj" />
     <!-- The host tests' fake slots, so every suite drives the host the same way. -->
     <Compile Include="../Corvid.Host.Tests/Fakes.cs" Link="Fakes.cs" />
+    <Compile Include="../Shared/FakeCodeTool.cs" Link="FakeCodeTool.cs" />
     <!-- Recorded message exchanges, compared with what the agent says now. -->
     <None Include="Exchanges/*.jsonl" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

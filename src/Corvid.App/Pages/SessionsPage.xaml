@@ -276,7 +276,8 @@
 
     <!-- A tool call's card (.card): head (icon, title, state, chevron or Stop), why, the live tail, the expanded output or diffs. -->
     <DataTemplate x:Key="ToolTemplate" x:DataType="sessions:ToolCardBlock">
-      <Grid AutomationProperties.Name="{x:Bind AutomationName, Mode=OneWay}">
+      <!-- A7: a code mode script's call sits indented under its run's card. -->
+      <Grid AutomationProperties.Name="{x:Bind AutomationName, Mode=OneWay}" Margin="{x:Bind local:SessionsPage.NestedIndent(IsNested), Mode=OneWay}">
         <Border Style="{StaticResource Card}" />
         <Border CornerRadius="8" BorderThickness="1" BorderBrush="{ThemeResource CorvidAccent}" Visibility="{x:Bind ui:Ui.VisibleIf(IsRunning), Mode=OneWay}" />
         <StackPanel>
@@ -306,6 +307,17 @@
           <!-- A5: which generator asked for the call, once the turn has switched. -->
           <TextBlock Text="{x:Bind GeneratedBy, Mode=OneWay}" Visibility="{x:Bind ui:Ui.VisibleIf(ShowGeneratedBy), Mode=OneWay}"
                      Style="{StaticResource CorvidSmallText}" Margin="38,0,12,8" />
+          <!-- A7: a code mode run: its language and how much of its limits it used, then its whole script (monospace; the
+               app draws code without syntax colours), every character shown. -->
+          <StackPanel Visibility="{x:Bind ui:Ui.VisibleIf(IsCodeRun), Mode=OneWay}" Spacing="6" Margin="38,0,12,10">
+            <TextBlock Text="{x:Bind CodeHeader, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" />
+            <Border Padding="10,8" CornerRadius="6" Background="{ThemeResource CorvidCodeBg}" MaxHeight="240">
+              <ScrollViewer HorizontalScrollBarVisibility="Auto" HorizontalScrollMode="Auto" VerticalScrollBarVisibility="Auto">
+                <TextBlock Text="{x:Bind CodeSource, Mode=OneWay}" Style="{StaticResource CorvidMonoText}" LineHeight="18.75" TextWrapping="NoWrap"
+                           IsTextSelectionEnabled="True" AutomationProperties.Name="Script" />
+              </ScrollViewer>
+            </Border>
+          </StackPanel>
           <Border Margin="1,0,1,1" Padding="10,8" CornerRadius="0,0,7,7" Background="{ThemeResource CorvidCodeBg}" MaxHeight="120"
                   Visibility="{x:Bind ui:Ui.VisibleIf(HasTail), Mode=OneWay}">
             <ScrollViewer HorizontalScrollBarVisibility="Auto" HorizontalScrollMode="Auto" VerticalScrollBarVisibility="Auto">
@@ -379,6 +391,22 @@
               </ScrollViewer>
             </Border>
             <TextBlock Text="{x:Bind Unparsed}" Style="{StaticResource CorvidSmallText}" Visibility="{x:Bind ui:Ui.VisibleIfText(Unparsed)}" />
+            <!-- A7: a code mode run: the whole script, revealed, and that each tool it calls is asked for on its own. -->
+            <Border Padding="12,10" CornerRadius="6" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1"
+                    Visibility="{x:Bind ui:Ui.VisibleIf(HasCode)}">
+              <StackPanel Spacing="6">
+                <TextBlock Text="{x:Bind CodeHeader}" Style="{StaticResource CorvidSmallText}" TextWrapping="Wrap" />
+                <TextBlock Text="{x:Bind CodeNoteText}" TextWrapping="Wrap" FontSize="13" />
+                <TextBlock Text="The script holds characters you cannot see; each is shown as its code (⟨U+…⟩)." Style="{StaticResource CorvidSmallText}"
+                           Foreground="{ThemeResource CorvidAmber}" TextWrapping="Wrap" Visibility="{x:Bind ui:Ui.VisibleIf(CodeHasHidden)}" />
+                <Border Padding="10,8" CornerRadius="6" Background="{ThemeResource CorvidCodeBg}" MaxHeight="320">
+                  <ScrollViewer HorizontalScrollBarVisibility="Auto" HorizontalScrollMode="Auto" VerticalScrollBarVisibility="Auto">
+                    <TextBlock Text="{x:Bind CodeSource}" Style="{StaticResource CorvidMonoText}" LineHeight="18.75" TextWrapping="NoWrap"
+                               IsTextSelectionEnabled="True" AutomationProperties.Name="Script to approve" />
+                  </ScrollViewer>
+                </Border>
+              </StackPanel>
+            </Border>
             <!-- A5: a spawn's children as they would start (goal, tools, budget, models), or the child that asks. -->
             <Border Padding="12,10" CornerRadius="6" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1"
                     Visibility="{x:Bind ui:Ui.VisibleIfText(DelegationText), Mode=OneWay}">

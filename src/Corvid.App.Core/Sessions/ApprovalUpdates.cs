@@ -164,6 +164,12 @@ public sealed record ApprovalRequested(string ApprovalId, string Tool, string Te
     /// shows (the cut line says how many characters it leaves out); empty when nothing was cut.
     /// </summary>
     public ImmutableArray<string> DelegationWhole { get; init; } = [];
+
+    /// <summary>
+    /// A7: for a code mode run, its whole script and language, shown in full on the card (revealed); each tool the script
+    /// calls is asked for on its own, which the card says.
+    /// </summary>
+    public CodeRun? Code { get; init; }
 }
 
 /// <summary>How a prompt closed.</summary>

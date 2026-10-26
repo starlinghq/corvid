@@ -108,7 +108,23 @@ internal sealed class WorkspaceComposer(CorvidOptions settings, VaultLocations v
             code.Python is { Length: > 0 } python ? CorvidPaths.ExpandHome(python) : found.Python,
             code.Node is { Length: > 0 } node ? CorvidPaths.ExpandHome(node) : found.Node,
             code.Dotnet is { Length: > 0 } dotnet ? CorvidPaths.ExpandHome(dotnet) : found.Dotnet),
+        Clients = GeneratedClient,
     };
+
+    /// <summary>
+    /// The client a script calls tools with (<see cref="Corvid.Tools.CodeMode.CodeModeClients"/>), written from the tools the
+    /// turn may offer; their descriptions are untrusted text the generators escape.
+    /// </summary>
+    internal static CodeClient GeneratedClient(CodeLanguage language, IReadOnlyList<Corvid.Tools.CodeMode.CodeModeTool> tools)
+    {
+        var (prefix, suffix) = Corvid.Tools.CodeMode.CodeModeClients.Inline(language switch
+        {
+            CodeLanguage.Python => Corvid.Tools.CodeMode.CodeModeLanguage.Python,
+            CodeLanguage.JavaScript => Corvid.Tools.CodeMode.CodeModeLanguage.JavaScript,
+            _ => Corvid.Tools.CodeMode.CodeModeLanguage.CSharp,
+        }, tools);
+        return new CodeClient(prefix, suffix);
+    }
 
     /// <summary>A7: <c>execute_code</c> for a workspace's shell, describing tools from <paramref name="registry"/>; null when off.</summary>
     public CodeTool? CodeToolFor(SandboxedShell shell, Func<ToolRegistry> registry) =>

@@ -42,6 +42,12 @@ public sealed record ReviewFile(string Path, int Added, int Removed)
     /// <summary>The call that last changed it ("patch_file").</summary>
     public string? Tool { get; init; }
 
+    /// <summary>
+    /// A7: when a code mode script made that call, the run it was made from ("execute_code"), so Review says the change
+    /// came from the script; null for the model's own calls.
+    /// </summary>
+    public string? Via { get; init; }
+
     /// <summary>The turn of that call.</summary>
     public int? Turn { get; init; }
 

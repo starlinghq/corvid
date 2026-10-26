@@ -227,6 +227,9 @@ public sealed partial class SessionUpdateTranslator(string workspace)
                     Target = ToolPresentation.Target(started.Input),
                     Input = started.Input?.GetRawText(),
                     Locations = Relative(started.Locations),
+                    // A7: a script's call names its run; a run brings its script.
+                    ParentCallId = started.ParentCallId,
+                    Code = CodeRunOf(CodeRunPresentation.Read(started.Tool, started.Input)),
                 });
                 break;
             case ToolCallChanged changed:
@@ -240,6 +243,8 @@ public sealed partial class SessionUpdateTranslator(string workspace)
                         Target = ToolPresentation.Target(input),
                         Input = input.GetRawText(),
                         Locations = Relative(changed.Locations),
+                        ParentCallId = changed.ParentCallId,
+                        Code = CodeRunOf(CodeRunPresentation.Read(tool, input)),
                     });
                 output.Add(new ToolCallUpdate(changed.CallId)
                 {
@@ -254,6 +259,11 @@ public sealed partial class SessionUpdateTranslator(string workspace)
                     Verdict = Verdict(changed),
                     // K-2: the running call's last lines, replacing the previous tail.
                     Tail = changed.Tail,
+                    ParentCallId = changed.ParentCallId,
+                    // A7: how a code mode run ended, from its result.
+                    CodeOutcome = CodeRunPresentation.IsCodeRun(changed.Tool) && changed.Output is { } result
+                        ? NonEmpty(CodeRunPresentation.Outcome(result))
+                        : null,
                 });
                 break;
             case HostPlan plan:
@@ -487,6 +497,18 @@ public sealed partial class SessionUpdateTranslator(string workspace)
     /// was refused unasked (G-2: the pipeline's assessment), else "read-only" for a tool that declared itself so; null when
     /// none of these is known, which leaves the card's verdict as it was.
     /// </summary>
+    /// <summary>A7: a code mode run as App.Core's cards show it, with the host's limits; null for any other call.</summary>
+    internal static CodeRun? CodeRunOf(CodeRunView? run) =>
+        run is null
+            ? null
+            : new CodeRun(run.DisplayLanguage, run.Source)
+            {
+                MaxCalls = Corvid.Tools.CodeMode.CodeModeLimits.Default.MaxCalls,
+                Limits = CodeRunPresentation.LimitsText(),
+            };
+
+    private static string? NonEmpty(string text) => text.Length == 0 ? null : text;
+
     internal static CallVerdict? Verdict(ToolCallChanged changed) => changed switch
     {
         { Approval: { } approval } => Verdict(approval) with { CheckpointId = approval.Approved ? changed.CheckpointBefore : null },

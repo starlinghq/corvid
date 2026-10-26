@@ -228,6 +228,19 @@ public sealed class ToolCardBlock : TranscriptBlock
         ShowGeneratedBy = GeneratedBy.Length > 0 && tool.TurnModel is { Length: > 0 } first && first != tool.Model;
         OnPropertyChanged(nameof(GeneratedBy));
         OnPropertyChanged(nameof(ShowGeneratedBy));
+        // A7: a script's call sits under its run; a run shows its language, its source and how much of its limits it used.
+        IsNested = tool.ParentCallId is not null;
+        ParentCallId = tool.ParentCallId;
+        IsCodeRun = tool.Code is not null;
+        CodeSource = tool.Code is { } code ? SafeText.Reveal(code.Source.Replace("\r\n", "\n", StringComparison.Ordinal).TrimEnd('\n')) : "";
+        CodeHeader = tool.Code is { } run ? CodeHeaderText(run, tool.NestedCalls, tool.CodeOutcome) : "";
+        if (tool.Code is { } script && Target.Length == 0)
+            Target = $"{SafeText.Clean(script.Language)} · {LineCount(script.Source)}";
+        OnPropertyChanged(nameof(IsNested));
+        OnPropertyChanged(nameof(ParentCallId));
+        OnPropertyChanged(nameof(IsCodeRun));
+        OnPropertyChanged(nameof(CodeSource));
+        OnPropertyChanged(nameof(CodeHeader));
         OnPropertyChanged(nameof(CanExpand));
         ToggleCommand.NotifyCanExecuteChanged();
         ShowOutputCommand.NotifyCanExecuteChanged();
@@ -239,6 +252,43 @@ public sealed class ToolCardBlock : TranscriptBlock
 
     /// <summary>A5: the card says <see cref="GeneratedBy"/> because the turn had switched generators by then.</summary>
     public bool ShowGeneratedBy { get; private set; }
+
+    /// <summary>A7: a code mode script made this call: the card is drawn indented under its run's.</summary>
+    public bool IsNested { get; private set; }
+
+    /// <summary>A7: the run this call was made from; null for the model's own calls.</summary>
+    public string? ParentCallId { get; private set; }
+
+    /// <summary>A7: the card is a code mode run's: it shows <see cref="CodeHeader"/> and <see cref="CodeSource"/>.</summary>
+    public bool IsCodeRun { get; private set; }
+
+    /// <summary>
+    /// A7: the run's script, every character shown (<see cref="SafeText.Reveal"/>: this is what ran, so a hidden character
+    /// is drawn as its code, not dropped). Monospace; the app draws code without syntax colours.
+    /// </summary>
+    public string CodeSource { get; private set; } = "";
+
+    /// <summary>A7: "Python · 2 lines · 1 of 50 tool calls · exit 0": the language and how much of the run's limits it used.</summary>
+    public string CodeHeader { get; private set; } = "";
+
+    internal static string CodeHeaderText(CodeRun run, int calls, string? outcome)
+    {
+        var parts = new List<string>
+        {
+            SafeText.Clean(run.Language),
+            LineCount(run.Source),
+            string.Create(CultureInfo.InvariantCulture, $"{calls} of {run.MaxCalls} tool call{(run.MaxCalls == 1 ? "" : "s")}"),
+        };
+        if (!string.IsNullOrEmpty(outcome))
+            parts.Add(outcome);
+        return string.Join(" · ", parts);
+    }
+
+    internal static string LineCount(string source)
+    {
+        var count = source.Length == 0 ? 0 : source.Replace("\r\n", "\n", StringComparison.Ordinal).TrimEnd('\n').Split('\n').Length;
+        return string.Create(CultureInfo.InvariantCulture, $"{count} line{(count == 1 ? "" : "s")}");
+    }
 
     internal override void Tick(BlockContext context)
     {

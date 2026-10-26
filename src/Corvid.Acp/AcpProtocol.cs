@@ -207,6 +207,10 @@ internal sealed record ToolCall(string ToolCallId, string Title, string Kind, st
     public JsonElement? RawInput { get; init; }
 
     public JsonElement? RawOutput { get; init; }
+
+    /// <summary>A7: <c>{"corvid":{"parentToolCallId":…}}</c> on a call a code mode script made; absent otherwise.</summary>
+    [JsonPropertyName("_meta")]
+    public JsonElement? Meta { get; init; }
 }
 
 /// <summary>Changes to a tool call (<c>tool_call_update</c>); also the tool call shown in a permission request.</summary>
@@ -225,6 +229,10 @@ internal sealed record ToolCallUpdate(string ToolCallId) : SessionUpdate
     public JsonElement? RawInput { get; init; }
 
     public JsonElement? RawOutput { get; init; }
+
+    /// <summary>A7: <c>{"corvid":{"parentToolCallId":…}}</c> on a call a code mode script made; absent otherwise.</summary>
+    [JsonPropertyName("_meta")]
+    public JsonElement? Meta { get; init; }
 }
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]

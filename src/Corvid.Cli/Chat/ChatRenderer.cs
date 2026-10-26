@@ -38,11 +38,15 @@ internal sealed class ChatRenderer : ITurnObserver
     }
 
     /// <param name="Tail">K-2: the running call's last line of output, cleaned for the terminal.</param>
+    /// <param name="Parent">A7: the call this one was made from (a code mode script's call), shown indented under it.</param>
     private sealed record ToolRow(string CallId, string Tool, long Started, string? Outcome = null, TimeSpan Elapsed = default,
-        string? Tail = null)
+        string? Tail = null, string? Parent = null)
     {
         public bool Running => Outcome is null;
     }
+
+    /// <summary>A7: how a script's call is marked under its run: indented, with an arrow.</summary>
+    internal const string NestedMark = "  ↳ ";
 
     public void Banner(string session, string generator, int tools)
     {
@@ -108,7 +112,10 @@ internal sealed class ChatRenderer : ITurnObserver
         }
     }
 
-    public void ToolStarted(string callId, string tool, bool approval)
+    public void ToolStarted(string callId, string tool, bool approval) => ToolStarted(callId, tool, approval, null);
+
+    /// <summary>A7: a call started; a code mode script's call (<paramref name="parentCallId"/>) is shown indented under its run.</summary>
+    public void ToolStarted(string callId, string tool, bool approval, string? parentCallId)
     {
         // A5 (A4 leftover): ask_user is the question, shown as one (ShowQuestion, or the turn's end), not as a running call.
         if (tool == AskUserTool.ToolName)
@@ -118,13 +125,24 @@ internal sealed class ChatRenderer : ITurnObserver
             EndText();
             // A call that may ask (approval) is checked first and often runs unasked (smart mode, a ! line that only reads):
             // only the approval box, when one opens, says it waits on the person (A4V2-6).
-            _tools = _tools.Add(new ToolRow(callId, tool, Stopwatch.GetTimestamp()));
+            _tools = Place(_tools, new ToolRow(callId, tool, Stopwatch.GetTimestamp(), Parent: parentCallId));
             if (_live)
                 StartPanel();
             else
-                _console.MarkupLine($"  [yellow]⏺[/] {Markup.Escape(tool)} [grey]running[/]");
+                _console.MarkupLine($"{Indent(parentCallId)}[yellow]⏺[/] {Markup.Escape(tool)} [grey]running[/]");
         }
     }
+
+    /// <summary>A7: a script's call goes after its run and the run's earlier calls; any other call at the end.</summary>
+    private static ImmutableList<ToolRow> Place(ImmutableList<ToolRow> rows, ToolRow row)
+    {
+        if (row.Parent is not { } parent)
+            return rows.Add(row);
+        var at = rows.FindLastIndex(item => item.CallId == parent || item.Parent == parent);
+        return at < 0 ? rows.Add(row) : rows.Insert(at + 1, row);
+    }
+
+    private static string Indent(string? parent) => parent is null ? "  " : "  " + NestedMark;
 
     public void ToolFinished(string callId, string tool, string outcome, TimeSpan elapsed)
     {
@@ -136,9 +154,10 @@ internal sealed class ChatRenderer : ITurnObserver
             if (row is not null)
                 _tools = _tools.Replace(row, row with { Outcome = outcome, Elapsed = elapsed });
             else
-                _tools = _tools.Add(new ToolRow(callId, tool, Stopwatch.GetTimestamp(), outcome, elapsed));
+                _tools = _tools.Add(row = new ToolRow(callId, tool, Stopwatch.GetTimestamp(), outcome, elapsed));
             if (!_live)
-                _console.MarkupLine($"  {Mark(outcome)} {Markup.Escape(tool)} [grey]{Markup.Escape(Describe(outcome))} · {Duration(elapsed)}[/]");
+                _console.MarkupLine($"{Indent(row.Parent)}{Mark(outcome)} {Markup.Escape(tool)} [grey]{Markup.Escape(Describe(outcome))}" +
+                    $"{Markup.Escape(Calls(_tools, callId))} · {Duration(elapsed)}[/]");
             else if (_tools.All(item => !item.Running))
                 StopPanel();
         }
@@ -272,7 +291,8 @@ internal sealed class ChatRenderer : ITurnObserver
         {
             StopPanel();
             EndText();
-            var body = new List<IRenderable> { new Markup($"[bold]{Markup.Escape(prompt.Analysis.Text)}[/]") };
+            // A7: the action as the pipeline states it holds model text (a script, a command line): hidden characters as escapes.
+            var body = new List<IRenderable> { new Markup($"[bold]{Markup.Escape(TerminalText.Choice(prompt.Analysis.Text))}[/]") };
             // A5: a spawn's children, or the child that asks (already shown with hidden characters escaped).
             foreach (var line in details ?? [])
                 body.Add(new Markup($"[cyan]{Markup.Escape(line)}[/]"));
@@ -458,10 +478,11 @@ internal sealed class ChatRenderer : ITurnObserver
         {
             table.AddRow(
                 new Markup(tool.Running ? "[yellow]⏺[/]" : Mark(tool.Outcome!)),
-                new Text(tool.Tool),
+                // A7: a script's calls are indented under its run.
+                new Text(tool.Parent is null ? tool.Tool : NestedMark + tool.Tool),
                 new Markup($"[grey]{Markup.Escape(tool.Running
                     ? "running · " + Duration(Stopwatch.GetElapsedTime(tool.Started))
-                    : Describe(tool.Outcome!) + " · " + Duration(tool.Elapsed))}[/]"));
+                    : Describe(tool.Outcome!) + Calls(tools, tool.CallId) + " · " + Duration(tool.Elapsed))}[/]"));
             // K-2: the running call's last line, dim, under it.
             if (tool.Running && tool.Tail is { Length: > 0 } tail)
                 table.AddRow(new Text(""), new Text(""), new Text(tail, new Style(Color.Grey)));
@@ -493,6 +514,13 @@ internal sealed class ChatRenderer : ITurnObserver
     private static string Mark(string outcome) => outcome == "succeeded" ? "[green]✓[/]" : outcome == "denied" ? "[yellow]⊘[/]" : "[red]✗[/]";
 
     private static string Describe(string outcome) => outcome.Replace('_', ' ');
+
+    /// <summary>A7: for a run whose script called tools, how many (" · 2 tool calls"); empty otherwise.</summary>
+    private static string Calls(ImmutableList<ToolRow> rows, string callId)
+    {
+        var count = rows.Count(row => row.Parent == callId);
+        return count == 0 ? "" : $" · {count} tool call{(count == 1 ? "" : "s")}";
+    }
 
     private static string Duration(TimeSpan elapsed) => CoreCommands.FormatDuration(elapsed);
 
