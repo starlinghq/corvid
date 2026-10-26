@@ -82,7 +82,7 @@ public sealed class ToolPresentation(CorvidRuntime runtime, WorkspaceServices? s
         var risk = function.Descriptor.Risk;
         return tool switch
         {
-            "shell" or "skill_run_script" => ToolCallKinds.Execute,
+            "shell" or "skill_run_script" or "execute_code" => ToolCallKinds.Execute,
             "search_files" or "memory_search" => ToolCallKinds.Search,
             _ when risk.Network => ToolCallKinds.Fetch,
             _ when risk.Destructive && risk.SideEffects.HasFlag(SideEffects.Filesystem) && tool.Contains("delete", StringComparison.Ordinal) => ToolCallKinds.Delete,

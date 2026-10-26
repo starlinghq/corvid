@@ -4325,6 +4325,60 @@ Frozen at version 1; `Corvid.Tools.CodeMode` implements the host side (`CodeMode
   names that are not identifiers (`[A-Za-z_][A-Za-z0-9_]*`, at most 64). Descriptions are untrusted text (an MCP server
   may have written them): a generator escapes them for the language it writes.
 
+### execute_code, the host side (A7)
+
+`Corvid.Tools.Builtin.CodeTool` (`execute_code`, beside `ShellTool`), `CodeRunner` and `ToolsSocketServer`. Off by default:
+`Corvid:Tools:Code:Enabled` (with `Corvid:Tools:Builtin`) registers it, per workspace like the shell (a bound tool).
+
+- **Arguments.** `language` (`python`, `javascript`, `csharp`) and `code`. The source parameter is `code`, not `source`:
+  `source` and `src` are path names to `ToolAnalyzer`.
+- **Its own approval kind.** `ApprovalOptions.CodeTools` (`BuiltinTools.CodeToolMapping`) resolves a call into a
+  `CodeAction`; `CodeAnalyzer` gives an analysis of kind `code` whose text is the source (what a card, the CLI and ACP
+  show), one command (`execute_code`, subcommand the language, effects execute and write) with **no targets** (nothing is
+  mined from the source) and one unresolved reason. So a script always asks, in every mode, and offers only "once": no
+  remembered rule and no `risk` answer runs a script unasked, and nothing is written to the rules file. The hardline
+  backstop still scans the source (`OpaqueScripts`: Vault's directory name, a disk formatter). Detection rules see the
+  call as a tool call. The tool runs only with an allowed `code` approval whose text and language are exactly the call's,
+  and only as a top-level call (it needs the turn's invoker). It is `[SideEffect(Process | Filesystem)] [Destructive]`, so
+  the turn takes a checkpoint before it, as for an unparsed shell command.
+- **The run.** The shell's policy for the workspace (its denials, its read-only paths, Vault's locations) with
+  `Network = false`, `Proxy = null` whatever `Corvid:Tools:ShellNetwork` says, and `SandboxTools(socket, token)`. The
+  socket is in a fresh 0700 directory under the temp directory (listed in `DeniedPaths` when that is not `/tmp` or `/run`),
+  listening before the script starts and deleted after; the token is `CodeModeProtocol.NewToken()`, written only by the
+  sandbox. The source goes on standard input, never on a command line or into the workspace: `python3 -E -s -B -`,
+  `node --input-type=module -` (an ES module), and for C# a fixed `/bin/sh` wrapper that writes it to the sandbox's own
+  `/tmp/corvid-code/Program.cs` beside stub `Directory.Build.props` (`PublishAot=false`), `Directory.Build.targets`,
+  `Directory.Packages.props` and a `nuget.config` that clears every source, builds from there (the build's output
+  reaches stderr only when it fails), then runs the built `Program.dll` through the host with the workspace as its
+  working directory. Outside the workspace, so a repository's own build files and `global.json` are never read. A `#:` directive (package, SDK, project, property) is refused before anything runs. The SDK's caches (`DOTNET_CLI_HOME`,
+  `NUGET_PACKAGES`) are under `<workspace>/.corvid/code/dotnet`, written by the sandbox alone, with a `.gitignore` of `*`;
+  `XDG_DATA_HOME` and `XDG_RUNTIME_DIR` point into the sandbox's `/tmp` (file-based apps' build cache; named mutexes).
+  Runtimes are found once by absolute path (`python3`, `node` on PATH; `dotnet` as `$DOTNET_ROOT/dotnet`, PATH or
+  `~/.dotnet/dotnet` with an `sdk/` beside it) or configured (`Corvid:Tools:Code:Python`, `Node`, `Dotnet`); a missing one
+  refuses its language. `corvid doctor` has a `code` row per runtime.
+- **The tools socket.** One `CodeModeSession` per run over `CodeModeCatalog.Describe(registry, context.OfferedTools,
+  Corvid:Tools:Code:Tools)` (default: the file tools, `shell`, `web_fetch`, memory search) and the parent call's invoker,
+  so every request takes the turn's path (approval per call, checkpoint, scrub, taint, egress, lease). At most 8
+  connections at once; when the script exits the server stops, cancels any call still running and waits for it, so each
+  nested call has its result before the parent's.
+- **Limits** (`Corvid:Tools:Code`, Hermes' defaults): `TimeoutSeconds` 300 (wall clock, enforced by a sandbox of its own
+  whose `SandboxOptions.Timeout` it is; the time a call waits for its approval counts, so a script whose call is still
+  awaiting a person at the limit is stopped and that prompt is cancelled), `MaxCalls` 50 (on the host, `call_limit`),
+  `MaxStdoutBytes` 50 000 and `MaxStderrBytes` 10 000 (the middle of longer output is cut, by UTF-8 bytes).
+- **Result.** `{"language","exit_code","stdout","stderr","timed_out"?,"error"?,"output_truncated"?,"tool_calls",
+  "calls":[{"call_id","tool","ok","tainted"}],"tainted"}`. `tainted` is true when any result the script received was
+  outside content; the kernel then marks the parent's result tainted too (asked `injection`, taints the session).
+- **Offered** only while the session's generator is a cloud or local-server model (plan §15): `CorvidRuntime` sets
+  `TurnOptions.ToolFilter` to `CodeModeFilter(slots)`, read at each turn's start, so a `/model` switch to an in-process
+  model withdraws it from the next turn, and a call to it is refused as not offered. A client the script is run with (the
+  generated clients) plugs in as `CodeToolOptions.Clients` (`CodeClientFactory`: a prefix and a suffix around the source).
+- **Tests.** `CodeToolTests` (the analysis, the refusals, the policy and command handed to the sandbox),
+  `CodeConfinementTests` (Python under the real launcher, CI-pinned: tool calls through the invoker, a call waiting on
+  its approval, a tainting result, the call budget, output caps, the time limit, no network even to the host's loopback,
+  the shell's denials, a wrong token), `CodeLanguageTests` (JavaScript, and C# beside a poisoned `Directory.Build.props` and `global.json`, run twice;
+  each skips without its runtime), `Corvid.Host.Tests.CodeModeTests` (a turn on a local-server generator whose script's
+  side effect asks under its own id and whose fetch taints the session; not offered to an in-process generator).
+
 ## Running the check
 
 ```sh

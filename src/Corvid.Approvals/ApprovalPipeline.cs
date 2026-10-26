@@ -158,6 +158,11 @@ public enum ApprovalResolution
 public sealed record ApprovalResult(bool Allowed, ApprovalResolution Resolution, ApprovalAssessment Assessment, string? ApprovalId,
     ApprovalScope? Scope);
 
+/// <summary>A7: a code tool's parameters (<see cref="ApprovalOptions.CodeTools"/>).</summary>
+/// <param name="Language">The string parameter naming the script's language.</param>
+/// <param name="Code">The string parameter holding the script's source.</param>
+public sealed record CodeToolParameters(string Language, string Code);
+
 public sealed record ApprovalOptions
 {
     public static ApprovalOptions Default { get; } = new();
@@ -172,6 +177,13 @@ public sealed record ApprovalOptions
     /// tool call, and a read-only command runs without asking.
     /// </summary>
     public IReadOnlyDictionary<string, string> ShellTools { get; init; } = ImmutableDictionary<string, string>.Empty;
+
+    /// <summary>
+    /// A7: tools whose call runs a script (code mode's <c>execute_code</c>), by tool name, with the string parameters that
+    /// hold its language and source. A call to one is assessed as the <see cref="CodeAction"/> it runs: kind <c>code</c>,
+    /// the source as its text, nothing mined from it as paths or addresses, and always asked, once.
+    /// </summary>
+    public IReadOnlyDictionary<string, CodeToolParameters> CodeTools { get; init; } = ImmutableDictionary<string, CodeToolParameters>.Empty;
 
     /// <summary>
     /// Detection rules evaluated at pre_execute (C-023), after the hardline list and before everything else. Null (the
@@ -323,6 +335,7 @@ public sealed class ApprovalPipeline
     {
         ShellAction shell => ShellAnalyzer.Analyze(shell.Command, Environment),
         ToolAction tool => ToolAnalyzer.Analyze(tool, Environment),
+        CodeAction code => CodeAnalyzer.Analyze(code),
         null => throw new ArgumentNullException(nameof(action)),
         _ => throw new ArgumentException($"Unknown action type {action.GetType().Name}.", nameof(action)),
     };
@@ -559,6 +572,12 @@ public sealed class ApprovalPipeline
             && tool.Arguments.ValueKind == System.Text.Json.JsonValueKind.Object
             && tool.Arguments.TryGetProperty(parameter, out var command) && command.ValueKind == System.Text.Json.JsonValueKind.String)
             return new ShellAction(command.GetString()!);
+        // A7: a code tool's call is the script it runs; without both strings it stays a tool call, which asks (no path found).
+        if (action is ToolAction code && Options.CodeTools.TryGetValue(code.Tool.Name, out var names)
+            && code.Arguments.ValueKind == System.Text.Json.JsonValueKind.Object
+            && code.Arguments.TryGetProperty(names.Language, out var language) && language.ValueKind == System.Text.Json.JsonValueKind.String
+            && code.Arguments.TryGetProperty(names.Code, out var source) && source.ValueKind == System.Text.Json.JsonValueKind.String)
+            return new CodeAction(code.Tool.Name, language.GetString()!, source.GetString()!);
         // Without its command the call stays a tool call: it changes files and processes with no target found, so it asks.
         return action;
     }
