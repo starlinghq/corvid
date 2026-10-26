@@ -36,15 +36,52 @@ dotnet build src/Corvid.App/Corvid.App.csproj -c Release -f net10.0-browserwasm 
 ```
 
 It builds with the workload (A3: `SelectableButtonAutomationPeer` skips the selection property event, which Uno 6.7 does not
-implement in the browser head) but has not been run in a browser yet; it runs on the demo services only, since the engine
-is desktop-only until attached mode (G-1).
+implement in the browser head; A6: the approval card's key repeat check reads no `KeyStatus` there) and runs in a browser
+(A6, headless Chromium): attached to the Corvid that serves it (below), or the demo with `?demo`. It does not call
+`AppLogging`, whose console logger provider throws in a browser and left the tab on its loading bar.
+
+## Attached mode (G-1)
+
+The window can show the sessions of a Corvid that runs elsewhere: `corvid serve --attach` serves the session seam
+(`ISessionService`, the engine's own `EngineSessionService`) over a WebSocket, and the app attaches with `--attach`. The
+Sessions page, the rail, approvals with the full card, questions and the queue work as in-process; the other areas say
+that they run on the engine's machine.
+
+```sh
+corvid serve --attach --no-openai                                  # unix:$XDG_RUNTIME_DIR/corvid/attach.sock
+Corvid.App --attach unix:$XDG_RUNTIME_DIR/corvid/attach.sock       # the owner, on the same machine
+corvid serve --attach --listen ws://127.0.0.1:8737 --web <wasm publish>/wwwroot   # plus a loopback WebSocket and the browser app
+corvid serve pair                                                  # a one-time code (5 min) for another device
+Corvid.App --attach ws://127.0.0.1:8737 --pair XXXXX-XXXXX         # pairs, keeps the device token, attaches
+# a browser: http://127.0.0.1:8737/#pair=XXXXX-XXXXX               # the code in the fragment, the token in localStorage
+corvid serve devices; corvid serve revoke <name>
+```
+
+- **Tokens.** Every connection needs one. The owner token is the Vault secret `Corvid:Serve:Attach:TokenSecret` names
+  (checked through Vault's scrubber, as `corvid serve`'s bearer token is; Corvid never holds it, so hand it to the app
+  with `CORVID_ATTACH_TOKEN`), or, without one, a token generated on first use in
+  `$XDG_STATE_HOME/corvid/attach/owner.token` (0600, in a 0700 directory; a file others can read is refused). A paired
+  device's token is kept on the server as a SHA-256 digest in `devices.json` (0600) and on the client in
+  `client-tokens.json` (0600) or the browser's localStorage. Pairing codes live in the server's memory only, redeem
+  once, expire after 5 minutes and, past 10 wrong codes or tokens a minute, nothing is accepted until the minute ends.
+- **Where it listens.** A Unix socket (0600) by default; `--listen` adds a WebSocket, loopback only unless the owner token
+  is a Vault secret. On loopback only loopback host names are served (no DNS rebinding), and a browser is accepted only
+  from the pages the server serves itself (`Origin`).
+- **Who sees what.** There is no guest: the owner and devices the owner paired get the seam, approvals included (F22);
+  anything else is closed before it sees a session. A device cannot make pairing codes.
+- **Disconnects.** A client that goes leaves the engine as it was: its approvals wait for another client or their deadline
+  (then denied), and once no client is left a question a turn asked inside the turn is put aside (the turn ends with it
+  open, and the next message answers it). The window shows a notice in each open session and its requests fail; open it
+  again to attach (no automatic reconnect yet).
 
 ## Command line
 
 | Option | Effect |
 | --- | --- |
 | `--engine` | The default (the option only says so): Corvid's engine in-process (it hosts the gateway and the scheduler only when asked: `Corvid:App:HostGateway`, `Corvid:App:HostScheduler`, or Start hosting on the Gateway and Jobs pages; U-8) (`Corvid.App.Engine`, desktop head only), over the same `corvid.json`, models and event log as the CLI; `CORVID_CONFIG` and `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR` move them (a test home sets them all, and `Corvid:Models:Cache`, to temporary directories). The host starts and the model cache is checked before the window opens; the models load in the background. With models missing it opens First run. Every area runs on the engine; a member the engine cannot honour yet refuses with the work item that brings it ("comes with U-6: …", shown as a red notice or a disabled action). Not with `--demo`. |
-| `--demo` | Demo services and the scripted scenario instead of the engine, with the clock frozen at 2026-10-24 14:05 local so every relative time and screenshot is stable. Every mockup comparison and screenshot of a mocked screen passes it; the browser head runs only the demo. |
+| `--demo` | Demo services and the scripted scenario instead of the engine, with the clock frozen at 2026-10-24 14:05 local so every relative time and screenshot is stable. Every mockup comparison and screenshot of a mocked screen passes it; the browser head opens it with `?demo`. |
+| `--attach <address>` | G-1: a Corvid elsewhere (`corvid serve --attach`) instead of the engine here: `unix:/path/attach.sock` or `ws://host:port`. The token is the one pairing kept for that address or, on this machine, the owner token (`$XDG_STATE_HOME/corvid/attach/owner.token`, or `$CORVID_ATTACH_TOKEN`). A refusal opens the window with every area saying why. Not with `--demo`, `--engine` or `--scene`. See Attached mode. |
+| `--pair <code>` | With `--attach`: pairs this window as a device with a code from `corvid serve pair` first, keeping its token (0600) for the next `--attach` to the address. |
 | `--theme light\|dark\|system` | The theme to start in; `system` by default. Settings switches it at run time. |
 | `--page <area>` | The area to open: `sessions`, `board`, `review`, `rewind`, `memory`, `skills`, `jobs`, `models`, `safety`, `mcp`, `gateway`, `secrets`, `audit`, `settings`, `first-run` (any case; `=` works too: `--page=models`). |
 | `--session <id>` | The session to select and open, such as `cli-9f2e`; with `--page`, it is selected and the page shows. |
@@ -322,7 +359,9 @@ heads and are unverified with a real screen reader.
 `tools/Corvid.Architecture` holds the app's rules, with tests in `tests/Corvid.Architecture.Tests`: Uno's packages
 appear in `Corvid.App` only, from an explicit list of what Uno.Sdk's implicit packages resolve (another list for the
 WebAssembly target); `Corvid.App.Core` takes no package but Markdig and no project but `Corvid.Abstractions`; only the
-head's desktop target and `Corvid.App.Engine` reach `Corvid.Host`, and the WebAssembly target never does. No
+head's desktop target and `Corvid.App.Engine` reach `Corvid.Host`, and the WebAssembly target never does. The CLI
+references `Corvid.App.Engine` (A6, G-1) so `corvid serve --attach` serves the engine's own session service: the remote
+seam is `ISessionService` itself, with no second copy of the approval, queue and question logic. No
 CommunityToolkit, MVUX, Uno.Extensions or Uno Toolkit: Hot Design (which brings them) and the in-app MCP endpoint are
 turned off in the project. The WebAssembly target pins `System.Security.Cryptography.Pkcs` and `.Xml` to the patched
 release over the 10.0.12 that Uno.Sdk's `Microsoft.Windows.Compatibility` brings (Directory.Packages.props); the desktop

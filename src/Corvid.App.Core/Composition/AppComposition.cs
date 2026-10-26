@@ -55,7 +55,8 @@ public sealed partial class AppComposition : IDisposable
         _ = HostingService; // the status bar says so whenever this app hosts the gateway or the scheduler (U-8)
         Shell.Navigate(options.Page ?? Area.Sessions);
         // G-7: the layout the person chose, from ui.db.
-        if (!options.Demo && Services.GetType() != typeof(UnavailableAppServices))
+        // Attached (G-1), ui.db is the engine machine's and not served: the window keeps its default layout.
+        if (!options.Demo && Services.GetType() != typeof(UnavailableAppServices) && Services is not Remote.RemoteAppServices)
             PreferencesApplied = ApplyPreferencesAsync();
     }
 
