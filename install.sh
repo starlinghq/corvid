@@ -151,6 +151,10 @@ mkdir -p "$prefix/lib/corvid" "$bindir"
 # Replace a previous install of the same version whole, so no stale file survives.
 rm -rf "$dest.new"
 mv "$work/x" "$dest.new"
+# U-9: reinstalling this version without --app keeps the app installed with it (the same release), not deleted under its link.
+if [ -z "$app" ] && [ -f "$dest/app/corvid-app" ] && [ "$(cat "$dest/app/VERSION" 2>/dev/null || true)" = "$installed" ]; then
+    mv "$dest/app" "$dest.new/app"
+fi
 rm -rf "$dest"
 mv "$dest.new" "$dest"
 chmod 0755 "$dest/corvid" "$dest/corvid-vault" "$dest/corvid-sandbox"
@@ -190,6 +194,20 @@ EOF
     mv "$desktop.new" "$desktop"
 fi
 
+# U-9: without --app, an app linked from an earlier install stays only while it is this release (corvid and the app share
+# the data directory and the event log's format). Otherwise its link, desktop entry and icon go, and the person is told.
+if [ -z "$app" ] && [ -L "$bindir/corvid-app" ]; then
+    target="$(readlink "$bindir/corvid-app")"
+    app_dir="$(dirname "$target")"
+    if [ ! -e "$bindir/corvid-app" ] || [ "$(cat "$app_dir/VERSION" 2>/dev/null || true)" != "$installed" ]; then
+        rm -f "$bindir/corvid-app" "$prefix/share/applications/corvid-app.desktop" \
+            "$prefix/share/icons/hicolor/scalable/apps/corvid-app.svg" "$prefix/share/icons/hicolor/256x256/apps/corvid-app.png"
+        printf 'Removed the windowed app link (it was not Corvid %s); install it again with: install.sh --app\n' "$installed" >&2
+    else
+        app_kept=1
+    fi
+fi
+
 # v0.1.0's installer put versions in <prefix>/share/corvid/<version>/, which is also Corvid's data directory. Remove those
 # old installs, now that nothing links to them. A directory goes only if it holds exactly the four files a release
 # tarball unpacks to, so Corvid's own data (checkpoints, the event log) is never touched.
@@ -226,6 +244,8 @@ Next:
 EOF
 if [ -n "$app" ]; then
     printf '  corvid-app                        # the windowed app, or Corvid in the applications menu\n'
+elif [ -n "${app_kept:-}" ]; then
+    printf '  corvid-app                        # the windowed app (kept from the earlier install of %s)\n' "$installed"
 else
     printf '\nThe windowed app installs with: install.sh --app\n'
 fi
