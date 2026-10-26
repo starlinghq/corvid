@@ -118,6 +118,67 @@ public sealed class AttachEndpointTests : IAsyncDisposable
         await app.StopAsync(Ct);
     }
 
+    // A6 review L1: beyond loopback, only the address listened on is served (a DNS name could be rebound onto this host,
+    // and its pages would then pass the Origin check as this server's own); on an unspecified address, any IP literal.
+    [Theory]
+    [InlineData("ws://192.0.2.5:8737", "192.0.2.5:8737", true)]
+    [InlineData("ws://192.0.2.5:8737", "attacker.example:8737", false)]
+    [InlineData("ws://192.0.2.5:8737", "192.0.2.6:8737", false)]
+    [InlineData("ws://0.0.0.0:8737", "192.0.2.6:8737", true)]
+    [InlineData("ws://0.0.0.0:8737", "corvid.lan:8737", false)]
+    [InlineData("ws://[::]:8737", "[2001:db8::1]:8737", true)]
+    public void BeyondLoopbackOnlyTheAddressListenedOnIsServed(string listen, string host, bool served)
+    {
+        var context = new Microsoft.AspNetCore.Http.DefaultHttpContext();
+        context.Connection.RemoteIpAddress = IPAddress.Parse("192.0.2.99");
+        context.Request.Host = new Microsoft.AspNetCore.Http.HostString(host);
+        var refusal = AttachEndpoint.Refusal(context, loopback: false, new Uri(listen));
+        Assert.Equal(served, refusal is null);
+        if (!served)
+            Assert.Equal(Microsoft.AspNetCore.Http.StatusCodes.Status421MisdirectedRequest, refusal!.Status);
+    }
+
+    // A6 review L2: a socket directory someone else may write, or that is not the user's, is refused before the bind.
+    [Fact]
+    public void ASocketDirectoryOthersMayWriteOrThatIsNotYoursIsRefused()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var own = Directory.CreateDirectory(Path.Combine(_directory, "own")).FullName;
+        File.SetUnixFileMode(own, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        AttachEndpoint.CheckSocketDirectory(own);
+
+        File.SetUnixFileMode(own, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.GroupWrite);
+        Assert.Contains("written by others", Assert.Throws<IOException>(() => AttachEndpoint.CheckSocketDirectory(own)).Message, StringComparison.Ordinal);
+        // /tmp: anyone may write it.
+        Assert.Throws<IOException>(() => AttachEndpoint.CheckSocketDirectory("/tmp"));
+        // A directory root owns (unless the tests run as root).
+        if (UnixPeers.CurrentUser is not (null or 0))
+            Assert.Contains("not yours", Assert.Throws<IOException>(() => AttachEndpoint.CheckSocketDirectory("/usr")).Message, StringComparison.Ordinal);
+    }
+
+    // A6 review L7: the first SIGTERM stops serve as Ctrl-C does; a second one is not swallowed, so the process ends.
+    [Fact]
+    public void ASecondSigtermIsNotSwallowed()
+    {
+        using var stop = new CancellationTokenSource();
+        var first = new System.Runtime.InteropServices.PosixSignalContext(System.Runtime.InteropServices.PosixSignal.SIGTERM);
+        ServeCommand.OnTerminate(first, stop);
+        Assert.True(first.Cancel);
+        Assert.True(stop.IsCancellationRequested);
+
+        var second = new System.Runtime.InteropServices.PosixSignalContext(System.Runtime.InteropServices.PosixSignal.SIGTERM);
+        ServeCommand.OnTerminate(second, stop);
+        Assert.False(second.Cancel);
+    }
+
+    // A6 review H2: the protection side (Corvid.Sandbox, for the approvals and the launcher) and attached mode (Corvid.App.Core)
+    // name the same directory.
+    [Fact]
+    public void TheProtectedAttachDirectoryIsTheOneAttachedModeUses() =>
+        Assert.Contains(AttachedPaths.StateDirectory, Corvid.Sandbox.BuiltInDenials.AttachStateDirectories(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), Environment.GetEnvironmentVariable));
+
     [Theory]
     [InlineData("ws://127.0.0.1:8737", true)]
     [InlineData("127.0.0.1:8737", true)]

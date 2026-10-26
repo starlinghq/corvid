@@ -106,11 +106,7 @@ internal static class ServeCommand
             context.Interrupts.Interrupted += OnInterrupt;
             // SIGTERM (systemd, kill) stops it as Ctrl-C does, so the socket and the sessions are let go of.
             using var terminate = OperatingSystem.IsWindows() ? null : System.Runtime.InteropServices.PosixSignalRegistration.Create(
-                System.Runtime.InteropServices.PosixSignal.SIGTERM, signal =>
-                {
-                    signal.Cancel = true;
-                    stop.Cancel();
-                });
+                System.Runtime.InteropServices.PosixSignal.SIGTERM, signal => OnTerminate(signal, stop));
             WebApplication? openAIApp = null;
             WebApplication? attachApp = null;
             var boundSocket = false;
@@ -143,9 +139,10 @@ internal static class ServeCommand
                         NoClientsLeft = sessions!.PutAsideInTurnQuestions,
                     };
                     sessions.AnswererPresent = () => server.Clients > 0;
-                    attachApp = AttachEndpoint.Build(server, new AttachEndpointOptions(plan.Socket, plan.Listen, plan.Web), stop.Token);
                     try
                     {
+                        // The socket's directory is checked as Kestrel is configured (A6 review L2): a refusal is an IOException too.
+                        attachApp = AttachEndpoint.Build(server, new AttachEndpointOptions(plan.Socket, plan.Listen, plan.Web), stop.Token);
                         await attachApp.StartAsync(cancellationToken).ConfigureAwait(false);
                     }
                     catch (IOException exception)
@@ -212,6 +209,16 @@ internal static class ServeCommand
             }
         }
         return ExitCodes.Success;
+    }
+
+    /// <summary>
+    /// SIGTERM stops serve as Ctrl-C does, letting go of the socket and the sessions; A6 review L7: a second one while that
+    /// stop runs is not swallowed, so the process ends at once (a stop that hangs never keeps <c>kill</c> from working).
+    /// </summary>
+    internal static void OnTerminate(System.Runtime.InteropServices.PosixSignalContext signal, CancellationTokenSource stop)
+    {
+        signal.Cancel = !stop.IsCancellationRequested;
+        stop.Cancel();
     }
 
     /// <summary>Where attached mode listens and who its owner is.</summary>

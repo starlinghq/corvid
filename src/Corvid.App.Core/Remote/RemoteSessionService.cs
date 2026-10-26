@@ -55,7 +55,13 @@ public sealed class RemoteSessionService : ISessionService, IAsyncDisposable, ID
     private RemoteSessionService(IMessageChannel channel, IDispatcher dispatcher)
     {
         _dispatcher = dispatcher;
-        _peer = new JsonRpcPeer(channel, onRequest: null, OnNotification);
+        // A6 review M2: a request the engine does not answer in time fails (and is cancelled there), unless it may take as
+        // long as a person or a model does.
+        _peer = new JsonRpcPeer(channel, onRequest: null, OnNotification)
+        {
+            RunsLong = AttachedProtocol.RunsLong,
+            RequestTimeout = AttachedProtocol.RequestTimeout,
+        };
         _ = WatchAsync();
     }
 
@@ -128,7 +134,7 @@ public sealed class RemoteSessionService : ISessionService, IAsyncDisposable, ID
     public static async Task<string> PairAsync(IMessageChannel channel, string code, string device, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        var peer = new JsonRpcPeer(channel, null, null);
+        var peer = new JsonRpcPeer(channel, null, null) { RequestTimeout = AttachedProtocol.RequestTimeout };
         await using (peer.ConfigureAwait(false))
         {
             peer.Start();

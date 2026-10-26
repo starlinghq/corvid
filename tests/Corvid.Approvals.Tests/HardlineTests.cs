@@ -38,7 +38,7 @@ public sealed class HardlineTests
         // The defaults stay protected when the variables point elsewhere, as the sandbox hides both.
         Assert.Equal(["/h/.local/share/corvid-vault", "/h/.config/corvid-vault", "/data/corvid-vault", "/conf/corvid-vault",
             "/run/u/corvid-vault"], env.Protected.Vault);
-        Assert.Equal(["/conf/corvid"], env.Protected.SafetyConfiguration);
+        Assert.Equal(["/conf/corvid", "/h/.local/state/corvid/attach"], env.Protected.SafetyConfiguration);
         Assert.Contains("/h/.ssh", env.Protected.CredentialStores);
         Assert.Contains("/conf/gh", env.Protected.CredentialStores);
         Assert.Contains("/run/u", env.Protected.CredentialStores);
@@ -53,6 +53,23 @@ public sealed class HardlineTests
         Assert.Subset(env.Protected.Vault.ToHashSet(), Sandbox.BuiltInDenials.VaultDirectories("/h", variables.GetValueOrDefault).ToHashSet());
         Assert.Subset(env.Protected.CredentialStores.ToHashSet(), Sandbox.BuiltInDenials.SecretPaths("/h", variables.GetValueOrDefault).ToHashSet());
         Assert.Contains(Sandbox.BuiltInDenials.RuntimeDirectory(variables.GetValueOrDefault), env.Protected.CredentialStores);
+        Assert.Subset(env.Protected.SafetyConfiguration.ToHashSet(), Sandbox.BuiltInDenials.AttachStateDirectories("/h", variables.GetValueOrDefault).ToHashSet());
+    }
+
+    // A6 review H2: attached mode's owner token and paired devices answer approvals over corvid serve --attach. A command
+    // that writes them is refused outright, at the default place and under XDG_STATE_HOME.
+    [Theory]
+    [InlineData("echo x > /h/.local/state/corvid/attach/devices.json")]
+    [InlineData("rm -rf /h/.local/state/corvid")]
+    [InlineData("cp mine.json /state/corvid/attach/devices.json")]
+    [InlineData("echo x > $XDG_STATE_HOME/corvid/attach/owner.token")]
+    public void Attached_modes_tokens_are_safety_configuration(string command)
+    {
+        var env = ApprovalEnvironment.Create("/w", "/h", "/data", "/conf", "/run/u", stateHome: "/state");
+        Assert.Contains("/h/.local/state/corvid/attach", env.Protected.SafetyConfiguration);
+        Assert.Contains("/state/corvid/attach", env.Protected.SafetyConfiguration);
+        Assert.Contains(Hardline.Check(Shell.ShellAnalyzer.Analyze(command, env), env),
+            reason => reason.Code == HardlineRules.SafetyConfigurationChange);
     }
 
     [Theory]

@@ -51,6 +51,28 @@ public sealed class FileToolsTests : IDisposable
         Assert.Equal(next + 2, rest.GetProperty("end_line").GetInt32());
     }
 
+    // A6 review H2: a workspace rooted at the home directory holds attached mode's tokens; the file tools neither read the
+    // owner token nor write the paired devices, at the default place or under XDG_STATE_HOME.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Attached_modes_tokens_in_a_home_workspace_are_refused(bool customState)
+    {
+        var home = _tree.Path("home");
+        var state = customState ? _tree.Path("home", "state") : _tree.Path("home", ".local", "state");
+        _tree.Write(Path.Combine(state, "corvid", "attach", "owner.token")[(_tree.Root.Length + 1)..], "owner-secret");
+        var environment = Approvals.ApprovalEnvironment.Create(home, home, stateHome: customState ? state : null);
+        var tools = new FileTools(Workspace.For(environment), FileToolOptions.Default);
+        var relative = Path.GetRelativePath(home, Path.Combine(state, "corvid", "attach"));
+
+        var read = await Assert.ThrowsAsync<ToolArgumentException>(() => Invoke(tools, "read_file", $$"""{"path":"{{relative}}/owner.token"}"""));
+        Assert.Contains("protected location", read.Message, StringComparison.Ordinal);
+        var write = await Assert.ThrowsAsync<ToolArgumentException>(() =>
+            Invoke(tools, "write_file", $$"""{"path":"{{relative}}/devices.json","content":"{}"}"""));
+        Assert.Contains("protected location", write.Message, StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(state, "corvid", "attach", "devices.json")));
+    }
+
     [Fact]
     public async Task Binary_files_are_not_read()
     {

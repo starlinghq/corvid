@@ -60,15 +60,24 @@ public sealed record AttachedAddress(Uri WebSocket, string? UnixSocket)
 public static class AttachedClient
 {
     /// <summary>Connects to the address; the channel reads at most <see cref="AttachedProtocol.MaxResponseBytes"/> per message.</summary>
-    public static async Task<IMessageChannel> OpenAsync(AttachedAddress address, CancellationToken cancellationToken)
+    /// <exception cref="IOException">It cannot be reached, or (Linux) a Unix socket is served by another user.</exception>
+    public static Task<IMessageChannel> OpenAsync(AttachedAddress address, CancellationToken cancellationToken) =>
+        OpenAsync(address, UnixPeers.CurrentUser, cancellationToken);
+
+    /// <param name="user">The user a Unix socket's server must run as (Linux); null checks nothing.</param>
+    internal static async Task<IMessageChannel> OpenAsync(AttachedAddress address, uint? user, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(address);
         var socket = new ClientWebSocket();
         try
         {
-            // A browser keeps its WebSockets alive itself and refuses the option.
+            // A browser keeps its WebSockets alive itself and refuses the options. A6 review M2: a peer that stops answering
+            // pings is dropped after KeepAliveTimeout, so a dead engine is found rather than waited on.
             if (!OperatingSystem.IsBrowser())
-                socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
+            {
+                socket.Options.KeepAliveInterval = AttachedProtocol.KeepAliveInterval;
+                socket.Options.KeepAliveTimeout = AttachedProtocol.KeepAliveTimeout;
+            }
             if (address.UnixSocket is { } path)
             {
                 if (OperatingSystem.IsBrowser())
@@ -81,6 +90,11 @@ public static class AttachedClient
                         try
                         {
                             await unix.ConnectAsync(new UnixDomainSocketEndPoint(path), token).ConfigureAwait(false);
+                            // A6 review M3: before a byte is sent, the server must be this user's own process (SO_PEERCRED),
+                            // so a socket another user put at the path never sees a token.
+                            if (user is { } expected && UnixPeers.UserOf(unix) is var peer && peer != expected)
+                                throw new PeerRefusedException($"{path} is served by {(peer is { } other ? $"user {other}" : "a process whose user cannot be told")}, " +
+                                    "not by you: no token is sent to it.");
                             return new NetworkStream(unix, ownsSocket: true);
                         }
                         catch
@@ -102,6 +116,10 @@ public static class AttachedClient
         catch (Exception exception) when (exception is WebSocketException or HttpRequestException or SocketException)
         {
             socket.Dispose();
+            // The peer check's refusal arrives wrapped by the handler; it is said as it is.
+            for (var inner = exception.InnerException; inner is not null; inner = inner.InnerException)
+                if (inner is PeerRefusedException refused)
+                    throw new PeerRefusedException($"Cannot attach to {address.Display}: {refused.Message}");
             throw new IOException($"Cannot reach Corvid at {address.Display}: {exception.Message}", exception);
         }
         catch

@@ -670,6 +670,19 @@ The fix round after the verifier's pass (A6V1-01 to 11) and the end-to-end pass:
   (`IAttachedAuthenticator.IsCurrentAsync`, `AttachedProtocol.RevocationCheck`). `corvid serve` warns that `ws://` past
   loopback is cleartext, and the README says so; there is no TLS (U-12). The browser head sends a `#pair=` code only to
   the server that served the page. Attached mode's scope in A6 is recorded as U-12: Sessions and the Board (A6V1-02).
+- **Attached mode after PR #81's review.** `$XDG_STATE_HOME/corvid/attach` is protected state (`ProtectedPaths` safety
+  configuration from `BuiltInDenials.AttachStateDirectories`, and a launcher mask): the file tools refuse it, no command
+  writes it, the sandbox hides it. A presented token is always checked; failures still count against pairing. The owner
+  token goes on its own only over a Unix socket, on Linux, after `SO_PEERCRED` says the server is this user's
+  (`UnixPeers`); over `ws://` a window pairs (challenge-response was not possible: a Vault-held owner token is only
+  verified through Vault, and devices are kept as digests). Requests run in the order sent, with `session/new`,
+  compaction, recaps, forks and commands started in order but run beside the rest (`AttachedProtocol.RunsLong`);
+  `$/cancelRequest` both ways; keep-alive pings (20 s, dropped after 30 s silent) on both ends; a 2-minute request
+  timeout except for the long ones; a 15 s attach timeout in both heads. Joining happens under the connection's gate;
+  a history too large for the client fails alone; an unexpected exception reaches the client as a generic error and the
+  server's log in full; at most 32 connections wait to authenticate; beyond loopback only the listen address is served
+  as Host; a named socket directory must be the user's and not group- or world-writable; a second SIGTERM ends serve;
+  the browser drops `#pair=` with `history.replaceState`; the devices file is read again only when it changed.
 - **Smaller ones.** `install.sh` without `--app` keeps an app of the same release and removes a stale app's link, desktop
   entry and icon with a note (A6V1-03). A slot left pinned after its choice was reset is pinned again on reopen
   (A6V1-07, `SessionModelSlots.RestorePin`). A tainted child's schema-checked output is enclosed as outside content

@@ -17,10 +17,10 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
     /// <summary>The launcher's exit code when it refused; its status file says why.</summary>
     internal const int NotStarted = 125;
 
-    // The launcher needs these to find bubblewrap, compute Vault's directories, and start (a framework-dependent build).
-    // They go to the launcher only; the command gets just the policy's names.
+    // The launcher needs these to find bubblewrap, compute Vault's directories and attached mode's (XDG_STATE_HOME, A6
+    // review H2), and start (a framework-dependent build). They go to the launcher only; the command gets just the policy's names.
     private static readonly string[] LauncherEnvironment =
-        ["PATH", "HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR", "DOTNET_ROOT"];
+        ["PATH", "HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "DOTNET_ROOT"];
 
     private readonly SandboxOptions _options = options ?? new SandboxOptions();
 

@@ -63,13 +63,23 @@ corvid serve devices; corvid serve revoke <name>
   `$XDG_STATE_HOME/corvid/attach/owner.token` (0600, in a 0700 directory; a file others can read is refused). A paired
   device's token is kept on the server as a SHA-256 digest in `devices.json` (0600) and on the client in
   `client-tokens.json` (0600) or the browser's localStorage. Pairing codes live in the server's memory only, redeem
-  once and expire after 5 minutes. Past 10 wrong codes or tokens a minute from one peer, that peer is refused until the
-  minute ends, and past 100 a minute from the network as a whole every network peer is; the Unix socket is counted on its
-  own, so guesses from the network never lock the owner out of their own machine. `corvid serve revoke <name>` refuses
-  the device's next connection and closes the ones it has open (at its next request, or within 5 seconds).
+  once and expire after 5 minutes. Past 10 wrong codes or tokens a minute from one peer, that peer may not pair until the
+  minute ends, and past 100 a minute from the network as a whole no network peer may; the Unix socket is counted on its
+  own. A presented token is always checked (A6 review): a 256-bit token cannot be guessed, so a flood of wrong ones never
+  locks out a valid one. `corvid serve revoke <name>` refuses the device's next connection and closes the ones it has
+  open (at its next request, or within 5 seconds). The window sends the owner token (the file's, or
+  `CORVID_ATTACH_TOKEN`) on its own only over a Unix socket, on Linux, after the kernel says the server is the same user
+  (`SO_PEERCRED`); over `ws://`, loopback included, a window pairs like any device, since another local user could hold
+  the port. The state directory is protected state: the file tools refuse it, no command may write it, and the sandbox
+  hides it from every command.
 - **Where it listens.** A Unix socket (0600) by default; `--listen` adds a WebSocket, loopback only unless the owner token
-  is a Vault secret. On loopback only loopback host names are served (no DNS rebinding), and a browser is accepted only
-  from the pages the server serves itself (`Origin`). There is no TLS: past loopback the owner token, device tokens and
+  is a Vault secret. On loopback only loopback host names are served (no DNS rebinding), beyond it only the address listened
+  on (any IP literal on `0.0.0.0`), and a browser is accepted only from the pages the server serves itself (`Origin`). A
+  socket directory you name must be yours and writable by nobody else. At most 32 connections may wait to authenticate
+  at once. Both ends ping every 20 s and drop a peer silent for 30 s; a request not answered in 2 minutes fails (except
+  `session/new`, compaction, recaps, forks and commands); a window that cannot attach within 15 s opens refused.
+  Requests from one connection run in the order sent (those long ones start in order and run beside the rest), and either
+  end may give one up with `$/cancelRequest`. There is no TLS: past loopback the owner token, device tokens and
   pairing codes cross the network in cleartext, and they answer approvals, so `corvid serve` says so at start. Listen
   beyond loopback only on a network you trust, or reach a loopback listener through an SSH tunnel or a TLS proxy. The
   browser head sends a `#pair=` code only to the server that served the page, never to another `?attach=` address.

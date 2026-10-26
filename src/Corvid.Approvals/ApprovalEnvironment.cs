@@ -15,7 +15,10 @@ namespace Corvid.Approvals;
 /// Directories and files that hold credentials: the sandbox's secret paths (<see cref="BuiltInDenials.SecretPaths"/>) and
 /// runtime directory, plus stores the sandbox does not hide (<c>~/.kube</c>, <c>~/.netrc</c>, <c>/etc/shadow</c>, ...).
 /// </param>
-/// <param name="SafetyConfiguration">Corvid's own approval and sandbox configuration (<c>$XDG_CONFIG_HOME/corvid</c>).</param>
+/// <param name="SafetyConfiguration">
+/// Corvid's own approval and sandbox configuration (<c>$XDG_CONFIG_HOME/corvid</c>), and attached mode's tokens
+/// (<see cref="BuiltInDenials.AttachStateDirectories"/>), which the file tools refuse and the sandbox hides.
+/// </param>
 public sealed record ProtectedPaths(
     ImmutableArray<string> Vault,
     ImmutableArray<string> CredentialStores,
@@ -30,7 +33,7 @@ public sealed record ProtectedPaths(
     ];
 
     /// <summary>The protected paths for a home directory and the XDG variables <paramref name="environment"/> reads.</summary>
-    /// <param name="environment">Reads <c>XDG_DATA_HOME</c>, <c>XDG_CONFIG_HOME</c> and <c>XDG_RUNTIME_DIR</c>; null is unset.</param>
+    /// <param name="environment">Reads <c>XDG_DATA_HOME</c>, <c>XDG_CONFIG_HOME</c>, <c>XDG_STATE_HOME</c> and <c>XDG_RUNTIME_DIR</c>; null is unset.</param>
     public static ProtectedPaths For(string home, Func<string, string?> environment)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(home);
@@ -50,7 +53,10 @@ public sealed record ProtectedPaths(
         return new ProtectedPaths(
             [.. vault.Select(PathMath.Normalize).Distinct(StringComparer.Ordinal)],
             [.. stores.Select(PathMath.Normalize).Distinct(StringComparer.Ordinal), "/etc/shadow", "/etc/gshadow", "/etc/sudoers", "/etc/sudoers.d"],
-            [PathMath.Normalize(Path.Combine(configHome, "corvid"))]);
+            // A6 review H2: attached mode's tokens and paired devices answer approvals; no tool writes them, the file tools
+            // and the sandbox keep them from every command.
+            [PathMath.Normalize(Path.Combine(configHome, "corvid")),
+                .. BuiltInDenials.AttachStateDirectories(home, environment).Select(PathMath.Normalize).Distinct(StringComparer.Ordinal)]);
     }
 
     /// <summary>
@@ -110,13 +116,14 @@ public sealed record ApprovalEnvironment
     /// For expansion, an unset data or config directory takes its default, which is also protected whatever is set.
     /// </summary>
     public static ApprovalEnvironment Create(string workspace, string home, string? dataHome = null, string? configHome = null,
-        string? runtimeDirectory = null)
+        string? runtimeDirectory = null, string? stateHome = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(home);
         var variables = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["XDG_DATA_HOME"] = Absolute(dataHome) ?? Path.Combine(home, ".local", "share"),
             ["XDG_CONFIG_HOME"] = Absolute(configHome) ?? Path.Combine(home, ".config"),
+            ["XDG_STATE_HOME"] = Absolute(stateHome) ?? Path.Combine(home, ".local", "state"),
         };
         if (Absolute(runtimeDirectory) is { } runtime)
             variables["XDG_RUNTIME_DIR"] = runtime;
@@ -129,7 +136,7 @@ public sealed record ApprovalEnvironment
     public static ApprovalEnvironment FromProcess(string workspace)
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return Create(Path.GetFullPath(workspace), home, Env("XDG_DATA_HOME"), Env("XDG_CONFIG_HOME"), Env("XDG_RUNTIME_DIR"));
+        return Create(Path.GetFullPath(workspace), home, Env("XDG_DATA_HOME"), Env("XDG_CONFIG_HOME"), Env("XDG_RUNTIME_DIR"), Env("XDG_STATE_HOME"));
 
         static string? Env(string name) => Environment.GetEnvironmentVariable(name) is { Length: > 0 } value ? value : null;
     }

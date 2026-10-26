@@ -17,8 +17,9 @@ public sealed record PairedDevice(string Name, string Digest, DateTimeOffset Pai
 /// next connection and closes the ones it has open (<see cref="IsCurrentAsync"/>). Pairing codes live in this process
 /// only: one the owner made (<see cref="CreatePairingCode"/>, from the
 /// desktop or <c>corvid serve pair</c>) redeems once before it expires. Past <see cref="FailuresPerMinute"/> wrong codes or
-/// tokens in a minute from one peer, that peer is refused everything until the minute is over, and past
-/// <see cref="NetworkFailuresPerMinute"/> from the network as a whole every network peer is, so a code cannot be guessed.
+/// tokens in a minute from one peer, that peer may not pair until the minute is over, and past
+/// <see cref="NetworkFailuresPerMinute"/> from the network as a whole no network peer may, so a code cannot be guessed. A
+/// token is always checked (A6 review M1): it cannot be guessed, so others' failures never lock out a valid one.
 /// The Unix socket (only the owner's user can open it) is counted on its own and never shut by the network's guesses, so
 /// a host on the LAN cannot lock the owner out of their own machine (A6 fix).
 /// </summary>
@@ -51,6 +52,8 @@ public sealed class AttachedAuthenticator(Func<string, CancellationToken, ValueT
     private readonly List<(string Digest, DateTimeOffset Expires)> _codes = [];
     private readonly Dictionary<string, Queue<DateTimeOffset>> _failures = new(StringComparer.Ordinal);
     private readonly Queue<DateTimeOffset> _network = new();
+    private readonly Lock _devicesGate = new();
+    private ((DateTime, long, int) Stamp, IReadOnlyList<PairedDevice> Devices)? _devices;
 
     /// <summary>Makes a pairing code that redeems once within <see cref="CodeLifetime"/>.</summary>
     public PairingCode CreatePairingCode()
@@ -78,10 +81,13 @@ public sealed class AttachedAuthenticator(Func<string, CancellationToken, ValueT
     {
         ArgumentNullException.ThrowIfNull(token);
         ArgumentNullException.ThrowIfNull(peer);
-        if (token.Length is 0 or > 4096 || Limited(peer))
+        if (token.Length is 0 or > 4096)
             return null;
+        // A6 review M1: a presented token is always checked, never refused for others' failures: a token is 256 random bits,
+        // so it cannot be guessed, and refusing it first let a flood of wrong ones lock a valid device or the owner out.
+        // Failures still count, so a peer flooding tokens cannot also guess pairing codes.
         var digest = AttachedSecrets.Digest(token);
-        foreach (var device in ReadDevices(devicesFile))
+        foreach (var device in Devices())
             if (AttachedSecrets.FixedTimeEquals(device.Digest, digest))
                 return new AttachedIdentity(AttachedRole.Device, device.Name);
         // Null (cannot be told: Vault is not answering) refuses, as a wrong token does, but is not counted as a guess.
@@ -143,7 +149,7 @@ public sealed class AttachedAuthenticator(Func<string, CancellationToken, ValueT
         if (identity.Role == AttachedRole.Owner)
             return ValueTask.FromResult(true);
         var digest = AttachedSecrets.Digest(token);
-        return ValueTask.FromResult(ReadDevices(devicesFile).Any(device => AttachedSecrets.FixedTimeEquals(device.Digest, digest)));
+        return ValueTask.FromResult(Devices().Any(device => AttachedSecrets.FixedTimeEquals(device.Digest, digest)));
     }
 
     /// <summary>The paired devices in the file; none when it does not exist.</summary>
@@ -176,10 +182,23 @@ public sealed class AttachedAuthenticator(Func<string, CancellationToken, ValueT
     private static void WriteDevices(string path, IReadOnlyList<PairedDevice> devices) =>
         PrivateFiles.Write(path, JsonSerializer.Serialize(new DevicesFileShape([.. devices]), AttachedFilesJson.Default.DevicesFile));
 
-    private bool Limited(string peer)
+    /// <summary>
+    /// The paired devices, read again only when the file changed (A6 review nit): a check runs before every request a
+    /// device sends, and the file changes only when a device pairs or is revoked. The file is replaced by a rename, so a new
+    /// version always has a new write time or length; the mode is in the stamp too, so a file opened to others by a later
+    /// <c>chmod</c> is refused as before.
+    /// </summary>
+    private IReadOnlyList<PairedDevice> Devices()
     {
-        lock (_gate)
-            return TooMany(peer, _time.GetUtcNow());
+        var info = new FileInfo(devicesFile);
+        var stamp = info.Exists ? (info.LastWriteTimeUtc, info.Length, OperatingSystem.IsWindows() ? 0 : (int)info.UnixFileMode) : (DateTime.MinValue, -1L, 0);
+        lock (_devicesGate)
+            if (_devices is { } cached && cached.Stamp == stamp)
+                return cached.Devices;
+        var devices = ReadDevices(devicesFile);
+        lock (_devicesGate)
+            _devices = (stamp, devices);
+        return devices;
     }
 
     private void Fail(string peer)

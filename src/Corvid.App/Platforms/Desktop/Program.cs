@@ -44,8 +44,10 @@ internal static class Program
             // G-1: another Corvid's sessions in this window. Connected before the window opens (its updates wait for the
             // window's dispatcher); a refusal opens the window anyway, every area saying why.
             attachedDispatcher = new LateDispatcher();
+            // A6 review M3: a host that accepts and then says nothing opens the window refused after a while, never hung.
+            using var connecting = new CancellationTokenSource(AttachedStartup.ConnectTimeout);
             var result = AttachedStartup.ConnectAsync(address, options.Pair, $"{Environment.MachineName} (Corvid app)", attachedDispatcher,
-                new FileDeviceTokenStore(), AttachedPaths.OwnerTokenFile).GetAwaiter().GetResult();
+                new FileDeviceTokenStore(), AttachedPaths.OwnerTokenFile, connecting.Token).GetAwaiter().GetResult();
             Console.Error.WriteLine("corvid app: " + result.Report);
             services = result.Services;
             attached = result.Connection;

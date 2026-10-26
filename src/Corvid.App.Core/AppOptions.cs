@@ -18,8 +18,8 @@ public sealed record AppOptions
                               local, instead of the engine
           --attach <address>  a Corvid that runs elsewhere (corvid serve --attach) instead of the engine here:
                               unix:/path/to/attach.sock, or ws://host:port; its sessions, approvals and questions
-                              in this window. On the same machine the owner token is read from
-                              $XDG_STATE_HOME/corvid/attach/owner.token (or $CORVID_ATTACH_TOKEN)
+                              in this window. Over the Unix socket the owner token is read from
+                              $XDG_STATE_HOME/corvid/attach/owner.token (or $CORVID_ATTACH_TOKEN); over ws://, pair
           --pair <code>       with --attach: pair this window as a device with a code from corvid serve pair;
                               its token is kept for the next --attach to that address
           --theme <theme>     light, dark or system (the default)

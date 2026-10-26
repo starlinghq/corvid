@@ -19,9 +19,13 @@ public sealed class JsonRpcException(int code, string message) : Exception(messa
 /// <summary>
 /// One end of attached mode's JSON-RPC (<see cref="AttachedProtocol"/>) over an <see cref="IMessageChannel"/>: requests both
 /// ways, notifications in order. Everything it sends goes through one queue, so a notification sent after another arrives
-/// after it, and a send never blocks the caller (an engine callback on the dispatcher). Requests it receives run
-/// concurrently, at most <see cref="AttachedProtocol.MaxConcurrentRequests"/> at a time; notifications run in order on the
-/// reading loop. Everything read is untrusted: a message that is not JSON-RPC closes the connection.
+/// after it, and a send never blocks the caller (an engine callback on the dispatcher). Requests it receives run one at a
+/// time in the order they came (A6 review M1: a mode set before a prompt applies to it, a queue move before a removal comes
+/// first), except those <see cref="RunsLong"/> names, which are started in their turn but not waited for, so a request that
+/// waits on a person (a worktree's card) never holds up the answer to it. At most
+/// <see cref="AttachedProtocol.MaxConcurrentRequests"/> are queued or running at once; either end may give one up with
+/// <see cref="AttachedProtocol.CancelRequest"/>. Notifications run in order on the reading loop. Everything read is
+/// untrusted: a message that is not JSON-RPC closes the connection.
 /// </summary>
 public sealed class JsonRpcPeer : IAsyncDisposable
 {
@@ -33,6 +37,9 @@ public sealed class JsonRpcPeer : IAsyncDisposable
     private readonly Action<string, JsonObject?>? _onNotification;
     private readonly Channel<string> _outgoing = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
     private readonly ConcurrentDictionary<long, TaskCompletionSource<JsonNode?>> _pending = new();
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _incoming = new(StringComparer.Ordinal);
+    private readonly Channel<Incoming> _ordered = Channel.CreateUnbounded<Incoming>(new UnboundedChannelOptions { SingleReader = true });
+    private Task? _answering;
     private readonly CancellationTokenSource _stop = new();
     private readonly TaskCompletionSource<string?> _closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Lock _closeGate = new();
@@ -54,6 +61,27 @@ public sealed class JsonRpcPeer : IAsyncDisposable
     /// <summary>The longest a message queued for the other end may be in bytes, in total, before the connection is dropped.</summary>
     public long MaxQueuedBytes { get; init; } = AttachedProtocol.MaxQueuedBytes;
 
+    /// <summary>
+    /// Requests that are started in their turn but not waited for before the next (A6 review M1), and that the caller sets
+    /// no <see cref="RequestTimeout"/>; null runs every request in turn.
+    /// </summary>
+    public Func<string, bool>? RunsLong { get; init; }
+
+    /// <summary>
+    /// How long <see cref="RequestAsync"/> waits for an answer to a request that does not <see cref="RunsLong"/> before it
+    /// gives up, tells the other end to cancel it and fails (A6 review M2). Infinite by default.
+    /// </summary>
+    public TimeSpan RequestTimeout { get; init; } = Timeout.InfiniteTimeSpan;
+
+    /// <summary>The clock <see cref="RequestTimeout"/> runs on.</summary>
+    public TimeProvider Time { get; init; } = TimeProvider.System;
+
+    /// <summary>
+    /// A request's handler failed with an exception no error code describes (A6 review L3): the other end is told only that
+    /// it failed, and this hears the method and the exception, to log.
+    /// </summary>
+    public Action<string, Exception>? OnUnexpected { get; init; }
+
     /// <summary>Completes when the connection has ended, with the reason when this end closed it.</summary>
     public Task<string?> Closed => _closed.Task;
 
@@ -63,24 +91,35 @@ public sealed class JsonRpcPeer : IAsyncDisposable
     public void Start()
     {
         _writing ??= WriteAsync();
+        if (_onRequest is not null)
+            _answering ??= AnswerInTurnAsync();
         _reading ??= ReadAsync();
     }
 
     /// <summary>Calls a method on the other end and waits for its result.</summary>
     /// <exception cref="JsonRpcException">The other end answered with an error.</exception>
-    /// <exception cref="IOException">The connection ended first.</exception>
+    /// <exception cref="IOException">The connection ended first, or (<see cref="RequestTimeout"/>) no answer came in time.</exception>
     public async Task<JsonNode?> RequestAsync(string method, JsonObject? parameters, CancellationToken cancellationToken)
     {
         var id = Interlocked.Increment(ref _nextId);
         var answer = new TaskCompletionSource<JsonNode?>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pending[id] = answer;
+        var limit = RunsLong?.Invoke(method) == true ? Timeout.InfiniteTimeSpan : RequestTimeout;
+        using var late = limit == Timeout.InfiniteTimeSpan ? null : new CancellationTokenSource(limit, Time);
         try
         {
             if (IsClosed)
                 throw new IOException("The connection is closed.");
             Enqueue(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id, ["method"] = method, ["params"] = parameters });
             using (cancellationToken.Register(() => answer.TrySetCanceled(cancellationToken)))
+            using (late?.Token.Register(() => answer.TrySetException(new IOException($"No answer to {method} within {limit.TotalSeconds:0} s."))))
                 return await answer.Task.ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is OperationCanceledException || late is { IsCancellationRequested: true })
+        {
+            // A6 review L4: the other end stops working on what nobody waits for any more.
+            Notify(AttachedProtocol.CancelRequest, new JsonObject { ["id"] = id });
+            throw;
         }
         finally
         {
@@ -136,6 +175,7 @@ public sealed class JsonRpcPeer : IAsyncDisposable
     {
         _closed.TrySetResult(null);
         _outgoing.Writer.TryComplete();
+        _ordered.Writer.TryComplete();
         try
         {
             _stop.Cancel();
@@ -243,6 +283,23 @@ public sealed class JsonRpcPeer : IAsyncDisposable
                 return false;
             if (id is null)
             {
+                if (method == AttachedProtocol.CancelRequest)
+                {
+                    // A6 review L4: the request named (one of the other end's, by its id) stops; an unknown id is ignored.
+                    if (parameters?["id"] is JsonValue cancelled && cancelled.GetValueKind() is JsonValueKind.Number or JsonValueKind.String
+                        && _incoming.TryGetValue(cancelled.ToJsonString(), out var running))
+                    {
+                        try
+                        {
+                            running.Cancel();
+                        }
+                        catch (ObjectDisposedException)
+                        {
+                            // It finished meanwhile.
+                        }
+                    }
+                    return true;
+                }
                 _onNotification?.Invoke(method, parameters);
                 return true;
             }
@@ -269,46 +326,104 @@ public sealed class JsonRpcPeer : IAsyncDisposable
         return true;
     }
 
+    /// <summary>A request received, waiting for its turn or running.</summary>
+    private sealed record Incoming(JsonNode Id, string Key, string Method, JsonObject? Parameters, CancellationTokenSource Cancel);
+
     private void Answer(JsonNode id, string method, JsonObject? parameters)
     {
         if (_onRequest is null)
         {
-            Reply(id, null, new JsonRpcException(AttachedProtocol.Errors.MethodNotFound, $"No method {method}."));
+            Reply(id, method, null, new JsonRpcException(AttachedProtocol.Errors.MethodNotFound, $"No method {method}."));
             return;
         }
+        // Queued and running together: a client cannot pile up work behind a slow request.
         if (Interlocked.Increment(ref _running) > AttachedProtocol.MaxConcurrentRequests)
         {
             Interlocked.Decrement(ref _running);
-            Reply(id, null, new JsonRpcException(AttachedProtocol.Errors.Busy, "Too many requests at once."));
+            Reply(id, method, null, new JsonRpcException(AttachedProtocol.Errors.Busy, "Too many requests at once."));
             return;
         }
-        _ = Task.Run(async () =>
+        var key = id.ToJsonString();
+        CancellationTokenSource cancel;
+        try
         {
-            try
-            {
-                var result = await _onRequest(method, parameters, _stop.Token).ConfigureAwait(false);
-                Reply(id, result, null);
-            }
-            catch (Exception exception)
-            {
-                Reply(id, null, exception);
-            }
-            finally
-            {
-                Interlocked.Decrement(ref _running);
-            }
-        });
+            cancel = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
+        }
+        catch (ObjectDisposedException)
+        {
+            Interlocked.Decrement(ref _running);
+            return;
+        }
+        if (!_incoming.TryAdd(key, cancel))
+        {
+            cancel.Dispose();
+            Interlocked.Decrement(ref _running);
+            Reply(id, method, null, new JsonRpcException(AttachedProtocol.Errors.InvalidRequest, "That request id is in use."));
+            return;
+        }
+        if (!_ordered.Writer.TryWrite(new Incoming(id, key, method, parameters, cancel)))
+            Done(key, cancel);
     }
 
-    private void Reply(JsonNode id, JsonNode? result, Exception? exception)
+    /// <summary>
+    /// The requests in the order they came (A6 review M1): each runs to its answer before the next starts, except one that
+    /// <see cref="RunsLong"/>, which is started here (so everything before it has run) and then left to finish on its own.
+    /// </summary>
+    private async Task AnswerInTurnAsync()
+    {
+        await Task.Yield();
+        await foreach (var request in _ordered.Reader.ReadAllAsync().ConfigureAwait(false))
+        {
+            var running = RunAsync(request);
+            if (RunsLong?.Invoke(request.Method) != true)
+                await running.ConfigureAwait(false);
+        }
+    }
+
+    private async Task RunAsync(Incoming request)
+    {
+        try
+        {
+            request.Cancel.Token.ThrowIfCancellationRequested();
+            var result = await _onRequest!(request.Method, request.Parameters, request.Cancel.Token).ConfigureAwait(false);
+            Reply(request.Id, request.Method, result, null);
+        }
+        catch (Exception exception)
+        {
+            Reply(request.Id, request.Method, null, exception);
+        }
+        finally
+        {
+            Done(request.Key, request.Cancel);
+        }
+    }
+
+    private void Done(string key, CancellationTokenSource cancel)
+    {
+        _incoming.TryRemove(KeyValuePair.Create(key, cancel));
+        cancel.Dispose();
+        Interlocked.Decrement(ref _running);
+    }
+
+    private void Reply(JsonNode id, string method, JsonNode? result, Exception? exception)
     {
         if (IsClosed)
             return;
         var message = new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id };
         if (exception is null)
+        {
             message["result"] = result;
+        }
         else
-            message["error"] = new JsonObject { ["code"] = CodeOf(exception), ["message"] = exception.Message };
+        {
+            var code = CodeOf(exception);
+            // A6 review L3: an exception nothing expected may carry paths or internals; the other end hears only that the
+            // request failed, and this end's log hears the rest.
+            var words = code == AttachedProtocol.Errors.Internal ? "The request failed; the attached Corvid's log says why." : exception.Message;
+            if (code == AttachedProtocol.Errors.Internal)
+                OnUnexpected?.Invoke(method, exception);
+            message["error"] = new JsonObject { ["code"] = code, ["message"] = words };
+        }
         Enqueue(message);
         if (exception is JsonRpcException { Fatal: true })
             _ = CloseAsync(exception.Message).AsTask();
@@ -318,6 +433,7 @@ public sealed class JsonRpcPeer : IAsyncDisposable
     public static int CodeOf(Exception exception) => exception switch
     {
         JsonRpcException rpc => rpc.Code,
+        OperationCanceledException => AttachedProtocol.Errors.RequestCancelled,
         KeyNotFoundException => AttachedProtocol.Errors.NotFound,
         ServiceUnavailableException => AttachedProtocol.Errors.Unavailable,
         ArgumentException or InvalidOperationException or NotSupportedException or FormatException => AttachedProtocol.Errors.Refused,

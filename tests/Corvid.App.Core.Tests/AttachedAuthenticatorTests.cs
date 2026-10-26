@@ -76,12 +76,48 @@ public sealed class AttachedAuthenticatorTests : IDisposable
             Assert.Null(await authenticator.PairAsync("WRONG-CODE" + i, "guesser", Ct));
 
         Assert.Null(await authenticator.PairAsync(code.Code, "phone", Ct));
-        // Tokens too: a flood of guesses shuts the door for the minute.
-        Assert.Null(await authenticator.AuthenticateAsync(Owner, Ct));
+        // A6 review M1: a token is still checked: it cannot be guessed, so the flood never locks the owner out.
+        Assert.NotNull(await authenticator.AuthenticateAsync(Owner, Ct));
 
         time.Advance(TimeSpan.FromMinutes(1));
         Assert.NotNull(await authenticator.PairAsync(code.Code, "phone", Ct));
-        Assert.NotNull(await authenticator.AuthenticateAsync(Owner, Ct));
+    }
+
+    // A6 review M1: ten wrong tokens from a peer used to refuse every token from it for a minute, the owner's and a paired
+    // device's included. A presented token is now always checked; the failures still count against pairing from that peer.
+    [Fact]
+    public async Task WrongTokensNeverLockOutAValidOneButStillCountAgainstPairing()
+    {
+        var time = ManualTimeProvider.Demo();
+        var authenticator = Create(time);
+        var device = (await authenticator.PairAsync(authenticator.CreatePairingCode().Code, "phone", "192.0.2.7", Ct))!.Value;
+        for (var i = 0; i < AttachedAuthenticator.FailuresPerMinute + 5; i++)
+            Assert.Null(await authenticator.AuthenticateAsync("wrong" + i, "192.0.2.7", Ct));
+
+        Assert.Equal(new AttachedIdentity(AttachedRole.Owner, null), await authenticator.AuthenticateAsync(Owner, "192.0.2.7", Ct));
+        Assert.Equal("phone", (await authenticator.AuthenticateAsync(device.Token, "192.0.2.7", Ct))?.Device);
+        Assert.Null(await authenticator.PairAsync(authenticator.CreatePairingCode().Code, "laptop", "192.0.2.7", Ct));
+    }
+
+    // A6 review nit: the devices file is read again only when it changed, and a revocation (another process's write) is
+    // seen at the next check.
+    [Fact]
+    public async Task TheDevicesFileIsReadAgainOnlyWhenItChanges()
+    {
+        var authenticator = Create();
+        var device = (await authenticator.PairAsync(authenticator.CreatePairingCode().Code, "phone", Ct))!.Value;
+        Assert.True(await authenticator.IsCurrentAsync(device.Identity, device.Token, Ct));
+        var stamp = File.GetLastWriteTimeUtc(Devices);
+
+        // Made unreadable as JSON without changing its stamp: the cached list answers, so it was not read again.
+        var text = await File.ReadAllTextAsync(Devices, Ct);
+        await File.WriteAllTextAsync(Devices, new string(' ', text.Length), Ct);
+        File.SetLastWriteTimeUtc(Devices, stamp);
+        Assert.True(await authenticator.IsCurrentAsync(device.Identity, device.Token, Ct));
+
+        await File.WriteAllTextAsync(Devices, text, Ct);
+        Assert.True(AttachedAuthenticator.Revoke(Devices, "phone"));
+        Assert.False(await authenticator.IsCurrentAsync(device.Identity, device.Token, Ct));
     }
 
     [Fact]
@@ -93,7 +129,7 @@ public sealed class AttachedAuthenticatorTests : IDisposable
         for (var i = 0; i < AttachedAuthenticator.FailuresPerMinute; i++)
             Assert.Null(await authenticator.AuthenticateAsync("wrong" + i, "192.0.2.7", Ct));
 
-        Assert.Null(await authenticator.AuthenticateAsync(Owner, "192.0.2.7", Ct));
+        Assert.Null(await authenticator.PairAsync(authenticator.CreatePairingCode().Code, "guesser", "192.0.2.7", Ct));
         Assert.NotNull(await authenticator.AuthenticateAsync(Owner, AttachedAuthenticator.SocketPeer, Ct));
         Assert.NotNull(await authenticator.AuthenticateAsync(Owner, "192.0.2.8", Ct));
 
