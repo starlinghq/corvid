@@ -138,11 +138,17 @@ public sealed class WorktreeSessionTests
         var session = await runtime.OpenWorktreeSessionAsync(asking.Id, "done", "test", Ct);
         var path = session.Workspace.Root;
 
+        // A surface that shows the session keeps it, so the worktree stays.
+        var viewer = runtime.AddViewer(id => id == session.Id);
         var busy = await Assert.ThrowsAsync<WorktreeRefusedException>(() => runtime.RemoveWorktreeAsync(asking.Id, "done", Ct));
         Assert.Contains(session.Id, busy.Message, StringComparison.Ordinal);
-        Assert.True(await runtime.ReleaseDriverAsync(session.Id));
+        Assert.True(runtime.TryGetSession(session.Id, out _));
+        Assert.True(Directory.Exists(path));
 
+        // Once nothing shows it, the idle session held here (as the window's Board leaves one) is let go of first.
+        viewer.Dispose();
         var removed = await runtime.RemoveWorktreeAsync(asking.Id, "done", Ct);
+        Assert.False(runtime.TryGetSession(session.Id, out _));
 
         Assert.Equal(2, prompts.Prompts.Count);
         Assert.False(Directory.Exists(path));

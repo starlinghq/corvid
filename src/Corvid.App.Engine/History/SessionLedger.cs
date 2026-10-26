@@ -135,7 +135,12 @@ internal sealed class LedgerTexts(CorvidRuntime runtime, WorkspaceServices? scop
         {
             throw new InvalidOperationException(exception.Message, exception);
         }
-        return workspace.Root == _scope.Root ? this : _others.GetOrAdd(workspace.Root, _ => new LedgerTexts(runtime, workspace));
+        if (workspace.Root == _scope.Root)
+            return this;
+        // Kept while the runtime's services of that directory are the same: a worktree removed and made again at the same
+        // path has new ones (its checkpoints, its environment), and the copy over the old is replaced (A6 fix).
+        return _others.AddOrUpdate(workspace.Root, _ => new LedgerTexts(runtime, workspace),
+            (_, known) => ReferenceEquals(known._scope, workspace) ? known : new LedgerTexts(runtime, workspace));
     }
 
     /// <summary>Whether the file tools may read the workspace-relative path.</summary>

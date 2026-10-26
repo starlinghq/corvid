@@ -204,6 +204,43 @@ public sealed class EngineWorkspaceTests
     }
 
     [Fact]
+    public async Task AWorktreeTheBoardMadeIsRemovedFromTheComposerOnceTheWindowNoLongerShowsItsSession()
+    {
+        // A6 e2e: the window held the session the Board made in the worktree, so /workspace remove kept refusing.
+        await using var fixture = await EngineFixture.StartAsync(null, Builtin);
+        var work = Repository(fixture);
+        using var service = fixture.Sessions();
+        var asking = await service.CreateAsync(Ct);
+        var waiter = new SessionWaiter();
+        using var subscription = await service.OpenAsync(asking, waiter.Add, Ct);
+        var creating = service.CreateAsync(new NewSessionRequest { Worktree = true, AskIn = asking, WorktreeName = "gone" }, Ct);
+        var first = await waiter.WaitAsync<ApprovalRequested>();
+        await service.AnswerApprovalAsync(asking, first.ApprovalId, ApprovalAnswer.Once, Ct);
+        var made = await creating.WaitAsync(TimeSpan.FromSeconds(60), Ct);
+        var path = fixture.Runtime.WorkspaceOf(made).Path;
+        Assert.True(fixture.Runtime.TryGetSession(made, out _));
+
+        // While the window shows the worktree's session, it stays and the removal is refused with why.
+        var showing = await service.OpenAsync(made, _ => { }, Ct);
+        var refusing = service.RunCommandAsync(asking, "/workspace remove gone", Ct);
+        await refusing.WaitAsync(TimeSpan.FromSeconds(60), Ct);
+        var refused = await waiter.WaitAsync<CommandResult>();
+        Assert.Equal(Corvid.App.Core.Sessions.OutputTone.Error, refused.Tone);
+        Assert.True(Directory.Exists(path));
+        showing.Dispose();
+        await service.IdleAsync();
+
+        var removing = service.RunCommandAsync(asking, "/workspace remove gone", Ct);
+        var second = await waiter.WaitAsync<ApprovalRequested>(card => card.ApprovalId != first.ApprovalId);
+        await service.AnswerApprovalAsync(asking, second.ApprovalId, ApprovalAnswer.Once, Ct);
+        await removing.WaitAsync(TimeSpan.FromSeconds(60), Ct);
+
+        var result = waiter.Updates.OfType<CommandResult>().Last();
+        Assert.Equal(Corvid.App.Core.Sessions.OutputTone.Success, result.Tone);
+        Assert.False(Directory.Exists(path));
+    }
+
+    [Fact]
     public async Task ADeniedWorktreeIsRefusedAndNothingIsMade()
     {
         await using var fixture = await EngineFixture.StartAsync(null, Builtin);

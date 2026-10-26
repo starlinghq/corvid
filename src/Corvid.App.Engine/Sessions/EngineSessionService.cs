@@ -80,6 +80,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         _dispatcher = dispatcher;
         _time = time;
         _engine.Started += OnEngineStarted;
+        _ = WatchViewsAsync();
         _ = WatchJobsAsync();
         _ = WatchRecordsAsync();
         _ = WatchLogAsync();
@@ -95,6 +96,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     {
         if (_disposed)
             return;
+        AddViewer(runtime);
         _ = WatchJobsAsync();
         _ = WatchLogAsync();
         _dispatcher.Post(() =>
@@ -102,6 +104,38 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             if (!_disposed)
                 ListChanged?.Invoke(this, EventArgs.Empty);
         });
+    }
+
+    private readonly Lock _viewerGate = new();
+    private IDisposable? _viewer;
+    private CorvidRuntime? _viewerOf;
+
+    /// <summary>
+    /// A6 fix: tells the runtime which sessions the window views, so removing a worktree lets go of an idle session here
+    /// that the window holds but does not show (one the Board made), and never of one it shows.
+    /// </summary>
+    private async Task WatchViewsAsync()
+    {
+        try
+        {
+            AddViewer(await _engine.Runtime.ConfigureAwait(false));
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            // A runtime that could not start: OnEngineStarted adds the viewer to the one that starts later.
+        }
+    }
+
+    private void AddViewer(CorvidRuntime runtime)
+    {
+        lock (_viewerGate)
+        {
+            if (_disposed || ReferenceEquals(_viewerOf, runtime))
+                return;
+            _viewer?.Dispose();
+            _viewer = runtime.AddViewer(IsViewed);
+            _viewerOf = runtime;
+        }
     }
 
     /// <summary>The turns and summary refreshes in flight, for a test or a shutdown that waits for them; a turn the queue starts counts.</summary>
@@ -419,6 +453,11 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     {
         _disposed = true;
         _engine.Started -= OnEngineStarted;
+        lock (_viewerGate)
+        {
+            _viewer?.Dispose();
+            _viewer = null;
+        }
         UnwatchJobs();
         UnwatchRecords();
         StopWatchingLog();

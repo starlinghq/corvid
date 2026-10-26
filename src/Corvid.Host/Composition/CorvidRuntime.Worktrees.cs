@@ -86,7 +86,7 @@ public sealed partial class CorvidRuntime
     /// <summary>
     /// Removes one of Corvid's worktrees of <paramref name="sessionId"/>'s repository after asking the person there. Its branch
     /// stays; git refuses one with changes or untracked files. Refused while a session that works in it is open here, or is
-    /// the one asking.
+    /// the one asking. An idle session held here that no surface views (<see cref="AddViewer"/>) is let go of first.
     /// </summary>
     /// <exception cref="WorktreeRefusedException">The person said no, nobody could be asked, or a session here works in it.</exception>
     /// <exception cref="WorktreeException">No such worktree of Corvid's, it has changes, or git failed.</exception>
@@ -98,7 +98,12 @@ public sealed partial class CorvidRuntime
         var worktree = (await Worktrees.ListAsync(repository).ConfigureAwait(false)).FirstOrDefault(item => item.Name == name)
             ?? throw new WorktreeException($"There is no worktree named {name} of {repository.MainCheckout} that Corvid made.");
         bool Inside(string path) => path == worktree.Path || path.StartsWith(worktree.Path + "/", StringComparison.Ordinal);
-        if (_sessions.Keys.FirstOrDefault(id => WorkspaceOf(id) is { IsDefault: false } open && Inside(open.Path)) is { } busy)
+        bool WorksInside(string id) => WorkspaceOf(id) is { IsDefault: false } open && Inside(open.Path);
+        // A6 fix: a session this process holds only because a surface opened it (the window's Board made it and never
+        // showed it) is let go of first when it is idle and no surface views it; a running, queued or viewed one stays.
+        foreach (var id in _sessions.Keys.Where(id => id != sessionId && WorksInside(id)).ToList())
+            await ReleaseDriverAsync(id, () => Viewed(id)).ConfigureAwait(false);
+        if (_sessions.Keys.FirstOrDefault(WorksInside) is { } busy)
             throw new WorktreeRefusedException($"Session {TerminalText.Visible(busy)} works in {worktree.Path} and is open here; close it first.");
         await AskAsync(sessionId, $"git -C {Quote(repository.MainCheckout)} worktree remove {Quote(worktree.Path)}",
             $"removes the git worktree at {worktree.Path}, outside the workspace (its branch {worktree.Branch ?? "(detached)"} stays)", null,
