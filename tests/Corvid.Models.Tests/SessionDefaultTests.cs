@@ -153,6 +153,9 @@ public sealed class SessionDefaultTests : IDisposable
         Assert.Same(_server, slots.Current(Generator));
         var reset = Switches().Last();
         Assert.Equal(("de_escalation", (bool?)true), (reset.Reason, reset.Reset));
+        // A6 (A5 left): logged with its pin, so a replay shows the slot still pinned.
+        Assert.True(reset.Pinned);
+        Assert.True(slots.IsPinned(Generator));
         Assert.Equal(_server.Profile.Id, ModelProfile.FromSnapshot(reset.NewProfile).Id);
         Assert.Equal(_db.Log.Read(Session, cancellationToken: Ct).Last(item => item.Payload is ModelSwitched).Sequence, cleared.Sequence);
     }
@@ -169,6 +172,8 @@ public sealed class SessionDefaultTests : IDisposable
         Assert.False(slots.HasSessionChoice(Generator));
         var reset = Switches().Last();
         Assert.Equal(("de_escalation", (bool?)true), (reset.Reason, reset.Reset));
+        // Not pinned: the reset says nothing of a pin.
+        Assert.Null(reset.Pinned);
         Assert.Equal(_local.Profile.Id, ModelProfile.FromSnapshot(reset.NewProfile).Id);
     }
 
