@@ -370,13 +370,16 @@ public sealed class CodeRunner
             var hidden = IsUnder(socketDirectory.FullName, "/tmp") || IsUnder(socketDirectory.FullName, "/run")
                 ? basePolicy.DeniedPaths
                 : basePolicy.DeniedPaths.Add(socketDirectory.FullName);
+            var values = EnvironmentFor(language, runtime, basePolicy.Workspace);
             var policy = basePolicy with
             {
                 Network = false,
                 Proxy = null,
                 Tools = new SandboxTools(socketPath, token),
                 DeniedPaths = hidden,
-                EnvironmentValues = EnvironmentFor(language, runtime, basePolicy.Workspace),
+                // The runtime's own settings win over a variable the shell passes through under the same name.
+                Environment = [.. basePolicy.Environment.Where(name => !values.ContainsKey(name))],
+                EnvironmentValues = values,
             };
             var command = CommandFor(language, runtime, basePolicy.Workspace, source) with { Output = context.Output };
 
@@ -453,6 +456,12 @@ public sealed class CodeRunner
             var cache = DotnetCache(workspace);
             values["DOTNET_ROOT"] = Path.GetDirectoryName(runtime)!;
             values["DOTNET_CLI_HOME"] = Path.Combine(cache, "home");
+            // The SDK's per-user data (file-based apps' build cache, NuGet's migrations) in the sandbox's own /tmp: the home
+            // directory is read-only there, and two runs in one workspace must not share a build of the same path.
+            values["XDG_DATA_HOME"] = "/tmp/corvid-code/data";
+            // Named mutexes (NuGet's first-use migrations) live in the runtime directory; the sandbox's /run is empty and
+            // read-only, so the sandbox's /tmp stands in.
+            values["XDG_RUNTIME_DIR"] = "/tmp";
             values["NUGET_PACKAGES"] = Path.Combine(cache, "packages");
             values["DOTNET_NOLOGO"] = "1";
             values["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
