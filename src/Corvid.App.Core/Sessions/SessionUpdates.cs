@@ -37,6 +37,9 @@ public sealed record UserMessage(string Text) : SessionUpdate
 
     /// <summary>Who wrote it when it is not the person (a gateway guest, security M2): the transcript names them.</summary>
     public string? From { get; init; }
+
+    /// <summary>K-8 (A6): the images it carried, drawn under its text; empty for a message without any.</summary>
+    public ImmutableArray<MessageImage> Images { get; init; } = [];
 }
 
 /// <summary>Streamed answer text (ACP <c>agent_message_chunk</c>): appended to the running turn's answer.</summary>
@@ -221,6 +224,9 @@ public sealed record QueuedMessage(string Id, string Text)
 {
     /// <summary>Delivered at the running turn's next step checkpoint rather than after it.</summary>
     public bool Steer { get; init; }
+
+    /// <summary>K-8 (A6): the images queued with it, sent with it when its turn starts.</summary>
+    public ImmutableArray<ImageAttachment> Images { get; init; } = [];
 }
 
 /// <summary>

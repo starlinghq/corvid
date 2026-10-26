@@ -50,9 +50,13 @@ public abstract record SessionEvent;
 // From (A4 review, security M2): who wrote it when it is not the session's own user (a gateway guest, "telegram guest dana
 // (1001)"); null for the user's own message, and in every log written before it existed. Such a message is outside content:
 // the prompt quotes it as someone else's words, and it answers no question asked of the owner.
+// Images (K-8, A6): the images the message carries, as references into the media store (digest, type, size, dimensions and
+// the file name); never the bytes. Omitted when null, so a message without images keeps its form, and a binary older than A6
+// reads a message with images as its text alone (unknown properties are skipped).
 public sealed record UserMessage(string Text,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? LocalOnly = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? From = null) : SessionEvent;
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? From = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ImmutableArray<Media.ImageRef>? Images = null) : SessionEvent;
 // Usage (A5) is the generator calls' tokens since the previous call's record, on the answer that ended them; omitted when
 // null (no call reported any, or a message from elsewhere), so events written before it keep their persisted form.
 public sealed record AssistantMessage(string Text,

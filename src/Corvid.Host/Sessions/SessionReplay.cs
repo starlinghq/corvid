@@ -144,6 +144,7 @@ public static class SessionReplay
                     {
                         At = at,
                         From = user.From,
+                        Images = user.Images ?? [],
                         Generator = generators.GetValueOrDefault(entry.FromSequence),
                     }));
                     round = null;

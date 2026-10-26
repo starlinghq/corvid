@@ -9,7 +9,9 @@ public sealed class QueuedChip
     internal QueuedChip(QueuedMessage message, RelayCommand remove, RelayCommand takeBack, RelayCommand moveUp, RelayCommand moveDown)
     {
         Id = message.Id;
-        Text = SafeText.Clean(message.Text);
+        // K-8 (A6): a queued message's images are counted on its chip.
+        Text = SafeText.Clean(message.Text) + (message.Images.IsDefaultOrEmpty ? ""
+            : $"{(message.Text.Length > 0 ? " " : "")}(+{SessionText.Plural(message.Images.Length, "image")})");
         IsSteer = message.Steer;
         RemoveCommand = remove;
         TakeBackCommand = takeBack;
@@ -160,7 +162,7 @@ public sealed partial class SessionViewModel
     /// <summary>Ctrl+S: stashes the draft, or brings the stashed one back into an empty editor.</summary>
     public RelayCommand StashDraftCommand { get; private set; } = null!;
 
-    public bool CanSubmit => !IsReadOnly && (_draft.Trim().Length > 0 || _currentApproval is not null);
+    public bool CanSubmit => !IsReadOnly && (_draft.Trim().Length > 0 || _currentApproval is not null || Attachments.Count > 0);
 
     private void InitializeComposer()
     {
@@ -185,6 +187,19 @@ public sealed partial class SessionViewModel
         }
 
         var text = _draft.Trim();
+        // K-8 (A6): images go with the message (queued behind a running turn as Enter queues); a command or an answer to
+        // a question never takes them, so they stay for the next message.
+        if (Attachments.Count > 0 && !IsCommandLine(text) && _pendingQuestion is not { IsOpen: true, AllowsFreeText: true })
+        {
+            Draft = "";
+            var images = TakeAttachments();
+            Run(() => _service.SendAsync(SessionId, text, images), () =>
+            {
+                GiveBack(text);
+                GiveBackImages(images);
+            });
+            return;
+        }
         if (text.Length == 0)
             return;
         Draft = "";
@@ -221,7 +236,11 @@ public sealed partial class SessionViewModel
     /// A refused message back in the composer (A4 verification): as it was when the composer is still empty; otherwise the
     /// person typed on meanwhile, and it goes before what they typed, on its own line, so neither is lost.
     /// </summary>
-    private void GiveBack(string text) => Draft = _draft.Length == 0 ? text : $"{text}\n{_draft}";
+    private void GiveBack(string text)
+    {
+        if (text.Length > 0)
+            Draft = _draft.Length == 0 ? text : $"{text}\n{_draft}";
+    }
 
     private void TakeBackLast()
     {

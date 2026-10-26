@@ -12,4 +12,7 @@
     <!-- Recorded message exchanges, compared with what the agent says now. -->
     <None Include="Exchanges/*.jsonl" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../Shared/TestImages.cs" Link="TestImages.cs" />
+  </ItemGroup>
 </Project>

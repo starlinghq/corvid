@@ -8,6 +8,11 @@ namespace Corvid.Models;
 /// <param name="ContextWindow">The model's context window in tokens (for an embedder, its maximum input).</param>
 /// <param name="AcceptedContext">How much of the window Corvid lets a prompt use; budget policy plans against this.</param>
 /// <param name="Placement">Device or endpoint, for example <c>cuda:0</c>, <c>cpu</c> or <c>remote</c>. Configuration, not identity.</param>
+/// <param name="Vision">
+/// K-8 (A6): the model reads images in a prompt (image content). False for every in-process model (Qwen3.5-0.8B is text
+/// only); a remote model says so in its settings (<c>Vision: true</c>). Omitted from a snapshot when false, so snapshots
+/// written before it read the same and an older binary reads a newer one.
+/// </param>
 public sealed record ModelProfile(
     string Id,
     int ContextWindow,
@@ -17,7 +22,8 @@ public sealed record ModelProfile(
     PromptCachingStyle Caching,
     ModelCost Cost,
     PrivacyClass Privacy,
-    string Placement)
+    string Placement,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Vision = false)
 {
     /// <summary>Throws when the profile cannot be planned against.</summary>
     public ModelProfile Validate()

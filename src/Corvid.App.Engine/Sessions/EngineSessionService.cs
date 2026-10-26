@@ -174,11 +174,19 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
 
     /// <param name="modeLines">Read a <c>!</c> or <c>#</c> line as the composer's mode (<see cref="ComposerLineAsync"/>); false
     /// for a question's answer, which is sent as given.</param>
-    private async Task<QueuedMessage> EnqueueAsync(string sessionId, string text, bool modeLines, CancellationToken cancellationToken)
+    /// <param name="images">K-8 (A6): the images the message carries, checked by <see cref="SendAsync(string, string, IReadOnlyList{ImageAttachment}, CancellationToken)"/>.</param>
+    private async Task<QueuedMessage> EnqueueAsync(string sessionId, string text, bool modeLines, CancellationToken cancellationToken,
+        ImmutableArray<ImageAttachment> images = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(text);
+        images = images.IsDefault ? [] : images;
+        if (images.IsEmpty)
+            ArgumentException.ThrowIfNullOrWhiteSpace(text);
+        ArgumentNullException.ThrowIfNull(text);
         ObjectDisposedException.ThrowIf(_disposed, this);
+        // K-8: a ! or # line is a mode, not a message: it takes no images.
+        if (!images.IsEmpty && modeLines && ComposerLine.Parse(text) is not null)
+            throw new InvalidOperationException("A ! or # line cannot carry images; send them with a message. Nothing was sent.");
         // A4: a # line is staged at once, never queued; a ! line queues as a turn of its own (StartTurnAsync posts it). A
         // question's answer is sent as given.
         if (modeLines && await ComposerLineAsync(sessionId, text, cancellationToken).ConfigureAwait(false) is { } handled)
@@ -203,7 +211,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 // it (A4 verification).
                 if (shellLine && channel.View?.Question is not null)
                     throw new InvalidOperationException("A question is open: answer it first, then send the ! line. Nothing was sent.");
-                message = new QueuedMessage($"q-{++channel.QueueCounter}", text.Trim());
+                message = new QueuedMessage($"q-{++channel.QueueCounter}", text.Trim()) { Images = images };
                 start = !channel.Running;
                 // K-6: with a question open the session waits on this message, the person's answer: it starts now, and what
                 // was queued before (typed before the question showed) waits behind it rather than answering it.
@@ -227,7 +235,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             {
                 try
                 {
-                    await StartTurnAsync(channel, runtime, tools, message.Text, cancellationToken, verbatim: !modeLines).ConfigureAwait(false);
+                    await StartTurnAsync(channel, runtime, tools, message.Text, cancellationToken, verbatim: !modeLines, images: message.Images).ConfigureAwait(false);
                 }
                 catch
                 {
@@ -476,7 +484,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     /// </summary>
     /// <param name="verbatim">Send the text as a message even when it reads as a <c>!</c> line (a question's answer).</param>
     private async Task StartTurnAsync(Channel channel, CorvidRuntime runtime, ToolPresentation tools, string text, CancellationToken cancellationToken,
-        bool verbatim = false)
+        bool verbatim = false, ImmutableArray<ImageAttachment> images = default)
     {
         var sessionId = channel.SessionId;
         IDisposable? feed = null, prompter = null;
@@ -518,7 +526,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             await PauseAt("post").ConfigureAwait(false);
             // Returns once the session's actor has the message (or the ! line's command); the turn runs on, and its end is
             // tracked below.
-            var delivery = await PostLineAsync(session, text, verbatim, cancellationToken).ConfigureAwait(false);
+            var delivery = await PostLineAsync(session, text, verbatim, cancellationToken, images).ConfigureAwait(false);
             Track(FinishTurnAsync(channel, reporter, delivery, feed, prompter, started));
             feed = prompter = null;
         }
@@ -653,7 +661,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         {
             var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
             var tools = await _engine.ToolsAsync().ConfigureAwait(false);
-            await StartTurnAsync(channel, runtime, tools, message.Text, CancellationToken.None).ConfigureAwait(false);
+            await StartTurnAsync(channel, runtime, tools, message.Text, CancellationToken.None, images: message.Images).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {

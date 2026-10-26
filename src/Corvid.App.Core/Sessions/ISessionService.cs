@@ -179,6 +179,32 @@ public interface ISessionService
     /// <summary>Queues a message behind the running turn (Enter while it runs); it is sent when the turn ends.</summary>
     Task<QueuedMessage> QueueAsync(string sessionId, string text, CancellationToken cancellationToken = default);
 
+    /// <summary>Whether messages here can carry images (K-8, A6 default member: false; the engine's can).</summary>
+    bool CanSendImages => false;
+
+    /// <summary>
+    /// K-8 (A6): sends a message with images (pasted, dropped or attached), queued behind a running turn as Enter does. The
+    /// engine checks, strips and stores the images, or refuses the message with why. A default member: without images it
+    /// is <see cref="SendAsync(string, string, CancellationToken)"/>; with any, a service without image support refuses.
+    /// </summary>
+    Task SendAsync(string sessionId, string text, IReadOnlyList<ImageAttachment> images, CancellationToken cancellationToken = default) =>
+        images is null || images.Count == 0 ? SendAsync(sessionId, text, cancellationToken)
+            : Task.FromException(new Composition.ServiceUnavailableException("Images in messages come with the engine (K-8)."));
+
+    /// <summary>
+    /// K-8 (A6): an image file the person dropped or named in the attach box, read under the engine's rules (no credential
+    /// file, no protected location, size checked before reading). A default member: refused without image support.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Why it was not read, for the person.</exception>
+    Task<ImageAttachment> ReadImageFileAsync(string sessionId, string path, CancellationToken cancellationToken = default) =>
+        Task.FromException<ImageAttachment>(new Composition.ServiceUnavailableException("Images in messages come with the engine (K-8)."));
+
+    /// <summary>
+    /// K-8 (A6): a message's image bytes by digest, for its thumbnail; null when none are stored (or the service keeps none).
+    /// The bytes are untrusted: drawn bounded, never opened by anything else.
+    /// </summary>
+    Task<byte[]?> ReadImageAsync(string sessionId, string digest, CancellationToken cancellationToken = default) => Task.FromResult<byte[]?>(null);
+
     /// <summary>Removes a queued message unsent (the chip's ×).</summary>
     Task RemoveQueuedAsync(string sessionId, string queuedId, CancellationToken cancellationToken = default);
 

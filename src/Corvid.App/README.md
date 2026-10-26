@@ -111,6 +111,21 @@ a space (`#`) or a space or a command word (`!`, `!!`: letters, digits and `_ . 
 failing again`, `#include <stdio.h> not found` and `!important: keep the API stable` are sent as messages; `\#` or `\!`
 at the start sends any such line as a message, without the backslash.
 
+Images (A6, K-8, flow F19): a pasted bitmap or copied image file, an image file dropped on the composer, or a path typed
+in the composer's attach box becomes a chip above the composer (up to 8 per message, 20 MiB and 40 megapixels each; PNG,
+JPEG, GIF and WebP, read from the bytes, never from the name); a dropped file that is not an image becomes an `@`
+reference in the draft, and a dropped folder is refused with why. The engine checks the chips before the message is
+queued (a refusal gives the message and chips back), and the turn strips every image's metadata (EXIF, text chunks,
+location) and stores the stripped bytes in the media store (`<data>/media/sha256/`, content-addressed); the log's
+`user_message` carries only references (digest, type, size, dimensions, name) in an optional `images` field, so a binary
+older than A6 reads such a message as its text alone. The transcript draws them as bounded thumbnails (360 by 240 at
+most) with their captions, live and replayed. A generator that reads images (a remote model with `"Vision": true`) is
+sent them; any other is sent the vision slot's description of each, labelled as a model's reading of the image, or the
+message is refused when no vision model is set. A gated (cloud) model is sent no image unless its egress policy allows
+images (`Corvid:Privacy:Images`, or the model's own `Egress:Images`); otherwise the privacy gate keeps the turn local or
+refuses it with why. `corvid chat` takes `/image <path>` (stage, list, `clear`) and `@shot.png` in a message; ACP takes
+image content blocks (base64 `data`; a `uri` alone is refused) and advertises `promptCapabilities.image`.
+
 Titles, recaps, pins and drafts (A4, G-6 and G-7): a session's title is its rename, else the one the local generator
 wrote after its first exchange (never a cloud generator), else its first message; the header's ••• menu renames it, pins
 it to the rail and asks for a recap, and the CLI's `/rename`, `/pin`, `/recap` and `/sessions` do the same over the same

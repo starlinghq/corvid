@@ -352,7 +352,7 @@ public sealed class SessionUpdateReporter : ITurnObserver
                     switch (item.Payload)
                     {
                         case UserMessage user:
-                            _fromLog.Add(new PromptSent(user.Text, item.Sequence) { At = item.RecordedAt, From = user.From });
+                            _fromLog.Add(new PromptSent(user.Text, item.Sequence) { At = item.RecordedAt, From = user.From, Images = user.Images ?? [] });
                             break;
                         // K-3: a steer the step checkpoint took; K-6: the question a clarifying turn ended on.
                         case UserSteered steer:

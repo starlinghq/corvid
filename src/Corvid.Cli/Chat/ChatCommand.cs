@@ -186,6 +186,8 @@ internal static class ChatCommand
                 string? next = null;
                 // K-6: the question the last turn ended on; the next message answers it, a number picking one of its choices.
                 ClarifyingQuestion? question = null;
+                // K-8 (A6): images /image named, sent with the next message.
+                var staged = new List<Abstractions.Media.ImageInput>();
                 while (true)
                 {
                     string? line;
@@ -202,6 +204,13 @@ internal static class ChatCommand
                     }
                     if (string.IsNullOrWhiteSpace(line))
                         continue;
+
+                    // K-8 (A6): /image <path> stages an image for the next message (the chat's own; the app attaches by drop or paste).
+                    if (ImageCommand.Matches(line))
+                    {
+                        renderer.Notice(ImageCommand.Run(line, staged, runtime.Builtin.Environment));
+                        continue;
+                    }
 
                     if (SlashCommandRegistry.IsCommand(line))
                     {
@@ -251,15 +260,45 @@ internal static class ChatCommand
                     // A \# or \! line is a message, sent without its backslash.
                     if (mode is null)
                         line = ComposerLine.MessageText(line);
+                    // K-8 (A6): @path names an image in the workspace; with /image's, it goes with this message.
+                    var images = new List<Abstractions.Media.ImageInput>();
+                    if (mode is null)
+                    {
+                        var (named, problems) = ImageAttachments.FromReferences(line, runtime.Builtin.Environment);
+                        if (!problems.IsEmpty)
+                        {
+                            foreach (var problem in problems)
+                                renderer.Notice($"[yellow]{Markup.Escape(TerminalText.Visible(problem))}[/]");
+                            renderer.Notice("[yellow]Nothing was sent; fix the reference or leave the @ off.[/]");
+                            continue;
+                        }
+                        images.AddRange(staged);
+                        images.AddRange(named);
+                        // Asked before the turn, so a refusal keeps the line unsent and the staged images staged.
+                        if (images.Count > 0 && session.CheckImages(images) is { } refusal)
+                        {
+                            renderer.Notice($"[yellow]{Markup.Escape(TerminalText.Visible(refusal))}[/]");
+                            continue;
+                        }
+                    }
+                    else if (staged.Count > 0)
+                    {
+                        renderer.Notice("[yellow]A shell line cannot carry images; they stay staged for your next message.[/]");
+                    }
                     line = ChatRenderer.Answer(question, line);
                     question = null;
+                    if (images.Count > 0)
+                    {
+                        renderer.Notice(ImageCommand.Sending(images));
+                        staged.Clear();
+                    }
 
                     renderer.BeginTurn();
                     // A ! line reports its own turn's result only (security L1): the log's head before the line is posted.
                     var before = mode is ComposerLine.Shell ? session.Snapshot().Head : 0;
                     var turn = mode is ComposerLine.Shell shell
                         ? await session.PostShellAsync(line.Trim(), new ShellLine(shell.Command, shell.LocalOnly), cancellationToken).ConfigureAwait(false)
-                        : session.SendAsync(line, cancellationToken);
+                        : images.Count > 0 ? session.SendAsync(line, images, cancellationToken) : session.SendAsync(line, cancellationToken);
                     Volatile.Write(ref running, turn);
                     Delivery delivery;
                     // A5: /model typed while the turn runs switches this session; the turn takes it at its next step.

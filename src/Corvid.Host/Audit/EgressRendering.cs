@@ -84,6 +84,11 @@ public static partial class EgressRendering
                     break;
                 case UsageContent:
                     break;
+                // K-8: an image the turn sent is named by its label and digest (the media store's key), never inlined.
+                case DataContent data when data.AdditionalProperties?.TryGetValue(Corvid.Models.Images.ImageContents.DigestKey, out var digest) == true
+                    && digest is string sha:
+                    parts.Add($"[{role} {Corvid.Models.Images.ImageContents.LabelOf(data)}, sha256 {sha}, not shown]");
+                    break;
                 case DataContent data:
                     parts.Add(string.Create(CultureInfo.InvariantCulture, $"[{role} {data.MediaType}, {data.Data.Length} bytes, not shown]"));
                     break;

@@ -273,8 +273,11 @@ public sealed partial class EngineSessionService
     /// <c>\#</c> or <c>\!</c> line without its backslash), and <paramref name="verbatim"/> text, such as a question's answer,
     /// is sent as given.
     /// </summary>
-    private static Task<Task<Delivery>> PostLineAsync(CorvidSession session, string text, bool verbatim, CancellationToken cancellationToken) =>
-        verbatim ? session.PostAsync(text, EnvelopeOrigin.User, cancellationToken)
+    private static Task<Task<Delivery>> PostLineAsync(CorvidSession session, string text, bool verbatim, CancellationToken cancellationToken,
+        ImmutableArray<ImageAttachment> images = default) =>
+        // K-8 (A6): a message with images (EnqueueAsync refused them on a mode line) goes as the person's message with them.
+        !images.IsDefaultOrEmpty ? session.PostAsync(verbatim ? text : ComposerLine.MessageText(text), EngineImages.Inputs(images), EnvelopeOrigin.User, cancellationToken)
+        : verbatim ? session.PostAsync(text, EnvelopeOrigin.User, cancellationToken)
             : ComposerLine.Parse(text) is ComposerLine.Shell shell
                 ? session.PostShellAsync(text.Trim(), new ShellLine(shell.Command, shell.LocalOnly), cancellationToken)
                 : session.PostAsync(ComposerLine.MessageText(text), EnvelopeOrigin.User, cancellationToken);

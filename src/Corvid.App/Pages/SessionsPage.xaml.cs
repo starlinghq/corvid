@@ -66,6 +66,8 @@ public sealed partial class SessionsPage : Page, IDockProvider
         Root.LostFocus += (_, _) => _ctrlHeld = false;
         Root.AddHandler(PreviewKeyDownEvent, new KeyEventHandler(OnCardPreviewKeyDown), true);
         Composer.BeforeTextChanging += OnComposerTextChanging;
+        // K-8 (A6): a pasted image becomes a chip (SessionsPage.Images.cs).
+        Composer.Paste += OnComposerPaste;
         // A5: with no session open while a new one starts, what is typed is kept for it.
         Composer.TextChanged += (_, _) =>
         {
