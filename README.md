@@ -144,8 +144,9 @@ conflict stops the restore so your edit is never overwritten. Checkpoints need `
 - **Vault-only keys.** Cloud model keys, MCP tokens and bot tokens are Vault secrets, each bound to its host. Corvid
   never reads keys from the environment, and without Vault cloud models are unavailable.
 - **Privacy egress gate.** Requests to cloud models are redacted by default (PII and any credential value).
-- **Credential scrub.** A token or password a tool returns is scrubbed before it reaches the event log, memory or any
-  model. Memory and skills refuse one outright.
+- **Credential scrub.** A token or password a tool returns, or one you paste into a message, is scrubbed before it
+  reaches the event log, memory or any model (so the model sees a marker, not the secret: keep secrets in Vault).
+  Memory and skills refuse one outright.
 - **Poisoned MCP tools.** MCP tool definitions are pinned on first listing. A tool that changes later, or whose
   description reads like injected instructions, is held until you review it.
 

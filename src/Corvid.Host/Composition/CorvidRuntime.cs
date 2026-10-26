@@ -1293,9 +1293,13 @@ public sealed class CorvidSession
         if (messages.Count == 0)
             return;
         var events = messages.Select(message => EventData.Create(message.FromUser ? new UserMessage(message.Text) : new AssistantMessage(message.Text))).ToList();
+        // A6: every new session's log starts with its workspace binding, so "no history yet" means nothing but that.
+        var head = _runtime.Log.GetHead(Id);
+        if (_runtime.Log.Read(Id).Any(item => item.Payload is not WorkspaceBound))
+            throw new InvalidOperationException($"Session '{Id}' already has a history.");
         try
         {
-            _runtime.Log.Append(Id, 0, events);
+            _runtime.Log.Append(Id, head, events);
         }
         catch (EventLogConflictException)
         {

@@ -236,6 +236,12 @@ public sealed partial class GitWorktrees
             var head = (await Run(Runner(worktree.Path), ["rev-parse", "--verify", "HEAD"], "git could not read the worktree's HEAD").ConfigureAwait(false)).Trim();
             if (head != worktree.Head)
                 return false;
+            // git's own removal deletes ignored files (build output, notes a child wrote under an ignored path): anything
+            // status shows, ignored files included, is work, and the worktree is kept.
+            var status = await Run(Runner(worktree.Path), ["status", "--porcelain", "--ignored", "--untracked-files=all"],
+                "git could not read the worktree's status").ConfigureAwait(false);
+            if (status.Trim().Length > 0)
+                return false;
             await RemoveAsync(repository, worktree.Name).ConfigureAwait(false);
         }
         catch (WorktreeException)

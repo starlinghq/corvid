@@ -204,6 +204,11 @@ public sealed class GitWorktreesTests : IDisposable
         var unused = await worktrees.AddAsync(repository, "unused");
         var committed = await worktrees.AddAsync(repository, "committed");
         var dirty = await worktrees.AddAsync(repository, "dirty");
+        var ignored = await worktrees.AddAsync(repository, "ignored");
+        // Output under an ignored path (a build's out/): git's own removal would delete it, so it counts as work.
+        File.AppendAllText(Path.Combine(project, ".git", "info", "exclude"), "out/\n");
+        Directory.CreateDirectory(Path.Combine(ignored.Path, "out"));
+        File.WriteAllText(Path.Combine(ignored.Path, "out", "result.txt"), "built\n");
         File.WriteAllText(Path.Combine(committed.Path, "new.txt"), "work\n");
         CheckpointFixture.Git(committed.Path, "add", ".");
         CheckpointFixture.Git(committed.Path, "commit", "-q", "-m", "work");
@@ -212,9 +217,12 @@ public sealed class GitWorktreesTests : IDisposable
         Assert.True(await worktrees.RemoveIfUnusedAsync(repository, unused));
         Assert.False(await worktrees.RemoveIfUnusedAsync(repository, committed));
         Assert.False(await worktrees.RemoveIfUnusedAsync(repository, dirty));
+        Assert.False(await worktrees.RemoveIfUnusedAsync(repository, ignored));
+        Assert.True(File.Exists(Path.Combine(ignored.Path, "out", "result.txt")));
 
         Assert.False(Directory.Exists(unused.Path));
-        Assert.Equal(["committed", "dirty"], (await worktrees.ListAsync(repository)).Select(worktree => worktree.Name));
+        Assert.Equal(["committed", "dirty", "ignored"],
+            (await worktrees.ListAsync(repository)).Select(worktree => worktree.Name).Order(StringComparer.Ordinal));
         var branches = CheckpointFixture.Git(project, "branch", "--list", "corvid/*");
         Assert.DoesNotContain("corvid/unused", branches, StringComparison.Ordinal);
         Assert.Contains("corvid/committed", branches, StringComparison.Ordinal);
