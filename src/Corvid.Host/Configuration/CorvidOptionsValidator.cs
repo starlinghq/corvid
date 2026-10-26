@@ -84,6 +84,8 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue) : IValidate
             errors.Add("Corvid:Sessions:RecapAfterMinutes must be between 0 (off) and 10080 (a week).");
         if (options.Turn.MaxOutputTokens is < 16 or > 65_536)
             errors.Add("Corvid:Turn:MaxOutputTokens must be between 16 and 65536.");
+        if (options.Turn.ImageTurns is < 1 or > 64)
+            errors.Add("Corvid:Turn:ImageTurns must be between 1 and 64.");
         if (options.Telemetry.OtlpEndpoint is { Length: > 0 } endpoint
             && (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https")))
             errors.Add($"Corvid:Telemetry:OtlpEndpoint must be an absolute http or https URI, not '{endpoint}'.");

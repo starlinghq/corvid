@@ -342,6 +342,12 @@ internal sealed class TurnHarness : IDisposable
 
     public bool NoMedia { get; init; }
 
+    /// <summary>A6 review: a store the turn uses in place of <see cref="Media"/> (one that counts its reads, say).</summary>
+    public Corvid.Abstractions.Media.IMediaStore? MediaStore { get; init; }
+
+    /// <summary>A6 review: the egress gate's policy per model, for the turn's image checks.</summary>
+    public Func<ModelProfile, Corvid.Models.Privacy.EgressPolicy?>? EgressPolicyFor { get; init; }
+
     public FakeGenerator Generator { get; }
 
     public FakeGenerator? Escalation { get; }
@@ -409,7 +415,8 @@ internal sealed class TurnHarness : IDisposable
         Retriever = Retriever,
         CoreBlocks = CoreBlocks,
         Options = Options,
-        Media = NoMedia ? null : Media,
+        Media = NoMedia ? null : MediaStore ?? Media,
+        EgressPolicyFor = EgressPolicyFor,
     };
 
     public TurnRunner Runner() => new(Session, Services());

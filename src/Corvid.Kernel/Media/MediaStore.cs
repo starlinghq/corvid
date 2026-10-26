@@ -6,7 +6,8 @@ namespace Corvid.Kernel.Media;
 
 /// <summary>
 /// K-8 (A6): images by SHA-256, as files beside the event log (<c>media/sha256/ab/&lt;digest&gt;</c>). Content-addressed, so
-/// writing is idempotent, a fork's copied events find their images, and nothing is ever rewritten; nothing is deleted
+/// writing is idempotent, a fork's copied events find their images, and nothing is rewritten but a file whose bytes no
+/// longer match its name (which a read refuses, so it held no image anyway); nothing is deleted
 /// either (a rewound or compacted message's images stay, as its event does). The directory is owner only, like the rest of
 /// the data directory. A read checks the bytes against their name, so a file changed on disk is not sent as the image.
 /// </summary>
@@ -24,8 +25,15 @@ public sealed class MediaStore : IMediaStore
     {
         var digest = Digest(data);
         var path = PathOf(digest);
-        if (File.Exists(path) && new FileInfo(path).Length == data.Length)
-            return digest;
+        // A6 review: a file already there counts only when its bytes are these (their digest), not merely as long; one that
+        // was changed on disk (which Read refuses) is replaced.
+        var damaged = false;
+        if (File.Exists(path))
+        {
+            if (Read(digest) is not null)
+                return digest;
+            damaged = true;
+        }
         PrivateDirectory.Create(Root);
         PrivateDirectory.Create(Path.GetDirectoryName(path)!);
         var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
@@ -41,7 +49,7 @@ public sealed class MediaStore : IMediaStore
             }
             try
             {
-                File.Move(temporary, path, overwrite: false);
+                File.Move(temporary, path, overwrite: damaged);
             }
             catch (IOException) when (File.Exists(path))
             {
