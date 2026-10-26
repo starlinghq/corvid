@@ -75,6 +75,12 @@ internal sealed class SandboxLayout : IDisposable
         Secret(Path.Combine(dataHome, "corvid-vault", "store.bin"));
         Secret(Path.Combine(dataHome, "corvid-vault", "master.cred"));
         Secret(Path.Combine(configHome, "corvid-vault", "vault.json"));
+        // A6 review H2: attached mode's owner token, paired devices and device tokens.
+        string stateHome = customXdg ? Path.Combine(Root, "xdg-state") : Path.Combine(Home, ".local", "state");
+        Secret(Path.Combine(stateHome, "corvid", "attach", "owner.token"));
+        Secret(Path.Combine(stateHome, "corvid", "attach", "devices.json"));
+        Secret(Path.Combine(stateHome, "corvid", "attach", "client-tokens.json"));
+        AttachState = Path.Combine(stateHome, "corvid", "attach");
         Secret(Path.Combine(Workspace, ".env"));
         Secret(Path.Combine(Workspace, "service", "deep", ".env.production"));
         VaultData = Path.Combine(dataHome, "corvid-vault");
@@ -103,8 +109,12 @@ internal sealed class SandboxLayout : IDisposable
         {
             Environment["XDG_DATA_HOME"] = dataHome;
             Environment["XDG_CONFIG_HOME"] = configHome;
+            Environment["XDG_STATE_HOME"] = stateHome;
         }
     }
+
+    /// <summary>Attached mode's state directory (owner token, devices, device tokens).</summary>
+    public string AttachState { get; }
 
     public string Root { get; }
 

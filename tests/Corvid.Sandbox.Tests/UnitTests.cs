@@ -141,6 +141,9 @@ public sealed class PolicyTests
 
         Assert.Equal(SandboxPlan.VaultDirectories(Env, "/home/u"), BuiltInDenials.VaultDirectories("/home/u", Env));
         Assert.Equal(SandboxPlan.SecretDirectories, BuiltInDenials.SecretDirectories);
+        // A6 review H2: attached mode's tokens, default and under XDG_STATE_HOME (data's value stands in for it here).
+        string? State(string name) => name == "XDG_STATE_HOME" ? data : Env(name);
+        Assert.Equal(SandboxPlan.AttachStateDirectories(State, "/home/u"), BuiltInDenials.AttachStateDirectories("/home/u", State));
         string[] gh = config is { Length: > 0 } && Path.IsPathFullyQualified(config) ? [Path.Combine(config, "gh")] : [];
         Assert.Equal(SandboxPlan.SecretDirectories.Select(relative => Path.Combine("/home/u", relative)).Concat(gh).Distinct(),
             BuiltInDenials.SecretPaths("/home/u", Env));
