@@ -182,6 +182,9 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
             throw new ArgumentException("A prepared launch cannot use the tools socket (A7 covers run-to-completion commands only).", nameof(policy));
         var environment = new Dictionary<string, string>(StringComparer.Ordinal);
         IReadOnlyDictionary<string, string> source = _options.Environment ?? CurrentEnvironment();
+        // A long-lived command must have the root hidden from the start, before any run makes it.
+        if (SandboxScratch.DeniedRoot(source) is not null)
+            SandboxScratch.EnsureRoot(source);
         policy = HidingScratch(policy, source);
         foreach (string name in policy.Environment.Concat(LauncherEnvironment).Distinct(StringComparer.Ordinal))
         {

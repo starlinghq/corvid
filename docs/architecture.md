@@ -4380,7 +4380,8 @@ nested-call path.
   socket directory are 0700 directories under one root, `SandboxScratch`: `$XDG_RUNTIME_DIR/corvid-runs` when the runtime
   directory is set (the launcher hides the whole runtime directory from every command), else `corvid-runs-<user>` in
   `TMPDIR`, which `BubblewrapSandbox` denies to every command it launches unless it is under `/tmp` or `/run` (replaced
-  anyway). So no other sandbox's command can list or read them, whatever `TMPDIR` is; the root is set to 0700 on every
+  anyway; a long-lived launch makes the root first, since the launcher hides only what exists). So no other sandbox's
+  command can list or read them, whatever `TMPDIR` is; the root is set to 0700 on every
   use, which fails unless this user owns it. Commands Vault launches with the launcher itself do not deny the fallback
   root. Test: `ConfinementTests.Another_runs_private_directory_cannot_be_seen_with_TMPDIR_outside_tmp`. `SandboxPolicy.EnvironmentValues` (`--setenv NAME=VALUE`) sets
   values, under `--env`'s name rules (secret-like names refused, no name both passed and set, no proxy or tools name),

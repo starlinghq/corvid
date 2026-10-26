@@ -193,6 +193,35 @@ public sealed class ScratchTests
         Assert.Equal(owner, File.GetUnixFileMode(directory.Parent.FullName));
     }
 
+    // A long-lived launch (an MCP server) is started before any run may have made the root: it is made then, so the launcher
+    // (which hides only what exists) hides it from that command for its whole life.
+    [Fact]
+    public void A_prepared_launch_makes_the_root_it_denies()
+    {
+        var tmp = System.IO.Path.Combine(AppContext.BaseDirectory, "scratch-" + Guid.NewGuid().ToString("N"));
+        var launcher = System.IO.Path.Combine(AppContext.BaseDirectory, "launcher-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tmp);
+        File.WriteAllText(launcher, "");
+        try
+        {
+            var environment = new Dictionary<string, string> { ["PATH"] = "/usr/bin", ["TMPDIR"] = tmp };
+            var root = SandboxScratch.DeniedRoot(environment)!;
+            Assert.False(Directory.Exists(root));
+
+            var launch = new BubblewrapSandbox(new SandboxOptions { LauncherPath = launcher, Environment = environment })
+                .Prepare(SandboxPolicy.ForWorkspace("/w"), new SandboxCommand("notes-mcp"));
+
+            Assert.True(Directory.Exists(root));
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, File.GetUnixFileMode(root));
+            Assert.Equal(["--workspace", "/w", "--deny", root], launch.Arguments.Take(4));
+        }
+        finally
+        {
+            File.Delete(launcher);
+            Directory.Delete(tmp, recursive: true);
+        }
+    }
+
     private sealed class TempDirectory : IDisposable
     {
         public string Path { get; } = Directory.CreateTempSubdirectory("corvid-scratch-test-").FullName;

@@ -53,6 +53,25 @@ public static class SandboxScratch
         ArgumentException.ThrowIfNullOrEmpty(prefix);
         if (OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("The sandbox runs on Linux only.");
+        var root = EnsureRoot(environment);
+        for (var attempt = 0; ; attempt++)
+        {
+            // Short: a Unix socket path holds 107 bytes, and code mode's socket is made in one of these.
+            var path = Path.Combine(root, prefix + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(6)));
+            if (Directory.Exists(path) && attempt < 8)
+                continue;
+            return Directory.CreateDirectory(path, Private);
+        }
+    }
+
+    /// <summary>
+    /// <see cref="Root"/>, made (0700, this user's) if missing. A command launched to run for long (an MCP server) is given
+    /// the root to deny before any run has made it, so it must exist then: the launcher hides only what exists.
+    /// </summary>
+    public static string EnsureRoot(IReadOnlyDictionary<string, string>? environment = null)
+    {
+        if (OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("The sandbox runs on Linux only.");
         var root = Root(environment);
         try
         {
@@ -67,13 +86,7 @@ public static class SandboxScratch
 
         if (File.GetUnixFileMode(root) != Private || (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
             throw new SandboxRefusedException($"The sandbox's private directory {root} is not a mode-0700 directory of this user's.");
-        for (var attempt = 0; ; attempt++)
-        {
-            var path = Path.Combine(root, prefix + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8)));
-            if (Directory.Exists(path) && attempt < 8)
-                continue;
-            return Directory.CreateDirectory(path, Private);
-        }
+        return root;
     }
 
     private static bool IsUnder(string path, string directory) =>

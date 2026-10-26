@@ -372,7 +372,7 @@ public sealed class CodeRunner
         var socketDirectory = Options.SocketRoot is { } root
             ? Directory.CreateDirectory(Path.Combine(root, "corvid-code-" + Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(8))),
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute)
-            : SandboxScratch.CreateDirectory("corvid-code-");
+            : SandboxScratch.CreateDirectory("code-");
         try
         {
             var socketPath = Path.Combine(socketDirectory.FullName, "tools.sock");
@@ -380,10 +380,13 @@ public sealed class CodeRunner
             if (Encoding.UTF8.GetByteCount(socketPath) > 100)
                 throw new SandboxRefusedException($"The tools socket's path is too long for a Unix socket ({socketPath}); set TMPDIR to a shorter directory.");
             var basePolicy = _shell.Policy;
-            // A socket root a caller chose is hidden from this run's command too; the default root is hidden from every run's.
-            var hidden = Options.SocketRoot is null || IsUnder(socketDirectory.FullName, "/tmp") || IsUnder(socketDirectory.FullName, "/run")
-                ? basePolicy.DeniedPaths
-                : basePolicy.DeniedPaths.Add(socketDirectory.FullName);
+            // The default root is hidden from every run's command (the sandbox adds it from its own environment; it is named
+            // here too, from this process's, in case the two differ). A socket root a caller chose is hidden from this run's.
+            var hidden = Options.SocketRoot is null
+                ? SandboxScratch.DeniedRoot() is { } scratch ? basePolicy.DeniedPaths.Add(scratch) : basePolicy.DeniedPaths
+                : IsUnder(socketDirectory.FullName, "/tmp") || IsUnder(socketDirectory.FullName, "/run")
+                    ? basePolicy.DeniedPaths
+                    : basePolicy.DeniedPaths.Add(socketDirectory.FullName);
             var values = EnvironmentFor(language, runtime, basePolicy.Workspace);
             var policy = basePolicy with
             {

@@ -525,7 +525,8 @@ public sealed class ApprovalCardBlock : TranscriptBlock
         PhoneTitle = card.Count > 1 ? $"Approval {card.Position} of {card.Count}" : "Approval";
         if (card.Next is { } next)
         {
-            var action = next.Tool == "shell" ? $"shell {next.Text}" : next.Text;
+            // A7V1-6: a queued code run is named, not quoted: its script is shown whole on its own card.
+            var action = next.Code is { } queued ? $"{next.Tool} · {queued.Language}" : next.Tool == "shell" ? $"shell {next.Text}" : next.Text;
             var ready = next.ProposedDiff is null ? "" : " (diff ready)";
             NextText = SessionText.Runs(string.Create(CultureInfo.InvariantCulture,
                 $"Next in the queue: `{action.Replace('`', '\'')}`{ready} · {card.Position + 1} of {card.Count}"));
