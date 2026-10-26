@@ -116,6 +116,17 @@ Remove… asks to remove it, the question's Remove takes focus, and `Esc` stops 
 secret…'s name field starts the set, and `Esc` closes the picker. The rest of the keyboard map
 (`docs/plan/ui.md` §6) comes with the screens it drives.
 
+Workspaces (A6, G-4): on the engine a session keeps the workspace it was started in (a `WorkspaceBound` event in its
+log), and its approvals, sandboxed shell, file tools, checkpoints, Review and Rewind follow it; a session that recorded
+none works in the configured one (`Corvid:Workspace`), as before. With sessions in several workspaces the rail groups
+them by workspace (the folder's name, its path where two share a name, and a worktree's branch). Ctrl+N and New session
+start in the workspace of the session in view; the Board's Open a workspace… starts one in a typed folder (`~/` is the
+home directory), in one the window already works in, or in a new git worktree of the session in view's repository (a
+branch `corvid/<name>` under `$XDG_STATE_HOME/corvid-worktrees`, `Corvid:Sessions:WorktreesDirectory`), made only after
+the person approves it on that session's card. `/workspace` does the same from the composer and the CLI (`list`,
+`open <path>`, `new [<name>]`, `remove <name>`), and `corvid chat --workspace <dir>` starts a chat session elsewhere. The
+demo keeps one workspace and the rail's Pinned and Recent.
+
 ## The harness check
 
 Every change to a screen is checked by running the app and looking at it next to its mockup (the approved artboards:
