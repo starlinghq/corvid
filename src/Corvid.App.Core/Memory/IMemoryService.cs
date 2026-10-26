@@ -31,6 +31,13 @@ public interface IMemoryService
     /// <summary>Proposes the block rewritten shorter, the update folded in; nothing is written.</summary>
     Task<BlockConsolidation> ConsolidateAsync(string updateId, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Asks the block rewrite job (plan §9.5) for <paramref name="block"/> rewritten to its budget, and stages the rewrite for
+    /// review as an update that <see cref="StagedBlockUpdate.Replaces"/> the block; nothing is written until it is approved.
+    /// </summary>
+    Task<StagedBlockUpdate> ConsolidateBlockAsync(string block, CancellationToken cancellationToken) =>
+        Task.FromException<StagedBlockUpdate>(new NotSupportedException("Consolidating a block is not offered here."));
+
     /// <summary>Counts text with the generator's tokenizer, as the block budgets are counted.</summary>
     Task<int> CountTokensAsync(string text, CancellationToken cancellationToken);
 

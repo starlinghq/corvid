@@ -43,7 +43,7 @@ public sealed class EnginePromptHistory(AppEngine engine) : IPromptHistory
 
     /// <summary>A session whose user messages a person typed here or at another of their own surfaces (the CLI, an editor).</summary>
     internal static bool Typed(string id) =>
-        id is not (McpSessions.Pins or GatewaySessions.Ledger or MemoryJobs.Session or Memory.EngineMemoryService.ImportSession)
+        id is not (McpSessions.Pins or GatewaySessions.Ledger or Corvid.Abstractions.Events.MemoryJobs.Session or Memory.EngineMemoryService.ImportSession)
         && !id.StartsWith("job:", StringComparison.Ordinal)
         && !id.StartsWith(GatewaySessions.Prefix, StringComparison.Ordinal);
 }

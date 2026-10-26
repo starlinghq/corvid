@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using Corvid.App.Core.Mvvm;
@@ -366,7 +367,7 @@ public sealed class MemoryViewModel : AreaViewModel
 
     internal async Task ApproveBlockAsync(BlockUpdateView update, CancellationToken cancellationToken)
     {
-        var replaces = update.IsConsolidated;
+        var replaces = update.ReplacesBlock;
         var text = update.TextToWrite;
         CoreBlock block;
         try
@@ -422,6 +423,31 @@ public sealed class MemoryViewModel : AreaViewModel
         }
 
         update.ShowConsolidation(consolidation);
+    }
+
+    /// <summary>
+    /// The Core blocks tab's "Consolidate now" (F11, plan §9.5): the block rewrite job's proposal staged as an update that
+    /// replaces the block, added to Review as a diff. Nothing is written until it is approved there.
+    /// </summary>
+    internal async Task ConsolidateBlockAsync(string block, CancellationToken cancellationToken)
+    {
+        StagedBlockUpdate staged;
+        try
+        {
+            staged = await _service.ConsolidateBlockAsync(block, cancellationToken).ConfigureAwait(true);
+        }
+        catch (Exception exception) when (Failed(exception))
+        {
+            Fail($"Could not consolidate the {SafeText.Clean(block)} block", exception);
+            return;
+        }
+
+        BlockUpdates.Add(new BlockUpdateView(this, staged, _time.LocalTimeZone));
+        SetOutcome(string.Create(CultureInfo.InvariantCulture,
+            $"Staged a consolidation of the {SafeText.Clean(block)} block for review: {staged.TokensNow} → {staged.TokensAfter} tokens. Approve it in Review to write it."),
+            Tone.Green);
+        QueueChanged();
+        Select(MemoryTabKind.Review);
     }
 
     internal Task<int> CountTokensAsync(string text) => _service.CountTokensAsync(text, CancellationToken.None);
@@ -602,6 +628,7 @@ public sealed class MemoryViewModel : AreaViewModel
     {
         HasPendingUpdate = BlockUpdates.Any(u => u.Update.Block == block.Name),
         OpenReview = _openReview,
+        ConsolidateNow = new AsyncRelayCommand(ct => ConsolidateBlockAsync(block.Name, ct)),
     };
 
     private void QueueChanged()

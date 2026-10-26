@@ -275,6 +275,50 @@ public sealed class MemoryViewModelTests
     }
 
     [Fact]
+    public async Task ConsolidateNowStagesTheRewriteAsADiffInReviewAndApproveReplacesTheBlock()
+    {
+        var (memory, _, _, _) = await Create();
+        var ct = TestContext.Current.CancellationToken;
+        await memory.RejectBlockAsync(memory.BlockUpdates[0], ct);
+        memory.Select(MemoryTabKind.CoreBlocks);
+        var user = memory.CoreBlocks[0];
+        Assert.True(user.CanConsolidateNow);
+        Assert.False(memory.CoreBlocks[1].CanConsolidateNow);
+        var before = user.Block.Text;
+
+        user.ConsolidateNow!.Execute(null);
+        await WaitUntil(() => memory.BlockUpdates.Count == 1);
+
+        // Staged in Review as a diff; the block is unchanged until the rewrite is approved.
+        Assert.Equal(MemoryTabKind.Review, memory.SelectedTab);
+        var update = memory.BlockUpdates[0];
+        Assert.True(update.Update.Replaces);
+        Assert.True(update.ShowsRewriteDiff);
+        Assert.False(update.ShowsDiff);
+        Assert.True(update.ReplacesBlock);
+        Assert.False(update.CanConsolidate);
+        Assert.Contains(update.DiffLines, line => line.IsRemoved && line.Sign == "−");
+        Assert.Contains(update.DiffLines, line => !line.IsRemoved && !line.IsAdded);
+        Assert.Equal(before, memory.CoreBlocks[0].Block.Text);
+        Assert.False(memory.CoreBlocks[0].CanConsolidateNow);
+        Assert.StartsWith("Staged a consolidation of the user block for review", memory.Outcome, StringComparison.Ordinal);
+
+        await memory.ApproveBlockAsync(update, ct);
+
+        Assert.Empty(memory.BlockUpdates);
+        Assert.Equal(update.Update.Added, memory.CoreBlocks[0].Block.Text);
+        Assert.StartsWith("Wrote the user block, consolidated", memory.Outcome, StringComparison.Ordinal);
+    }
+
+    private static async Task WaitUntil(Func<bool> condition)
+    {
+        // The demo service completes synchronously, so the command has finished by the first check; the bound is a guard.
+        for (var i = 0; i < 100 && !condition(); i++)
+            await Task.Yield();
+        Assert.True(condition());
+    }
+
+    [Fact]
     public async Task TheCoreBlocksTabOffersConsolidationForABlockNearItsBudget()
     {
         var (memory, _, _, _) = await Create();

@@ -87,7 +87,12 @@ public sealed class DemoMemoryService : IMemoryService
         var block = _blocks[index];
         int tokens;
         string blockText;
-        if (replacesBlock)
+        if (update.Replaces)
+        {
+            tokens = Count(text);
+            blockText = text.Trim();
+        }
+        else if (replacesBlock)
         {
             var baseline = _consolidation is { } c && c.Block == update.Block ? c : Consolidation(update);
             tokens = baseline.Tokens + Count(text) - Count(baseline.Text);
@@ -143,6 +148,35 @@ public sealed class DemoMemoryService : IMemoryService
         var update = _blockUpdates.Find(u => u.Id == updateId) ?? throw new InvalidOperationException($"No staged block update {updateId}.");
         _consolidation = Consolidation(update);
         return Task.FromResult(_consolidation);
+    }
+
+    /// <summary>The demo's block rewrite job: the block's distinct lines, the longest dropped, staged as an update replacing it.</summary>
+    public Task<StagedBlockUpdate> ConsolidateBlockAsync(string block, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var current = _blocks.Find(b => b.Name == block) ?? throw new InvalidOperationException($"No block {block}.");
+        if (_blockUpdates.Any(u => u.Block == block && u.Replaces))
+            throw new InvalidOperationException($"A consolidation of the {block} block already waits in Review.");
+        var lines = current.Text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct().ToList();
+        if (lines.Count > 1)
+            lines.Remove(lines.MaxBy(line => line.Length)!);
+        var rewrite = string.Join("\n", lines);
+        var kept = lines.ToHashSet(StringComparer.Ordinal);
+        var old = current.Text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var update = new StagedBlockUpdate($"b-{_nextId++}", block)
+        {
+            StagedAt = _time.GetUtcNow(),
+            StagedBy = "memory-jobs",
+            Why = $"consolidation: {current.Tokens} of {current.Budget} tokens rewritten to {Count(rewrite)}",
+            Added = rewrite,
+            TokensNow = current.Tokens,
+            TokensAfter = Count(rewrite),
+            Budget = current.Budget,
+            Replaces = true,
+            Diff = [.. old.Select(line => new BlockDiffRow(kept.Remove(line) ? BlockLineKind.Kept : BlockLineKind.Removed, line))],
+        };
+        _blockUpdates.Add(update);
+        return Task.FromResult(update);
     }
 
     public Task<int> CountTokensAsync(string text, CancellationToken cancellationToken)
