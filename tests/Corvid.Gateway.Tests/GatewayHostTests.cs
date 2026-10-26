@@ -102,6 +102,25 @@ public sealed class GatewayHostTests
     }
 
     [Fact]
+    public async Task SearchAnswersOnlyInADirectChat()
+    {
+        // A6 review (security M2): /search quotes what was said in every conversation, so never to a group.
+        await using var fixture = new GatewayFixture();
+        var adapter = new FakeAdapter();
+        await fixture.StartAsync(GatewayFixture.Options(Fake), adapter);
+
+        adapter.Write(new InboundMessage("fake", "group", "owner", "/search@corvid_bot wifi password") { Direct = false, Addressed = true });
+        await Wait.Until(() => adapter.Sent.Count == 1, "the refusal");
+        Assert.Contains("/search quotes what was said in every conversation, so it answers only in a direct message", adapter.Sent.Single().Text,
+            StringComparison.Ordinal);
+        Assert.Empty(fixture.Agent.Commands);
+
+        adapter.Write(Direct("owner", "/search wifi password"));
+        await Wait.Until(() => !fixture.Agent.Commands.IsEmpty, "the command in a direct chat");
+        Assert.Equal("/search wifi password", fixture.Agent.Commands.Single().Line);
+    }
+
+    [Fact]
     public async Task APairedGuestsOwnAllowlistReplacesTheAdaptersForThemAlone()
     {
         await using var fixture = new GatewayFixture();
