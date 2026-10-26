@@ -173,9 +173,10 @@ public sealed class EngineAttachedTests
     public async Task AnApprovalAClientLeftUnansweredIsDeniedAtItsDeadlineNotApproved()
     {
         var models = new FakeModels(new FakeGenerator(Reply.Call("add_note", """{"text":"water plants"}"""), Reply.Say("Not added.")));
-        await using var fixture = await EngineFixture.StartAsync(models);
-        // The pipeline's deadline runs on the system clock; a short one keeps the test quick.
-        fixture.Runtime.Approvals.SetTimeout(TimeSpan.FromSeconds(1));
+        // The pipeline's deadline runs on the test's clock (A6 fix), moved past it below rather than waited for.
+        var time = Corvid.App.Core.Tests.ManualTimeProvider.Demo();
+        await using var fixture = await EngineFixture.StartAsync(models, null,
+            services => Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions.AddSingleton<TimeProvider>(services, time));
         var id = fixture.Runtime.OpenSession(surface: "app").Id;
         await using var served = new Served(fixture);
         var engineSide = new SessionWaiter();
@@ -190,7 +191,15 @@ public sealed class EngineAttachedTests
         await client.DisposeAsync();
         await connection.WaitAsync(TimeSpan.FromSeconds(30), Ct);
 
-        var resolved = await engineSide.WaitAsync<ApprovalResolved>();
+        // Nobody answers: past its deadline the approval is denied. Moved on until the pipeline's wait has heard it (its
+        // timer is made as the prompt is asked, which the client saw just before).
+        var resolving = engineSide.WaitAsync<ApprovalResolved>();
+        for (var moves = 0; !resolving.IsCompleted && moves < 600; moves++)
+        {
+            time.Advance(fixture.Runtime.Approvals.Options.Timeout + TimeSpan.FromSeconds(1));
+            await Task.WhenAny(resolving, Task.Delay(50, Ct));
+        }
+        var resolved = await resolving;
         Assert.NotEqual(ApprovalOutcome.Approved, resolved.Outcome);
         await engineSide.WaitAsync<TurnEnded>();
         Assert.DoesNotContain("water plants", models.Tools.Notes);

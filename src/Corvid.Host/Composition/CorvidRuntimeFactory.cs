@@ -71,7 +71,8 @@ public sealed class CorvidRuntimeFactory(
     IMcpTransports? mcpTransports = null,
     WebFetchTransport? webTransport = null,
     UiStateStore? uiState = null,
-    CorvidConfigWriter? configWriter = null)
+    CorvidConfigWriter? configWriter = null,
+    TimeProvider? time = null)
 {
     /// <summary>
     /// Configured models that stop the runtime from starting, checked offline (by size for Starling's): every missing or
@@ -171,6 +172,7 @@ public sealed class CorvidRuntimeFactory(
             // hub content into trusted content. The skills directory is read-only to commands and closed to the file tools.
             var skillsGuard = SkillsGuard(settings, environment.Workspace);
             var prompters = new ApprovalRouter();
+            // The approvals' deadlines run on the registered TimeProvider (a test's), else the system clock.
             var approvals = new ApprovalPipeline(environment, fabric, log, prompters, new JsonFileApprovalRuleStore(rulesFile),
                 new ApprovalOptions
                 {
@@ -181,7 +183,7 @@ public sealed class CorvidRuntimeFactory(
                     Detections = settings.Detections.Enabled
                         ? new DetectionEngine(RulePack.BuiltIn(), BuiltinTools.ShellToolMapping, settings.Detections.Enforce)
                         : null,
-                });
+                }, timeProvider: time);
 
             var counter = composer.GeneratorCounter();
             var memory = settings.Memory.Enabled
