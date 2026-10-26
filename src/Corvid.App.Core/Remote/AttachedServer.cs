@@ -209,9 +209,15 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
                 if (await server._authenticator.IsCurrentAsync(identity, token, cancellationToken).ConfigureAwait(false))
                     return true;
             }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException)
+            catch (IOException)
             {
-                // Refused below.
+                // Cannot tell now (the file is written by rename, so this is the disk, not a half-written file): asked again
+                // at the next request or check.
+                return true;
+            }
+            catch (Exception exception) when (exception is UnauthorizedAccessException or InvalidDataException)
+            {
+                // A file others can read, or one that is not a devices file: refused below, as authentication refuses it.
             }
             server.Log?.Invoke($"attach: {Who} is no longer paired; closing its connection");
             return false;

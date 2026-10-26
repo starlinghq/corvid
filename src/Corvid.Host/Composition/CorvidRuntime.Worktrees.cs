@@ -101,7 +101,10 @@ public sealed partial class CorvidRuntime
         bool WorksInside(string id) => WorkspaceOf(id) is { IsDefault: false } open && Inside(open.Path);
         // A6 fix: a session this process holds only because a surface opened it (the window's Board made it and never
         // showed it) is let go of first when it is idle and no surface views it; a running, queued or viewed one stays.
-        foreach (var id in _sessions.Keys.Where(id => id != sessionId && WorksInside(id)).ToList())
+        // Only the asking surface's own sessions: another surface here (a gateway chat, ACP, HTTP) may keep its handle.
+        var surface = TryGetSession(sessionId, out var asking) ? asking.Surface : null;
+        foreach (var id in _sessions.Where(open => open.Key != sessionId && open.Value.Surface == surface && WorksInside(open.Key))
+                     .Select(open => open.Key).ToList())
             await ReleaseDriverAsync(id, () => Viewed(id)).ConfigureAwait(false);
         if (_sessions.Keys.FirstOrDefault(WorksInside) is { } busy)
             throw new WorktreeRefusedException($"Session {TerminalText.Visible(busy)} works in {worktree.Path} and is open here; close it first.");
