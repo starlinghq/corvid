@@ -21,7 +21,7 @@ pull request starlinghq/corvid#71.
 | A3 `Corvid.App.Engine`: the real runtime behind the services | done behind `--engine`, verified end to end in three rounds, PR review fixed (§1.4) | PR #77 |
 | A4 the gaps A3 left: the running turn, records, egress, hosting, parity; the engine becomes the default | done, verified end to end in three rounds (§1.5) | branch `a4/engine` |
 | A5 model switching at any time, subagents with a model mix, G-15 forks mid-turn, the A4 leftovers | done, verified end to end in two rounds (§1.6) | branch `a5/engine` |
-| A6 attached mode (G-1), workspaces and worktrees per session (G-4), images (K-8, F19), search across sessions (G-5), the `corvid-app` binary and its tarball (U-7, U-9), the A5 leftovers | merged and checked by the integrator; the app run on the engine, attached and with `--demo` (§1.7) | branch `a6/int` |
+| A6 attached mode (G-1), workspaces and worktrees per session (G-4), images (K-8, F19), search across sessions (G-5), the `corvid-app` binary and its tarball (U-7, U-9), the A5 leftovers | done, verified end to end in two rounds (§1.7) | branch `a6/engine` |
 
 The build ran as a workflow in a cloud container: one agent per step, each building, launching the app on a virtual
 display, screenshotting it and comparing it with the mockup renders, then an independent verifier. It was stopped during
